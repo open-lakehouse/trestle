@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+.vim
+.zed
+
+# Rust
+target/
+/Cargo.lock
+
+# Environment
+.env

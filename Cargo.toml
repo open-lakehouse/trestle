@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/delta-incubator/trestle"
+readme = "README.md"
+rust-version = "1.85"
+version = "0.1.0"
+homepage = "https://github.com/delta-incubator/trestle"
+keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store"]
+
+[workspace.dependencies]
+async-trait = "0.1"
+bytes = "1.1"
+chrono = { version = "0.4", features = ["serde"] }
+itertools = "0.14"
+pbjson = "0.9"
+pbjson-types = "0.9"
+prost = "0.14"
+prost-types = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+strum = { version = "0.27", features = ["derive"] }
+sqlx = "0.8"
+thiserror = "2"
+tracing = { version = "0.1", features = ["log"] }
+url = { version = "2.5", features = ["serde", "std"], default-features = false }
+uuid = { version = "1", features = ["serde"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls-native-roots",
+  "http2",
+  "json",
+  "stream",
+] }
+
+[workspace.metadata.typos]
+default.extend-ignore-re = [
+  "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
+  "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
+  "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
+]
+files.extend-exclude = ["crates/trestle-codegen/src/gen/**/*"]
+
+[workspace.metadata.typos.default.extend-words]
+typ = "typ"
+AKS = "AKS"
