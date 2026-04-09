@@ -197,9 +197,9 @@ pub(crate) fn generate_resource_enum(
         quote! {}
     };
 
-    // object_conversions! macro invocation and qualified_name() methods
+    // Object conversion impl blocks and qualified_name() methods
     let object_conversions_impl: TokenStream = if config.generate_object_conversions {
-        let mut entries: Vec<TokenStream> = Vec::new();
+        let mut conversion_impls: Vec<TokenStream> = Vec::new();
         let mut qualified_name_impls: Vec<TokenStream> = Vec::new();
 
         for r in &resources {
@@ -221,9 +221,15 @@ pub(crate) fn generate_resource_enum(
                 .map(|n| format_ident!("{}", n))
                 .collect();
 
-            entries.push(quote! {
-                #path, #label_expr, #id_ident, [#(#path_name_idents),*], #is_optional
-            });
+            conversion_impls.push(emit_from_object(&path, &id_ident, is_optional));
+            conversion_impls.push(emit_to_object(&path, &label_expr, &id_ident, is_optional));
+            conversion_impls.push(emit_resource_impl(
+                &path,
+                &label_expr,
+                &id_ident,
+                &path_name_idents,
+                is_optional,
+            ));
 
             // qualified_name() impl
             let format_expr: TokenStream = build_qualified_name_expr(&r.path_names);
@@ -237,15 +243,12 @@ pub(crate) fn generate_resource_enum(
             });
         }
 
-        let derive_crate = format_ident!("{}", config.derive_crate_name);
         quote! {
             use crate::Error;
             use crate::models::object::Object;
             use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
 
-            ::#derive_crate::object_conversions!(
-                #(#entries);*
-            );
+            #(#conversion_impls)*
 
             #(#qualified_name_impls)*
         }
@@ -294,8 +297,12 @@ pub(crate) fn generate_resource_enum(
         #object_conversions_impl
     };
 
-    // Generate the resource descriptor registry and Label impl
-    let registry_impl = generate_resource_registry(&resources, config);
+    // Generate the resource descriptor registry and Label impl (only when store integration is enabled)
+    let registry_impl = if config.generate_store_integration {
+        generate_resource_registry(&resources, config)
+    } else {
+        quote! {}
+    };
 
     let all_tokens = quote! {
         #tokens
@@ -595,6 +602,115 @@ fn generate_resource_registry(resources: &[ResourceEntry], config: &CodeGenConfi
     quote! {
         #label_impl
         #registry
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Object conversion helpers (emit the impl blocks formerly produced by
+// trestle_derive::object_conversions!)
+// ---------------------------------------------------------------------------
+
+fn emit_from_object(
+    path: &syn::Type,
+    id_ident: &proc_macro2::Ident,
+    is_optional: bool,
+) -> TokenStream {
+    let id_assignment = if is_optional {
+        quote! { res.#id_ident = Some(object.id.hyphenated().to_string()); }
+    } else {
+        quote! { res.#id_ident = object.id.hyphenated().to_string(); }
+    };
+    quote! {
+        impl TryFrom<Object> for #path {
+            type Error = Error;
+
+            fn try_from(object: Object) -> Result<Self, Self::Error> {
+                let props = object
+                    .properties
+                    .ok_or_else(|| Error::generic("expected properties"))?;
+                let mut res: #path = ::serde_json::from_value(props)?;
+                #id_assignment
+                Ok(res)
+            }
+        }
+    }
+}
+
+fn emit_to_object(
+    path: &syn::Type,
+    label_expr: &syn::Expr,
+    id_ident: &proc_macro2::Ident,
+    is_optional: bool,
+) -> TokenStream {
+    let id_field = if is_optional {
+        quote! {
+            let id = obj
+                .#id_ident
+                .as_ref()
+                .map(|id| ::uuid::Uuid::parse_str(id))
+                .transpose()?
+                .unwrap_or_else(|| ::uuid::Uuid::nil());
+        }
+    } else {
+        quote! {
+            let id = ::uuid::Uuid::parse_str(&obj.#id_ident).unwrap_or_else(|_| ::uuid::Uuid::nil());
+        }
+    };
+    quote! {
+        impl TryFrom<#path> for Object {
+            type Error = Error;
+
+            fn try_from(obj: #path) -> Result<Self, Self::Error> {
+                #id_field
+                Ok(Object {
+                    id,
+                    name: obj.resource_name(),
+                    label: #label_expr,
+                    properties: Some(::serde_json::to_value(obj)?),
+                    updated_at: None,
+                    created_at: chrono::Utc::now(),
+                })
+            }
+        }
+    }
+}
+
+fn emit_resource_impl(
+    path: &syn::Type,
+    label_expr: &syn::Expr,
+    id_ident: &proc_macro2::Ident,
+    path_name_idents: &[proc_macro2::Ident],
+    is_optional: bool,
+) -> TokenStream {
+    let resource_ref = if is_optional {
+        quote! {
+            self
+                .#id_ident
+                .as_ref()
+                .and_then(|id| ::uuid::Uuid::parse_str(id).ok())
+                .map(ResourceRef::Uuid)
+                .unwrap_or_else(|| ResourceRef::Name(self.resource_name()))
+        }
+    } else {
+        quote! {
+            ::uuid::Uuid::parse_str(&self.#id_ident)
+                .ok()
+                .map(ResourceRef::Uuid)
+                .unwrap_or_else(|| ResourceRef::Name(self.resource_name()))
+        }
+    };
+    quote! {
+        impl ResourceExt for #path {
+            fn resource_name(&self) -> ResourceName {
+                ResourceName::new([#(&self.#path_name_idents),*])
+            }
+            fn resource_ref(&self) -> ResourceRef {
+                #resource_ref
+            }
+            fn resource_ident(&self) -> ResourceIdent {
+                (#label_expr).to_ident(self.resource_ref())
+            }
+        }
     }
 }
 

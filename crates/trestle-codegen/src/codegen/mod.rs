@@ -162,17 +162,28 @@ pub struct CodeGenConfig {
 
     /// When `true`, generate `labels.rs` with `Resource` / `ObjectLabel` enums derived
     /// from `google.api.resource` annotations. Requires `output.models` to be `Some`.
+    ///
+    /// Store-specific output (`Label` impl, `RESOURCE_DESCRIPTORS`) is only emitted when
+    /// `generate_store_integration` is also `true`.
     pub generate_resource_enum: bool,
+
+    /// When `true` (and `generate_resource_enum` is set), emit the `trestle_store` integration
+    /// code in `labels.rs`:
+    /// - `impl trestle_store::Label for ObjectLabel`
+    /// - `pub static RESOURCE_DESCRIPTORS: &[trestle_store::ResourceTypeDescriptor<ObjectLabel>]`
+    ///
+    /// Set to `false` for crates that use the enums without a store dependency.
+    pub generate_store_integration: bool,
 
     /// Fully-qualified path to the `Error` type used in generated `TryFrom<Resource>` impls.
     ///
     /// E.g. `"crate::Error"`. When `None`, `TryFrom` impls are not generated.
     pub error_type_path: Option<String>,
 
-    /// When `true` and `generate_resource_enum` is set, emit a
-    /// `::trestle_derive::object_conversions!` invocation in `labels.rs` for all
-    /// resource types that have an `IDENTIFIER`-annotated field, plus a `qualified_name()`
-    /// inherent method on each resource type.
+    /// When `true` and `generate_resource_enum` is set, emit `TryFrom<Object>`/`TryFrom<T>`
+    /// and `ResourceExt` impl blocks in `labels.rs` for all resource types that have an
+    /// `IDENTIFIER`-annotated field, plus a `qualified_name()` inherent method on each
+    /// resource type.
     pub generate_object_conversions: bool,
 
     /// Configuration for language-binding generation. Required when `output.python`,
@@ -182,11 +193,6 @@ pub struct CodeGenConfig {
     /// Relative path of the prost-generated `gen/` dir from the models subdirectory.
     /// Required when `output.models` is `Some`. E.g. `"../gen"`.
     pub models_gen_dir: Option<String>,
-
-    /// Crate name for the derive macros used in generated `object_conversions!` invocations.
-    ///
-    /// Default: `"trestle_derive"`
-    pub derive_crate_name: String,
 
     /// Crate name for the resource store types used in generated `RESOURCE_DESCRIPTORS`.
     ///

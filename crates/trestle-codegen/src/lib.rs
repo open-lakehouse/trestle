@@ -56,11 +56,11 @@
 //!     models_path_crate_template: "crate::models::{service}::v1".into(),
 //!     output,
 //!     generate_resource_enum: true,
+//!     generate_store_integration: false,
 //!     error_type_path: None,
 //!     generate_object_conversions: false,
 //!     bindings: None,
 //!     models_gen_dir: None,
-//!     derive_crate_name: "trestle_derive".into(),
 //!     resource_store_crate_name: "trestle_store".into(),
 //! };
 //!

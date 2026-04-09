@@ -423,8 +423,6 @@ mod tests {
     use super::RetryConfig;
     use crate::retry::{Error, RetryExt};
     use crate::service::ReqwestService;
-    use hyper::Response;
-    use hyper::header::LOCATION;
     use mockito;
     use reqwest::{Client, Method, StatusCode};
     use std::sync::Arc;

@@ -22,7 +22,6 @@ fn make_test_config(
         result_type_path: "crate::Result".to_string(),
         models_path_template: "example_common::models::{service}::v1".to_string(),
         models_path_crate_template: "crate::models::{service}::v1".to_string(),
-        derive_crate_name: "trestle_derive".to_string(),
         resource_store_crate_name: "trestle_store".to_string(),
         output: CodeGenOutput {
             common,
@@ -36,6 +35,7 @@ fn make_test_config(
             python_typings_filename: "example_client.pyi".to_string(),
         },
         generate_resource_enum: false,
+        generate_store_integration: false,
         error_type_path: None,
         generate_object_conversions: false,
         bindings: Some(BindingsConfig {
