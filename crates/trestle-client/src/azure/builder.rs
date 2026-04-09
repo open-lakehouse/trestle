@@ -62,7 +62,7 @@ impl From<Error> for crate::Error {
 /// ```
 /// # let ACCOUNT = "foo";
 /// # let ACCESS_KEY = "foo";
-/// # use trestle_cloud::azure::AzureBuilder;
+/// # use trestle_client::azure::AzureBuilder;
 /// let config = AzureBuilder::new()
 ///  .with_account(ACCOUNT)
 ///  .with_access_key(ACCESS_KEY)
@@ -96,7 +96,7 @@ pub struct AzureBuilder {
 ///
 /// # Example
 /// ```
-/// # use trestle_cloud::azure::{AzureBuilder, AzureConfigKey};
+/// # use trestle_client::azure::{AzureBuilder, AzureConfigKey};
 /// let builder = AzureBuilder::new()
 ///     .with_config("azure_client_id".parse().unwrap(), "my-client-id")
 ///     .with_config(AzureConfigKey::AuthorityId, "my-tenant-id");

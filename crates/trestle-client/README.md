@@ -33,7 +33,7 @@ trestle-cloud = "0.1"
 ```
 
 ```rust,ignore
-use trestle_cloud::CloudClient;
+use trestle_client::CloudClient;
 
 // Bearer token auth (works with any provider)
 let client = CloudClient::new_with_token("my-token");

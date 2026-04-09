@@ -134,9 +134,9 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
             #[pyo3(signature = (base_url, token = None))]
             pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
                 let client = if let Some(token) = token {
-                    trestle_cloud::CloudClient::new_with_token(token)
+                    trestle_client::CloudClient::new_with_token(token)
                 } else {
-                    trestle_cloud::CloudClient::new_unauthenticated()
+                    trestle_client::CloudClient::new_unauthenticated()
                 };
                 let base_url = base_url.parse().map_err(#py_error_type::from)?;
                 Ok(Self { client: #aggregate_client_ident::new(client, base_url) })

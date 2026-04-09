@@ -163,9 +163,9 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
             #[napi(factory)]
             pub fn from_url(base_url: String, token: Option<String>) -> napi::Result<Self> {
                 let client = if let Some(token) = token {
-                    trestle_cloud::CloudClient::new_with_token(token)
+                    trestle_client::CloudClient::new_with_token(token)
                 } else {
-                    trestle_cloud::CloudClient::new_unauthenticated()
+                    trestle_client::CloudClient::new_unauthenticated()
                 };
                 let base_url = base_url.parse().map_err(|e: url::ParseError| {
                     napi::Error::new(napi::Status::GenericFailure, e.to_string())
