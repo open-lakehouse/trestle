@@ -5,11 +5,11 @@ members = ["crates/*"]
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/delta-incubator/trestle"
+repository = "https://github.com/open-lakehouse/trestle"
 readme = "README.md"
 rust-version = "1.85"
 version = "0.1.0"
-homepage = "https://github.com/delta-incubator/trestle"
+homepage = "https://github.com/open-lakehouse/trestle"
 keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store"]
 
 [workspace.dependencies]

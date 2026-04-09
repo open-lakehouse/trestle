@@ -223,12 +223,12 @@ struct FileGenerateConfig {
     python_typings_filename: Option<String>,
     /// Set to `true` to generate `labels.rs` with `Resource` / `ObjectLabel` enums.
     generate_resource_enum: Option<bool>,
+    /// Set to `true` to emit `Label` impl and `RESOURCE_DESCRIPTORS` in `labels.rs`.
+    generate_store_integration: Option<bool>,
     /// Path to the `Error` type for generated `TryFrom<Resource>` impls (e.g. `"crate::Error"`).
     error_type_path: Option<String>,
-    /// Set to `true` to emit `object_conversions!` and `qualified_name()` in `labels.rs`.
+    /// Set to `true` to emit object conversion impls and `qualified_name()` in `labels.rs`.
     generate_object_conversions: Option<bool>,
-    /// Crate name for the derive macros (default: `"trestle_derive"`).
-    derive_crate_name: Option<String>,
     /// Crate name for the resource store types (default: `"trestle_store"`).
     resource_store_crate_name: Option<String>,
     python: Option<FilePythonConfig>,
@@ -447,6 +447,7 @@ fn build_config(
     });
 
     let generate_resource_enum = file_cfg.generate_resource_enum.unwrap_or(false);
+    let generate_store_integration = file_cfg.generate_store_integration.unwrap_or(false);
     let generate_object_conversions = file_cfg.generate_object_conversions.unwrap_or(false);
 
     CodeGenConfig {
@@ -462,14 +463,11 @@ fn build_config(
         models_path_crate_template: args.models_path_crate_template.clone().unwrap_or_default(),
         output,
         generate_resource_enum,
+        generate_store_integration,
         error_type_path: file_cfg.error_type_path.clone(),
         generate_object_conversions,
         bindings,
         models_gen_dir,
-        derive_crate_name: file_cfg
-            .derive_crate_name
-            .clone()
-            .unwrap_or_else(|| "trestle_derive".to_string()),
         resource_store_crate_name: file_cfg
             .resource_store_crate_name
             .clone()
