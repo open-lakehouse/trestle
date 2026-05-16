@@ -158,9 +158,9 @@ fn derive_ordered_hierarchy(
     let mut ancestors: Vec<(usize, String, String)> = global_map
         .iter()
         .filter(|((_, child), _)| child == &managed_type)
-        .filter_map(|((parent_type, _), field_name)| {
+        .map(|((parent_type, _), field_name)| {
             let depth = compute_depth(parent_type, global_map, &mut HashSet::new());
-            Some((depth, parent_type.clone(), field_name.clone()))
+            (depth, parent_type.clone(), field_name.clone())
         })
         .collect();
 

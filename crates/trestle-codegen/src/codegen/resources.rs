@@ -486,12 +486,7 @@ fn infer_package_prefix(packages: &[&str]) -> String {
     // Take only the top-level shared segment (one dot-level), not the full common prefix,
     // so version segments like "v1" don't get included when all packages share them.
     // Use the first segment as the meaningful namespace prefix.
-    let prefix_seg = if common_len > 0 {
-        first_parts[0]
-    } else {
-        first_parts[0]
-    };
-    format!(".{}.", prefix_seg)
+    format!(".{}.", first_parts[0])
 }
 
 /// Convert a fully-qualified protobuf message name to a Rust type path relative to
