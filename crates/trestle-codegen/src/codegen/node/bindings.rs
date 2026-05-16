@@ -471,8 +471,7 @@ fn generate_resource_accessor_method(service: &ServiceHandler<'_>) -> Option<Tok
     let has_name_field = !resource.descriptor.name_field.is_empty();
     let from_full_name_method = format_ident!("{}_from_full_name", resource.descriptor.singular);
     let method_call = if has_name_field && params.len() > 1 {
-        let format_str: String = std::iter::repeat("{}")
-            .take(params.len())
+        let format_str: String = std::iter::repeat_n("{}", params.len())
             .collect::<Vec<_>>()
             .join(".");
         quote! {
