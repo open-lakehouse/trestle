@@ -66,7 +66,7 @@ impl From<Error> for crate::Error {
 /// # let REGION = "foo";
 /// # let ACCESS_KEY_ID = "foo";
 /// # let SECRET_KEY = "foo";
-/// # use trestle_cloud::aws::AmazonBuilder;
+/// # use trestle_client::aws::AmazonBuilder;
 /// let config = AmazonBuilder::new()
 ///  .with_region(REGION)
 ///  .with_access_key_id(ACCESS_KEY_ID)
@@ -100,7 +100,7 @@ pub struct AmazonBuilder {
 ///
 /// # Example
 /// ```
-/// # use trestle_cloud::aws::{AmazonBuilder, AmazonS3ConfigKey};
+/// # use trestle_client::aws::{AmazonBuilder, AmazonS3ConfigKey};
 /// let builder = AmazonBuilder::new()
 ///     .with_config("aws_access_key_id".parse().unwrap(), "my-access-key-id")
 ///     .with_config(AmazonS3ConfigKey::DefaultRegion, "my-default-region");

@@ -50,7 +50,8 @@ use crate::utils::strings;
 pub(crate) use types::MethodPlanner;
 pub use types::{
     BodyField, GenerationPlan, ManagedResource, MethodPlan, PathParam, QueryParam, RequestParam,
-    RequestType, ServicePlan, SkippedMethod, extract_managed_resources, split_body_fields,
+    RequestType, ResourceHierarchy, ServicePlan, SkippedMethod, extract_managed_resources,
+    split_body_fields,
 };
 
 mod types;
@@ -60,20 +61,165 @@ mod types;
 /// Methods with missing HTTP annotations are excluded from the plan and recorded in
 /// [`GenerationPlan::skipped_methods`] so callers can distinguish "zero methods generated"
 /// from "all methods were silently dropped".
+///
+/// Hierarchy derivation uses a two-phase cross-service algorithm:
+/// 1. Build all service plans (hierarchy empty).
+/// 2. Construct a global parent map across all services, then assign depth-sorted hierarchies.
 pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
-    let mut services = Vec::new();
+    // Phase 1: analyze all services without hierarchy.
+    let mut plans = Vec::new();
     let mut skipped_methods = Vec::new();
-
     for service_info in metadata.services.values() {
-        let (service_plan, skipped) = analyze_service(metadata, service_info)?;
-        services.push(service_plan);
+        let (plan, skipped) = analyze_service(metadata, service_info)?;
+        plans.push(plan);
         skipped_methods.extend(skipped);
     }
+
+    // Phase 2: build the cross-service global parent map, then assign depth-sorted hierarchies.
+    let global_map = build_global_parent_map(&plans, metadata);
+    let services = plans
+        .into_iter()
+        .map(|mut plan| {
+            plan.hierarchy = derive_ordered_hierarchy(&plan, &global_map, metadata);
+            plan
+        })
+        .collect();
 
     Ok(GenerationPlan {
         services,
         skipped_methods,
     })
+}
+
+// ── Cross-service hierarchy resolution ────────────────────────────────────────────────────────
+
+/// Maps `(parent_resource_type, child_resource_type)` → proto field name that carries the
+/// parent identifier on the child service's List request (e.g. `"catalog_name"`).
+type GlobalParentMap = HashMap<(String, String), String>;
+
+/// Build a map of immediate-parent relationships by scanning every service's List method query
+/// params for `child_type`-annotated fields.
+///
+/// **Key semantic filter:** only params where `child_type == this service's managed resource type`
+/// are recorded. This ensures that `catalog_name` on `ListTablesRequest` (child_type = Table) is
+/// recorded as `(Catalog, Table)`, and `schema_name` as `(Schema, Table)` — but when walking
+/// Schema's own List method, `catalog_name` (child_type = Schema) is recorded as `(Catalog, Schema)`.
+/// The chain `Catalog → Schema → Table` is then reconstructable via depth analysis.
+fn build_global_parent_map(plans: &[ServicePlan], metadata: &CodeGenMetadata) -> GlobalParentMap {
+    let mut map: GlobalParentMap = HashMap::new();
+
+    for plan in plans {
+        let managed_type = match plan.managed_resources.first() {
+            Some(r) => &r.descriptor.r#type,
+            None => continue,
+        };
+        if managed_type.is_empty() {
+            continue;
+        }
+
+        for method in &plan.methods {
+            if method.request_type != RequestType::List {
+                continue;
+            }
+            for param in method.query_parameters() {
+                let Some(ref rr) = param.resource_reference else {
+                    continue;
+                };
+                // Only record when child_type matches this service's own managed resource type.
+                if rr.child_type != *managed_type {
+                    continue;
+                }
+                if let Some(parent_type) = resolve_parent_type_from_field(&param.name, metadata) {
+                    map.entry((parent_type, managed_type.clone()))
+                        .or_insert_with(|| param.name.clone());
+                }
+            }
+        }
+    }
+
+    map
+}
+
+/// Derive the ordered ancestor chain for a service's managed resource using the global parent map.
+///
+/// Returns entries sorted **root-first** (shallowest ancestor first), so iterating them gives
+/// the correct left-to-right param order (e.g. `[catalog_name, schema_name]` for a Table service).
+fn derive_ordered_hierarchy(
+    plan: &ServicePlan,
+    global_map: &GlobalParentMap,
+    metadata: &CodeGenMetadata,
+) -> Vec<ResourceHierarchy> {
+    let managed_type = match plan.managed_resources.first() {
+        Some(r) => r.descriptor.r#type.clone(),
+        None => return vec![],
+    };
+
+    // Collect all (parent_resource_type, parent_field_name) entries for this managed resource.
+    let mut ancestors: Vec<(usize, String, String)> = global_map
+        .iter()
+        .filter(|((_, child), _)| child == &managed_type)
+        .filter_map(|((parent_type, _), field_name)| {
+            let depth = compute_depth(parent_type, global_map, &mut HashSet::new());
+            Some((depth, parent_type.clone(), field_name.clone()))
+        })
+        .collect();
+
+    if ancestors.is_empty() {
+        return vec![];
+    }
+
+    // Sort root-first (ascending depth).
+    ancestors.sort_by_key(|(depth, _, _)| *depth);
+
+    ancestors
+        .into_iter()
+        .map(|(_, parent_type, field_name)| {
+            let parent_singular = field_name
+                .strip_suffix("_name")
+                .and_then(|s| metadata.resource_from_singular(s))
+                .map(|_| field_name.strip_suffix("_name").unwrap().to_string());
+            ResourceHierarchy {
+                child_resource_type: managed_type.clone(),
+                parent_resource_type: parent_type,
+                parent_field_name: field_name,
+                parent_singular,
+            }
+        })
+        .collect()
+}
+
+/// Compute the depth of a resource type in the parent chain (0 = root, no parent in map).
+///
+/// Uses `visited` for cycle detection; if a cycle is encountered, emits a warning and returns 0.
+fn compute_depth(
+    resource_type: &str,
+    map: &GlobalParentMap,
+    visited: &mut HashSet<String>,
+) -> usize {
+    if !visited.insert(resource_type.to_string()) {
+        warn!("Cycle detected in resource hierarchy at type: {resource_type}");
+        return 0;
+    }
+    let parent = map
+        .iter()
+        .find(|((_, child), _)| child == resource_type)
+        .map(|((parent, _), _)| parent.clone());
+
+    match parent {
+        None => 0,
+        Some(parent_type) => 1 + compute_depth(&parent_type, map, visited),
+    }
+}
+
+/// Resolve the resource type string for a proto field name by stripping `"_name"` and looking up
+/// the resulting singular in `metadata`.
+///
+/// Returns `None` if the field name doesn't end in `"_name"` or no resource matches.
+fn resolve_parent_type_from_field(field_name: &str, metadata: &CodeGenMetadata) -> Option<String> {
+    field_name
+        .strip_suffix("_name")
+        .and_then(|s| metadata.resource_from_singular(s))
+        .map(|rd| rd.r#type.clone())
 }
 
 /// Analyze a single service and create a service plan.
@@ -116,6 +262,7 @@ fn analyze_service(
             methods: method_plans,
             managed_resources,
             documentation: info.documentation.clone(),
+            hierarchy: vec![], // filled in Phase 2 of analyze_metadata
         },
         skipped,
     ))
@@ -253,6 +400,7 @@ fn extract_request_fields(
                 name: field.name.clone(),
                 field_type: field.unified_type.clone(),
                 documentation: field.documentation.clone(),
+                resource_reference: field.resource_reference.clone(),
             });
         }
         processed_fields.insert(field_name);
@@ -409,6 +557,7 @@ mod tests {
             oneof_variants: None,
             field_behavior: vec![],
             is_sensitive: false,
+            resource_reference: None,
         }
     }
 
@@ -425,6 +574,7 @@ mod tests {
             oneof_variants: None,
             field_behavior: vec![],
             is_sensitive: false,
+            resource_reference: None,
         }
     }
 
@@ -515,5 +665,404 @@ mod tests {
         let (_, _, body) = extract_request_fields(&method, &fields).unwrap();
         assert_eq!(body.len(), 1);
         assert!(body[0].repeated);
+    }
+
+    // ── Cross-service hierarchy chain resolution tests ─────────────────────────────────────────
+
+    /// Build a three-level metadata fixture: Catalog → Schema → Table.
+    ///
+    /// Three services:
+    /// - CatalogService: ListCatalogs (no child_type params), GetCatalog
+    /// - SchemaService: ListSchemas (catalog_name with child_type = Schema), GetSchema
+    /// - TableService: ListTables (catalog_name and schema_name both with child_type = Table), GetTable
+    fn make_three_level_metadata() -> (CodeGenMetadata, ServiceInfo, ServiceInfo, ServiceInfo) {
+        use crate::google::api::ResourceReference;
+        use crate::parsing::types::BaseType;
+
+        let mut messages = HashMap::new();
+
+        // Catalog resource
+        messages.insert(
+            "Catalog".to_string(),
+            MessageInfo {
+                name: "Catalog".to_string(),
+                fields: vec![],
+                resource_descriptor: Some(ResourceDescriptor {
+                    r#type: "example.io/Catalog".to_string(),
+                    pattern: vec!["catalogs/{catalog}".to_string()],
+                    name_field: "name".to_string(),
+                    history: 0,
+                    plural: "catalogs".to_string(),
+                    singular: "catalog".to_string(),
+                    style: vec![],
+                }),
+                documentation: None,
+            },
+        );
+
+        // Schema resource
+        messages.insert(
+            "Schema".to_string(),
+            MessageInfo {
+                name: "Schema".to_string(),
+                fields: vec![],
+                resource_descriptor: Some(ResourceDescriptor {
+                    r#type: "example.io/Schema".to_string(),
+                    pattern: vec!["schemas/{schema}".to_string()],
+                    name_field: "name".to_string(),
+                    history: 0,
+                    plural: "schemas".to_string(),
+                    singular: "schema".to_string(),
+                    style: vec![],
+                }),
+                documentation: None,
+            },
+        );
+
+        // Table resource
+        messages.insert(
+            "Table".to_string(),
+            MessageInfo {
+                name: "Table".to_string(),
+                fields: vec![],
+                resource_descriptor: Some(ResourceDescriptor {
+                    r#type: "example.io/Table".to_string(),
+                    pattern: vec!["tables/{table}".to_string()],
+                    name_field: "full_name".to_string(),
+                    history: 0,
+                    plural: "tables".to_string(),
+                    singular: "table".to_string(),
+                    style: vec![],
+                }),
+                documentation: None,
+            },
+        );
+
+        // ListCatalogsRequest — no child_type params
+        messages.insert(
+            "ListCatalogsRequest".to_string(),
+            MessageInfo {
+                name: "ListCatalogsRequest".to_string(),
+                fields: vec![],
+                resource_descriptor: None,
+                documentation: None,
+            },
+        );
+
+        // ListSchemasRequest — catalog_name with child_type = Schema
+        messages.insert(
+            "ListSchemasRequest".to_string(),
+            MessageInfo {
+                name: "ListSchemasRequest".to_string(),
+                fields: vec![MessageField {
+                    name: "catalog_name".to_string(),
+                    unified_type: UnifiedType {
+                        base_type: BaseType::String,
+                        is_optional: false,
+                        is_repeated: false,
+                    },
+                    documentation: None,
+                    oneof_variants: None,
+                    field_behavior: vec![crate::google::api::FieldBehavior::Required],
+                    is_sensitive: false,
+                    resource_reference: Some(ResourceReference {
+                        r#type: String::new(),
+                        child_type: "example.io/Schema".to_string(),
+                    }),
+                }],
+                resource_descriptor: None,
+                documentation: None,
+            },
+        );
+
+        // ListTablesRequest — catalog_name and schema_name, both child_type = Table (flat API)
+        messages.insert(
+            "ListTablesRequest".to_string(),
+            MessageInfo {
+                name: "ListTablesRequest".to_string(),
+                fields: vec![
+                    MessageField {
+                        name: "catalog_name".to_string(),
+                        unified_type: UnifiedType {
+                            base_type: BaseType::String,
+                            is_optional: false,
+                            is_repeated: false,
+                        },
+                        documentation: None,
+                        oneof_variants: None,
+                        field_behavior: vec![crate::google::api::FieldBehavior::Required],
+                        is_sensitive: false,
+                        resource_reference: Some(ResourceReference {
+                            r#type: String::new(),
+                            child_type: "example.io/Table".to_string(),
+                        }),
+                    },
+                    MessageField {
+                        name: "schema_name".to_string(),
+                        unified_type: UnifiedType {
+                            base_type: BaseType::String,
+                            is_optional: false,
+                            is_repeated: false,
+                        },
+                        documentation: None,
+                        oneof_variants: None,
+                        field_behavior: vec![crate::google::api::FieldBehavior::Required],
+                        is_sensitive: false,
+                        resource_reference: Some(ResourceReference {
+                            r#type: String::new(),
+                            child_type: "example.io/Table".to_string(),
+                        }),
+                    },
+                ],
+                resource_descriptor: None,
+                documentation: None,
+            },
+        );
+
+        let metadata = CodeGenMetadata {
+            messages,
+            ..Default::default()
+        };
+
+        let catalog_svc = ServiceInfo {
+            name: "CatalogService".to_string(),
+            package: "example.v1".to_string(),
+            documentation: None,
+            methods: vec![
+                MethodMetadata {
+                    service_name: "CatalogService".to_string(),
+                    method_name: "ListCatalogs".to_string(),
+                    input_type: "ListCatalogsRequest".to_string(),
+                    output_type: "ListCatalogsResponse".to_string(),
+                    operation: None,
+                    http_rule: HttpRule {
+                        selector: "".to_string(),
+                        pattern: Some(Pattern::Get("/catalogs".to_string())),
+                        body: "".to_string(),
+                        response_body: "".to_string(),
+                        additional_bindings: vec![],
+                    },
+                    http_pattern: HttpPattern::parse("/catalogs"),
+                    documentation: None,
+                },
+                MethodMetadata {
+                    service_name: "CatalogService".to_string(),
+                    method_name: "GetCatalog".to_string(),
+                    input_type: "GetCatalogRequest".to_string(),
+                    output_type: "Catalog".to_string(),
+                    operation: None,
+                    http_rule: HttpRule {
+                        selector: "".to_string(),
+                        pattern: Some(Pattern::Get("/catalogs/{name}".to_string())),
+                        body: "".to_string(),
+                        response_body: "".to_string(),
+                        additional_bindings: vec![],
+                    },
+                    http_pattern: HttpPattern::parse("/catalogs/{name}"),
+                    documentation: None,
+                },
+            ],
+        };
+
+        let schema_svc = ServiceInfo {
+            name: "SchemaService".to_string(),
+            package: "example.v1".to_string(),
+            documentation: None,
+            methods: vec![
+                MethodMetadata {
+                    service_name: "SchemaService".to_string(),
+                    method_name: "ListSchemas".to_string(),
+                    input_type: "ListSchemasRequest".to_string(),
+                    output_type: "ListSchemasResponse".to_string(),
+                    operation: None,
+                    http_rule: HttpRule {
+                        selector: "".to_string(),
+                        pattern: Some(Pattern::Get("/schemas".to_string())),
+                        body: "".to_string(),
+                        response_body: "".to_string(),
+                        additional_bindings: vec![],
+                    },
+                    http_pattern: HttpPattern::parse("/schemas"),
+                    documentation: None,
+                },
+                MethodMetadata {
+                    service_name: "SchemaService".to_string(),
+                    method_name: "GetSchema".to_string(),
+                    input_type: "GetSchemaRequest".to_string(),
+                    output_type: "Schema".to_string(),
+                    operation: None,
+                    http_rule: HttpRule {
+                        selector: "".to_string(),
+                        pattern: Some(Pattern::Get("/schemas/{full_name}".to_string())),
+                        body: "".to_string(),
+                        response_body: "".to_string(),
+                        additional_bindings: vec![],
+                    },
+                    http_pattern: HttpPattern::parse("/schemas/{full_name}"),
+                    documentation: None,
+                },
+            ],
+        };
+
+        let table_svc = ServiceInfo {
+            name: "TableService".to_string(),
+            package: "example.v1".to_string(),
+            documentation: None,
+            methods: vec![
+                MethodMetadata {
+                    service_name: "TableService".to_string(),
+                    method_name: "ListTables".to_string(),
+                    input_type: "ListTablesRequest".to_string(),
+                    output_type: "ListTablesResponse".to_string(),
+                    operation: None,
+                    http_rule: HttpRule {
+                        selector: "".to_string(),
+                        pattern: Some(Pattern::Get("/tables".to_string())),
+                        body: "".to_string(),
+                        response_body: "".to_string(),
+                        additional_bindings: vec![],
+                    },
+                    http_pattern: HttpPattern::parse("/tables"),
+                    documentation: None,
+                },
+                MethodMetadata {
+                    service_name: "TableService".to_string(),
+                    method_name: "GetTable".to_string(),
+                    input_type: "GetTableRequest".to_string(),
+                    output_type: "Table".to_string(),
+                    operation: None,
+                    http_rule: HttpRule {
+                        selector: "".to_string(),
+                        pattern: Some(Pattern::Get("/tables/{full_name}".to_string())),
+                        body: "".to_string(),
+                        response_body: "".to_string(),
+                        additional_bindings: vec![],
+                    },
+                    http_pattern: HttpPattern::parse("/tables/{full_name}"),
+                    documentation: None,
+                },
+            ],
+        };
+
+        (metadata, catalog_svc, schema_svc, table_svc)
+    }
+
+    /// Build service plans from three-level fixture metadata for hierarchy testing.
+    fn make_plans_from_fixture() -> (
+        Vec<ServicePlan>,
+        CodeGenMetadata,
+    ) {
+        let (metadata, catalog_svc, schema_svc, table_svc) = make_three_level_metadata();
+        let mut plans = Vec::new();
+        for svc in &[&catalog_svc, &schema_svc, &table_svc] {
+            let (plan, _) = analyze_service(&metadata, svc).unwrap();
+            plans.push(plan);
+        }
+        (plans, metadata)
+    }
+
+    #[test]
+    fn test_build_global_parent_map() {
+        let (plans, metadata) = make_plans_from_fixture();
+        let map = build_global_parent_map(&plans, &metadata);
+
+        // Catalog → Schema (from ListSchemasRequest.catalog_name with child_type=Schema)
+        assert_eq!(
+            map.get(&("example.io/Catalog".to_string(), "example.io/Schema".to_string())),
+            Some(&"catalog_name".to_string()),
+            "Catalog→Schema mapping missing"
+        );
+        // Schema → Table (from ListTablesRequest.schema_name with child_type=Table)
+        assert_eq!(
+            map.get(&("example.io/Schema".to_string(), "example.io/Table".to_string())),
+            Some(&"schema_name".to_string()),
+            "Schema→Table mapping missing"
+        );
+        // Catalog → Table (flat-API artifact from ListTablesRequest.catalog_name)
+        assert_eq!(
+            map.get(&("example.io/Catalog".to_string(), "example.io/Table".to_string())),
+            Some(&"catalog_name".to_string()),
+            "Catalog→Table flat-API mapping missing"
+        );
+    }
+
+    #[test]
+    fn test_derive_ordered_hierarchy_three_levels() {
+        let (plans, metadata) = make_plans_from_fixture();
+        let map = build_global_parent_map(&plans, &metadata);
+        let table_plan = plans.iter().find(|p| p.service_name == "TableService").unwrap();
+        let hierarchy = derive_ordered_hierarchy(table_plan, &map, &metadata);
+
+        assert_eq!(hierarchy.len(), 2, "expected 2 ancestors for Table");
+        // Root-first: catalog_name (depth 0) before schema_name (depth 1)
+        assert_eq!(hierarchy[0].parent_field_name, "catalog_name");
+        assert_eq!(hierarchy[1].parent_field_name, "schema_name");
+        assert_eq!(hierarchy[0].parent_resource_type, "example.io/Catalog");
+        assert_eq!(hierarchy[1].parent_resource_type, "example.io/Schema");
+        assert_eq!(hierarchy[0].parent_singular, Some("catalog".to_string()));
+        assert_eq!(hierarchy[1].parent_singular, Some("schema".to_string()));
+        // child_resource_type is the managed resource (Table) for all entries
+        assert!(hierarchy.iter().all(|h| h.child_resource_type == "example.io/Table"));
+    }
+
+    #[test]
+    fn test_derive_ordered_hierarchy_two_levels() {
+        let (plans, metadata) = make_plans_from_fixture();
+        let map = build_global_parent_map(&plans, &metadata);
+        let schema_plan = plans.iter().find(|p| p.service_name == "SchemaService").unwrap();
+        let hierarchy = derive_ordered_hierarchy(schema_plan, &map, &metadata);
+
+        assert_eq!(hierarchy.len(), 1);
+        assert_eq!(hierarchy[0].parent_field_name, "catalog_name");
+        assert_eq!(hierarchy[0].parent_resource_type, "example.io/Catalog");
+    }
+
+    #[test]
+    fn test_derive_ordered_hierarchy_root_resource() {
+        let (plans, metadata) = make_plans_from_fixture();
+        let map = build_global_parent_map(&plans, &metadata);
+        let catalog_plan = plans.iter().find(|p| p.service_name == "CatalogService").unwrap();
+        let hierarchy = derive_ordered_hierarchy(catalog_plan, &map, &metadata);
+
+        assert!(hierarchy.is_empty(), "root resource should have empty hierarchy");
+    }
+
+    #[test]
+    fn test_compute_depth_cycle_guard() {
+        // A ↔ B mutual cycle: neither should cause a panic or infinite recursion.
+        let mut map: GlobalParentMap = HashMap::new();
+        map.insert(("A".to_string(), "B".to_string()), "a_name".to_string());
+        map.insert(("B".to_string(), "A".to_string()), "b_name".to_string());
+
+        // Should return without panicking.
+        let depth_a = compute_depth("A", &map, &mut HashSet::new());
+        let depth_b = compute_depth("B", &map, &mut HashSet::new());
+        // Exact values are unspecified due to cycle detection, but must not overflow.
+        let _ = (depth_a, depth_b);
+    }
+
+    #[test]
+    fn test_full_analyze_metadata_hierarchy_ordering() {
+        let (metadata, catalog_svc, schema_svc, table_svc) = make_three_level_metadata();
+        let mut services_map = HashMap::new();
+        services_map.insert("CatalogService".to_string(), catalog_svc);
+        services_map.insert("SchemaService".to_string(), schema_svc);
+        services_map.insert("TableService".to_string(), table_svc);
+        let full_metadata = CodeGenMetadata {
+            messages: metadata.messages,
+            services: services_map,
+            ..Default::default()
+        };
+
+        let plan = analyze_metadata(&full_metadata).unwrap();
+        let table_svc_plan = plan
+            .services
+            .iter()
+            .find(|s| s.service_name == "TableService")
+            .expect("TableService plan not found");
+
+        assert_eq!(table_svc_plan.hierarchy.len(), 2);
+        assert_eq!(table_svc_plan.hierarchy[0].parent_field_name, "catalog_name");
+        assert_eq!(table_svc_plan.hierarchy[1].parent_field_name, "schema_name");
     }
 }

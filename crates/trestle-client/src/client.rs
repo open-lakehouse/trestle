@@ -129,7 +129,7 @@ impl Certificate {
     /// # Example from a PEM file
     ///
     /// ```no_run
-    /// # use trestle_cloud::Certificate;
+    /// # use trestle_client::Certificate;
     /// # use std::fs::File;
     /// # use std::io::Read;
     /// let mut buf = Vec::new();

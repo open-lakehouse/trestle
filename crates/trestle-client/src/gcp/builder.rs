@@ -67,7 +67,7 @@ impl From<Error> for crate::Error {
 ///
 /// # Example
 /// ```
-/// # use trestle_cloud::gcp::GoogleBuilder;
+/// # use trestle_client::gcp::GoogleBuilder;
 /// let gcs = GoogleBuilder::from_env().build(None);
 /// ```
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ pub struct GoogleBuilder {
 ///
 /// # Example
 /// ```
-/// # use trestle_cloud::gcp::{GoogleBuilder, GoogleConfigKey};
+/// # use trestle_client::gcp::{GoogleBuilder, GoogleConfigKey};
 /// let builder = GoogleBuilder::new()
 ///     .with_config("google_service_account".parse().unwrap(), "my-service-account");
 /// ```
@@ -183,7 +183,7 @@ impl GoogleBuilder {
     ///
     /// # Example
     /// ```
-    /// use trestle_cloud::gcp::GoogleBuilder;
+    /// use trestle_client::gcp::GoogleBuilder;
     ///
     /// let gcs = GoogleBuilder::from_env()
     ///     .build(None);
@@ -227,7 +227,7 @@ impl GoogleBuilder {
     ///
     /// # Example
     /// ```
-    /// use trestle_cloud::gcp::{GoogleBuilder, GoogleConfigKey};
+    /// use trestle_client::gcp::{GoogleBuilder, GoogleConfigKey};
     ///
     /// let builder = GoogleBuilder::from_env()
     ///     .with_service_account_key("foo");

@@ -323,16 +323,46 @@ fn generate_resource_accessor_methods_for_typings(
         Some(r) => r,
         None => return vec![],
     };
-    let parent_pattern = match parent_resource.descriptor.pattern.first() {
-        Some(p) => p.as_str(),
-        None => return vec![],
-    };
+    let parent_singular = &parent_resource.descriptor.singular;
 
     let mut methods = Vec::new();
 
     for other in all_services {
         let child_resource = match other.resource() {
             Some(r) => r,
+            None => continue,
+        };
+
+        // --- Annotation-driven path ---
+        // A child service owns this parent if any of its hierarchy entries name this parent.
+        let annotation_match = other.plan.hierarchy.iter().any(|h| {
+            h.parent_singular
+                .as_deref()
+                .map(|s| s == parent_singular)
+                .unwrap_or(false)
+        });
+
+        if annotation_match {
+            let method_name = &child_resource.descriptor.singular;
+            let accessor_params = derive_resource_accessor_params(other);
+            let mut params = vec!["self".to_string()];
+            params.extend(accessor_params.iter().map(|p| format!("{}: str", p)));
+            let return_type = format!("{}", other.client_type());
+
+            methods.push(generate_method_template(
+                method_name,
+                &params,
+                &return_type,
+                None,
+                1,
+            ));
+            continue;
+        }
+
+        // --- Heuristic fallback: pattern prefix matching ---
+        // Kept for resources without hierarchy annotations (e.g. Column under Table).
+        let parent_pattern = match parent_resource.descriptor.pattern.first() {
+            Some(p) => p.as_str(),
             None => continue,
         };
         let child_pattern = match child_resource.descriptor.pattern.first() {

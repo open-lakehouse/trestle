@@ -40,6 +40,7 @@ const GOOGLE_API_HTTP_EXTENSION: u32 = 72295728; // google.api.http
 const GNOSTIC_OPERATION_EXTENSION: u32 = 1143; // gnostic.openapi.v3.operation
 const GOOGLE_API_RESOURCE_EXTENSION: u32 = 1053; // google.api.resource
 const GOOGLE_API_FIELD_BEHAVIOR_EXTENSION: u32 = 1052; // google.api.field_behavior
+const GOOGLE_API_RESOURCE_REFERENCE_EXTENSION: u32 = 1055; // google.api.resource_reference
 
 pub fn parse_file_descriptor_set(
     file_descriptor_set: &FileDescriptorSet,

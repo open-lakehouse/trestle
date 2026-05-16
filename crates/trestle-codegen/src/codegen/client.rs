@@ -24,7 +24,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
 
     let tokens = quote! {
-        use trestle_cloud::CloudClient;
+        use trestle_client::CloudClient;
         use url::Url;
         use #result_path;
         use #mod_path::*;

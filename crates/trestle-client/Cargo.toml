@@ -1,5 +1,5 @@
 [package]
-name = "trestle-cloud"
+name = "trestle-client"
 description = "Cloud provider credential abstraction for AWS, Azure, and GCP"
 edition.workspace = true
 homepage.workspace = true

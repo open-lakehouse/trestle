@@ -87,8 +87,8 @@ pub use codegen::{
 
 pub use analysis::{
     BodyField, GenerationPlan, ManagedResource, MethodPlan, PathParam, QueryParam, RequestParam,
-    RequestType, ServicePlan, SkippedMethod, analyze_metadata, extract_managed_resources,
-    split_body_fields,
+    RequestType, ResourceHierarchy, ServicePlan, SkippedMethod, analyze_metadata,
+    extract_managed_resources, split_body_fields,
 };
 // Note: MethodPlanner is pub(crate) — it is an internal helper, not part of the public API.
 pub use openapi_enrich::run as enrich_openapi;

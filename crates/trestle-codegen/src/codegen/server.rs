@@ -357,6 +357,7 @@ mod tests {
                 is_repeated: true,
             },
             documentation: None,
+            resource_reference: None,
         })
     }
 
@@ -369,6 +370,7 @@ mod tests {
                 is_repeated: false,
             },
             documentation: None,
+            resource_reference: None,
         })
     }
 
@@ -381,6 +383,7 @@ mod tests {
                 is_repeated: true,
             },
             documentation: None,
+            resource_reference: None,
         })
     }
 

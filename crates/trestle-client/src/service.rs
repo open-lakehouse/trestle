@@ -46,7 +46,7 @@ impl HttpService for ReqwestService {
 /// # Example
 ///
 /// ```ignore
-/// use trestle_cloud::CloudClient;
+/// use trestle_client::CloudClient;
 ///
 /// let io_runtime = tokio::runtime::Runtime::new().unwrap();
 /// let client = CloudClient::new_with_token("tok")
