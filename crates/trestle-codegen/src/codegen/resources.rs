@@ -70,13 +70,14 @@ pub(crate) fn generate_resource_enum(
             };
 
             // Derive path_names from the service plan for this resource.
-            // A resource is hierarchical if its descriptor explicitly sets name_field = "full_name"
+            // A resource is hierarchical if its descriptor explicitly sets name_field (any value)
             // OR if the message has a full_name field (server-computed dot-joined composite).
             let message_has_full_name = info.fields.iter().any(|f| f.name == "full_name");
             let path_names = derive_path_names(
                 &rd.singular,
-                rd.name_field == "full_name" || message_has_full_name,
+                !rd.name_field.is_empty() || message_has_full_name,
                 plan,
+                metadata,
             );
 
             // Compute field descriptors with roles for the resource registry.
@@ -299,7 +300,7 @@ pub(crate) fn generate_resource_enum(
 
     // Generate the resource descriptor registry and Label impl (only when store integration is enabled)
     let registry_impl = if config.generate_store_integration {
-        generate_resource_registry(&resources, config)
+        generate_resource_registry(&resources, config, plan, metadata)
     } else {
         quote! {}
     };
@@ -346,8 +347,13 @@ enum FieldRoleEntry {
 
 /// Derive the ordered list of field names used to build a `ResourceName` for a resource.
 ///
-/// Uses the same two-signal logic as `derive_resource_accessor_params` in the Python codegen:
-/// 1. `name_field = "full_name"` on the descriptor → resource has decomposable composite name
+/// **Annotation-driven path** (preferred): when the service for `singular` has
+/// `hierarchy` entries from `resource_reference { child_type }` annotations, the
+/// parent field names are taken directly from those entries (in the order they appear
+/// as List method query params), followed by `"name"`.
+///
+/// **Heuristic fallback** (when no annotations present): uses the same two-signal logic:
+/// 1. `name_field` non-empty on the descriptor → resource has decomposable composite name
 /// 2. Check the List method's required string-typed query params for parent names
 ///
 /// Returns e.g. `["catalog_name", "schema_name", "name"]` for Table,
@@ -356,6 +362,7 @@ fn derive_path_names(
     singular: &str,
     has_full_name_field: bool,
     plan: &GenerationPlan,
+    metadata: &CodeGenMetadata,
 ) -> Vec<String> {
     // Find the service whose singular resource name matches
     let service = plan.services.iter().find(|s| {
@@ -368,6 +375,30 @@ fn derive_path_names(
         return vec!["name".to_string()];
     };
 
+    // Find this resource's type string from metadata
+    let resource_type = metadata
+        .resource_from_singular(singular)
+        .map(|rd| rd.r#type.clone())
+        .unwrap_or_default();
+
+    // --- Annotation-driven path ---
+    // Collect hierarchy entries for this resource type, in List-method param order.
+    if !service.hierarchy.is_empty() && !resource_type.is_empty() {
+        let annotation_parents: Vec<String> = service
+            .hierarchy
+            .iter()
+            .filter(|h| h.child_resource_type == resource_type)
+            .map(|h| h.parent_field_name.clone())
+            .collect();
+
+        if !annotation_parents.is_empty() {
+            let mut params = annotation_parents;
+            params.push("name".to_string());
+            return params;
+        }
+    }
+
+    // --- Heuristic fallback ---
     // Get the Get method's path param name
     let get_path_param = service
         .methods
@@ -492,7 +523,12 @@ fn message_name_to_rust_path(name: &str, prefix: &str, super_levels: u32) -> Opt
 ///    label type compatible with the generic resource store.
 /// 2. `pub static RESOURCE_DESCRIPTORS: &[ResourceTypeDescriptor]` — a static registry
 ///    of all resource types with field roles, path names, and parent relationships.
-fn generate_resource_registry(resources: &[ResourceEntry], config: &CodeGenConfig) -> TokenStream {
+fn generate_resource_registry(
+    resources: &[ResourceEntry],
+    config: &CodeGenConfig,
+    plan: &GenerationPlan,
+    metadata: &CodeGenMetadata,
+) -> TokenStream {
     let store_crate = format_ident!("{}", config.resource_store_crate_name);
 
     // --- Label impl for ObjectLabel ---
@@ -506,22 +542,50 @@ fn generate_resource_registry(resources: &[ResourceEntry], config: &CodeGenConfi
     };
 
     // --- RESOURCE_DESCRIPTORS static ---
-    // Compute parent_label for each resource by cross-referencing path_names.
-    // A resource with path_names ["catalog_name", "schema_name", "name"] has parent
-    // equal to the resource whose path_names length is one less and whose singular
-    // name matches the second-to-last path component (minus the "_name" suffix).
+    // Compute parent_label for each resource.
+    // Annotation-driven: look for hierarchy entries across all services where
+    // child_resource_type matches this resource's type string. The parent singular
+    // is stored directly on the hierarchy entry.
+    // Heuristic fallback: for resources without annotation data, strip "_name" from
+    // the second-to-last path_names component and match against known resource singulars.
     let parent_labels: Vec<Option<String>> = resources
         .iter()
         .map(|r| {
             if r.path_names.len() <= 1 {
                 return None;
             }
-            // The second-to-last path component holds the parent's singular name + "_name"
+
+            // Try annotation-driven path first
+            let resource_type = metadata
+                .resource_from_singular(&r.singular)
+                .map(|rd| rd.r#type.as_str())
+                .unwrap_or("");
+            if !resource_type.is_empty() {
+                for service in &plan.services {
+                    for h in &service.hierarchy {
+                        if h.child_resource_type == resource_type {
+                            if let Some(ref parent_sing) = h.parent_singular {
+                                let found = resources.iter().find_map(|candidate| {
+                                    if candidate.singular == *parent_sing {
+                                        Some(candidate.variant_name.clone())
+                                    } else {
+                                        None
+                                    }
+                                });
+                                if found.is_some() {
+                                    return found;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Heuristic fallback: strip "_name" from second-to-last path component
             let parent_path_component = &r.path_names[r.path_names.len() - 2];
             let parent_singular = parent_path_component
                 .strip_suffix("_name")
                 .unwrap_or(parent_path_component);
-            // Find the resource with that singular name
             resources.iter().find_map(|candidate| {
                 if candidate.singular == parent_singular {
                     Some(candidate.variant_name.clone())

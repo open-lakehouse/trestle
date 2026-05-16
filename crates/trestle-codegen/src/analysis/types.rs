@@ -74,6 +74,15 @@ pub struct ServicePlan {
     pub managed_resources: Vec<ManagedResource>,
     /// Documentation from protobuf service comments
     pub documentation: Option<String>,
+    /// Ancestor chain for this service's managed resource, derived cross-service from
+    /// `resource_reference { child_type }` annotations.
+    ///
+    /// Entries are ordered **root-first** (shallowest ancestor first). For example, for
+    /// a Table service this would be `[catalog_name (depth 0), schema_name (depth 1)]`.
+    ///
+    /// Empty when no `resource_reference` annotations are present — codegen falls back to
+    /// naming heuristics in that case.
+    pub hierarchy: Vec<ResourceHierarchy>,
 }
 
 /// Plan for generating code for a single method
@@ -195,6 +204,12 @@ pub struct QueryParam {
     pub field_type: UnifiedType,
     /// Documentation from protobuf field comments
     pub documentation: Option<String>,
+    /// Resource reference annotation, if present on the corresponding proto field.
+    ///
+    /// - `child_type` non-empty: this param scopes a parent of that resource type
+    ///   (e.g. `catalog_name` with `child_type = "unitycatalog.io/Schema"`).
+    /// - `r#type` non-empty: this param directly identifies a resource of that type.
+    pub resource_reference: Option<crate::google::api::ResourceReference>,
 }
 
 impl QueryParam {
@@ -255,6 +270,37 @@ pub struct ManagedResource {
     pub type_name: String,
     /// Resource descriptor information
     pub descriptor: ResourceDescriptor,
+}
+
+/// Describes one ancestor step in a managed resource's parent chain, derived from
+/// `google.api.resource_reference { child_type }` annotations on List request fields.
+///
+/// Entries in [`ServicePlan::hierarchy`] are ordered **root-first** (shallowest ancestor first),
+/// so iterating them in order produces the correct param list for resource accessors (e.g.
+/// `["catalog_name", "schema_name"]` for a Table, where catalog is depth 0 and schema depth 1).
+///
+/// Built during analysis via the cross-service global parent map and stored on [`ServicePlan`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ResourceHierarchy {
+    /// The service's managed resource type string (e.g. `"unitycatalog.io/Table"`).
+    ///
+    /// Note: on flat APIs this equals the `child_type` annotation value, but the *actual*
+    /// resource type of the ancestor is `parent_resource_type`, which may differ.
+    pub child_resource_type: String,
+    /// The actual resource type of the ancestor identified by `parent_field_name`
+    /// (e.g. `"unitycatalog.io/Catalog"` for the `catalog_name` field on ListTablesRequest).
+    ///
+    /// This may differ from `child_resource_type` for grandparent fields on flat APIs
+    /// (e.g. `catalog_name` on ListTablesRequest has `child_type = Table` but the field
+    /// actually identifies a Catalog resource).
+    pub parent_resource_type: String,
+    /// The proto field name carrying the ancestor identifier (e.g. `"catalog_name"`).
+    pub parent_field_name: String,
+    /// The singular name of the ancestor resource (e.g. `"catalog"`), resolved by stripping
+    /// `"_name"` from `parent_field_name` and matching against known resource descriptors.
+    /// `None` when the singular cannot be resolved.
+    pub parent_singular: Option<String>,
 }
 
 /// Classifies an RPC method as a standard CRUD operation or custom operation.

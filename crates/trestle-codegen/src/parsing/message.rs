@@ -7,7 +7,7 @@ use protobuf::descriptor::field_descriptor_proto::{Label, Type};
 use protobuf::descriptor::{DescriptorProto, FieldDescriptorProto, MessageOptions, SourceCodeInfo};
 
 use super::{CodeGenMetadata, MessageField, MessageInfo, OneofVariant, extract_documentation};
-use crate::google::api::{FieldBehavior, ResourceDescriptor};
+use crate::google::api::{FieldBehavior, ResourceDescriptor, ResourceReference};
 use crate::parsing::types::{BaseType, UnifiedType};
 use crate::{Error, Result};
 
@@ -100,6 +100,9 @@ pub(super) fn process_message(
         // Extract debug_redact option (marks sensitive fields)
         let is_sensitive = extract_debug_redact(field);
 
+        // Extract resource_reference annotation (ext 1055)
+        let resource_reference = extract_resource_reference(field)?;
+
         let field_info = MessageField {
             name: field.name().to_string(),
             unified_type,
@@ -107,6 +110,7 @@ pub(super) fn process_message(
             field_behavior,
             oneof_variants: None,
             is_sensitive,
+            resource_reference,
         };
         fields.push(field_info);
     }
@@ -133,6 +137,7 @@ pub(super) fn process_message(
             documentation: None,
             field_behavior: vec![],
             is_sensitive: false,
+            resource_reference: None,
         };
 
         fields.push(oneof_field);
@@ -260,6 +265,47 @@ fn extract_debug_redact(field: &FieldDescriptorProto) -> bool {
         }
     }
     false
+}
+
+/// Extract `google.api.resource_reference` option from field-level options.
+///
+/// Extension field 1055 on `google.protobuf.FieldOptions`.
+///
+/// - `child_type` non-empty: this field identifies a parent container for the named resource.
+/// - `r#type` non-empty: this field directly identifies a resource of that type.
+fn extract_resource_reference(
+    field: &FieldDescriptorProto,
+) -> Result<Option<ResourceReference>> {
+    let Some(options) = field.options.as_ref() else {
+        return Ok(None);
+    };
+    for (field_number, field_value) in options.unknown_fields().iter() {
+        if field_number == super::GOOGLE_API_RESOURCE_REFERENCE_EXTENSION {
+            let data = match field_value {
+                protobuf::UnknownValueRef::LengthDelimited(bytes) => bytes,
+                _ => continue,
+            };
+            match ResourceReference::decode(data) {
+                Ok(rr) => {
+                    // Only return Some if at least one of the fields is non-empty
+                    if rr.r#type.is_empty() && rr.child_type.is_empty() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(rr));
+                }
+                Err(e) => {
+                    return Err(Error::InvalidAnnotation {
+                        object: field.name().to_string(),
+                        message: format!(
+                            "Failed to parse google.api.resource_reference: {}",
+                            e
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Decode a varint from the given cursor

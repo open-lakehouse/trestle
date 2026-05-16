@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::gnostic::openapi::v3::Operation;
-use crate::google::api::{FieldBehavior, HttpRule, ResourceDescriptor};
+use crate::google::api::{FieldBehavior, HttpRule, ResourceDescriptor, ResourceReference};
 use crate::parsing::http::HttpPattern;
 use crate::parsing::types::{BaseType, UnifiedType};
 
@@ -86,6 +86,13 @@ pub struct MessageField {
     /// Whether the field is marked with `debug_redact = true` in the proto definition.
     /// Indicates the field contains sensitive data that should be routed to secret storage.
     pub is_sensitive: bool,
+    /// Resource reference annotation from `google.api.resource_reference` (ext 1055).
+    ///
+    /// - `child_type` non-empty: this field identifies a parent container for the named resource
+    ///   (e.g. `catalog_name` with `child_type = "unitycatalog.io/Schema"`).
+    /// - `r#type` non-empty: this field directly identifies a resource of that type
+    ///   (e.g. `full_name` with `type = "unitycatalog.io/Table"`).
+    pub resource_reference: Option<ResourceReference>,
 }
 
 /// Information about a variant in a oneof field

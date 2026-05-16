@@ -464,16 +464,37 @@ fn generate_resource_accessor_method(service: &ServiceHandler<'_>) -> Option<Tok
         .iter()
         .map(|id| quote! { #id: String })
         .collect::<Vec<_>>();
-    let param_refs = param_idents
-        .iter()
-        .map(|id| quote! { #id })
-        .collect::<Vec<_>>();
 
-    let method_call = quote! {
-        #[napi]
-        pub fn #method_name(&self, #(#param_list),*) -> #client_name {
-            #client_name {
-                client: self.client.#method_name(#(#param_refs),*),
+    // When the resource uses a composite `full_name` (name_field is set and there are multiple
+    // decomposed params), the underlying Rust client accessor takes a single `full_name` string.
+    // Join the decomposed params with a `.` separator and call `{method}_from_full_name`.
+    let has_name_field = !resource.descriptor.name_field.is_empty();
+    let from_full_name_method = format_ident!("{}_from_full_name", resource.descriptor.singular);
+    let method_call = if has_name_field && params.len() > 1 {
+        let format_str: String = std::iter::repeat("{}")
+            .take(params.len())
+            .collect::<Vec<_>>()
+            .join(".");
+        quote! {
+            #[napi]
+            pub fn #method_name(&self, #(#param_list),*) -> #client_name {
+                let full_name = format!(#format_str, #(#param_idents),*);
+                #client_name {
+                    client: self.client.#from_full_name_method(full_name),
+                }
+            }
+        }
+    } else {
+        let param_refs = param_idents
+            .iter()
+            .map(|id| quote! { #id })
+            .collect::<Vec<_>>();
+        quote! {
+            #[napi]
+            pub fn #method_name(&self, #(#param_list),*) -> #client_name {
+                #client_name {
+                    client: self.client.#method_name(#(#param_refs),*),
+                }
             }
         }
     };

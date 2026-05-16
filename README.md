@@ -12,8 +12,7 @@ resource store — all driven by proto annotations.
 |-------|-------------|
 | [`trestle-codegen`](crates/trestle-codegen) | Proto-driven code generation for REST handlers, clients, resource registries, and language bindings |
 | [`trestle-store`](crates/trestle-store) | Generic, TAO-inspired object and association store with field-role enforcement |
-| [`trestle-derive`](crates/trestle-derive) | Derive macros for `Object` ↔ typed struct conversions |
-| [`trestle-cloud`](crates/trestle-cloud) | Unified cloud credential abstraction for AWS, Azure, GCP, and Databricks |
+| [`trestle-client`](crates/trestle-client) | HTTP client based on reqwest with build in Authorization for many clouds. |
 
 ## How it works
 

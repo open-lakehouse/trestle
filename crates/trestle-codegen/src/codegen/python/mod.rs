@@ -42,25 +42,40 @@ pub(super) fn resource_pattern_params(pattern: &str) -> Vec<String> {
 
 /// Derive the parameter names for a resource accessor method on the main client.
 ///
-/// Uses two signals from the proto metadata to determine whether the resource
-/// needs a hierarchical parameter list (e.g. `catalog_name, schema_name`) or a
-/// single composite name:
+/// **Annotation-driven path** (preferred): when the service has `hierarchy` entries
+/// from `resource_reference { child_type }` annotations, the parent field names are
+/// taken directly from those entries (in List method query param order).
 ///
-/// 1. `name_field = "full_name"` on the `ResourceDescriptor` indicates the
-///    resource stores a decomposable composite name (e.g. Schema).
-/// 2. The Get method's path parameter name: `{full_name}` means the API accepts
-///    a pre-composed name (single param), while `{name}` means the resource uses
-///    its own simple name and needs parent context from the List method.
-///
-/// The parent hierarchy is read from the List method's required string-typed
-/// query parameters (e.g. `catalog_name`, `schema_name`).
+/// **Heuristic fallback** (when no annotations present): uses two signals:
+/// 1. `name_field` non-empty on the `ResourceDescriptor` → resource has a composite name.
+/// 2. Get method path param `"name"` + required string params on List method.
 pub(super) fn derive_resource_accessor_params(service: &ServiceHandler<'_>) -> Vec<String> {
     let resource = match service.resource() {
         Some(r) => r,
         None => return vec!["name".to_string()],
     };
 
-    let has_explicit_full_name = resource.descriptor.name_field == "full_name";
+    // --- Annotation-driven path ---
+    // Find hierarchy entries for this resource's type string
+    let resource_type = &resource.descriptor.r#type;
+    if !service.plan.hierarchy.is_empty() && !resource_type.is_empty() {
+        let annotation_parents: Vec<String> = service
+            .plan
+            .hierarchy
+            .iter()
+            .filter(|h| &h.child_resource_type == resource_type)
+            .map(|h| h.parent_field_name.clone())
+            .collect();
+
+        if !annotation_parents.is_empty() {
+            let mut params = annotation_parents;
+            params.push(format!("{}_name", resource.descriptor.singular));
+            return params;
+        }
+    }
+
+    // --- Heuristic fallback ---
+    let has_explicit_name_field = !resource.descriptor.name_field.is_empty();
 
     let get_path_param_name = service
         .methods()
@@ -79,7 +94,7 @@ pub(super) fn derive_resource_accessor_params(service: &ServiceHandler<'_>) -> V
         })
         .unwrap_or_default();
 
-    let should_decompose = has_explicit_full_name
+    let should_decompose = has_explicit_name_field
         || (get_path_param_name.as_deref() == Some("name") && !parent_params.is_empty());
 
     if should_decompose {
