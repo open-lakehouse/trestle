@@ -48,10 +48,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
+        id: stable-toolchain
       - name: Install cargo-msrv
-        run: cargo install cargo-msrv --locked
-      - name: Verify MSRV
-        run: cargo msrv verify --workspace
+        run: cargo +stable install cargo-msrv --locked
+      - name: Verify MSRV (trestle-store)
+        run: cargo msrv verify --manifest-path crates/trestle-store/Cargo.toml
+      - name: Verify MSRV (trestle-client)
+        run: cargo msrv verify --manifest-path crates/trestle-client/Cargo.toml
+      - name: Verify MSRV (trestle-codegen)
+        run: cargo msrv verify --manifest-path crates/trestle-codegen/Cargo.toml
 
   test:
     name: Test / ${{ matrix.os }}
