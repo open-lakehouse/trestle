@@ -948,10 +948,7 @@ mod tests {
     }
 
     /// Build service plans from three-level fixture metadata for hierarchy testing.
-    fn make_plans_from_fixture() -> (
-        Vec<ServicePlan>,
-        CodeGenMetadata,
-    ) {
+    fn make_plans_from_fixture() -> (Vec<ServicePlan>, CodeGenMetadata) {
         let (metadata, catalog_svc, schema_svc, table_svc) = make_three_level_metadata();
         let mut plans = Vec::new();
         for svc in &[&catalog_svc, &schema_svc, &table_svc] {
@@ -968,19 +965,28 @@ mod tests {
 
         // Catalog → Schema (from ListSchemasRequest.catalog_name with child_type=Schema)
         assert_eq!(
-            map.get(&("example.io/Catalog".to_string(), "example.io/Schema".to_string())),
+            map.get(&(
+                "example.io/Catalog".to_string(),
+                "example.io/Schema".to_string()
+            )),
             Some(&"catalog_name".to_string()),
             "Catalog→Schema mapping missing"
         );
         // Schema → Table (from ListTablesRequest.schema_name with child_type=Table)
         assert_eq!(
-            map.get(&("example.io/Schema".to_string(), "example.io/Table".to_string())),
+            map.get(&(
+                "example.io/Schema".to_string(),
+                "example.io/Table".to_string()
+            )),
             Some(&"schema_name".to_string()),
             "Schema→Table mapping missing"
         );
         // Catalog → Table (flat-API artifact from ListTablesRequest.catalog_name)
         assert_eq!(
-            map.get(&("example.io/Catalog".to_string(), "example.io/Table".to_string())),
+            map.get(&(
+                "example.io/Catalog".to_string(),
+                "example.io/Table".to_string()
+            )),
             Some(&"catalog_name".to_string()),
             "Catalog→Table flat-API mapping missing"
         );
@@ -990,7 +996,10 @@ mod tests {
     fn test_derive_ordered_hierarchy_three_levels() {
         let (plans, metadata) = make_plans_from_fixture();
         let map = build_global_parent_map(&plans, &metadata);
-        let table_plan = plans.iter().find(|p| p.service_name == "TableService").unwrap();
+        let table_plan = plans
+            .iter()
+            .find(|p| p.service_name == "TableService")
+            .unwrap();
         let hierarchy = derive_ordered_hierarchy(table_plan, &map, &metadata);
 
         assert_eq!(hierarchy.len(), 2, "expected 2 ancestors for Table");
@@ -1002,14 +1011,21 @@ mod tests {
         assert_eq!(hierarchy[0].parent_singular, Some("catalog".to_string()));
         assert_eq!(hierarchy[1].parent_singular, Some("schema".to_string()));
         // child_resource_type is the managed resource (Table) for all entries
-        assert!(hierarchy.iter().all(|h| h.child_resource_type == "example.io/Table"));
+        assert!(
+            hierarchy
+                .iter()
+                .all(|h| h.child_resource_type == "example.io/Table")
+        );
     }
 
     #[test]
     fn test_derive_ordered_hierarchy_two_levels() {
         let (plans, metadata) = make_plans_from_fixture();
         let map = build_global_parent_map(&plans, &metadata);
-        let schema_plan = plans.iter().find(|p| p.service_name == "SchemaService").unwrap();
+        let schema_plan = plans
+            .iter()
+            .find(|p| p.service_name == "SchemaService")
+            .unwrap();
         let hierarchy = derive_ordered_hierarchy(schema_plan, &map, &metadata);
 
         assert_eq!(hierarchy.len(), 1);
@@ -1021,10 +1037,16 @@ mod tests {
     fn test_derive_ordered_hierarchy_root_resource() {
         let (plans, metadata) = make_plans_from_fixture();
         let map = build_global_parent_map(&plans, &metadata);
-        let catalog_plan = plans.iter().find(|p| p.service_name == "CatalogService").unwrap();
+        let catalog_plan = plans
+            .iter()
+            .find(|p| p.service_name == "CatalogService")
+            .unwrap();
         let hierarchy = derive_ordered_hierarchy(catalog_plan, &map, &metadata);
 
-        assert!(hierarchy.is_empty(), "root resource should have empty hierarchy");
+        assert!(
+            hierarchy.is_empty(),
+            "root resource should have empty hierarchy"
+        );
     }
 
     #[test]
@@ -1062,7 +1084,10 @@ mod tests {
             .expect("TableService plan not found");
 
         assert_eq!(table_svc_plan.hierarchy.len(), 2);
-        assert_eq!(table_svc_plan.hierarchy[0].parent_field_name, "catalog_name");
+        assert_eq!(
+            table_svc_plan.hierarchy[0].parent_field_name,
+            "catalog_name"
+        );
         assert_eq!(table_svc_plan.hierarchy[1].parent_field_name, "schema_name");
     }
 }

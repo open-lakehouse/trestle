@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.87
         with:
           components: rustfmt
       - run: cargo fmt --all --check
@@ -26,13 +26,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.87
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo clippy --all-targets --features trestle-store/sqlx -- -D warnings
-      - run: cargo clippy --all-targets --features trestle-client/recording -- -D warnings
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --features trestle-store/sqlx -- -D warnings
+      - run: cargo clippy --locked --all-targets --features trestle-client/recording -- -D warnings
 
   machete:
     name: Unused Dependencies
@@ -46,18 +46,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.87
       - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
         id: stable-toolchain
       - name: Install cargo-msrv
         run: cargo +stable install cargo-msrv --locked
       - name: Verify MSRV (trestle-store)
-        run: cargo msrv verify --manifest-path crates/trestle-store/Cargo.toml
+        run: cargo msrv verify --manifest-path crates/trestle-store/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (trestle-client)
-        run: cargo msrv verify --manifest-path crates/trestle-client/Cargo.toml
+        run: cargo msrv verify --manifest-path crates/trestle-client/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (trestle-codegen)
-        run: cargo msrv verify --manifest-path crates/trestle-codegen/Cargo.toml
+        run: cargo msrv verify --manifest-path crates/trestle-codegen/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}
@@ -68,14 +68,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.87
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (default features)
-        run: cargo test --lib --tests
+        run: cargo test --locked --lib --tests
       - name: Run tests (trestle-store sqlx feature)
-        run: cargo test --lib --tests -p trestle-store --features sqlx
+        run: cargo test --locked --lib --tests -p trestle-store --features sqlx
       - name: Run tests (trestle-client recording feature)
-        run: cargo test --lib --tests -p trestle-client --features recording
+        run: cargo test --locked --lib --tests -p trestle-client --features recording
 
   build-release:
     name: Build / release / ${{ matrix.os }}
@@ -86,6 +86,6 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.87
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --all-targets
+      - run: cargo build --locked --release --all-targets
