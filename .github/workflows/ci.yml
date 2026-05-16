@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --features trestle-store/sqlx -- -D warnings
+      - run: cargo clippy --all-targets --features trestle-client/recording -- -D warnings
+
+  machete:
+    name: Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bnjbvr/cargo-machete@main
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-msrv
+        run: cargo install cargo-msrv --locked
+      - name: Verify MSRV
+        run: cargo msrv verify --workspace
+
+  test:
+    name: Test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests (default features)
+        run: cargo test --lib --tests
+      - name: Run tests (trestle-store sqlx feature)
+        run: cargo test --lib --tests -p trestle-store --features sqlx
+      - name: Run tests (trestle-client recording feature)
+        run: cargo test --lib --tests -p trestle-client --features recording
+
+  build-release:
+    name: Build / release / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --all-targets
