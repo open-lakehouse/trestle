@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE: "ci"
 
 jobs:
   fmt:
@@ -29,7 +33,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.87
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --all-targets --features trestle-store/sqlx -- -D warnings
       - run: cargo clippy --locked --all-targets --features trestle-client/recording -- -D warnings
@@ -47,9 +51,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.87
-      - uses: Swatinem/rust-cache@v2
       - uses: dtolnay/rust-toolchain@stable
         id: stable-toolchain
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Install cargo-msrv
         run: cargo +stable install cargo-msrv --locked
       - name: Verify MSRV (trestle-store)
@@ -69,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.87
-      - uses: Swatinem/rust-cache@v2
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - name: Run tests (default features)
         run: cargo test --locked --lib --tests
       - name: Run tests (trestle-store sqlx feature)
@@ -87,5 +91,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.87
-      - uses: Swatinem/rust-cache@v2
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - run: cargo build --locked --release --all-targets
