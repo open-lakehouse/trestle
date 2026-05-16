@@ -273,9 +273,7 @@ fn extract_debug_redact(field: &FieldDescriptorProto) -> bool {
 ///
 /// - `child_type` non-empty: this field identifies a parent container for the named resource.
 /// - `r#type` non-empty: this field directly identifies a resource of that type.
-fn extract_resource_reference(
-    field: &FieldDescriptorProto,
-) -> Result<Option<ResourceReference>> {
+fn extract_resource_reference(field: &FieldDescriptorProto) -> Result<Option<ResourceReference>> {
     let Some(options) = field.options.as_ref() else {
         return Ok(None);
     };
@@ -296,10 +294,7 @@ fn extract_resource_reference(
                 Err(e) => {
                     return Err(Error::InvalidAnnotation {
                         object: field.name().to_string(),
-                        message: format!(
-                            "Failed to parse google.api.resource_reference: {}",
-                            e
-                        ),
+                        message: format!("Failed to parse google.api.resource_reference: {}", e),
                     });
                 }
             }

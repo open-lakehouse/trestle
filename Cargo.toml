@@ -7,7 +7,7 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/open-lakehouse/trestle"
 readme = "README.md"
-rust-version = "1.85"
+rust-version = "1.87"
 version = "0.1.0"
 homepage = "https://github.com/open-lakehouse/trestle"
 keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store"]
@@ -35,6 +35,26 @@ reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "stream",
 ] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+
+# Fast cold-start builds for CI: workspace crates compile cheaply (inherits
+# dev), but incremental is off so sccache can populate the shared cache.
+# Dependencies build at opt-level=3 with debuginfo stripped so the cached
+# target/ stays small and tests run near release speed.
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false
+
+[profile.ci.package."*"]
+opt-level = 3
+debug = false
+debug-assertions = false
+strip = "debuginfo"
 
 [workspace.metadata.typos]
 default.extend-ignore-re = [
