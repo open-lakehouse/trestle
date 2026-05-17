@@ -233,6 +233,28 @@ fn generate_hybrid_request_impl(method: &MethodHandler<'_>) -> TokenStream {
     }
 }
 
+/// Generate body parameter extractions as TokenStream
+fn generate_body_extractions_tokens(method: &MethodPlan, response_type: &Ident) -> TokenStream {
+    let body_fields = method.body_fields().collect_vec();
+    if body_fields.is_empty() {
+        quote! {}
+    } else {
+        let field_names: Vec<_> = body_fields
+            .iter()
+            .map(|f| format_ident!("{}", f.name))
+            .collect();
+        quote! {
+            let axum::extract::Json::<#response_type>(body) = body_req
+                .extract()
+                .await
+                .map_err(axum::response::IntoResponse::into_response)?;
+            let (#(#field_names),*) = (
+                #(body.#field_names),*
+            );
+        }
+    }
+}
+
 /// Generate path parameter extractions as TokenStream
 fn path_extractions(method: &MethodHandler<'_>) -> TokenStream {
     let params = &method.plan.path_parameters().collect_vec();
@@ -422,27 +444,5 @@ mod tests {
             tokens.contains("as i32"),
             "should cast enum variants to i32"
         );
-    }
-}
-
-/// Generate body parameter extractions as TokenStream
-fn generate_body_extractions_tokens(method: &MethodPlan, response_type: &Ident) -> TokenStream {
-    let body_fields = method.body_fields().collect_vec();
-    if body_fields.is_empty() {
-        quote! {}
-    } else {
-        let field_names: Vec<_> = body_fields
-            .iter()
-            .map(|f| format_ident!("{}", f.name))
-            .collect();
-        quote! {
-            let axum::extract::Json::<#response_type>(body) = body_req
-                .extract()
-                .await
-                .map_err(axum::response::IntoResponse::into_response)?;
-            let (#(#field_names),*) = (
-                #(body.#field_names),*
-            );
-        }
     }
 }
