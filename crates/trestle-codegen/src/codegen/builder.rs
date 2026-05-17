@@ -307,7 +307,7 @@ fn generate_oneof_variant_methods(
 
             // Derive the Rust parameter type from the UnifiedType abstraction.
             let rust_type_str = unified_to_rust(&variant.field_type, RenderContext::Parameter);
-            // Fall back to `String` if the generated type string is somehow unparseable.
+            // Fall back to `String` if the generated type string is somehow not parseable.
             // The inner parse of the literal "String" is infallible.
             let param_type: syn::Type = syn::parse_str(&rust_type_str)
                 .unwrap_or_else(|_| syn::parse_str("String").unwrap());

@@ -32,7 +32,7 @@ jobs:
           persist-credentials: false
 
       - name: Run zizmor
-        uses: zizmorcore/zizmor-action@b50d8f60e27e0084aa3a5f5dff46054a8253ac2a # v1.25.2
+        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # 0.5.6
         with:
           # Skip the GitHub Code Scanning SARIF upload — code scanning
           # isn't enabled for this repo and we only care about the
