@@ -46,9 +46,17 @@ pub(super) fn resource_pattern_params(pattern: &str) -> Vec<String> {
 /// from `resource_reference { child_type }` annotations, the parent field names are
 /// taken directly from those entries (in List method query param order).
 ///
-/// **Heuristic fallback** (when no annotations present): uses two signals:
-/// 1. `name_field` non-empty on the `ResourceDescriptor` → resource has a composite name.
-/// 2. Get method path param `"name"` + required string params on List method.
+/// **Heuristic fallback** (when no `resource_reference` annotations are present):
+/// uses two signals to decide whether the resource name is composite:
+/// 1. `name_field` non-empty on the `ResourceDescriptor` → resource defines a dot-joined
+///    composite `full_name` backed by individual component fields. This means callers must
+///    supply each component separately.
+/// 2. Get method path param == `"name"` *and* the List method has required string params
+///    beyond path params → those extra params are the parent components (e.g. `catalog_name`,
+///    `schema_name`). This handles protos that use the `name` field for the full path but
+///    split it via List query params without `resource_reference` annotations.
+///
+/// If neither signal fires, a single `"name"` param is assumed (flat resource with no parents).
 pub(super) fn derive_resource_accessor_params(service: &ServiceHandler<'_>) -> Vec<String> {
     let resource = match service.resource() {
         Some(r) => r,
@@ -75,8 +83,11 @@ pub(super) fn derive_resource_accessor_params(service: &ServiceHandler<'_>) -> V
     }
 
     // --- Heuristic fallback ---
+    // Signal 1: proto explicitly declares a name_field, meaning it has a composite full_name.
     let has_explicit_name_field = !resource.descriptor.name_field.is_empty();
 
+    // Signal 2: Get method uses path param `"name"` (opaque full path) and the List method has
+    // extra required string query params that represent parent components.
     let get_path_param_name = service
         .methods()
         .find(|m| matches!(m.plan.request_type, RequestType::Get))

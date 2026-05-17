@@ -61,6 +61,7 @@ pub(super) fn generate_server(service: &ServiceHandler<'_>) -> String {
         .collect_vec();
 
     let mod_path = service.models_path();
+    // handler_name is a validated Rust identifier, so this parse is infallible.
     let trait_path: Path =
         syn::parse_str(&format!("super::handler::{}", &service.plan.handler_name)).unwrap();
     let result_path: Path =
@@ -198,6 +199,8 @@ fn from_request_impl(method: &MethodHandler<'_>) -> TokenStream {
 
 /// Generate hybrid FromRequest implementation for methods with path/query + body
 fn generate_hybrid_request_impl(method: &MethodHandler<'_>) -> TokenStream {
+    // Only reached when is_hybrid == true (caller checked path/query params exist),
+    // which requires a non-Empty input message, so input_type() is always Some here.
     let input_type = method.input_type().unwrap();
     let path_extractions = path_extractions(method);
     let query_extractions = query_extractions(method);

@@ -80,10 +80,10 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
     let services = plans
         .into_iter()
         .map(|mut plan| {
-            plan.hierarchy = derive_ordered_hierarchy(&plan, &global_map, metadata);
-            plan
+            plan.hierarchy = derive_ordered_hierarchy(&plan, &global_map, metadata)?;
+            Ok(plan)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(GenerationPlan {
         services,
@@ -144,14 +144,16 @@ fn build_global_parent_map(plans: &[ServicePlan], metadata: &CodeGenMetadata) ->
 ///
 /// Returns entries sorted **root-first** (shallowest ancestor first), so iterating them gives
 /// the correct left-to-right param order (e.g. `[catalog_name, schema_name]` for a Table service).
+///
+/// Returns `Err` if a cycle is detected in the resource hierarchy annotations.
 fn derive_ordered_hierarchy(
     plan: &ServicePlan,
     global_map: &GlobalParentMap,
     metadata: &CodeGenMetadata,
-) -> Vec<ResourceHierarchy> {
+) -> Result<Vec<ResourceHierarchy>> {
     let managed_type = match plan.managed_resources.first() {
         Some(r) => r.descriptor.r#type.clone(),
-        None => return vec![],
+        None => return Ok(vec![]),
     };
 
     // Collect all (parent_resource_type, parent_field_name) entries for this managed resource.
@@ -159,19 +161,19 @@ fn derive_ordered_hierarchy(
         .iter()
         .filter(|((_, child), _)| child == &managed_type)
         .map(|((parent_type, _), field_name)| {
-            let depth = compute_depth(parent_type, global_map, &mut HashSet::new());
-            (depth, parent_type.clone(), field_name.clone())
+            let depth = compute_depth(parent_type, global_map, &mut HashSet::new())?;
+            Ok((depth, parent_type.clone(), field_name.clone()))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     if ancestors.is_empty() {
-        return vec![];
+        return Ok(vec![]);
     }
 
     // Sort root-first (ascending depth).
     ancestors.sort_by_key(|(depth, _, _)| *depth);
 
-    ancestors
+    Ok(ancestors
         .into_iter()
         .map(|(_, parent_type, field_name)| {
             let parent_singular = field_name
@@ -185,20 +187,21 @@ fn derive_ordered_hierarchy(
                 parent_singular,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Compute the depth of a resource type in the parent chain (0 = root, no parent in map).
 ///
-/// Uses `visited` for cycle detection; if a cycle is encountered, emits a warning and returns 0.
+/// Returns `Err` if a cycle is detected in the resource hierarchy annotations.
 fn compute_depth(
     resource_type: &str,
     map: &GlobalParentMap,
     visited: &mut HashSet<String>,
-) -> usize {
+) -> Result<usize> {
     if !visited.insert(resource_type.to_string()) {
-        warn!("Cycle detected in resource hierarchy at type: {resource_type}");
-        return 0;
+        return Err(crate::Error::Build(format!(
+            "Cycle detected in resource hierarchy at type: {resource_type}"
+        )));
     }
     let parent = map
         .iter()
@@ -206,8 +209,8 @@ fn compute_depth(
         .map(|((parent, _), _)| parent.clone());
 
     match parent {
-        None => 0,
-        Some(parent_type) => 1 + compute_depth(&parent_type, map, visited),
+        None => Ok(0),
+        Some(parent_type) => Ok(1 + compute_depth(&parent_type, map, visited)?),
     }
 }
 
@@ -1000,7 +1003,8 @@ mod tests {
             .iter()
             .find(|p| p.service_name == "TableService")
             .unwrap();
-        let hierarchy = derive_ordered_hierarchy(table_plan, &map, &metadata);
+        let hierarchy = derive_ordered_hierarchy(table_plan, &map, &metadata)
+            .expect("no cycles in test fixture");
 
         assert_eq!(hierarchy.len(), 2, "expected 2 ancestors for Table");
         // Root-first: catalog_name (depth 0) before schema_name (depth 1)
@@ -1026,7 +1030,8 @@ mod tests {
             .iter()
             .find(|p| p.service_name == "SchemaService")
             .unwrap();
-        let hierarchy = derive_ordered_hierarchy(schema_plan, &map, &metadata);
+        let hierarchy = derive_ordered_hierarchy(schema_plan, &map, &metadata)
+            .expect("no cycles in test fixture");
 
         assert_eq!(hierarchy.len(), 1);
         assert_eq!(hierarchy[0].parent_field_name, "catalog_name");
@@ -1041,7 +1046,8 @@ mod tests {
             .iter()
             .find(|p| p.service_name == "CatalogService")
             .unwrap();
-        let hierarchy = derive_ordered_hierarchy(catalog_plan, &map, &metadata);
+        let hierarchy = derive_ordered_hierarchy(catalog_plan, &map, &metadata)
+            .expect("no cycles in test fixture");
 
         assert!(
             hierarchy.is_empty(),
@@ -1051,16 +1057,13 @@ mod tests {
 
     #[test]
     fn test_compute_depth_cycle_guard() {
-        // A ↔ B mutual cycle: neither should cause a panic or infinite recursion.
+        // A ↔ B mutual cycle: compute_depth should return Err, not panic or recurse infinitely.
         let mut map: GlobalParentMap = HashMap::new();
         map.insert(("A".to_string(), "B".to_string()), "a_name".to_string());
         map.insert(("B".to_string(), "A".to_string()), "b_name".to_string());
 
-        // Should return without panicking.
-        let depth_a = compute_depth("A", &map, &mut HashSet::new());
-        let depth_b = compute_depth("B", &map, &mut HashSet::new());
-        // Exact values are unspecified due to cycle detection, but must not overflow.
-        let _ = (depth_a, depth_b);
+        assert!(compute_depth("A", &map, &mut HashSet::new()).is_err());
+        assert!(compute_depth("B", &map, &mut HashSet::new()).is_err());
     }
 
     #[test]

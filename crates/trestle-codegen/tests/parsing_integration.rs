@@ -44,7 +44,7 @@ fn test_parses_messages() {
 
 #[test]
 fn test_parses_field_behavior() {
-    use trestle_codegen::google::api::FieldBehavior;
+    use trestle_codegen::FieldBehavior;
     use trestle_codegen::parsing::MessageField;
 
     let meta = parse_meta();

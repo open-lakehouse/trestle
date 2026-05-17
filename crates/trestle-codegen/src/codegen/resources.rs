@@ -53,8 +53,18 @@ pub(crate) fn generate_resource_enum(
             if !name.starts_with(&package_prefix) {
                 return None;
             }
-            // Extract variant name from resource type (e.g. "unitycatalog.io/ExternalLocation" -> "ExternalLocation")
-            let variant_name = rd.r#type.split('/').next_back()?.to_string();
+            // Extract variant name from resource type (e.g. "acme.io/Widget" -> "Widget")
+            let variant_name = match rd.r#type.split('/').next_back() {
+                Some(v) if !v.is_empty() => v.to_string(),
+                _ => {
+                    tracing::warn!(
+                        "Skipping resource `{}`: type `{}` has no `/`-separated variant name",
+                        name,
+                        rd.r#type
+                    );
+                    return None;
+                }
+            };
             // labels.rs always lives one level inside the models subdir, so super:: reaches the subdir
             // module which has all the service pub mods as siblings.
             let rust_path = message_name_to_rust_path(name, &package_prefix, 1)?;
@@ -427,7 +437,8 @@ fn derive_path_names(
     if should_decompose {
         let mut params = parent_params;
         params.push(format!("{singular}_name"));
-        // Replace the final `{singular}_name` with just `name` since the proto field is always `name`
+        // Replace the final `{singular}_name` with just `name` since the proto field is always `name`.
+        // last_mut() is infallible: we just pushed an element above.
         let last = params.last_mut().unwrap();
         *last = "name".to_string();
         params

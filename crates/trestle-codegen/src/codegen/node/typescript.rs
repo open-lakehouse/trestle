@@ -780,6 +780,7 @@ fn generate_resource_accessor(service: &ServiceHandler<'_>) -> Option<String> {
         return None;
     }
 
+    // managed_resources is non-empty (checked above), so resource() is always Some here.
     let resource = service.resource().unwrap();
     let method_name = resource.descriptor.singular.to_case(Case::Camel);
     let client_type = service.client_type().to_string();
