@@ -62,7 +62,7 @@ default.extend-ignore-re = [
   "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
   "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
 ]
-files.extend-exclude = ["crates/trestle-codegen/src/gen/**/*"]
+files.extend-exclude = ["crates/olai-codegen/src/gen/**/*"]
 
 [workspace.metadata.typos.default.extend-words]
 typ = "typ"
