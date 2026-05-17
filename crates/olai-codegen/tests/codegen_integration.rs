@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
+use olai_codegen::parsing::parse_file_descriptor_set;
+use olai_codegen::{BindingsConfig, CodeGenConfig, CodeGenOutput, generate_code};
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
 use tempfile::TempDir;
-use olai_codegen::parsing::parse_file_descriptor_set;
-use olai_codegen::{BindingsConfig, CodeGenConfig, CodeGenOutput, generate_code};
 
 fn load_descriptor() -> FileDescriptorSet {
     let bytes = include_bytes!("../proto/example.bin");

@@ -1,6 +1,6 @@
+use olai_codegen::parsing::{CodeGenMetadata, parse_file_descriptor_set};
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
-use olai_codegen::parsing::{CodeGenMetadata, parse_file_descriptor_set};
 
 fn load_descriptor() -> FileDescriptorSet {
     let bytes = include_bytes!("../proto/example.bin");
