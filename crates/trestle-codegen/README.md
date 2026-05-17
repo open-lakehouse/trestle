@@ -178,6 +178,129 @@ enrich_openapi:
   camel_case: true
 ```
 
+## Recommended Project Structure
+
+`proto-gen` writes generated files into output directories that can span multiple crates. The recommended layout separates concerns across four crates:
+
+```
+my-workspace/
+├── Cargo.toml
+├── proto/
+│   └── my_service.proto          # source of truth
+├── api.bin                       # buf build output
+├── proto-gen.yaml
+└── crates/
+    ├── common/                   # shared model types
+    │   └── src/
+    │       └── models/
+    │           ├── mod.rs        # hand-written: re-exports from _gen
+    │           └── _gen/
+    │               ├── labels.rs # generated: Resource enum, ObjectLabel, store impls
+    │               └── mod.rs    # generated: include! prost output + re-exports
+    │
+    ├── server/                   # Axum service implementation
+    │   └── src/
+    │       ├── api/
+    │       │   ├── context.rs    # hand-written: RequestContext (impl FromRequestParts)
+    │       │   └── error.rs      # hand-written: Error type, Result alias
+    │       └── gen/
+    │           ├── common/       # generated: Axum extractors
+    │           └── server/       # generated: handler traits + route handlers
+    │
+    └── client/                   # HTTP client
+        └── src/
+            └── gen/
+                ├── common/       # generated: shared extractor types
+                └── client/       # generated: client struct + request builders
+```
+
+### What you write vs. what is generated
+
+**Hand-written** (once, then stable):
+
+- `RequestContext` — extracted from each Axum request (auth, request ID, etc.); must implement `axum::extract::FromRequestParts`
+- `Error` / `Result<T>` — your service error type and result alias; used in all generated handler and client signatures
+- `parse_error_response` — called by generated client code on non-2xx responses; signature: `pub async fn parse_error_response(response: reqwest::Response) -> Error`
+- `common/src/models/mod.rs` — re-exports from `_gen` so the rest of the codebase imports from a stable path
+
+**Generated** (overwritten on each run, do not edit):
+
+- `common/src/models/_gen/labels.rs` — `Resource` enum, `ObjectLabel` enum, `trestle_store::Label` impl, `RESOURCE_DESCRIPTORS`
+- `common/src/models/_gen/mod.rs` — `include!` directives into prost output + `pub use` re-exports
+- `server/src/gen/common/` — Axum extractor structs for path/query/body parameters
+- `server/src/gen/server/` — `*Handler` trait (one `async fn` per RPC) + Axum route handler functions
+- `client/src/gen/client/` — `*Client` struct + `with_*` builder methods
+
+### Implementing a handler
+
+The generated handler trait has one method per RPC. Implement it in your server crate:
+
+```rust
+use async_trait::async_trait;
+use gen::server::catalogs::CatalogHandler;
+
+struct MyCatalogHandler { /* db pool, etc. */ }
+
+#[async_trait]
+impl CatalogHandler for MyCatalogHandler {
+    async fn get_catalog(
+        &self,
+        request: GetCatalogRequest,
+        context: RequestContext,
+    ) -> Result<Catalog> {
+        // ...
+    }
+}
+```
+
+Wire the generated route handlers into Axum using the handler as state:
+
+```rust
+let handler = Arc::new(MyCatalogHandler::new());
+let app = axum::Router::new()
+    .merge(gen::server::catalogs::server::router(handler));
+```
+
+### Using the generated client
+
+```rust
+use trestle_client::CloudClient;
+use gen::client::catalogs::CatalogClient;
+
+let client = CatalogClient::new(
+    CloudClient::new(/* credentials */),
+    url::Url::parse("https://api.example.com/")?,
+);
+
+let catalog = client.get_catalog(&GetCatalogRequest { name: "my-catalog".into() }).await?;
+```
+
+### Cargo.toml dependencies
+
+Add these to the crates that consume the generated code:
+
+```toml
+# server/Cargo.toml
+[dependencies]
+axum = "0.8"
+axum-extra = "0.10"
+async-trait = "0.1"
+trestle-store = { path = "../../crates/trestle-store" }  # if store integration enabled
+
+# client/Cargo.toml
+[dependencies]
+trestle-client = { path = "../../crates/trestle-client" }
+url = "2"
+serde_json = "1"
+
+# common/Cargo.toml — additional deps when generate_object_conversions = true
+[dependencies]
+trestle-store = { path = "../../crates/trestle-store" }
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+strum = { version = "0.26", features = ["derive"] }
+```
+
 ## Library Usage
 
 `proto-gen` handles the full workflow for most use cases. If you need to embed generation into a Rust program (e.g. a custom build tool), the library API exposes the same three-step pipeline:
