@@ -473,7 +473,7 @@ fn infer_package_prefix(packages: &[&str]) -> String {
         return String::new();
     }
     let first_parts: Vec<&str> = packages[0].split('.').collect();
-    let common_len = first_parts
+    let _common_len = first_parts
         .iter()
         .enumerate()
         .take_while(|(i, seg)| {
