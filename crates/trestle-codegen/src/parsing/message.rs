@@ -369,7 +369,7 @@ fn extract_message_resource_option(
             let data = match field_value {
                 protobuf::UnknownValueRef::LengthDelimited(bytes) => bytes,
                 _ => {
-                    println!("Skipping non-length-delimited google.api.resource field");
+                    tracing::warn!("Skipping non-length-delimited google.api.resource field");
                     continue;
                 }
             };

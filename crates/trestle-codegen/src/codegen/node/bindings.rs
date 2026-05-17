@@ -453,6 +453,7 @@ fn generate_resource_accessor_method(service: &ServiceHandler<'_>) -> Option<Tok
         return None;
     }
 
+    // managed_resources is non-empty (checked above), so resource() is always Some here.
     let resource = service.resource().unwrap();
     let method_name = format_ident!("{}", resource.descriptor.singular);
     let client_name = format_ident!("Napi{}", service.client_type().to_string());

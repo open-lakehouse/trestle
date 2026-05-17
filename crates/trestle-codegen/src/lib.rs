@@ -96,11 +96,12 @@ pub use parsing::http::HttpPattern;
 pub use parsing::types::{BaseType, RenderContext, UnifiedType};
 pub use parsing::{CodeGenMetadata, parse_file_descriptor_set, process_file_descriptor};
 
-/// Prost-generated Google API proto types (resource annotations, HTTP rules, etc.).
-///
-/// These are used internally for proto descriptor parsing. The doc comments on
-/// individual types contain proto-syntax examples that are not valid Rust.
-pub mod google {
+/// The `FieldBehavior` enum from `google.api.field_behavior`, re-exported for
+/// consumers that need to inspect field behavior annotations (e.g. in tests).
+pub use google::api::FieldBehavior;
+
+// Prost-generated Google API proto types — internal only.
+pub(crate) mod google {
     pub mod api {
         #![allow(unused)]
         #![allow(clippy::doc_overindented_list_items)]

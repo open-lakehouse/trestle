@@ -173,16 +173,10 @@ fn collection_client_method(
         return None;
     }
     match &method.plan.request_type {
-        RequestType::List => Some(collection_list_method_impl(
-            &method,
-            py_error_type,
-            py_result_type,
-        )),
-        RequestType::Create => Some(collection_create_method_impl(
-            &method,
-            py_error_type,
-            py_result_type,
-        )),
+        RequestType::List => collection_list_method_impl(&method, py_error_type, py_result_type),
+        RequestType::Create => {
+            collection_create_method_impl(&method, py_error_type, py_result_type)
+        }
         _ => None,
     }
 }
@@ -191,17 +185,17 @@ fn collection_list_method_impl(
     method: &MethodHandler<'_>,
     py_error_type: &Ident,
     py_result_type: &Ident,
-) -> TokenStream {
+) -> Option<TokenStream> {
     let method_name = method.plan.base_method_ident();
 
     let (param_defs, pyo3_signature) = collection_method_parameters(method, true);
     let client_call = inner_resource_client_call(method);
     let builder_calls = generate_builder_pattern(method, true);
 
-    let items_field = method.list_output_field().unwrap();
+    let items_field = method.list_output_field()?;
     let response_type = method.field_type(&items_field.unified_type, RenderContext::ReturnType);
 
-    quote! {
+    Some(quote! {
         #pyo3_signature
         pub fn #method_name(
             &self,
@@ -216,21 +210,21 @@ fn collection_list_method_impl(
                 Ok::<_, #py_error_type>(result)
             })
         }
-    }
+    })
 }
 
 fn collection_create_method_impl(
     method: &MethodHandler<'_>,
     py_error_type: &Ident,
     py_result_type: &Ident,
-) -> TokenStream {
+) -> Option<TokenStream> {
     let method_name = method.plan.base_method_ident();
-    let response_type = method.output_type().unwrap();
+    let response_type = method.output_type()?;
     let (param_defs, pyo3_signature) = collection_method_parameters(method, false);
     let client_call = inner_resource_client_call(method);
     let builder_calls = generate_builder_pattern(method, false);
 
-    quote! {
+    Some(quote! {
         #pyo3_signature
         pub fn #method_name(
             &self,
@@ -245,7 +239,7 @@ fn collection_create_method_impl(
                 Ok::<_, #py_error_type>(result)
             })
         }
-    }
+    })
 }
 
 fn resource_get_update_method_impl(
@@ -353,6 +347,8 @@ fn render_pyo3(signature_parts: &[&RequestParam]) -> TokenStream {
         quote! {}
     } else {
         let signature_string = signature_parts.join(", ");
+        // signature_parts are protobuf field names (always valid identifiers), so parsing
+        // as a TokenStream is infallible.
         let tokens = signature_string
             .parse::<proc_macro2::TokenStream>()
             .unwrap();
@@ -420,6 +416,7 @@ fn generate_resource_accessor_method(service: &ServiceHandler<'_>) -> Option<Tok
         return None;
     }
 
+    // managed_resources is non-empty (checked above), so resource() is always Some here.
     let resource = service.resource().unwrap();
     let method_name = format_ident!("{}", resource.descriptor.singular);
     let client_name = format_ident!("Py{}", service.client_type().to_string());

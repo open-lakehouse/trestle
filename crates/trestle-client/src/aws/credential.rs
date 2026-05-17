@@ -553,6 +553,7 @@ impl TokenProvider for AssumeRoleProvider {
 ///
 /// # References
 /// - <https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html>
+#[allow(clippy::too_many_arguments)]
 async fn assume_role(
     client: &Client,
     service: &Arc<dyn HttpService>,

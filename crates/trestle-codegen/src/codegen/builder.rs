@@ -68,7 +68,12 @@ fn generate_request_builder(
     service: &ServiceHandler<'_>,
 ) -> crate::error::Result<String> {
     let builder_ident = method.builder_type();
-    let request_type_ident = method.input_type().unwrap();
+    let request_type_ident = method.input_type().ok_or_else(|| {
+        crate::Error::Build(format!(
+            "method `{}` has no input type (Empty input); cannot generate builder",
+            method.plan.handler_function_name
+        ))
+    })?;
     let output_type_ident = method.output_type();
     let client_type_ident = service.client_type();
     let method_name = format_ident!("{}", method.plan.handler_function_name);
@@ -119,7 +124,7 @@ fn generate_request_builder(
     };
 
     let into_stream_impl = if matches!(method.plan.request_type, RequestType::List) {
-        Some(generate_into_stream_impl(method, &method_name))
+        Some(generate_into_stream_impl(method, &method_name)?)
     } else {
         None
     };
@@ -302,6 +307,8 @@ fn generate_oneof_variant_methods(
 
             // Derive the Rust parameter type from the UnifiedType abstraction.
             let rust_type_str = unified_to_rust(&variant.field_type, RenderContext::Parameter);
+            // Fall back to `String` if the generated type string is somehow not parseable.
+            // The inner parse of the literal "String" is infallible.
             let param_type: syn::Type = syn::parse_str(&rust_type_str)
                 .unwrap_or_else(|_| syn::parse_str("String").unwrap());
 
@@ -392,12 +399,17 @@ fn generate_simple_with_method(method: &MethodHandler<'_>, param: &RequestParam)
 fn generate_into_stream_impl(
     method: MethodHandler<'_>,
     client_method_name: &proc_macro2::Ident,
-) -> TokenStream {
-    let items_field = method.list_output_field().unwrap();
+) -> crate::error::Result<TokenStream> {
+    let items_field = method.list_output_field().ok_or_else(|| {
+        crate::Error::Build(format!(
+            "List method `{}` has no non-page_token output field; cannot generate into_stream",
+            method.plan.handler_function_name
+        ))
+    })?;
     let item_field_ident = format_ident!("{}", items_field.name);
     let output_type_ident = items_field.unified_type.type_ident();
 
-    quote! {
+    Ok(quote! {
         /// Convert paginated request into stream of results
         pub fn into_stream(self) -> BoxStream<'static, Result<#output_type_ident>> {
             let remaining = self.request.max_results;
@@ -418,7 +430,7 @@ fn generate_into_stream_impl(
             .try_flatten()
             .boxed()
         }
-    }
+    })
 }
 
 #[cfg(test)]
