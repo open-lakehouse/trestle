@@ -44,8 +44,8 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: cargo clippy --locked --all-targets --features trestle-store/sqlx -- -D warnings
-      - run: cargo clippy --locked --all-targets --features trestle-client/recording -- -D warnings
+      - run: cargo clippy --locked --all-targets --features olai-store/sqlx -- -D warnings
+      - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
 
   machete:
     name: Unused Dependencies
@@ -73,12 +73,12 @@ jobs:
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Install cargo-msrv
         run: cargo +stable install cargo-msrv --locked
-      - name: Verify MSRV (trestle-store)
-        run: cargo msrv verify --manifest-path crates/trestle-store/Cargo.toml -- cargo check --locked
-      - name: Verify MSRV (trestle-client)
-        run: cargo msrv verify --manifest-path crates/trestle-client/Cargo.toml -- cargo check --locked
-      - name: Verify MSRV (trestle-codegen)
-        run: cargo msrv verify --manifest-path crates/trestle-codegen/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-store)
+        run: cargo msrv verify --manifest-path crates/olai-store/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-http)
+        run: cargo msrv verify --manifest-path crates/olai-http/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-codegen)
+        run: cargo msrv verify --manifest-path crates/olai-codegen/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}
@@ -97,10 +97,10 @@ jobs:
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Run tests (default features)
         run: cargo test --locked --lib --tests
-      - name: Run tests (trestle-store sqlx feature)
-        run: cargo test --locked --lib --tests -p trestle-store --features sqlx
-      - name: Run tests (trestle-client recording feature)
-        run: cargo test --locked --lib --tests -p trestle-client --features recording
+      - name: Run tests (olai-store sqlx feature)
+        run: cargo test --locked --lib --tests -p olai-store --features sqlx
+      - name: Run tests (olai-http recording feature)
+        run: cargo test --locked --lib --tests -p olai-http --features recording
 
   build-release:
     name: Build / release / ${{ matrix.os }}

@@ -10,9 +10,9 @@ resource store — all driven by proto annotations.
 
 | Crate | Description |
 |-------|-------------|
-| [`trestle-codegen`](crates/trestle-codegen) | Proto-driven code generation for REST handlers, clients, resource registries, and language bindings |
-| [`trestle-store`](crates/trestle-store) | Generic, TAO-inspired object and association store with field-role enforcement |
-| [`trestle-client`](crates/trestle-client) | HTTP client based on reqwest with build in Authorization for many clouds. |
+| [`olai-codegen`](crates/olai-codegen) | Proto-driven code generation for REST handlers, clients, resource registries, and language bindings |
+| [`olai-store`](crates/olai-store) | Generic, TAO-inspired object and association store with field-role enforcement |
+| [`olai-http`](crates/olai-http) | HTTP client based on reqwest with built-in authorization for many clouds. |
 
 ## How it works
 
@@ -22,7 +22,7 @@ resource store — all driven by proto annotations.
     ▼  buf build
 descriptor.bin
     │
-    ▼  trestle-codegen (proto-gen)
+    ▼  olai-codegen (olai-codegen)
     ├── Axum handler traits + route wiring
     ├── HTTP client structs
     ├── PyO3 bindings + .pyi typings
@@ -30,7 +30,7 @@ descriptor.bin
     ├── ObjectLabel enum (impl Label)
     └── RESOURCE_DESCRIPTORS registry (field roles from annotations)
     │
-    ▼  trestle-store
+    ▼  olai-store
     ├── ObjectStore<L> / AssociationStore<L>  — async CRUD + graph ops
     ├── ManagedObjectStore                    — field-role enforcement
     └── SecretManager                         — encrypted sensitive fields
@@ -42,11 +42,11 @@ Add the crates you need:
 
 ```toml
 [dependencies]
-trestle-store = "0.1"
-trestle-cloud = "0.1"
+olai-store = "0.1"
+olai-http = "0.1"
 
 [build-dependencies]
-trestle-codegen = "0.1"
+olai-codegen = "0.1"
 ```
 
 See each crate's README for detailed usage.

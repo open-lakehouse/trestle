@@ -4,10 +4,9 @@
 
 Multi-crate Rust workspace:
 
-- `crates/trestle-codegen/` — Proto-driven code generation (REST handlers, clients, bindings, resource registries)
-- `crates/trestle-store/` — Generic resource store abstractions (Object, Association, Label, Registry)
-- `crates/trestle-derive/` — Proc-macro crate for Object ↔ typed struct conversions
-- `crates/trestle-cloud/` — Cloud credential abstraction (AWS, Azure, GCP, Databricks)
+- `crates/olai-codegen/` — Proto-driven code generation (REST handlers, clients, bindings, resource registries)
+- `crates/olai-store/` — Generic resource store abstractions (Object, Association, Label, Registry)
+- `crates/olai-http/` — Cloud credential abstraction and HTTP client (AWS, Azure, GCP, Databricks)
 
 ## Build & Test
 
@@ -19,7 +18,7 @@ cargo clippy             # Lint
 cargo fmt                # Format
 ```
 
-The `trestle-codegen` crate has doctests disabled (`doctest = false` in `[lib]`)
+The `olai-codegen` crate has doctests disabled (`doctest = false` in `[lib]`)
 because prost-generated proto doc comments contain proto-syntax examples that are
 not valid Rust.
 

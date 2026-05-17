@@ -25,18 +25,18 @@ jobs:
         with:
           toolchain: "1.87"
 
-      - name: Publish trestle-store
-        run: cargo publish -p trestle-store
+      - name: Publish olai-store
+        run: cargo publish -p olai-store
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish trestle-client
-        run: cargo publish -p trestle-client
+      - name: Publish olai-http
+        run: cargo publish -p olai-http
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish trestle-codegen
-        run: cargo publish -p trestle-codegen
+      - name: Publish olai-codegen
+        run: cargo publish -p olai-codegen
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
