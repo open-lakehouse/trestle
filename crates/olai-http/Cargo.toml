@@ -46,7 +46,7 @@ tokio = { version = "1.29.0", features = [
   "time",
   "io-util",
 ] }
-http = "*"
+http = "1"
 rust-ini = "0.21"
 
 [dev-dependencies]

@@ -23,11 +23,6 @@ jobs:
         with:
           toolchain: "1.87"
 
-      - name: Publish olai-store
-        run: cargo publish -p olai-store
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
       - name: Publish olai-http
         run: cargo publish -p olai-http
         env:
