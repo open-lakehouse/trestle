@@ -1,0 +1,68 @@
+import { useState } from "react";
+
+// Once `just regen` has run, swap this stub for the real client:
+//
+//   import { {{ project_name | pascal_case }}Client, ApiError } from "@/api";
+//
+// The generated client targets the same origin the app is served from, so the
+// React app works locally (via Vite's /v1 proxy) and on Databricks (via the
+// platform edge) with zero env-conditional code.
+
+interface Greeting {
+  name: string;
+  recipient: string;
+  message: string;
+}
+
+async function createGreeting(recipient: string): Promise<Greeting> {
+  const r = await fetch("/v1/greetings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ greeting: { recipient } }),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+{% raw %}const PAGE_STYLE = { fontFamily: "system-ui", padding: 24 } as const;
+const INPUT_STYLE = { padding: 8, marginRight: 8 } as const;
+const RESULT_STYLE = { marginTop: 16 } as const;
+const ERROR_STYLE = { color: "crimson" } as const;{% endraw %}
+
+export default function App() {
+  const [recipient, setRecipient] = useState("world");
+  const [greeting, setGreeting] = useState<Greeting | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+{% raw %}
+  return (
+    <div style={PAGE_STYLE}>
+      <h1>{% endraw %}{{ project_name }}{% raw %}</h1>
+      <p>Local Databricks-style Rust app, scaffolded by trestle.</p>
+
+      <input
+        value={recipient}
+        onChange={(e) => setRecipient(e.target.value)}
+        style={INPUT_STYLE}
+      />
+      <button
+        onClick={async () => {
+          try {
+            setGreeting(await createGreeting(recipient));
+            setError(null);
+          } catch (e) {
+            setError(String(e));
+          }
+        }}
+      >
+        Greet
+      </button>
+
+      {greeting && (
+        <pre style={RESULT_STYLE}>{JSON.stringify(greeting, null, 2)}</pre>
+      )}
+      {error && <p style={ERROR_STYLE}>{error}</p>}
+    </div>
+  );
+}
+{% endraw %}

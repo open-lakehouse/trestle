@@ -1,0 +1,41 @@
+set dotenv-load := true
+set dotenv-filename := ".env.local"
+
+default := "{{ stack_profile }}"
+
+# Bring up the stack with the chosen Docker Compose profile.
+# Profiles: db | svc | full | notebooks
+{% raw %}up profile=default:
+    docker compose --profile {{ profile }} up -d{% endraw %}
+
+# Stop everything and wipe volumes.
+down:
+    docker compose down -v
+
+# Tail logs for a service (e.g. `just logs mlflow`).
+{% raw %}logs svc:
+    docker compose logs -f {{ svc }}{% endraw %}
+
+# Open a psql shell against the given database (default: $POSTGRES_DB).
+{% raw %}psql db="$POSTGRES_DB":
+    docker compose exec db psql -U $POSTGRES_USER -d {{ db }}{% endraw %}
+
+{% if 'local-stack-envoy' in stack.components -%}
+# Convenience: open the UIs in the default browser.
+mlflow-ui:
+    @python3 -c "import webbrowser; webbrowser.open('http://localhost:'+__import__('os').environ.get('ENVOY_PORT','9080')+'/mlflow')"
+
+uc-ui:
+    @python3 -c "import webbrowser; webbrowser.open('http://localhost:'+__import__('os').environ.get('ENVOY_PORT','9080')+'/unity-catalog')"
+
+notebooks:
+    @python3 -c "import webbrowser; webbrowser.open('http://localhost:'+__import__('os').environ.get('ENVOY_PORT','9080')+'/notebooks')"
+
+# Print the current envoy route table (helpful when debugging URL rewrites).
+routes:
+    @cat docker/envoy/envoy.yaml | grep -A2 'prefix:'
+{%- endif %}
+
+# Show what's running.
+status:
+    docker compose ps

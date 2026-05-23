@@ -1,0 +1,5 @@
+.env.local
+.data/
+.cache/
+notebooks/.marimo/
+notebooks/__pycache__/

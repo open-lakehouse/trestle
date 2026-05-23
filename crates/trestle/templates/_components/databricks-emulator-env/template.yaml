@@ -1,0 +1,20 @@
+name: databricks-emulator-env
+version: 0.1.0
+description: |
+  Contributes only environment variables — the set Databricks Apps injects into
+  every running app. Wired together with the Envoy URL rewrites elsewhere in the
+  stack, this lets app code read `DATABRICKS_HOST`, `DATABRICKS_TOKEN`,
+  `MLFLOW_TRACKING_URI`, and the OBO header variables identically in local dev
+  and in production.
+
+provides:
+  env_vars:
+    LOCAL_DEV: "1"
+    DATABRICKS_HOST: "http://localhost:${ENVOY_PORT:-9080}"
+    DATABRICKS_TOKEN: "local-dev-token-do-not-use-in-prod"
+    DATABRICKS_CLIENT_ID: "local-dev"
+    DATABRICKS_WORKSPACE_ID: "local"
+    DATABRICKS_APP_URL: "http://localhost:${ENVOY_PORT:-9080}"
+    DATABRICKS_APP_PORT: "8080"
+    DATABRICKS_FORWARDED_USER: "local-developer@example.com"
+    DATABRICKS_FORWARDED_EMAIL: "local-developer@example.com"

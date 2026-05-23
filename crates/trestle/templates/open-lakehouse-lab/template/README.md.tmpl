@@ -1,0 +1,84 @@
+# {{ lab_name }}
+
+A local open-lakehouse environment scaffolded with [trestle](https://github.com/open-lakehouse/trestle).
+Profile: **{{ stack_profile }}**.
+
+## What this is
+
+A self-contained `docker compose` stack with:
+
+{% for c in stack.components -%}
+- `{{ c }}`
+{% endfor %}
+
+Envoy sits at the front edge and rewrites Databricks-shaped URLs so the same
+code paths work locally and on Databricks. For example:
+
+```
+http://localhost:${ENVOY_PORT}/api/2.0/mlflow/experiments/create
+```
+
+… is routed to MLflow's `/mlflow/api/2.0/mlflow/experiments/create` endpoint,
+exactly as Databricks would route it to its managed MLflow.
+
+## Quickstart
+
+```bash
+# 1. Copy the env file and edit as needed
+cp .env.example .env.local
+
+# 2. Bring up the stack
+just up
+
+# 3. Open the UIs
+{% if 'local-stack-envoy' in stack.components -%}
+just mlflow-ui      # http://localhost:${ENVOY_PORT}/mlflow
+just uc-ui          # http://localhost:${ENVOY_PORT}/unity-catalog
+just notebooks      # http://localhost:${ENVOY_PORT}/notebooks
+{%- else -%}
+docker compose ps
+{%- endif %}
+```
+
+## URLs
+
+| Service | URL |
+|---------|-----|
+{%- if 'local-stack-envoy' in stack.components %}
+| Envoy gateway | <http://localhost:${ENVOY_PORT:-9080}/> |
+{%- endif %}
+{%- if 'local-stack-postgres' in stack.components %}
+| Postgres | `postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-postgres}` |
+| pgweb | <http://localhost:${PGWEB_PORT:-8081}> |
+{%- endif %}
+{%- if 'local-stack-seaweedfs' in stack.components %}
+| SeaweedFS S3 | <http://localhost:${SEAWEEDFS_S3_PORT:-9000}> |
+{%- endif %}
+{%- if 'local-stack-mlflow' in stack.components %}
+| MLflow | <http://localhost:${ENVOY_PORT:-9080}/mlflow> |
+{%- endif %}
+{%- if 'local-stack-unity-catalog' in stack.components %}
+| Unity Catalog | <http://localhost:${ENVOY_PORT:-9080}/unity-catalog> |
+{%- endif %}
+{%- if 'local-stack-notebooks' in stack.components %}
+| Marimo notebooks | <http://localhost:${ENVOY_PORT:-9080}/notebooks> |
+{%- endif %}
+{%- if 'local-stack-jaeger' in stack.components %}
+| Jaeger | <http://localhost:${ENVOY_PORT:-9080}/jaeger> |
+{%- endif %}
+
+## Extending the stack
+
+To add a new service:
+
+1. Drop a fresh compose fragment under `docker/compose/<service>.yaml`.
+2. Add it to the `include:` list in `compose.yaml`.
+3. (Optional) Add a route to `docker/envoy/envoy.yaml`.
+4. (Optional) Add env vars to `.env.example`.
+
+For a more structured approach, see `.cursor/rules/extending-the-stack.md`.
+
+## License
+
+This scaffold is dual-licensed Apache-2.0 / MIT, like trestle itself. Code you
+write inside the lab is yours.

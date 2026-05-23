@@ -13,12 +13,7 @@ keywords.workspace = true
 [lib]
 doctest = false
 
-[[bin]]
-name = "olai-codegen"
-path = "src/bin/proto-gen.rs"
-
 [dependencies]
-clap = { version = "4", features = ["derive", "env"] }
 prost = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }

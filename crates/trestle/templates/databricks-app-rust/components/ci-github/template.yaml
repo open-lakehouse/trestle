@@ -1,0 +1,8 @@
+name: ci-github
+version: 0.1.0
+description: |
+  GitHub Actions workflows. `ci.yml` runs fmt + clippy + tests + buf lint +
+  frontend build + codegen-drift; `deploy.yml` deploys the Databricks Asset
+  Bundle via Workload Identity Federation.
+
+provides: {}

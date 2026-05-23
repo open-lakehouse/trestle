@@ -4,7 +4,7 @@ Proto-driven code generator that transforms compiled protobuf descriptors into i
 
 ## Overview
 
-The single source of truth is your `.proto` files. Annotate them with standard Google API extensions and run `proto-gen generate` to emit:
+The single source of truth is your `.proto` files. Annotate them with standard Google API extensions and run `trestle generate` (the unified `trestle` CLI; the legacy `proto-gen` binary has been folded in) to emit:
 
 | Output | What is generated |
 |---|---|
@@ -24,7 +24,7 @@ The single source of truth is your `.proto` files. Annotate them with standard G
     ▼  buf build --as-file-descriptor-set
 descriptor binary (.bin)
     │
-    ▼  proto-gen generate
+    ▼  trestle generate
 Source files (Rust, Python, TypeScript, …)
 ```
 
@@ -74,7 +74,7 @@ cargo install --path crates/olai-codegen --bin olai-codegen
 Or build and run directly from the workspace:
 
 ```bash
-cargo run --bin proto-gen -- generate --help
+trestle generate --help
 ```
 
 ### Compile descriptors
@@ -85,10 +85,10 @@ buf build --as-file-descriptor-set -o api.bin
 
 ### Config file (recommended)
 
-A YAML config file is the preferred way to invoke `proto-gen`, particularly in multi-crate workspaces where output directories span crate boundaries. CLI flags override any value from the file.
+A YAML config file is the preferred way to invoke `trestle generate`, particularly in multi-crate workspaces where output directories span crate boundaries. CLI flags override any value from the file. New projects scaffolded with `trestle new` use `trestle.yaml`; the older `proto-gen.yaml` filename is still accepted for backwards compatibility.
 
 ```yaml
-# proto-gen.yaml
+# trestle.yaml
 descriptors: api.bin
 buf_gen: buf.gen.yaml  # optional: auto-derives models_path_template from prost plugin output
 
@@ -124,18 +124,18 @@ generate:
 ```
 
 ```bash
-proto-gen generate --config proto-gen.yaml
+trestle generate --config trestle.yaml
 ```
 
 Any field can be overridden at the command line:
 
 ```bash
-proto-gen generate --config proto-gen.yaml --descriptors path/to/other.bin
+trestle generate --config trestle.yaml --descriptors path/to/other.bin
 ```
 
 ### CLI flags (all options)
 
-#### `proto-gen generate`
+#### `trestle generate`
 
 | Flag | Env var | Description |
 |---|---|---|
@@ -155,7 +155,7 @@ proto-gen generate --config proto-gen.yaml --descriptors path/to/other.bin
 | `--output-node-ts` | `UC_BUILD_OUTPUT_NODE_TS` | Output dir for TypeScript client |
 | `--python-typings-filename` | `UC_BUILD_PYTHON_TYPINGS_FILENAME` | Name of the `.pyi` stub file |
 
-#### `proto-gen enrich-openapi`
+#### `trestle enrich-openapi`
 
 Merges proto-derived validation rules into an OpenAPI YAML spec.
 
@@ -180,7 +180,18 @@ enrich_openapi:
 
 ## Recommended Project Structure
 
-`proto-gen` writes generated files into output directories that can span multiple crates. The recommended layout separates concerns across four crates:
+> The structure described below is what `trestle new databricks-app-rust`
+> produces. Use the CLI to scaffold a fresh project in this shape and skip the
+> manual setup:
+>
+> ```bash
+> trestle new my-app --template databricks-app-rust --profile dbx-emulator
+> ```
+>
+> The rest of this section documents the same layout for users who'd rather wire
+> things up by hand.
+
+`trestle generate` (formerly `proto-gen generate`) writes generated files into output directories that can span multiple crates. The recommended layout separates concerns across four crates:
 
 ```
 my-workspace/
@@ -188,7 +199,7 @@ my-workspace/
 ├── proto/
 │   └── my_service.proto          # source of truth
 ├── api.bin                       # buf build output
-├── proto-gen.yaml
+├── trestle.yaml
 └── crates/
     ├── common/                   # shared model types
     │   └── src/
@@ -303,7 +314,7 @@ strum = { version = "0.26", features = ["derive"] }
 
 ## Library Usage
 
-`proto-gen` handles the full workflow for most use cases. If you need to embed generation into a Rust program (e.g. a custom build tool), the library API exposes the same three-step pipeline:
+`trestle generate` handles the full workflow for most use cases. If you need to embed generation into a Rust program (e.g. a custom build tool), the library API exposes the same three-step pipeline:
 
 ```rust
 use olai_codegen::{

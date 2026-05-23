@@ -1,0 +1,29 @@
+name: local-stack-unity-catalog
+version: 0.1.0
+description: |
+  Upstream Unity Catalog server (Java). Backed by Postgres for metadata; uses
+  SeaweedFS for table storage. Envoy proxies `/api/2.1/unity-catalog/*` to it so
+  client code that targets the Databricks UC REST API works locally without
+  changes. To swap in `unitycatalog-rs`, override the `UC_IMAGE` env var (see the
+  generated `docker/compose/unity-catalog.yaml` for details).
+
+depends_on:
+  - local-stack-postgres
+  - local-stack-seaweedfs
+  - local-stack-envoy
+
+provides:
+  compose_includes:
+    - ./docker/compose/unity-catalog.yaml
+  postgres_databases:
+    - unitycatalog
+  s3_buckets:
+    - unity
+  envoy_clusters:
+    - { name: unity_catalog, host: unitycatalog, port: 8080 }
+  envoy_routes:
+    - { prefix: "/api/2.1/unity-catalog", cluster: unity_catalog }
+    - { prefix: "/unity-catalog", cluster: unity_catalog }
+  env_vars:
+    UC_IMAGE: "unitycatalog/unitycatalog:latest"
+    UC_DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/unitycatalog"

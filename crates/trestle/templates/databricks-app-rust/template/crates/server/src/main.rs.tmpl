@@ -1,0 +1,54 @@
+//! {{ project_name }} server entry point.
+//!
+//! Databricks Apps runs this binary in a container and routes traffic to the
+//! port it sets via the `DATABRICKS_APP_PORT` env var (defaulting to 8080).
+//! Headers like `X-Forwarded-Access-Token` carry the end-user's OBO credential.
+
+use std::env;
+use std::net::SocketAddr;
+
+use axum::Router;
+use axum::routing::get;
+use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
+
+mod api;
+mod handlers;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_logging();
+
+    let port: u16 = env::var("DATABRICKS_APP_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8080);
+    let addr: SocketAddr = ([0, 0, 0, 0], port).into();
+
+    let app = build_router();
+
+    tracing::info!(%addr, "{{ project_name }} server listening");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+fn build_router() -> Router {
+    Router::new()
+        // Liveness/readiness for Databricks Apps and CI smoke tests.
+        .route("/healthz", get(|| async { "ok" }))
+        // Generated routes are added here once `just regen` has run. Example:
+        //   let svc = handlers::greeting::Service::default();
+        //   .merge(crate::gen::server::greeting::server::router(svc))
+        .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http())
+}
+
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_env("APP_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
+}

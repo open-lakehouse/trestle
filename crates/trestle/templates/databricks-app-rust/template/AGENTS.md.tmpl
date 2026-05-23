@@ -1,0 +1,81 @@
+# `{{ project_name }}` — Agent Operating Guide
+
+This file orients you (an AI coding agent) to the conventions of a
+trestle-scaffolded Databricks-Apps-ready Rust service. Read it before editing.
+
+## Mental model
+
+**Proto is the source of truth.** Every API surface, model type, server handler
+trait, and TypeScript client method is generated from
+`proto/{{ project_name | snake_case }}/v1/*.proto`. You should change `.proto`
+files first, run `just regen`, and then implement the new handler — never the
+other way around.
+
+## When to do what
+
+| Goal | Path |
+|------|------|
+| Add a new RPC | `.cursor/rules/adding-an-rpc.md` |
+| Implement a handler | `.cursor/rules/implementing-a-handler.md` |
+| Call the API from the frontend | `.cursor/rules/using-the-ts-client.md` |
+{%- if local_stack != 'none' %}
+| Bring up local services | `.cursor/rules/running-locally-with-compose.md` |
+{%- endif %}
+| Deploy | `.cursor/rules/deploying-to-databricks.md` |
+
+## Hard rules
+
+1. **Never edit `crates/*/src/gen/`, `crates/*/src/models/_gen/`, or
+   `frontend/src/api/`.** They are regenerated and `git diff` will roar.
+2. **Do not hardcode hostnames or auth tokens.** Read `DATABRICKS_HOST`,
+   `DATABRICKS_TOKEN`, `MLFLOW_TRACKING_URI`. The same code runs locally (via
+   Envoy) and on Databricks (via the platform's HTTPS edge).
+3. **OBO context goes through `RequestContext`.** `crates/server/src/api/context.rs`
+   already extracts `X-Forwarded-Access-Token`; never re-implement that
+   extraction in a handler.
+4. **Run `just regen` after any `.proto` change.** CI fails the
+   `codegen-drift` check otherwise.
+5. **Keep the four-crate layout.** `common` is generated-only; `server`
+   depends on `common`; `client` depends on `common`; nothing depends on `server`.
+
+## Common workflows
+
+### "Add a new endpoint"
+
+1. Edit `proto/{{ project_name | snake_case }}/v1/service.proto`.
+2. `just regen`
+3. Add a method in `crates/server/src/handlers/<svc>.rs` implementing the
+   generated trait.
+4. Register it in `crates/server/src/main.rs` (`.merge(...)`)
+{%- if with_frontend %}
+5. Use it from `frontend/src/` via the now-regenerated client at
+   `frontend/src/api/`.
+{%- endif %}
+
+### "Talk to MLflow"
+
+```rust
+use reqwest::Client;
+
+let host = std::env::var("MLFLOW_TRACKING_URI")?;  // identical local/prod
+let token = ctx.access_token.as_deref().ok_or(Error::Unauthorized(..))?;
+let resp = Client::new()
+    .post(format!("{host}/api/2.0/mlflow/experiments/create"))
+    .bearer_auth(token)
+    .json(&body)
+    .send()
+    .await?;
+```
+
+## Active local stack
+
+This project was scaffolded with `local_stack = {{ local_stack }}`.
+{% if local_stack != 'none' -%}
+Active components:
+
+{% for c in stack.components -%}
+- `{{ c }}`
+{% endfor %}
+{%- else -%}
+The local stack is disabled; running `just dev` will only start the Rust server.
+{%- endif %}

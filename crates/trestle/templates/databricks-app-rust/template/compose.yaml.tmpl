@@ -1,0 +1,24 @@
+# Top-level compose entrypoint. The `services.app` block builds the Rust binary
+# and exposes it to Envoy as the `app` cluster; every other service comes from
+# a `_components/local-stack-*` fragment via `include:`.
+name: {{ project_name | kebab_case }}
+
+include:
+{%- for path in stack.compose_includes %}
+  - path: {{ path }}
+    project_directory: .
+{%- endfor %}
+
+services:
+  {{ app_service_name }}:
+    profiles: [dev, svc, full, app]
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    restart: unless-stopped
+    env_file: [.env.local]
+    environment:
+      DATABRICKS_APP_PORT: "{{ app_port }}"
+      APP_LOG: ${APP_LOG:-info}
+    expose:
+      - "{{ app_port }}"

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+exclude = [
+  # Templates are scaffolds containing project skeletons (frequently
+  # uncompilable in isolation); they must never be picked up by `cargo build`.
+  "crates/trestle/templates",
+]
 
 [workspace.package]
 version = "0.0.1"

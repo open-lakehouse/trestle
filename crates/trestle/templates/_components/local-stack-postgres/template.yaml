@@ -1,0 +1,18 @@
+name: local-stack-postgres
+version: 0.1.0
+description: |
+  Postgres 16 with optional pgweb browser, configured to create additional
+  databases at first boot for any component that contributes to
+  `postgres_databases`. Used as the OLTP store for MLflow tracking, Unity
+  Catalog metadata, and any user-defined service that registers a DB.
+
+provides:
+  compose_includes:
+    - ./docker/compose/postgres.yaml
+  postgres_databases: []
+  env_vars:
+    POSTGRES_USER: "postgres"
+    POSTGRES_PASSWORD: "postgres"
+    POSTGRES_DB: "postgres"
+    POSTGRES_PORT: "5432"
+    PGWEB_PORT: "8081"

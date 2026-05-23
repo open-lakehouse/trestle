@@ -1,0 +1,26 @@
+//! Implementation of the starter `Greeting` service. Replace this with your
+//! real handlers; the pattern is the same:
+//!
+//! 1. Define your RPCs in `proto/{{ project_name | snake_case }}/v1/service.proto`.
+//! 2. Run `just regen` to produce the trait + router.
+//! 3. Implement the trait here.
+//! 4. Wire `crate::gen::server::greeting::server::router(handler)` into `main.rs`.
+
+use crate::api::{RequestContext, Result};
+
+#[derive(Default, Clone)]
+pub struct Service;
+
+impl Service {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Hand-written stub. Once `just regen` runs the generated trait, replace
+    /// this signature with the trait method (the compiler will tell you what to
+    /// change). Until then, keep this method around so `cargo check` succeeds
+    /// on a freshly-scaffolded tree.
+    pub async fn hello(&self, _ctx: RequestContext, who: &str) -> Result<String> {
+        Ok(format!("hello, {who}!"))
+    }
+}

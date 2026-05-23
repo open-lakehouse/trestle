@@ -1,0 +1,30 @@
+name: local-stack-mlflow
+version: 0.1.0
+description: |
+  MLflow tracking server backed by Postgres (metadata) and SeaweedFS (artifacts).
+  Envoy rewrites the Databricks-shaped `/api/2.0/mlflow/*` URLs to MLflow's
+  `/mlflow/api/2.0/mlflow/*` so apps using `MLFLOW_TRACKING_URI=http://localhost:$ENVOY_PORT`
+  behave identically locally and on Databricks.
+
+depends_on:
+  - local-stack-postgres
+  - local-stack-seaweedfs
+  - local-stack-envoy
+
+provides:
+  compose_includes:
+    - ./docker/compose/mlflow.yaml
+  postgres_databases:
+    - mlflow
+  s3_buckets:
+    - mlflow
+  envoy_clusters:
+    - { name: mlflow, host: mlflow, port: 5000 }
+  envoy_routes:
+    - { prefix: "/api/2.0/mlflow", cluster: mlflow, rewrite: "/mlflow/api/2.0/mlflow" }
+    - { prefix: "/api/2.0/otel", cluster: mlflow, rewrite: "" }
+    - { prefix: "/mlflow", cluster: mlflow }
+  env_vars:
+    MLFLOW_TRACKING_URI: "http://localhost:${ENVOY_PORT:-9080}"
+    MLFLOW_S3_ENDPOINT_URL: "http://localhost:${SEAWEEDFS_S3_PORT:-9000}"
+    MLFLOW_EXPERIMENT_NAME: "local-dev"
