@@ -7,6 +7,7 @@ use quote::{format_ident, quote};
 use super::super::format_tokens;
 use super::derive_resource_accessor_params;
 use crate::analysis::{RequestParam, RequestType};
+use crate::google::api::http_rule::Pattern;
 use crate::codegen::{MethodHandler, ServiceHandler};
 use crate::parsing::types::{BaseType, RenderContext};
 use crate::utils::strings;
@@ -159,6 +160,18 @@ fn resource_client_method(
             resource_get_update_method_impl(&method, py_error_type, py_result_type)
         }
         RequestType::Delete => resource_delete_method_impl(&method, py_error_type, py_result_type),
+        // Custom POST/PATCH RPCs that target a specific resource (e.g.
+        // `POST /catalogs/{name}:rotateToken`) share the emit shape of
+        // `Update`: path params + body + non-empty response. Factory-style
+        // RPCs without path params (e.g. `Generate*Credentials`) are
+        // classified as collection methods by `is_collection_method()` and
+        // are emitted on the aggregate client instead — skip them here so
+        // they don't get duplicated.
+        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
+            if !method.is_collection_method() =>
+        {
+            resource_get_update_method_impl(&method, py_error_type, py_result_type)
+        }
         _ => return None,
     };
     Some(code)
@@ -175,6 +188,12 @@ fn collection_client_method(
     match &method.plan.request_type {
         RequestType::List => collection_list_method_impl(&method, py_error_type, py_result_type),
         RequestType::Create => {
+            collection_create_method_impl(&method, py_error_type, py_result_type)
+        }
+        // Custom POST/PATCH RPCs without path params (e.g. `Generate*`
+        // factory RPCs) share the emit shape of `Create`: body + return
+        // an unrelated response type.
+        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
             collection_create_method_impl(&method, py_error_type, py_result_type)
         }
         _ => None,
