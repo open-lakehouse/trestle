@@ -4,9 +4,15 @@
 
 Multi-crate Rust workspace:
 
+- `crates/trestle/` — Unified CLI (`trestle new`, `trestle generate`, `trestle enrich-openapi`) + embedded templates and shared component library at `crates/trestle/templates/`
 - `crates/olai-codegen/` — Proto-driven code generation (REST handlers, clients, bindings, resource registries)
 - `crates/olai-store/` — Generic resource store abstractions (Object, Association, Label, Registry)
 - `crates/olai-http/` — Cloud credential abstraction and HTTP client (AWS, Azure, GCP, Databricks)
+
+The `trestle` binary subsumes the old `proto-gen` binary; `trestle generate` and
+`trestle enrich-openapi` are the canonical entry points. `trestle new` scaffolds
+the four-crate "Recommended Project Structure" described in
+`crates/olai-codegen/README.md`.
 
 ## Build & Test
 

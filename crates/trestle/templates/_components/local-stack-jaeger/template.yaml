@@ -1,0 +1,20 @@
+name: local-stack-jaeger
+version: 0.1.0
+description: |
+  Jaeger all-in-one tracing backend exposed at `/jaeger` via Envoy. Receives OTLP
+  traces from the user's app on port 4317 (set OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+  in `.env.local` to the Envoy endpoint).
+
+depends_on:
+  - local-stack-envoy
+
+provides:
+  compose_includes:
+    - ./docker/compose/jaeger.yaml
+  envoy_clusters:
+    - { name: jaeger_ui, host: jaeger, port: 16686 }
+  envoy_routes:
+    - { prefix: "/jaeger", cluster: jaeger_ui }
+  env_vars:
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://localhost:4317"
+    JAEGER_UI_PORT: "16686"

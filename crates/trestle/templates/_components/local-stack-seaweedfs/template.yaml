@@ -1,0 +1,17 @@
+name: local-stack-seaweedfs
+version: 0.1.0
+description: |
+  SeaweedFS single-node S3-compatible object storage, used as the artifact store
+  for MLflow, Delta tables in notebooks, and any other component that requests an
+  S3 bucket via `provides.s3_buckets`.
+
+provides:
+  compose_includes:
+    - ./docker/compose/seaweedfs.yaml
+  s3_buckets: []
+  env_vars:
+    AWS_ACCESS_KEY_ID: "seaweedfs"
+    AWS_SECRET_ACCESS_KEY: "seaweedfs"
+    AWS_DEFAULT_REGION: "us-east-1"
+    SEAWEEDFS_S3_PORT: "9000"
+    SEAWEEDFS_MASTER_PORT: "9333"

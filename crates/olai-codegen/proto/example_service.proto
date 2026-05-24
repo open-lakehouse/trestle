@@ -34,6 +34,16 @@ service CatalogService {
   rpc DeleteCatalog(DeleteCatalogRequest) returns (DeleteCatalogResponse) {
     option (google.api.http) = {delete: "/catalogs/{name}"};
   }
+
+  // Custom POST RPC without path params — covers `RequestType::Custom(Post)`
+  // dispatched as a collection method (the shape used by factory-style
+  // RPCs like `GenerateTemporary*Credentials`).
+  rpc GenerateCatalogToken(GenerateCatalogTokenRequest) returns (CatalogToken) {
+    option (google.api.http) = {
+      post: "/catalog-tokens"
+      body: "*"
+    };
+  }
 }
 
 message CreateCatalogRequest {
@@ -64,3 +74,11 @@ message DeleteCatalogRequest {
 }
 
 message DeleteCatalogResponse {}
+
+message GenerateCatalogTokenRequest {
+  string catalog_id = 1;
+}
+
+message CatalogToken {
+  string token = 1;
+}

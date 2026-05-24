@@ -21,7 +21,7 @@ fn test_parses_services_and_methods() {
         .services
         .get("CatalogService")
         .expect("CatalogService exists");
-    assert_eq!(catalog.methods.len(), 5); // Create/Get/List/Update/Delete
+    assert_eq!(catalog.methods.len(), 6); // Create/Get/List/Update/Delete + custom GenerateCatalogToken
 
     let schema = meta
         .services

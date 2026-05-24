@@ -1,0 +1,30 @@
+# Databricks Asset Bundle for {{ project_name }}.
+#
+# `databricks bundle deploy` uploads the source + binary to the workspace and
+# registers an app. The bundle name doubles as the asset prefix in the workspace,
+# so keep it stable across deploys.
+bundle:
+  name: {{ project_name | snake_case }}
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${var.databricks_host}
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.databricks_host}
+
+variables:
+  databricks_host:
+    description: "Workspace URL"
+
+resources:
+  apps:
+    {{ project_name | snake_case }}:
+      name: {{ project_name | kebab_case }}
+      description: "{{ project_name }} (scaffolded by trestle)"
+      source_code_path: ./

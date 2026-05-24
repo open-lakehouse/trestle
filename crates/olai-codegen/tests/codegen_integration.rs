@@ -207,3 +207,51 @@ fn test_codegen_uses_configured_aggregate_client_name() {
         "Python output should use configured aggregate client name"
     );
 }
+
+/// Regression test for the Python emitter silently dropping
+/// `RequestType::Custom(Pattern::Post | Pattern::Patch)` RPCs.
+///
+/// `GenerateCatalogToken` is a factory-style POST RPC without path
+/// parameters — `is_collection_method` classifies it as a collection
+/// method (alongside `List` and `Create`), and the emitter should emit
+/// a `generate_catalog_token(...)` method on the aggregate client.
+#[test]
+fn test_python_emitter_handles_custom_post_rpcs() {
+    let descriptor = load_descriptor();
+    let metadata = parse_file_descriptor_set(&descriptor).expect("parse succeeded");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let common_dir = tmp.path().join("common");
+    let node_ts_dir = tmp.path().join("node_ts");
+    let python_dir = tmp.path().join("python");
+    let node_dir = tmp.path().join("node");
+
+    for dir in &[&common_dir, &node_ts_dir, &python_dir, &node_dir] {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+
+    let config = make_test_config(common_dir, node_ts_dir, python_dir.clone(), node_dir);
+
+    generate_code(&metadata, &config).expect("generate_code succeeded");
+
+    let py_files = collect_generated_files(&python_dir);
+    let all_py = py_files.join("\n");
+
+    assert!(
+        all_py.contains("generate_catalog_token"),
+        "Python emitter dropped a `Custom(Post)` RPC; output should expose \
+         `generate_catalog_token`"
+    );
+
+    // The `.pyi` typings emitter must also include `Custom(Post|Patch)`
+    // RPCs — the runtime bindings and the type stubs must stay in sync.
+    let pyi = py_files
+        .iter()
+        .find(|f| f.contains("class ExampleClient"))
+        .expect("expected ExampleClient stub in generated Python output");
+    assert!(
+        pyi.contains("generate_catalog_token"),
+        "Python `.pyi` emitter dropped a `Custom(Post)` RPC; expected \
+         `generate_catalog_token` in the stub"
+    );
+}

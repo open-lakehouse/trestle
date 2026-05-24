@@ -1,0 +1,19 @@
+name: local-stack-notebooks
+version: 0.1.0
+description: |
+  Marimo notebooks served behind Envoy at `/notebooks`. Mounted env vars give
+  notebooks the same `MLFLOW_TRACKING_URI` and `DATABRICKS_*` configuration the
+  Rust server sees, so the same example code runs in both contexts.
+
+depends_on:
+  - local-stack-envoy
+
+provides:
+  compose_includes:
+    - ./docker/compose/notebooks.yaml
+  envoy_clusters:
+    - { name: notebooks, host: notebooks, port: 8080 }
+  envoy_routes:
+    - { prefix: "/notebooks", cluster: notebooks }
+  env_vars:
+    NOTEBOOKS_PORT: "8082"

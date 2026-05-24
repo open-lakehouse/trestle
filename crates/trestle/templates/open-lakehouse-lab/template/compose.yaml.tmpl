@@ -1,0 +1,13 @@
+# Top-level compose entrypoint. Every backing service is pulled in via `include:`
+# from `docker/compose/`; that file list is owned by the active component set,
+# not edited by hand. See README.md and `.cursor/rules/extending-the-stack.md`.
+#
+# `project_directory: .` makes the include files resolve their relative paths
+# (volumes, configs, etc.) against this top-level directory instead of their own.
+name: {{ lab_name }}
+
+include:
+{%- for path in stack.compose_includes %}
+  - path: {{ path }}
+    project_directory: .
+{%- endfor %}

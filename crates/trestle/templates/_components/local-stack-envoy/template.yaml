@@ -1,0 +1,15 @@
+name: local-stack-envoy
+version: 0.1.0
+description: |
+  Envoy gateway that emulates the Databricks request edge locally. Routes incoming
+  HTTP traffic to either the user's app or a backing service (MLflow, Unity Catalog,
+  notebooks, ...) based on URL prefix. Service-specific route fragments are
+  contributed by the other `local-stack-*` components.
+
+provides:
+  compose_includes:
+    - ./docker/compose/envoy.yaml
+  envoy_clusters: []
+  envoy_routes: []
+  env_vars:
+    ENVOY_PORT: "9080"

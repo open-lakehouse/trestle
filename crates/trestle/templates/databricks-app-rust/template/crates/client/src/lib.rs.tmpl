@@ -1,0 +1,11 @@
+//! HTTP client for the {{ project_name }} service.
+//!
+//! The `gen` module is populated by `trestle generate`; until then, this crate
+//! re-exports just the shared models so downstream consumers can import them
+//! without forcing a regen on a freshly-scaffolded tree.
+
+pub use {{ project_name | snake_case }}_common::models;
+
+#[path = "gen/mod.rs"]
+mod _gen;
+pub use _gen::*;

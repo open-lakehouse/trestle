@@ -1,0 +1,87 @@
+set dotenv-load := true
+set dotenv-filename := ".env.local"
+
+project := "{{ project_name | kebab_case }}"
+
+# ------------------------------------------------------------------------------
+# Codegen
+# ------------------------------------------------------------------------------
+
+# Build the proto descriptor + regenerate Rust + TS code.
+regen:
+    buf build -o api.bin
+    trestle generate -c trestle.yaml
+{% if with_frontend -%}
+    cd frontend && npm install
+{% endif %}
+
+# ------------------------------------------------------------------------------
+# Dev loop
+# ------------------------------------------------------------------------------
+
+# Run the server (and frontend, if enabled) in watch mode.
+{% if with_frontend -%}
+dev:
+    docker compose --profile dev up -d
+    cargo run -p {{ project_name | kebab_case }}-server &
+    cd frontend && npm run dev
+{%- else %}
+dev:
+    docker compose --profile svc up -d
+    cargo run -p {{ project_name | kebab_case }}-server
+{%- endif %}
+
+# ------------------------------------------------------------------------------
+# Local stack (delegated to compose)
+# ------------------------------------------------------------------------------
+
+{% if local_stack != 'none' -%}
+# Bring up the local platform stack (Postgres, MLflow, Envoy, ...).
+up profile="svc":
+    docker compose --profile {% raw %}{{profile}}{% endraw %} up -d
+
+# Stop everything and wipe volumes.
+down:
+    docker compose down -v
+
+# Tail logs (e.g. `just logs mlflow`).
+logs svc:
+    docker compose logs -f {% raw %}{{svc}}{% endraw %}
+
+# Print the active envoy route table.
+routes:
+    @sed -n '/match: { prefix:/p' docker/envoy/envoy.yaml
+{%- endif %}
+
+# ------------------------------------------------------------------------------
+# Databricks Apps
+# ------------------------------------------------------------------------------
+
+# Validate the asset bundle (no deploy).
+bundle-validate:
+    databricks bundle validate
+
+# Deploy the bundle.
+deploy:
+    databricks bundle deploy
+    databricks bundle run {{ project_name | snake_case }}
+
+# ------------------------------------------------------------------------------
+# Quality
+# ------------------------------------------------------------------------------
+
+fmt:
+    cargo fmt --all
+{% if with_frontend -%}
+    cd frontend && npm run format
+{%- endif %}
+
+lint:
+    cargo clippy --all-targets -- -D warnings
+    buf lint
+{% if with_frontend -%}
+    cd frontend && npm run lint
+{%- endif %}
+
+test:
+    cargo test --workspace --lib --tests
