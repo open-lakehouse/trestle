@@ -7,8 +7,8 @@ use quote::{format_ident, quote};
 use super::super::format_tokens;
 use super::derive_resource_accessor_params;
 use crate::analysis::{RequestParam, RequestType};
-use crate::google::api::http_rule::Pattern;
 use crate::codegen::{MethodHandler, ServiceHandler};
+use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, RenderContext};
 use crate::utils::strings;
 

@@ -242,4 +242,16 @@ fn test_python_emitter_handles_custom_post_rpcs() {
         "Python emitter dropped a `Custom(Post)` RPC; output should expose \
          `generate_catalog_token`"
     );
+
+    // The `.pyi` typings emitter must also include `Custom(Post|Patch)`
+    // RPCs — the runtime bindings and the type stubs must stay in sync.
+    let pyi = py_files
+        .iter()
+        .find(|f| f.contains("class ExampleClient"))
+        .expect("expected ExampleClient stub in generated Python output");
+    assert!(
+        pyi.contains("generate_catalog_token"),
+        "Python `.pyi` emitter dropped a `Custom(Post)` RPC; expected \
+         `generate_catalog_token` in the stub"
+    );
 }

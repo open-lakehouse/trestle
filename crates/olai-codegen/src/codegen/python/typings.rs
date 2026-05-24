@@ -9,6 +9,7 @@ use super::{
 };
 use crate::analysis::RequestType;
 use crate::codegen::{MethodHandler, ServiceHandler};
+use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, UnifiedType, unified_to_python_type};
 use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo};
 
@@ -64,6 +65,14 @@ fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<Strin
         RequestType::Get | RequestType::Update => method.plan.resource_client_method().to_string(),
         RequestType::Delete => method.plan.resource_client_method().to_string(),
         RequestType::List | RequestType::Create => method.plan.base_method_ident().to_string(),
+        // Custom POST/PATCH RPCs that target a specific resource (path
+        // params present). Use the resource-client method name, mirroring
+        // the bindings emitter.
+        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
+            if !method.is_collection_method() =>
+        {
+            method.plan.resource_client_method().to_string()
+        }
         _ => return None,
     };
 
@@ -450,7 +459,8 @@ fn generate_main_client_class_typings(
                                 "Any".to_string()
                             }
                         }
-                        RequestType::Create => {
+                        RequestType::Create
+                        | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
                             if let Some(output_type) = method.output_type() {
                                 python_type_annotation_from_ident(&output_type)
                             } else {
