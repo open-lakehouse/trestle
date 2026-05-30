@@ -17,18 +17,26 @@
 //! ```
 
 pub mod aggregate;
+pub mod catalog;
 pub mod hooks;
 pub mod loader;
 pub mod manifest;
+pub mod preview;
 pub mod prompt;
 pub mod render;
 pub mod resolve;
+pub mod validate;
 pub mod walk;
+pub mod wizard;
 
 pub use aggregate::{StackContext, aggregate_stack_context};
+pub use catalog::{ComponentCatalog, ComponentSummary};
 pub use loader::{TemplateSource, load_template};
-pub use manifest::{Component, ComponentManifest, Manifest, Profile, Provides, VarKind, Variable};
+pub use manifest::{
+    Category, Component, ComponentManifest, DefaultList, LakehouseRequires, Manifest, Profile,
+    Provides, VarKind, Variable, WireHelp,
+};
 pub use prompt::{VariableValue, collect_variables};
 pub use render::{Renderer, register_filters};
-pub use resolve::resolve_components;
+pub use resolve::{ResolveInput, ResolvedComponent, ScaffoldRoot, resolve_components};
 pub use walk::render_tree;

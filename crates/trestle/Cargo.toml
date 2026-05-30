@@ -28,7 +28,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 minijinja = { version = "2.19", features = ["loader", "json", "preserve_order"] }
 rust-embed = { version = "8.11", features = ["debug-embed", "include-exclude"] }
-inquire = "0.9"
+cliclack = "0.5.4"
 walkdir = "2.5"
 regex = "1"
 ignore = "0.4"

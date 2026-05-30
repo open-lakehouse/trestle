@@ -174,4 +174,62 @@ mod tests {
                 (init_backoff_secs + (value * base - init_backoff_secs) / 2.).min(max_backoff_secs);
         }
     }
+
+    #[test]
+    fn test_backoff_default_rng_stays_within_bounds() {
+        // Using the production (thread) RNG, the first backoff must equal
+        // `init_backoff` and every produced delay must remain within
+        // `[init_backoff, max_backoff]`.
+        let init = Duration::from_millis(100);
+        let max = Duration::from_secs(15);
+        let config = BackoffConfig {
+            init_backoff: init,
+            max_backoff: max,
+            base: 2.,
+        };
+
+        let mut backoff = Backoff::new(&config);
+
+        let first = backoff.next();
+        assert_eq!(first, init, "first backoff must equal init_backoff");
+
+        for _ in 0..50 {
+            let d = backoff.next();
+            assert!(
+                d >= init && d <= max,
+                "backoff {d:?} outside bounds [{init:?}, {max:?}]"
+            );
+        }
+    }
+
+    #[test]
+    fn test_backoff_trends_upward_with_max_rng() {
+        // With an RNG that always selects the top of the range, successive
+        // backoffs are monotonically non-decreasing until they saturate at
+        // `max_backoff`.
+        let config = BackoffConfig {
+            init_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_secs(5),
+            base: 2.,
+        };
+
+        let rng = Box::new(FixedRng(u64::MAX));
+        let mut backoff = Backoff::new_with_rng(&config, Some(rng));
+
+        let mut prev = backoff.next();
+        let mut saw_increase = false;
+        for _ in 0..15 {
+            let next = backoff.next();
+            assert!(
+                next + Duration::from_nanos(1) >= prev,
+                "backoff decreased: {prev:?} -> {next:?}"
+            );
+            if next > prev {
+                saw_increase = true;
+            }
+            assert!(next <= config.max_backoff);
+            prev = next;
+        }
+        assert!(saw_increase, "expected backoff to grow over time");
+    }
 }

@@ -16,7 +16,7 @@ use crate::{
 /// This generates:
 /// - FromRequestParts extractor implementations for path/query parameters
 /// - FromRequest extractor implementations for JSON body
-pub(super) fn generate_common(service: &ServiceHandler<'_>) -> String {
+pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
     let extractor_impls = service
         .methods()
         .map(|method| from_request_extractor(&method))
@@ -54,7 +54,7 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> String {
     format_tokens(tokens)
 }
 
-pub(super) fn generate_server(service: &ServiceHandler<'_>) -> String {
+pub(super) fn generate_server(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
     let handler_function_impls = service
         .methods()
         .map(|method| axum_route_handler_impl(&method, &service.plan.handler_name))

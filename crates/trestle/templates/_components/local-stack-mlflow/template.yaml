@@ -1,10 +1,19 @@
 name: local-stack-mlflow
 version: 0.1.0
+category: ml
+provider_of: experiment_tracking
+display_name: "MLflow tracking"
+summary: "Experiment + model tracking; Databricks-shaped URLs work locally."
 description: |
   MLflow tracking server backed by Postgres (metadata) and SeaweedFS (artifacts).
   Envoy rewrites the Databricks-shaped `/api/2.0/mlflow/*` URLs to MLflow's
   `/mlflow/api/2.0/mlflow/*` so apps using `MLFLOW_TRACKING_URI=http://localhost:$ENVOY_PORT`
   behave identically locally and on Databricks.
+
+wire_help:
+  - { env: MLFLOW_TRACKING_URI, note: "Point any MLflow client (Python, R, Java) here." }
+  - { env: MLFLOW_S3_ENDPOINT_URL, note: "Where MLflow stores artifacts." }
+  - { url: "http://localhost:${ENVOY_PORT:-9080}/mlflow", note: "MLflow UI (behind Envoy)." }
 
 depends_on:
   - local-stack-postgres

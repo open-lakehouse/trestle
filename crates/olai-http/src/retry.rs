@@ -59,6 +59,13 @@ pub enum Error {
         retry_timeout: Duration,
         source: reqwest::Error,
     },
+
+    /// A non-retryable transport failure surfaced by the [`HttpService`], for
+    /// example when a spawned I/O task is cancelled during runtime shutdown.
+    #[error("Transport error: {source}")]
+    Transport {
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
 }
 
 impl Error {
@@ -69,6 +76,7 @@ impl Error {
             Self::Server { status, .. } => Some(*status),
             Self::Client { status, .. } => Some(*status),
             Self::Reqwest { source, .. } => source.status(),
+            Self::Transport { .. } => None,
         }
     }
 
@@ -79,6 +87,7 @@ impl Error {
             Self::Server { body, .. } => body.as_deref(),
             Self::BareRedirect => None,
             Self::Reqwest { .. } => None,
+            Self::Transport { .. } => None,
         }
     }
 
@@ -313,7 +322,7 @@ impl RetryableRequest {
                         tokio::time::sleep(sleep).await;
                     }
                 },
-                Err(e) => {
+                Err(crate::Error::ReqwestError(e)) => {
                     let e = sanitize_err(e);
 
                     let mut do_retry = false;
@@ -370,6 +379,14 @@ impl RetryableRequest {
                         e,
                     );
                     tokio::time::sleep(sleep).await;
+                }
+                // Any non-reqwest error surfaced by the service (e.g. a cancelled
+                // I/O task during runtime shutdown) is a non-retryable transport
+                // failure. Return it immediately without consuming a retry.
+                Err(other) => {
+                    return Err(Error::Transport {
+                        source: Box::new(other),
+                    });
                 }
             }
         }
@@ -605,5 +622,83 @@ mod tests {
             .sensitive(true);
         let err = req.send().await.unwrap_err().to_string();
         assert!(!err.contains("SENSITIVE"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_retry_exhaustion_returns_last_server_error() {
+        let mut server = mockito::Server::new_async().await;
+
+        let retry = RetryConfig {
+            // Keep backoff tiny so the test is fast.
+            backoff: crate::backoff::BackoffConfig {
+                init_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(2),
+                base: 2.,
+            },
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        let client = Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let service = Arc::new(ReqwestService::new(client.clone()));
+        let server_url = server.url();
+
+        // The server always returns 502. With max_retries = 2 that is three
+        // attempts total, all failing, after which the last error is surfaced.
+        let mock = server
+            .mock("GET", "/")
+            .with_status(502)
+            .with_body("upstream boom")
+            .expect(3)
+            .create_async()
+            .await;
+
+        let err = client
+            .request(Method::GET, &server_url)
+            .send_retry(&retry, service.clone())
+            .await
+            .unwrap_err();
+
+        // 5xx that exhausts retries surfaces as a Reqwest error carrying the
+        // final 502 status.
+        assert!(matches!(err, Error::Reqwest { .. }), "{err:?}");
+        assert_eq!(err.status(), Some(StatusCode::BAD_GATEWAY));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_no_retries_returns_immediately() {
+        let mut server = mockito::Server::new_async().await;
+
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 0,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        let client = Client::builder().build().unwrap();
+        let service = Arc::new(ReqwestService::new(client.clone()));
+        let server_url = server.url();
+
+        // With max_retries = 0 the server is hit exactly once even on a 5xx.
+        let mock = server
+            .mock("GET", "/")
+            .with_status(503)
+            .with_body("")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let err = client
+            .request(Method::GET, &server_url)
+            .send_retry(&retry, service.clone())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.status(), Some(StatusCode::SERVICE_UNAVAILABLE));
+        mock.assert_async().await;
     }
 }

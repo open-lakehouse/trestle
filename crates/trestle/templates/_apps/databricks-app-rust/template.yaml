@@ -1,0 +1,75 @@
+name: databricks-app-rust
+version: 0.1.0
+display_name: "Databricks app (Rust + Axum)"
+summary: "Service + optional frontend + proto codegen; deployable to Databricks Apps."
+description: |
+  Rust-Axum service ready to deploy to Databricks Apps, with proto-driven code
+  generation (server, client, TS bindings) and the Databricks-shaped local env
+  contract (DATABRICKS_HOST / TOKEN / forwarded-user headers) wired up via the
+  always-on Envoy gateway.
+authors: [trestle]
+trestle_min_version: 0.1.0
+
+# Project-identity variables that survive after the "no low-level prompts" cut.
+# `project_name` comes from the positional CLI arg; everything else has a silent
+# default that power users can override via `--set`.
+variables:
+  - name: project_name
+    prompt: "Project name (kebab-case)"
+    validate: "^[a-z][a-z0-9-]*$"
+    help: "Used for crate names, Docker images, and the Databricks Apps app name."
+  - name: gh_owner
+    default: "your-org"
+    help: "GitHub owner/org used in Cargo.toml `repository`."
+
+# App-private categories. `options:` lists explicit values (not component names)
+# so the wizard can offer simple `react` / `none` style picks for things that
+# aren't full lakehouse components.
+categories:
+  - id: frontend
+    display_name: "Frontend"
+    multi: false
+    optional: true
+    default: react
+    options: [react, none]
+    help: "Whether to scaffold a React+Vite SPA under frontend/."
+  - id: ci
+    display_name: "CI / CD"
+    multi: false
+    optional: true
+    default: github
+    options: [github, none]
+    help: "Workflow flavour for the rendered .github/ directory."
+
+# Lakehouse-side dependencies. `hard:` is silently auto-enabled; `soft:` is
+# pre-checked in the relevant category multi-select but can be deselected.
+lakehouse_requires:
+  hard: [databricks-emulator-env]
+  soft: [local-stack-postgres]
+  recommended_categories:
+    ml: [local-stack-mlflow]
+    storage: [local-stack-seaweedfs]
+
+# Local app-private components. Selection comes from the `frontend` / `ci`
+# categories via the resolver's compat shim (`when:` against the derived
+# `with_frontend` / `with_ci` flags below).
+components:
+  - { name: frontend-react, kind: local, path: components/frontend-react, when: "with_frontend" }
+  - { name: ci-github,      kind: local, path: components/ci-github,      when: "with_ci" }
+
+template_context:
+  has_app: true
+  app_service_name: "{{ project_name | kebab_case }}-server"
+  app_port: 8080
+  # Baked-in defaults that replace the dropped prompts (rust_edition, license).
+  rust_edition: "2024"
+  license: "Apache-2.0"
+  # Legacy compat values still referenced by some `.tmpl` files. `local_stack`
+  # being non-`none` signals that some local platform stack is active; the wizard
+  # always enables Envoy + (typically) Postgres, so `custom` is a safe default.
+  local_stack: "custom"
+
+post_init:
+  - run: "git init -q && git add -A && git commit -q -m 'chore: scaffolded by trestle' || true"
+    confirm: true
+    description: "Initialise a fresh git repository"

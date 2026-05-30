@@ -12,7 +12,7 @@ use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, RenderContext};
 use crate::utils::strings;
 
-pub fn main_module(services: &[ServiceHandler<'_>]) -> String {
+pub fn main_module(services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
     let service_modules = services.iter().map(|s| {
         let module_name = format_ident!("{}", s.plan.base_path);
         quote! { pub mod #module_name; }
@@ -28,7 +28,7 @@ pub fn main_module(services: &[ServiceHandler<'_>]) -> String {
     format_tokens(tokens)
 }
 
-pub(crate) fn generate(service: &ServiceHandler<'_>) -> String {
+pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
     let bindings = service
         .config
         .bindings

@@ -64,4 +64,20 @@ client.set_recording_dir("/path/to/recordings".into())?;
 Sensitive headers (`Authorization`, `x-amz-security-token`, etc.) are automatically
 redacted in recordings.
 
+## Credential redaction convention
+
+Credential structs hold long-lived secrets and must never expose their field
+values through `Debug` (which is easy to trigger accidentally via `tracing`,
+`println!("{:?}")`, or `unwrap`/`expect` panic messages). When adding a new
+credential type:
+
+- **Do not** `#[derive(Debug)]` on a struct holding a secret, token, or access
+  key. Derive only the traits you actually need (`Eq`, `PartialEq`, …).
+- Hand-write `impl fmt::Debug` that renders `<redacted>` for every secret-bearing
+  field (including identifiers like access key IDs). For `Option` fields, prefer
+  rendering `Some("<redacted>")` / `None` so the *presence* of a token is still
+  observable without leaking its value.
+
+See `AwsCredential` in `src/aws/credential.rs` for the reference implementation.
+
 [object_store]: https://crates.io/crates/object_store

@@ -29,9 +29,9 @@ pub(crate) fn generate_resource_enum(
     metadata: &CodeGenMetadata,
     config: &CodeGenConfig,
     error_type_path: Option<&str>,
-) -> String {
+) -> crate::error::Result<String> {
     if !config.generate_resource_enum {
-        return String::new();
+        return Ok(String::new());
     }
 
     // Infer package prefix from service packages (e.g. "unitycatalog.catalogs.v1" → ".unitycatalog.")
@@ -43,229 +43,115 @@ pub(crate) fn generate_resource_enum(
             .collect::<Vec<_>>(),
     );
 
-    // Collect all messages that have a resource annotation matching the inferred prefix
-    let mut resources: Vec<ResourceEntry> = metadata
-        .messages
-        .iter()
-        .filter_map(|(name, info)| {
-            let rd = info.resource_descriptor.as_ref()?;
-            // Only include packages matching the inferred prefix (excludes google/gnostic messages)
-            if !name.starts_with(&package_prefix) {
-                return None;
+    // Collect all messages that have a resource annotation matching the inferred prefix.
+    //
+    // Proto-derived `rust_path` strings are parsed (and validated) exactly once here. A
+    // malformed path hard-fails with [`Error::InvalidRustPath`] naming the offending proto
+    // message, rather than panicking deep in token generation.
+    let mut resources: Vec<ResourceEntry> = Vec::new();
+    for (name, info) in &metadata.messages {
+        let Some(rd) = info.resource_descriptor.as_ref() else {
+            continue;
+        };
+        // Only include packages matching the inferred prefix (excludes google/gnostic messages)
+        if !name.starts_with(&package_prefix) {
+            continue;
+        }
+        // Extract variant name from resource type (e.g. "acme.io/Widget" -> "Widget")
+        let variant_name = match rd.r#type.split('/').next_back() {
+            Some(v) if !v.is_empty() => v.to_string(),
+            _ => {
+                tracing::warn!(
+                    "Skipping resource `{}`: type `{}` has no `/`-separated variant name",
+                    name,
+                    rd.r#type
+                );
+                continue;
             }
-            // Extract variant name from resource type (e.g. "acme.io/Widget" -> "Widget")
-            let variant_name = match rd.r#type.split('/').next_back() {
-                Some(v) if !v.is_empty() => v.to_string(),
-                _ => {
-                    tracing::warn!(
-                        "Skipping resource `{}`: type `{}` has no `/`-separated variant name",
-                        name,
-                        rd.r#type
-                    );
-                    return None;
+        };
+        // labels.rs always lives one level inside the models subdir, so super:: reaches the subdir
+        // module which has all the service pub mods as siblings.
+        let Some(rust_path) = message_name_to_rust_path(name, &package_prefix, 1) else {
+            continue;
+        };
+
+        // Validate the proto-derived path once, attributing failures to the proto message.
+        let rust_type: syn::Type =
+            syn::parse_str(&rust_path).map_err(|e| crate::error::Error::InvalidRustPath {
+                path: rust_path.clone(),
+                message: name.clone(),
+                source: e,
+            })?;
+
+        // Find the IDENTIFIER-annotated field
+        let id_field = info
+            .fields
+            .iter()
+            .find(|f| f.field_behavior.contains(&FieldBehavior::Identifier));
+        let (id_field_name, id_is_optional) = match id_field {
+            Some(f) => (Some(f.name.clone()), f.unified_type.is_optional),
+            None => (None, false),
+        };
+
+        // Derive path_names from the service plan for this resource.
+        // A resource is hierarchical if its descriptor explicitly sets name_field (any value)
+        // OR if the message has a full_name field (server-computed dot-joined composite).
+        let message_has_full_name = info.fields.iter().any(|f| f.name == "full_name");
+        let path_names = derive_path_names(
+            &rd.singular,
+            !rd.name_field.is_empty() || message_has_full_name,
+            plan,
+            metadata,
+        );
+
+        // Compute field descriptors with roles for the resource registry.
+        let known_managed_fields: &[&str] =
+            &["created_at", "updated_at", "created_by", "updated_by"];
+        let field_descriptors: Vec<FieldDescriptorEntry> = info
+            .fields
+            .iter()
+            .map(|f| {
+                let role = if f.field_behavior.contains(&FieldBehavior::Identifier) {
+                    FieldRoleEntry::Identifier
+                } else if f.is_sensitive {
+                    FieldRoleEntry::Sensitive
+                } else if f.field_behavior.contains(&FieldBehavior::OutputOnly)
+                    && known_managed_fields.contains(&f.name.as_str())
+                {
+                    FieldRoleEntry::Managed
+                } else {
+                    FieldRoleEntry::Data
+                };
+                FieldDescriptorEntry {
+                    name: f.name.clone(),
+                    role,
                 }
-            };
-            // labels.rs always lives one level inside the models subdir, so super:: reaches the subdir
-            // module which has all the service pub mods as siblings.
-            let rust_path = message_name_to_rust_path(name, &package_prefix, 1)?;
-
-            // Find the IDENTIFIER-annotated field
-            let id_field = info
-                .fields
-                .iter()
-                .find(|f| f.field_behavior.contains(&FieldBehavior::Identifier));
-            let (id_field_name, id_is_optional) = match id_field {
-                Some(f) => (Some(f.name.clone()), f.unified_type.is_optional),
-                None => (None, false),
-            };
-
-            // Derive path_names from the service plan for this resource.
-            // A resource is hierarchical if its descriptor explicitly sets name_field (any value)
-            // OR if the message has a full_name field (server-computed dot-joined composite).
-            let message_has_full_name = info.fields.iter().any(|f| f.name == "full_name");
-            let path_names = derive_path_names(
-                &rd.singular,
-                !rd.name_field.is_empty() || message_has_full_name,
-                plan,
-                metadata,
-            );
-
-            // Compute field descriptors with roles for the resource registry.
-            let known_managed_fields: &[&str] =
-                &["created_at", "updated_at", "created_by", "updated_by"];
-            let field_descriptors: Vec<FieldDescriptorEntry> = info
-                .fields
-                .iter()
-                .map(|f| {
-                    let role = if f.field_behavior.contains(&FieldBehavior::Identifier) {
-                        FieldRoleEntry::Identifier
-                    } else if f.is_sensitive {
-                        FieldRoleEntry::Sensitive
-                    } else if f.field_behavior.contains(&FieldBehavior::OutputOnly)
-                        && known_managed_fields.contains(&f.name.as_str())
-                    {
-                        FieldRoleEntry::Managed
-                    } else {
-                        FieldRoleEntry::Data
-                    };
-                    FieldDescriptorEntry {
-                        name: f.name.clone(),
-                        role,
-                    }
-                })
-                .collect();
-
-            Some(ResourceEntry {
-                variant_name,
-                rust_path,
-                singular: rd.singular.clone(),
-                id_field: id_field_name,
-                id_is_optional,
-                path_names,
-                has_full_name: message_has_full_name,
-                field_descriptors,
             })
-        })
-        .collect();
+            .collect();
+
+        resources.push(ResourceEntry {
+            variant_name,
+            rust_path,
+            rust_type,
+            singular: rd.singular.clone(),
+            id_field: id_field_name,
+            id_is_optional,
+            path_names,
+            has_full_name: message_has_full_name,
+            field_descriptors,
+        });
+    }
 
     // Sort deterministically by singular name
     resources.sort_by(|a, b| a.singular.cmp(&b.singular));
 
-    let resource_variants: Vec<TokenStream> = resources
-        .iter()
-        .map(|r| {
-            let variant = format_ident!("{}", r.variant_name);
-            let path: syn::Type = syn::parse_str(&r.rust_path)
-                .unwrap_or_else(|e| panic!("Invalid rust path `{}`: {}", r.rust_path, e));
-            quote! { #variant(#path) }
-        })
-        .collect();
+    let (resource_variants, label_variants) = build_variants(&resources);
 
-    let label_variants: Vec<TokenStream> = resources
-        .iter()
-        .map(|r| {
-            let variant = format_ident!("{}", r.variant_name);
-            quote! { #variant }
-        })
-        .collect();
+    // Inherent impl and From/TryFrom impls — only emitted when error_type_path is set.
+    let extra_impls = build_tryfrom_impls(&resources, error_type_path)?;
 
-    // Inherent impl and From/TryFrom impls — only emitted when error_type_path is set
-    let extra_impls: TokenStream = if let Some(error_path) = error_type_path {
-        let error_ty: syn::Type = syn::parse_str(error_path)
-            .unwrap_or_else(|e| panic!("Invalid error_type_path `{error_path}`: {e}"));
-
-        let label_arms: Vec<TokenStream> = resources
-            .iter()
-            .map(|r| {
-                let variant = format_ident!("{}", r.variant_name);
-                quote! { Resource::#variant(_) => &ObjectLabel::#variant, }
-            })
-            .collect();
-
-        let from_impls: Vec<TokenStream> = resources
-            .iter()
-            .map(|r| {
-                let variant = format_ident!("{}", r.variant_name);
-                let path: syn::Type = syn::parse_str(&r.rust_path)
-                    .unwrap_or_else(|e| panic!("Invalid rust path `{}`: {}", r.rust_path, e));
-                quote! {
-                    impl From<#path> for Resource {
-                        fn from(v: #path) -> Self {
-                            Resource::#variant(v)
-                        }
-                    }
-
-                    impl TryFrom<Resource> for #path {
-                        type Error = #error_ty;
-
-                        fn try_from(r: Resource) -> Result<Self, Self::Error> {
-                            match r {
-                                Resource::#variant(v) => Ok(v),
-                                _ => Err(<#error_ty>::generic(concat!(
-                                    "Resource is not a ",
-                                    stringify!(#variant)
-                                ))),
-                            }
-                        }
-                    }
-                }
-            })
-            .collect();
-
-        quote! {
-            impl Resource {
-                /// Return the discriminant label for this resource.
-                pub fn resource_label(&self) -> &ObjectLabel {
-                    match self {
-                        #(#label_arms)*
-                    }
-                }
-            }
-
-            #(#from_impls)*
-        }
-    } else {
-        quote! {}
-    };
-
-    // Object conversion impl blocks and qualified_name() methods
-    let object_conversions_impl: TokenStream = if config.generate_object_conversions {
-        let mut conversion_impls: Vec<TokenStream> = Vec::new();
-        let mut qualified_name_impls: Vec<TokenStream> = Vec::new();
-
-        for r in &resources {
-            let Some(ref id_field) = r.id_field else {
-                // No IDENTIFIER annotation — skip
-                continue;
-            };
-
-            let path: syn::Type = syn::parse_str(&r.rust_path)
-                .unwrap_or_else(|e| panic!("Invalid rust path `{}`: {}", r.rust_path, e));
-            let label_expr: syn::Expr = syn::parse_str(&format!("ObjectLabel::{}", r.variant_name))
-                .unwrap_or_else(|e| panic!("Invalid label expr: {e}"));
-            let id_ident = format_ident!("{}", id_field);
-            let is_optional = r.id_is_optional;
-
-            let path_name_idents: Vec<proc_macro2::Ident> = r
-                .path_names
-                .iter()
-                .map(|n| format_ident!("{}", n))
-                .collect();
-
-            conversion_impls.push(emit_from_object(&path, &id_ident, is_optional));
-            conversion_impls.push(emit_to_object(&path, &label_expr, &id_ident, is_optional));
-            conversion_impls.push(emit_resource_impl(
-                &path,
-                &label_expr,
-                &id_ident,
-                &path_name_idents,
-                is_optional,
-            ));
-
-            // qualified_name() impl
-            let format_expr: TokenStream = build_qualified_name_expr(&r.path_names);
-            qualified_name_impls.push(quote! {
-                impl #path {
-                    /// Returns the fully-qualified dot-separated name computed from component fields.
-                    pub fn qualified_name(&self) -> String {
-                        #format_expr
-                    }
-                }
-            });
-        }
-
-        quote! {
-            use crate::Error;
-            use crate::models::object::Object;
-            use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
-
-            #(#conversion_impls)*
-
-            #(#qualified_name_impls)*
-        }
-    } else {
-        quote! {}
-    };
+    // Object conversion impl blocks and qualified_name() methods.
+    let object_conversions_impl = build_object_conversions(&resources, config)?;
 
     let tokens = quote! {
         /// All resource types managed by the service.
@@ -324,9 +210,176 @@ pub(crate) fn generate_resource_enum(
     format_tokens(all_tokens)
 }
 
+/// Build the `Resource` (typed) and `ObjectLabel` (discriminant) enum variant token lists.
+fn build_variants(resources: &[ResourceEntry]) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    let resource_variants = resources
+        .iter()
+        .map(|r| {
+            let variant = format_ident!("{}", r.variant_name);
+            let path = &r.rust_type;
+            quote! { #variant(#path) }
+        })
+        .collect();
+
+    let label_variants = resources
+        .iter()
+        .map(|r| {
+            let variant = format_ident!("{}", r.variant_name);
+            quote! { #variant }
+        })
+        .collect();
+
+    (resource_variants, label_variants)
+}
+
+/// Build the `resource_label()` accessor plus `From<T>`/`TryFrom<Resource>` impls.
+///
+/// Emitted only when `error_type_path` is set; returns an empty token stream otherwise.
+/// Fails with [`crate::error::Error::InvalidErrorTypePath`] if `error_type_path` is not a
+/// valid Rust type.
+fn build_tryfrom_impls(
+    resources: &[ResourceEntry],
+    error_type_path: Option<&str>,
+) -> crate::error::Result<TokenStream> {
+    let Some(error_path) = error_type_path else {
+        return Ok(quote! {});
+    };
+
+    let error_ty: syn::Type =
+        syn::parse_str(error_path).map_err(|e| crate::error::Error::InvalidErrorTypePath {
+            path: error_path.to_string(),
+            source: e,
+        })?;
+
+    let label_arms: Vec<TokenStream> = resources
+        .iter()
+        .map(|r| {
+            let variant = format_ident!("{}", r.variant_name);
+            quote! { Resource::#variant(_) => &ObjectLabel::#variant, }
+        })
+        .collect();
+
+    let from_impls: Vec<TokenStream> = resources
+        .iter()
+        .map(|r| {
+            let variant = format_ident!("{}", r.variant_name);
+            let path = &r.rust_type;
+            quote! {
+                impl From<#path> for Resource {
+                    fn from(v: #path) -> Self {
+                        Resource::#variant(v)
+                    }
+                }
+
+                impl TryFrom<Resource> for #path {
+                    type Error = #error_ty;
+
+                    fn try_from(r: Resource) -> Result<Self, Self::Error> {
+                        match r {
+                            Resource::#variant(v) => Ok(v),
+                            _ => Err(<#error_ty>::generic(concat!(
+                                "Resource is not a ",
+                                stringify!(#variant)
+                            ))),
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
+    Ok(quote! {
+        impl Resource {
+            /// Return the discriminant label for this resource.
+            pub fn resource_label(&self) -> &ObjectLabel {
+                match self {
+                    #(#label_arms)*
+                }
+            }
+        }
+
+        #(#from_impls)*
+    })
+}
+
+/// Build the `Object` conversion impls and `qualified_name()` inherent methods.
+///
+/// Emitted only when `config.generate_object_conversions` is set; resources without an
+/// `IDENTIFIER`-annotated field are skipped. Returns an empty token stream when disabled.
+fn build_object_conversions(
+    resources: &[ResourceEntry],
+    config: &CodeGenConfig,
+) -> crate::error::Result<TokenStream> {
+    if !config.generate_object_conversions {
+        return Ok(quote! {});
+    }
+
+    let mut conversion_impls: Vec<TokenStream> = Vec::new();
+    let mut qualified_name_impls: Vec<TokenStream> = Vec::new();
+
+    for r in resources {
+        let Some(ref id_field) = r.id_field else {
+            // No IDENTIFIER annotation — skip
+            continue;
+        };
+
+        let path = &r.rust_type;
+        // `ObjectLabel::<variant>` is built from a validated variant ident, so it always
+        // parses; surface any failure as an error rather than panicking.
+        let label_expr: syn::Expr = syn::parse_str(&format!("ObjectLabel::{}", r.variant_name))
+            .map_err(|e| crate::error::Error::InvalidRustPath {
+                path: format!("ObjectLabel::{}", r.variant_name),
+                message: r.rust_path.clone(),
+                source: e,
+            })?;
+        let id_ident = format_ident!("{}", id_field);
+        let is_optional = r.id_is_optional;
+
+        let path_name_idents: Vec<proc_macro2::Ident> = r
+            .path_names
+            .iter()
+            .map(|n| format_ident!("{}", n))
+            .collect();
+
+        conversion_impls.push(emit_from_object(path, &id_ident, is_optional));
+        conversion_impls.push(emit_to_object(path, &label_expr, &id_ident, is_optional));
+        conversion_impls.push(emit_resource_impl(
+            path,
+            &label_expr,
+            &id_ident,
+            &path_name_idents,
+            is_optional,
+        ));
+
+        // qualified_name() impl
+        let format_expr: TokenStream = build_qualified_name_expr(&r.path_names);
+        qualified_name_impls.push(quote! {
+            impl #path {
+                /// Returns the fully-qualified dot-separated name computed from component fields.
+                pub fn qualified_name(&self) -> String {
+                    #format_expr
+                }
+            }
+        });
+    }
+
+    Ok(quote! {
+        use crate::Error;
+        use crate::models::object::Object;
+        use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
+
+        #(#conversion_impls)*
+
+        #(#qualified_name_impls)*
+    })
+}
+
 struct ResourceEntry {
     variant_name: String,
     rust_path: String,
+    /// Pre-parsed form of [`rust_path`](ResourceEntry::rust_path), validated once at
+    /// analysis time so token generation cannot fail.
+    rust_type: syn::Type,
     singular: String,
     /// Field name carrying `FieldBehavior::Identifier`, if present.
     id_field: Option<String>,
@@ -787,6 +840,133 @@ fn emit_resource_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::{GenerationPlan, ServicePlan};
+    use crate::google::api::ResourceDescriptor;
+    use crate::parsing::{CodeGenMetadata, MessageInfo};
+    use std::collections::HashMap;
+
+    fn config_with_resource_enum(error_type_path: Option<String>) -> CodeGenConfig {
+        CodeGenConfig {
+            context_type_path: "crate::Context".into(),
+            result_type_path: "crate::Result".into(),
+            models_path_template: "example_common::models::{service}::v1".into(),
+            models_path_crate_template: "crate::models::{service}::v1".into(),
+            resource_store_crate_name: "olai_store".into(),
+            output: crate::codegen::CodeGenOutput {
+                common: "/tmp/common".into(),
+                models: Some("/tmp/models".into()),
+                models_subdir: "_gen".into(),
+                server: None,
+                client: None,
+                python: None,
+                node: None,
+                node_ts: None,
+                python_typings_filename: "client.pyi".into(),
+            },
+            generate_resource_enum: true,
+            generate_store_integration: false,
+            error_type_path,
+            generate_object_conversions: false,
+            bindings: None,
+            models_gen_dir: None,
+        }
+    }
+
+    fn plan_for_package(package: &str) -> GenerationPlan {
+        GenerationPlan {
+            services: vec![ServicePlan {
+                service_name: "WidgetService".into(),
+                handler_name: "WidgetHandler".into(),
+                base_path: "widgets".into(),
+                package: package.into(),
+                methods: vec![],
+                managed_resources: vec![],
+                documentation: None,
+                hierarchy: vec![],
+            }],
+            skipped_methods: vec![],
+        }
+    }
+
+    fn metadata_with_message(name: &str) -> CodeGenMetadata {
+        let mut messages = HashMap::new();
+        messages.insert(
+            name.to_string(),
+            MessageInfo {
+                name: name.rsplit('.').next().unwrap_or(name).to_string(),
+                fields: vec![],
+                resource_descriptor: Some(ResourceDescriptor {
+                    r#type: "example.io/Widget".into(),
+                    pattern: vec!["widgets/{widget}".into()],
+                    name_field: String::new(),
+                    history: 0,
+                    plural: "widgets".into(),
+                    singular: "widget".into(),
+                    style: vec![],
+                }),
+                documentation: None,
+            },
+        );
+        CodeGenMetadata {
+            messages,
+            ..Default::default()
+        }
+    }
+
+    /// 1.3 — a proto message whose derived Rust path is not a valid `syn::Type`
+    /// must produce `Error::InvalidRustPath` naming the offending message, not a panic.
+    #[test]
+    fn malformed_rust_path_returns_invalid_rust_path_error() {
+        // Package prefix is ".example.", so ".example.1bad.v1.Widget" → "super::1bad::v1::Widget".
+        // `1bad` is not a valid Rust identifier, so the path fails to parse.
+        let bad_name = ".example.1bad.v1.Widget";
+        let plan = plan_for_package("example.1bad.v1");
+        let metadata = metadata_with_message(bad_name);
+        let config = config_with_resource_enum(None);
+
+        let err = generate_resource_enum(&plan, &metadata, &config, None)
+            .expect_err("expected a typed error, not a panic or stub");
+        match err {
+            crate::error::Error::InvalidRustPath { message, path, .. } => {
+                assert_eq!(
+                    message, bad_name,
+                    "error should name the offending proto message"
+                );
+                assert!(
+                    path.contains("1bad"),
+                    "error should include the bad path: {path}"
+                );
+            }
+            other => panic!("expected InvalidRustPath, got {other:?}"),
+        }
+    }
+
+    /// 1.3 — a malformed `error_type_path` must produce `Error::InvalidErrorTypePath`.
+    #[test]
+    fn malformed_error_type_path_returns_error() {
+        let plan = plan_for_package("example.widgets.v1");
+        let metadata = metadata_with_message(".example.widgets.v1.Widget");
+        let config = config_with_resource_enum(Some("not a type!!".into()));
+
+        let err = generate_resource_enum(&plan, &metadata, &config, Some("not a type!!"))
+            .expect_err("expected a typed error");
+        assert!(
+            matches!(err, crate::error::Error::InvalidErrorTypePath { .. }),
+            "expected InvalidErrorTypePath, got {err:?}"
+        );
+    }
+
+    /// Sanity: a well-formed proto-derived path generates successfully.
+    #[test]
+    fn well_formed_path_generates() {
+        let plan = plan_for_package("example.widgets.v1");
+        let metadata = metadata_with_message(".example.widgets.v1.Widget");
+        let config = config_with_resource_enum(Some("crate::Error".into()));
+
+        let out = generate_resource_enum(&plan, &metadata, &config, Some("crate::Error"))
+            .expect("well-formed path should generate");
+        assert!(out.contains("super::widgets::v1::Widget"), "output: {out}");
+    }
 
     #[test]
     fn test_message_name_to_rust_path() {

@@ -42,7 +42,7 @@ fn is_napi_supported_type(base_type: &BaseType) -> bool {
     }
 }
 
-pub fn main_module(services: &[ServiceHandler<'_>]) -> String {
+pub fn main_module(services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
     let service_modules = services.iter().map(|s| {
         let module_name = format_ident!("{}", s.plan.base_path);
         quote! { pub mod #module_name; }
@@ -59,7 +59,7 @@ pub fn main_module(services: &[ServiceHandler<'_>]) -> String {
     format_tokens(tokens)
 }
 
-pub(crate) fn generate(service: &ServiceHandler<'_>) -> String {
+pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
     let bindings = service
         .config
         .bindings
