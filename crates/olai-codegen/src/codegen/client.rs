@@ -49,7 +49,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
         }
     };
 
-    Ok(format_tokens(tokens))
+    format_tokens(tokens)
 }
 
 /// Generate client method implementation

@@ -17,6 +17,7 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
 
 # convenience for downstream crates that want to use certain types with sqlx
@@ -30,3 +31,9 @@ sqlx = { workspace = true, optional = true, features = [
 [features]
 default = []
 sqlx = ["dep:sqlx"]
+
+[dev-dependencies]
+tokio = { version = "1.29.0", features = ["rt", "macros"] }
+# `v4` is only needed by the in-memory test doubles to mint object ids;
+# real store backends generate their own ids, so the lib does not need it.
+uuid = { version = "1", features = ["v4"] }

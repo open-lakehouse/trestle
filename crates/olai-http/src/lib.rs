@@ -492,7 +492,7 @@ fn redact_headers(headers: &HashMap<String, String>) -> HashMap<String, String> 
 }
 
 #[cfg(feature = "recording")]
-async fn send_record(builder: CloudRequestBuilder) -> Result<reqwest::Response, reqwest::Error> {
+async fn send_record(builder: CloudRequestBuilder) -> Result<reqwest::Response> {
     let Some(out_dir) = builder.out_dir else {
         let request = builder.builder.build().expect("request to be valid");
         return builder.client.service.call(request).await;

@@ -14,7 +14,7 @@ pub(super) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
         trait_methods.push(method_code);
     }
 
-    let trait_code = handler_trait(service, &service.plan.handler_name, &trait_methods);
+    let trait_code = handler_trait(service, &service.plan.handler_name, &trait_methods)?;
     let module_header = generate_module_header(service);
 
     Ok(format!("{}{}", module_header, trait_code))
@@ -59,7 +59,7 @@ pub fn handler_trait(
     service: &ServiceHandler<'_>,
     trait_name: &str,
     methods: &[TokenStream],
-) -> String {
+) -> Result<String> {
     let trait_ident = format_ident!("{}", trait_name);
     let mod_path = service.models_path();
     let result_path: syn::Path =

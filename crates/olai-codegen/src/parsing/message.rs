@@ -213,16 +213,19 @@ fn extract_field_behavior_option(field: &FieldDescriptorProto) -> Result<Vec<Fie
                     }
                 }
                 protobuf::UnknownValueRef::LengthDelimited(bytes) => {
-                    // Packed repeated field - multiple varints in one field
+                    // Packed repeated field - multiple varints in one field.
+                    //
+                    // Propagate decode failures instead of silently `break`ing, which would
+                    // truncate the packed list and drop later `field_behavior` annotations.
                     let mut cursor = std::io::Cursor::new(bytes);
                     while cursor.position() < bytes.len() as u64 {
-                        match decode_varint(&mut cursor) {
-                            Ok(value) => {
-                                if let Ok(behavior) = FieldBehavior::try_from(value as i32) {
-                                    behaviors.push(behavior);
-                                }
-                            }
-                            Err(_) => break,
+                        let value = decode_varint(&mut cursor).map_err(|e| {
+                            crate::Error::Build(format!(
+                                "failed to decode packed google.api.field_behavior varint: {e}"
+                            ))
+                        })?;
+                        if let Ok(behavior) = FieldBehavior::try_from(value as i32) {
+                            behaviors.push(behavior);
                         }
                     }
                 }
@@ -533,6 +536,54 @@ mod tests {
         let field = FieldDescriptorProto::new();
         let result = extract_field_behavior_option(&field).unwrap();
         assert!(result.is_empty());
+    }
+
+    /// 1.4 — a truncated packed `field_behavior` varint must propagate an error rather than
+    /// silently `break`ing and dropping annotations.
+    #[test]
+    fn test_truncated_packed_field_behavior_varint_propagates_error() {
+        use protobuf::descriptor::FieldOptions;
+
+        let mut field = FieldDescriptorProto::new();
+        let mut options = FieldOptions::new();
+        // A length-delimited payload of `[0x80]`: a varint whose continuation bit is set but
+        // which has no following byte — i.e. a truncated varint.
+        options
+            .special_fields
+            .mut_unknown_fields()
+            .add_length_delimited(
+                super::super::GOOGLE_API_FIELD_BEHAVIOR_EXTENSION,
+                vec![0x80],
+            );
+        field.options = protobuf::MessageField::some(options);
+
+        let result = extract_field_behavior_option(&field);
+        assert!(
+            result.is_err(),
+            "truncated packed varint should propagate an error, got {result:?}"
+        );
+    }
+
+    /// Sanity: a well-formed packed `field_behavior` payload still decodes.
+    #[test]
+    fn test_well_formed_packed_field_behavior_varint_decodes() {
+        use protobuf::descriptor::FieldOptions;
+
+        let mut field = FieldDescriptorProto::new();
+        let mut options = FieldOptions::new();
+        // Packed varints: REQUIRED (2) and OUTPUT_ONLY (3) as single-byte varints.
+        options
+            .special_fields
+            .mut_unknown_fields()
+            .add_length_delimited(
+                super::super::GOOGLE_API_FIELD_BEHAVIOR_EXTENSION,
+                vec![2, 3],
+            );
+        field.options = protobuf::MessageField::some(options);
+
+        let behaviors = extract_field_behavior_option(&field).expect("well-formed payload decodes");
+        assert!(behaviors.contains(&FieldBehavior::Required));
+        assert!(behaviors.contains(&FieldBehavior::OutputOnly));
     }
 
     #[test]

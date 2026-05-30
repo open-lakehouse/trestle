@@ -141,7 +141,18 @@ fn enrich_from_jsonschema(
             .get("$ref")
             .and_then(|v: &serde_json::Value| v.as_str())
             .unwrap_or("");
-        let root_key = root_ref.strip_prefix("#/$defs/").unwrap_or("");
+        // Surface an unexpected `$ref` shape instead of silently coercing it to an empty key,
+        // which would mask malformed bundles behind a generic "could not resolve" message.
+        let root_key = match root_ref.strip_prefix("#/$defs/") {
+            Some(key) => key,
+            None => {
+                eprintln!(
+                    "enrich-openapi: unexpected root $ref format '{root_ref}' for {type_name} \
+                     (expected '#/$defs/<name>'), skipping"
+                );
+                continue;
+            }
+        };
         let root_schema: serde_json::Value = match defs.get(root_key) {
             Some(s) => s.clone(),
             None => {

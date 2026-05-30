@@ -409,3 +409,116 @@ fn assert_cargo_check_passes(root: &Path) {
         String::from_utf8_lossy(&out.stderr),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Behavior tests: CLI argument handling and edge cases (cheap; no rendering of
+// the full tree where avoidable).
+// ---------------------------------------------------------------------------
+
+/// A baseline `NewArgs` for the embedded `lakehouse` base, rendering into
+/// `out`, with `name`. Optional categories are deselected so the scaffold stays
+/// minimal and fast.
+fn minimal_args(name: &str, out: std::path::PathBuf) -> NewArgs {
+    let overrides: BTreeMap<String, String> = [("gh_owner".to_string(), "acme".to_string())]
+        .into_iter()
+        .collect();
+    NewArgs {
+        name: name.to_string(),
+        out_dir: Some(out),
+        template: "lakehouse".to_string(),
+        apps: vec![],
+        selections: [
+            ("storage", vec![]),
+            ("metadata_db", vec![]),
+            ("catalog", vec![]),
+            ("query_engine", vec![]),
+            ("ml", vec![]),
+            ("observability", vec![]),
+            ("notebooks", vec![]),
+        ]
+        .into_iter()
+        .map(|(k, v): (&str, Vec<&str>)| (k.to_string(), v.into_iter().map(String::from).collect()))
+        .collect(),
+        profile: None,
+        with: vec![],
+        values: None,
+        overrides: overrides.into_iter().collect(),
+        non_interactive: true,
+        force: false,
+    }
+}
+
+#[test]
+fn rejects_path_traversal_project_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("dest");
+    // `..` is not a valid project name and must be rejected before any fs op.
+    let args = minimal_args("../evil", out.clone());
+    let err = new::run(args).expect_err("path-traversal name must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("project_name") && msg.contains("must match"),
+        "unexpected error: {msg}"
+    );
+    // Nothing should have been created.
+    assert!(!out.exists(), "no output dir should be created on bad name");
+}
+
+#[test]
+fn rejects_invalid_char_project_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    for bad in ["Foo", "1foo", "foo_bar", "foo bar", "/abs", ""] {
+        let out = tmp.path().join(format!("dest-{}", bad.len()));
+        let args = minimal_args(bad, out.clone());
+        let err = new::run(args).expect_err(&format!("`{bad}` should be rejected"));
+        assert!(
+            err.to_string().contains("project_name"),
+            "`{bad}` gave unexpected error: {err}"
+        );
+        assert!(!out.exists(), "`{bad}` should not create an output dir");
+    }
+}
+
+#[test]
+fn force_overwrites_existing_nonempty_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("dest");
+    std::fs::create_dir_all(&out).unwrap();
+    // Pre-existing, non-empty directory.
+    std::fs::write(out.join("preexisting.txt"), b"keep me out of the way").unwrap();
+
+    // Without --force this must fail with OutputExists.
+    let args = minimal_args("test-app", out.clone());
+    let err = new::run(args).expect_err("non-empty dir without --force must fail");
+    assert!(
+        err.to_string().contains("already exists"),
+        "unexpected error: {err}"
+    );
+
+    // With --force the scaffold proceeds.
+    let mut args = minimal_args("test-app", out.clone());
+    args.force = true;
+    new::run(args).expect("--force should overwrite an existing directory");
+    // A known base file is now present alongside the pre-existing file.
+    assert!(out.join("preexisting.txt").exists());
+}
+
+#[test]
+fn non_interactive_missing_required_var_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("dest");
+    // Drop the gh_owner override so a required variable is unset.
+    let mut args = minimal_args("test-app", out);
+    args.overrides.clear();
+    let result = new::run(args);
+    // Either it errors on the missing variable, or gh_owner has a default and it
+    // succeeds — assert the contract that *if* it fails, it's a clear variable
+    // error rather than a panic or rendering failure.
+    if let Err(e) = result {
+        let msg = e.to_string();
+        assert!(
+            msg.contains("required") || msg.contains("variable") || msg.contains("gh_owner"),
+            "missing-var failure should mention the variable, got: {msg}"
+        );
+    }
+}

@@ -32,13 +32,16 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<Str
         return Ok(String::new());
     }
 
-    let builder_code = generate_builders_module(service, &builder_impls);
+    let builder_code = generate_builders_module(service, &builder_impls)?;
 
     Ok(builder_code)
 }
 
 /// Generate the complete builders module
-fn generate_builders_module(service: &ServiceHandler<'_>, builders: &[String]) -> String {
+fn generate_builders_module(
+    service: &ServiceHandler<'_>,
+    builders: &[String],
+) -> crate::error::Result<String> {
     let builder_tokens: Vec<TokenStream> = builders
         .iter()
         .map(|b| syn::parse_str::<TokenStream>(b).unwrap_or_else(|_| quote! {}))
@@ -97,7 +100,7 @@ fn generate_request_builder(
     );
 
     // Generate with_* methods: body fields first (handles oneof variants), then query params
-    let with_methods_body = generate_with_methods(&method, &optional_body);
+    let with_methods_body = generate_with_methods(&method, &optional_body)?;
     let with_methods_query = optional_query
         .iter()
         .map(|param| generate_simple_with_method(&method, param));
@@ -155,7 +158,7 @@ fn generate_request_builder(
         #into_future_impl
     };
 
-    Ok(format_tokens(tokens))
+    format_tokens(tokens)
 }
 
 /// Generate the constructor for the builder
@@ -202,7 +205,7 @@ fn generate_constructor(
 fn generate_with_methods(
     method: &MethodHandler<'_>,
     optional_fields: &[&BodyField],
-) -> Vec<TokenStream> {
+) -> crate::error::Result<Vec<TokenStream>> {
     let mut methods = Vec::new();
 
     // First, generate individual methods for oneof variants
@@ -210,7 +213,7 @@ fn generate_with_methods(
         if matches!(field.field_type.base_type, BaseType::OneOf(_))
             && field.oneof_variants.is_some()
         {
-            methods.extend(generate_oneof_variant_methods(method, field));
+            methods.extend(generate_oneof_variant_methods(method, field)?);
         }
     }
 
@@ -222,7 +225,7 @@ fn generate_with_methods(
         .collect();
 
     methods.extend(regular_methods);
-    methods
+    Ok(methods)
 }
 
 fn builder_with_impl(method: &MethodHandler<'_>, field: &BodyField) -> TokenStream {
@@ -292,7 +295,7 @@ fn builder_with_impl(method: &MethodHandler<'_>, field: &BodyField) -> TokenStre
 fn generate_oneof_variant_methods(
     method: &MethodHandler<'_>,
     field: &BodyField,
-) -> Vec<TokenStream> {
+) -> crate::error::Result<Vec<TokenStream>> {
     let variants = field.oneof_variants.as_ref().unwrap();
     let oneof_field_ident = format_ident!("{}", field.name);
 
@@ -305,22 +308,30 @@ fn generate_oneof_variant_methods(
             let param_ident = format_ident!("{}", variant.field_name.replace("_", ""));
             let variant_name = format_ident!("{}", variant.variant_name);
 
-            // Derive the Rust parameter type from the UnifiedType abstraction.
+            // Derive the Rust parameter type from the UnifiedType abstraction. Hard-fail with
+            // context when the derived type string is unparseable rather than silently
+            // substituting `String`, which would generate a wrong-typed builder method.
             let rust_type_str = unified_to_rust(&variant.field_type, RenderContext::Parameter);
-            // Fall back to `String` if the generated type string is somehow not parseable.
-            // The inner parse of the literal "String" is infallible.
-            let param_type: syn::Type = syn::parse_str(&rust_type_str)
-                .unwrap_or_else(|_| syn::parse_str("String").unwrap());
+            let param_type: syn::Type = syn::parse_str(&rust_type_str).map_err(|source| {
+                crate::error::Error::InvalidRustPath {
+                    path: rust_type_str.clone(),
+                    message: format!(
+                        "oneof variant `{}` of field `{}`",
+                        variant.field_name, field.name
+                    ),
+                    source,
+                }
+            })?;
 
             let doc_attr = field_doc_attr(variant.documentation.as_deref(), &variant.field_name);
 
-            quote! {
+            Ok(quote! {
                 #doc_attr
                 pub fn #method_name(mut self, #param_ident: #param_type) -> Self {
                     self.request.#oneof_field_ident = Some(#enum_type_tokens::#variant_name(#param_ident));
                     self
                 }
-            }
+            })
         })
         .collect()
 }

@@ -85,11 +85,15 @@ pub struct NewArgs {
     #[clap(long = "set", short = 'D', value_parser = parse_key_val)]
     pub overrides: Vec<(String, String)>,
 
-    /// Skip all prompts; fail if any required variable is unset.
+    /// Skip all prompts; fail if any required variable is unset. Note that
+    /// `post_init` hooks marked `confirm: true` are skipped in this mode (they
+    /// cannot be confirmed without a prompt).
     #[clap(long)]
     pub non_interactive: bool,
 
-    /// Overwrite the output directory if it already exists.
+    /// Render into the output directory even if it already exists and is
+    /// non-empty. Existing files with the same path as a generated file are
+    /// overwritten; other existing files are left untouched.
     #[clap(long)]
     pub force: bool,
 }
@@ -113,7 +117,41 @@ fn parse_selection(s: &str) -> std::result::Result<(String, Vec<String>), String
     Ok((key.to_string(), values))
 }
 
+/// Validate the project name before it is used to derive the output directory
+/// or the default `project_name` variable.
+///
+/// The name must match `^[a-z][a-z0-9-]*$` — the same pattern templates declare
+/// for the `project_name` variable. Enforcing it here (rather than only later,
+/// during variable collection) prevents path-traversal names like `../foo` or
+/// absolute paths from being turned into an output directory before the
+/// per-variable validation ever runs (notably in `--non-interactive` mode).
+fn validate_project_name(name: &str) -> Result<()> {
+    let valid = {
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(c) if c.is_ascii_lowercase() => {
+                chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            }
+            _ => false,
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::InvalidVariable {
+            name: "project_name".to_string(),
+            reason: format!(
+                "`{name}` must match `^[a-z][a-z0-9-]*$` (lowercase letters, digits, and dashes; \
+                 must start with a letter)"
+            ),
+        })
+    }
+}
+
 pub fn run(args: NewArgs) -> Result<()> {
+    // Reject invalid / path-traversal names before touching the filesystem.
+    validate_project_name(&args.name)?;
+
     let out_dir = args
         .out_dir
         .clone()

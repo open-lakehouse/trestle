@@ -46,7 +46,7 @@ type StdError = Box<dyn std::error::Error + Send + Sync>;
 static EMPTY_SHA256_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 /// A set of AWS security credentials
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct AwsCredential {
     /// AWS_ACCESS_KEY_ID
     pub key_id: String,
@@ -54,6 +54,19 @@ pub struct AwsCredential {
     pub secret_key: String,
     /// AWS_SESSION_TOKEN
     pub token: Option<String>,
+}
+
+// Manual `Debug` impl: an `AwsCredential` holds long-lived secrets, so we never
+// expose the field values (including the access key id, which is itself a
+// sensitive identifier). See the credential-redaction convention in the README.
+impl std::fmt::Debug for AwsCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsCredential")
+            .field("key_id", &"<redacted>")
+            .field("secret_key", &"<redacted>")
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl AwsCredential {
@@ -766,12 +779,41 @@ mod tests {
     use std::env;
 
     #[test]
+    fn test_debug_does_not_leak_secrets() {
+        // Deliberately non-secret-looking sentinel values so the secret
+        // scanner doesn't flag this test; we only care that the Debug output
+        // does not echo them back.
+        let credential = AwsCredential {
+            key_id: "fake-key-id-do-not-print".to_string(),
+            secret_key: "fake-secret-do-not-print".to_string(),
+            token: Some("fake-session-token-do-not-print".to_string()),
+        };
+        let rendered = format!("{credential:?}");
+        assert!(
+            !rendered.contains("fake-key-id-do-not-print"),
+            "key_id leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("fake-secret-do-not-print"),
+            "secret_key leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("fake-session-token-do-not-print"),
+            "session token leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
     fn test_sign_with_signed_payload() {
         let client = Client::new();
 
         let credential = AwsCredential {
+            // AWS-documented SigV4 example vectors — the signature asserted
+            // below is computed from exactly these values, so they cannot be
+            // swapped for non-secret-looking placeholders.
             key_id: "AKIAIOSFODNN7EXAMPLE".to_string(), // gitleaks:allow
-            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(), // gitleaks:allow
             token: None,
         };
 

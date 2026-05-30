@@ -21,6 +21,33 @@ pub enum Error {
         source: syn::Error,
     },
 
+    #[error("Invalid Rust path `{path}` derived from proto message `{message}`: {source}")]
+    InvalidRustPath {
+        path: String,
+        message: String,
+        #[source]
+        source: syn::Error,
+    },
+
+    #[error("Invalid error_type_path `{path}`: {source}")]
+    InvalidErrorTypePath {
+        path: String,
+        #[source]
+        source: syn::Error,
+    },
+
+    #[error(
+        "Failed to parse generated tokens as a Rust file: {source}\n--- generated tokens ---\n{tokens}"
+    )]
+    GeneratedParse {
+        tokens: String,
+        #[source]
+        source: syn::Error,
+    },
+
+    #[error("Unexpected $ref format `{value}` (expected `#/$defs/<name>`)")]
+    UnexpectedRefFormat { value: String },
+
     #[error("Missing HTTP rule pattern for method `{method}`")]
     MissingHttpPattern { method: String },
 

@@ -42,6 +42,40 @@ const GOOGLE_API_RESOURCE_EXTENSION: u32 = 1053; // google.api.resource
 const GOOGLE_API_FIELD_BEHAVIOR_EXTENSION: u32 = 1052; // google.api.field_behavior
 const GOOGLE_API_RESOURCE_REFERENCE_EXTENSION: u32 = 1055; // google.api.resource_reference
 
+/// Parse a compiled protobuf [`FileDescriptorSet`] into [`CodeGenMetadata`].
+///
+/// This is the first stage of the code-generation pipeline. It walks every
+/// message, enum, and service in the descriptor set and extracts the annotations
+/// that drive generation (`google.api.http`, `google.api.resource`,
+/// `field_behavior`, `debug_redact`, …) into a structured form.
+///
+/// The full pipeline is three stages:
+///
+/// ```text
+/// FileDescriptorSet
+///   │  parse_file_descriptor_set
+///   ▼
+/// CodeGenMetadata
+///   │  analyze_metadata          (analysis/mod.rs)
+///   ▼
+/// GenerationPlan
+///   │  generate_code             (codegen/mod.rs)
+///   ▼
+/// Rust / Python / TypeScript source written to disk
+/// ```
+///
+/// Typical usage from a build script:
+///
+/// ```ignore
+/// let fds = prost_types::FileDescriptorSet::decode(&bytes[..])?;
+/// let metadata = parse_file_descriptor_set(&fds)?;
+/// let config = CodeGenConfig::new(/* … */);
+/// generate_code(&metadata, &config)?;
+/// ```
+///
+/// Returns an error if a descriptor contains an annotation that cannot be
+/// decoded; methods without HTTP annotations are not an error here (they are
+/// recorded later, during [`analyze_metadata`](crate::analyze_metadata)).
 pub fn parse_file_descriptor_set(
     file_descriptor_set: &FileDescriptorSet,
 ) -> Result<CodeGenMetadata> {

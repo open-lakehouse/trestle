@@ -12,10 +12,16 @@ use tokio::runtime::Handle;
 /// execution on a dedicated I/O runtime -- useful when the CPU runtime has I/O disabled.
 pub trait HttpService: Debug + Send + Sync + 'static {
     /// Execute an HTTP request, returning the response.
+    ///
+    /// The error type is [`crate::Error`]. Implementations that perform the
+    /// actual network I/O surface transport failures as
+    /// [`crate::Error::ReqwestError`], which the retry layer inspects to decide
+    /// whether a failure is retryable. Other variants (e.g. a cancelled I/O
+    /// task) are treated as non-retryable.
     fn call(
         &self,
         request: reqwest::Request,
-    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = crate::Result<reqwest::Response>> + Send + '_>>;
 }
 
 /// Default [`HttpService`] that delegates directly to [`reqwest::Client::execute`].
@@ -32,8 +38,9 @@ impl HttpService for ReqwestService {
     fn call(
         &self,
         request: reqwest::Request,
-    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
-        Box::pin(self.0.execute(request))
+    ) -> Pin<Box<dyn Future<Output = crate::Result<reqwest::Response>> + Send + '_>> {
+        let client = self.0.clone();
+        Box::pin(async move { Ok(client.execute(request).await?) })
     }
 }
 
@@ -68,18 +75,28 @@ impl HttpService for SpawnService {
     fn call(
         &self,
         request: reqwest::Request,
-    ) -> Pin<Box<dyn Future<Output = Result<reqwest::Response, reqwest::Error>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = crate::Result<reqwest::Response>> + Send + '_>> {
         let inner = Arc::clone(&self.inner);
         let handle = self.handle.clone();
         Box::pin(async move {
             match handle.spawn(async move { inner.call(request).await }).await {
                 Ok(result) => result,
+                Err(join_err) if join_err.is_cancelled() => {
+                    // The spawned I/O task was cancelled, typically because the
+                    // I/O runtime is being shut down concurrently with an
+                    // in-flight request (a graceful-shutdown race). This is not a
+                    // bug in our code, so surface it as an error rather than
+                    // crashing the client.
+                    Err(crate::Error::Generic {
+                        source: Box::new(join_err),
+                    })
+                }
                 Err(join_err) => {
-                    // The spawned I/O task panicked or was cancelled. This is a
-                    // programming error (e.g. tokio runtime was shut down), not a
-                    // transient network failure, so we re-panic with context rather
-                    // than silently swallowing the cause.
-                    panic!("I/O runtime task failed: {join_err}")
+                    // The spawned I/O task genuinely panicked. That indicates a
+                    // programming error (e.g. a bug in request execution), not a
+                    // transient network failure, so we re-panic with context
+                    // rather than silently swallowing the cause.
+                    panic!("I/O runtime task panicked: {join_err}")
                 }
             }
         })

@@ -108,6 +108,7 @@ impl<T: Clone + Send> TokenCache<T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{Duration, Instant};
 
@@ -168,5 +169,76 @@ mod test {
         // Should fetch, since we've passed fetch_backoff
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_valid_token_within_ttl_is_reused() {
+        // Default min_ttl is 5 minutes; a token valid for an hour is comfortably
+        // within its window and must be served from cache, never re-fetched.
+        let cache = TokenCache::default();
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        async fn get_token() -> Result<TemporaryToken<String>, String> {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(create_token(Some(Duration::from_secs(3600))))
+        }
+
+        // First call performs the fetch.
+        let _ = cache.get_or_insert_with(get_token).await.unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
+
+        // Several subsequent calls all hit the cache.
+        for _ in 0..5 {
+            let _ = cache.get_or_insert_with(get_token).await.unwrap();
+        }
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_non_expiring_token_is_reused() {
+        // A token with `expiry == None` never expires and must always be served
+        // from cache after the initial fetch.
+        let cache = TokenCache::default();
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        async fn get_token() -> Result<TemporaryToken<String>, String> {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(create_token(None))
+        }
+
+        let _ = cache.get_or_insert_with(get_token).await.unwrap();
+        let _ = cache.get_or_insert_with(get_token).await.unwrap();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_callers_single_flight() {
+        // `get_or_insert_with` holds the cache mutex across the fetch future, so
+        // concurrent callers serialize: the first performs the (slow) fetch and
+        // stores a token comfortably within `min_ttl`, and the rest observe the
+        // freshly-cached token and return it without re-fetching.
+        let cache = Arc::new(TokenCache::default());
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        async fn get_token() -> Result<TemporaryToken<String>, String> {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+            // Simulate a slow network fetch so callers genuinely overlap.
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<_, String>(create_token(Some(Duration::from_secs(3600))))
+        }
+
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let cache = Arc::clone(&cache);
+            handles.push(tokio::spawn(async move {
+                cache.get_or_insert_with(get_token).await.unwrap()
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // Exactly one fetch despite ten concurrent callers.
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
     }
 }
