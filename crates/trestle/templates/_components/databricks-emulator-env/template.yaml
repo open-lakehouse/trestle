@@ -1,11 +1,21 @@
 name: databricks-emulator-env
 version: 0.1.0
+category: app_runtime
+provider_of: databricks_apps_contract
+display_name: "Databricks app runtime contract"
+summary: "DATABRICKS_HOST / TOKEN / forwarded-user env vars apps expect on Databricks."
 description: |
   Contributes only environment variables — the set Databricks Apps injects into
   every running app. Wired together with the Envoy URL rewrites elsewhere in the
   stack, this lets app code read `DATABRICKS_HOST`, `DATABRICKS_TOKEN`,
   `MLFLOW_TRACKING_URI`, and the OBO header variables identically in local dev
   and in production.
+
+wire_help:
+  - { env: DATABRICKS_HOST, note: "Where the databricks-sdk calls land (Envoy locally)." }
+  - { env: DATABRICKS_TOKEN, note: "Dummy local token; replaced on Databricks." }
+  - { env: DATABRICKS_FORWARDED_USER, note: "OBO header Envoy injects on upstream requests." }
+  - { env: DATABRICKS_FORWARDED_EMAIL, note: "OBO header Envoy injects on upstream requests." }
 
 provides:
   env_vars:

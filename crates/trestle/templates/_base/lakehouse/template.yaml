@@ -1,0 +1,71 @@
+name: lakehouse
+version: 0.1.0
+display_name: "Lakehouse environment"
+summary: "Docker-compose env: Envoy + Databricks-shaped routing + optional storage / db / catalog / engines / notebooks."
+description: |
+  The always-rendered base for `trestle new`. Lays down the docker-compose
+  scaffolding, the Envoy gateway, and the rendered `.env.example` /
+  `compose.yaml` orchestrator. Picks for storage, catalog, query engines, ML
+  tracking, notebooks, and observability come from the wizard's category step;
+  each pick contributes its `compose_includes`, `envoy_routes`, env vars, and
+  any postgres databases or S3 buckets through the `provides:` aggregation.
+authors: [trestle]
+trestle_min_version: 0.1.0
+
+# Opinionated baseline: not user-selectable. Envoy is always-on so we have a
+# single, uniform networking + Databricks-mimicking story across every scaffold.
+always:
+  - local-stack-envoy
+
+# User-facing categories. All optional; pre-selected defaults can be deselected
+# in the wizard. The wizard discovers eligible components by matching
+# `ComponentManifest::category` against `id`, so adding a new component is a
+# single-file drop.
+categories:
+  - id: storage
+    display_name: "Object storage"
+    multi: true
+    optional: true
+    default: [local-stack-seaweedfs]
+    help: "S3-compatible blob store used by MLflow, UC, Delta tables, etc."
+  - id: metadata_db
+    display_name: "Metadata database"
+    multi: true
+    optional: true
+    default: [local-stack-postgres]
+    help: "Backing store for MLflow tracking, UC metadata, and app DBs."
+  - id: catalog
+    display_name: "Data catalog"
+    multi: true
+    optional: true
+    help: "Catalog / governance plane (Unity Catalog, Polaris, …)."
+  - id: query_engine
+    display_name: "Query engine"
+    multi: true
+    optional: true
+    help: "SQL / Spark engines for ad-hoc analytics."
+  - id: ml
+    display_name: "ML tracking"
+    multi: true
+    optional: true
+    help: "Experiment + model tracking (MLflow, etc.)."
+  - id: observability
+    display_name: "Observability"
+    multi: true
+    optional: true
+    help: "Tracing / metrics / logging backends."
+  - id: notebooks
+    display_name: "Notebooks"
+    multi: true
+    optional: true
+    help: "Interactive notebook servers wired into the same env as the apps."
+
+template_context:
+  has_app: false
+  app_service_name: ""
+  app_port: 8080
+
+post_init:
+  - run: "git init -q && git add -A && git commit -q -m 'chore: scaffolded by trestle' || true"
+    confirm: true
+    description: "Initialise a fresh git repository"

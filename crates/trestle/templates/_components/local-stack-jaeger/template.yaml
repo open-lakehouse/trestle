@@ -1,9 +1,17 @@
 name: local-stack-jaeger
 version: 0.1.0
+category: observability
+provider_of: tracing
+display_name: "Jaeger tracing"
+summary: "All-in-one OTLP tracing backend with the Jaeger UI."
 description: |
   Jaeger all-in-one tracing backend exposed at `/jaeger` via Envoy. Receives OTLP
   traces from the user's app on port 4317 (set OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
   in `.env.local` to the Envoy endpoint).
+
+wire_help:
+  - { url: "http://localhost:${ENVOY_PORT:-9080}/jaeger", note: "Jaeger UI (behind Envoy)." }
+  - { env: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, note: "Where apps push OTLP traces." }
 
 depends_on:
   - local-stack-envoy

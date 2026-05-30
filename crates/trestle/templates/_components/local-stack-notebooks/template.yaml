@@ -1,9 +1,17 @@
 name: local-stack-notebooks
 version: 0.1.0
+category: notebooks
+provider_of: notebook_server
+display_name: "Marimo notebooks"
+summary: "Notebooks behind Envoy at /notebooks; inherits the same env as your app."
 description: |
   Marimo notebooks served behind Envoy at `/notebooks`. Mounted env vars give
   notebooks the same `MLFLOW_TRACKING_URI` and `DATABRICKS_*` configuration the
   Rust server sees, so the same example code runs in both contexts.
+
+wire_help:
+  - { url: "http://localhost:${ENVOY_PORT:-9080}/notebooks", note: "Notebook UI (behind Envoy)." }
+  - { env: NOTEBOOKS_PORT, note: "Internal port the Marimo server listens on." }
 
 depends_on:
   - local-stack-envoy

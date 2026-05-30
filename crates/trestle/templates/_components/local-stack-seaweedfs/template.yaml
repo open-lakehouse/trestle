@@ -1,9 +1,19 @@
 name: local-stack-seaweedfs
 version: 0.1.0
+category: storage
+provider_of: object_store
+display_name: "SeaweedFS (local S3)"
+summary: "Self-hosted S3-compatible object store; zero external deps."
 description: |
   SeaweedFS single-node S3-compatible object storage, used as the artifact store
   for MLflow, Delta tables in notebooks, and any other component that requests an
   S3 bucket via `provides.s3_buckets`.
+
+wire_help:
+  - { env: AWS_ACCESS_KEY_ID, note: "Static access key apps use to talk to SeaweedFS." }
+  - { env: AWS_SECRET_ACCESS_KEY, note: "Static secret key (local dev only)." }
+  - { env: SEAWEEDFS_S3_PORT, note: "Host port for the S3 API." }
+  - { url: "http://localhost:${SEAWEEDFS_S3_PORT:-9000}", note: "S3 endpoint for the SDK / `aws s3` CLI." }
 
 provides:
   compose_includes:

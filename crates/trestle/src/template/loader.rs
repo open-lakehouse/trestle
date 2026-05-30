@@ -15,7 +15,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::embedded::{RustEmbed, SHARED_COMPONENTS_PREFIX, Templates};
+use crate::embedded::{
+    APP_TEMPLATES_PREFIX, BASE_TEMPLATES_PREFIX, RustEmbed, SHARED_COMPONENTS_PREFIX, Templates,
+    embedded_app_names, embedded_base_names,
+};
 use crate::error::{Error, Result};
 
 use super::manifest::{ComponentManifest, Manifest};
@@ -102,6 +105,20 @@ pub struct LoadedComponent {
     _keepalive: Option<tempfile::TempDir>,
 }
 
+impl LoadedComponent {
+    /// Build a synthetic [`LoadedComponent`] without touching the filesystem.
+    /// Test-only — production code always goes through one of the `load_*`
+    /// entry points so paths are tracked properly.
+    #[cfg(test)]
+    pub(crate) fn synthetic(root: PathBuf, manifest: ComponentManifest) -> Self {
+        Self {
+            root,
+            manifest,
+            _keepalive: None,
+        }
+    }
+}
+
 /// Load a component from a path under the parent template's `components/` directory.
 pub fn load_local_component(root: PathBuf) -> Result<LoadedComponent> {
     let manifest = read_component_manifest(&root)?;
@@ -113,8 +130,39 @@ pub fn load_local_component(root: PathBuf) -> Result<LoadedComponent> {
 }
 
 fn load_embedded(name: &str) -> Result<LoadedTemplate> {
-    let prefix = format!("{name}/");
-    if !<Templates as RustEmbed>::iter().any(|p| p.starts_with(&prefix)) {
+    let prefix = resolve_embedded_template_prefix(name)?;
+    let tmp = tempfile::tempdir()?;
+    extract_embedded_subtree(&prefix, tmp.path())?;
+    let manifest = read_template_manifest(tmp.path())?;
+    Ok(LoadedTemplate {
+        root: tmp.path().to_path_buf(),
+        manifest,
+        _keepalive: Some(tmp),
+    })
+}
+
+/// Map a user-friendly embedded name (e.g. `lakehouse` or `databricks-app-rust`)
+/// onto its prefix inside the embedded asset bundle. Bases live under `_base/`
+/// and apps under `_apps/`; both can be referenced by short name.
+fn resolve_embedded_template_prefix(name: &str) -> Result<String> {
+    let candidates = [
+        format!("{BASE_TEMPLATES_PREFIX}{name}/"),
+        format!("{APP_TEMPLATES_PREFIX}{name}/"),
+    ];
+    for prefix in &candidates {
+        if <Templates as RustEmbed>::iter().any(|p| p.starts_with(prefix.as_str())) {
+            return Ok(prefix.clone());
+        }
+    }
+    Err(Error::TemplateNotFound {
+        name: name.to_string(),
+    })
+}
+
+/// Embedded base template (e.g. `lakehouse`).
+pub fn load_embedded_base(name: &str) -> Result<LoadedTemplate> {
+    let prefix = format!("{BASE_TEMPLATES_PREFIX}{name}/");
+    if !<Templates as RustEmbed>::iter().any(|p| p.starts_with(prefix.as_str())) {
         return Err(Error::TemplateNotFound {
             name: name.to_string(),
         });
@@ -127,6 +175,34 @@ fn load_embedded(name: &str) -> Result<LoadedTemplate> {
         manifest,
         _keepalive: Some(tmp),
     })
+}
+
+/// Embedded app template (e.g. `databricks-app-rust`).
+pub fn load_embedded_app(name: &str) -> Result<LoadedTemplate> {
+    let prefix = format!("{APP_TEMPLATES_PREFIX}{name}/");
+    if !<Templates as RustEmbed>::iter().any(|p| p.starts_with(prefix.as_str())) {
+        return Err(Error::TemplateNotFound {
+            name: name.to_string(),
+        });
+    }
+    let tmp = tempfile::tempdir()?;
+    extract_embedded_subtree(&prefix, tmp.path())?;
+    let manifest = read_template_manifest(tmp.path())?;
+    Ok(LoadedTemplate {
+        root: tmp.path().to_path_buf(),
+        manifest,
+        _keepalive: Some(tmp),
+    })
+}
+
+/// Iterate over the names of all known embedded base templates.
+pub fn list_embedded_bases() -> Vec<String> {
+    embedded_base_names()
+}
+
+/// Iterate over the names of all known embedded apps.
+pub fn list_embedded_apps() -> Vec<String> {
+    embedded_app_names()
 }
 
 fn load_local(path: &Path) -> Result<LoadedTemplate> {

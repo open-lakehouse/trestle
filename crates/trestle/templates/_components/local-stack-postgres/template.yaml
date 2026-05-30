@@ -1,10 +1,20 @@
 name: local-stack-postgres
 version: 0.1.0
+category: metadata_db
+provider_of: relational_db
+display_name: "Postgres"
+summary: "Postgres 16 + optional pgweb; auto-creates DBs declared by other components."
 description: |
   Postgres 16 with optional pgweb browser, configured to create additional
   databases at first boot for any component that contributes to
   `postgres_databases`. Used as the OLTP store for MLflow tracking, Unity
   Catalog metadata, and any user-defined service that registers a DB.
+
+wire_help:
+  - { env: POSTGRES_USER, note: "Default superuser (Postgres credentials)." }
+  - { env: POSTGRES_PASSWORD, note: "Default superuser password (local dev only)." }
+  - { env: POSTGRES_PORT, note: "Host port forwarded to the Postgres container." }
+  - { env: PGWEB_PORT, note: "Port for the pgweb DB browser (optional UI)." }
 
 provides:
   compose_includes:

@@ -5,12 +5,14 @@
 //!
 //! ```text
 //! templates/
-//! ├── _components/                       # shared component library
-//! │   ├── local-stack-envoy/
-//! │   ├── local-stack-postgres/
-//! │   └── ...
-//! ├── databricks-app-rust/                # template 1
-//! └── open-lakehouse-lab/                 # template 2
+//! ├── _base/
+//! │   └── lakehouse/                     # the always-rendered base
+//! ├── _apps/
+//! │   └── databricks-app-rust/           # opt-in apps layered on top
+//! └── _components/                       # shared component library
+//!     ├── local-stack-envoy/
+//!     ├── local-stack-postgres/
+//!     └── ...
 //! ```
 //!
 //! Use [`Templates::iter()`] to discover entries.
@@ -31,32 +33,46 @@ pub use rust_embed::RustEmbed;
 #[exclude = ".gitkeep"]
 pub struct Templates;
 
+/// Prefix that marks the always-rendered base templates (e.g. the lakehouse).
+pub const BASE_TEMPLATES_PREFIX: &str = "_base/";
+/// Prefix that marks the opt-in app templates that can be layered on top of a base.
+pub const APP_TEMPLATES_PREFIX: &str = "_apps/";
 /// Prefix that marks the shared (cross-template) component library.
 pub const SHARED_COMPONENTS_PREFIX: &str = "_components/";
 
-/// Iterate over the names (top-level directory entries) of all embedded templates,
-/// skipping the shared component library.
-pub fn embedded_template_names() -> Vec<String> {
-    let mut names = std::collections::BTreeSet::new();
-    for path in <Templates as RustEmbed>::iter() {
-        if path.starts_with(SHARED_COMPONENTS_PREFIX) {
-            continue;
-        }
-        if let Some(first) = path.split('/').next() {
-            names.insert(first.to_string());
-        }
-    }
-    names.into_iter().collect()
+/// Subdirectory names of all embedded base templates (e.g. `lakehouse`).
+pub fn embedded_base_names() -> Vec<String> {
+    immediate_children(BASE_TEMPLATES_PREFIX)
 }
 
-/// Iterate over the names of all embedded shared components.
+/// Subdirectory names of all embedded apps (e.g. `databricks-app-rust`).
+pub fn embedded_app_names() -> Vec<String> {
+    immediate_children(APP_TEMPLATES_PREFIX)
+}
+
+/// Subdirectory names of all embedded shared components.
 pub fn embedded_shared_component_names() -> Vec<String> {
+    immediate_children(SHARED_COMPONENTS_PREFIX)
+}
+
+/// Back-compat: legacy callers want every embedded "top-level template" (base or
+/// app) as a flat list, by short name.
+pub fn embedded_template_names() -> Vec<String> {
+    let mut out = embedded_base_names();
+    out.extend(embedded_app_names());
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn immediate_children(prefix: &str) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for path in <Templates as RustEmbed>::iter() {
-        if let Some(rest) = path.strip_prefix(SHARED_COMPONENTS_PREFIX) {
-            if let Some(first) = rest.split('/').next() {
-                names.insert(first.to_string());
-            }
+        let Some(rest) = path.strip_prefix(prefix) else {
+            continue;
+        };
+        if let Some((first, _)) = rest.split_once('/') {
+            names.insert(first.to_string());
         }
     }
     names.into_iter().collect()

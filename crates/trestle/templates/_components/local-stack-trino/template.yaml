@@ -1,0 +1,27 @@
+name: local-stack-trino
+version: 0.1.0
+category: query_engine
+provider_of: sql_engine
+display_name: "Trino"
+summary: "Distributed SQL engine; speaks Iceberg, Delta, Hive, JDBC, S3 via connectors."
+description: |
+  Trino single-node coordinator/worker exposed at `/trino` via Envoy. Talks to
+  SeaweedFS (S3) for table storage and Postgres for connector metadata. Useful
+  for ad-hoc SQL over Iceberg / Delta tables produced elsewhere in the stack.
+
+depends_on:
+  - local-stack-envoy
+
+wire_help:
+  - { url: "http://localhost:${ENVOY_PORT:-9080}/trino", note: "Trino UI + REST API (behind Envoy)." }
+  - { env: TRINO_PORT, note: "Internal Trino HTTP port (default 8080 inside the container)." }
+
+provides:
+  compose_includes:
+    - ./docker/compose/trino.yaml
+  envoy_clusters:
+    - { name: trino, host: trino, port: 8080 }
+  envoy_routes:
+    - { prefix: "/trino", cluster: trino }
+  env_vars:
+    TRINO_PORT: "8080"

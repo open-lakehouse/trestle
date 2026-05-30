@@ -7,7 +7,6 @@
 use std::path::Path;
 use std::process::Command;
 
-use inquire::Confirm;
 use minijinja::Value;
 
 use crate::error::{Error, Result};
@@ -40,9 +39,9 @@ pub fn run_post_init(
                 tracing::info!("skipping confirm-required hook: {description}");
                 continue;
             }
-            let ok = Confirm::new(&format!("Run: {description}?"))
-                .with_default(true)
-                .prompt()
+            let ok = cliclack::confirm(format!("Run: {description}?"))
+                .initial_value(true)
+                .interact()
                 .map_err(|e| Error::other(format!("hook prompt failed: {e}")))?;
             if !ok {
                 continue;

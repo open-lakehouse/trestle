@@ -2,17 +2,21 @@
 //!
 //! Three input channels feed the final variable map, in priority order:
 //!
-//! 1. `--values <file.yaml>` (highest priority)
-//! 2. Interactive prompts (skipped when `--non-interactive`)
-//! 3. Manifest defaults
+//! 1. `--set key=value` CLI overrides (highest priority).
+//! 2. `--values <file.yaml>` (flat key→value map; also accepted in the new
+//!    structured-values format with a `variables:` section — that's handled in
+//!    the CLI layer before this function sees it).
+//! 3. Interactive prompts (skipped when `--non-interactive`).
+//! 4. Manifest defaults.
 //!
-//! In `--non-interactive` mode, a variable with no value from sources (1) or (3) is a
-//! hard error.
+//! In `--non-interactive` mode, a variable with no value from sources (1)–(2)
+//! and no default is a hard error.
+//!
+//! The prompts use [`cliclack`] so they share the wizard's look-and-feel.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use inquire::{Confirm, Select, Text, validator::StringValidator};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -47,7 +51,7 @@ impl VariableValue {
     }
 }
 
-/// Collect variable values from the three input channels.
+/// Collect variable values from the configured input channels.
 pub fn collect_variables(
     manifest: &Manifest,
     values_file: Option<&Path>,
@@ -59,9 +63,28 @@ pub fn collect_variables(
         let bytes = std::fs::read(path).map_err(|e| Error::io_at(path, e))?;
         let raw: BTreeMap<String, serde_yaml::Value> =
             serde_yaml::from_slice(&bytes).map_err(|e| Error::yaml_at(path, e))?;
-        for (k, v) in raw {
-            if let Some(val) = VariableValue::from_yaml(&v) {
-                from_file.insert(k, val);
+        // The structured format has top-level keys we don't want to treat as
+        // variables (`apps`, `selections`, `variables`). If we see a
+        // `variables:` block, prefer that; otherwise treat the whole map as a
+        // flat name→value pairing (legacy format).
+        if let Some(vars) = raw.get("variables") {
+            if let serde_yaml::Value::Mapping(m) = vars {
+                for (k, v) in m {
+                    if let (serde_yaml::Value::String(name), Some(val)) =
+                        (k, VariableValue::from_yaml(v))
+                    {
+                        from_file.insert(name.clone(), val);
+                    }
+                }
+            }
+        } else {
+            for (k, v) in raw {
+                if matches!(k.as_str(), "apps" | "selections") {
+                    continue;
+                }
+                if let Some(val) = VariableValue::from_yaml(&v) {
+                    from_file.insert(k, val);
+                }
             }
         }
     }
@@ -69,7 +92,7 @@ pub fn collect_variables(
     let mut out: BTreeMap<String, VariableValue> = BTreeMap::new();
 
     for var in &manifest.variables {
-        // Priority: CLI override > values file > prompt > default
+        // Priority: CLI override > values file > prompt > default.
         if let Some(s) = overrides.get(&var.name) {
             out.insert(var.name.clone(), coerce(var, s)?);
             continue;
@@ -88,6 +111,18 @@ pub fn collect_variables(
             return Err(Error::MissingVariable {
                 name: var.name.clone(),
             });
+        }
+        // Interactive: if the variable has a default and no prompt text, treat
+        // it as a silent default (we follow the "opinionated defaults instead
+        // of low-level prompts" principle). Variables without a `prompt:`
+        // field never block the user with a question.
+        if var.prompt.is_none() {
+            if let Some(d) = &var.default {
+                if let Some(v) = VariableValue::from_yaml(d) {
+                    out.insert(var.name.clone(), v);
+                    continue;
+                }
+            }
         }
         out.insert(var.name.clone(), prompt_for(var)?);
     }
@@ -141,100 +176,66 @@ fn prompt_for(var: &Variable) -> Result<VariableValue> {
 
     match var.kind {
         VarKind::Bool => {
-            let mut c = Confirm::new(&prompt_text);
+            let mut c = cliclack::confirm(prompt_text);
             if let Some(d) = &var.default {
                 if let Some(b) = d.as_bool() {
-                    c = c.with_default(b);
+                    c = c.initial_value(b);
                 }
             }
-            if let Some(h) = &var.help {
-                c = c.with_help_message(h);
-            }
-            let b = c
-                .prompt()
-                .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
+            let b = c.interact().map_err(|e| io_err("confirm", e))?;
             Ok(VariableValue::Bool(b))
         }
         VarKind::Enum => {
-            let options: Vec<&str> = var.options.iter().map(String::as_str).collect();
-            if options.is_empty() {
+            if var.options.is_empty() {
                 return Err(Error::Manifest(format!(
                     "variable `{}` is type=enum but has no options",
                     var.name
                 )));
             }
-            let mut s = Select::new(&prompt_text, options.clone());
+            let items: Vec<(String, String, String)> = var
+                .options
+                .iter()
+                .map(|o| (o.clone(), o.clone(), String::new()))
+                .collect();
+            let mut s = cliclack::select(prompt_text).items(&items);
             if let Some(d) = &var.default {
                 if let Some(v) = d.as_str() {
-                    if let Some(idx) = options.iter().position(|o| *o == v) {
-                        s = s.with_starting_cursor(idx);
-                    }
+                    s = s.initial_value(v.to_string());
                 }
             }
-            if let Some(h) = &var.help {
-                s = s.with_help_message(h);
-            }
-            let picked = s
-                .prompt()
-                .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
-            Ok(VariableValue::String(picked.to_string()))
+            let picked = s.interact().map_err(|e| io_err("select", e))?;
+            Ok(VariableValue::String(picked))
         }
         VarKind::String => {
-            let mut t = Text::new(&prompt_text);
+            let mut t = cliclack::input(prompt_text);
             let default_str = var
                 .default
                 .as_ref()
                 .and_then(|d| d.as_str().map(String::from));
             if let Some(d) = default_str.as_deref() {
-                t = t.with_default(d);
-            }
-            if let Some(h) = &var.help {
-                t = t.with_help_message(h);
+                t = t.default_input(d);
             }
             if let Some(rx) = &var.validate {
-                let validator = RegexValidator::new(&var.name, rx)?;
-                t = t.with_validator(validator);
+                let var_name = var.name.clone();
+                let regex_src = rx.clone();
+                let compiled = Regex::new(rx).map_err(|e| Error::InvalidVariable {
+                    name: var.name.clone(),
+                    reason: format!("bad validate regex `{rx}`: {e}"),
+                })?;
+                t = t.validate(move |input: &String| {
+                    if compiled.is_match(input) {
+                        Ok(())
+                    } else {
+                        Err(format!("`{var_name}` must match `{regex_src}`"))
+                    }
+                });
             }
-            let s = t
-                .prompt()
-                .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
+            let s: String = t.interact().map_err(|e| io_err("input", e))?;
             Ok(VariableValue::String(s))
         }
     }
 }
 
-#[derive(Clone)]
-struct RegexValidator {
-    var_name: String,
-    raw: String,
-    re: Regex,
-}
-
-impl RegexValidator {
-    fn new(var_name: &str, raw: &str) -> Result<Self> {
-        let re = Regex::new(raw).map_err(|e| Error::InvalidVariable {
-            name: var_name.to_string(),
-            reason: format!("bad validate regex `{raw}`: {e}"),
-        })?;
-        Ok(Self {
-            var_name: var_name.to_string(),
-            raw: raw.to_string(),
-            re,
-        })
-    }
-}
-
-impl StringValidator for RegexValidator {
-    fn validate(
-        &self,
-        input: &str,
-    ) -> std::result::Result<inquire::validator::Validation, inquire::CustomUserError> {
-        if self.re.is_match(input) {
-            Ok(inquire::validator::Validation::Valid)
-        } else {
-            Ok(inquire::validator::Validation::Invalid(
-                format!("`{}` must match `{}`", self.var_name, self.raw).into(),
-            ))
-        }
-    }
+fn io_err(kind: &str, e: std::io::Error) -> Error {
+    Error::other(format!("{kind} prompt failed: {e}"))
 }
