@@ -113,13 +113,12 @@ fn parse_url_segments(template: &str) -> Vec<UrlSegment> {
             // Parse parameter name
             let mut param_name = String::new();
             let mut closed = false;
-            while let Some(&next_ch) = chars.peek() {
+            for next_ch in chars.by_ref() {
                 if next_ch == '}' {
-                    chars.next(); // consume the '}'
                     closed = true;
                     break;
                 }
-                param_name.push(chars.next().unwrap());
+                param_name.push(next_ch);
             }
 
             // An unclosed brace (e.g. `{name` with no `}`) is malformed — skip it rather

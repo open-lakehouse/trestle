@@ -80,6 +80,43 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
     }
 }
 
+// ── Generated code is syntactically valid Rust ───────────────────────────────
+
+/// Every emitted `.rs` file must parse as a Rust source file.
+///
+/// The substring assertions elsewhere in this suite can't catch structural defects like
+/// duplicate `pub mod` blocks (E0428) or stray tokens — only a real parse can. This is the
+/// cheap guard that keeps the generator's core invariant ("the output is valid Rust") honest
+/// without standing up a full `cargo check` fixture crate.
+#[test]
+fn all_generated_rust_files_parse() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.generate_object_conversions = true;
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let rust_files: Vec<PathBuf> = ["common", "models", "server", "client"]
+        .iter()
+        .flat_map(|d| walk(&tmp.path().join(d)))
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .collect();
+
+    assert!(
+        !rust_files.is_empty(),
+        "expected generated .rs files, found none"
+    );
+
+    for path in &rust_files {
+        let src = std::fs::read_to_string(path).expect("read generated file");
+        if let Err(err) = syn::parse_file(&src) {
+            panic!(
+                "generated file {} is not valid Rust: {err}\n---\n{src}",
+                path.display()
+            );
+        }
+    }
+}
+
 // ── HTTP client method generation ───────────────────────────────────────────
 
 #[test]
@@ -152,6 +189,36 @@ fn handler_trait_has_async_methods_per_rpc() {
     );
 }
 
+/// Query-param extractors must only mark optional/repeated fields `#[serde(default)]`.
+///
+/// Required query params (proto3 fields not marked `optional`) must have NO default, so omitting
+/// one is a deserialization error rather than silently defaulting — regression guard for the
+/// extractor `serde(default)` policy.
+#[test]
+fn required_query_params_have_no_serde_default() {
+    let tmp = TempDir::new().unwrap();
+    let config = rust_config(tmp.path());
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let common = read_all(&tmp.path().join("common"));
+
+    // `max_results`/`page_token` on ListCatalogs are required scalars → emitted with no default.
+    assert!(
+        common.contains("max_results: i32,") && common.contains("page_token: String,"),
+        "required query params should be plain fields:\n{common}"
+    );
+    assert!(
+        !common.contains("#[serde(default)]\n            max_results")
+            && !common.contains("#[serde(default)] max_results"),
+        "required query param `max_results` must NOT carry #[serde(default)]:\n{common}"
+    );
+    // Repeated `tags` (Vec) still gets a default so an absent key → empty Vec.
+    assert!(
+        common.contains("tags: Vec<String>"),
+        "repeated query param `tags` missing:\n{common}"
+    );
+}
+
 // ── Resource-enum + conversions ──────────────────────────────────────────────
 
 #[test]
@@ -208,6 +275,17 @@ fn resource_registry_descriptors_generated() {
     assert!(
         labels.contains("ObjectLabel::Catalog") && labels.contains("FieldRole::"),
         "descriptor entry contents missing"
+    );
+    // A flat resource's name decomposes to just `["name"]` — standard List fields like
+    // `page_token` must not leak into the path components (regression guard for the
+    // proto3-presence heuristic).
+    assert!(
+        labels.contains("path_names: &[\"name\"]"),
+        "Catalog path_names should be [\"name\"], not include pagination fields:\n{labels}"
+    );
+    assert!(
+        !labels.contains("page_token\", \"name"),
+        "pagination field leaked into path_names:\n{labels}"
     );
 }
 

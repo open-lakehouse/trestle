@@ -196,7 +196,14 @@ fn generate_query_parameters(method: &MethodHandler<'_>) -> proc_macro2::TokenSt
                     url.query_pairs_mut().append_pair(#param_name, &value.to_string());
                 }
             });
+        } else if matches!(field_type.base_type, BaseType::String) {
+            // Required string param: always sent. Append the value directly (it is already a
+            // `String`, so `.to_string()` would be redundant).
+            param_assignments.push(quote! {
+                url.query_pairs_mut().append_pair(#param_name, &request.#field_ident);
+            });
         } else {
+            // Required non-string scalar: always sent.
             param_assignments.push(quote! {
                 url.query_pairs_mut().append_pair(#param_name, &request.#field_ident.to_string());
             });

@@ -181,7 +181,13 @@ fn generate_constructor(
             &field_ident,
             &RenderContext::Constructor,
         );
-        quote! { #field_ident: #assignment }
+        // When the assignment is just the field ident (no `.into()`/cast), use field shorthand
+        // (`field`) instead of `field: field`, which trips `redundant_field_names`.
+        if field_ident == assignment.to_string() {
+            quote! { #field_ident }
+        } else {
+            quote! { #field_ident: #assignment }
+        }
     });
 
     let obtain_doc = format!(
@@ -296,7 +302,11 @@ fn generate_oneof_variant_methods(
     method: &MethodHandler<'_>,
     field: &BodyField,
 ) -> crate::error::Result<Vec<TokenStream>> {
-    let variants = field.oneof_variants.as_ref().unwrap();
+    // No variants → no methods to emit. Keeps the invariant self-contained rather than relying
+    // on the caller having checked `is_some()`.
+    let Some(variants) = field.oneof_variants.as_ref() else {
+        return Ok(Vec::new());
+    };
     let oneof_field_ident = format_ident!("{}", field.name);
 
     let enum_type_tokens = method.field_type(&field.field_type, RenderContext::BuilderMethod);

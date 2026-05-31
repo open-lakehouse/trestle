@@ -4,7 +4,7 @@ Proto-driven code generator that transforms compiled protobuf descriptors into i
 
 ## Overview
 
-The single source of truth is your `.proto` files. Annotate them with standard Google API extensions and run `trestle generate` (the unified `trestle` CLI; the legacy `proto-gen` binary has been folded in) to emit:
+The single source of truth is your `.proto` files. Annotate them with standard Google API extensions and run `trestle generate` to emit:
 
 | Output | What is generated |
 |---|---|
@@ -67,13 +67,11 @@ service CatalogService {
 
 ### Installation
 
-```bash
-cargo install --path crates/olai-codegen --bin olai-codegen
-```
-
-Or build and run directly from the workspace:
+`olai-codegen` is a library; code generation is driven by the `trestle` CLI. Install it from
+the workspace:
 
 ```bash
+cargo install --path crates/trestle
 trestle generate --help
 ```
 
@@ -85,7 +83,7 @@ buf build --as-file-descriptor-set -o api.bin
 
 ### Config file (recommended)
 
-A YAML config file is the preferred way to invoke `trestle generate`, particularly in multi-crate workspaces where output directories span crate boundaries. CLI flags override any value from the file. New projects scaffolded with `trestle new` use `trestle.yaml`; the older `proto-gen.yaml` filename is still accepted for backwards compatibility.
+A YAML config file is the preferred way to invoke `trestle generate`, particularly in multi-crate workspaces where output directories span crate boundaries. CLI flags override any value from the file. New projects scaffolded with `trestle new` use `trestle.yaml` (the older `proto-gen.yaml` name is still accepted).
 
 ```yaml
 # trestle.yaml
@@ -191,7 +189,7 @@ enrich_openapi:
 > The rest of this section documents the same layout for users who'd rather wire
 > things up by hand.
 
-`trestle generate` (formerly `proto-gen generate`) writes generated files into output directories that can span multiple crates. The recommended layout separates concerns across four crates:
+`trestle generate` writes generated files into output directories that can span multiple crates. The recommended layout separates concerns across four crates:
 
 ```
 my-workspace/
@@ -264,12 +262,39 @@ impl CatalogHandler for MyCatalogHandler {
 }
 ```
 
-Wire the generated route handlers into Axum using the handler as state:
+The generator emits a free Axum handler function per RPC (e.g. `get_catalog`,
+`create_catalog`) but does **not** build the `Router` for you — you wire the routes by hand.
+This is deliberate: only your app knows the URL prefixes to nest under, and a service often
+mixes generated CRUD handlers with hand-written ones (custom streaming responses, bespoke
+headers) that the generator can't see. Write one small router fn per service:
 
 ```rust
-let handler = Arc::new(MyCatalogHandler::new());
+use axum::routing::{delete, get, patch, post};
+use gen::server::catalogs::server::*;
+
+fn catalogs_router<T, Cx>(handler: T) -> axum::Router
+where
+    T: CatalogHandler<Cx> + Clone + Send + Sync + 'static,
+    Cx: axum::extract::FromRequestParts<T> + Send + 'static,
+{
+    axum::Router::new()
+        .route("/catalogs", get(list_catalogs::<T, Cx>).post(create_catalog::<T, Cx>))
+        .route(
+            "/catalogs/{name}",
+            get(get_catalog::<T, Cx>)
+                .patch(update_catalog::<T, Cx>)
+                .delete(delete_catalog::<T, Cx>),
+        )
+        .with_state(handler)
+}
+```
+
+Then merge the per-service routers and nest them under your API prefix:
+
+```rust
+let handler = MyCatalogHandler::new();
 let app = axum::Router::new()
-    .merge(gen::server::catalogs::server::router(handler));
+    .nest("/api/2.1/unity-catalog", catalogs_router(handler.clone()).merge(schemas_router(handler)));
 ```
 
 ### Using the generated client
@@ -380,4 +405,4 @@ generate_code(&metadata, &config)?;
 
 ## Examples
 
-The `proto/` directory contains fully-annotated example protobuf definitions (`example_models.proto`, `example_service.proto`) and a pre-compiled descriptor (`example.bin`). Integration tests in `tests/` run the full pipeline against these examples and serve as executable documentation of the generated output.
+The `proto/` directory contains fully-annotated example protobuf definitions and a pre-compiled descriptor (`example.bin`). Integration tests in `tests/` run the full pipeline against these examples and serve as executable documentation of the generated output.

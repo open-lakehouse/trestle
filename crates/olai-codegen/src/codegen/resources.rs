@@ -259,11 +259,24 @@ fn build_tryfrom_impls(
         })
         .collect();
 
+    // With a single resource variant, `Resource::Variant(v) => Ok(v)` is already exhaustive;
+    // a trailing `_ =>` arm would be unreachable. Only emit the catch-all when needed.
+    let single_variant = resources.len() == 1;
     let from_impls: Vec<TokenStream> = resources
         .iter()
         .map(|r| {
             let variant = format_ident!("{}", r.variant_name);
             let path = &r.rust_type;
+            let mismatch_arm = if single_variant {
+                quote! {}
+            } else {
+                quote! {
+                    _ => Err(<#error_ty>::generic(concat!(
+                        "Resource is not a ",
+                        stringify!(#variant)
+                    ))),
+                }
+            };
             quote! {
                 impl From<#path> for Resource {
                     fn from(v: #path) -> Self {
@@ -277,10 +290,7 @@ fn build_tryfrom_impls(
                     fn try_from(r: Resource) -> Result<Self, Self::Error> {
                         match r {
                             Resource::#variant(v) => Ok(v),
-                            _ => Err(<#error_ty>::generic(concat!(
-                                "Resource is not a ",
-                                stringify!(#variant)
-                            ))),
+                            #mismatch_arm
                         }
                     }
                 }
@@ -363,10 +373,20 @@ fn build_object_conversions(
         });
     }
 
+    // Imports are only used by the conversion impls; emitting them when every resource was
+    // skipped (no IDENTIFIER field) would leave dead `use` statements behind.
+    let imports = if conversion_impls.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            use crate::Error;
+            use crate::models::object::Object;
+            use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
+        }
+    };
+
     Ok(quote! {
-        use crate::Error;
-        use crate::models::object::Object;
-        use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
+        #imports
 
         #(#conversion_impls)*
 
@@ -406,6 +426,18 @@ enum FieldRoleEntry {
     Identifier,
     Sensitive,
     Managed,
+}
+
+/// Standard AIP-132 `List` request fields that are never part of a resource's name.
+///
+/// These are pagination/filtering knobs, not parent-hierarchy components, so the heuristic
+/// path-name derivation must skip them (proto3 scalars carry no presence info, so they can't
+/// be told apart from real name fields by optionality alone).
+fn is_standard_list_field(name: &str) -> bool {
+    matches!(
+        name,
+        "page_token" | "page_size" | "max_results" | "order_by" | "filter"
+    )
 }
 
 /// Derive the ordered list of field names used to build a `ResourceName` for a resource.
@@ -469,7 +501,12 @@ fn derive_path_names(
         .find(|m| m.request_type == RequestType::Get)
         .and_then(|m| m.path_parameters().next().map(|p| p.name.clone()));
 
-    // Get the List method's required string query params (these are the parent hierarchy params)
+    // Get the List method's string query params that look like parent-hierarchy names.
+    //
+    // proto3 scalars have no presence, so `is_optional()` is effectively always false for them
+    // — we can't use it to tell a real parent name (e.g. `catalog_name`) apart from a standard
+    // pagination/listing field. Exclude the well-known AIP-132 List fields explicitly so they
+    // don't get misread as path components (e.g. `page_token` leaking into a resource name).
     let parent_params: Vec<String> = service
         .methods
         .iter()
@@ -479,6 +516,7 @@ fn derive_path_names(
                 .iter()
                 .filter(|p| !p.is_path_param() && !p.is_optional())
                 .filter(|p| matches!(p.field_type().base_type, BaseType::String))
+                .filter(|p| !is_standard_list_field(p.name()))
                 .map(|p| p.name().to_string())
                 .collect()
         })

@@ -36,6 +36,14 @@ pub enum Error {
         source: syn::Error,
     },
 
+    #[error("Invalid {field} `{path}`: {source}")]
+    InvalidConfigPath {
+        field: &'static str,
+        path: String,
+        #[source]
+        source: syn::Error,
+    },
+
     #[error(
         "Failed to parse generated tokens as a Rust file: {source}\n--- generated tokens ---\n{tokens}"
     )]
@@ -45,15 +53,6 @@ pub enum Error {
         source: syn::Error,
     },
 
-    #[error("Unexpected $ref format `{value}` (expected `#/$defs/<name>`)")]
-    UnexpectedRefFormat { value: String },
-
-    #[error("Missing HTTP rule pattern for method `{method}`")]
-    MissingHttpPattern { method: String },
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

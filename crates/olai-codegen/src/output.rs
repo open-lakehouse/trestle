@@ -5,13 +5,12 @@ use crate::Result;
 use crate::codegen::GeneratedCode;
 
 /// Return the appropriate "do not edit" header for a given file path.
+///
+/// Python uses `#` comments; Rust/TypeScript/JavaScript (and anything else) use `//`.
 fn generated_header(path: &str) -> &'static str {
-    if path.ends_with(".ts") || path.ends_with(".js") {
-        "// @generated — do not edit by hand.\n"
-    } else if path.ends_with(".py") || path.ends_with(".pyi") {
+    if path.ends_with(".py") || path.ends_with(".pyi") {
         "# @generated — do not edit by hand.\n"
     } else {
-        // Rust and everything else
         "// @generated — do not edit by hand.\n"
     }
 }

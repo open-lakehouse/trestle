@@ -27,17 +27,47 @@ impl ModelsPath {
             template: template.to_string(),
             source: e,
         })?;
-        Ok(Self {
+        Ok(Self::from_template(template))
+    }
+
+    /// Wrap a template without the construction-time validation done by [`ModelsPath::new`].
+    ///
+    /// For callers that already validated the template (e.g. `generate_code` validates both
+    /// templates up front, so per-service handlers needn't re-parse on every `models_path()`
+    /// call). `resolve`/`try_resolve` still parse the final substituted path.
+    pub(crate) fn from_template(template: &str) -> Self {
+        Self {
             template: template.to_string(),
+        }
+    }
+
+    /// Replace `{service}` with `service` and return the parsed [`syn::Path`], erroring if the
+    /// substitution does not parse.
+    ///
+    /// `new` only proves the template parses for the literal `test`; a real service segment that
+    /// isn't a valid path component (leading digit, hyphen, reserved word) can still fail here.
+    /// Call this once per service up front (see [`ModelsPath::validate_for`]) so failures surface
+    /// as a clean [`Error::InvalidModelsPathTemplate`] before generation rather than panicking.
+    pub fn try_resolve(&self, service: &str) -> Result<syn::Path> {
+        let path = self.template.replace("{service}", service);
+        syn::parse_str(&path).map_err(|source| Error::InvalidModelsPathTemplate {
+            template: path,
+            source,
         })
+    }
+
+    /// Validate that `service` substitutes into a parseable path. Used up front, per service.
+    pub fn validate_for(&self, service: &str) -> Result<()> {
+        self.try_resolve(service).map(|_| ())
     }
 
     /// Replace `{service}` with `service` and return the parsed [`syn::Path`].
     ///
     /// # Panics
     ///
-    /// Cannot panic in practice: `new` already validates that every possible
-    /// `{service}` substitution produces a valid path.
+    /// Panics if the substituted path doesn't parse. Generation validates every service segment
+    /// up front via [`ModelsPath::validate_for`], so this is unreachable on the generation path;
+    /// prefer [`ModelsPath::try_resolve`] anywhere that hasn't already validated.
     pub fn resolve(&self, service: &str) -> syn::Path {
         let path = self.template.replace("{service}", service);
         syn::parse_str(&path)

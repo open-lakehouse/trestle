@@ -112,14 +112,12 @@ fn extract_method_annotations(
     method: &MethodDescriptorProto,
     service_name: &str,
 ) -> Result<(Option<Operation>, HttpRule)> {
-    if method.options.is_none() {
+    let Some(options) = method.options.as_ref() else {
         return Err(Error::MissingAnnotation {
             object: method.name().to_string(),
             message: "missing required google.api.http annotation".to_string(),
         });
-    }
-
-    let options = method.options.as_ref().unwrap();
+    };
     let unknown_fields = options.unknown_fields();
 
     let mut operation = None;

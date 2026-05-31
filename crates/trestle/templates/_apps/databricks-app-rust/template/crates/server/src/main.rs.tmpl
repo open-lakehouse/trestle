@@ -37,9 +37,16 @@ fn build_router() -> Router {
     Router::new()
         // Liveness/readiness for Databricks Apps and CI smoke tests.
         .route("/healthz", get(|| async { "ok" }))
-        // Generated routes are added here once `just regen` has run. Example:
+        // Mount generated routes here once `just regen` has run. The generator emits one Axum
+        // handler function per RPC (in `crate::gen::server::greeting::server`); wire them onto a
+        // router with your service as state. Example:
         //   let svc = handlers::greeting::Service::default();
-        //   .merge(crate::gen::server::greeting::server::router(svc))
+        //   use crate::gen::server::greeting::server::*;
+        //   .merge(
+        //       Router::new()
+        //           .route("/greetings", post(create_greeting::<_, _>))
+        //           .with_state(svc),
+        //   )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }

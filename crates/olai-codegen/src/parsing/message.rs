@@ -193,11 +193,9 @@ pub(super) fn process_message(
 /// - `Ok(Vec<FieldBehavior>)` containing all field behaviors found
 /// - `Err(...)` if there's an error parsing the extension data
 fn extract_field_behavior_option(field: &FieldDescriptorProto) -> Result<Vec<FieldBehavior>> {
-    if field.options.is_none() {
+    let Some(options) = field.options.as_ref() else {
         return Ok(vec![]);
-    }
-
-    let options = field.options.as_ref().unwrap();
+    };
     let unknown_fields = options.unknown_fields();
 
     // Look for the google.api.field_behavior extension
@@ -359,11 +357,9 @@ fn decode_varint(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u64, std::io::Er
 fn extract_message_resource_option(
     message: &DescriptorProto,
 ) -> Result<Option<ResourceDescriptor>> {
-    if message.options.is_none() {
+    let Some(options) = message.options.as_ref() else {
         return Ok(None);
-    }
-
-    let options = message.options.as_ref().unwrap();
+    };
     let unknown_fields = options.unknown_fields();
 
     // Look for the google.api.resource extension

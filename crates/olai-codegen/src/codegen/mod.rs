@@ -19,7 +19,7 @@
 //! - **Client Code**: HTTP client implementations for services
 //! - **Type Mappings**: Conversions between protobuf and Rust types
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use convert_case::{Case, Casing};
 use itertools::Itertools;
@@ -97,8 +97,22 @@ impl MethodPlan {
 /// construction time rather than mid-generation.
 pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Result<()> {
     // Validate templates early so callers get a clean error before any generation starts.
-    ModelsPath::new(&config.models_path_template)?;
-    ModelsPath::new(&config.models_path_crate_template)?;
+    let models_path = ModelsPath::new(&config.models_path_template)?;
+    let models_path_crate = ModelsPath::new(&config.models_path_crate_template)?;
+
+    // The context/result type paths come from user config and are parsed as `syn::Path` deep in
+    // the per-method generators (handler/client/server/builder). Validate them once here so a
+    // typo surfaces as a clean error instead of panicking mid-generation.
+    for (field, path) in [
+        ("context_type", &config.context_type_path),
+        ("result_type", &config.result_type_path),
+    ] {
+        syn::parse_str::<syn::Path>(path).map_err(|source| Error::InvalidConfigPath {
+            field,
+            path: path.clone(),
+            source,
+        })?;
+    }
 
     // Validate that bindings config is present when language-binding output is requested.
     if (config.output.python.is_some()
@@ -110,6 +124,13 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
     }
 
     let plan = analyze_metadata(metadata)?;
+
+    // Validate every service's `{service}` substitution up front so a base path that isn't a
+    // valid Rust path segment fails cleanly here rather than panicking inside per-service codegen.
+    for service in &plan.services {
+        models_path.validate_for(&service.base_path)?;
+        models_path_crate.validate_for(&service.base_path)?;
+    }
 
     let common_code = generate_common_code(&plan, metadata, config)?;
     output::write_generated_code(&common_code, &config.output.common)?;
@@ -140,8 +161,13 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
         let gen_dir = config.models_gen_dir.as_deref().unwrap_or("../gen");
         let include_labels = config.generate_resource_enum;
         let mod_content = generate_models_mod(&plan.services, gen_dir, include_labels, metadata);
-        let mod_path = subdir.join("mod.rs");
-        std::fs::write(&mod_path, mod_content).map_err(Error::Io)?;
+        // Route through write_generated_code so the `// @generated` header is prepended like
+        // every other emitted file, rather than writing it raw.
+        let mut mod_files = GeneratedCode {
+            files: std::collections::HashMap::new(),
+        };
+        mod_files.files.insert("mod.rs".to_string(), mod_content);
+        output::write_generated_code(&mod_files, &subdir)?;
     }
 
     if let Some(ref server_dir) = config.output.server {
@@ -458,73 +484,46 @@ pub fn generate_models_mod(
     include_labels: bool,
     metadata: &CodeGenMetadata,
 ) -> String {
-    let mut sorted_services: Vec<&ServicePlan> = services.iter().collect();
-    sorted_services.sort_by_key(|s| &s.base_path);
-
-    // Build the `pub mod` blocks
-    let service_mods: Vec<TokenStream> = sorted_services
-        .iter()
-        .map(|svc| {
-            // package = "unitycatalog.catalogs.v1"
-            // parts   = ["unitycatalog", "catalogs", "v1"]
-            let parts: Vec<&str> = svc.package.split('.').collect();
-            // service module = second-to-last segment (e.g. "catalogs")
-            // version module = last segment (e.g. "v1")
-            let (svc_seg, ver_seg) = if parts.len() >= 2 {
-                (parts[parts.len() - 2], parts[parts.len() - 1])
-            } else {
-                (svc.base_path.as_str(), "v1")
-            };
-
-            let svc_mod = format_ident!("{}", svc_seg);
-            let ver_mod = format_ident!("{}", ver_seg);
-
-            let main_include = format!("./{}/{}.rs", gen_dir, svc.package);
-            let tonic_include = format!("./{}/{}.tonic.rs", gen_dir, svc.package);
-
-            quote! {
-                pub mod #svc_mod {
-                    pub mod #ver_mod {
-                        include!(#main_include);
-                        #[cfg(feature = "grpc")]
-                        include!(#tonic_include);
-                    }
-                }
-            }
-        })
-        .collect();
-
-    // Collect `pub use` re-exports: include managed resources AND all resource-descriptor
-    // messages in the same package (catches nested types like Column that aren't direct
-    // RPC return types but still have google.api.resource annotations).
-    let mut reexports: Vec<TokenStream> = Vec::new();
-    for svc in &sorted_services {
-        let package = &svc.package;
-        let fq_prefix = format!(".{}.", package);
-
+    // Services are keyed by proto package, not by service: multiple services can share a
+    // package (e.g. `CatalogService` and `SchemaService` both in `example.catalog.v1`), and
+    // emitting one `pub mod`/`pub use` block per service would produce duplicate modules and
+    // imports (E0428). Group by package first, then emit once per package.
+    //
+    // package = "unitycatalog.catalogs.v1"
+    // parts   = ["unitycatalog", "catalogs", "v1"]
+    // service module = second-to-last segment ("catalogs"); version = last segment ("v1").
+    let mod_segments = |svc: &ServicePlan| -> (String, String) {
         let parts: Vec<&str> = svc.package.split('.').collect();
-        let (svc_seg, ver_seg) = if parts.len() >= 2 {
-            (parts[parts.len() - 2], parts[parts.len() - 1])
+        if parts.len() >= 2 {
+            (
+                parts[parts.len() - 2].to_string(),
+                parts[parts.len() - 1].to_string(),
+            )
         } else {
-            (svc.base_path.as_str(), "v1")
-        };
-        let svc_mod = format_ident!("{}", svc_seg);
-        let ver_mod = format_ident!("{}", ver_seg);
+            (svc.base_path.clone(), "v1".to_string())
+        }
+    };
 
-        // Gather from managed_resources first.
-        let mut type_names: std::collections::BTreeSet<String> = svc
-            .managed_resources
-            .iter()
-            .map(|r| r.type_name.clone())
-            .collect();
+    // One entry per package, in sorted order, with the union of re-exported type names.
+    let mut packages: BTreeMap<String, (String, String, BTreeSet<String>)> = BTreeMap::new();
+    for svc in services {
+        let (svc_seg, ver_seg) = mod_segments(svc);
+        let entry = packages
+            .entry(svc.package.clone())
+            .or_insert_with(|| (svc_seg, ver_seg, BTreeSet::new()));
+        let type_names = &mut entry.2;
 
-        // Also include all resource-annotated messages in this package.
+        // Re-export managed resources for this service...
+        type_names.extend(svc.managed_resources.iter().map(|r| r.type_name.clone()));
+
+        // ...plus every resource-annotated message in the same package (catches nested types
+        // like `Column` that aren't direct RPC return types but still carry annotations).
+        let fq_prefix = format!(".{}.", svc.package);
+        let fq_pkg = format!(".{}", svc.package);
         for (fq_name, msg_info) in &metadata.messages {
             if msg_info.resource_descriptor.is_some()
-                && (fq_name.starts_with(&fq_prefix)
-                    || fq_name.starts_with(&format!(".{}", package)))
+                && (fq_name.starts_with(&fq_prefix) || fq_name.starts_with(&fq_pkg))
             {
-                // Simple name = last component after '.'
                 let simple = fq_name
                     .rfind('.')
                     .map(|i| &fq_name[i + 1..])
@@ -532,8 +531,27 @@ pub fn generate_models_mod(
                 type_names.insert(simple.to_string());
             }
         }
+    }
 
-        for type_name in &type_names {
+    let mut service_mods: Vec<TokenStream> = Vec::new();
+    let mut reexports: Vec<TokenStream> = Vec::new();
+    for (package, (svc_seg, ver_seg, type_names)) in &packages {
+        let svc_mod = format_ident!("{}", svc_seg);
+        let ver_mod = format_ident!("{}", ver_seg);
+
+        let main_include = format!("./{}/{}.rs", gen_dir, package);
+        let tonic_include = format!("./{}/{}.tonic.rs", gen_dir, package);
+        service_mods.push(quote! {
+            pub mod #svc_mod {
+                pub mod #ver_mod {
+                    include!(#main_include);
+                    #[cfg(feature = "grpc")]
+                    include!(#tonic_include);
+                }
+            }
+        });
+
+        for type_name in type_names {
             let type_ident = format_ident!("{}", type_name);
             reexports.push(quote! {
                 pub use #svc_mod::#ver_mod::#type_ident;
@@ -623,16 +641,13 @@ impl ServiceHandler<'_> {
     }
 
     pub(crate) fn models_path(&self) -> syn::Path {
-        // Templates are validated by `generate_code` before any `ServiceHandler` is used,
-        // so this substitution is guaranteed to succeed.
-        ModelsPath::new(&self.config.models_path_template)
-            .expect("models_path_template already validated by generate_code")
-            .resolve(&self.plan.base_path)
+        // Templates (and each service's substitution) are validated by `generate_code` before
+        // any `ServiceHandler` is used, so skip the redundant re-validation `new` would do.
+        ModelsPath::from_template(&self.config.models_path_template).resolve(&self.plan.base_path)
     }
 
     pub(crate) fn models_path_crate(&self) -> syn::Path {
-        ModelsPath::new(&self.config.models_path_crate_template)
-            .expect("models_path_crate_template already validated by generate_code")
+        ModelsPath::from_template(&self.config.models_path_crate_template)
             .resolve(&self.plan.base_path)
     }
 }
@@ -698,7 +713,13 @@ impl MethodHandler<'_> {
     /// Depending on context we may want concrete types (e.g. 'String') or more flexible types (e.g. 'Into<String d>')
     pub(crate) fn field_type(&self, field_type: &UnifiedType, ctx: RenderContext) -> syn::Type {
         let rust_type = types::unified_to_rust(field_type, ctx);
-        syn::parse_str(&rust_type).expect("proper field type")
+        // `rust_type` comes from this crate's own proto→Rust mapping, not user input, so an
+        // unparseable result is a bug in `unified_to_rust`. Panic with the offending string so
+        // the broken mapping is obvious (the generated-code parse test in
+        // `tests/generation_integration.rs` is the broader guard for output validity).
+        syn::parse_str(&rust_type).unwrap_or_else(|e| {
+            panic!("internal: unified_to_rust produced an invalid type `{rust_type}`: {e}")
+        })
     }
 
     /// Get field assignment TokenStream for constructor
