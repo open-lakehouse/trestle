@@ -176,10 +176,11 @@ fn derive_ordered_hierarchy(
     Ok(ancestors
         .into_iter()
         .map(|(_, parent_type, field_name)| {
-            let parent_singular = field_name
-                .strip_suffix("_name")
-                .and_then(|s| metadata.resource_from_singular(s))
-                .map(|_| field_name.strip_suffix("_name").unwrap().to_string());
+            let parent_singular = field_name.strip_suffix("_name").and_then(|stem| {
+                metadata
+                    .resource_from_singular(stem)
+                    .map(|_| stem.to_string())
+            });
             ResourceHierarchy {
                 child_resource_type: managed_type.clone(),
                 parent_resource_type: parent_type,

@@ -31,13 +31,17 @@ fn generate_module_header(service: &ServiceHandler<'_>) -> String {
     let mut lines = vec![
         format!("//! Handler trait for [`{}`].", service.plan.handler_name),
         "//!".to_string(),
-        "//! Implement this trait to provide a custom backend for this service.".to_string(),
-        "//! Register your implementation with the generated route setup functions.".to_string(),
+        "//! Implement this trait to provide a custom backend for this service, then mount the"
+            .to_string(),
+        "//! generated handler functions (in the sibling `server` module) onto an `axum::Router`"
+            .to_string(),
+        "//! with your implementation as state.".to_string(),
         "//!".to_string(),
         "//! # Composability".to_string(),
         "//!".to_string(),
         "//! A single struct can implement multiple handler traits to serve multiple".to_string(),
-        "//! services. Use [`axum::Router::merge`] to compose routers together.".to_string(),
+        "//! services. Use [`axum::Router::merge`] to compose per-service routers together."
+            .to_string(),
     ];
     if let Some(doc) = service.plan.documentation.as_deref() {
         lines.push("//!".to_string());

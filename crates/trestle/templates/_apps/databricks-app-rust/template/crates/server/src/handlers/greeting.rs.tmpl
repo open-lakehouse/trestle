@@ -2,9 +2,10 @@
 //! real handlers; the pattern is the same:
 //!
 //! 1. Define your RPCs in `proto/{{ project_name | snake_case }}/v1/service.proto`.
-//! 2. Run `just regen` to produce the trait + router.
+//! 2. Run `just regen` to produce the handler trait + per-RPC route handler functions.
 //! 3. Implement the trait here.
-//! 4. Wire `crate::gen::server::greeting::server::router(handler)` into `main.rs`.
+//! 4. Mount the generated handler functions onto an `axum::Router` in `main.rs`
+//!    (see `build_router`), with this `Service` as state.
 
 use crate::api::{RequestContext, Result};
 

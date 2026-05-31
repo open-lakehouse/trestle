@@ -349,7 +349,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         python_typings_filename,
     };
 
-    let config = build_config(output, &args, &file_cfg, models_gen_dir);
+    let config = build_config(output, &args, &file_cfg, models_gen_dir)?;
     generate_code(&metadata, &config)?;
 
     Ok(())
@@ -361,41 +361,100 @@ fn build_config(
     args: &GenerateArgs,
     file_cfg: &FileGenerateConfig,
     models_gen_dir: Option<String>,
-) -> CodeGenConfig {
+) -> Result<CodeGenConfig> {
     let has_bindings_output =
         output.python.is_some() || output.node.is_some() || output.node_ts.is_some();
 
-    let bindings = has_bindings_output.then(|| {
+    // Several binding names become Rust identifiers (`format_ident!`) deep in the generators,
+    // which panic on empty input. Validate up front and fail with an actionable error naming
+    // the missing config key, rather than crashing mid-generation.
+    let require = |value: Option<String>, key: &str, section: &str| -> Result<String> {
+        match value {
+            Some(v) if !v.trim().is_empty() => Ok(v),
+            _ => Err(Error::other(format!(
+                "language bindings output was requested but `{section}.{key}` is not set; \
+                 binding names are required and cannot be empty"
+            ))),
+        }
+    };
+
+    let bindings = if has_bindings_output {
         let py = file_cfg.python.as_ref();
         let node = file_cfg.node.as_ref();
         let ts = file_cfg.typescript.as_ref();
-        BindingsConfig {
-            aggregate_client_name: ts
-                .and_then(|c| c.aggregate_client_name.clone())
-                .unwrap_or_default(),
-            client_crate_name: ts
-                .and_then(|c| c.client_crate_name.clone())
-                .unwrap_or_default(),
-            py_error_type: py.and_then(|c| c.error_type.clone()).unwrap_or_default(),
-            py_result_type: py.and_then(|c| c.result_type.clone()).unwrap_or_default(),
-            napi_error_ext_trait: node
-                .and_then(|c| c.napi_error_ext_trait.clone())
-                .unwrap_or_default(),
+
+        // Only enforce names for the outputs actually requested.
+        let (aggregate_client_name, client_crate_name, ts_error_base_class) =
+            if output.node_ts.is_some() {
+                (
+                    require(
+                        ts.and_then(|c| c.aggregate_client_name.clone()),
+                        "aggregate_client_name",
+                        "typescript",
+                    )?,
+                    require(
+                        ts.and_then(|c| c.client_crate_name.clone()),
+                        "client_crate_name",
+                        "typescript",
+                    )?,
+                    require(
+                        ts.and_then(|c| c.error_base_class.clone()),
+                        "error_base_class",
+                        "typescript",
+                    )?,
+                )
+            } else {
+                Default::default()
+            };
+
+        let (py_error_type, py_result_type) = if output.python.is_some() {
+            (
+                require(
+                    py.and_then(|c| c.error_type.clone()),
+                    "error_type",
+                    "python",
+                )?,
+                require(
+                    py.and_then(|c| c.result_type.clone()),
+                    "result_type",
+                    "python",
+                )?,
+            )
+        } else {
+            Default::default()
+        };
+
+        let napi_error_ext_trait = if output.node.is_some() {
+            require(
+                node.and_then(|c| c.napi_error_ext_trait.clone()),
+                "napi_error_ext_trait",
+                "node",
+            )?
+        } else {
+            String::new()
+        };
+
+        Some(BindingsConfig {
+            aggregate_client_name,
+            client_crate_name,
+            py_error_type,
+            py_result_type,
+            napi_error_ext_trait,
             typings_package_filter: py.and_then(|c| c.typings_package_filter.clone()),
-            ts_error_base_class: ts
-                .and_then(|c| c.error_base_class.clone())
-                .unwrap_or_default(),
+            ts_error_base_class,
             ts_error_code_prefix: ts
                 .and_then(|c| c.error_code_prefix.clone())
                 .unwrap_or_default(),
-        }
-    });
+        })
+    } else {
+        None
+    };
 
     let generate_resource_enum = file_cfg.generate_resource_enum.unwrap_or(false);
     let generate_store_integration = file_cfg.generate_store_integration.unwrap_or(false);
     let generate_object_conversions = file_cfg.generate_object_conversions.unwrap_or(false);
 
-    CodeGenConfig {
+    Ok(CodeGenConfig {
         context_type_path: args
             .context_type
             .clone()
@@ -417,5 +476,5 @@ fn build_config(
             .resource_store_crate_name
             .clone()
             .unwrap_or_else(|| "olai_store".to_string()),
-    }
+    })
 }

@@ -243,14 +243,20 @@ fn generate_body_extractions_tokens(method: &MethodPlan, response_type: &Ident) 
             .iter()
             .map(|f| format_ident!("{}", f.name))
             .collect();
+        // A single body field is a plain binding, not a 1-tuple destructure — `(x) = (y)`
+        // trips `unused_parens`.
+        let binding = if field_names.len() == 1 {
+            let name = &field_names[0];
+            quote! { let #name = body.#name; }
+        } else {
+            quote! { let (#(#field_names),*) = (#(body.#field_names),*); }
+        };
         quote! {
             let axum::extract::Json::<#response_type>(body) = body_req
                 .extract()
                 .await
                 .map_err(axum::response::IntoResponse::into_response)?;
-            let (#(#field_names),*) = (
-                #(body.#field_names),*
-            );
+            #binding
         }
     }
 }
@@ -268,9 +274,22 @@ fn path_extractions(method: &MethodHandler<'_>) -> TokenStream {
             .map(|p| method.field_type(&p.field_type, RenderContext::Extractor))
             .collect();
 
+        // A single path param is a scalar, not a 1-tuple: `Path(name)` / `Path<String>`.
+        // Wrapping it in parens (`Path((name))`) trips the `unused_parens` lint.
+        let (pat, ty) = if param_names.len() == 1 {
+            let name = &param_names[0];
+            let ty = &param_types[0];
+            (quote! { #name }, quote! { #ty })
+        } else {
+            (
+                quote! { (#(#param_names),*) },
+                quote! { (#(#param_types),*) },
+            )
+        };
+
         quote! {
-            let axum::extract::Path((#(#param_names),*)) = parts
-                .extract::<axum::extract::Path<(#(#param_types),*)>>()
+            let axum::extract::Path(#pat) = parts
+                .extract::<axum::extract::Path<#ty>>()
                 .await
                 .map_err(axum::response::IntoResponse::into_response)?;
         }
@@ -288,8 +307,10 @@ fn query_extractions(method: &MethodHandler<'_>) -> TokenStream {
             // Use QueryExtractor so enums render as their actual type (not i32):
             // query strings carry variant names as strings, not integers.
             let type_tokens = method.field_type(&p.field_type, RenderContext::QueryExtractor);
-            // Repeated fields need #[serde(default)] so an absent key deserializes as an
-            // empty Vec rather than a deserialization error.
+            // Optional and repeated fields get #[serde(default)] so an absent key deserializes to
+            // None / an empty Vec rather than erroring. Required query params (proto3 fields not
+            // marked `optional`) intentionally have NO default: omitting one is a 400/422, which
+            // is the correct contract for a required parameter.
             if p.is_optional() || p.field_type.is_repeated {
                 quote! { #[serde(default)] #name: #type_tokens }
             } else {
