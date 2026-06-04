@@ -646,7 +646,7 @@ impl ServiceHandler<'_> {
     /// which is not always the same as the service's `base_path` (derived from the service
     /// *name*, e.g. `TagPoliciesService` → `tag_policies`). Use the package's leaf-before-version
     /// segment so the models import path matches where the proto plugin actually wrote the types.
-    /// Falls back to `base_path` when the package is empty or unparseable.
+    /// Falls back to `base_path` when the package is empty or unparsable.
     fn models_segment(&self) -> String {
         let segs: Vec<&str> = self
             .plan
@@ -744,7 +744,7 @@ impl MethodHandler<'_> {
     pub(crate) fn field_type(&self, field_type: &UnifiedType, ctx: RenderContext) -> syn::Type {
         let rust_type = types::unified_to_rust(field_type, ctx);
         // `rust_type` comes from this crate's own proto→Rust mapping, not user input, so an
-        // unparseable result is a bug in `unified_to_rust`. Panic with the offending string so
+        // unparsable result is a bug in `unified_to_rust`. Panic with the offending string so
         // the broken mapping is obvious (the generated-code parse test in
         // `tests/generation_integration.rs` is the broader guard for output validity).
         syn::parse_str(&rust_type).unwrap_or_else(|e| {

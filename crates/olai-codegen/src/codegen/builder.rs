@@ -319,7 +319,7 @@ fn generate_oneof_variant_methods(
             let variant_name = format_ident!("{}", variant.variant_name);
 
             // Derive the Rust parameter type from the UnifiedType abstraction. Hard-fail with
-            // context when the derived type string is unparseable rather than silently
+            // context when the derived type string is unparsable rather than silently
             // substituting `String`, which would generate a wrong-typed builder method.
             let rust_type_str = unified_to_rust(&variant.field_type, RenderContext::Parameter);
             let param_type: syn::Type = syn::parse_str(&rust_type_str).map_err(|source| {
