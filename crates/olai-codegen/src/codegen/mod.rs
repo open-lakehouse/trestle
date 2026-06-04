@@ -640,16 +640,46 @@ impl ServiceHandler<'_> {
         }
     }
 
+    /// The module segment under which this service's generated models live.
+    ///
+    /// Models are emitted per proto *package* (e.g. `unitycatalog.tags.v1` → module `tags`),
+    /// which is not always the same as the service's `base_path` (derived from the service
+    /// *name*, e.g. `TagPoliciesService` → `tag_policies`). Use the package's leaf-before-version
+    /// segment so the models import path matches where the proto plugin actually wrote the types.
+    /// Falls back to `base_path` when the package is empty or unparseable.
+    fn models_segment(&self) -> String {
+        let segs: Vec<&str> = self
+            .plan
+            .package
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .collect();
+        match segs.as_slice() {
+            // `unitycatalog.tags.v1` → `tags`
+            [.., name, version] if is_version_segment(version) => name.to_string(),
+            // `unitycatalog.tags` → `tags`
+            [.., name] => name.to_string(),
+            // No package info: fall back to the service-name-derived base path.
+            _ => self.plan.base_path.clone(),
+        }
+    }
+
     pub(crate) fn models_path(&self) -> syn::Path {
         // Templates (and each service's substitution) are validated by `generate_code` before
         // any `ServiceHandler` is used, so skip the redundant re-validation `new` would do.
-        ModelsPath::from_template(&self.config.models_path_template).resolve(&self.plan.base_path)
+        ModelsPath::from_template(&self.config.models_path_template).resolve(&self.models_segment())
     }
 
     pub(crate) fn models_path_crate(&self) -> syn::Path {
         ModelsPath::from_template(&self.config.models_path_crate_template)
-            .resolve(&self.plan.base_path)
+            .resolve(&self.models_segment())
     }
+}
+
+/// Whether a proto package segment is a version marker like `v1`, `v2beta1`, etc.
+fn is_version_segment(seg: &str) -> bool {
+    seg.strip_prefix('v')
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 pub(crate) struct MethodHandler<'a> {
