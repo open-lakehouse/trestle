@@ -70,7 +70,7 @@ mod tests {
     /// 1.4 — `format_tokens` must hard-fail (with the offending token string) on tokens that
     /// don't parse as a Rust file, rather than silently emitting an empty/comment-only module.
     #[test]
-    fn format_tokens_hard_fails_on_unparseable_tokens() {
+    fn format_tokens_hard_fails_on_unparsable_tokens() {
         // `struct` with no name is a valid `TokenStream` but not a valid Rust file.
         let err = format_tokens(quote! { struct }).expect_err("expected a parse error");
         match err {

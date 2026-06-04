@@ -17,12 +17,24 @@ pub mod strings {
     use super::*;
 
     /// Convert service name to handler trait name
-    /// e.g., "CatalogsService" -> "CatalogHandler"
+    /// e.g., "CatalogsService" -> "CatalogHandler", "TagPoliciesService" -> "TagPolicyHandler"
     pub fn service_to_handler_name(service_name: &str) -> String {
         if let Some(base) = service_name.strip_suffix("Service") {
-            format!("{}Handler", base.trim_end_matches('s'))
+            format!("{}Handler", singularize(base))
         } else {
             format!("{}Handler", service_name)
+        }
+    }
+
+    /// Naive singularization of a PascalCase plural noun.
+    ///
+    /// Handles the common `-ies -> -y` rule (e.g. `TagPolicies` -> `TagPolicy`) before
+    /// falling back to trimming a trailing `s` (e.g. `Catalogs` -> `Catalog`).
+    fn singularize(word: &str) -> String {
+        if let Some(stem) = word.strip_suffix("ies") {
+            format!("{stem}y")
+        } else {
+            word.trim_end_matches('s').to_string()
         }
     }
 
@@ -63,6 +75,10 @@ mod tests {
             assert_eq!(
                 strings::service_to_handler_name("SchemasService"),
                 "SchemaHandler"
+            );
+            assert_eq!(
+                strings::service_to_handler_name("TagPoliciesService"),
+                "TagPolicyHandler"
             );
         }
 

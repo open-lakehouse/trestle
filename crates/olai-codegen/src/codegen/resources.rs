@@ -97,9 +97,22 @@ pub(crate) fn generate_resource_enum(
         // A resource is hierarchical if its descriptor explicitly sets name_field (any value)
         // OR if the message has a full_name field (server-computed dot-joined composite).
         let message_has_full_name = info.fields.iter().any(|f| f.name == "full_name");
+        // The leaf name component. Defaults to `name`, but `google.api.resource.name_field`
+        // may point at a different scalar leaf field (e.g. `tag_key`). `full_name` is excluded:
+        // it denotes a composite full name that is *decomposed* into parents + leaf, not the leaf
+        // itself.
+        let leaf_name = if !rd.name_field.is_empty()
+            && rd.name_field != "full_name"
+            && info.fields.iter().any(|f| f.name == rd.name_field)
+        {
+            rd.name_field.clone()
+        } else {
+            "name".to_string()
+        };
         let path_names = derive_path_names(
             &rd.singular,
             !rd.name_field.is_empty() || message_has_full_name,
+            &leaf_name,
             plan,
             metadata,
         );
@@ -456,6 +469,7 @@ fn is_standard_list_field(name: &str) -> bool {
 fn derive_path_names(
     singular: &str,
     has_full_name_field: bool,
+    leaf_name: &str,
     plan: &GenerationPlan,
     metadata: &CodeGenMetadata,
 ) -> Vec<String> {
@@ -467,7 +481,7 @@ fn derive_path_names(
     });
 
     let Some(service) = service else {
-        return vec!["name".to_string()];
+        return vec![leaf_name.to_string()];
     };
 
     // Find this resource's type string from metadata
@@ -488,7 +502,7 @@ fn derive_path_names(
 
         if !annotation_parents.is_empty() {
             let mut params = annotation_parents;
-            params.push("name".to_string());
+            params.push(leaf_name.to_string());
             return params;
         }
     }
@@ -528,13 +542,14 @@ fn derive_path_names(
     if should_decompose {
         let mut params = parent_params;
         params.push(format!("{singular}_name"));
-        // Replace the final `{singular}_name` with just `name` since the proto field is always `name`.
+        // Replace the final `{singular}_name` with the leaf field name (usually `name`, or the
+        // resource's `name_field` when it diverges, e.g. `tag_key`).
         // last_mut() is infallible: we just pushed an element above.
         let last = params.last_mut().unwrap();
-        *last = "name".to_string();
+        *last = leaf_name.to_string();
         params
     } else {
-        vec!["name".to_string()]
+        vec![leaf_name.to_string()]
     }
 }
 
