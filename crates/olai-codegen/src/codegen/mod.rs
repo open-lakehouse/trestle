@@ -350,6 +350,11 @@ fn generate_node_ts_code(
     let mut files = HashMap::new();
     files.insert("client.ts".to_string(), ts_code);
 
+    // The `models/index.ts` barrel re-exports every service's generated protobuf-es modules so
+    // `client.ts`'s `from "./models"` imports (message and service request/response types) resolve.
+    let models_barrel = node::typescript::generate_models_barrel(&handlers);
+    files.insert("models/index.ts".to_string(), models_barrel);
+
     Ok(GeneratedCode { files })
 }
 

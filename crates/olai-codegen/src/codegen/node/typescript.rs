@@ -158,6 +158,30 @@ function parseNativeError(e: unknown): never {{
     )
 }
 
+/// Generate the `models/index.ts` barrel that re-exports every service's generated protobuf-es
+/// modules (both the message types in `models_pb` and the service request/response types in
+/// `svc_pb`).
+///
+/// `client.ts` imports message and response types from `"./models"`, so this barrel must surface
+/// both `*_pb` files. The path for each is derived from the service's proto package
+/// (e.g. `unitycatalog.tags.v1` → `./gen/unitycatalog/tags/v1/{models_pb,svc_pb}`).
+pub(crate) fn generate_models_barrel(services: &[ServiceHandler<'_>]) -> String {
+    let mut paths: Vec<String> = services
+        .iter()
+        .map(|s| s.plan.package.replace('.', "/"))
+        .sorted()
+        .dedup()
+        .flat_map(|pkg| {
+            [
+                format!("export * from \"./gen/{pkg}/models_pb\";"),
+                format!("export * from \"./gen/{pkg}/svc_pb\";"),
+            ]
+        })
+        .collect();
+    paths.push(String::new()); // trailing newline
+    paths.join("\n")
+}
+
 /// Generate the complete `client.ts` file for all services.
 pub(crate) fn generate_client_ts(services: &[ServiceHandler<'_>]) -> String {
     let bindings = services

@@ -72,6 +72,26 @@ pub(crate) fn generate(
     // --- Methods: collection constructors, flat constructors, resource accessors. ---
     let methods = services.iter().flat_map(|s| service_methods(s));
 
+    // --- Low-level passthrough accessors: `<base>_client(&self) -> <LowLevelClient>`. ---
+    // These hand back a clone of the per-service low-level client so callers (e.g. a hybrid
+    // proxy server, or hand-written ergonomic wrappers) can drive requests directly. Emitted for
+    // every service since the fields are private.
+    let passthrough_accessors = services.iter().map(|s| {
+        let field = format_ident!("{}", s.plan.base_path);
+        let accessor = format_ident!("{}_client", s.plan.base_path);
+        let client_ty = low_level_client_path(s);
+        let doc = format!(
+            "Low-level `{}` client exposing request/response passthrough methods.",
+            s.plan.base_path
+        );
+        quote! {
+            #[doc = #doc]
+            pub fn #accessor(&self) -> #client_ty {
+                self.#field.clone()
+            }
+        }
+    });
+
     let imports = generate_imports(&services);
 
     let tokens = quote! {
@@ -93,6 +113,18 @@ pub(crate) fn generate(
                     #(#field_names,)*
                 }
             }
+
+            /// Create a new aggregate client with no authentication.
+            pub fn new_unauthenticated(base_url: Url) -> Self {
+                Self::new(CloudClient::new_unauthenticated(), base_url)
+            }
+
+            /// Create a new aggregate client authenticating with a bearer token.
+            pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
+                Self::new(CloudClient::new_with_token(token), base_url)
+            }
+
+            #(#passthrough_accessors)*
 
             #(#methods)*
         }
@@ -240,8 +272,15 @@ fn flat_method(method: &MethodHandler<'_>, field: &proc_macro2::Ident) -> TokenS
 /// [`super::python::bindings::generate_resource_accessor_method`].
 ///
 /// Returns `<singular>(<params>: impl Into<String>...) -> <Singular>Client`, constructing the
-/// hand-written scoped client. When the resource has a composite `name_field` and multiple params,
-/// also emits `<singular>_from_full_name` and joins the params with `.` to build the full name.
+/// hand-written scoped client. When the resource is **nested** (its accessor takes parent
+/// components in addition to its own name), also emits `<singular>_from_full_name` and joins the
+/// params with `.` to build the full name.
+///
+/// Nesting is determined from resource analysis: `derive_resource_accessor_params` returns the
+/// parent chain plus the leaf name, so a `params.len() > 1` means the resource has ancestors and
+/// its full name is splittable. A top-level resource (e.g. catalog, tag policy) has a single name
+/// component with nothing to decompose, so no `from_full_name` accessor is emitted — regardless of
+/// whether it declares a custom `name_field`.
 fn resource_accessor_method(
     service: &ServiceHandler<'_>,
     field: &proc_macro2::Ident,
@@ -260,9 +299,10 @@ fn resource_accessor_method(
         .map(|id| quote! { #id: impl ToString })
         .collect();
 
-    let has_name_field = !resource.descriptor.name_field.is_empty();
+    // A resource is nested when its accessor params include parent components beyond its own name.
+    let is_nested = params.len() > 1;
 
-    if has_name_field && params.len() > 1 {
+    if is_nested {
         let from_full_name = format_ident!("{}_from_full_name", resource.descriptor.singular);
         let format_str: String = std::iter::repeat_n("{}", params.len())
             .collect::<Vec<_>>()
