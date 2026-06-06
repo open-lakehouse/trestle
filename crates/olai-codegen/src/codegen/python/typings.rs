@@ -3,9 +3,9 @@
 use textwrap::{Options, dedent, fill, indent, refill};
 
 use super::{
-    DOCS_TARGET_WIDTH, clean_and_format_description, derive_resource_accessor_params,
-    extract_simple_type_name, is_list_method, python_type_annotation,
-    python_type_annotation_from_ident, resource_pattern_params, sanitize_python_field_name,
+    DOCS_TARGET_WIDTH, clean_and_format_description, extract_simple_type_name, is_list_method,
+    python_type_annotation, python_type_annotation_from_ident, resource_pattern_params,
+    sanitize_python_field_name,
 };
 use crate::analysis::RequestType;
 use crate::codegen::{MethodHandler, ServiceHandler};
@@ -372,7 +372,13 @@ fn generate_resource_accessor_methods_for_typings(
 
         if annotation_match {
             let method_name = &child_resource.descriptor.singular;
-            let accessor_params = derive_resource_accessor_params(other);
+            // `other` is a resource service (it owns `child_resource`), so its accessor params
+            // are always populated.
+            let accessor_params = other
+                .plan
+                .resource_accessor_params
+                .clone()
+                .unwrap_or_default();
             let mut params = vec!["self".to_string()];
             params.extend(accessor_params.iter().map(|p| format!("{}: str", p)));
             let return_type = format!("{}", other.client_type());
@@ -557,7 +563,12 @@ fn generate_main_client_class_typings(
             let resource = service.resource()?;
             let method_name = resource.descriptor.singular.clone();
             let client_name = format!("{}", service.client_type());
-            let pattern_params = derive_resource_accessor_params(service);
+            // Guarded by `resource()?` above, so accessor params are always populated.
+            let pattern_params = service
+                .plan
+                .resource_accessor_params
+                .clone()
+                .unwrap_or_default();
             let mut params = vec!["self".to_string()];
             params.extend(pattern_params.iter().map(|p| format!("{}: str", p)));
 

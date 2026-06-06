@@ -4,9 +4,7 @@ use quote::{format_ident, quote};
 
 use super::{doc_tokens, extract_type_ident, format_tokens};
 use crate::Result;
-use crate::analysis::RequestType;
 use crate::codegen::{MethodHandler, ServiceHandler};
-use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::BaseType;
 
 /// Generate client code for a service
@@ -62,13 +60,7 @@ pub fn client_method(method: MethodHandler<'_>) -> TokenStream {
     let url_formatting = generate_url_formatting(&method, has_query_params);
     let query_handling = generate_query_parameters(&method);
 
-    let body_handling = if matches!(
-        method.plan.request_type,
-        RequestType::Create
-            | RequestType::Update
-            | RequestType::Custom(Pattern::Post(_))
-            | RequestType::Custom(Pattern::Patch(_))
-    ) {
+    let body_handling = if method.plan.has_request_body {
         quote! { .json(request) }
     } else {
         quote! {}

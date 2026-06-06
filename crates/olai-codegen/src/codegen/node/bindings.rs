@@ -5,10 +5,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::format_tokens;
-use super::super::python::derive_resource_accessor_params;
-use crate::analysis::{RequestParam, RequestType};
+use crate::analysis::{EmitShape, RequestParam};
 use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
-use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, RenderContext};
 use crate::utils::strings;
 
@@ -192,69 +190,47 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
 }
 
 /// Emit an instance method for a resource-scoped client. Always [`BindingMode::Scoped`].
+///
+/// Only methods that belong on the scoped client are emitted (see
+/// [`MethodHandler::is_scoped_instance_method`]); the emit shape is chosen from [`EmitShape`].
 fn resource_client_method(method: MethodHandler<'_>) -> Option<TokenStream> {
-    let mode = BindingMode::Scoped;
-    let code = match &method.plan.request_type {
-        RequestType::Get | RequestType::Update => resource_get_update_method_impl(&method, mode),
-        RequestType::Delete => resource_delete_method_impl(&method, mode),
-        // Resource-targeted custom POST/PATCH RPCs (e.g. `POST /catalogs/{name}:rotateToken`)
-        // share the get/update emit shape. Factory-style RPCs without path params are emitted on
-        // the root client instead (`is_collection_method()`), so skip them here.
-        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
-            if !method.is_collection_method() =>
-        {
-            resource_get_update_method_impl(&method, mode)
-        }
-        _ => return None,
-    };
-    Some(code)
+    if !method.is_scoped_instance_method() {
+        return None;
+    }
+    Some(emit_for_shape(&method, BindingMode::Scoped))
 }
 
 /// Emit a method on the root (aggregate) client. See the Python `root_client_method` for the
 /// scoped-vs-flat contract.
 fn root_client_method(method: MethodHandler<'_>, mode: BindingMode) -> Option<TokenStream> {
     match mode {
-        BindingMode::Scoped => collection_client_method(method, mode),
-        BindingMode::Flat => flat_client_method(method),
+        // Scoped services contribute only collection-shaped methods (list / create / factory) to
+        // the root client; other methods (incl. scoped `Custom(Get)`) are not surfaced here.
+        BindingMode::Scoped => {
+            let collection_shaped =
+                matches!(method.emit_shape(), EmitShape::List | EmitShape::Create);
+            (method.is_collection_method() && collection_shaped)
+                .then(|| emit_for_shape(&method, mode))
+        }
+        // Flat (resource-less) services contribute every method, lowered flat.
+        BindingMode::Flat => Some(emit_for_shape(&method, mode)),
     }
 }
 
-/// Emit a collection-style method (list / create / factory) on the root client.
-fn collection_client_method(method: MethodHandler<'_>, mode: BindingMode) -> Option<TokenStream> {
-    if !method.is_collection_method() {
-        return None;
-    }
-    match &method.plan.request_type {
-        RequestType::List => {
-            let batch = collection_list_method_impl(&method, mode);
-            let stream = collection_list_stream_method_impl(&method, mode);
-            Some(quote! { #batch #stream })
-        }
-        RequestType::Create => Some(collection_create_method_impl(&method, mode)),
-        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
-            Some(collection_create_method_impl(&method, mode))
-        }
-        _ => None,
-    }
-}
-
-/// Emit a method for a resource-less service on the root client, lowered [`BindingMode::Flat`].
-fn flat_client_method(method: MethodHandler<'_>) -> Option<TokenStream> {
-    let mode = BindingMode::Flat;
-    let code = match &method.plan.request_type {
-        RequestType::List => {
-            let batch = collection_list_method_impl(&method, mode);
-            let stream = collection_list_stream_method_impl(&method, mode);
+/// Emit a method in the given mode, dispatching purely on its [`EmitShape`]. Single dispatch point
+/// replacing the per-(scoped/collection/flat) `match request_type` arms; a List method emits both
+/// the batch and streaming variants (the Node-specific shape).
+fn emit_for_shape(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    match method.emit_shape() {
+        EmitShape::List => {
+            let batch = collection_list_method_impl(method, mode);
+            let stream = collection_list_stream_method_impl(method, mode);
             quote! { #batch #stream }
         }
-        RequestType::Create | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
-            collection_create_method_impl(&method, mode)
-        }
-        RequestType::Get | RequestType::Update => resource_get_update_method_impl(&method, mode),
-        RequestType::Delete => resource_delete_method_impl(&method, mode),
-        RequestType::Custom(_) => resource_get_update_method_impl(&method, mode),
-    };
-    Some(code)
+        EmitShape::Create => collection_create_method_impl(method, mode),
+        EmitShape::GetUpdate => resource_get_update_method_impl(method, mode),
+        EmitShape::Delete => resource_delete_method_impl(method, mode),
+    }
 }
 
 fn collection_list_method_impl(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
@@ -429,39 +405,27 @@ fn resource_delete_method_impl(method: &MethodHandler<'_>, mode: BindingMode) ->
 }
 
 fn resource_method_parameters(method: &MethodHandler<'_>, mode: BindingMode) -> Vec<TokenStream> {
-    // Scoped clients already hold the path params; flat (root-client) methods must accept them.
-    let drop_path = mode == BindingMode::Scoped;
-    method
-        .required_parameters()
-        .chain(method.optional_parameters())
-        .filter(|field| !(drop_path && field.is_path_param()))
-        .filter(|field| is_napi_supported(field) || is_required_message_body(field))
-        .map(|p| {
-            let param_name = p.field_ident();
-            if is_required_message_body(p) {
-                // Message bodies cross the NAPI boundary as serialized bytes (decoded below).
-                quote! { #param_name: napi::bindgen_prelude::Buffer }
-            } else {
-                let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
-                quote! { #param_name: #rust_type }
-            }
-        })
-        .collect()
+    napi_param_defs(method, mode)
 }
 
-fn collection_method_parameters(method: &MethodHandler<'_>, is_list: bool) -> Vec<TokenStream> {
+fn collection_method_parameters(method: &MethodHandler<'_>, _is_list: bool) -> Vec<TokenStream> {
+    napi_param_defs(method, BindingMode::Flat)
+}
+
+/// Render the NAPI method param defs from the shared [`MethodHandler::param_plan`], then apply the
+/// NAPI-specific capability filter (drop params NAPI can't pass, except required message bodies,
+/// which cross as a `Buffer`). Path/`page_token` filtering already happened in `param_plan`.
+fn napi_param_defs(method: &MethodHandler<'_>, mode: BindingMode) -> Vec<TokenStream> {
     method
-        .required_parameters()
-        .chain(method.optional_parameters())
-        .filter(|p| !(is_list && p.name() == "page_token"))
+        .param_plan(mode)
+        .into_iter()
         // Keep NAPI-native params and required message bodies (passed as a `Buffer`); drop other
         // unsupported params (e.g. optional message setters, which stay codegen-omitted for now).
         .filter(|p| is_napi_supported(p) || is_required_message_body(p))
         .map(|p| {
             let param_name = p.field_ident();
             if is_required_message_body(p) {
-                // Protobuf message bodies cross the NAPI boundary as serialized bytes; the binding
-                // decodes them below. (See `inner_resource_client_call`.)
+                // Message bodies cross the NAPI boundary as serialized bytes (decoded below).
                 quote! { #param_name: napi::bindgen_prelude::Buffer }
             } else {
                 let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
@@ -579,32 +543,22 @@ fn generate_builder_pattern(method: &MethodHandler<'_>, is_list: bool) -> Vec<To
 }
 
 fn generate_resource_accessor_method(service: &ServiceHandler<'_>) -> Option<TokenStream> {
-    if service.plan.managed_resources.is_empty() {
-        return None;
-    }
-
-    // managed_resources is non-empty (checked above), so resource() is always Some here.
-    let resource = service.resource().unwrap();
-    let method_name = format_ident!("{}", resource.descriptor.singular);
+    let spec = service.accessor_spec()?;
+    let method_name = format_ident!("{}", spec.singular);
     let client_name = format_ident!("Napi{}", service.client_type().to_string());
 
-    let params = derive_resource_accessor_params(service);
-
-    let param_idents: Vec<_> = params.iter().map(|p| format_ident!("{}", p)).collect();
+    let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
     let param_list = param_idents
         .iter()
         .map(|id| quote! { #id: String })
         .collect::<Vec<_>>();
 
-    // When the resource uses a composite `full_name` (name_field is set and there are multiple
-    // decomposed params), the underlying Rust client accessor takes a single `full_name` string.
-    // Join the decomposed params with a `.` separator and call `{method}_from_full_name`.
-    let has_name_field = !resource.descriptor.name_field.is_empty();
-    let from_full_name_method = format_ident!("{}_from_full_name", resource.descriptor.singular);
-    let method_call = if has_name_field && params.len() > 1 {
-        let format_str: String = std::iter::repeat_n("{}", params.len())
-            .collect::<Vec<_>>()
-            .join(".");
+    // A nested resource has a composite `full_name`; the underlying Rust client accessor takes a
+    // single `full_name` string, so join the decomposed params with `.` and call
+    // `{method}_from_full_name`.
+    let method_call = if spec.nested {
+        let from_full_name_method = format_ident!("{}_from_full_name", spec.singular);
+        let format_str = spec.join_format();
         quote! {
             #[napi]
             pub fn #method_name(&self, #(#param_list),*) -> #client_name {

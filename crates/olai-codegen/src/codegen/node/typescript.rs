@@ -6,10 +6,8 @@
 use convert_case::{Case, Casing};
 use itertools::Itertools;
 
-use super::super::python::derive_resource_accessor_params;
-use crate::analysis::{RequestParam, RequestType};
+use crate::analysis::{EmitShape, RequestParam, RequestType};
 use crate::codegen::{BindingMode, BindingsConfig, MethodHandler, ServiceHandler};
-use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, unified_to_typescript};
 
 /// Format optional documentation as a JSDoc comment block.
@@ -412,6 +410,8 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
 
     let mut methods = String::new();
 
+    // The TS scoped class surfaces only the standard instance verbs (get/update/delete). Other
+    // methods (collection methods, resource-targeted customs) live on the aggregate client.
     for method in service.methods() {
         match &method.plan.request_type {
             RequestType::Get => {
@@ -452,13 +452,56 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
     ))
 }
 
-/// Whether the path-param filter should drop path params for this mode.
+/// The required/optional param split for an instance-style (get/update/delete) TS method, using the
+/// shared [`MethodHandler::param_plan_split`] for path/`page_token` filtering plus the NAPI
+/// capability filter. Required params keep message bodies (passed as bytes); optional params don't.
+fn ts_param_split<'a>(
+    method: &'a MethodHandler<'a>,
+    mode: BindingMode,
+) -> (Vec<&'a RequestParam>, Vec<&'a RequestParam>) {
+    let (required, optional) = method.param_plan_split(mode);
+    (
+        ts_capability_filter(required, true),
+        ts_capability_filter(optional, false),
+    )
+}
+
+/// The required/optional param split for a collection-style (list/create) TS method.
 ///
-/// [`BindingMode::Scoped`] methods live on a resource-scoped client that already holds the path
-/// params, so they are omitted from the signature. [`BindingMode::Flat`] methods live on the root
-/// client and must accept and forward every param, including path params.
-fn drops_path(mode: BindingMode) -> bool {
-    mode == BindingMode::Scoped
+/// These helpers historically take an explicit `drop_path` flag (the scoped aggregate path passes
+/// `true`, the flat path `false`) and filter `page_token` only on list methods, so we apply those
+/// flags directly here rather than going through `param_plan_split` — preserving the TS-specific
+/// behavior exactly. The NAPI capability filter is shared via [`ts_capability_filter`].
+fn ts_collection_param_split<'a>(
+    method: &'a MethodHandler<'a>,
+    drop_path: bool,
+    drop_page_token: bool,
+) -> (Vec<&'a RequestParam>, Vec<&'a RequestParam>) {
+    let required = method
+        .required_parameters()
+        .filter(|p| !(drop_path && p.is_path_param()))
+        .collect();
+    let optional = method
+        .optional_parameters()
+        .filter(|p| !(drop_path && p.is_path_param()))
+        .filter(|p| !(drop_page_token && p.name() == "page_token"))
+        .collect();
+    (
+        ts_capability_filter(required, true),
+        ts_capability_filter(optional, false),
+    )
+}
+
+/// Apply the NAPI capability filter shared by the Node and TS bindings: drop params NAPI can't pass.
+/// Required params additionally keep message bodies (which cross as serialized bytes).
+fn ts_capability_filter(
+    params: Vec<&RequestParam>,
+    keep_message_bodies: bool,
+) -> Vec<&RequestParam> {
+    params
+        .into_iter()
+        .filter(|p| is_napi_supported(p) || (keep_message_bodies && is_required_message_body(p)))
+        .collect()
 }
 
 /// The TS method name and the native (NAPI) call name for a get/update/delete-style method.
@@ -505,21 +548,9 @@ fn generate_instance_returning_method(
 ) -> String {
     let schema_name = format!("{}Schema", type_name);
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let drop_path = drops_path(mode);
     let (ts_name, native_name) = instance_method_names(method, mode, verb);
 
-    let required_params: Vec<&RequestParam> = method
-        .required_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param())
-                && (is_napi_supported(p) || is_required_message_body(p))
-        })
-        .collect();
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
-        .collect();
-
+    let (required_params, optional_params) = ts_param_split(method, mode);
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
     let MethodCallSpec {
         full_param_list,
@@ -540,21 +571,9 @@ fn generate_instance_returning_method(
 
 fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let drop_path = drops_path(mode);
     let (ts_name, native_name) = instance_method_names(method, mode, "delete");
 
-    let required_params: Vec<&RequestParam> = method
-        .required_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param())
-                && (is_napi_supported(p) || is_required_message_body(p))
-        })
-        .collect();
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
-        .collect();
-
+    let (required_params, optional_params) = ts_param_split(method, mode);
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
     let MethodCallSpec {
         full_param_list,
@@ -581,28 +600,25 @@ fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode
 /// list/stream, create-with-return (or void), get/update-style returning, or delete (void).
 fn generate_flat_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> String {
     let mode = BindingMode::Flat;
-    match &method.plan.request_type {
-        RequestType::List => {
+    // Flat methods never drop path params (the root client passes everything).
+    match method.emit_shape() {
+        EmitShape::List => {
             let mut out = generate_collection_list_method(service, method, false);
             out.push_str(&generate_collection_list_stream_method(
                 service, method, false,
             ));
             out
         }
-        RequestType::Create | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
-            generate_collection_create_method(service, method, false)
-        }
-        RequestType::Delete => generate_resource_delete_method(method, mode),
-        // Get / Update, and any remaining custom RPC on a resource-less service: forward all params
-        // and decode the typed response. An `Empty`-returning RPC produces a `Promise<void>`.
-        RequestType::Get | RequestType::Update | RequestType::Custom(_) => {
-            match method.output_type() {
-                Some(output_type) => {
-                    generate_resource_get_method(method, &output_type.to_string(), mode)
-                }
-                None => generate_resource_delete_method(method, mode),
+        EmitShape::Create => generate_collection_create_method(service, method, false),
+        EmitShape::Delete => generate_resource_delete_method(method, mode),
+        // Get / Update / resource-targeted custom: forward all params and decode the typed response.
+        // An `Empty`-returning RPC produces a `Promise<void>`.
+        EmitShape::GetUpdate => match method.output_type() {
+            Some(output_type) => {
+                generate_resource_get_method(method, &output_type.to_string(), mode)
             }
-        }
+            None => generate_resource_delete_method(method, mode),
+        },
     }
 }
 
@@ -767,19 +783,7 @@ fn generate_collection_list_method(
     let item_type_name = items_field.unified_type.type_ident().to_string();
     let schema_name = format!("{}Schema", item_type_name);
 
-    let required_params: Vec<&RequestParam> = method
-        .required_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param())
-                && (is_napi_supported(p) || is_required_message_body(p))
-        })
-        .collect();
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param()) && p.name() != "page_token" && is_napi_supported(p)
-        })
-        .collect();
+    let (required_params, optional_params) = ts_collection_param_split(method, drop_path, true);
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
     let MethodCallSpec {
@@ -822,19 +826,7 @@ fn generate_collection_list_stream_method(
     let item_type_name = items_field.unified_type.type_ident().to_string();
     let schema_name = format!("{}Schema", item_type_name);
 
-    let required_params: Vec<&RequestParam> = method
-        .required_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param())
-                && (is_napi_supported(p) || is_required_message_body(p))
-        })
-        .collect();
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param()) && p.name() != "page_token" && is_napi_supported(p)
-        })
-        .collect();
+    let (required_params, optional_params) = ts_collection_param_split(method, drop_path, true);
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
     let MethodCallSpec {
@@ -870,17 +862,7 @@ fn generate_collection_create_method(
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let method_name = method.binding_method_name_str().to_case(Case::Camel);
 
-    let required_params: Vec<&RequestParam> = method
-        .required_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param())
-                && (is_napi_supported(p) || is_required_message_body(p))
-        })
-        .collect();
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
-        .collect();
+    let (required_params, optional_params) = ts_collection_param_split(method, drop_path, false);
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
     let MethodCallSpec {
@@ -904,18 +886,7 @@ fn generate_void_create_method(method: &MethodHandler<'_>, drop_path: bool) -> S
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let method_name = method.binding_method_name_str().to_case(Case::Camel);
 
-    let required_params: Vec<&RequestParam> = method
-        .required_parameters()
-        .filter(|p| {
-            !(drop_path && p.is_path_param())
-                && (is_napi_supported(p) || is_required_message_body(p))
-        })
-        .collect();
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
-        .collect();
-
+    let (required_params, optional_params) = ts_collection_param_split(method, drop_path, false);
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
     let MethodCallSpec {
         full_param_list,
@@ -935,24 +906,21 @@ fn generate_void_create_method(method: &MethodHandler<'_>, drop_path: bool) -> S
 }
 
 fn generate_resource_accessor(service: &ServiceHandler<'_>) -> Option<String> {
-    if service.plan.managed_resources.is_empty() {
-        return None;
-    }
-
-    // managed_resources is non-empty (checked above), so resource() is always Some here.
-    let resource = service.resource().unwrap();
-    let method_name = resource.descriptor.singular.to_case(Case::Camel);
+    let spec = service.accessor_spec()?;
+    let method_name = spec.singular.to_case(Case::Camel);
     let client_type = service.client_type().to_string();
 
-    let params = derive_resource_accessor_params(service);
-
-    let param_list = params
+    // TS forwards every param to the NAPI accessor, which performs any full-name join internally —
+    // so the TS layer doesn't branch on `spec.nested`, it just passes the params through.
+    let param_list = spec
+        .params
         .iter()
         .map(|p| format!("{}: string", p.to_case(Case::Camel)))
         .collect::<Vec<_>>()
         .join(", ");
 
-    let arg_list = params
+    let arg_list = spec
+        .params
         .iter()
         .map(|p| p.to_case(Case::Camel))
         .collect::<Vec<_>>()

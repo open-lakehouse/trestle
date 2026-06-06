@@ -151,23 +151,62 @@ handles gRPC-transcoding placeholder syntax:
   semantics is a future refinement.
 - Dotted nested path placeholders (above).
 
-## Deferred refactor (next step)
+## IR enrichment (done)
 
-This pass fixed the bindings without touching the analysis IR. The cleaner long-term
-shape, informed by the above:
+The "deferred refactor" below has largely landed. Method *intent* used to be re-derived
+from the CRUD `RequestType` enum (plus method-name heuristics) at ~15 emit sites across the
+Rust emitters and the three language bindings, and those derivations had drifted. Intent is
+now computed **once** in `analysis/` and consumed by every emitter:
 
-1. **Make resource and method-shape orthogonal in the IR.** Today method intent is
-   re-derived from the CRUD `RequestType` enum at multiple emitter sites. Introduce a
-   derived `MethodShape { CollectionScoped, InstanceScoped, Unbound }` on `MethodPlan`,
-   consumed by the bindings, so the scoped/flat decision and the collection/instance
-   decision are explicit rather than re-inferred per emitter.
-2. **Reduce `ManagedResource` to a presentation concern.** The flat model is the base;
-   resource scoping is a convenience layer applied on top when a `google.api.resource`
-   is present — not a load-bearing IR concept.
-3. **Classify resource-less standard verbs.** Allow List/Get/Delete classification
-   without a `google.api.resource` (e.g. from HTTP method + path shape) so resource-less
-   collections can get streamed list semantics where appropriate.
-4. **Config escape hatch — only if needed.** If a real API needs naming/grouping/scoping
-   that annotations can't express, add a `service_overrides` block to the codegen config.
-   Don't build it speculatively; annotations (resource, http, gnostic operation) cover
-   the cases seen so far.
+- **Derived intent fields on `MethodPlan`** (`analysis/types.rs`), computed in `analyze_method` /
+  `analyze_service`:
+  - `MethodShape { CollectionScoped, InstanceScoped, Unbound }` — where a method sits relative
+    to a resource, folding the old `is_collection_method()` + `BindingMode` logic into one field.
+  - `has_request_body`, `needs_request_parts`, `scoped_verb` — scalars that replace the
+    `RequestType` re-matching in `client.rs` (body attach), `server.rs` (extractor selection +
+    `RequestPartsExt` import), and `MethodPlan::resource_client_method` (scoped verb).
+- **`EmitShape { List, Create, GetUpdate, Delete }`** (`analysis::emit_shape`) is the single
+  source for the per-binding emit dispatch. Python/Node/TypeScript each used to re-`match
+  request_type` to pick a list/create/get-update/delete shape; they now branch on
+  `MethodHandler::emit_shape()`, with emittability guards (`is_scoped_instance_method`, the
+  collection-shape check on the root client) preserving the exact prior per-client surface.
+- **Name heuristics in one place.** The `List`/`Generate` proto-name conventions live only in
+  `analysis::is_collection_method`; emitters call it rather than re-implementing the prefix checks.
+- **Resource accessor params on `ServicePlan`.** `resource_accessor_params` is derived once
+  (Phase 2 of `analyze_metadata`) and rendered by all four accessor emitters (Rust aggregate +
+  Python + Node + TypeScript) via the shared `AccessorSpec`, replacing the old
+  `derive_resource_accessor_params` that was called at four emit sites with a now-converged
+  nesting rule (`params.len() > 1`).
+- **Shared param filtering.** `MethodHandler::param_plan{,_split}` apply the drop-path / drop-
+  `page_token` filtering once; the per-language emitters render the result and layer only their
+  language-required transforms (pyo3 signature, NAPI capability filter + `Buffer`, TS camelCase).
+
+**Bug fixed in passing:** the accessor heuristic used to scoop standard AIP-132 pagination fields
+(`page_token`, `max_results`, …) into a flat resource's accessor params (e.g.
+`catalog(page_token, catalog_name)`). The single derivation now excludes them via
+`analysis::is_standard_list_field` (shared with the resource-enum path), so a flat resource yields
+`catalog(catalog_name)`.
+
+**Determinism fix:** `analyze_metadata` now sorts services by name before building plans;
+previously the `HashMap` iteration order made emitted module declarations non-reproducible.
+
+**Regression oracle:** `tests/golden_integration.rs` snapshots the full generated tree (Rust +
+Python + Node + TypeScript) for the proto fixtures and diffs byte-for-byte against committed
+golden files. Re-bless intended output changes with
+`BLESS=1 cargo test -p olai-codegen --test golden_integration`.
+
+### Evaluated, not done
+
+- **`OutputShape` enum.** Considered, but the Empty/response/streamed-item handling is already DRY:
+  every path funnels through `MethodHandler::output_message()` (the single `Empty` detection point)
+  via `output_type()` / `output_type_or_unit()` / `has_response` / `list_output_field()`. There is
+  no re-derived logic to collapse, so an enum would be churn without benefit.
+- **Classify resource-less standard verbs.** A resource-less `ListTagAssignments` is still
+  `RequestType::Custom` (List/Get/Delete classification requires `google.api.resource`), and the
+  flat emitters return the full response message rather than a streamed item list. Giving
+  resource-less collections streamed semantics remains a future refinement.
+- **Reduce `ManagedResource` to a presentation concern** — `MethodShape` makes the scoped/flat
+  decision explicit, but `ManagedResource` is still the load-bearing source of resource presence;
+  fully demoting it to presentation is not yet done.
+- **Config escape hatch (`service_overrides`)** — still not needed; annotations (resource, http,
+  gnostic operation) cover every case seen so far. Don't build it speculatively.

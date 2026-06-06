@@ -65,13 +65,36 @@ pub(crate) enum BindingMode {
     Flat,
 }
 
+/// Language-agnostic description of a service's resource accessor method on the aggregate client.
+///
+/// Computed once from the IR (`ServicePlan::resource_accessor_params`) and rendered by each language
+/// emitter, so the param list and nested-vs-flat decision are shared by construction.
+pub(crate) struct AccessorSpec {
+    /// The resource singular, used as the accessor method name (e.g. `catalog`).
+    pub(crate) singular: String,
+    /// The ordered accessor params (ancestors + `<singular>_name` leaf), e.g.
+    /// `["catalog_name", "schema_name"]` or `["name"]`.
+    pub(crate) params: Vec<String>,
+    /// Whether the resource is nested (has parent components); its full name is the dot-joined
+    /// params and the accessor delegates through a `<singular>_from_full_name` helper.
+    pub(crate) nested: bool,
+}
+
+impl AccessorSpec {
+    /// The `format!` template for joining the params into a composite full name
+    /// (e.g. `"{}.{}"` for two params). Only meaningful when [`Self::nested`] is true.
+    pub(crate) fn join_format(&self) -> String {
+        std::iter::repeat_n("{}", self.params.len())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
 impl MethodPlan {
     pub(crate) fn resource_client_method(&self) -> Ident {
-        match self.request_type {
-            RequestType::Get => format_ident!("get"),
-            RequestType::Update => format_ident!("update"),
-            RequestType::Delete => format_ident!("delete"),
-            _ => format_ident!("{}", self.handler_function_name),
+        match &self.scoped_verb {
+            Some(verb) => format_ident!("{}", verb),
+            None => format_ident!("{}", self.handler_function_name),
         }
     }
 
@@ -680,6 +703,27 @@ impl ServiceHandler<'_> {
         }
     }
 
+    /// The language-agnostic spec for this service's resource accessor on the aggregate client, or
+    /// `None` for resource-less services.
+    ///
+    /// All four accessor emitters (Rust aggregate, Python, Node, TypeScript) render from this single
+    /// spec rather than re-deriving the param list and nesting decision, which previously diverged
+    /// between the Rust aggregate and the bindings.
+    pub(crate) fn accessor_spec(&self) -> Option<AccessorSpec> {
+        let resource = self.resource()?;
+        let params = self.plan.resource_accessor_params.clone()?;
+        // A resource is nested when its accessor params include parent components beyond its own
+        // name; its full name is then the dot-joined components. This is the single, converged
+        // nesting rule — previously the Rust aggregate used `len > 1` while Python/Node also gated
+        // on `name_field`, which could disagree.
+        let nested = params.len() > 1;
+        Some(AccessorSpec {
+            singular: resource.descriptor.singular.clone(),
+            params,
+            nested,
+        })
+    }
+
     pub(crate) fn methods(&self) -> impl Iterator<Item = MethodHandler<'_>> {
         self.plan.methods.iter().map(|plan| MethodHandler {
             plan,
@@ -753,15 +797,76 @@ pub(crate) struct MethodHandler<'a> {
 
 impl MethodHandler<'_> {
     pub(crate) fn is_collection_method(&self) -> bool {
+        crate::analysis::is_collection_method(
+            &self.plan.request_type,
+            &self.plan.metadata.method_name,
+        )
+    }
+
+    /// The language-agnostic [`EmitShape`] for this method, derived once from its request type and
+    /// name. The Python/Node/TypeScript emitters branch on this instead of each re-matching
+    /// `RequestType`.
+    pub(crate) fn emit_shape(&self) -> crate::analysis::EmitShape {
+        crate::analysis::emit_shape(&self.plan.request_type, self.is_collection_method())
+    }
+
+    /// Whether this method is emitted as an instance method on a resource-scoped client
+    /// (`get`/`update`/`delete` or a resource-targeted custom `POST`/`PATCH`).
+    ///
+    /// This is the exact set the bindings previously matched in their `resource_client_method`
+    /// dispatch: standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
+    /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
+    /// deliberately **not** surfaced on the scoped client, matching prior behavior.
+    pub(crate) fn is_scoped_instance_method(&self) -> bool {
         matches!(
             self.plan.request_type,
-            RequestType::List | RequestType::Create
-        ) || (matches!(self.plan.request_type, RequestType::Custom(Pattern::Get(_)))
-            && self.plan.metadata.method_name.starts_with("List"))
-            || (matches!(
-                self.plan.request_type,
-                RequestType::Custom(Pattern::Post(_))
-            ) && self.plan.metadata.method_name.starts_with("Generate"))
+            RequestType::Get | RequestType::Update | RequestType::Delete
+        ) || (matches!(
+            self.plan.request_type,
+            RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
+        ) && !self.is_collection_method())
+    }
+
+    /// The ordered binding parameter list for `mode`, with shared filtering applied once.
+    ///
+    /// Required params come before optional ones (matching the previous
+    /// `required_parameters().chain(optional_parameters())` order). Filtering reproduces exactly what
+    /// the old per-language `collection_method_parameters` / `resource_method_parameters` did,
+    /// keyed on [`EmitShape`]:
+    ///
+    /// - **collection shapes** (`List`, `Create`): never drop path params (collection methods live
+    ///   on the root client and pass everything); drop `page_token` for `List` (streaming handles
+    ///   pagination).
+    /// - **instance shapes** (`GetUpdate`, `Delete`): drop path params in [`BindingMode::Scoped`]
+    ///   (the scoped client already holds them); never filter `page_token`.
+    ///
+    /// Per-language emitters render the returned `&RequestParam`s (applying their own type mapping /
+    /// capability filters) instead of each re-deriving this filtered list.
+    pub(crate) fn param_plan(&self, mode: BindingMode) -> Vec<&RequestParam> {
+        let (required, optional) = self.param_plan_split(mode);
+        required.into_iter().chain(optional).collect()
+    }
+
+    /// Like [`Self::param_plan`] but keeps the required/optional partition, for emitters (e.g.
+    /// TypeScript) that render the two groups differently (required positional args vs an optional
+    /// `options` object). Both groups have the same shared path/`page_token` filtering applied.
+    pub(crate) fn param_plan_split(
+        &self,
+        mode: BindingMode,
+    ) -> (Vec<&RequestParam>, Vec<&RequestParam>) {
+        use crate::analysis::EmitShape;
+        let shape = self.emit_shape();
+        let is_collection_shape = matches!(shape, EmitShape::List | EmitShape::Create);
+        let drop_path = !is_collection_shape && mode == BindingMode::Scoped;
+        let drop_page_token = shape == EmitShape::List;
+        let keep = |p: &&RequestParam| {
+            let is_dropped_path = drop_path && p.is_path_param();
+            let is_dropped_page_token = drop_page_token && p.name() == "page_token";
+            !is_dropped_path && !is_dropped_page_token
+        };
+        let required = self.required_parameters().filter(keep).collect();
+        let optional = self.optional_parameters().filter(keep).collect();
+        (required, optional)
     }
 
     pub(crate) fn output_message(&self) -> Option<MessageMeta<'_>> {

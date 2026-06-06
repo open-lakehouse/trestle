@@ -276,37 +276,29 @@ fn flat_method(method: &MethodHandler<'_>, field: &proc_macro2::Ident) -> TokenS
 /// components in addition to its own name), also emits `<singular>_from_full_name` and joins the
 /// params with `.` to build the full name.
 ///
-/// Nesting is determined from resource analysis: `derive_resource_accessor_params` returns the
-/// parent chain plus the leaf name, so a `params.len() > 1` means the resource has ancestors and
-/// its full name is splittable. A top-level resource (e.g. catalog, tag policy) has a single name
-/// component with nothing to decompose, so no `from_full_name` accessor is emitted — regardless of
-/// whether it declares a custom `name_field`.
+/// Nesting comes from the shared [`super::AccessorSpec`] (built from
+/// `ServicePlan::resource_accessor_params`): the param list is the parent chain plus the leaf name,
+/// so `params.len() > 1` means the resource has ancestors and its full name is splittable. A
+/// top-level resource (e.g. catalog, tag policy) has a single name component with nothing to
+/// decompose, so no `from_full_name` accessor is emitted. This is the single converged nesting rule
+/// shared by the Rust aggregate and all language bindings.
 fn resource_accessor_method(
     service: &ServiceHandler<'_>,
     field: &proc_macro2::Ident,
 ) -> Option<TokenStream> {
-    if service.plan.managed_resources.is_empty() {
-        return None;
-    }
-    let resource = service.resource().unwrap();
-    let method_name = format_ident!("{}", resource.descriptor.singular);
+    let spec = service.accessor_spec()?;
+    let method_name = format_ident!("{}", spec.singular);
     let client_ty = service.client_type();
 
-    let params = super::python::derive_resource_accessor_params(service);
-    let param_idents: Vec<_> = params.iter().map(|p| format_ident!("{}", p)).collect();
+    let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
     let param_defs: Vec<_> = param_idents
         .iter()
         .map(|id| quote! { #id: impl ToString })
         .collect();
 
-    // A resource is nested when its accessor params include parent components beyond its own name.
-    let is_nested = params.len() > 1;
-
-    if is_nested {
-        let from_full_name = format_ident!("{}_from_full_name", resource.descriptor.singular);
-        let format_str: String = std::iter::repeat_n("{}", params.len())
-            .collect::<Vec<_>>()
-            .join(".");
+    if spec.nested {
+        let from_full_name = format_ident!("{}_from_full_name", spec.singular);
+        let format_str = spec.join_format();
         Some(quote! {
             pub fn #method_name(&self, #(#param_defs),*) -> #client_ty {
                 let full_name = format!(#format_str, #(#param_idents.to_string()),*);

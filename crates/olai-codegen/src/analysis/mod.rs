@@ -49,10 +49,11 @@ use crate::utils::strings;
 
 pub(crate) use types::MethodPlanner;
 pub use types::{
-    BodyField, GenerationPlan, ManagedResource, MethodPlan, PathParam, QueryParam, RequestParam,
-    RequestType, ResourceHierarchy, ServicePlan, SkippedMethod, extract_managed_resources,
-    split_body_fields,
+    BodyField, EmitShape, GenerationPlan, ManagedResource, MethodPlan, MethodShape, PathParam,
+    QueryParam, RequestParam, RequestType, ResourceHierarchy, ServicePlan, SkippedMethod,
+    extract_managed_resources, split_body_fields,
 };
+pub(crate) use types::{emit_shape, is_collection_method};
 
 mod types;
 
@@ -67,20 +68,29 @@ mod types;
 /// 2. Construct a global parent map across all services, then assign depth-sorted hierarchies.
 pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
     // Phase 1: analyze all services without hierarchy.
+    //
+    // `metadata.services` is a `HashMap`, whose iteration order is non-deterministic. Sort by
+    // service name first so the resulting plan order (and thus emitted module declarations and the
+    // global parent map's insertion order) is reproducible across runs.
+    let mut service_infos: Vec<_> = metadata.services.values().collect();
+    service_infos.sort_by(|a, b| a.name.cmp(&b.name));
+
     let mut plans = Vec::new();
     let mut skipped_methods = Vec::new();
-    for service_info in metadata.services.values() {
+    for service_info in service_infos {
         let (plan, skipped) = analyze_service(metadata, service_info)?;
         plans.push(plan);
         skipped_methods.extend(skipped);
     }
 
-    // Phase 2: build the cross-service global parent map, then assign depth-sorted hierarchies.
+    // Phase 2: build the cross-service global parent map, then assign depth-sorted hierarchies
+    // and (once the hierarchy is known) the resource accessor param list.
     let global_map = build_global_parent_map(&plans, metadata);
     let services = plans
         .into_iter()
         .map(|mut plan| {
             plan.hierarchy = derive_ordered_hierarchy(&plan, &global_map, metadata)?;
+            plan.resource_accessor_params = derive_resource_accessor_params(&plan);
             Ok(plan)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -226,6 +236,98 @@ fn resolve_parent_type_from_field(field_name: &str, metadata: &CodeGenMetadata) 
         .map(|rd| rd.r#type.clone())
 }
 
+/// Standard AIP-132 `List` request fields that are never part of a resource's name.
+///
+/// These are pagination/filtering knobs, not parent-hierarchy components. proto3 scalars carry no
+/// presence info, so a required `page_token` looks identical to a real parent name like
+/// `catalog_name` — the heuristic derivation must exclude these by name explicitly, or pagination
+/// fields leak into accessor params (e.g. a flat Catalog getting a bogus `(page_token, name)`).
+pub(crate) fn is_standard_list_field(name: &str) -> bool {
+    matches!(
+        name,
+        "page_token" | "page_size" | "max_results" | "order_by" | "filter"
+    )
+}
+
+/// Derive the ordered ancestor field names for a service's managed resource, *excluding* the
+/// resource's own leaf name. e.g. `["catalog_name"]` for Schema, `[]` for a flat Catalog.
+///
+/// **Annotation-driven path** (preferred): when the service has `hierarchy` entries from
+/// `resource_reference { child_type }` annotations, the parent field names come straight from those
+/// entries (in List-method param order).
+///
+/// **Heuristic fallback** (no annotations): the resource name is composite when either
+/// 1. the descriptor declares a `name_field` (an explicit dot-joined `full_name`), or
+/// 2. the Get method's path param is `"name"` (an opaque full path) *and* the List method has
+///    required string query params that aren't standard pagination fields — those are the parents.
+///
+/// Returns an empty vec for a flat (top-level) resource.
+pub(crate) fn derive_accessor_parent_fields(plan: &ServicePlan) -> Vec<String> {
+    let Some(resource) = plan.managed_resources.first() else {
+        return vec![];
+    };
+
+    // --- Annotation-driven path ---
+    let resource_type = &resource.descriptor.r#type;
+    if !plan.hierarchy.is_empty() && !resource_type.is_empty() {
+        let annotation_parents: Vec<String> = plan
+            .hierarchy
+            .iter()
+            .filter(|h| &h.child_resource_type == resource_type)
+            .map(|h| h.parent_field_name.clone())
+            .collect();
+        if !annotation_parents.is_empty() {
+            return annotation_parents;
+        }
+    }
+
+    // --- Heuristic fallback ---
+    let has_explicit_name_field = !resource.descriptor.name_field.is_empty();
+
+    let get_path_param_name = plan
+        .methods
+        .iter()
+        .find(|m| m.request_type == RequestType::Get)
+        .and_then(|m| m.path_parameters().next().map(|p| p.name.clone()));
+
+    let parent_params: Vec<String> = plan
+        .methods
+        .iter()
+        .find(|m| m.request_type == RequestType::List)
+        .map(|m| {
+            m.parameters
+                .iter()
+                .filter(|p| !p.is_path_param() && !p.is_optional())
+                .filter(|p| matches!(p.field_type().base_type, BaseType::String))
+                .filter(|p| !is_standard_list_field(p.name()))
+                .map(|p| p.name().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let should_decompose = has_explicit_name_field
+        || (get_path_param_name.as_deref() == Some("name") && !parent_params.is_empty());
+
+    if should_decompose {
+        parent_params
+    } else {
+        vec![]
+    }
+}
+
+/// Derive the full resource accessor param list (ancestor fields + the resource's own
+/// `<singular>_name` leaf), or `None` for resource-less services.
+///
+/// Single source of truth consumed by all four accessor emitters (Rust aggregate + Python + Node +
+/// TypeScript). A returned list of length 1 (`["<singular>_name"]`) is a flat resource; length > 1
+/// is nested (its full name is the dot-joined components).
+fn derive_resource_accessor_params(plan: &ServicePlan) -> Option<Vec<String>> {
+    let resource = plan.managed_resources.first()?;
+    let mut params = derive_accessor_parent_fields(plan);
+    params.push(format!("{}_name", resource.descriptor.singular));
+    Some(params)
+}
+
 /// Analyze a single service and create a service plan.
 ///
 /// Returns the plan and a list of methods that were skipped due to incomplete metadata.
@@ -257,6 +359,18 @@ fn analyze_service(
 
     let managed_resources = types::extract_managed_resources(metadata, &method_plans);
 
+    // Second pass: now that we know whether this service manages a resource, classify each method's
+    // shape (collection / instance / unbound). `analyze_method` couldn't do this — it has no view of
+    // the service's resources.
+    let service_has_resource = !managed_resources.is_empty();
+    for plan in &mut method_plans {
+        plan.shape = types::method_shape(
+            &plan.request_type,
+            &plan.metadata.method_name,
+            service_has_resource,
+        );
+    }
+
     Ok((
         ServicePlan {
             service_name: info.name.clone(),
@@ -266,7 +380,8 @@ fn analyze_service(
             methods: method_plans,
             managed_resources,
             documentation: info.documentation.clone(),
-            hierarchy: vec![], // filled in Phase 2 of analyze_metadata
+            hierarchy: vec![],              // filled in Phase 2 of analyze_metadata
+            resource_accessor_params: None, // filled in Phase 2 of analyze_metadata
         },
         skipped,
     ))
@@ -306,6 +421,10 @@ pub(crate) fn analyze_method(
         .chain(body_fields.into_iter().map(Into::into))
         .collect();
 
+    let has_request_body = types::request_has_body(&request_type);
+    let needs_request_parts = types::request_needs_request_parts(&request_type);
+    let scoped_verb = types::scoped_verb(&request_type);
+
     Ok(Some(MethodPlan {
         metadata: method.clone(),
         handler_function_name: method.method_name.to_case(Case::Snake),
@@ -315,6 +434,12 @@ pub(crate) fn analyze_method(
         request_type,
         output_resource_type,
         http_pattern,
+        has_request_body,
+        needs_request_parts,
+        scoped_verb,
+        // Provisional: `shape` depends on the owning service's managed resources, which aren't
+        // known here. `analyze_service` overwrites this once `extract_managed_resources` has run.
+        shape: types::MethodShape::Unbound,
     }))
 }
 
@@ -1120,5 +1245,76 @@ mod tests {
             "catalog_name"
         );
         assert_eq!(table_svc_plan.hierarchy[1].parent_field_name, "schema_name");
+    }
+
+    #[test]
+    fn resource_accessor_params_nested_and_flat() {
+        let (metadata, catalog_svc, schema_svc, table_svc) = make_three_level_metadata();
+        let mut services_map = HashMap::new();
+        services_map.insert("CatalogService".to_string(), catalog_svc);
+        services_map.insert("SchemaService".to_string(), schema_svc);
+        services_map.insert("TableService".to_string(), table_svc);
+        let full_metadata = CodeGenMetadata {
+            messages: metadata.messages,
+            services: services_map,
+            ..Default::default()
+        };
+
+        let plan = analyze_metadata(&full_metadata).unwrap();
+        let params = |name: &str| {
+            plan.services
+                .iter()
+                .find(|s| s.service_name == name)
+                .unwrap()
+                .resource_accessor_params
+                .clone()
+        };
+
+        // Nested resource (annotation-driven): ancestors root-first + own leaf.
+        assert_eq!(
+            params("TableService"),
+            Some(vec![
+                "catalog_name".to_string(),
+                "schema_name".to_string(),
+                "table_name".to_string(),
+            ])
+        );
+        // One ancestor.
+        assert_eq!(
+            params("SchemaService"),
+            Some(vec!["catalog_name".to_string(), "schema_name".to_string()])
+        );
+        // Flat top-level resource: just its own name.
+        assert_eq!(
+            params("CatalogService"),
+            Some(vec!["catalog_name".to_string()])
+        );
+    }
+
+    // The pagination-leak regression (a flat resource's List `page_token`/`max_results` no longer
+    // bleed into its accessor params) is covered end-to-end by the golden snapshot test
+    // (`tests/golden_integration.rs`), whose `example.bin` ListCatalogs request carries those very
+    // fields. `is_standard_list_field` is unit-tested below.
+
+    #[test]
+    fn standard_list_fields_recognized() {
+        for f in [
+            "page_token",
+            "page_size",
+            "max_results",
+            "order_by",
+            "filter",
+        ] {
+            assert!(
+                is_standard_list_field(f),
+                "{f} should be a standard list field"
+            );
+        }
+        for f in ["name", "catalog_name", "schema_name"] {
+            assert!(
+                !is_standard_list_field(f),
+                "{f} should NOT be a standard list field"
+            );
+        }
     }
 }
