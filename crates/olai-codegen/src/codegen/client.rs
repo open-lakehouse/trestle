@@ -108,42 +108,19 @@ fn generate_url_formatting(
     let path = path.trim_start_matches('/');
     let params = method.plan.path_parameters().collect_vec();
 
-    if needs_mut {
-        if params.is_empty() {
-            return quote! {
-                let mut url = self.base_url.join(#path)?;
-            };
-        }
-
-        let (format_string, format_args) = method.plan.http_pattern.to_format_string();
-
-        if format_args.is_empty() {
-            return quote! {
-                let mut url = self.base_url.join(#path)?;
-            };
-        }
-
-        let field_idents: Vec<_> = format_args
-            .iter()
-            .map(|template_param| format_ident!("{}", template_param))
-            .collect();
-        return quote! {
-            let formatted_path = format!(#format_string, #(request.#field_idents),*);
-            let mut url = self.base_url.join(&formatted_path)?;
-        };
-    }
-
-    if params.is_empty() {
-        return quote! {
-            let url = self.base_url.join(#path)?;
-        };
-    }
+    // Only the binding's mutability differs between the two callers.
+    let mut_kw = if needs_mut {
+        quote! { mut }
+    } else {
+        quote! {}
+    };
 
     let (format_string, format_args) = method.plan.http_pattern.to_format_string();
 
-    if format_args.is_empty() {
+    // No path params (or a template with no args) -> direct join; otherwise format then join.
+    if params.is_empty() || format_args.is_empty() {
         quote! {
-            let url = self.base_url.join(#path)?;
+            let #mut_kw url = self.base_url.join(#path)?;
         }
     } else {
         let field_idents: Vec<_> = format_args
@@ -152,7 +129,7 @@ fn generate_url_formatting(
             .collect();
         quote! {
             let formatted_path = format!(#format_string, #(request.#field_idents),*);
-            let url = self.base_url.join(&formatted_path)?;
+            let #mut_kw url = self.base_url.join(&formatted_path)?;
         }
     }
 }

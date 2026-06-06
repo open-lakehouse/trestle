@@ -189,6 +189,7 @@ fn child_nav_method(
     let leaf_ident = format_ident!("{}", leaf);
 
     let parent_args = parent_components.iter().map(|c| quote! { &self.#c });
+    let low_level = child_low_level_ctor(&module, &child_low_level);
     let doc = format!(" Access a `{}` within this resource.", link.child_singular);
 
     Some(quote! {
@@ -197,10 +198,7 @@ fn child_nav_method(
             crate::codegen::#module::#child_scoped::new(
                 #(#parent_args,)*
                 #leaf_ident,
-                crate::codegen::#module::#child_low_level::new(
-                    self.client.client.clone(),
-                    self.client.base_url.clone(),
-                ),
+                #low_level,
             )
         }
     })
@@ -226,41 +224,16 @@ fn child_create_method(
     // Names of the parent's captured components, for matching the child Create builder's params.
     let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
     let required: Vec<&RequestParam> = create.required_parameters().collect();
+    let (new_args, method_param_defs) =
+        render_child_builder_args(&create, &required, &parent_names);
 
-    // The builder's `::new` takes the Create method's required params in order. Classify each as a
-    // parent-component fill or a method argument (see `classify_builder_args`), then render.
-    let mut new_args: Vec<TokenStream> = Vec::new();
-    let mut method_param_defs: Vec<TokenStream> = Vec::new();
-    for (param, source) in required
-        .iter()
-        .zip(classify_builder_args(&required, &parent_names))
-    {
-        match source {
-            BuilderArg::ParentComponent => {
-                let field = format_ident!("{}", param.name());
-                new_args.push(quote! { &self.#field });
-            }
-            BuilderArg::MethodArg => {
-                let ident = param.field_ident();
-                let ty = create.field_type(
-                    param.field_type(),
-                    crate::parsing::types::RenderContext::Constructor,
-                );
-                method_param_defs.push(quote! { #ident: #ty });
-                new_args.push(quote! { #ident });
-            }
-        }
-    }
-
+    let low_level = child_low_level_ctor(&module, &child_low_level);
     let doc = format!(" Create a `{}` within this resource.", link.child_singular);
     Some(quote! {
         #[doc = #doc]
         pub fn #method_name(&self, #(#method_param_defs),*) -> crate::codegen::#module::#builder_ty {
             crate::codegen::#module::#builder_ty::new(
-                crate::codegen::#module::#child_low_level::new(
-                    self.client.client.clone(),
-                    self.client.base_url.clone(),
-                ),
+                #low_level,
                 #(#new_args),*
             )
         }
@@ -287,35 +260,14 @@ fn child_list_method(
     // Match the aggregate's list method name (e.g. `list_schemas`).
     let method_name = list.binding_method_name();
 
-    let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
-    let required: Vec<&RequestParam> = list.required_parameters().collect();
-
     // The builder's `::new` takes the List method's required params in order. Parent-filter params
     // are filled from `self`; the rest (e.g. a required `max_results`) become method args. When the
     // proto marks pagination fields `optional`, they're `with_*` setters and drop out here.
-    let mut new_args: Vec<TokenStream> = Vec::new();
-    let mut method_param_defs: Vec<TokenStream> = Vec::new();
-    for (param, source) in required
-        .iter()
-        .zip(classify_builder_args(&required, &parent_names))
-    {
-        match source {
-            BuilderArg::ParentComponent => {
-                let field = format_ident!("{}", param.name());
-                new_args.push(quote! { &self.#field });
-            }
-            BuilderArg::MethodArg => {
-                let ident = param.field_ident();
-                let ty = list.field_type(
-                    param.field_type(),
-                    crate::parsing::types::RenderContext::Constructor,
-                );
-                method_param_defs.push(quote! { #ident: #ty });
-                new_args.push(quote! { #ident });
-            }
-        }
-    }
+    let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
+    let required: Vec<&RequestParam> = list.required_parameters().collect();
+    let (new_args, method_param_defs) = render_child_builder_args(&list, &required, &parent_names);
 
+    let low_level = child_low_level_ctor(&module, &child_low_level);
     let doc = format!(
         " List `{}` resources within this resource.",
         link.child_singular
@@ -324,10 +276,7 @@ fn child_list_method(
         #[doc = #doc]
         pub fn #method_name(&self, #(#method_param_defs),*) -> crate::codegen::#module::#builder_ty {
             crate::codegen::#module::#builder_ty::new(
-                crate::codegen::#module::#child_low_level::new(
-                    self.client.client.clone(),
-                    self.client.base_url.clone(),
-                ),
+                #low_level,
                 #(#new_args),*
             )
         }
@@ -360,6 +309,57 @@ fn classify_builder_args(required: &[&RequestParam], parent_names: &[String]) ->
             }
         })
         .collect()
+}
+
+/// `crate::codegen::<module>::<LowLevel>::new(self.client.client.clone(), self.client.base_url.clone())`
+/// — the child's low-level client built from this scoped client's cloud client + base URL. Shared by
+/// the child nav/create/list emitters.
+fn child_low_level_ctor(
+    module: &proc_macro2::Ident,
+    child_low_level: &proc_macro2::Ident,
+) -> TokenStream {
+    quote! {
+        crate::codegen::#module::#child_low_level::new(
+            self.client.client.clone(),
+            self.client.base_url.clone(),
+        )
+    }
+}
+
+/// Split a child builder's required `::new` params into the builder's positional `new` args and the
+/// caller-facing method parameter definitions, classifying each via [`classify_builder_args`].
+///
+/// Parent-component params become `&self.<field>`; the rest become `<ident>: <ty>` params (typed via
+/// `method.field_type(.., Constructor)`). Returns `(new_args, method_param_defs)`. Shared by the child
+/// create and list emitters — they differ only in which `MethodHandler` supplies the types.
+fn render_child_builder_args(
+    method: &MethodHandler<'_>,
+    required: &[&RequestParam],
+    parent_names: &[String],
+) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    let mut new_args: Vec<TokenStream> = Vec::new();
+    let mut method_param_defs: Vec<TokenStream> = Vec::new();
+    for (param, source) in required
+        .iter()
+        .zip(classify_builder_args(required, parent_names))
+    {
+        match source {
+            BuilderArg::ParentComponent => {
+                let field = format_ident!("{}", param.name());
+                new_args.push(quote! { &self.#field });
+            }
+            BuilderArg::MethodArg => {
+                let ident = param.field_ident();
+                let ty = method.field_type(
+                    param.field_type(),
+                    crate::parsing::types::RenderContext::Constructor,
+                );
+                method_param_defs.push(quote! { #ident: #ty });
+                new_args.push(quote! { #ident });
+            }
+        }
+    }
+    (new_args, method_param_defs)
 }
 
 /// The struct's captured-component fields (each a `String`).

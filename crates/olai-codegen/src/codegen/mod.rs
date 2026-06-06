@@ -38,6 +38,7 @@ use crate::parsing::types::{self, RenderContext, UnifiedType};
 use crate::parsing::{CodeGenMetadata, MessageField, MessageInfo};
 
 mod aggregate;
+mod bindings;
 mod builder;
 mod client;
 mod config;
@@ -1052,8 +1053,11 @@ impl MethodHandler<'_> {
     }
 }
 
-/// Extract the final type name from a fully qualified protobuf type and convert to Ident
+/// Extract the final type name from a fully qualified protobuf type and convert to Ident.
+///
+/// Thin `Ident` adapter over [`crate::utils::extract_simple_type_name`] — the single source of
+/// truth for last-segment extraction. (Not [`crate::utils::extract_qualified_type_name`], which
+/// parent-prefixes nested types — different behavior.)
 pub(crate) fn extract_type_ident(full_type: &str) -> Ident {
-    let type_name = full_type.split('.').next_back().unwrap_or(full_type);
-    format_ident!("{}", type_name)
+    format_ident!("{}", crate::utils::extract_simple_type_name(full_type))
 }

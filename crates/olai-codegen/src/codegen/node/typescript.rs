@@ -6,9 +6,10 @@
 use convert_case::{Case, Casing};
 use itertools::Itertools;
 
+use super::caps::{is_napi_supported, is_required_message_body, message_type_name};
 use crate::analysis::{EmitShape, RequestParam, RequestType};
 use crate::codegen::{BindingMode, BindingsConfig, MethodHandler, ServiceHandler};
-use crate::parsing::types::{BaseType, unified_to_typescript};
+use crate::parsing::types::unified_to_typescript;
 
 /// Format optional documentation as a JSDoc comment block.
 fn format_jsdoc(documentation: Option<&str>, indent: &str) -> String {
@@ -24,50 +25,6 @@ fn format_jsdoc(documentation: Option<&str>, indent: &str) -> String {
         .map(|l| format!("{}   * {}", indent, l.trim()))
         .collect();
     format!("{}/**\n{}\n{}   */\n", indent, lines.join("\n"), indent)
-}
-
-fn is_napi_supported(param: &RequestParam) -> bool {
-    is_napi_supported_type(&param.field_type().base_type)
-}
-
-/// Whether a param is a required, singular protobuf message — passed to the native binding as
-/// serialized bytes via `toBinary(<Type>Schema, value)` and accepted as a typed object in the TS
-/// method signature. Mirrors the NAPI-side `is_required_message_body`.
-fn is_required_message_body(param: &RequestParam) -> bool {
-    !param.is_optional()
-        && !param.field_type().is_repeated
-        && matches!(
-            param.field_type().base_type,
-            BaseType::Message(_) | BaseType::OneOf(_)
-        )
-}
-
-/// The simple message type name of a param's type (e.g. `TagPolicy`), for `toBinary`/type rendering.
-fn message_type_name(param: &RequestParam) -> Option<String> {
-    match &param.field_type().base_type {
-        BaseType::Message(n) | BaseType::OneOf(n) => {
-            Some(crate::utils::extract_simple_type_name(n))
-        }
-        _ => None,
-    }
-}
-
-fn is_napi_supported_type(base_type: &BaseType) -> bool {
-    match base_type {
-        BaseType::String
-        | BaseType::Int32
-        | BaseType::Int64
-        | BaseType::Bool
-        | BaseType::Float32
-        | BaseType::Float64
-        | BaseType::Bytes
-        | BaseType::Unit
-        | BaseType::Enum(_) => true,
-        BaseType::Map(k, v) => {
-            is_napi_supported_type(&k.base_type) && is_napi_supported_type(&v.base_type)
-        }
-        BaseType::Message(_) | BaseType::OneOf(_) => false,
-    }
 }
 
 /// TypeScript error class definitions and `parseNativeError` helper.
