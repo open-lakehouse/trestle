@@ -41,6 +41,26 @@ class S3Config():
     def __init__(self, bucket: str) -> None:
         ...
 
+class Schema():
+    """A Schema is a child resource of a Catalog. This fixture exercises the generated nested resource-
+scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and the cross-module
+model import for the create method's enum parameter (`SchemaType`)."""
+    comment: str
+    created_at: int
+    full_name: str
+    """Dot-joined `catalog.schema` full name."""
+    schema_type: SchemaType
+
+    def __init__(
+
+            self,
+            comment: str,
+            created_at: int,
+            full_name: str,
+            schema_type: SchemaType
+        ) -> None:
+        ...
+
 class StorageConfig():
     azure: Optional[AzureConfig]
     s3: Optional[S3Config]
@@ -69,6 +89,11 @@ class CatalogType(enum.Enum):
     DELTASHARING_CATALOG = "DELTASHARING_CATALOG"
     MANAGED_CATALOG = "MANAGED_CATALOG"
 
+class SchemaType(enum.Enum):
+    EXTERNAL_SCHEMA = "EXTERNAL_SCHEMA"
+    MANAGED_SCHEMA = "MANAGED_SCHEMA"
+    SCHEMA_TYPE_UNSPECIFIED = "SCHEMA_TYPE_UNSPECIFIED"
+
 class CatalogClient():
     def delete(self) -> None:
         """
@@ -88,6 +113,36 @@ class CatalogClient():
             The requested resource
         """
         ...
+    def schema(self, catalog_name: str, schema_name: str) -> SchemaClient:
+        ...
+
+class SchemaClient():
+    def delete(self) -> None:
+        """
+        Returns:
+            None
+        """
+        ...
+    def get(self) -> Schema:
+        """
+        Returns:
+            A Schema is a child resource of a Catalog. This fixture exercises the generated
+            nested resource-
+            scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+            the cross-
+            module model import for the create method's enum parameter (`SchemaType`).
+        """
+        ...
+    def update(self, schema: Optional[Schema] = None) -> Schema:
+        """
+        Returns:
+            A Schema is a child resource of a Catalog. This fixture exercises the generated
+            nested resource-
+            scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+            the cross-
+            module model import for the create method's enum parameter (`SchemaType`).
+        """
+        ...
 
 class ExampleClient():
     def __init__(self, base_url: str, token: Optional[str] = None) -> None:
@@ -96,6 +151,29 @@ class ExampleClient():
         """
         Returns:
             The requested resource
+        """
+        ...
+    def create_schema(
+
+            self,
+            name: str,
+            catalog_name: str,
+            schema_type: SchemaType
+        ) -> Schema:
+        """
+        Args:
+            name: Schema's own name (the new component supplied by the caller).
+            catalog_name: Parent catalog name — filled from the parent `CatalogClient`'s captured component.
+            schema_type: Required enum parameter whose type lives in this (schemas) models module —
+                         exercises the child-model import on the parent's generated `create_schema` method.
+
+
+        Returns:
+            A Schema is a child resource of a Catalog. This fixture exercises the generated
+            nested resource-
+            scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+            the cross-
+            module model import for the create method's enum parameter (`SchemaType`).
         """
         ...
     def create_tag_assignment(
@@ -187,6 +265,23 @@ class ExampleClient():
             List of items
         """
         ...
+    def list_schemas(
+
+            self,
+            catalog_name: str,
+            max_results: int,
+            page_token: str
+        ) -> List[Schema]:
+        """
+        Args:
+            catalog_name: Parent scoping field carrying the child-type reference that makes Schema a child
+                          of Catalog.
+
+
+        Returns:
+            List of items
+        """
+        ...
     def list_tag_assignments(
 
             self,
@@ -220,4 +315,6 @@ class ExampleClient():
         """
         ...
     def catalog(self, catalog_name: str) -> CatalogClient:
+        ...
+    def schema(self, catalog_name: str, schema_name: str) -> SchemaClient:
         ...

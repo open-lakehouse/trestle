@@ -11,19 +11,28 @@
 //! services. Use [`axum::Router::merge`] to compose per-service routers together.
 use async_trait::async_trait;
 use crate::Result;
-use example_common::models::catalog::v1::*;
+use example_common::models::schemas::v1::*;
 #[async_trait]
 pub trait SchemaHandler<Cx = crate::Context>: Send + Sync + 'static {
-    /// Repeated string query param
-    async fn list_by_tags(
+    async fn create_schema(
         &self,
-        request: ListByTagsRequest,
+        request: CreateSchemaRequest,
         context: Cx,
-    ) -> Result<ListByTagsResponse>;
-    /// Enum query param
-    async fn list_by_catalog_type(
+    ) -> Result<Schema>;
+    async fn get_schema(&self, request: GetSchemaRequest, context: Cx) -> Result<Schema>;
+    async fn list_schemas(
         &self,
-        request: ListByCatalogTypeRequest,
+        request: ListSchemasRequest,
         context: Cx,
-    ) -> Result<ListByTagsResponse>;
+    ) -> Result<ListSchemasResponse>;
+    async fn update_schema(
+        &self,
+        request: UpdateSchemaRequest,
+        context: Cx,
+    ) -> Result<Schema>;
+    async fn delete_schema(
+        &self,
+        request: DeleteSchemaRequest,
+        context: Cx,
+    ) -> Result<DeleteSchemaResponse>;
 }

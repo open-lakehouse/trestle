@@ -1,12 +1,13 @@
 // @generated — do not edit by hand.
 use example_common::models::catalog::v1::*;
+use example_common::models::schemas::v1::*;
 use super::builders::*;
 use super::client::CatalogServiceClient;
 /// A client scoped to a single `catalog`.
 #[derive(Clone)]
 pub struct CatalogClient {
-    catalog_name: String,
-    client: CatalogServiceClient,
+    pub(crate) catalog_name: String,
+    pub(crate) client: CatalogServiceClient,
 }
 impl CatalogClient {
     /// Create a client bound to the resource's name components.
@@ -24,5 +25,35 @@ impl CatalogClient {
     }
     pub fn delete(&self) -> DeleteCatalogBuilder {
         DeleteCatalogBuilder::new(self.client.clone(), &self.catalog_name)
+    }
+    /// Access a `schema` within this resource.
+    pub fn schema(
+        &self,
+        schema_name: impl Into<String>,
+    ) -> crate::codegen::schema::SchemaClient {
+        crate::codegen::schema::SchemaClient::new(
+            &self.catalog_name,
+            schema_name,
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.client.clone(),
+                self.client.base_url.clone(),
+            ),
+        )
+    }
+    /// Create a `schema` within this resource.
+    pub fn create_schema(
+        &self,
+        name: impl Into<String>,
+        schema_type: SchemaType,
+    ) -> crate::codegen::schema::CreateSchemaBuilder {
+        crate::codegen::schema::CreateSchemaBuilder::new(
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.client.clone(),
+                self.client.base_url.clone(),
+            ),
+            name,
+            &self.catalog_name,
+            schema_type,
+        )
     }
 }

@@ -2,9 +2,11 @@
 use olai_http::CloudClient;
 use url::Url;
 use crate::codegen::catalog::*;
+use crate::codegen::query::*;
 use crate::codegen::schema::*;
 use crate::codegen::tag_assignments::*;
 use example_common::models::catalog::v1::*;
+use example_common::models::schemas::v1::*;
 use example_common::models::tags::v1::*;
 #[derive(Clone)]
 pub struct ExampleClient {
@@ -37,9 +39,16 @@ impl ExampleClient {
             self.base_url.clone(),
         )
     }
+    ///Low-level `query` client exposing request/response passthrough methods.
+    pub fn query_client(&self) -> crate::codegen::query::QueryClient {
+        crate::codegen::query::QueryClient::new(
+            self.client.clone(),
+            self.base_url.clone(),
+        )
+    }
     ///Low-level `schema` client exposing request/response passthrough methods.
-    pub fn schema_client(&self) -> crate::codegen::schema::SchemaClient {
-        crate::codegen::schema::SchemaClient::new(
+    pub fn schema_client(&self) -> crate::codegen::schema::SchemaServiceClient {
+        crate::codegen::schema::SchemaServiceClient::new(
             self.client.clone(),
             self.base_url.clone(),
         )
@@ -111,7 +120,7 @@ impl ExampleClient {
         max_results: i32,
     ) -> ListByTagsBuilder {
         ListByTagsBuilder::new(
-            crate::codegen::schema::SchemaClient::new(
+            crate::codegen::query::QueryClient::new(
                 self.client.clone(),
                 self.base_url.clone(),
             ),
@@ -129,11 +138,67 @@ impl ExampleClient {
         catalog_type: CatalogType,
     ) -> ListByCatalogTypeBuilder {
         ListByCatalogTypeBuilder::new(
-            crate::codegen::schema::SchemaClient::new(
+            crate::codegen::query::QueryClient::new(
                 self.client.clone(),
                 self.base_url.clone(),
             ),
             catalog_type,
+        )
+    }
+    /// # Arguments
+    ///
+    /// * `name` - Schema's own name (the new component supplied by the caller).
+    /// * `catalog_name` - Parent catalog name — filled from the parent `CatalogClient`'s captured component.
+    /// * `schema_type` - Required enum parameter whose type lives in this (schemas) models module — exercises the
+    /// child-model import on the parent's generated `create_schema` method.
+    pub fn create_schema(
+        &self,
+        name: impl Into<String>,
+        catalog_name: impl Into<String>,
+        schema_type: SchemaType,
+    ) -> CreateSchemaBuilder {
+        CreateSchemaBuilder::new(
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.clone(),
+                self.base_url.clone(),
+            ),
+            name,
+            catalog_name,
+            schema_type,
+        )
+    }
+    /// # Arguments
+    ///
+    /// * `catalog_name` - Parent scoping field carrying the child-type reference that makes Schema a child of Catalog.
+    pub fn list_schemas(
+        &self,
+        catalog_name: impl Into<String>,
+        max_results: i32,
+        page_token: impl Into<String>,
+    ) -> ListSchemasBuilder {
+        ListSchemasBuilder::new(
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.clone(),
+                self.base_url.clone(),
+            ),
+            catalog_name,
+            max_results,
+            page_token,
+        )
+    }
+    /// Access the `schema` resource scoped to the given name.
+    pub fn schema(
+        &self,
+        catalog_name: impl Into<String>,
+        schema_name: impl Into<String>,
+    ) -> SchemaClient {
+        SchemaClient::new(
+            catalog_name,
+            schema_name,
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.clone(),
+                self.base_url.clone(),
+            ),
         )
     }
     /// List assignments for an entity. Path params: entity_type, entity_name.

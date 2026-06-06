@@ -49,9 +49,9 @@ use crate::utils::strings;
 
 pub(crate) use types::MethodPlanner;
 pub use types::{
-    BodyField, EmitShape, GenerationPlan, ManagedResource, MethodPlan, MethodShape, PathParam,
-    QueryParam, RequestParam, RequestType, ResourceHierarchy, ServicePlan, SkippedMethod,
-    extract_managed_resources, split_body_fields,
+    BodyField, ChildLink, EmitShape, GenerationPlan, ManagedResource, MethodPlan, MethodShape,
+    PathParam, QueryParam, RequestParam, RequestType, ResourceHierarchy, ServicePlan,
+    SkippedMethod, extract_managed_resources, split_body_fields,
 };
 pub(crate) use types::{emit_shape, is_collection_method};
 
@@ -86,7 +86,7 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
     // Phase 2: build the cross-service global parent map, then assign depth-sorted hierarchies
     // and (once the hierarchy is known) the resource accessor param list.
     let global_map = build_global_parent_map(&plans, metadata);
-    let services = plans
+    let mut services = plans
         .into_iter()
         .map(|mut plan| {
             plan.hierarchy = derive_ordered_hierarchy(&plan, &global_map, metadata)?;
@@ -94,6 +94,10 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
             Ok(plan)
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // Phase 2b: derive direct children. This needs every service's accessor params (filled above),
+    // so it runs as a separate sub-pass over the now-complete set.
+    assign_direct_children(&mut services);
 
     Ok(GenerationPlan {
         services,
@@ -328,6 +332,47 @@ fn derive_resource_accessor_params(plan: &ServicePlan) -> Option<Vec<String>> {
     Some(params)
 }
 
+/// Populate each service's [`ServicePlan::direct_children`] using the accessor-param prefix relation.
+///
+/// A resource-scoped service C is a *direct child* of resource-scoped service P when C's accessor
+/// params extend P's by exactly one trailing component (P's params are a prefix of C's and
+/// `C.len() == P.len() + 1`). Children are sorted by singular for deterministic output.
+fn assign_direct_children(services: &mut [ServicePlan]) {
+    // Snapshot the (accessor params, base_path, singular) of every resource-scoped service so we can
+    // scan for children while mutating each parent's `direct_children` in place.
+    let candidates: Vec<(Vec<String>, String, String)> = services
+        .iter()
+        .filter_map(|s| {
+            let params = s.resource_accessor_params.clone()?;
+            let singular = s.managed_resources.first()?.descriptor.singular.clone();
+            Some((params, s.base_path.clone(), singular))
+        })
+        .collect();
+
+    for plan in services.iter_mut() {
+        let Some(parent_params) = plan.resource_accessor_params.clone() else {
+            continue;
+        };
+        let mut children: Vec<ChildLink> = candidates
+            .iter()
+            .filter(|(child_params, child_base_path, _)| {
+                *child_base_path != plan.base_path
+                    && child_params.len() == parent_params.len() + 1
+                    && child_params[..parent_params.len()] == parent_params[..]
+            })
+            .map(
+                |(child_params, child_base_path, child_singular)| ChildLink {
+                    child_singular: child_singular.clone(),
+                    child_base_path: child_base_path.clone(),
+                    child_accessor_params: child_params.clone(),
+                },
+            )
+            .collect();
+        children.sort_by(|a, b| a.child_singular.cmp(&b.child_singular));
+        plan.direct_children = children;
+    }
+}
+
 /// Analyze a single service and create a service plan.
 ///
 /// Returns the plan and a list of methods that were skipped due to incomplete metadata.
@@ -382,6 +427,7 @@ fn analyze_service(
             documentation: info.documentation.clone(),
             hierarchy: vec![],              // filled in Phase 2 of analyze_metadata
             resource_accessor_params: None, // filled in Phase 2 of analyze_metadata
+            direct_children: vec![],        // filled in Phase 2b of analyze_metadata
         },
         skipped,
     ))
@@ -1288,6 +1334,61 @@ mod tests {
         assert_eq!(
             params("CatalogService"),
             Some(vec!["catalog_name".to_string()])
+        );
+    }
+
+    #[test]
+    fn direct_children_via_accessor_param_prefix() {
+        let (metadata, catalog_svc, schema_svc, table_svc) = make_three_level_metadata();
+        let mut services_map = HashMap::new();
+        services_map.insert("CatalogService".to_string(), catalog_svc);
+        services_map.insert("SchemaService".to_string(), schema_svc);
+        services_map.insert("TableService".to_string(), table_svc);
+        let full_metadata = CodeGenMetadata {
+            messages: metadata.messages,
+            services: services_map,
+            ..Default::default()
+        };
+
+        let plan = analyze_metadata(&full_metadata).unwrap();
+        let children = |name: &str| -> Vec<String> {
+            plan.services
+                .iter()
+                .find(|s| s.service_name == name)
+                .unwrap()
+                .direct_children
+                .iter()
+                .map(|c| c.child_singular.clone())
+                .collect()
+        };
+
+        // Catalog → Schema (params extend by one); Catalog is NOT a direct parent of Table (extends
+        // by two), so Table must not appear under Catalog.
+        assert_eq!(children("CatalogService"), vec!["schema".to_string()]);
+        // Schema → Table.
+        assert_eq!(children("SchemaService"), vec!["table".to_string()]);
+        // Table is a leaf: no children.
+        assert!(children("TableService").is_empty());
+
+        // The child link carries enough to construct the child clients.
+        let catalog = plan
+            .services
+            .iter()
+            .find(|s| s.service_name == "CatalogService")
+            .unwrap();
+        let schema_link = &catalog.direct_children[0];
+        // base_path comes from the child service name (here `SchemaService` → `schema`).
+        let schema_base_path = plan
+            .services
+            .iter()
+            .find(|s| s.service_name == "SchemaService")
+            .unwrap()
+            .base_path
+            .clone();
+        assert_eq!(schema_link.child_base_path, schema_base_path);
+        assert_eq!(
+            schema_link.child_accessor_params,
+            vec!["catalog_name".to_string(), "schema_name".to_string()]
         );
     }
 

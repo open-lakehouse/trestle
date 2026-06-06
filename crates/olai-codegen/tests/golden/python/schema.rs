@@ -1,0 +1,45 @@
+// @generated — do not edit by hand.
+use std::collections::HashMap;
+use pyo3::prelude::*;
+use example_client::SchemaClient;
+use example_common::models::schemas::v1::*;
+use crate::error::{PyExampleError, PyExampleResult};
+use crate::runtime::get_runtime;
+#[pyclass(name = "SchemaClient")]
+pub struct PySchemaClient {
+    pub(crate) client: SchemaClient,
+}
+#[pymethods]
+impl PySchemaClient {
+    pub fn get(&self, py: Python) -> PyExampleResult<Schema> {
+        let mut request = self.client.get();
+        let runtime = get_runtime(py)?;
+        py.allow_threads(|| {
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(result)
+        })
+    }
+    #[pyo3(signature = (schema = None))]
+    pub fn update(&self, py: Python, schema: Option<Schema>) -> PyExampleResult<Schema> {
+        let mut request = self.client.update();
+        request = request.with_schema(schema);
+        let runtime = get_runtime(py)?;
+        py.allow_threads(|| {
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(result)
+        })
+    }
+    pub fn delete(&self, py: Python) -> PyExampleResult<()> {
+        let mut request = self.client.delete();
+        let runtime = get_runtime(py)?;
+        py.allow_threads(|| {
+            runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(())
+        })
+    }
+}
+impl PySchemaClient {
+    pub fn new(client: SchemaClient) -> Self {
+        Self { client }
+    }
+}

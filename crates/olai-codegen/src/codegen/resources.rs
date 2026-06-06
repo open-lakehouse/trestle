@@ -926,6 +926,7 @@ mod tests {
                 documentation: None,
                 hierarchy: vec![],
                 resource_accessor_params: None,
+                direct_children: vec![],
             }],
             skipped_methods: vec![],
         }

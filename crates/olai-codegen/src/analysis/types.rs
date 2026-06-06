@@ -171,6 +171,30 @@ pub struct ServicePlan {
     /// (Phase 2, after `hierarchy` is populated) so the four accessor emitters — Rust aggregate,
     /// Python, Node, TypeScript — all read the same list instead of each re-deriving it.
     pub resource_accessor_params: Option<Vec<String>>,
+    /// Direct child resources of this service's managed resource, used to generate child-navigation
+    /// accessors (e.g. `catalog.schema(name)`) and child-create methods (e.g. `catalog.create_schema`)
+    /// on the scoped client.
+    ///
+    /// A resource C is a *direct child* of P when C's [`Self::resource_accessor_params`] equals P's
+    /// plus exactly one additional trailing component (P's params are a prefix of C's, and
+    /// `C.len() == P.len() + 1`). Sorted by `child_singular`. Empty for leaf or flat resources.
+    /// Computed in Phase 2 of `analyze_metadata` after every service's accessor params are known.
+    pub direct_children: Vec<ChildLink>,
+}
+
+/// A direct child resource of a parent resource, for generating child-navigation and child-create
+/// methods on the parent's scoped client. See [`ServicePlan::direct_children`].
+#[derive(Debug, Clone)]
+pub struct ChildLink {
+    /// The child resource singular — used as the navigation accessor method name (e.g. `schema`).
+    pub child_singular: String,
+    /// The child service's `base_path` / module segment (e.g. `schemas`), used to reference the
+    /// child's generated clients as `crate::codegen::<base_path>::…`.
+    pub child_base_path: String,
+    /// The child's full accessor params (ancestors + own leaf), e.g. `["catalog_name","schema_name"]`.
+    /// The leading entries equal the parent's accessor params (the prefix relation); the final entry
+    /// is the child's own name component.
+    pub child_accessor_params: Vec<String>,
 }
 
 /// Plan for generating code for a single method

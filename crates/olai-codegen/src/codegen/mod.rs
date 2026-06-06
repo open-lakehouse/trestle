@@ -401,8 +401,9 @@ fn generate_client_code(
         files.insert(format!("{}/builders.rs", service.base_path), builder_code);
 
         // Ergonomic resource-scoped client, when enabled and the service manages a resource.
+        // `plan` is passed so the emitter can resolve child services for navigation/create accessors.
         let has_resource_client = if config.output.generate_resource_clients {
-            resource_client::generate(&handler)?
+            resource_client::generate(&handler, plan)?
                 .map(|code| {
                     files.insert(format!("{}/resource.rs", service.base_path), code);
                 })

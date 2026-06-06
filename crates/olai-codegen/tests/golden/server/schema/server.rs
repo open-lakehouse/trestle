@@ -1,30 +1,66 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
 use crate::Result;
-use example_common::models::catalog::v1::*;
+use example_common::models::schemas::v1::*;
 use super::handler::SchemaHandler;
 use axum::extract::State;
-pub async fn list_by_tags<T, Cx>(
+pub async fn create_schema<T, Cx>(
     State(handler): State<T>,
     context: Cx,
-    request: ListByTagsRequest,
-) -> Result<::axum::Json<ListByTagsResponse>>
+    request: CreateSchemaRequest,
+) -> Result<::axum::Json<Schema>>
 where
     T: SchemaHandler<Cx> + Clone + Send + Sync + 'static,
     Cx: axum::extract::FromRequestParts<T> + Send,
 {
-    let result = handler.list_by_tags(request, context).await?;
+    let result = handler.create_schema(request, context).await?;
     Ok(axum::Json(result))
 }
-pub async fn list_by_catalog_type<T, Cx>(
+pub async fn get_schema<T, Cx>(
     State(handler): State<T>,
     context: Cx,
-    request: ListByCatalogTypeRequest,
-) -> Result<::axum::Json<ListByTagsResponse>>
+    request: GetSchemaRequest,
+) -> Result<::axum::Json<Schema>>
 where
     T: SchemaHandler<Cx> + Clone + Send + Sync + 'static,
     Cx: axum::extract::FromRequestParts<T> + Send,
 {
-    let result = handler.list_by_catalog_type(request, context).await?;
+    let result = handler.get_schema(request, context).await?;
+    Ok(axum::Json(result))
+}
+pub async fn list_schemas<T, Cx>(
+    State(handler): State<T>,
+    context: Cx,
+    request: ListSchemasRequest,
+) -> Result<::axum::Json<ListSchemasResponse>>
+where
+    T: SchemaHandler<Cx> + Clone + Send + Sync + 'static,
+    Cx: axum::extract::FromRequestParts<T> + Send,
+{
+    let result = handler.list_schemas(request, context).await?;
+    Ok(axum::Json(result))
+}
+pub async fn update_schema<T, Cx>(
+    State(handler): State<T>,
+    context: Cx,
+    request: UpdateSchemaRequest,
+) -> Result<::axum::Json<Schema>>
+where
+    T: SchemaHandler<Cx> + Clone + Send + Sync + 'static,
+    Cx: axum::extract::FromRequestParts<T> + Send,
+{
+    let result = handler.update_schema(request, context).await?;
+    Ok(axum::Json(result))
+}
+pub async fn delete_schema<T, Cx>(
+    State(handler): State<T>,
+    context: Cx,
+    request: DeleteSchemaRequest,
+) -> Result<::axum::Json<DeleteSchemaResponse>>
+where
+    T: SchemaHandler<Cx> + Clone + Send + Sync + 'static,
+    Cx: axum::extract::FromRequestParts<T> + Send,
+{
+    let result = handler.delete_schema(request, context).await?;
     Ok(axum::Json(result))
 }

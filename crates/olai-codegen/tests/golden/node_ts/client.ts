@@ -4,21 +4,26 @@ import {
   type Catalog,
   type CatalogToken,
   type DeleteCatalogResponse,
+  type DeleteSchemaResponse,
   type DeleteTagAssignmentResponse,
   type ListByTagsResponse,
   type ListTagAssignmentsResponse,
+  type Schema,
   type TagAssignment,
   CatalogSchema,
   CatalogTokenSchema,
   DeleteCatalogResponseSchema,
+  DeleteSchemaResponseSchema,
   DeleteTagAssignmentResponseSchema,
   ListByTagsResponseSchema,
   ListTagAssignmentsResponseSchema,
+  SchemaSchema,
   TagAssignmentSchema,
 } from "./models";
 import {
   NapiCatalogClient as NativeCatalogClient,
   NapiExampleClient as NativeClient,
+  NapiSchemaClient as NativeSchemaClient,
 } from "./native";
 
 // ── ExampleError error hierarchy ────────────────────────────────────────────────────────
@@ -148,6 +153,34 @@ export class CatalogClient {
 
 }
 
+export class SchemaClient {
+  private readonly inner: NativeSchemaClient;
+
+  /** @internal */
+  constructor(inner: NativeSchemaClient) {
+    this.inner = inner;
+  }
+
+  async get(): Promise<Schema> {
+    try {
+      return fromBinary(SchemaSchema, await this.inner.get());
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+  async update(): Promise<Schema> {
+    try {
+      return fromBinary(SchemaSchema, await this.inner.update());
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+  async delete(): Promise<void> {
+    try {
+      await this.inner.delete();
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+}
+
 export class ExampleClient {
   private readonly inner: NativeClient;
 
@@ -197,6 +230,32 @@ export class ExampleClient {
     try {
       return fromBinary(ListByTagsResponseSchema, await this.inner.listByCatalogType(catalogType));
     } catch (e) { throw parseNativeError(e); }
+  }
+
+  async createSchema(name: string, catalogName: string, schemaType: number): Promise<Schema> {
+    try {
+      return fromBinary(SchemaSchema, await this.inner.createSchema(name, catalogName, schemaType));
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+  async listSchemas(catalogName: string, maxResults: number, pageToken: string): Promise<Schema[]> {
+    try {
+      return (await this.inner.listSchemas(catalogName, maxResults, pageToken)).map((data) =>
+        fromBinary(SchemaSchema, data),
+      );
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+  async *listSchemasStream(catalogName: string, maxResults: number, pageToken: string): AsyncIterable<Schema> {
+    try {
+      for await (const data of this.inner.listSchemasStream(catalogName, maxResults, pageToken)) {
+        yield fromBinary(SchemaSchema, data);
+      }
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+  schema(catalogName: string, schemaName: string): SchemaClient {
+    return new SchemaClient(this.inner.schema(catalogName, schemaName));
   }
 
   /**
