@@ -17,6 +17,14 @@ impl CatalogClient {
             client,
         }
     }
+    /// This resource's own name (the leaf component).
+    pub fn name(&self) -> &str {
+        &self.catalog_name
+    }
+    /// The fully-qualified name of this resource.
+    pub fn full_name(&self) -> String {
+        self.catalog_name.clone()
+    }
     pub fn get(&self) -> GetCatalogBuilder {
         GetCatalogBuilder::new(self.client.clone(), &self.catalog_name)
     }

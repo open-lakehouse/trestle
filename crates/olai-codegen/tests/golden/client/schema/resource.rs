@@ -33,6 +33,18 @@ impl SchemaClient {
         let schema_name = parts.next().unwrap_or_default();
         Self::new(catalog_name, schema_name, client)
     }
+    /// The `catalog_name` component of this resource's name.
+    pub fn catalog_name(&self) -> &str {
+        &self.catalog_name
+    }
+    /// This resource's own name (the leaf component).
+    pub fn name(&self) -> &str {
+        &self.schema_name
+    }
+    /// The fully-qualified name of this resource (its dot-joined name components).
+    pub fn full_name(&self) -> String {
+        format!("{}.{}", self.catalog_name, self.schema_name)
+    }
     pub fn get(&self, view: get_schema_request::View) -> GetSchemaBuilder {
         GetSchemaBuilder::new(
             self.client.clone(),

@@ -4,6 +4,9 @@
 //! resource's name components and exposes:
 //! - constructors: `new(components…, client)` and — for nested resources — `from_full_name(full_name,
 //!   client)`, which splits the dot-joined name into components once and forwards to `new`;
+//! - name-inspection accessors: `name(&self) -> &str` for the resource's own leaf, a qualified
+//!   `<ancestor>(&self) -> &str` per ancestor component (e.g. `schema.catalog_name()`), and
+//!   `full_name(&self) -> String` (the dot-joined components);
 //! - instance operations (`get`/`update`/`delete` and resource-targeted custom RPCs), each
 //!   returning the matching generated builder with the captured components injected as the path arg;
 //! - child-navigation accessors (`catalog.schema(name) -> SchemaClient`), child-create methods
@@ -54,6 +57,7 @@ pub(crate) fn generate(
     } else {
         quote! {}
     };
+    let name_accessors = name_accessors(&components, &join_format);
     let methods = instance_methods(service, &components, &join_format);
     let child_methods = child_methods(service, plan, &components);
 
@@ -80,6 +84,7 @@ pub(crate) fn generate(
         impl #scoped_ident {
             #constructor
             #from_full_name
+            #name_accessors
             #(#methods)*
             #(#child_methods)*
         }
@@ -420,6 +425,71 @@ fn from_full_name_constructor(
             #(#bindings)*
             Self::new(#(#args,)* client)
         }
+    }
+}
+
+/// Name-inspection accessors over the captured components:
+/// - the resource's **own** leaf component (always the last) is exposed as `pub fn name(&self) ->
+///   &str` — generic, so `catalog.name()` / `schema.name()` rather than the stuttering
+///   `catalog.catalog_name()`;
+/// - each **ancestor** component keeps its qualified accessor `pub fn <ancestor>(&self) -> &str`
+///   (e.g. `schema.catalog_name()`);
+/// - `pub fn full_name(&self) -> String` returns the dot-joined components (just the leaf for a flat
+///   resource).
+///
+/// The leaf accessor uses the literal name `name`, which can't collide with an ancestor (ancestors
+/// are always `<parent>_name`). If the leaf component is itself literally named `name`, the qualified
+/// and generic names coincide — emit it once.
+fn name_accessors(components: &[proc_macro2::Ident], join_format: &str) -> TokenStream {
+    let Some((leaf, ancestors)) = components.split_last() else {
+        return quote! {};
+    };
+
+    // Ancestor accessors: qualified by field name (e.g. `catalog_name`).
+    let ancestor_accessors = ancestors.iter().map(|c| {
+        let doc = format!(" The `{c}` component of this resource's name.");
+        quote! {
+            #[doc = #doc]
+            pub fn #c(&self) -> &str {
+                &self.#c
+            }
+        }
+    });
+
+    // Own leaf accessor: exposed generically as `name()`.
+    let name_ident = format_ident!("name");
+    let leaf_accessor = quote! {
+        /// This resource's own name (the leaf component).
+        pub fn #name_ident(&self) -> &str {
+            &self.#leaf
+        }
+    };
+
+    // `full_name()`: the dot-joined components (just the leaf for a flat resource). Skip when a
+    // component is literally named `full_name` (its own accessor already exposes it).
+    let full_name = if components.iter().any(|c| *c == "full_name") {
+        quote! {}
+    } else if components.len() == 1 {
+        quote! {
+            /// The fully-qualified name of this resource.
+            pub fn full_name(&self) -> String {
+                self.#leaf.clone()
+            }
+        }
+    } else {
+        let field_refs = components.iter().map(|c| quote! { self.#c });
+        quote! {
+            /// The fully-qualified name of this resource (its dot-joined name components).
+            pub fn full_name(&self) -> String {
+                format!(#join_format, #(#field_refs),*)
+            }
+        }
+    };
+
+    quote! {
+        #(#ancestor_accessors)*
+        #leaf_accessor
+        #full_name
     }
 }
 
@@ -826,5 +896,59 @@ mod tests {
             !imports[0].contains("catalog"),
             "parent's own models path should not be re-imported: {imports:?}"
         );
+    }
+
+    // ── name-inspection accessors ────────────────────────────────────────────────────────────
+
+    /// Flat resource: its single (leaf) component is exposed as the generic `name()`, not the
+    /// stuttering `catalog_name()`; `full_name()` clones the leaf field.
+    #[test]
+    fn name_accessors_flat_uses_generic_name() {
+        let out = name_accessors(&idents(&["catalog_name"]), &join_format(1)).to_string();
+        assert!(
+            out.contains("pub fn name (& self) -> & str { & self . catalog_name }"),
+            "{out}"
+        );
+        // No stuttering `catalog_name()` accessor.
+        assert!(!out.contains("pub fn catalog_name"), "{out}");
+        assert!(
+            out.contains("pub fn full_name (& self) -> String { self . catalog_name . clone () }"),
+            "{out}"
+        );
+    }
+
+    /// Nested resource: ancestors keep qualified accessors; the own leaf is `name()`; `full_name()`
+    /// dot-joins all components.
+    #[test]
+    fn name_accessors_nested_ancestors_qualified_leaf_generic() {
+        let out =
+            name_accessors(&idents(&["catalog_name", "schema_name"]), &join_format(2)).to_string();
+        // Ancestor stays qualified.
+        assert!(
+            out.contains("pub fn catalog_name (& self) -> & str"),
+            "{out}"
+        );
+        // Own leaf is the generic `name()` reading the schema_name field, not `schema_name()`.
+        assert!(
+            out.contains("pub fn name (& self) -> & str { & self . schema_name }"),
+            "{out}"
+        );
+        assert!(!out.contains("pub fn schema_name"), "{out}");
+        assert!(
+            out.contains("format ! (\"{}.{}\" , self . catalog_name , self . schema_name)"),
+            "{out}"
+        );
+    }
+
+    /// A leaf component literally named `full_name` is exposed as `name()`; no synthesized
+    /// `full_name()` String method is emitted (would duplicate / mismatch the return type).
+    #[test]
+    fn name_accessors_skip_synth_full_name_on_collision() {
+        let out = name_accessors(&idents(&["full_name"]), &join_format(1)).to_string();
+        assert!(
+            out.contains("pub fn name (& self) -> & str { & self . full_name }"),
+            "{out}"
+        );
+        assert_eq!(out.matches("fn full_name").count(), 0, "{out}");
     }
 }
