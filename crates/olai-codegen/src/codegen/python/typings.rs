@@ -42,6 +42,12 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
 
     for &i in &service_indices {
         let service = &services[i];
+        // Resource-less (Flat) services have no per-service scoped client in the real bindings
+        // (their methods live on the aggregate client), so they must not get a phantom scoped
+        // class in the `.pyi` either.
+        if !service.is_resource_scoped() {
+            continue;
+        }
         let service_class = generate_service_class_typings(service, services);
         content.push(service_class);
         content.push("".to_string());
@@ -125,10 +131,23 @@ fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<Strin
 }
 
 fn generate_method_parameters_for_typings(method: &MethodHandler<'_>) -> Vec<String> {
+    generate_method_parameters_for_typings_inner(method, true)
+}
+
+/// Build the parameter list for a `.pyi` method signature.
+///
+/// `drop_path` mirrors the bindings emitter (`resource_method_parameters` /
+/// `collection_method_parameters`): scoped clients already hold the path params (captured by the
+/// resource accessor), so they're dropped; flat (root-client) methods must accept every param,
+/// including path params.
+fn generate_method_parameters_for_typings_inner(
+    method: &MethodHandler<'_>,
+    drop_path: bool,
+) -> Vec<String> {
     let mut parameters = Vec::new();
 
     for param in method.required_parameters() {
-        if !param.is_path_param() {
+        if !(drop_path && param.is_path_param()) {
             let param_type = python_type_annotation(param.field_type());
             parameters.push(format!("{}: {}", param.name(), param_type));
         }
@@ -435,6 +454,57 @@ fn generate_service_class_typings(
     generate_class_from_template(&client_ident, "", None, &body_content)
 }
 
+/// Render the `.pyi` stub for one method emitted directly on the aggregate client.
+///
+/// Used both for collection-style methods of resource-scoped services and for *every* method of
+/// resource-less (Flat) services. `drop_path` controls whether path params are included in the
+/// signature: scoped collection methods drop them, flat methods keep them — mirroring the bindings
+/// emitter (`collection_method_parameters` / `resource_method_parameters`).
+fn generate_aggregate_method_typing(
+    method: &MethodHandler<'_>,
+    drop_path: bool,
+) -> (String, String) {
+    let method_name = method.binding_method_name_str();
+
+    let return_type = match &method.plan.request_type {
+        RequestType::List => {
+            if let Some(items_field) = method.list_output_field() {
+                let item_type = python_type_annotation(&items_field.unified_type);
+                format!(
+                    "List[{}]",
+                    item_type.trim_start_matches("List[").trim_end_matches("]")
+                )
+            } else {
+                "Any".to_string()
+            }
+        }
+        _ => {
+            // Empty-returning RPCs (e.g. a `Touch*` custom method) are typed `None` in Python.
+            if let Some(output_type) = method.output_type() {
+                python_type_annotation_from_ident(&output_type)
+            } else {
+                "None".to_string()
+            }
+        }
+    };
+
+    let parameters = generate_method_parameters_for_typings_inner(method, drop_path);
+    let mut params = vec!["self".to_string()];
+    params.extend(parameters);
+
+    let docstring = format_method_docstring_with_params(method);
+    let docstring_text = if docstring.trim().is_empty() {
+        None
+    } else {
+        Some(docstring.trim())
+    };
+
+    (
+        method_name.clone(),
+        generate_method_template(&method_name, &params, &return_type, docstring_text, 1),
+    )
+}
+
 fn generate_main_client_class_typings(
     services: &[&ServiceHandler<'_>],
     client_class_name: &str,
@@ -442,56 +512,35 @@ fn generate_main_client_class_typings(
     let mut collection_methods = services
         .iter()
         .flat_map(|service| {
-            service
-                .methods()
-                .filter(|m| m.is_collection_method())
-                .filter_map(|method| {
-                    let method_name = method.plan.base_method_ident().to_string();
-                    let return_type = match &method.plan.request_type {
-                        RequestType::List => {
-                            if let Some(items_field) = method.list_output_field() {
-                                let item_type = python_type_annotation(&items_field.unified_type);
-                                format!(
-                                    "List[{}]",
-                                    item_type.trim_start_matches("List[").trim_end_matches("]")
-                                )
-                            } else {
-                                "Any".to_string()
-                            }
-                        }
-                        RequestType::Create
-                        | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
-                            if let Some(output_type) = method.output_type() {
-                                python_type_annotation_from_ident(&output_type)
-                            } else {
-                                "Any".to_string()
-                            }
-                        }
-                        _ => return None,
-                    };
-
-                    let parameters = generate_method_parameters_for_typings(&method);
-                    let mut params = vec!["self".to_string()];
-                    params.extend(parameters);
-
-                    let docstring = format_method_docstring_with_params(&method);
-                    let docstring_text = if docstring.trim().is_empty() {
-                        None
-                    } else {
-                        Some(docstring.trim())
-                    };
-
-                    Some((
-                        method_name.clone(),
-                        generate_method_template(
-                            &method_name,
-                            &params,
-                            &return_type,
-                            docstring_text,
-                            1,
-                        ),
-                    ))
-                })
+            // Resource-scoped services contribute only their collection-style methods to the
+            // aggregate client (instance methods live on the scoped client). Resource-less (Flat)
+            // services contribute *all* of their methods, lowered flat with every param including
+            // path params — matching the real bindings.
+            let is_flat = !service.is_resource_scoped();
+            service.methods().filter_map(move |method| {
+                let emit = if is_flat {
+                    // Flat services emit every method (`flat_client_method` handles all request
+                    // types).
+                    true
+                } else {
+                    // Scoped services emit only the collection-style methods that
+                    // `collection_client_method` actually lowers onto the aggregate client:
+                    // list / create / factory POST|PATCH RPCs.
+                    method.is_collection_method()
+                        && matches!(
+                            method.plan.request_type,
+                            RequestType::List
+                                | RequestType::Create
+                                | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
+                        )
+                };
+                if !emit {
+                    return None;
+                }
+                // Collection methods of scoped services drop path params; flat methods keep them.
+                let drop_path = !is_flat;
+                Some(generate_aggregate_method_typing(&method, drop_path))
+            })
         })
         .collect::<Vec<_>>();
 

@@ -255,3 +255,155 @@ fn test_python_emitter_handles_custom_post_rpcs() {
          `generate_catalog_token` in the stub"
     );
 }
+
+/// Resource-less, composite-key services (e.g. tag assignments) must produce usable bindings:
+/// every method lives on the root client and accepts ALL path params, and `Empty`-returning custom
+/// RPCs lower to a unit/void result. This is the "flat binding lowering" regression guard.
+#[test]
+fn test_resource_less_service_emits_flat_bindings_with_path_params() {
+    let descriptor = load_descriptor();
+    let metadata = parse_file_descriptor_set(&descriptor).expect("parse succeeded");
+    let tmp = TempDir::new().expect("tempdir");
+    let common_dir = tmp.path().join("common");
+    let node_ts_dir = tmp.path().join("node_ts");
+    let python_dir = tmp.path().join("python");
+    let node_dir = tmp.path().join("node");
+    for dir in &[&common_dir, &node_ts_dir, &python_dir, &node_dir] {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    let config = make_test_config(
+        common_dir.clone(),
+        node_ts_dir.clone(),
+        python_dir.clone(),
+        node_dir.clone(),
+    );
+    generate_code(&metadata, &config).expect("generate_code succeeded");
+
+    // The `.pyi` stub must mirror the flat bindings: resource-less methods land on the aggregate
+    // `ExampleClient` with all path params, and there is no phantom scoped class.
+    let pyi = std::fs::read_to_string(python_dir.join("example_client.pyi")).expect("pyi");
+    assert!(
+        pyi.contains(
+            "def fetch_tag_assignment(\n\
+             \n            self,\n\
+             \x20           entity_type: str,\n\
+             \x20           entity_name: str,\n\
+             \x20           tag_key: str\n\
+             \x20       ) -> TagAssignment:"
+        ),
+        "pyi: fetch_tag_assignment must expose all composite path params -> TagAssignment:\n{pyi}"
+    );
+    assert!(
+        pyi.contains(
+            "def touch_tag_assignment(\n\
+             \n            self,\n\
+             \x20           entity_type: str,\n\
+             \x20           entity_name: str,\n\
+             \x20           tag_key: str\n\
+             \x20       ) -> None:"
+        ),
+        "pyi: touch_tag_assignment must take all path params and return None:\n{pyi}"
+    );
+    assert!(
+        !pyi.contains("class TagAssignmentsServiceClient")
+            && !pyi.contains("class TagAssignmentsClient")
+            && !pyi.contains("class TagsClient"),
+        "pyi: resource-less service must not get a phantom scoped class:\n{pyi}"
+    );
+
+    let py = std::fs::read_to_string(python_dir.join("mod.rs")).expect("python mod.rs");
+    // Composite-key getter exposes ALL path params on the root client (not a scoped client).
+    // The Get RPC carries a gnostic `operation_id`, so the binding method is named
+    // `fetch_tag_assignment` (annotation-driven naming), not `get_tag_assignment`.
+    assert!(
+        py.contains("pub fn fetch_tag_assignment(")
+            && py.contains("entity_type: String")
+            && py.contains("entity_name: String")
+            && py.contains("tag_key: String"),
+        "python: fetch_tag_assignment must take all composite path params:\n{py:.4000}"
+    );
+    // Empty-returning custom RPC lowers to `<()>` (regression for the missing type arg).
+    assert!(
+        py.contains("pub fn touch_tag_assignment(") && py.contains("PyExampleResult<()>"),
+        "python: touch_tag_assignment must return PyExampleResult<()>:\n{py:.4000}"
+    );
+    // Resource-less service has no scoped per-service module emitted.
+    assert!(
+        !python_dir.join("tags.rs").exists(),
+        "python: resource-less service must not get a scoped module"
+    );
+
+    let ts = std::fs::read_to_string(node_ts_dir.join("client.ts")).expect("ts client.ts");
+    assert!(
+        ts.contains(
+            "async fetchTagAssignment(entityType: string, entityName: string, tagKey: string)"
+        ),
+        "ts: fetchTagAssignment must take all composite path params:\n{ts:.4000}"
+    );
+    assert!(
+        ts.contains("async touchTagAssignment(") && ts.contains("tagKey: string): Promise<void>"),
+        "ts: touchTagAssignment must return Promise<void>:\n{ts:.4000}"
+    );
+}
+
+/// The generated Rust aggregate root client (`client.rs`) must expose flat builder constructors for
+/// resource-less services, matching the surface the language bindings call. Regression guard for the
+/// aggregate generator.
+#[test]
+fn test_aggregate_client_emits_flat_builders_for_resource_less_service() {
+    let descriptor = load_descriptor();
+    let metadata = parse_file_descriptor_set(&descriptor).expect("parse succeeded");
+    let tmp = TempDir::new().expect("tempdir");
+    let common_dir = tmp.path().join("common");
+    let node_ts_dir = tmp.path().join("node_ts");
+    let python_dir = tmp.path().join("python");
+    let node_dir = tmp.path().join("node");
+    let client_dir = tmp.path().join("client");
+    for dir in &[
+        &common_dir,
+        &node_ts_dir,
+        &python_dir,
+        &node_dir,
+        &client_dir,
+    ] {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    let mut config = make_test_config(
+        common_dir.clone(),
+        node_ts_dir.clone(),
+        python_dir.clone(),
+        node_dir.clone(),
+    );
+    config.output.client = Some(client_dir.clone());
+    generate_code(&metadata, &config).expect("generate_code succeeded");
+
+    let client = std::fs::read_to_string(client_dir.join("client.rs")).expect("client.rs");
+
+    // The aggregate struct uses the configured name.
+    assert!(
+        client.contains("pub struct ExampleClient"),
+        "client.rs must define the configured aggregate struct:\n{client:.4000}"
+    );
+    // Resource-less list method takes the composite path params (entity_type, entity_name) and
+    // returns the builder.
+    assert!(
+        client.contains("pub fn list_tag_assignments(")
+            && client.contains("entity_type: impl Into<String>")
+            && client.contains("entity_name: impl Into<String>")
+            && client.contains("-> ListTagAssignmentsBuilder"),
+        "client.rs: list_tag_assignments must take composite path params and return its builder:\n{client:.4000}"
+    );
+    // Custom POST RPC (Empty return) emits a flat builder constructor under its operation name.
+    assert!(
+        client.contains("pub fn touch_tag_assignment(")
+            && client.contains("tag_key: impl Into<String>")
+            && client.contains("-> TouchTagAssignmentBuilder"),
+        "client.rs: touch_tag_assignment must take all path params and return its builder:\n{client:.4000}"
+    );
+    // The top-level client module must re-export the aggregate.
+    let client_mod = std::fs::read_to_string(client_dir.join("mod.rs")).expect("client mod.rs");
+    assert!(
+        client_mod.contains("pub mod client") && client_mod.contains("pub use client::*"),
+        "client mod.rs must export the aggregate module:\n{client_mod}"
+    );
+}

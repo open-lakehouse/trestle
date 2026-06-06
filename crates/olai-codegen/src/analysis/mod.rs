@@ -344,7 +344,9 @@ fn extract_request_fields(
 
     let mut processed_fields = HashSet::new();
 
-    // Add path parameters in URL template order.
+    // Add path parameters in URL template order. `parameter_names()` yields normalized flat field
+    // names from the URL template (segment-binding `=pattern` suffixes already stripped by the
+    // template parser; unsupported dotted placeholders are kept out of `parameters` entirely).
     for path_param_name in path_param_names {
         if let Some(field) = fields_by_name.get(path_param_name.as_str()) {
             // Path params are always included even if OUTPUT_ONLY (they appear in the URL, not
@@ -355,6 +357,13 @@ fn extract_request_fields(
                 documentation: field.documentation.clone(),
             });
             processed_fields.insert(field.name.as_str());
+        } else {
+            // Unresolved placeholder: warn rather than silently misrouting the field to query/body.
+            warn!(
+                "Method {}.{}: URL path placeholder `{}` does not match any request field; \
+                 the param will be omitted from the path",
+                method.service_name, method.method_name, path_param_name
+            );
         }
     }
 

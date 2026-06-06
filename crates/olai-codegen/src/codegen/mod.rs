@@ -38,6 +38,7 @@ use crate::output;
 use crate::parsing::types::{self, RenderContext, UnifiedType};
 use crate::parsing::{CodeGenMetadata, MessageField, MessageInfo};
 
+mod aggregate;
 mod builder;
 mod client;
 mod config;
@@ -50,6 +51,19 @@ mod tokens;
 
 pub use config::{BindingsConfig, CodeGenConfig, CodeGenOutput, ModelsPath};
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
+
+/// How a language binding lowers a method's call into the underlying Rust client.
+///
+/// Resource services expose a scoped client (e.g. `CatalogClient`) that captures path params;
+/// resource-less services have no such client, so their methods live on the root client and must
+/// pass every param themselves (the "flat" shape, treated like collection methods).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingMode {
+    /// Method lives on a resource-scoped client that already holds the path params.
+    Scoped,
+    /// Method lives on the root client and receives all params, including path params.
+    Flat,
+}
 
 impl MethodPlan {
     pub(crate) fn resource_client_method(&self) -> Ident {
@@ -267,7 +281,10 @@ fn generate_python_code(
         })
         .collect_vec();
 
-    for service in &handlers {
+    // Per-service scoped client modules are only meaningful for resource-scoped services. The
+    // methods of resource-less services live on the root client (emitted by `main_module`), so
+    // they don't get a scoped module of their own.
+    for service in handlers.iter().filter(|s| s.is_resource_scoped()) {
         let python_code = python::generate(service)?;
         files.insert(format!("{}.rs", service.plan.base_path), python_code);
     }
@@ -301,7 +318,9 @@ fn generate_node_code(
         })
         .collect_vec();
 
-    for service in &handlers {
+    // See `generate_python_code`: only resource-scoped services get a per-service scoped module;
+    // resource-less services' methods live on the root client.
+    for service in handlers.iter().filter(|s| s.is_resource_scoped()) {
         let napi_code = node::generate(service)?;
         files.insert(format!("{}.rs", service.plan.base_path), napi_code);
     }
@@ -355,7 +374,15 @@ fn generate_client_code(
         files.insert(format!("{}/mod.rs", service.base_path), module_code);
     }
 
-    let module_code = generate_client_main_module(&plan.services);
+    // Top-level aggregate root client (e.g. `UnityCatalogClient`), emitted only when a bindings
+    // config (which carries the aggregate name) is present.
+    let has_aggregate = aggregate::generate(plan, metadata, config)?
+        .map(|aggregate_code| {
+            files.insert("client.rs".to_string(), aggregate_code);
+        })
+        .is_some();
+
+    let module_code = generate_client_main_module(&plan.services, has_aggregate);
     files.insert("mod.rs".to_string(), module_code);
 
     Ok(GeneratedCode { files })
@@ -407,7 +434,7 @@ pub fn main_module(services: &[ServicePlan]) -> String {
     format_tokens_static(tokens)
 }
 
-fn generate_client_main_module(services: &[ServicePlan]) -> String {
+fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) -> String {
     let service_modules: Vec<TokenStream> = services
         .iter()
         .map(|s| {
@@ -416,8 +443,21 @@ fn generate_client_main_module(services: &[ServicePlan]) -> String {
         })
         .collect();
 
+    // Export the aggregate root client (`client.rs`) when it was generated. Per-service files live
+    // under `<base_path>/`, so a top-level `client` module never collides with them.
+    let aggregate_module = if has_aggregate {
+        quote! {
+            pub mod client;
+            pub use client::*;
+        }
+    } else {
+        quote! {}
+    };
+
     let tokens = quote! {
         #(#service_modules)*
+
+        #aggregate_module
 
         use futures::Future;
 
@@ -616,6 +656,25 @@ impl ServiceHandler<'_> {
         self.plan.managed_resources.first()
     }
 
+    /// Whether this service manages a `google.api.resource` and therefore gets a resource-scoped
+    /// client (e.g. `CatalogClient` bound to a name).
+    ///
+    /// Resource-less services (entity tag assignments, temporary credentials, delta commits) have
+    /// no scoped client; their methods are emitted on the root client and pass every param
+    /// directly ([`BindingMode::Flat`]). See [`Self::binding_mode`].
+    pub(crate) fn is_resource_scoped(&self) -> bool {
+        self.resource().is_some()
+    }
+
+    /// The [`BindingMode`] used to lower this service's methods in language bindings.
+    pub(crate) fn binding_mode(&self) -> BindingMode {
+        if self.is_resource_scoped() {
+            BindingMode::Scoped
+        } else {
+            BindingMode::Flat
+        }
+    }
+
     pub(crate) fn methods(&self) -> impl Iterator<Item = MethodHandler<'_>> {
         self.plan.methods.iter().map(|plan| MethodHandler {
             plan,
@@ -713,6 +772,20 @@ impl MethodHandler<'_> {
             .map(|t| extract_type_ident(&t.info.name))
     }
 
+    /// The method's output type as a `syn::Type`, falling back to the unit type `()` when the
+    /// RPC returns `Empty` (i.e. [`Self::output_message`] is `None`).
+    ///
+    /// Binding emitters splice the response type into `Result<T>` wrappers
+    /// (e.g. `PyUnityCatalogResult<T>`); interpolating a bare `Option::None` would produce an
+    /// uncompilable `PyUnityCatalogResult<>`. Use this so `Empty`-returning RPCs yield
+    /// `PyUnityCatalogResult<()>` instead.
+    pub(crate) fn output_type_or_unit(&self) -> syn::Type {
+        match self.output_type() {
+            Some(ident) => syn::parse_quote!(#ident),
+            None => syn::parse_quote!(()),
+        }
+    }
+
     pub(crate) fn list_output_field(&self) -> Option<&MessageField> {
         self.output_message()?
             .info
@@ -736,6 +809,29 @@ impl MethodHandler<'_> {
 
     pub(crate) fn builder_type(&self) -> Ident {
         format_ident!("{}Builder", self.plan.metadata.method_name)
+    }
+
+    /// The method name to expose in language bindings.
+    ///
+    /// Prefers the gnostic `operation_id` annotation (`gnostic.openapi.v3.operation`) when present,
+    /// snake-cased, so proto authors can give bindings a hand-tuned name. Falls back to the
+    /// proto-derived name ([`MethodPlan::base_method_ident`]).
+    ///
+    /// This affects only the *emitted* binding method name — the call into the underlying Rust
+    /// client still uses [`MethodPlan::base_method_ident`], so the handler/client API is unchanged.
+    pub(crate) fn binding_method_name(&self) -> Ident {
+        format_ident!("{}", self.binding_method_name_str())
+    }
+
+    /// The snake_case binding method name (see [`Self::binding_method_name`]).
+    ///
+    /// Provided as a `String` so the string-templated TypeScript generator can camel-case it and
+    /// stay consistent with the snake→camel name NAPI derives for the native method.
+    pub(crate) fn binding_method_name_str(&self) -> String {
+        match self.plan.metadata.operation.as_ref() {
+            Some(op) if !op.operation_id.is_empty() => op.operation_id.to_case(Case::Snake),
+            _ => self.plan.handler_function_name.clone(),
+        }
     }
 
     /// Get type representation for rust depending on context

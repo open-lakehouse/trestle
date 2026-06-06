@@ -7,7 +7,8 @@ use quote::{format_ident, quote};
 use super::super::format_tokens;
 use super::super::python::derive_resource_accessor_params;
 use crate::analysis::{RequestParam, RequestType};
-use crate::codegen::{MethodHandler, ServiceHandler};
+use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
+use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, RenderContext};
 use crate::utils::strings;
 
@@ -43,7 +44,9 @@ fn is_napi_supported_type(base_type: &BaseType) -> bool {
 }
 
 pub fn main_module(services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
-    let service_modules = services.iter().map(|s| {
+    // Only resource-scoped services have a per-service scoped module; resource-less services'
+    // methods live on the root client (see `collection_client_struct`).
+    let service_modules = services.iter().filter(|s| s.is_resource_scoped()).map(|s| {
         let module_name = format_ident!("{}", s.plan.base_path);
         quote! { pub mod #module_name; }
     });
@@ -126,15 +129,23 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
         quote! { use #mod_path::*; }
     });
 
-    let codegen_imports = sorted_services.iter().map(|s| {
-        let mod_name = format_ident!("{}", s.plan.base_path);
-        let client_name = format_ident!("Napi{}", s.client_type().to_string());
-        quote! { use crate::codegen::#mod_name::#client_name; }
-    });
-
-    let methods = sorted_services
+    // Only resource-scoped services expose a per-service scoped client to import.
+    let codegen_imports = sorted_services
         .iter()
-        .flat_map(|s| s.methods().filter_map(collection_client_method));
+        .filter(|s| s.is_resource_scoped())
+        .map(|s| {
+            let mod_name = format_ident!("{}", s.plan.base_path);
+            let client_name = format_ident!("Napi{}", s.client_type().to_string());
+            quote! { use crate::codegen::#mod_name::#client_name; }
+        });
+
+    // Root-client methods: collection-style methods from every service, plus — for resource-less
+    // services, which have no scoped client — *all* of their methods, lowered flat so they pass
+    // every param including path params.
+    let methods = sorted_services.iter().flat_map(|s| {
+        let mode = s.binding_mode();
+        s.methods().filter_map(move |m| root_client_method(m, mode))
+    });
 
     let resource_accessor_methods = sorted_services
         .iter()
@@ -180,35 +191,77 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
     }
 }
 
+/// Emit an instance method for a resource-scoped client. Always [`BindingMode::Scoped`].
 fn resource_client_method(method: MethodHandler<'_>) -> Option<TokenStream> {
+    let mode = BindingMode::Scoped;
     let code = match &method.plan.request_type {
-        RequestType::Get | RequestType::Update => resource_get_update_method_impl(&method),
-        RequestType::Delete => resource_delete_method_impl(&method),
+        RequestType::Get | RequestType::Update => resource_get_update_method_impl(&method, mode),
+        RequestType::Delete => resource_delete_method_impl(&method, mode),
+        // Resource-targeted custom POST/PATCH RPCs (e.g. `POST /catalogs/{name}:rotateToken`)
+        // share the get/update emit shape. Factory-style RPCs without path params are emitted on
+        // the root client instead (`is_collection_method()`), so skip them here.
+        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
+            if !method.is_collection_method() =>
+        {
+            resource_get_update_method_impl(&method, mode)
+        }
         _ => return None,
     };
     Some(code)
 }
 
-fn collection_client_method(method: MethodHandler<'_>) -> Option<TokenStream> {
+/// Emit a method on the root (aggregate) client. See the Python `root_client_method` for the
+/// scoped-vs-flat contract.
+fn root_client_method(method: MethodHandler<'_>, mode: BindingMode) -> Option<TokenStream> {
+    match mode {
+        BindingMode::Scoped => collection_client_method(method, mode),
+        BindingMode::Flat => flat_client_method(method),
+    }
+}
+
+/// Emit a collection-style method (list / create / factory) on the root client.
+fn collection_client_method(method: MethodHandler<'_>, mode: BindingMode) -> Option<TokenStream> {
     if !method.is_collection_method() {
         return None;
     }
     match &method.plan.request_type {
         RequestType::List => {
-            let batch = collection_list_method_impl(&method);
-            let stream = collection_list_stream_method_impl(&method);
+            let batch = collection_list_method_impl(&method, mode);
+            let stream = collection_list_stream_method_impl(&method, mode);
             Some(quote! { #batch #stream })
         }
-        RequestType::Create => Some(collection_create_method_impl(&method)),
+        RequestType::Create => Some(collection_create_method_impl(&method, mode)),
+        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
+            Some(collection_create_method_impl(&method, mode))
+        }
         _ => None,
     }
 }
 
-fn collection_list_method_impl(method: &MethodHandler<'_>) -> TokenStream {
-    let method_name = method.plan.base_method_ident();
+/// Emit a method for a resource-less service on the root client, lowered [`BindingMode::Flat`].
+fn flat_client_method(method: MethodHandler<'_>) -> Option<TokenStream> {
+    let mode = BindingMode::Flat;
+    let code = match &method.plan.request_type {
+        RequestType::List => {
+            let batch = collection_list_method_impl(&method, mode);
+            let stream = collection_list_stream_method_impl(&method, mode);
+            quote! { #batch #stream }
+        }
+        RequestType::Create | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
+            collection_create_method_impl(&method, mode)
+        }
+        RequestType::Get | RequestType::Update => resource_get_update_method_impl(&method, mode),
+        RequestType::Delete => resource_delete_method_impl(&method, mode),
+        RequestType::Custom(_) => resource_get_update_method_impl(&method, mode),
+    };
+    Some(code)
+}
+
+fn collection_list_method_impl(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    let method_name = method.binding_method_name();
 
     let param_defs = collection_method_parameters(method, true);
-    let client_call = inner_resource_client_call(method);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, true);
 
     quote! {
@@ -235,12 +288,14 @@ fn collection_list_method_impl(method: &MethodHandler<'_>) -> TokenStream {
 /// The method is non-async; the stream is driven lazily by the Node.js consumer via
 /// the Web Streams `pull` protocol. The `Env` argument is injected by napi-rs when
 /// the method signature includes `env: napi::Env`.
-fn collection_list_stream_method_impl(method: &MethodHandler<'_>) -> TokenStream {
-    let base_name = method.plan.base_method_ident();
-    let stream_method_name = format_ident!("{}_stream", base_name);
+fn collection_list_stream_method_impl(
+    method: &MethodHandler<'_>,
+    mode: BindingMode,
+) -> TokenStream {
+    let stream_method_name = format_ident!("{}_stream", method.binding_method_name());
 
     let param_defs = collection_method_parameters(method, true);
-    let client_call = inner_resource_client_call(method);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, true);
 
     quote! {
@@ -265,11 +320,11 @@ fn collection_list_stream_method_impl(method: &MethodHandler<'_>) -> TokenStream
     }
 }
 
-fn collection_create_method_impl(method: &MethodHandler<'_>) -> TokenStream {
-    let method_name = method.plan.base_method_ident();
+fn collection_create_method_impl(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    let method_name = method.binding_method_name();
     let has_response = method.output_type().is_some();
     let param_defs = collection_method_parameters(method, false);
-    let client_call = inner_resource_client_call(method);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, false);
 
     if has_response {
@@ -304,32 +359,58 @@ fn collection_create_method_impl(method: &MethodHandler<'_>) -> TokenStream {
     }
 }
 
-fn resource_get_update_method_impl(method: &MethodHandler<'_>) -> TokenStream {
-    let method_name = method.plan.resource_client_method();
-    let param_defs = resource_method_parameters(method);
-    let client_call = inner_resource_client_call(method);
+fn resource_get_update_method_impl(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    let method_name = match mode {
+        BindingMode::Scoped => method.plan.resource_client_method(),
+        BindingMode::Flat => method.binding_method_name(),
+    };
+    let has_response = method.output_type().is_some();
+    let param_defs = resource_method_parameters(method, mode);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, false);
 
-    quote! {
-        #[napi(catch_unwind)]
-        pub async fn #method_name(
-            &self,
-            #(#param_defs,)*
-        ) -> napi::Result<Buffer> {
-            let mut request = #client_call;
-            #(#builder_calls)*
-            request
-                .await
-                .map(|item| Buffer::from(item.encode_to_vec()))
-                .default_error()
+    if has_response {
+        quote! {
+            #[napi(catch_unwind)]
+            pub async fn #method_name(
+                &self,
+                #(#param_defs,)*
+            ) -> napi::Result<Buffer> {
+                let mut request = #client_call;
+                #(#builder_calls)*
+                request
+                    .await
+                    .map(|item| Buffer::from(item.encode_to_vec()))
+                    .default_error()
+            }
+        }
+    } else {
+        // Custom POST/PATCH RPCs that target a resource can return `Empty` (e.g. a
+        // delta-commit-style `Commit`). Emit a `()` return rather than a `Buffer` of an
+        // empty message.
+        quote! {
+            #[napi(catch_unwind)]
+            pub async fn #method_name(
+                &self,
+                #(#param_defs,)*
+            ) -> napi::Result<()> {
+                let mut request = #client_call;
+                #(#builder_calls)*
+                request
+                    .await
+                    .default_error()
+            }
         }
     }
 }
 
-fn resource_delete_method_impl(method: &MethodHandler<'_>) -> TokenStream {
-    let method_name = method.plan.resource_client_method();
-    let param_defs = resource_method_parameters(method);
-    let client_call = inner_resource_client_call(method);
+fn resource_delete_method_impl(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    let method_name = match mode {
+        BindingMode::Scoped => method.plan.resource_client_method(),
+        BindingMode::Flat => method.binding_method_name(),
+    };
+    let param_defs = resource_method_parameters(method, mode);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, false);
 
     quote! {
@@ -347,11 +428,13 @@ fn resource_delete_method_impl(method: &MethodHandler<'_>) -> TokenStream {
     }
 }
 
-fn resource_method_parameters(method: &MethodHandler<'_>) -> Vec<TokenStream> {
+fn resource_method_parameters(method: &MethodHandler<'_>, mode: BindingMode) -> Vec<TokenStream> {
+    // Scoped clients already hold the path params; flat (root-client) methods must accept them.
+    let drop_path = mode == BindingMode::Scoped;
     method
         .required_parameters()
         .chain(method.optional_parameters())
-        .filter(|field| !field.is_path_param() && is_napi_supported(field))
+        .filter(|field| !(drop_path && field.is_path_param()) && is_napi_supported(field))
         .map(|p| {
             let param_name = p.field_ident();
             let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
@@ -373,11 +456,15 @@ fn collection_method_parameters(method: &MethodHandler<'_>, is_list: bool) -> Ve
         .collect()
 }
 
-fn inner_resource_client_call(method: &MethodHandler<'_>) -> TokenStream {
-    let method_name = method.plan.resource_client_method();
+/// Emit the call into the underlying Rust client. See the Python `inner_resource_client_call`.
+fn inner_resource_client_call(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    let (method_name, drop_path) = match mode {
+        BindingMode::Scoped => (method.plan.resource_client_method(), true),
+        BindingMode::Flat => (method.plan.base_method_ident(), false),
+    };
     let args = method
         .required_parameters()
-        .filter(|param| !param.is_path_param() && is_napi_supported(param))
+        .filter(|param| !(drop_path && param.is_path_param()) && is_napi_supported(param))
         .map(|param| {
             let param_name = param.field_ident();
             if matches!(param.field_type().base_type, BaseType::Enum(..)) {

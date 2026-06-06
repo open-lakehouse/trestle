@@ -8,7 +8,8 @@ use itertools::Itertools;
 
 use super::super::python::derive_resource_accessor_params;
 use crate::analysis::{RequestParam, RequestType};
-use crate::codegen::{BindingsConfig, MethodHandler, ServiceHandler};
+use crate::codegen::{BindingMode, BindingsConfig, MethodHandler, ServiceHandler};
+use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, unified_to_typescript};
 
 /// Format optional documentation as a JSDoc comment block.
@@ -226,12 +227,12 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
         }
 
         for method in service.methods() {
-            if let Some(output) = method.output_type() {
-                let name = output.to_string();
-                if !type_names.contains(&name)
-                    && !name.ends_with("Response")
-                    && !name.ends_with("Request")
-                {
+            // Import exactly the type each method's generated code decodes (see
+            // `decoded_type_name`): item type for standard list unwrapping, otherwise the full
+            // output message. This keeps imports in lockstep with emitted `fromBinary` calls,
+            // including resource-less (Flat) services that decode `*Response` messages directly.
+            if let Some(name) = decoded_type_name(service, &method) {
+                if !type_names.contains(&name) {
                     type_names.push(name.clone());
                     schema_names.push(format!("{}Schema", name));
                 }
@@ -286,6 +287,27 @@ import {{
     )
 }
 
+/// The model type name that a method's generated code decodes via `fromBinary`, if any.
+///
+/// Mirrors the per-request-type emit logic so the import set stays in lockstep with the emitted
+/// `fromBinary(<Type>Schema, ...)` calls:
+/// - standard `List` methods unwrap the repeated field → the item type (e.g. `Catalog`);
+/// - every other returning method decodes its full output message (e.g. `TagAssignment`,
+///   `ListTagAssignmentsResponse`);
+/// - `Empty`-returning (void) methods decode nothing → `None`.
+fn decoded_type_name(_service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> Option<String> {
+    match &method.plan.request_type {
+        RequestType::List => Some(
+            method
+                .list_output_field()?
+                .unified_type
+                .type_ident()
+                .to_string(),
+        ),
+        _ => method.output_type().map(|t| t.to_string()),
+    }
+}
+
 /// Generate an options interface for a method's optional parameters.
 fn generate_options_interface(method: &MethodHandler<'_>) -> Option<String> {
     let optional_params: Vec<&RequestParam> = method
@@ -334,13 +356,24 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
     for method in service.methods() {
         match &method.plan.request_type {
             RequestType::Get => {
-                methods.push_str(&generate_resource_get_method(&method, type_name));
+                methods.push_str(&generate_resource_get_method(
+                    &method,
+                    type_name,
+                    BindingMode::Scoped,
+                ));
             }
             RequestType::Update => {
-                methods.push_str(&generate_resource_update_method(&method, type_name));
+                methods.push_str(&generate_resource_update_method(
+                    &method,
+                    type_name,
+                    BindingMode::Scoped,
+                ));
             }
             RequestType::Delete => {
-                methods.push_str(&generate_resource_delete_method(&method));
+                methods.push_str(&generate_resource_delete_method(
+                    &method,
+                    BindingMode::Scoped,
+                ));
             }
             _ => {}
         }
@@ -360,45 +393,82 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
     ))
 }
 
-fn generate_resource_get_method(method: &MethodHandler<'_>, type_name: &str) -> String {
-    let schema_name = format!("{}Schema", type_name);
-    let options_type = format!("{}Options", method.plan.metadata.method_name);
-    let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
+/// Whether the path-param filter should drop path params for this mode.
+///
+/// [`BindingMode::Scoped`] methods live on a resource-scoped client that already holds the path
+/// params, so they are omitted from the signature. [`BindingMode::Flat`] methods live on the root
+/// client and must accept and forward every param, including path params.
+fn drops_path(mode: BindingMode) -> bool {
+    mode == BindingMode::Scoped
+}
 
+/// The TS method name and the native (NAPI) call name for a get/update/delete-style method.
+///
+/// - [`BindingMode::Scoped`]: short verb (`get`/`update`/`delete`) on the scoped client.
+/// - [`BindingMode::Flat`]: the full base method name (camelCased) on the root client, matching
+///   the NAPI-exposed flat method (snake_case Rust → camelCase JS).
+fn instance_method_names(
+    method: &MethodHandler<'_>,
+    mode: BindingMode,
+    verb: &str,
+) -> (String, String) {
+    match mode {
+        BindingMode::Scoped => (verb.to_string(), verb.to_string()),
+        BindingMode::Flat => {
+            let name = method.binding_method_name_str().to_case(Case::Camel);
+            (name.clone(), name)
+        }
+    }
+}
+
+fn generate_resource_get_method(
+    method: &MethodHandler<'_>,
+    type_name: &str,
+    mode: BindingMode,
+) -> String {
+    generate_instance_returning_method(method, type_name, mode, "get")
+}
+
+fn generate_resource_update_method(
+    method: &MethodHandler<'_>,
+    type_name: &str,
+    mode: BindingMode,
+) -> String {
+    generate_instance_returning_method(method, type_name, mode, "update")
+}
+
+/// Shared body for get/update-style methods: forward params and decode a typed response.
+fn generate_instance_returning_method(
+    method: &MethodHandler<'_>,
+    type_name: &str,
+    mode: BindingMode,
+    verb: &str,
+) -> String {
+    let schema_name = format!("{}Schema", type_name);
+    let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
+    let drop_path = drops_path(mode);
+    let (ts_name, native_name) = instance_method_names(method, mode, verb);
+
+    let required_params: Vec<&RequestParam> = method
+        .required_parameters()
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
 
-    if optional_params.is_empty() {
-        return format!(
-            r#"{jsdoc}  async get(): Promise<{type_name}> {{
-    try {{
-      return fromBinary({schema_name}, await this.inner.get());
-    }} catch (e) {{ throw parseNativeError(e); }}
-  }}
-
-"#
-        );
-    }
-
-    let destructure_fields = optional_params
-        .iter()
-        .map(|p| p.name().to_case(Case::Camel))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let call_args = optional_params
-        .iter()
-        .map(|p| p.name().to_case(Case::Camel))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let spec = MethodCallSpec::build(method, &required_params, &optional_params);
+    let MethodCallSpec {
+        full_param_list,
+        optional_destructure,
+        all_args,
+    } = spec;
 
     format!(
-        r#"{jsdoc}  async get(options?: {options_type}): Promise<{type_name}> {{
-    const {{ {destructure_fields} }} = options || {{}};
-    try {{
-      return fromBinary({schema_name}, await this.inner.get({call_args}));
+        r#"{jsdoc}  async {ts_name}({full_param_list}): Promise<{type_name}> {{
+{optional_destructure}    try {{
+      return fromBinary({schema_name}, await this.inner.{native_name}({all_args}));
     }} catch (e) {{ throw parseNativeError(e); }}
   }}
 
@@ -406,45 +476,31 @@ fn generate_resource_get_method(method: &MethodHandler<'_>, type_name: &str) -> 
     )
 }
 
-fn generate_resource_update_method(method: &MethodHandler<'_>, type_name: &str) -> String {
-    let schema_name = format!("{}Schema", type_name);
-    let options_type = format!("{}Options", method.plan.metadata.method_name);
+fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
+    let drop_path = drops_path(mode);
+    let (ts_name, native_name) = instance_method_names(method, mode, "delete");
 
+    let required_params: Vec<&RequestParam> = method
+        .required_parameters()
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
 
-    if optional_params.is_empty() {
-        return format!(
-            r#"{jsdoc}  async update(): Promise<{type_name}> {{
-    try {{
-      return fromBinary({schema_name}, await this.inner.update());
-    }} catch (e) {{ throw parseNativeError(e); }}
-  }}
-
-"#
-        );
-    }
-
-    let destructure_fields = optional_params
-        .iter()
-        .map(|p| p.name().to_case(Case::Camel))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let call_args = optional_params
-        .iter()
-        .map(|p| p.name().to_case(Case::Camel))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let spec = MethodCallSpec::build(method, &required_params, &optional_params);
+    let MethodCallSpec {
+        full_param_list,
+        optional_destructure,
+        all_args,
+    } = spec;
 
     format!(
-        r#"{jsdoc}  async update(options?: {options_type}): Promise<{type_name}> {{
-    const {{ {destructure_fields} }} = options || {{}};
-    try {{
-      return fromBinary({schema_name}, await this.inner.update({call_args}));
+        r#"{jsdoc}  async {ts_name}({full_param_list}): Promise<void> {{
+{optional_destructure}    try {{
+      await this.inner.{native_name}({all_args});
     }} catch (e) {{ throw parseNativeError(e); }}
   }}
 
@@ -452,49 +508,37 @@ fn generate_resource_update_method(method: &MethodHandler<'_>, type_name: &str) 
     )
 }
 
-fn generate_resource_delete_method(method: &MethodHandler<'_>) -> String {
-    let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let optional_params: Vec<&RequestParam> = method
-        .optional_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
-        .collect();
-
-    if optional_params.is_empty() {
-        return format!(
-            r#"{jsdoc}  async delete(): Promise<void> {{
-    try {{
-      await this.inner.delete();
-    }} catch (e) {{ throw parseNativeError(e); }}
-  }}
-
-"#
-        );
+/// Emit a single method for a resource-less (Flat) service onto the root client.
+///
+/// Every method of a resource-less service is emitted here, lowered [`BindingMode::Flat`] so the
+/// signature includes all params (including path params) and forwards them to the native client
+/// method of the same (camelCased) name. The emit shape is chosen by request type:
+/// list/stream, create-with-return (or void), get/update-style returning, or delete (void).
+fn generate_flat_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> String {
+    let mode = BindingMode::Flat;
+    match &method.plan.request_type {
+        RequestType::List => {
+            let mut out = generate_collection_list_method(service, method, false);
+            out.push_str(&generate_collection_list_stream_method(
+                service, method, false,
+            ));
+            out
+        }
+        RequestType::Create | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
+            generate_collection_create_method(service, method, false)
+        }
+        RequestType::Delete => generate_resource_delete_method(method, mode),
+        // Get / Update, and any remaining custom RPC on a resource-less service: forward all params
+        // and decode the typed response. An `Empty`-returning RPC produces a `Promise<void>`.
+        RequestType::Get | RequestType::Update | RequestType::Custom(_) => {
+            match method.output_type() {
+                Some(output_type) => {
+                    generate_resource_get_method(method, &output_type.to_string(), mode)
+                }
+                None => generate_resource_delete_method(method, mode),
+            }
+        }
     }
-
-    let options_type = format!("{}Options", method.plan.metadata.method_name);
-
-    let destructure_fields = optional_params
-        .iter()
-        .map(|p| p.name().to_case(Case::Camel))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let call_args = optional_params
-        .iter()
-        .map(|p| p.name().to_case(Case::Camel))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        r#"{jsdoc}  async delete(options?: {options_type}): Promise<void> {{
-    const {{ {destructure_fields} }} = options || {{}};
-    try {{
-      await this.inner.delete({call_args});
-    }} catch (e) {{ throw parseNativeError(e); }}
-  }}
-
-"#
-    )
 }
 
 /// Generate the main aggregate client class (e.g. `MyServiceClient`).
@@ -507,25 +551,43 @@ fn generate_aggregate_client_sorted(
     let mut methods = String::new();
 
     for service in services {
-        for method in service.methods() {
-            if !method.is_collection_method() {
-                continue;
-            }
-            match &method.plan.request_type {
-                RequestType::List => {
-                    methods.push_str(&generate_collection_list_method(service, &method));
-                    methods.push_str(&generate_collection_list_stream_method(service, &method));
+        match service.binding_mode() {
+            // Resource-scoped services contribute only collection-style methods to the root client;
+            // their instance methods live on the scoped client. Path params are dropped here.
+            BindingMode::Scoped => {
+                for method in service.methods() {
+                    if !method.is_collection_method() {
+                        continue;
+                    }
+                    match &method.plan.request_type {
+                        RequestType::List => {
+                            methods
+                                .push_str(&generate_collection_list_method(service, &method, true));
+                            methods.push_str(&generate_collection_list_stream_method(
+                                service, &method, true,
+                            ));
+                        }
+                        RequestType::Create => {
+                            methods.push_str(&generate_collection_create_method(
+                                service, &method, true,
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
-                RequestType::Create => {
-                    methods.push_str(&generate_collection_create_method(service, &method));
-                }
-                _ => {}
-            }
-        }
 
-        // Resource accessor methods (e.g. .catalog("name"), .schema("cat", "schema"))
-        if let Some(accessor) = generate_resource_accessor(service) {
-            methods.push_str(&accessor);
+                // Resource accessor methods (e.g. .catalog("name"), .schema("cat", "schema"))
+                if let Some(accessor) = generate_resource_accessor(service) {
+                    methods.push_str(&accessor);
+                }
+            }
+            // Resource-less services contribute *every* method to the root client, lowered flat:
+            // each passes all params (including path params) straight to the native client.
+            BindingMode::Flat => {
+                for method in service.methods() {
+                    methods.push_str(&generate_flat_method(service, &method));
+                }
+            }
         }
     }
 
@@ -616,9 +678,10 @@ impl MethodCallSpec {
 fn generate_collection_list_method(
     _service: &ServiceHandler<'_>,
     method: &MethodHandler<'_>,
+    drop_path: bool,
 ) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let method_name = method.plan.handler_function_name.to_case(Case::Camel);
+    let method_name = method.binding_method_name_str().to_case(Case::Camel);
     let items_field = match method.list_output_field() {
         Some(field) => field,
         None => return String::new(),
@@ -628,11 +691,13 @@ fn generate_collection_list_method(
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && p.name() != "page_token" && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param()) && p.name() != "page_token" && is_napi_supported(p)
+        })
         .collect();
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
@@ -663,9 +728,10 @@ fn generate_collection_list_method(
 fn generate_collection_list_stream_method(
     _service: &ServiceHandler<'_>,
     method: &MethodHandler<'_>,
+    drop_path: bool,
 ) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let base_method_name = method.plan.handler_function_name.to_case(Case::Camel);
+    let base_method_name = method.binding_method_name_str().to_case(Case::Camel);
     let stream_method_name = format!("{}Stream", base_method_name);
 
     let items_field = match method.list_output_field() {
@@ -677,11 +743,13 @@ fn generate_collection_list_stream_method(
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && p.name() != "page_token" && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param()) && p.name() != "page_token" && is_napi_supported(p)
+        })
         .collect();
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
@@ -707,23 +775,24 @@ fn generate_collection_list_stream_method(
 fn generate_collection_create_method(
     _service: &ServiceHandler<'_>,
     method: &MethodHandler<'_>,
+    drop_path: bool,
 ) -> String {
     let output_type = match method.output_type() {
         Some(t) => t.to_string(),
-        None => return generate_void_create_method(method),
+        None => return generate_void_create_method(method, drop_path),
     };
     let schema_name = format!("{}Schema", output_type);
 
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let method_name = method.plan.handler_function_name.to_case(Case::Camel);
+    let method_name = method.binding_method_name_str().to_case(Case::Camel);
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
@@ -744,17 +813,17 @@ fn generate_collection_create_method(
     )
 }
 
-fn generate_void_create_method(method: &MethodHandler<'_>) -> String {
+fn generate_void_create_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let method_name = method.plan.handler_function_name.to_case(Case::Camel);
+    let method_name = method.binding_method_name_str().to_case(Case::Camel);
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
         .collect();
 
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);

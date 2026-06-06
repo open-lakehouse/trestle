@@ -7,13 +7,15 @@ use quote::{format_ident, quote};
 use super::super::format_tokens;
 use super::derive_resource_accessor_params;
 use crate::analysis::{RequestParam, RequestType};
-use crate::codegen::{MethodHandler, ServiceHandler};
+use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
 use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, RenderContext};
 use crate::utils::strings;
 
 pub fn main_module(services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
-    let service_modules = services.iter().map(|s| {
+    // Only resource-scoped services have a per-service scoped module; resource-less services'
+    // methods live on the root client (see `collection_client_struct`).
+    let service_modules = services.iter().filter(|s| s.is_resource_scoped()).map(|s| {
         let module_name = format_ident!("{}", s.plan.base_path);
         quote! { pub mod #module_name; }
     });
@@ -99,15 +101,25 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
         quote! { use #mod_path::*; }
     });
 
-    let codegen_imports = sorted_services.iter().map(|s| {
-        let mod_name = format_ident!("{}", s.plan.base_path);
-        let client_name = format_ident!("Py{}", s.client_type().to_string());
-        quote! { use crate::codegen::#mod_name::#client_name; }
-    });
+    // Only resource-scoped services expose a per-service scoped client to import.
+    let codegen_imports = sorted_services
+        .iter()
+        .filter(|s| s.is_resource_scoped())
+        .map(|s| {
+            let mod_name = format_ident!("{}", s.plan.base_path);
+            let client_name = format_ident!("Py{}", s.client_type().to_string());
+            quote! { use crate::codegen::#mod_name::#client_name; }
+        });
 
+    // Root-client methods: collection-style methods from every service, plus — for resource-less
+    // services, which have no scoped client — *all* of their methods (get/update/delete/custom),
+    // lowered flat so they pass every param including path params.
+    let py_error_type_ref = &py_error_type;
+    let py_result_type_ref = &py_result_type;
     let methods = sorted_services.iter().flat_map(|s| {
+        let mode = s.binding_mode();
         s.methods()
-            .filter_map(|m| collection_client_method(m, &py_error_type, &py_result_type))
+            .filter_map(move |m| root_client_method(m, mode, py_error_type_ref, py_result_type_ref))
     });
 
     let resource_accessor_methods = sorted_services
@@ -150,16 +162,23 @@ fn collection_client_struct(services: &[ServiceHandler<'_>]) -> TokenStream {
     }
 }
 
+/// Emit an instance method for a resource-scoped client (`get`/`update`/`delete` and
+/// resource-targeted custom RPCs). Always [`BindingMode::Scoped`].
 fn resource_client_method(
     method: MethodHandler<'_>,
     py_error_type: &Ident,
     py_result_type: &Ident,
 ) -> Option<TokenStream> {
     let code = match &method.plan.request_type {
-        RequestType::Get | RequestType::Update => {
-            resource_get_update_method_impl(&method, py_error_type, py_result_type)
+        RequestType::Get | RequestType::Update => resource_get_update_method_impl(
+            &method,
+            BindingMode::Scoped,
+            py_error_type,
+            py_result_type,
+        ),
+        RequestType::Delete => {
+            resource_delete_method_impl(&method, BindingMode::Scoped, py_error_type, py_result_type)
         }
-        RequestType::Delete => resource_delete_method_impl(&method, py_error_type, py_result_type),
         // Custom POST/PATCH RPCs that target a specific resource (e.g.
         // `POST /catalogs/{name}:rotateToken`) share the emit shape of
         // `Update`: path params + body + non-empty response. Factory-style
@@ -170,15 +189,42 @@ fn resource_client_method(
         RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
             if !method.is_collection_method() =>
         {
-            resource_get_update_method_impl(&method, py_error_type, py_result_type)
+            resource_get_update_method_impl(
+                &method,
+                BindingMode::Scoped,
+                py_error_type,
+                py_result_type,
+            )
         }
         _ => return None,
     };
     Some(code)
 }
 
+/// Emit a method on the root (aggregate) client.
+///
+/// - [`BindingMode::Scoped`] services contribute only their collection-style methods (list /
+///   create / factory RPCs); their instance methods live on the scoped client.
+/// - [`BindingMode::Flat`] services (resource-less) contribute **every** method, lowered flat so
+///   each passes all params (including path params) directly to the root client.
+fn root_client_method(
+    method: MethodHandler<'_>,
+    mode: BindingMode,
+    py_error_type: &Ident,
+    py_result_type: &Ident,
+) -> Option<TokenStream> {
+    match mode {
+        BindingMode::Scoped => {
+            collection_client_method(method, mode, py_error_type, py_result_type)
+        }
+        BindingMode::Flat => flat_client_method(method, py_error_type, py_result_type),
+    }
+}
+
+/// Emit a collection-style method (list / create / factory) on the root client.
 fn collection_client_method(
     method: MethodHandler<'_>,
+    mode: BindingMode,
     py_error_type: &Ident,
     py_result_type: &Ident,
 ) -> Option<TokenStream> {
@@ -186,29 +232,62 @@ fn collection_client_method(
         return None;
     }
     match &method.plan.request_type {
-        RequestType::List => collection_list_method_impl(&method, py_error_type, py_result_type),
+        RequestType::List => {
+            collection_list_method_impl(&method, mode, py_error_type, py_result_type)
+        }
         RequestType::Create => {
-            collection_create_method_impl(&method, py_error_type, py_result_type)
+            collection_create_method_impl(&method, mode, py_error_type, py_result_type)
         }
         // Custom POST/PATCH RPCs without path params (e.g. `Generate*`
         // factory RPCs) share the emit shape of `Create`: body + return
         // an unrelated response type.
         RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
-            collection_create_method_impl(&method, py_error_type, py_result_type)
+            collection_create_method_impl(&method, mode, py_error_type, py_result_type)
         }
         _ => None,
     }
 }
 
-fn collection_list_method_impl(
-    method: &MethodHandler<'_>,
+/// Emit a method for a resource-less service on the root client, choosing the right emit shape by
+/// request type. Lowered [`BindingMode::Flat`]: every param (incl. path) is passed through.
+fn flat_client_method(
+    method: MethodHandler<'_>,
     py_error_type: &Ident,
     py_result_type: &Ident,
 ) -> Option<TokenStream> {
-    let method_name = method.plan.base_method_ident();
+    let mode = BindingMode::Flat;
+    let code = match &method.plan.request_type {
+        RequestType::List => {
+            collection_list_method_impl(&method, mode, py_error_type, py_result_type)?
+        }
+        RequestType::Create | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
+            collection_create_method_impl(&method, mode, py_error_type, py_result_type)?
+        }
+        RequestType::Get | RequestType::Update => {
+            resource_get_update_method_impl(&method, mode, py_error_type, py_result_type)
+        }
+        RequestType::Delete => {
+            resource_delete_method_impl(&method, mode, py_error_type, py_result_type)
+        }
+        // Custom GET/DELETE/etc. on a resource-less service: treat like get/update (no body) —
+        // pass all params and return the response.
+        RequestType::Custom(_) => {
+            resource_get_update_method_impl(&method, mode, py_error_type, py_result_type)
+        }
+    };
+    Some(code)
+}
+
+fn collection_list_method_impl(
+    method: &MethodHandler<'_>,
+    mode: BindingMode,
+    py_error_type: &Ident,
+    py_result_type: &Ident,
+) -> Option<TokenStream> {
+    let method_name = method.binding_method_name();
 
     let (param_defs, pyo3_signature) = collection_method_parameters(method, true);
-    let client_call = inner_resource_client_call(method);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, true);
 
     let items_field = method.list_output_field()?;
@@ -234,13 +313,14 @@ fn collection_list_method_impl(
 
 fn collection_create_method_impl(
     method: &MethodHandler<'_>,
+    mode: BindingMode,
     py_error_type: &Ident,
     py_result_type: &Ident,
 ) -> Option<TokenStream> {
-    let method_name = method.plan.base_method_ident();
-    let response_type = method.output_type()?;
+    let method_name = method.binding_method_name();
+    let response_type = method.output_type_or_unit();
     let (param_defs, pyo3_signature) = collection_method_parameters(method, false);
-    let client_call = inner_resource_client_call(method);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, false);
 
     Some(quote! {
@@ -263,13 +343,17 @@ fn collection_create_method_impl(
 
 fn resource_get_update_method_impl(
     method: &MethodHandler<'_>,
+    mode: BindingMode,
     py_error_type: &Ident,
     py_result_type: &Ident,
 ) -> TokenStream {
-    let method_name = method.plan.resource_client_method();
-    let response_type = method.output_type();
-    let (param_defs, pyo3_signature) = resource_method_parameters(method);
-    let client_call = inner_resource_client_call(method);
+    let method_name = match mode {
+        BindingMode::Scoped => method.plan.resource_client_method(),
+        BindingMode::Flat => method.binding_method_name(),
+    };
+    let response_type = method.output_type_or_unit();
+    let (param_defs, pyo3_signature) = resource_method_parameters(method, mode);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, false);
 
     quote! {
@@ -292,12 +376,16 @@ fn resource_get_update_method_impl(
 
 fn resource_delete_method_impl(
     method: &MethodHandler<'_>,
+    mode: BindingMode,
     py_error_type: &Ident,
     py_result_type: &Ident,
 ) -> TokenStream {
-    let method_name = method.plan.resource_client_method();
-    let (param_defs, pyo3_signature) = resource_method_parameters(method);
-    let client_call = inner_resource_client_call(method);
+    let method_name = match mode {
+        BindingMode::Scoped => method.plan.resource_client_method(),
+        BindingMode::Flat => method.binding_method_name(),
+    };
+    let (param_defs, pyo3_signature) = resource_method_parameters(method, mode);
+    let client_call = inner_resource_client_call(method, mode);
     let builder_calls = generate_builder_pattern(method, false);
 
     quote! {
@@ -318,16 +406,22 @@ fn resource_delete_method_impl(
     }
 }
 
-fn resource_method_parameters(method: &MethodHandler<'_>) -> (Vec<TokenStream>, TokenStream) {
+fn resource_method_parameters(
+    method: &MethodHandler<'_>,
+    mode: BindingMode,
+) -> (Vec<TokenStream>, TokenStream) {
     let map_param = |p: &RequestParam| {
         let param_name = p.field_ident();
         let rust_type = method.field_type(p.field_type(), RenderContext::PythonParameter);
         quote! { #param_name: #rust_type }
     };
+    // Scoped clients already hold the path params (captured by the resource accessor), so the
+    // method signature omits them. Flat (root-client) methods must accept every param.
+    let drop_path = mode == BindingMode::Scoped;
     let parameters = method
         .required_parameters()
         .chain(method.optional_parameters())
-        .filter(|field| !field.is_path_param())
+        .filter(|field| !(drop_path && field.is_path_param()))
         .collect_vec();
     let signature = render_pyo3(&parameters);
     (parameters.into_iter().map(map_param).collect(), signature)
@@ -377,11 +471,23 @@ fn render_pyo3(signature_parts: &[&RequestParam]) -> TokenStream {
     }
 }
 
-fn inner_resource_client_call(method: &MethodHandler<'_>) -> TokenStream {
-    let method_name = method.plan.resource_client_method();
+/// Emit the call into the underlying Rust client for a binding method.
+///
+/// Two shapes, selected by `mode`:
+/// - [`BindingMode::Scoped`] — the method lives on a resource-scoped client (e.g. `CatalogClient`)
+///   that already captured the path params, so the call uses the scoped method name
+///   (`get`/`update`/…) and omits path params.
+/// - [`BindingMode::Flat`] — the method lives on the root client (resource-less services, treated
+///   like collection methods). There is no scoped client to supply path params, so the call uses
+///   the base method name and passes **every** required param, including path params.
+fn inner_resource_client_call(method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
+    let (method_name, drop_path) = match mode {
+        BindingMode::Scoped => (method.plan.resource_client_method(), true),
+        BindingMode::Flat => (method.plan.base_method_ident(), false),
+    };
     let args = method
         .required_parameters()
-        .filter(|param| !param.is_path_param())
+        .filter(|param| !(drop_path && param.is_path_param()))
         .map(|param| {
             let param_name = param.field_ident();
             quote! { #param_name }

@@ -1,0 +1,98 @@
+syntax = "proto3";
+package example.tags.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+import "gnostic/openapi/v3/annotations.proto";
+
+// Tag-assignment-shaped API: a resource-less service (no `google.api.resource`)
+// keyed by a composite path `(entity_type, entity_name, tag_key)`. Exercises the
+// flat binding lowering — every method lives on the root client and must accept
+// all path params directly.
+service TagAssignmentsService {
+  // List assignments for an entity. Path params: entity_type, entity_name.
+  rpc ListTagAssignments(ListTagAssignmentsRequest) returns (ListTagAssignmentsResponse) {
+    option (google.api.http) = {
+      get: "/entities/{entity_type}/{entity_name}/tags"
+    };
+  }
+
+  // Create/assign a tag. Path params: entity_type, entity_name; body: tag.
+  rpc CreateTagAssignment(CreateTagAssignmentRequest) returns (TagAssignment) {
+    option (google.api.http) = {
+      post: "/entities/{entity_type}/{entity_name}/tags"
+      body: "tag"
+    };
+  }
+
+  // Get a single assignment. Composite key: entity_type, entity_name, tag_key.
+  // Carries a gnostic `operation_id` to exercise annotation-driven binding method naming
+  // (the binding method should be named `fetch_tag_assignment`, not `get_tag_assignment`).
+  rpc GetTagAssignment(GetTagAssignmentRequest) returns (TagAssignment) {
+    option (google.api.http) = {
+      get: "/entities/{entity_type}/{entity_name}/tags/{tag_key}"
+    };
+    option (gnostic.openapi.v3.operation) = {operation_id: "FetchTagAssignment"};
+  }
+
+  // Delete a single assignment. Composite key path params.
+  rpc DeleteTagAssignment(DeleteTagAssignmentRequest) returns (DeleteTagAssignmentResponse) {
+    option (google.api.http) = {
+      delete: "/entities/{entity_type}/{entity_name}/tags/{tag_key}"
+    };
+  }
+
+  // Custom POST RPC targeting a composite key that returns `Empty` — exercises
+  // the `<()>` / void-return path for a resource-less, path-param'd method.
+  rpc TouchTagAssignment(TouchTagAssignmentRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/entities/{entity_type}/{entity_name}/tags/{tag_key}:touch"
+      body: "*"
+    };
+  }
+}
+
+message TagAssignment {
+  string entity_type = 1;
+  string entity_name = 2;
+  string tag_key = 3;
+  string tag_value = 4;
+}
+
+message ListTagAssignmentsRequest {
+  string entity_type = 1;
+  string entity_name = 2;
+  int32 max_results = 3;
+  string page_token = 4;
+}
+
+message ListTagAssignmentsResponse {
+  repeated TagAssignment tag_assignments = 1;
+  string next_page_token = 2;
+}
+
+message CreateTagAssignmentRequest {
+  string entity_type = 1;
+  string entity_name = 2;
+  TagAssignment tag = 3;
+}
+
+message GetTagAssignmentRequest {
+  string entity_type = 1;
+  string entity_name = 2;
+  string tag_key = 3;
+}
+
+message DeleteTagAssignmentRequest {
+  string entity_type = 1;
+  string entity_name = 2;
+  string tag_key = 3;
+}
+
+message DeleteTagAssignmentResponse {}
+
+message TouchTagAssignmentRequest {
+  string entity_type = 1;
+  string entity_name = 2;
+  string tag_key = 3;
+}

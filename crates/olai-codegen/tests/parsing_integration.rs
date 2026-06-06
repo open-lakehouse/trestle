@@ -14,8 +14,8 @@ fn parse_meta() -> CodeGenMetadata {
 #[test]
 fn test_parses_services_and_methods() {
     let meta = parse_meta();
-    // CatalogService + SchemaService
-    assert_eq!(meta.services.len(), 2);
+    // CatalogService + SchemaService + TagAssignmentsService
+    assert_eq!(meta.services.len(), 3);
 
     let catalog = meta
         .services
@@ -28,6 +28,13 @@ fn test_parses_services_and_methods() {
         .get("SchemaService")
         .expect("SchemaService exists");
     assert_eq!(schema.methods.len(), 2); // ListByTags + ListByCatalogType
+
+    // Resource-less, composite-key service exercising the flat binding lowering.
+    let tags = meta
+        .services
+        .get("TagAssignmentsService")
+        .expect("TagAssignmentsService exists");
+    assert_eq!(tags.methods.len(), 5); // List/Create/Get/Delete + custom Touch (returns Empty)
 }
 
 #[test]

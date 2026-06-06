@@ -146,11 +146,20 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
 ///    repeated fields in `Option<T>`, even when the field is not marked optional in proto.
 fn should_wrap_in_option(ctx: RenderContext, ty: &UnifiedType) -> bool {
     let is_optional_non_builder = ty.is_optional && !matches!(ctx, RenderContext::BuilderMethod);
-    let is_ffi_collection = matches!(
+    let is_ffi = matches!(
         ctx,
         RenderContext::PythonParameter | RenderContext::NapiParameter
-    ) && (matches!(ty.base_type, BaseType::Map(_, _)) || ty.is_repeated);
-    is_optional_non_builder || is_ffi_collection
+    );
+    // At FFI boundaries, wrap complex types (maps, repeated, messages, oneofs) in `Option`.
+    // This keeps the generated parameter type in sync with `BodyField::is_optional`, which treats
+    // these as optional (`= None`) in the pyo3 signature — a bare `T` param with a `= None`
+    // default fails to compile.
+    let is_ffi_complex = is_ffi
+        && (matches!(
+            ty.base_type,
+            BaseType::Map(_, _) | BaseType::Message(_) | BaseType::OneOf(_)
+        ) || ty.is_repeated);
+    is_optional_non_builder || is_ffi_complex
 }
 
 /// Generate field assignment code
