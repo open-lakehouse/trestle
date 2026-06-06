@@ -680,6 +680,32 @@ pub fn split_body_fields(plan: &MethodPlan) -> (Vec<&BodyField>, Vec<&BodyField>
     (required, optional)
 }
 
+/// Extract managed resources from service methods, deduplicating by type name.
+pub fn extract_managed_resources(
+    metadata: &CodeGenMetadata,
+    methods: &[MethodPlan],
+) -> Vec<ManagedResource> {
+    let mut resources = Vec::new();
+    let mut seen_types = HashSet::<String>::new();
+
+    for method in methods {
+        if let Some(ref resource_type) = method.output_resource_type {
+            if seen_types.contains(resource_type) {
+                continue;
+            }
+            if let Some(descriptor) = metadata.get_resource_descriptor(resource_type) {
+                resources.push(ManagedResource {
+                    type_name: resource_type.clone(),
+                    descriptor: descriptor.clone(),
+                });
+                seen_types.insert(resource_type.clone());
+            }
+        }
+    }
+
+    resources
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,30 +913,4 @@ mod tests {
         assert_eq!(scoped_verb(&custom(Pattern::Post(String::new()))), None);
         assert_eq!(scoped_verb(&custom(Pattern::Get(String::new()))), None);
     }
-}
-
-/// Extract managed resources from service methods, deduplicating by type name.
-pub fn extract_managed_resources(
-    metadata: &CodeGenMetadata,
-    methods: &[MethodPlan],
-) -> Vec<ManagedResource> {
-    let mut resources = Vec::new();
-    let mut seen_types = HashSet::<String>::new();
-
-    for method in methods {
-        if let Some(ref resource_type) = method.output_resource_type {
-            if seen_types.contains(resource_type) {
-                continue;
-            }
-            if let Some(descriptor) = metadata.get_resource_descriptor(resource_type) {
-                resources.push(ManagedResource {
-                    type_name: resource_type.clone(),
-                    descriptor: descriptor.clone(),
-                });
-                seen_types.insert(resource_type.clone());
-            }
-        }
-    }
-
-    resources
 }
