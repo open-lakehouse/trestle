@@ -16,7 +16,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
         method_tokens.push(method_code);
     }
 
-    let client_ident = service.client_type();
+    let client_ident = service.low_level_client_type();
     let mod_path = service.models_path();
     let result_path: syn::Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");

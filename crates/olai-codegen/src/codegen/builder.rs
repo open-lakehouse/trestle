@@ -78,7 +78,7 @@ fn generate_request_builder(
         ))
     })?;
     let output_type_ident = method.output_type();
-    let client_type_ident = service.client_type();
+    let client_type_ident = service.low_level_client_type();
     let method_name = format_ident!("{}", method.plan.handler_function_name);
 
     // Constructor params: all required parameters (path + required body fields)

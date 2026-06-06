@@ -903,6 +903,7 @@ mod tests {
                 node: None,
                 node_ts: None,
                 python_typings_filename: "client.pyi".into(),
+                generate_resource_clients: false,
             },
             generate_resource_enum: true,
             generate_store_integration: false,

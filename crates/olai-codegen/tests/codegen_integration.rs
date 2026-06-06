@@ -33,6 +33,7 @@ fn make_test_config(
             node: Some(node),
             node_ts: Some(node_ts),
             python_typings_filename: "example_client.pyi".to_string(),
+            generate_resource_clients: false,
         },
         generate_resource_enum: false,
         generate_store_integration: false,

@@ -45,6 +45,7 @@ mod config;
 mod handler;
 pub(crate) mod node;
 mod python;
+mod resource_client;
 mod resources;
 mod server;
 mod tokens;
@@ -398,7 +399,19 @@ fn generate_client_code(
         files.insert(format!("{}/client.rs", service.base_path), client_code);
         let builder_code = builder::generate(&handler)?;
         files.insert(format!("{}/builders.rs", service.base_path), builder_code);
-        let module_code = generate_client_module();
+
+        // Ergonomic resource-scoped client, when enabled and the service manages a resource.
+        let has_resource_client = if config.output.generate_resource_clients {
+            resource_client::generate(&handler)?
+                .map(|code| {
+                    files.insert(format!("{}/resource.rs", service.base_path), code);
+                })
+                .is_some()
+        } else {
+            false
+        };
+
+        let module_code = generate_client_module(has_resource_client);
         files.insert(format!("{}/mod.rs", service.base_path), module_code);
     }
 
@@ -436,10 +449,20 @@ fn generate_server_module(service: &ServicePlan) -> String {
     format_tokens_static(tokens)
 }
 
-fn generate_client_module() -> String {
+fn generate_client_module(has_resource_client: bool) -> String {
+    // Emit the scoped resource client module only when it was generated for this service.
+    let resource_module = if has_resource_client {
+        quote! {
+            pub use resource::*;
+            pub mod resource;
+        }
+    } else {
+        quote! {}
+    };
     let tokens = quote! {
         pub use client::*;
         pub use builders::*;
+        #resource_module
 
         pub mod client;
         pub mod builders;
@@ -731,6 +754,12 @@ impl ServiceHandler<'_> {
         })
     }
 
+    /// The ergonomic, public-facing client type for this service.
+    ///
+    /// For a resource-scoped service this is the **scoped resource client** (e.g. `CatalogClient`,
+    /// bound to a name) — the type callers and language bindings use. For a resource-less service it
+    /// is the single flat client (e.g. `TagAssignmentClient`). The low-level transport client (one
+    /// async method per RPC) is [`Self::low_level_client_type`].
     pub(crate) fn client_type(&self) -> Ident {
         if let Some(resource) = self.resource() {
             format_ident!(
@@ -746,6 +775,32 @@ impl ServiceHandler<'_> {
                     .trim_end_matches('s')
             )
         }
+    }
+
+    /// The low-level transport client type (`{ client: CloudClient, base_url: Url }` with one async
+    /// method per RPC), emitted by [`client`](super::client).
+    ///
+    /// For a resource-scoped service this is `<Singular>ServiceClient` (e.g. `CatalogServiceClient`),
+    /// distinct from the ergonomic scoped [`Self::client_type`] (`CatalogClient`). For a
+    /// resource-less service there is no scoped client, so the low-level client *is* the
+    /// [`Self::client_type`] (e.g. `TagAssignmentClient`).
+    pub(crate) fn low_level_client_type(&self) -> Ident {
+        if let Some(resource) = self.resource() {
+            format_ident!(
+                "{}ServiceClient",
+                resource.descriptor.singular.to_case(Case::Pascal)
+            )
+        } else {
+            self.client_type()
+        }
+    }
+
+    /// The ergonomic scoped resource client type, or `None` for a resource-less service.
+    ///
+    /// Same as [`Self::client_type`] but `Option`-typed to make "resource-scoped only" explicit at
+    /// call sites that generate the scoped client / its accessor.
+    pub(crate) fn scoped_client_type(&self) -> Option<Ident> {
+        self.resource().map(|_| self.client_type())
     }
 
     /// The module segment under which this service's generated models live.

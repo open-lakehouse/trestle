@@ -8,13 +8,13 @@ use example_common::models::catalog::v1::*;
 use super::client::*;
 /// Builder for creating a catalog
 pub struct CreateCatalogBuilder {
-    client: CatalogClient,
+    client: CatalogServiceClient,
     request: CreateCatalogRequest,
 }
 impl CreateCatalogBuilder {
     /// Create a new builder instance.
-    /// Obtain via the corresponding method on `CatalogClient`.
-    pub(crate) fn new(client: CatalogClient) -> Self {
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
+    pub(crate) fn new(client: CatalogServiceClient) -> Self {
         let request = CreateCatalogRequest {
             ..Default::default()
         };
@@ -37,13 +37,13 @@ impl IntoFuture for CreateCatalogBuilder {
 }
 /// Builder for getting a catalog
 pub struct GetCatalogBuilder {
-    client: CatalogClient,
+    client: CatalogServiceClient,
     request: GetCatalogRequest,
 }
 impl GetCatalogBuilder {
     /// Create a new builder instance.
-    /// Obtain via the corresponding method on `CatalogClient`.
-    pub(crate) fn new(client: CatalogClient, name: impl Into<String>) -> Self {
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
+    pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
         let request = GetCatalogRequest {
             name: name.into(),
             ..Default::default()
@@ -62,14 +62,14 @@ impl IntoFuture for GetCatalogBuilder {
 }
 /// Builder for listing catalogs
 pub struct ListCatalogsBuilder {
-    client: CatalogClient,
+    client: CatalogServiceClient,
     request: ListCatalogsRequest,
 }
 impl ListCatalogsBuilder {
     /// Create a new builder instance.
-    /// Obtain via the corresponding method on `CatalogClient`.
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
     pub(crate) fn new(
-        client: CatalogClient,
+        client: CatalogServiceClient,
         max_results: i32,
         page_token: impl Into<String>,
     ) -> Self {
@@ -115,13 +115,13 @@ impl IntoFuture for ListCatalogsBuilder {
 }
 /// Builder for updating a catalog
 pub struct UpdateCatalogBuilder {
-    client: CatalogClient,
+    client: CatalogServiceClient,
     request: UpdateCatalogRequest,
 }
 impl UpdateCatalogBuilder {
     /// Create a new builder instance.
-    /// Obtain via the corresponding method on `CatalogClient`.
-    pub(crate) fn new(client: CatalogClient, name: impl Into<String>) -> Self {
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
+    pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
         let request = UpdateCatalogRequest {
             name: name.into(),
             ..Default::default()
@@ -145,13 +145,13 @@ impl IntoFuture for UpdateCatalogBuilder {
 }
 /// Builder for deleting a catalog
 pub struct DeleteCatalogBuilder {
-    client: CatalogClient,
+    client: CatalogServiceClient,
     request: DeleteCatalogRequest,
 }
 impl DeleteCatalogBuilder {
     /// Create a new builder instance.
-    /// Obtain via the corresponding method on `CatalogClient`.
-    pub(crate) fn new(client: CatalogClient, name: impl Into<String>) -> Self {
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
+    pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
         let request = DeleteCatalogRequest {
             name: name.into(),
             ..Default::default()
@@ -170,13 +170,16 @@ impl IntoFuture for DeleteCatalogBuilder {
 }
 /// Builder for catalog token
 pub struct GenerateCatalogTokenBuilder {
-    client: CatalogClient,
+    client: CatalogServiceClient,
     request: GenerateCatalogTokenRequest,
 }
 impl GenerateCatalogTokenBuilder {
     /// Create a new builder instance.
-    /// Obtain via the corresponding method on `CatalogClient`.
-    pub(crate) fn new(client: CatalogClient, catalog_id: impl Into<String>) -> Self {
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
+    pub(crate) fn new(
+        client: CatalogServiceClient,
+        catalog_id: impl Into<String>,
+    ) -> Self {
         let request = GenerateCatalogTokenRequest {
             catalog_id: catalog_id.into(),
             ..Default::default()

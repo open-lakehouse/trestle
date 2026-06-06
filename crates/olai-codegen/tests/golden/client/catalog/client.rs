@@ -5,11 +5,11 @@ use crate::Result;
 use example_common::models::catalog::v1::*;
 /// HTTP client for service operations
 #[derive(Clone)]
-pub struct CatalogClient {
+pub struct CatalogServiceClient {
     pub(crate) client: CloudClient,
     pub(crate) base_url: Url,
 }
-impl CatalogClient {
+impl CatalogServiceClient {
     /// Create a new client instance
     pub fn new(client: CloudClient, mut base_url: Url) -> Self {
         if !base_url.path().ends_with('/') {

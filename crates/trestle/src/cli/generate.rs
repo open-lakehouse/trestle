@@ -163,6 +163,7 @@ pub(crate) struct FileGenerateConfig {
     pub generate_store_integration: Option<bool>,
     pub error_type_path: Option<String>,
     pub generate_object_conversions: Option<bool>,
+    pub generate_resource_clients: Option<bool>,
     pub resource_store_crate_name: Option<String>,
     pub python: Option<FilePythonConfig>,
     pub node: Option<FileNodeConfig>,
@@ -347,6 +348,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         node: output_node,
         node_ts: output_node_ts,
         python_typings_filename,
+        generate_resource_clients: file_cfg.generate_resource_clients.unwrap_or(false),
     };
 
     let config = build_config(output, &args, &file_cfg, models_gen_dir)?;

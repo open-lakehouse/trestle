@@ -83,6 +83,7 @@ fn full_config(tmp: &Path) -> CodeGenConfig {
             node: Some(node),
             node_ts: Some(node_ts),
             python_typings_filename: "client.pyi".into(),
+            generate_resource_clients: true,
         },
         generate_resource_enum: true,
         generate_store_integration: true,

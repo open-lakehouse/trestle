@@ -6,21 +6,20 @@
 //! (see [`super::python::bindings::collection_client_struct`] and
 //! [`super::python::bindings::generate_resource_accessor_method`], which this file mirrors).
 //!
-//! Structure mirrors the previously hand-written root client:
-//! - one field per service, named after the service `base_path`, holding the generated low-level
-//!   per-service client ([`ServiceHandler::client_type`]);
-//! - `new(client, base_url)` constructing each per-service client;
+//! Structure:
+//! - stores only a `CloudClient` + base `Url`; per-service low-level clients are built **on demand**
+//!   (they hold just those two cheaply-cloneable values), so nothing is allocated per service in
+//!   `new(client, base_url)`;
 //! - for each service, collection-style builder constructors (and, for resource-scoped services, a
-//!   resource accessor returning the hand-written scoped client); resource-less ("flat") services
-//!   contribute *every* method as a flat builder constructor.
+//!   resource accessor returning the generated scoped client — see [`super::resource_client`]);
+//!   resource-less ("flat") services contribute *every* method as a flat builder constructor.
 
 use itertools::Itertools;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::config::CodeGenConfig;
-use super::format_tokens;
-use super::{BindingMode, MethodHandler, ServiceHandler};
+use super::{BindingMode, MethodHandler, ServiceHandler, doc_tokens, format_tokens};
 use crate::analysis::{GenerationPlan, RequestParam};
 use crate::parsing::CodeGenMetadata;
 use crate::parsing::types::RenderContext;
@@ -51,35 +50,17 @@ pub(crate) fn generate(
         .collect_vec();
     services.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
 
-    // --- Struct fields: one per service, named after the service base_path. ---
-    let fields = services.iter().map(|s| {
-        let field = format_ident!("{}", s.plan.base_path);
-        let client_ty = low_level_client_path(s);
-        quote! { #field: #client_ty }
-    });
-
-    // --- Constructor body: build each per-service client, then move them into Self. ---
-    let constructor_bindings = services.iter().map(|s| {
-        let field = format_ident!("{}", s.plan.base_path);
-        let client_ty = low_level_client_path(s);
-        quote! { let #field = #client_ty::new(client.clone(), base_url.clone()); }
-    });
-    let field_names = services.iter().map(|s| {
-        let field = format_ident!("{}", s.plan.base_path);
-        quote! { #field }
-    });
-
     // --- Methods: collection constructors, flat constructors, resource accessors. ---
     let methods = services.iter().flat_map(|s| service_methods(s));
 
     // --- Low-level passthrough accessors: `<base>_client(&self) -> <LowLevelClient>`. ---
-    // These hand back a clone of the per-service low-level client so callers (e.g. a hybrid
-    // proxy server, or hand-written ergonomic wrappers) can drive requests directly. Emitted for
-    // every service since the fields are private.
+    // These build a fresh per-service low-level client (cheap: `CloudClient`/`Url` are O(1) to
+    // clone) so callers (e.g. a hybrid proxy server, or hand-written ergonomic wrappers) can drive
+    // requests directly.
     let passthrough_accessors = services.iter().map(|s| {
-        let field = format_ident!("{}", s.plan.base_path);
         let accessor = format_ident!("{}_client", s.plan.base_path);
         let client_ty = low_level_client_path(s);
+        let ctor = low_level_client_ctor(s);
         let doc = format!(
             "Low-level `{}` client exposing request/response passthrough methods.",
             s.plan.base_path
@@ -87,7 +68,7 @@ pub(crate) fn generate(
         quote! {
             #[doc = #doc]
             pub fn #accessor(&self) -> #client_ty {
-                self.#field.clone()
+                #ctor
             }
         }
     });
@@ -99,19 +80,20 @@ pub(crate) fn generate(
 
         #[derive(Clone)]
         pub struct #aggregate_ident {
-            #(#fields,)*
+            client: CloudClient,
+            base_url: Url,
         }
 
         impl #aggregate_ident {
             /// Create a new aggregate client from a cloud client and base URL.
+            ///
+            /// Per-service clients are constructed on demand (they only hold a cheaply-cloneable
+            /// `CloudClient` + `Url`), so nothing is allocated per service here.
             pub fn new(client: CloudClient, mut base_url: Url) -> Self {
                 if !base_url.path().ends_with('/') {
                     base_url.set_path(&format!("{}/", base_url.path()));
                 }
-                #(#constructor_bindings)*
-                Self {
-                    #(#field_names,)*
-                }
+                Self { client, base_url }
             }
 
             /// Create a new aggregate client with no authentication.
@@ -120,6 +102,7 @@ pub(crate) fn generate(
             }
 
             /// Create a new aggregate client authenticating with a bearer token.
+            // `token` stays `impl ToString` to match `CloudClient::new_with_token`'s own signature.
             pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
                 Self::new(CloudClient::new_with_token(token), base_url)
             }
@@ -134,11 +117,19 @@ pub(crate) fn generate(
 }
 
 /// The fully-qualified path to a service's generated low-level per-service client,
-/// e.g. `crate::codegen::catalogs::CatalogClient`.
+/// e.g. `crate::codegen::catalogs::CatalogServiceClient`.
 fn low_level_client_path(service: &ServiceHandler<'_>) -> TokenStream {
     let module = format_ident!("{}", service.plan.base_path);
-    let client = service.client_type();
+    let client = service.low_level_client_type();
     quote! { crate::codegen::#module::#client }
+}
+
+/// An expression constructing a fresh low-level per-service client from the aggregate's stored
+/// `CloudClient` + `base_url` (both cheaply cloneable), e.g.
+/// `crate::codegen::catalogs::CatalogServiceClient::new(self.client.clone(), self.base_url.clone())`.
+fn low_level_client_ctor(service: &ServiceHandler<'_>) -> TokenStream {
+    let path = low_level_client_path(service);
+    quote! { #path::new(self.client.clone(), self.base_url.clone()) }
 }
 
 /// Emit `use` statements the aggregate needs: cloud client + url, per-service low-level clients,
@@ -159,55 +150,81 @@ fn generate_imports(services: &[ServiceHandler<'_>]) -> TokenStream {
         .unique_by(|p| quote! { #p }.to_string())
         .map(|mod_path| quote! { use #mod_path::*; });
 
-    // Hand-written scoped clients live in the consuming crate. The crate's `lib.rs` re-exports
-    // them at crate root (`pub use catalogs::*` brings `CatalogClient` into `crate::`), so we
-    // reference them as `crate::<Singular>Client`.
-    let scoped_client_imports = services
-        .iter()
-        .filter(|s| s.is_resource_scoped())
-        .map(|s| {
-            let client = s.client_type();
-            quote! { use crate::#client; }
-        })
-        .unique_by(|t| t.to_string());
-
+    // The generated scoped clients (`CatalogClient`, …) live alongside the low-level clients and
+    // builders under `crate::codegen::<base>`, so the `codegen_imports` globs above already bring
+    // them into scope — no separate import needed.
     quote! {
         use olai_http::CloudClient;
         use url::Url;
         #(#codegen_imports)*
         #(#model_imports)*
-        #(#scoped_client_imports)*
     }
 }
 
 /// Emit all aggregate methods contributed by a single service.
 fn service_methods(service: &ServiceHandler<'_>) -> Vec<TokenStream> {
-    let field = format_ident!("{}", service.plan.base_path);
     let mode = service.binding_mode();
 
     let mut methods = Vec::new();
     for method in service.methods() {
         match mode {
             // Scoped services contribute only collection-style methods (list/create/factory);
-            // their instance methods live on the hand-written scoped client.
+            // their instance methods live on the generated scoped client.
             BindingMode::Scoped => {
                 if method.is_collection_method() {
-                    methods.push(collection_method(&method, &field));
+                    methods.push(collection_method(service, &method));
                 }
             }
             // Resource-less services contribute every method, lowered flat (all params passed,
             // including path params).
             BindingMode::Flat => {
-                methods.push(flat_method(&method, &field));
+                methods.push(flat_method(service, &method));
             }
         }
     }
 
-    if let Some(accessor) = resource_accessor_method(service, &field) {
+    if let Some(accessor) = resource_accessor_method(service) {
         methods.push(accessor);
     }
 
     methods
+}
+
+/// Build a doc-comment token stream for an aggregate method: the proto method documentation,
+/// followed by a `# Arguments` section listing each required param that has a field comment.
+///
+/// Falls back to just the method doc (or nothing) when no params carry documentation, so methods
+/// with documented protos still get useful rustdoc on the aggregate surface.
+fn doc_with_arguments(method: &MethodHandler<'_>) -> TokenStream {
+    let mut doc = method
+        .plan
+        .metadata
+        .documentation
+        .as_deref()
+        .map(|d| d.trim_end().to_string())
+        .unwrap_or_default();
+
+    let arg_lines: Vec<String> = method
+        .required_parameters()
+        .filter_map(|p| {
+            p.documentation()
+                .map(|d| format!("* `{}` - {}", p.name(), d.trim()))
+        })
+        .collect();
+
+    if !arg_lines.is_empty() {
+        if !doc.is_empty() {
+            doc.push('\n');
+        }
+        doc.push_str("\n# Arguments\n\n");
+        doc.push_str(&arg_lines.join("\n"));
+    }
+
+    if doc.is_empty() {
+        quote! {}
+    } else {
+        doc_tokens(Some(&doc))
+    }
 }
 
 /// Render the constructor parameter list (name: type) and the forwarding arg list for a builder
@@ -240,81 +257,70 @@ fn builder_params(
 ///
 /// Forwards all required params (in `required_parameters()` order) to the builder's `::new`, which
 /// takes exactly those params. The binding method name mirrors what the Python aggregate calls.
-fn collection_method(method: &MethodHandler<'_>, field: &proc_macro2::Ident) -> TokenStream {
-    let method_name = method.binding_method_name();
-    let builder_ty = method.builder_type();
-    let params: Vec<&RequestParam> = method.required_parameters().collect();
-    let (param_defs, args) = builder_params(method, &params);
-
-    quote! {
-        pub fn #method_name(&self, #(#param_defs),*) -> #builder_ty {
-            #builder_ty::new(self.#field.clone(), #(#args),*)
-        }
-    }
+fn collection_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> TokenStream {
+    builder_constructor_method(service, method)
 }
 
 /// Emit a method for a resource-less ("flat") service: pass ALL required params (incl. path) to the
 /// builder constructor. Covers list/create/get/update/delete/custom uniformly.
-fn flat_method(method: &MethodHandler<'_>, field: &proc_macro2::Ident) -> TokenStream {
+fn flat_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> TokenStream {
+    builder_constructor_method(service, method)
+}
+
+/// Shared body for aggregate builder-constructor methods: forward all required params to the
+/// builder's `::new`, constructing the per-service low-level client on demand.
+fn builder_constructor_method(
+    service: &ServiceHandler<'_>,
+    method: &MethodHandler<'_>,
+) -> TokenStream {
+    let doc = doc_with_arguments(method);
     let method_name = method.binding_method_name();
     let builder_ty = method.builder_type();
     let params: Vec<&RequestParam> = method.required_parameters().collect();
     let (param_defs, args) = builder_params(method, &params);
+    let ctor = low_level_client_ctor(service);
 
     quote! {
+        #doc
         pub fn #method_name(&self, #(#param_defs),*) -> #builder_ty {
-            #builder_ty::new(self.#field.clone(), #(#args),*)
+            #builder_ty::new(#ctor, #(#args),*)
         }
     }
 }
 
-/// Emit the resource accessor for a resource-scoped service, mirroring
-/// [`super::python::bindings::generate_resource_accessor_method`].
+/// Emit the resource accessor for a resource-scoped service:
+/// `<singular>(<components>: impl Into<String>…) -> <Singular>Client`.
 ///
-/// Returns `<singular>(<params>: impl Into<String>...) -> <Singular>Client`, constructing the
-/// hand-written scoped client. When the resource is **nested** (its accessor takes parent
-/// components in addition to its own name), also emits `<singular>_from_full_name` and joins the
-/// params with `.` to build the full name.
-///
-/// Nesting comes from the shared [`super::AccessorSpec`] (built from
-/// `ServicePlan::resource_accessor_params`): the param list is the parent chain plus the leaf name,
-/// so `params.len() > 1` means the resource has ancestors and its full name is splittable. A
-/// top-level resource (e.g. catalog, tag policy) has a single name component with nothing to
-/// decompose, so no `from_full_name` accessor is emitted. This is the single converged nesting rule
-/// shared by the Rust aggregate and all language bindings.
-fn resource_accessor_method(
-    service: &ServiceHandler<'_>,
-    field: &proc_macro2::Ident,
-) -> Option<TokenStream> {
+/// Passes the captured name components **directly** to the generated scoped client's `new` — no
+/// dot-join / split round-trip. The components come from the shared [`super::AccessorSpec`] (built
+/// from `ServicePlan::resource_accessor_params`): the parent chain plus the leaf name. The
+/// per-service low-level client is built on demand from the aggregate's `CloudClient` + `base_url`.
+fn resource_accessor_method(service: &ServiceHandler<'_>) -> Option<TokenStream> {
+    // The accessor returns the generated scoped client, which only exists when resource-client
+    // generation is enabled. Without it there is nothing to hand back.
+    if !service.config.output.generate_resource_clients {
+        return None;
+    }
     let spec = service.accessor_spec()?;
+    let client_ty = service.scoped_client_type()?;
     let method_name = format_ident!("{}", spec.singular);
-    let client_ty = service.client_type();
+    let ctor = low_level_client_ctor(service);
 
     let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
     let param_defs: Vec<_> = param_idents
         .iter()
-        .map(|id| quote! { #id: impl ToString })
+        .map(|id| quote! { #id: impl Into<String> })
         .collect();
+    let args = param_idents.iter().map(|id| quote! { #id });
 
-    if spec.nested {
-        let from_full_name = format_ident!("{}_from_full_name", spec.singular);
-        let format_str = spec.join_format();
-        Some(quote! {
-            pub fn #method_name(&self, #(#param_defs),*) -> #client_ty {
-                let full_name = format!(#format_str, #(#param_idents.to_string()),*);
-                self.#from_full_name(full_name)
-            }
-
-            pub fn #from_full_name(&self, full_name: impl ToString) -> #client_ty {
-                #client_ty::new_from_full_name(full_name, self.#field.clone())
-            }
-        })
-    } else {
-        let args = param_idents.iter().map(|id| quote! { #id });
-        Some(quote! {
-            pub fn #method_name(&self, #(#param_defs),*) -> #client_ty {
-                #client_ty::new(#(#args),*, self.#field.clone())
-            }
-        })
-    }
+    let doc = format!(
+        " Access the `{}` resource scoped to the given name.",
+        spec.singular
+    );
+    Some(quote! {
+        #[doc = #doc]
+        pub fn #method_name(&self, #(#param_defs),*) -> #client_ty {
+            #client_ty::new(#(#args,)* #ctor)
+        }
+    })
 }
