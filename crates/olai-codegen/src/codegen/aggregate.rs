@@ -317,10 +317,31 @@ fn resource_accessor_method(service: &ServiceHandler<'_>) -> Option<TokenStream>
         " Access the `{}` resource scoped to the given name.",
         spec.singular
     );
+
+    // For nested resources, also offer a `<singular>_from_full_name(full_name)` convenience that
+    // delegates to the scoped client's `from_full_name` (which splits the dot-joined name once).
+    let from_full_name = if spec.nested {
+        let ffn_method = format_ident!("{}_from_full_name", spec.singular);
+        let ffn_doc = format!(
+            " Access the `{}` resource from its dot-joined full name.",
+            spec.singular
+        );
+        quote! {
+            #[doc = #ffn_doc]
+            pub fn #ffn_method(&self, full_name: impl Into<String>) -> #client_ty {
+                #client_ty::from_full_name(full_name, #ctor)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     Some(quote! {
         #[doc = #doc]
         pub fn #method_name(&self, #(#param_defs),*) -> #client_ty {
             #client_ty::new(#(#args,)* #ctor)
         }
+
+        #from_full_name
     })
 }

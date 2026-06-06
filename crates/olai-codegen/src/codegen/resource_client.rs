@@ -2,6 +2,8 @@
 //!
 //! For a resource-scoped service this emits a thin client (e.g. `CatalogClient`) that captures the
 //! resource's name components and exposes:
+//! - constructors: `new(components…, client)` and — for nested resources — `from_full_name(full_name,
+//!   client)`, which splits the dot-joined name into components once and forwards to `new`;
 //! - instance operations (`get`/`update`/`delete` and resource-targeted custom RPCs), each
 //!   returning the matching generated builder with the captured components injected as the path arg;
 //! - child-navigation accessors (`catalog.schema(name) -> SchemaClient`) and child-create methods
@@ -43,6 +45,14 @@ pub(crate) fn generate(
 
     let struct_def = scoped_struct(&scoped_ident, &components, &low_level_ident);
     let constructor = scoped_constructor(&components, &low_level_ident);
+    // For nested resources, also offer a `from_full_name` constructor that splits a dot-joined
+    // full name into the component fields once (no round-trip). Flat resources skip it — it would
+    // duplicate `new`.
+    let from_full_name = if spec.nested {
+        from_full_name_constructor(&components, &low_level_ident, &spec.singular)
+    } else {
+        quote! {}
+    };
     let methods = instance_methods(service, &components, &join_format);
     let child_methods = child_methods(service, plan, &components);
 
@@ -68,6 +78,7 @@ pub(crate) fn generate(
 
         impl #scoped_ident {
             #constructor
+            #from_full_name
             #(#methods)*
             #(#child_methods)*
         }
@@ -304,6 +315,42 @@ fn scoped_constructor(
     }
 }
 
+/// `pub fn from_full_name(full_name, client) -> Self` for a nested resource.
+///
+/// Splits the dot-joined `full_name` into its component fields **once** (`splitn(N, '.')`, so the
+/// final component keeps any trailing dots) and forwards to [`Self::new`] — no parse-then-rejoin
+/// round-trip. Only emitted for nested resources (`components.len() > 1`); for a flat resource it
+/// would duplicate `new`.
+fn from_full_name_constructor(
+    components: &[proc_macro2::Ident],
+    low_level_ident: &proc_macro2::Ident,
+    singular: &str,
+) -> TokenStream {
+    let n = components.len();
+    // Bind each component from the split iterator, in order.
+    let bindings = components.iter().map(|c| {
+        quote! { let #c = parts.next().unwrap_or_default(); }
+    });
+    let args = components.iter().map(|c| quote! { #c });
+    let doc = format!(
+        " Create a `{singular}` client from its dot-joined full name (e.g. `\"{}\"`).",
+        components
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(".")
+    );
+    quote! {
+        #[doc = #doc]
+        pub fn from_full_name(full_name: impl Into<String>, client: #low_level_ident) -> Self {
+            let full_name = full_name.into();
+            let mut parts = full_name.splitn(#n, '.');
+            #(#bindings)*
+            Self::new(#(#args,)* client)
+        }
+    }
+}
+
 /// One method per `is_scoped_instance_method()` RPC, returning its builder.
 fn instance_methods(
     service: &ServiceHandler<'_>,
@@ -528,6 +575,38 @@ mod tests {
                 CreateArg::ParentComponent,
                 CreateArg::MethodArg,
             ]
+        );
+    }
+
+    // ── from_full_name constructor ───────────────────────────────────────────────────────────
+
+    /// A two-component resource splits the full name with `splitn(2, '.')` and forwards the parts to
+    /// `new` in order.
+    #[test]
+    fn from_full_name_splits_into_components() {
+        let components = idents(&["catalog_name", "schema_name"]);
+        let low = format_ident!("SchemaServiceClient");
+        let out = from_full_name_constructor(&components, &low, "schema").to_string();
+
+        assert!(out.contains("splitn (2usize"), "expected splitn(2): {out}");
+        assert!(out.contains("let catalog_name = parts . next ()"), "{out}");
+        assert!(out.contains("let schema_name = parts . next ()"), "{out}");
+        assert!(
+            out.contains("Self :: new (catalog_name , schema_name , client)"),
+            "forwards parts in order to new: {out}"
+        );
+    }
+
+    /// A three-component resource splits with `splitn(3, '.')`.
+    #[test]
+    fn from_full_name_three_components() {
+        let components = idents(&["catalog_name", "schema_name", "table_name"]);
+        let low = format_ident!("TableServiceClient");
+        let out = from_full_name_constructor(&components, &low, "table").to_string();
+        assert!(out.contains("splitn (3usize"), "expected splitn(3): {out}");
+        assert!(
+            out.contains("Self :: new (catalog_name , schema_name , table_name , client)"),
+            "{out}"
         );
     }
 

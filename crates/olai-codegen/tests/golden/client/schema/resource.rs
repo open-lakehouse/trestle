@@ -22,6 +22,17 @@ impl SchemaClient {
             client,
         }
     }
+    /// Create a `schema` client from its dot-joined full name (e.g. `"catalog_name.schema_name"`).
+    pub fn from_full_name(
+        full_name: impl Into<String>,
+        client: SchemaServiceClient,
+    ) -> Self {
+        let full_name = full_name.into();
+        let mut parts = full_name.splitn(2usize, '.');
+        let catalog_name = parts.next().unwrap_or_default();
+        let schema_name = parts.next().unwrap_or_default();
+        Self::new(catalog_name, schema_name, client)
+    }
     pub fn get(&self) -> GetSchemaBuilder {
         GetSchemaBuilder::new(
             self.client.clone(),

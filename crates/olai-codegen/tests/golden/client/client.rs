@@ -201,6 +201,16 @@ impl ExampleClient {
             ),
         )
     }
+    /// Access the `schema` resource from its dot-joined full name.
+    pub fn schema_from_full_name(&self, full_name: impl Into<String>) -> SchemaClient {
+        SchemaClient::from_full_name(
+            full_name,
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.clone(),
+                self.base_url.clone(),
+            ),
+        )
+    }
     /// List assignments for an entity. Path params: entity_type, entity_name.
     pub fn list_tag_assignments(
         &self,
