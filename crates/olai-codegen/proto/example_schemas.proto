@@ -65,7 +65,17 @@ message CreateSchemaRequest {
 }
 
 message GetSchemaRequest {
+  // A *nested* enum (declared inside the request message). Exercises nested-enum parsing and the
+  // parent-qualified naming in the Python typings (`GetSchemaRequestView`), which must not collide
+  // with any other nested enum of the same simple name.
+  enum View {
+    VIEW_UNSPECIFIED = 0;
+    BASIC = 1;
+    FULL = 2;
+  }
+
   string full_name = 1;
+  View view = 2;
 }
 
 message ListSchemasRequest {

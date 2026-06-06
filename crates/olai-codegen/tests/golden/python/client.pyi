@@ -1,6 +1,6 @@
 # @generated — do not edit by hand.
 from __future__ import annotations
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict
 import enum
 
 class AzureConfig():
@@ -39,6 +39,22 @@ class CatalogToken():
     token: str
 
     def __init__(self, token: str) -> None:
+        ...
+
+class DeleteTagAssignmentResponse():
+    ...
+
+class ListByTagsResponse():
+    results: List[str]
+
+    def __init__(self, results: Optional[List[str]] = None) -> None:
+        ...
+
+class ListTagAssignmentsResponse():
+    next_page_token: str
+    tag_assignments: List[TagAssignment]
+
+    def __init__(self, next_page_token: str, tag_assignments: Optional[List[TagAssignment]] = None) -> None:
         ...
 
 class S3Config():
@@ -95,6 +111,14 @@ class CatalogType(enum.Enum):
     DELTASHARING_CATALOG = "DELTASHARING_CATALOG"
     MANAGED_CATALOG = "MANAGED_CATALOG"
 
+class GetSchemaRequestView(enum.Enum):
+    """A *nested* enum (declared inside the request message). Exercises nested-enum parsing and the parent-
+qualified naming in the Python typings (`GetSchemaRequestView`), which must not collide with any
+other nested enum of the same simple name."""
+    BASIC = "BASIC"
+    FULL = "FULL"
+    VIEW_UNSPECIFIED = "VIEW_UNSPECIFIED"
+
 class SchemaType(enum.Enum):
     EXTERNAL_SCHEMA = "EXTERNAL_SCHEMA"
     MANAGED_SCHEMA = "MANAGED_SCHEMA"
@@ -129,7 +153,7 @@ class SchemaClient():
             None
         """
         ...
-    def get(self) -> Schema:
+    def get(self, view: GetSchemaRequestView) -> Schema:
         """
         Returns:
             A Schema is a child resource of a Catalog. This fixture exercises the generated

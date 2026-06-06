@@ -28,7 +28,8 @@ impl SchemaServiceClient {
     }
     pub async fn get_schema(&self, request: &GetSchemaRequest) -> Result<Schema> {
         let formatted_path = format!("schemas/{}", request.full_name);
-        let url = self.base_url.join(&formatted_path)?;
+        let mut url = self.base_url.join(&formatted_path)?;
+        url.query_pairs_mut().append_pair("view", &request.view.to_string());
         let response = self.client.get(url).send().await?;
         if !response.status().is_success() {
             return Err(crate::error::parse_error_response(response).await);

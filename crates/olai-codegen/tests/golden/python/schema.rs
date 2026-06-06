@@ -11,8 +11,13 @@ pub struct PySchemaClient {
 }
 #[pymethods]
 impl PySchemaClient {
-    pub fn get(&self, py: Python) -> PyExampleResult<Schema> {
-        let mut request = self.client.get();
+    #[pyo3(signature = (view))]
+    pub fn get(
+        &self,
+        py: Python,
+        view: get_schema_request::View,
+    ) -> PyExampleResult<Schema> {
+        let mut request = self.client.get(view);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
             let result = runtime.block_on(request.into_future())?;

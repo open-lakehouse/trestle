@@ -163,9 +163,9 @@ export class SchemaClient {
     this.inner = inner;
   }
 
-  async get(): Promise<Schema> {
+  async get(view: number): Promise<Schema> {
     try {
-      return fromBinary(SchemaSchema, await this.inner.get());
+      return fromBinary(SchemaSchema, await this.inner.get(view));
     } catch (e) { throw parseNativeError(e); }
   }
 

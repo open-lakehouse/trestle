@@ -12,6 +12,33 @@ pub fn extract_simple_type_name(name: &str) -> String {
     name.split('.').next_back().unwrap_or(name).to_string()
 }
 
+/// Derive the **emitted** type name for a (possibly nested) protobuf type from its fully-qualified
+/// name, disambiguating nested types by their parent message.
+///
+/// Package and version segments are lowercase; type segments are PascalCase. This joins the trailing
+/// run of type segments (everything from the first PascalCase segment onward), so a top-level type is
+/// unchanged while a nested type is prefixed by its enclosing message(s):
+///
+/// - `".pkg.v1.Catalog"` → `"Catalog"`
+/// - `".pkg.v1.GenerateTemporaryTableCredentialsRequest.Operation"` →
+///   `"GenerateTemporaryTableCredentialsRequestOperation"`
+///
+/// This keeps emitted names collision-free when the same nested name (e.g. `Operation`) appears in
+/// multiple messages, and must be used consistently for both type *definitions* and *references*.
+pub fn extract_qualified_type_name(name: &str) -> String {
+    let segments: Vec<&str> = name.split('.').filter(|s| !s.is_empty()).collect();
+    // A type segment starts with an ASCII uppercase letter (PascalCase); package/version segments
+    // do not. Find the first such segment and join from there to the end.
+    let start = segments
+        .iter()
+        .position(|s| s.starts_with(|c: char| c.is_ascii_uppercase()));
+    match start {
+        Some(i) => segments[i..].concat(),
+        // No PascalCase segment (shouldn't happen for a real type) — fall back to the last segment.
+        None => extract_simple_type_name(name),
+    }
+}
+
 /// String manipulation utilities
 pub mod strings {
     use super::*;
@@ -105,6 +132,42 @@ mod tests {
                 strings::service_to_base_path("RecipientsService"),
                 "recipients"
             );
+        }
+    }
+
+    mod qualified_type_name {
+        use super::*;
+
+        #[test]
+        fn top_level_type_is_unchanged() {
+            assert_eq!(
+                extract_qualified_type_name(".unitycatalog.catalog.v1.Catalog"),
+                "Catalog"
+            );
+            assert_eq!(extract_qualified_type_name(".pkg.v1.UpdateX"), "UpdateX");
+        }
+
+        #[test]
+        fn nested_type_is_prefixed_by_parent() {
+            assert_eq!(
+                extract_qualified_type_name(
+                    ".unitycatalog.temporary_credentials.v1.GenerateTemporaryTableCredentialsRequest.Operation"
+                ),
+                "GenerateTemporaryTableCredentialsRequestOperation"
+            );
+        }
+
+        #[test]
+        fn distinct_parents_yield_distinct_names() {
+            let a = extract_qualified_type_name(".pkg.v1.GenerateTableCredsRequest.Operation");
+            let b = extract_qualified_type_name(".pkg.v1.GenerateVolumeCredsRequest.Operation");
+            assert_ne!(a, b);
+        }
+
+        #[test]
+        fn no_leading_dot_or_package() {
+            // A bare PascalCase name is returned as-is.
+            assert_eq!(extract_qualified_type_name("Catalog"), "Catalog");
         }
     }
 }

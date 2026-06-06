@@ -33,10 +33,11 @@ impl SchemaClient {
         let schema_name = parts.next().unwrap_or_default();
         Self::new(catalog_name, schema_name, client)
     }
-    pub fn get(&self) -> GetSchemaBuilder {
+    pub fn get(&self, view: get_schema_request::View) -> GetSchemaBuilder {
         GetSchemaBuilder::new(
             self.client.clone(),
             format!("{}.{}", self.catalog_name, self.schema_name),
+            view,
         )
     }
     pub fn update(&self) -> UpdateSchemaBuilder {

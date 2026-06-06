@@ -12,22 +12,26 @@ use crate::codegen::{MethodHandler, ServiceHandler};
 use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, UnifiedType, unified_to_python_type};
 use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo};
+use crate::utils::extract_qualified_type_name;
 
 /// Generate unified Python typings (.pyi file) for all services in a single file
 pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
     let metadata = services[0].metadata;
     let bindings = services[0].config.bindings.as_ref();
 
-    let mut content = vec![
-        "from __future__ import annotations".to_string(),
-        "from typing import Optional, List, Dict, Any, Literal".to_string(),
-        "import enum".to_string(),
-        "".to_string(),
-    ];
+    // Build the body first, then prepend only the `typing` imports it actually references — avoids
+    // unused-import lint noise (e.g. `Any`/`Literal` imported but never used).
+    let mut content: Vec<String> = Vec::new();
+
+    // Message types referenced directly as a method return type (e.g. a custom RPC returning a raw
+    // `*Response`). These must be emitted as classes even though `*Response` is otherwise skipped,
+    // or the method signatures reference undefined names.
+    let returned_types = referenced_return_types(services);
 
     let model_classes = generate_model_classes(
         metadata,
         bindings.and_then(|b| b.typings_package_filter.as_deref()),
+        &returned_types,
     );
     content.extend(model_classes);
 
@@ -63,7 +67,29 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
     );
     content.push(main_client_class);
 
-    content.join("\n")
+    let body = content.join("\n");
+
+    // Prepend the header: `from __future__` + only the `typing` names the body references + `enum`
+    // if used. A name is "used" if it appears as a word anywhere in the body.
+    let uses = |name: &str| {
+        body.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .any(|tok| tok == name)
+    };
+    let typing_names: Vec<&str> = ["Optional", "List", "Dict", "Any", "Literal"]
+        .into_iter()
+        .filter(|n| uses(n))
+        .collect();
+
+    let mut header = vec!["from __future__ import annotations".to_string()];
+    if !typing_names.is_empty() {
+        header.push(format!("from typing import {}", typing_names.join(", ")));
+    }
+    if uses("enum") {
+        header.push("import enum".to_string());
+    }
+    header.push(String::new());
+
+    format!("{}\n{}", header.join("\n"), body)
 }
 
 fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<String> {
@@ -694,7 +720,39 @@ fn collect_field_types(ut: &UnifiedType, queue: &mut std::collections::VecDeque<
 
 // --- Model / enum class generation ---
 
-fn generate_model_classes(metadata: &CodeGenMetadata, package_filter: Option<&str>) -> Vec<String> {
+/// Simple names of message types referenced directly as a method return type.
+///
+/// A non-list method returns its raw output message; for a custom RPC that is a `*Response` type
+/// (e.g. `UpdatePermissionsResponse`), which is otherwise skipped by [`generate_model_classes`].
+/// Collecting these lets us emit exactly the response classes that are actually referenced, without
+/// emitting every (unused) response wrapper. List methods return the unwrapped item type, so they're
+/// excluded here.
+fn referenced_return_types(services: &[ServiceHandler<'_>]) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for service in services {
+        for method in service.methods() {
+            // Mirror the rendered return type: List methods return the unwrapped item (not the
+            // response wrapper), and Delete methods are typed `None`, so neither references the raw
+            // output message. Every other method returns its output message directly.
+            if matches!(
+                method.plan.request_type,
+                RequestType::List | RequestType::Delete
+            ) {
+                continue;
+            }
+            if let Some(ident) = method.output_type() {
+                set.insert(ident.to_string());
+            }
+        }
+    }
+    set
+}
+
+fn generate_model_classes(
+    metadata: &CodeGenMetadata,
+    package_filter: Option<&str>,
+    returned_types: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
     let mut classes = Vec::new();
     let (reachable_messages, _) = collect_reachable_types(metadata, package_filter);
 
@@ -702,7 +760,15 @@ fn generate_model_classes(metadata: &CodeGenMetadata, package_filter: Option<&st
         .iter()
         .filter(|name| {
             let simple = extract_simple_type_name(name);
-            !simple.ends_with("Request") && !simple.ends_with("Response")
+            // Request/Response wrappers are not part of the typed surface — except a Response that a
+            // method returns directly, which must be emitted so its signature reference resolves.
+            if simple.ends_with("Request") {
+                return false;
+            }
+            if simple.ends_with("Response") {
+                return returned_types.contains(simple.as_str());
+            }
+            true
         })
         .filter_map(|name| metadata.messages.get(name.as_str()))
         .collect();
@@ -722,15 +788,17 @@ fn generate_enum_classes(metadata: &CodeGenMetadata, package_filter: Option<&str
     let mut enums = Vec::new();
     let (_, reachable_enums) = collect_reachable_types(metadata, package_filter);
 
-    let mut matching_enums: Vec<_> = reachable_enums
+    // Keep the FQ key alongside the info so the emitted class name can be parent-qualified for
+    // nested enums (the bare `EnumInfo.name` loses the parent).
+    let mut matching_enums: Vec<(&String, &EnumInfo)> = reachable_enums
         .iter()
-        .filter_map(|name| metadata.enums.get(name.as_str()))
+        .filter_map(|name| metadata.enums.get(name.as_str()).map(|info| (name, info)))
         .collect();
 
-    matching_enums.sort_by_key(|enum_info| extract_simple_type_name(&enum_info.name));
+    matching_enums.sort_by_key(|(fq, _)| extract_qualified_type_name(fq));
 
-    for enum_info in matching_enums {
-        let enum_def = generate_enum_class_definition(enum_info);
+    for (fq, enum_info) in matching_enums {
+        let enum_def = generate_enum_class_definition(fq, enum_info);
         enums.push(enum_def);
         enums.push("".to_string());
     }
@@ -739,7 +807,8 @@ fn generate_enum_classes(metadata: &CodeGenMetadata, package_filter: Option<&str
 }
 
 fn generate_model_class_definition(message: &MessageInfo) -> String {
-    let class_name = extract_simple_type_name(&message.name);
+    // `MessageInfo.name` is fully qualified; nested messages get a parent-qualified class name.
+    let class_name = extract_qualified_type_name(&message.name);
     let docstring = message
         .documentation
         .as_ref()
@@ -793,8 +862,9 @@ fn generate_model_class_definition(message: &MessageInfo) -> String {
     generate_class_from_template(&class_name, "", docstring.as_deref(), &body_content)
 }
 
-fn generate_enum_class_definition(enum_info: &EnumInfo) -> String {
-    let enum_name = extract_simple_type_name(&enum_info.name);
+fn generate_enum_class_definition(fq_name: &str, enum_info: &EnumInfo) -> String {
+    let _ = &enum_info.name;
+    let enum_name = extract_qualified_type_name(fq_name);
     let docstring = enum_info
         .documentation
         .as_ref()

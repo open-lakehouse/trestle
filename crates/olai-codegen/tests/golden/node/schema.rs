@@ -14,8 +14,17 @@ pub struct NapiSchemaClient {
 #[napi]
 impl NapiSchemaClient {
     #[napi(catch_unwind)]
-    pub async fn get(&self) -> napi::Result<Buffer> {
-        let mut request = self.client.get();
+    pub async fn get(&self, view: i32) -> napi::Result<Buffer> {
+        let mut request = self
+            .client
+            .get(
+                view
+                    .try_into()
+                    .map_err(|_| napi::Error::new(
+                        napi::Status::GenericFailure,
+                        "invalid enum value",
+                    ))?,
+            );
         request.await.map(|item| Buffer::from(item.encode_to_vec())).default_error()
     }
     #[napi(catch_unwind)]

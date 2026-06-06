@@ -7,7 +7,7 @@ use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::utils::extract_simple_type_name;
+use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
 
 /// Context for rendering types in different situations
 #[derive(Debug, Clone, Copy)]
@@ -199,9 +199,12 @@ pub fn unified_to_python_type(unified_type: &UnifiedType) -> String {
         BaseType::Float64 | BaseType::Float32 => "float".to_string(),
         BaseType::Bytes => "bytes".to_string(),
         BaseType::Unit => "None".to_string(),
-        BaseType::Message(name) => extract_simple_type_name(name),
-        BaseType::Enum(name) => extract_simple_type_name(name),
-        BaseType::OneOf(name) => extract_simple_type_name(name),
+        // Python typings emit flat classes, so nested types use the parent-qualified name (e.g.
+        // `GenerateTemporaryTableCredentialsRequestOperation`) to stay collision-free. Top-level
+        // types are unaffected (qualified == simple).
+        BaseType::Message(name) => extract_qualified_type_name(name),
+        BaseType::Enum(name) => extract_qualified_type_name(name),
+        BaseType::OneOf(name) => extract_qualified_type_name(name),
         BaseType::Map(key_type, value_type) => {
             let key_str = unified_to_python_type(key_type);
             let value_str = unified_to_python_type(value_type);

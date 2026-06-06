@@ -49,9 +49,11 @@ impl GetSchemaBuilder {
     pub(crate) fn new(
         client: SchemaServiceClient,
         full_name: impl Into<String>,
+        view: get_schema_request::View,
     ) -> Self {
         let request = GetSchemaRequest {
             full_name: full_name.into(),
+            view: view as i32,
             ..Default::default()
         };
         Self { client, request }
