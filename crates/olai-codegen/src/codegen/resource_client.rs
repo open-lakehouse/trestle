@@ -6,9 +6,10 @@
 //!   client)`, which splits the dot-joined name into components once and forwards to `new`;
 //! - instance operations (`get`/`update`/`delete` and resource-targeted custom RPCs), each
 //!   returning the matching generated builder with the captured components injected as the path arg;
-//! - child-navigation accessors (`catalog.schema(name) -> SchemaClient`) and child-create methods
-//!   (`catalog.create_schema(name) -> CreateSchemaBuilder`) for each direct child resource, reusing
-//!   the parent's captured components.
+//! - child-navigation accessors (`catalog.schema(name) -> SchemaClient`), child-create methods
+//!   (`catalog.create_schema(name) -> CreateSchemaBuilder`), and child-list methods
+//!   (`catalog.list_schemas(…) -> ListSchemasBuilder`, with `.into_stream()` for pagination) for each
+//!   direct child resource, reusing the parent's captured components as the filter/path values.
 //!
 //! This replaces the previously hand-written scoped clients in consuming crates. The struct (with
 //! `pub(crate)` fields) is generated into the consuming crate's source tree alongside the low-level
@@ -157,6 +158,9 @@ fn child_methods(
         if let Some(create) = child_create_method(&child, link, parent_components) {
             out.push(create);
         }
+        if let Some(list) = child_list_method(&child, link, parent_components) {
+            out.push(list);
+        }
     }
     out
 }
@@ -219,19 +223,19 @@ fn child_create_method(
     let required: Vec<&RequestParam> = create.required_parameters().collect();
 
     // The builder's `::new` takes the Create method's required params in order. Classify each as a
-    // parent-component fill or a method argument (see `classify_create_args`), then render.
+    // parent-component fill or a method argument (see `classify_builder_args`), then render.
     let mut new_args: Vec<TokenStream> = Vec::new();
     let mut method_param_defs: Vec<TokenStream> = Vec::new();
     for (param, source) in required
         .iter()
-        .zip(classify_create_args(&required, &parent_names))
+        .zip(classify_builder_args(&required, &parent_names))
     {
         match source {
-            CreateArg::ParentComponent => {
+            BuilderArg::ParentComponent => {
                 let field = format_ident!("{}", param.name());
                 new_args.push(quote! { &self.#field });
             }
-            CreateArg::MethodArg => {
+            BuilderArg::MethodArg => {
                 let ident = param.field_ident();
                 let ty = create.field_type(
                     param.field_type(),
@@ -258,28 +262,96 @@ fn child_create_method(
     })
 }
 
-/// How a child Create builder argument is supplied.
+/// `pub fn list_<child>(&self, <args>) -> crate::codegen::<base>::List<Child>Builder`.
+///
+/// Lists the child resource scoped to this resource: the parent's captured components pre-fill the
+/// child List request's matching filter param(s) (e.g. `catalog_name`); pagination/other required
+/// params become method args. The returned builder has `into_stream()` for paginated iteration.
+/// Returns `None` when the child has no `List` method.
+fn child_list_method(
+    child: &ServiceHandler<'_>,
+    link: &crate::analysis::ChildLink,
+    parent_components: &[proc_macro2::Ident],
+) -> Option<TokenStream> {
+    let list = child
+        .methods()
+        .find(|m| m.plan.request_type == RequestType::List)?;
+    let child_low_level = child.low_level_client_type();
+    let module = format_ident!("{}", link.child_base_path);
+    let builder_ty = list.builder_type();
+    // Match the aggregate's list method name (e.g. `list_schemas`).
+    let method_name = list.binding_method_name();
+
+    let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
+    let required: Vec<&RequestParam> = list.required_parameters().collect();
+
+    // The builder's `::new` takes the List method's required params in order. Parent-filter params
+    // are filled from `self`; the rest (e.g. a required `max_results`) become method args. When the
+    // proto marks pagination fields `optional`, they're `with_*` setters and drop out here.
+    let mut new_args: Vec<TokenStream> = Vec::new();
+    let mut method_param_defs: Vec<TokenStream> = Vec::new();
+    for (param, source) in required
+        .iter()
+        .zip(classify_builder_args(&required, &parent_names))
+    {
+        match source {
+            BuilderArg::ParentComponent => {
+                let field = format_ident!("{}", param.name());
+                new_args.push(quote! { &self.#field });
+            }
+            BuilderArg::MethodArg => {
+                let ident = param.field_ident();
+                let ty = list.field_type(
+                    param.field_type(),
+                    crate::parsing::types::RenderContext::Constructor,
+                );
+                method_param_defs.push(quote! { #ident: #ty });
+                new_args.push(quote! { #ident });
+            }
+        }
+    }
+
+    let doc = format!(
+        " List `{}` resources within this resource.",
+        link.child_singular
+    );
+    Some(quote! {
+        #[doc = #doc]
+        pub fn #method_name(&self, #(#method_param_defs),*) -> crate::codegen::#module::#builder_ty {
+            crate::codegen::#module::#builder_ty::new(
+                crate::codegen::#module::#child_low_level::new(
+                    self.client.client.clone(),
+                    self.client.base_url.clone(),
+                ),
+                #(#new_args),*
+            )
+        }
+    })
+}
+
+/// How a child builder (`Create*`/`List*`) argument is supplied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CreateArg {
+enum BuilderArg {
     /// Filled from the parent's captured component of the same name (`&self.<name>`).
     ParentComponent,
     /// Supplied by the caller as a method argument.
     MethodArg,
 }
 
-/// Classify each of a child Create method's required params (in builder `::new` order) as either a
-/// parent-component fill or a caller-supplied method argument.
+/// Classify each of a child builder's required `::new` params (in order) as either a parent-component
+/// fill or a caller-supplied method argument.
 ///
-/// A param whose name matches one of the parent's captured component names is a `ParentComponent`;
-/// everything else (the child's own name, other required fields) is a `MethodArg`.
-fn classify_create_args(required: &[&RequestParam], parent_names: &[String]) -> Vec<CreateArg> {
+/// A param whose name matches one of the parent's captured component names is a `ParentComponent`
+/// (e.g. `catalog_name` on a child Create/List); everything else (the child's own name, pagination
+/// knobs, other required fields) is a `MethodArg`. Shared by the child create and list emitters.
+fn classify_builder_args(required: &[&RequestParam], parent_names: &[String]) -> Vec<BuilderArg> {
     required
         .iter()
         .map(|p| {
             if parent_names.iter().any(|n| n == p.name()) {
-                CreateArg::ParentComponent
+                BuilderArg::ParentComponent
             } else {
-                CreateArg::MethodArg
+                BuilderArg::MethodArg
             }
         })
         .collect()
@@ -540,8 +612,8 @@ mod tests {
         let refs: Vec<&RequestParam> = required.iter().collect();
         let parents = vec!["catalog_name".to_string()];
         assert_eq!(
-            classify_create_args(&refs, &parents),
-            vec![CreateArg::MethodArg, CreateArg::ParentComponent]
+            classify_builder_args(&refs, &parents),
+            vec![BuilderArg::MethodArg, BuilderArg::ParentComponent]
         );
     }
 
@@ -553,11 +625,11 @@ mod tests {
         let refs: Vec<&RequestParam> = required.iter().collect();
         let parents = vec!["catalog_name".to_string(), "schema_name".to_string()];
         assert_eq!(
-            classify_create_args(&refs, &parents),
+            classify_builder_args(&refs, &parents),
             vec![
-                CreateArg::MethodArg,
-                CreateArg::ParentComponent,
-                CreateArg::ParentComponent,
+                BuilderArg::MethodArg,
+                BuilderArg::ParentComponent,
+                BuilderArg::ParentComponent,
             ]
         );
     }
@@ -569,11 +641,54 @@ mod tests {
         let refs: Vec<&RequestParam> = required.iter().collect();
         let parents = vec!["catalog_name".to_string()];
         assert_eq!(
-            classify_create_args(&refs, &parents),
+            classify_builder_args(&refs, &parents),
             vec![
-                CreateArg::MethodArg,
-                CreateArg::ParentComponent,
-                CreateArg::MethodArg,
+                BuilderArg::MethodArg,
+                BuilderArg::ParentComponent,
+                BuilderArg::MethodArg,
+            ]
+        );
+    }
+
+    /// ListSchemas builder `new(client, catalog_name, max_results, page_token)` (fixtures: pagination
+    /// is required): `catalog_name` is the parent filter (filled from `&self.catalog_name`); the
+    /// pagination knobs become method args. Order is preserved.
+    #[test]
+    fn list_args_parent_filter_then_pagination() {
+        let required = vec![
+            path("catalog_name"),
+            path("max_results"),
+            path("page_token"),
+        ];
+        let refs: Vec<&RequestParam> = required.iter().collect();
+        let parents = vec!["catalog_name".to_string()];
+        assert_eq!(
+            classify_builder_args(&refs, &parents),
+            vec![
+                BuilderArg::ParentComponent,
+                BuilderArg::MethodArg,
+                BuilderArg::MethodArg,
+            ]
+        );
+    }
+
+    /// Nested list (e.g. tables under a schema): both `catalog_name` and `schema_name` are parent
+    /// filters, each filled from `self`.
+    #[test]
+    fn list_args_multi_parent_filters() {
+        let required = vec![
+            path("catalog_name"),
+            path("schema_name"),
+            path("max_results"),
+        ];
+        let refs: Vec<&RequestParam> = required.iter().collect();
+        let parents = vec!["catalog_name".to_string(), "schema_name".to_string()];
+        assert_eq!(
+            classify_builder_args(&refs, &parents),
+            vec![
+                BuilderArg::ParentComponent,
+                BuilderArg::ParentComponent,
+                BuilderArg::MethodArg,
             ]
         );
     }

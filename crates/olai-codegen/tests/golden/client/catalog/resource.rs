@@ -62,4 +62,20 @@ impl CatalogClient {
             schema_type,
         )
     }
+    /// List `schema` resources within this resource.
+    pub fn list_schemas(
+        &self,
+        max_results: i32,
+        page_token: impl Into<String>,
+    ) -> crate::codegen::schema::ListSchemasBuilder {
+        crate::codegen::schema::ListSchemasBuilder::new(
+            crate::codegen::schema::SchemaServiceClient::new(
+                self.client.client.clone(),
+                self.client.base_url.clone(),
+            ),
+            &self.catalog_name,
+            max_results,
+            page_token,
+        )
+    }
 }
