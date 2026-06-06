@@ -26,6 +26,12 @@ impl CatalogClient {
     pub fn delete(&self) -> DeleteCatalogBuilder {
         DeleteCatalogBuilder::new(self.client.clone(), &self.catalog_name)
     }
+    /// Resource-targeted custom GET (path param, not a collection method) — exercises surfacing a
+    /// custom read on the scoped client (`catalog.get_catalog_status()`) instead of leaving its
+    /// generated builder orphaned.
+    pub fn get_catalog_status(&self) -> GetCatalogStatusBuilder {
+        GetCatalogStatusBuilder::new(self.client.clone(), &self.catalog_name)
+    }
     /// Access a `schema` within this resource.
     pub fn schema(
         &self,

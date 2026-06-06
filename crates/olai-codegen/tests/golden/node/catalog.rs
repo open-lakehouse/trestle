@@ -28,6 +28,11 @@ impl NapiCatalogClient {
         let mut request = self.client.delete();
         request.await.default_error()
     }
+    #[napi(catch_unwind)]
+    pub async fn get_catalog_status(&self) -> napi::Result<Buffer> {
+        let mut request = self.client.get_catalog_status();
+        request.await.map(|item| Buffer::from(item.encode_to_vec())).default_error()
+    }
 }
 impl NapiCatalogClient {
     pub fn new(client: CatalogClient) -> Self {

@@ -47,4 +47,12 @@ pub trait CatalogHandler<Cx = crate::Context>: Send + Sync + 'static {
         request: GenerateCatalogTokenRequest,
         context: Cx,
     ) -> Result<CatalogToken>;
+    /// Resource-targeted custom GET (path param, not a collection method) — exercises surfacing a
+    /// custom read on the scoped client (`catalog.get_catalog_status()`) instead of leaving its
+    /// generated builder orphaned.
+    async fn get_catalog_status(
+        &self,
+        request: GetCatalogStatusRequest,
+        context: Cx,
+    ) -> Result<CatalogStatus>;
 }

@@ -95,4 +95,20 @@ impl CatalogServiceClient {
         let result = response.bytes().await?;
         Ok(serde_json::from_slice(&result)?)
     }
+    /// Resource-targeted custom GET (path param, not a collection method) — exercises surfacing a
+    /// custom read on the scoped client (`catalog.get_catalog_status()`) instead of leaving its
+    /// generated builder orphaned.
+    pub async fn get_catalog_status(
+        &self,
+        request: &GetCatalogStatusRequest,
+    ) -> Result<CatalogStatus> {
+        let formatted_path = format!("catalogs/{}/status", request.name);
+        let url = self.base_url.join(&formatted_path)?;
+        let response = self.client.get(url).send().await?;
+        if !response.status().is_success() {
+            return Err(crate::error::parse_error_response(response).await);
+        }
+        let result = response.bytes().await?;
+        Ok(serde_json::from_slice(&result)?)
+    }
 }

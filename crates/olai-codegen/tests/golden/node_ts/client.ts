@@ -2,6 +2,7 @@
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
   type Catalog,
+  type CatalogStatus,
   type CatalogToken,
   type DeleteCatalogResponse,
   type DeleteSchemaResponse,
@@ -11,6 +12,7 @@ import {
   type Schema,
   type TagAssignment,
   CatalogSchema,
+  CatalogStatusSchema,
   CatalogTokenSchema,
   DeleteCatalogResponseSchema,
   DeleteSchemaResponseSchema,

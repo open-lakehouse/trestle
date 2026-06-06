@@ -29,6 +29,12 @@ class Catalog():
         ) -> None:
         ...
 
+class CatalogStatus():
+    state: str
+
+    def __init__(self, state: str) -> None:
+        ...
+
 class CatalogToken():
     token: str
 

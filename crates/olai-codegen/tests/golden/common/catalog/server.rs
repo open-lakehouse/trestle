@@ -99,3 +99,16 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for GenerateCatalogTokenReque
         Ok(request)
     }
 }
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetCatalogStatusRequest {
+    type Rejection = axum::response::Response;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let axum::extract::Path(name) = parts
+            .extract::<axum::extract::Path<String>>()
+            .await
+            .map_err(axum::response::IntoResponse::into_response)?;
+        Ok(GetCatalogStatusRequest { name })
+    }
+}

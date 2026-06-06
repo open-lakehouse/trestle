@@ -196,3 +196,28 @@ impl IntoFuture for GenerateCatalogTokenBuilder {
         Box::pin(async move { client.generate_catalog_token(&request).await })
     }
 }
+/// Builder for catalog status
+pub struct GetCatalogStatusBuilder {
+    client: CatalogServiceClient,
+    request: GetCatalogStatusRequest,
+}
+impl GetCatalogStatusBuilder {
+    /// Create a new builder instance.
+    /// Obtain via the corresponding method on `CatalogServiceClient`.
+    pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
+        let request = GetCatalogStatusRequest {
+            name: name.into(),
+            ..Default::default()
+        };
+        Self { client, request }
+    }
+}
+impl IntoFuture for GetCatalogStatusBuilder {
+    type Output = Result<CatalogStatus>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+    fn into_future(self) -> Self::IntoFuture {
+        let client = self.client;
+        let request = self.request;
+        Box::pin(async move { client.get_catalog_status(&request).await })
+    }
+}

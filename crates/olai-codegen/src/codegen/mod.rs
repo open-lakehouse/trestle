@@ -33,7 +33,6 @@ use crate::analysis::{
     BodyField, GenerationPlan, ManagedResource, MethodPlan, RequestParam, RequestType, ServicePlan,
     analyze_metadata, split_body_fields,
 };
-use crate::google::api::http_rule::Pattern;
 use crate::output;
 use crate::parsing::types::{self, RenderContext, UnifiedType};
 use crate::parsing::{CodeGenMetadata, MessageField, MessageInfo};
@@ -874,13 +873,22 @@ impl MethodHandler<'_> {
     /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
     /// deliberately **not** surfaced on the scoped client, matching prior behavior.
     pub(crate) fn is_scoped_instance_method(&self) -> bool {
-        matches!(
+        // Standard instance verbs are always scoped.
+        if matches!(
             self.plan.request_type,
             RequestType::Get | RequestType::Update | RequestType::Delete
-        ) || (matches!(
-            self.plan.request_type,
-            RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
-        ) && !self.is_collection_method())
+        ) {
+            return true;
+        }
+        // A *resource-targeted* custom RPC (any verb) is a scoped instance method: it has at least
+        // one path param (so it operates on a specific resource) and is not a collection method
+        // (those — list / create / factory — live on the root client). This surfaces custom reads
+        // like `GetTableExists` / `GetPermissions` (`GET …/{name}/exists`) and resource-targeted
+        // custom POST/PATCH (`…/{name}:rotateToken`) on the scoped client, rather than leaving their
+        // generated builders orphaned/unreachable.
+        matches!(self.plan.request_type, RequestType::Custom(_))
+            && !self.is_collection_method()
+            && self.plan.path_parameters().next().is_some()
     }
 
     /// The ordered binding parameter list for `mode`, with shared filtering applied once.
