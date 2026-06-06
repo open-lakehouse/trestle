@@ -234,6 +234,8 @@ pub struct BodyField {
     pub field_type: UnifiedType,
     /// Whether this field is a repeated (Vec) type
     pub repeated: bool,
+    /// Whether the field is explicitly marked `(google.api.field_behavior) = REQUIRED`.
+    pub required: bool,
     /// For oneof fields, the variants with their names and types
     pub oneof_variants: Option<Vec<OneofVariant>>,
     /// Documentation from protobuf field comments
@@ -243,11 +245,19 @@ pub struct BodyField {
 impl BodyField {
     /// Denotes whether this field should be treated as optional in builder APIs.
     ///
-    /// A field is optional when its `UnifiedType.is_optional` flag is set, when it is
-    /// repeated, or when its base type is `Map`, `Message`, or `OneOf` (complex types
-    /// always have a valid default and are therefore optional constructor parameters).
+    /// A field marked `REQUIRED` is never optional — even for complex types — so it becomes a
+    /// required constructor parameter rather than a `with_*` setter. (Without this, a required
+    /// message body like `tag_assignment` would be a no-arg-constructor + optional setter, and the
+    /// NAPI binding would execute with an empty body.)
+    ///
+    /// Otherwise a field is optional when its `UnifiedType.is_optional` flag is set, when it is
+    /// repeated, or when its base type is `Map`, `Message`, or `OneOf` (complex types have a valid
+    /// default and are treated as optional constructor parameters).
     pub fn is_optional(&self) -> bool {
         use crate::parsing::types::BaseType;
+        if self.required {
+            return false;
+        }
         self.field_type.is_optional
             || self.repeated
             || matches!(

@@ -434,11 +434,17 @@ fn resource_method_parameters(method: &MethodHandler<'_>, mode: BindingMode) -> 
     method
         .required_parameters()
         .chain(method.optional_parameters())
-        .filter(|field| !(drop_path && field.is_path_param()) && is_napi_supported(field))
+        .filter(|field| !(drop_path && field.is_path_param()))
+        .filter(|field| is_napi_supported(field) || is_required_message_body(field))
         .map(|p| {
             let param_name = p.field_ident();
-            let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
-            quote! { #param_name: #rust_type }
+            if is_required_message_body(p) {
+                // Message bodies cross the NAPI boundary as serialized bytes (decoded below).
+                quote! { #param_name: napi::bindgen_prelude::Buffer }
+            } else {
+                let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
+                quote! { #param_name: #rust_type }
+            }
         })
         .collect()
 }
@@ -447,13 +453,33 @@ fn collection_method_parameters(method: &MethodHandler<'_>, is_list: bool) -> Ve
     method
         .required_parameters()
         .chain(method.optional_parameters())
-        .filter(|p| !(is_list && p.name() == "page_token") && is_napi_supported(p))
+        .filter(|p| !(is_list && p.name() == "page_token"))
+        // Keep NAPI-native params and required message bodies (passed as a `Buffer`); drop other
+        // unsupported params (e.g. optional message setters, which stay codegen-omitted for now).
+        .filter(|p| is_napi_supported(p) || is_required_message_body(p))
         .map(|p| {
             let param_name = p.field_ident();
-            let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
-            quote! { #param_name: #rust_type }
+            if is_required_message_body(p) {
+                // Protobuf message bodies cross the NAPI boundary as serialized bytes; the binding
+                // decodes them below. (See `inner_resource_client_call`.)
+                quote! { #param_name: napi::bindgen_prelude::Buffer }
+            } else {
+                let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
+                quote! { #param_name: #rust_type }
+            }
         })
         .collect()
+}
+
+/// Whether a param is a required, singular protobuf message — i.e. a request body that must cross
+/// the NAPI boundary as serialized bytes (a `Buffer`) and be decoded on the Rust side.
+fn is_required_message_body(param: &RequestParam) -> bool {
+    !param.is_optional()
+        && !param.field_type().is_repeated
+        && matches!(
+            param.field_type().base_type,
+            BaseType::Message(_) | BaseType::OneOf(_)
+        )
 }
 
 /// Emit the call into the underlying Rust client. See the Python `inner_resource_client_call`.
@@ -464,10 +490,27 @@ fn inner_resource_client_call(method: &MethodHandler<'_>, mode: BindingMode) -> 
     };
     let args = method
         .required_parameters()
-        .filter(|param| !(drop_path && param.is_path_param()) && is_napi_supported(param))
+        .filter(|param| {
+            !(drop_path && param.is_path_param())
+                && (is_napi_supported(param) || is_required_message_body(param))
+        })
         .map(|param| {
             let param_name = param.field_ident();
-            if matches!(param.field_type().base_type, BaseType::Enum(..)) {
+            if is_required_message_body(param) {
+                // Decode the protobuf bytes received over the NAPI boundary back into the message.
+                let msg_ty = format_ident!(
+                    "{}",
+                    match &param.field_type().base_type {
+                        BaseType::Message(n) | BaseType::OneOf(n) =>
+                            crate::utils::extract_simple_type_name(n),
+                        _ => unreachable!("is_required_message_body guarantees a message type"),
+                    }
+                );
+                quote! {
+                    <#msg_ty as prost::Message>::decode(#param_name.as_ref())
+                        .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("invalid {} payload: {e}", stringify!(#msg_ty))))?
+                }
+            } else if matches!(param.field_type().base_type, BaseType::Enum(..)) {
                 quote! { #param_name.try_into().map_err(|_| napi::Error::new(napi::Status::GenericFailure, "invalid enum value"))? }
             } else {
                 quote! { #param_name }

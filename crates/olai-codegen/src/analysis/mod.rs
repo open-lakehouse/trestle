@@ -387,6 +387,7 @@ fn extract_request_fields(
                 name: field.name.clone(),
                 field_type: field.unified_type.clone().optional(),
                 repeated: false,
+                required: false,
                 oneof_variants: field.oneof_variants.clone(),
                 documentation: field.documentation.clone(),
             });
@@ -401,10 +402,27 @@ fn extract_request_fields(
         };
 
         if is_body {
+            let required = field.field_behavior.contains(&FieldBehavior::Required);
+            // Mark non-required singular message/oneof bodies as optional on the type so FFI
+            // bindings render them as `Option<T>` (matching their `= None` default). Required
+            // bodies keep the bare type and become required constructor params. Scalars and
+            // collections are unaffected (their optionality is already correct).
+            let needs_optional_marker = !required
+                && !field.unified_type.is_repeated
+                && matches!(
+                    field.unified_type.base_type,
+                    BaseType::Message(_) | BaseType::OneOf(_)
+                );
+            let field_type = if needs_optional_marker {
+                field.unified_type.clone().optional()
+            } else {
+                field.unified_type.clone()
+            };
             body_fields.push(BodyField {
                 name: field.name.clone(),
-                field_type: field.unified_type.clone(),
+                field_type,
                 repeated: field.unified_type.is_repeated,
+                required,
                 oneof_variants: None,
                 documentation: field.documentation.clone(),
             });

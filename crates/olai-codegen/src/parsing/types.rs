@@ -150,16 +150,13 @@ fn should_wrap_in_option(ctx: RenderContext, ty: &UnifiedType) -> bool {
         ctx,
         RenderContext::PythonParameter | RenderContext::NapiParameter
     );
-    // At FFI boundaries, wrap complex types (maps, repeated, messages, oneofs) in `Option`.
-    // This keeps the generated parameter type in sync with `BodyField::is_optional`, which treats
-    // these as optional (`= None`) in the pyo3 signature — a bare `T` param with a `= None`
-    // default fails to compile.
-    let is_ffi_complex = is_ffi
-        && (matches!(
-            ty.base_type,
-            BaseType::Map(_, _) | BaseType::Message(_) | BaseType::OneOf(_)
-        ) || ty.is_repeated);
-    is_optional_non_builder || is_ffi_complex
+    // At FFI boundaries, collections (maps, repeated) are wrapped in `Option` so callers can
+    // distinguish "absent" from "empty". Message/oneof optionality is carried by `ty.is_optional`
+    // (set during analysis from the field's `REQUIRED` behavior), so a required message body
+    // renders as a bare `T` required param while an optional one renders as `Option<T>`.
+    let is_ffi_collection =
+        is_ffi && (matches!(ty.base_type, BaseType::Map(_, _)) || ty.is_repeated);
+    is_optional_non_builder || is_ffi_collection
 }
 
 /// Generate field assignment code
@@ -183,6 +180,12 @@ pub fn field_assignment(
         BaseType::Map(_, _) => quote! {
             #field_ident.into_iter().map(|(k, v)| (k.into(), v.into())).collect()
         },
+        // Singular message/oneof fields are `Option<T>` in the prost-generated request struct, but
+        // a required one arrives as a bare `T` constructor param — wrap it in `Some` to assign.
+        // (Repeated messages are `Vec<T>`, not `Option`, so they fall through unchanged.)
+        BaseType::Message(_) | BaseType::OneOf(_) if !unified_type.is_repeated => {
+            quote! { Some(#field_ident) }
+        }
         _ => quote! { #field_ident },
     }
 }

@@ -32,6 +32,28 @@ fn is_napi_supported(param: &RequestParam) -> bool {
     is_napi_supported_type(&param.field_type().base_type)
 }
 
+/// Whether a param is a required, singular protobuf message — passed to the native binding as
+/// serialized bytes via `toBinary(<Type>Schema, value)` and accepted as a typed object in the TS
+/// method signature. Mirrors the NAPI-side `is_required_message_body`.
+fn is_required_message_body(param: &RequestParam) -> bool {
+    !param.is_optional()
+        && !param.field_type().is_repeated
+        && matches!(
+            param.field_type().base_type,
+            BaseType::Message(_) | BaseType::OneOf(_)
+        )
+}
+
+/// The simple message type name of a param's type (e.g. `TagPolicy`), for `toBinary`/type rendering.
+fn message_type_name(param: &RequestParam) -> Option<String> {
+    match &param.field_type().base_type {
+        BaseType::Message(n) | BaseType::OneOf(n) => {
+            Some(crate::utils::extract_simple_type_name(n))
+        }
+        _ => None,
+    }
+}
+
 fn is_napi_supported_type(base_type: &BaseType) -> bool {
     match base_type {
         BaseType::String
@@ -261,6 +283,19 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
                     schema_names.push(format!("{}Schema", name));
                 }
             }
+
+            // Required message bodies are encoded with `toBinary(<Type>Schema, value)` before
+            // crossing to the native binding, so import each body's type and schema too.
+            for param in method.required_parameters() {
+                if is_required_message_body(param) {
+                    if let Some(name) = message_type_name(param) {
+                        if !type_names.contains(&name) {
+                            type_names.push(name.clone());
+                            schema_names.push(format!("{}Schema", name));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -299,7 +334,7 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
         .join("\n");
 
     format!(
-        r#"import {{ fromBinary }} from "@bufbuild/protobuf";
+        r#"import {{ fromBinary, toBinary }} from "@bufbuild/protobuf";
 import {{
 {type_imports}
 {schema_imports}
@@ -475,7 +510,10 @@ fn generate_instance_returning_method(
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param())
+                && (is_napi_supported(p) || is_required_message_body(p))
+        })
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
@@ -507,7 +545,10 @@ fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param())
+                && (is_napi_supported(p) || is_required_message_body(p))
+        })
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
@@ -650,11 +691,14 @@ impl MethodCallSpec {
         let required_param_list = required_params
             .iter()
             .map(|p| {
-                format!(
-                    "{}: {}",
-                    p.name().to_case(Case::Camel),
-                    unified_to_typescript(p.field_type()).replace(" | undefined", "")
-                )
+                // A required message body is accepted as its typed object (e.g.
+                // `tagPolicy: TagPolicy`) and serialized to bytes when forwarded to the native
+                // binding (see `all_args` below).
+                let ty = match message_type_name(p) {
+                    Some(name) if is_required_message_body(p) => name,
+                    _ => unified_to_typescript(p.field_type()).replace(" | undefined", ""),
+                };
+                format!("{}: {}", p.name().to_case(Case::Camel), ty)
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -684,7 +728,17 @@ impl MethodCallSpec {
 
         let mut args: Vec<String> = required_params
             .iter()
-            .map(|p| p.name().to_case(Case::Camel))
+            .map(|p| {
+                let name = p.name().to_case(Case::Camel);
+                // Serialize required message bodies to protobuf bytes for the native binding.
+                match message_type_name(p) {
+                    // `toBinary` yields a `Uint8Array`; the native binding expects a Node `Buffer`.
+                    Some(ty) if is_required_message_body(p) => {
+                        format!("Buffer.from(toBinary({ty}Schema, {name}))")
+                    }
+                    _ => name,
+                }
+            })
             .collect();
         for p in optional_params {
             args.push(p.name().to_case(Case::Camel));
@@ -715,7 +769,10 @@ fn generate_collection_list_method(
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param())
+                && (is_napi_supported(p) || is_required_message_body(p))
+        })
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
@@ -767,7 +824,10 @@ fn generate_collection_list_stream_method(
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param())
+                && (is_napi_supported(p) || is_required_message_body(p))
+        })
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
@@ -812,7 +872,10 @@ fn generate_collection_create_method(
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param())
+                && (is_napi_supported(p) || is_required_message_body(p))
+        })
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
@@ -843,7 +906,10 @@ fn generate_void_create_method(method: &MethodHandler<'_>, drop_path: bool) -> S
 
     let required_params: Vec<&RequestParam> = method
         .required_parameters()
-        .filter(|p| !(drop_path && p.is_path_param()) && is_napi_supported(p))
+        .filter(|p| {
+            !(drop_path && p.is_path_param())
+                && (is_napi_supported(p) || is_required_message_body(p))
+        })
         .collect();
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
