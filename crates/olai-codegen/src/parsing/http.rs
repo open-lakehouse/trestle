@@ -96,6 +96,29 @@ impl HttpPattern {
     }
 }
 
+/// Normalize the raw contents of a `{…}` placeholder into the single request-field name it binds.
+///
+/// gRPC transcoding (`google.api.http`) templates use richer placeholder syntax than a bare
+/// field name:
+/// - **Segment binding**: `{name=catalogs/*}` binds the `name` field to a multi-segment pattern.
+///   The pattern after `=` is matched at runtime by the literal URL segments and does not change
+///   which field is bound, so we keep only the field name before `=`. **Supported.**
+/// - **Dotted field path**: `{table.catalog_name}` binds a *nested* request field. Supporting this
+///   correctly would ripple through analysis (nested field resolution), the Rust client URL
+///   builder (`request.table.catalog_name` access), and binding signatures. **Not yet supported** —
+///   returns `None` so the caller preserves the placeholder verbatim instead of emitting broken
+///   code. Tracked as a known limitation.
+///
+/// Returns the normalized flat field name, or `None` when the placeholder is degenerate
+/// (e.g. `{=foo}`) or uses an unsupported shape (dotted path).
+fn normalize_placeholder(raw: &str) -> Option<String> {
+    let name = raw.split('=').next().unwrap_or("").trim();
+    if name.is_empty() || name.contains('.') {
+        return None;
+    }
+    Some(name.to_string())
+}
+
 /// Parse URL template into segments
 fn parse_url_segments(template: &str) -> Vec<UrlSegment> {
     let mut segments = Vec::new();
@@ -110,21 +133,32 @@ fn parse_url_segments(template: &str) -> Vec<UrlSegment> {
                 current_static.clear();
             }
 
-            // Parse parameter name
-            let mut param_name = String::new();
+            // Parse the raw placeholder contents (everything up to the closing `}`).
+            let mut raw = String::new();
             let mut closed = false;
             for next_ch in chars.by_ref() {
                 if next_ch == '}' {
                     closed = true;
                     break;
                 }
-                param_name.push(next_ch);
+                raw.push(next_ch);
             }
 
             // An unclosed brace (e.g. `{name` with no `}`) is malformed — skip it rather
             // than emitting a parameter with a truncated or empty name.
-            if !param_name.is_empty() && closed {
-                segments.push(UrlSegment::Parameter(param_name));
+            match (!raw.is_empty() && closed)
+                .then(|| normalize_placeholder(&raw))
+                .flatten()
+            {
+                Some(param_name) => segments.push(UrlSegment::Parameter(param_name)),
+                // Unsupported placeholder shape (e.g. a dotted nested path like
+                // `{table.catalog_name}`). Preserve it verbatim as a literal so the URL template
+                // stays intact and no invalid Rust identifier is ever generated from it. A flat
+                // binding for the nested field is a known gap (see `normalize_placeholder`).
+                None if closed && !raw.is_empty() => {
+                    segments.push(UrlSegment::Static(format!("{{{raw}}}")));
+                }
+                None => {}
             }
         } else {
             current_static.push(ch);
@@ -287,6 +321,42 @@ mod tests {
             "unclosed brace must not produce a parameter"
         );
         assert_eq!(pattern.static_prefix, "/catalogs/");
+    }
+
+    #[test]
+    fn test_segment_binding_placeholder() {
+        // `{name=catalogs/*}` binds the `name` field; the `=pattern` suffix is stripped.
+        let pattern = HttpPattern::parse("/v1/{name=catalogs/*}");
+        assert_eq!(pattern.parameters, vec!["name"]);
+
+        let (format_str, args) = pattern.to_format_string();
+        assert_eq!(args, vec!["name"]);
+        // The format string must not contain the `=catalogs/*` pattern text.
+        assert!(!format_str.contains('='), "got: {format_str}");
+    }
+
+    #[test]
+    fn test_dotted_placeholder_is_preserved_not_a_param() {
+        // Dotted nested paths are not yet supported: the placeholder is kept verbatim as a literal
+        // (so the URL stays intact) and is NOT surfaced as a parameter (so no invalid ident is
+        // generated downstream).
+        let pattern = HttpPattern::parse("/v1/tables/{table.catalog_name}/x");
+        assert!(
+            pattern.parameters.is_empty(),
+            "dotted placeholder must not become a parameter: {:?}",
+            pattern.parameters
+        );
+        assert!(
+            pattern.template.contains("{table.catalog_name}"),
+            "original template text is retained"
+        );
+    }
+
+    #[test]
+    fn test_degenerate_placeholder_is_ignored() {
+        // `{=foo}` has no field name before `=` — not a parameter.
+        let pattern = HttpPattern::parse("/v1/{=foo}");
+        assert!(pattern.parameters.is_empty());
     }
 
     #[test]

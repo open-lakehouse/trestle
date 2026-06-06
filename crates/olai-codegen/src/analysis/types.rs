@@ -34,6 +34,83 @@ pub enum RequestType {
     Custom(Pattern),
 }
 
+/// Where a method sits relative to a resource, independent of its CRUD verb.
+///
+/// Computed once during analysis from the method's [`RequestType`], name, and whether the owning
+/// service manages a `google.api.resource`. This makes the scoped/flat and collection/instance
+/// decisions explicit on the IR so emitters stop re-deriving them (replacing the old
+/// `MethodHandler::is_collection_method()` + `BindingMode` logic scattered across emit sites).
+///
+/// The three cases map onto the binding layout:
+/// - [`MethodShape::CollectionScoped`] and [`MethodShape::InstanceScoped`] both belong to a
+///   resource-scoped service; collection methods live on the root client, instance methods on the
+///   per-resource scoped client.
+/// - [`MethodShape::Unbound`] belongs to a resource-less service; every method lives on the root
+///   client and passes all params (the old "flat" lowering).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodShape {
+    /// Collection-style operation on a resource service (list / create / factory RPC). Lives on the
+    /// root/aggregate client and passes every param.
+    CollectionScoped,
+    /// Instance operation on a resource service (get / update / delete / resource-targeted custom).
+    /// Lives on the per-resource scoped client, which already holds the path params.
+    InstanceScoped,
+    /// Method of a resource-less ("flat") service. Lives on the root client and passes every param,
+    /// including path params.
+    Unbound,
+}
+
+/// The structural template a language binding uses to emit a method, independent of language.
+///
+/// Collapses the per-binding `match request_type { … }` dispatch (which Python, Node, and
+/// TypeScript each repeated identically) into a single analysis decision. Each variant corresponds
+/// to one emit-shape helper every binding already has (`*_list_method_impl`,
+/// `*_create_method_impl`, `*_get_update_method_impl`, `*_delete_method_impl`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmitShape {
+    /// Streamed/collected list — returns the repeated item type. (`List`, or a custom `GET` named
+    /// `List*`.)
+    List,
+    /// Factory/create — body in, returns a (possibly unrelated) response message. (`Create`, or a
+    /// collection-style custom `POST`/`PATCH` factory like `Generate*`.)
+    Create,
+    /// Get-or-update — path params (+ optional body), returns the resource/response. (`Get`,
+    /// `Update`, a resource-targeted custom `POST`/`PATCH`, or any other custom verb on a flat
+    /// service.)
+    GetUpdate,
+    /// Delete — path params, no response. (`Delete`.)
+    Delete,
+}
+
+/// Classify a method's [`EmitShape`] from its request type and proto name.
+///
+/// Mirrors **exactly** the per-impl dispatch the bindings previously each performed inline (the
+/// `match request_type` arms in `collection_client_method` / `flat_client_method` /
+/// `resource_client_method`), so emit shape is decided in one place without behavior drift.
+///
+/// `is_collection` (from [`is_collection_method`]) only distinguishes a collection-style custom
+/// `POST`/`PATCH` factory (→ [`EmitShape::Create`]) from a resource-targeted custom `POST`/`PATCH`
+/// (→ [`EmitShape::GetUpdate`]). Note a resource-less `Custom(Get)` named `List*` is **not**
+/// List-shaped here: the old flat dispatch routed it through the `Custom(_) => get_update` arm
+/// (returning the full response message, keeping `page_token`), and only a true
+/// [`RequestType::List`] gets streamed/`List` emit. Collection *routing* (which client a method
+/// lands on) is a separate decision driven by [`is_collection_method`].
+pub(crate) fn emit_shape(request_type: &RequestType, is_collection: bool) -> EmitShape {
+    match request_type {
+        RequestType::List => EmitShape::List,
+        RequestType::Create => EmitShape::Create,
+        RequestType::Delete => EmitShape::Delete,
+        RequestType::Get | RequestType::Update => EmitShape::GetUpdate,
+        // A collection-style custom POST/PATCH is a factory (Create-shaped); every other custom verb
+        // — including a `Custom(Get)` named `List*` — is GetUpdate-shaped (path + optional body,
+        // return the full response).
+        RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) if is_collection => {
+            EmitShape::Create
+        }
+        RequestType::Custom(_) => EmitShape::GetUpdate,
+    }
+}
+
 /// A method that was skipped during analysis due to incomplete metadata.
 #[derive(Debug, Clone)]
 pub struct SkippedMethod {
@@ -83,6 +160,41 @@ pub struct ServicePlan {
     /// Empty when no `resource_reference` annotations are present — codegen falls back to
     /// naming heuristics in that case.
     pub hierarchy: Vec<ResourceHierarchy>,
+    /// Parameter names for this service's resource accessor on the aggregate client, e.g.
+    /// `["catalog_name", "schema_name"]` for a nested Schema or `["name"]` for a flat Catalog.
+    ///
+    /// The trailing element is the resource's own `<singular>_name`; any preceding elements are
+    /// ancestor identifiers. A list of length > 1 means the resource is *nested* and its full name
+    /// is the dot-joined components.
+    ///
+    /// `None` for resource-less services (no accessor is generated). Computed once during analysis
+    /// (Phase 2, after `hierarchy` is populated) so the four accessor emitters — Rust aggregate,
+    /// Python, Node, TypeScript — all read the same list instead of each re-deriving it.
+    pub resource_accessor_params: Option<Vec<String>>,
+    /// Direct child resources of this service's managed resource, used to generate child-navigation
+    /// accessors (e.g. `catalog.schema(name)`) and child-create methods (e.g. `catalog.create_schema`)
+    /// on the scoped client.
+    ///
+    /// A resource C is a *direct child* of P when C's [`Self::resource_accessor_params`] equals P's
+    /// plus exactly one additional trailing component (P's params are a prefix of C's, and
+    /// `C.len() == P.len() + 1`). Sorted by `child_singular`. Empty for leaf or flat resources.
+    /// Computed in Phase 2 of `analyze_metadata` after every service's accessor params are known.
+    pub direct_children: Vec<ChildLink>,
+}
+
+/// A direct child resource of a parent resource, for generating child-navigation and child-create
+/// methods on the parent's scoped client. See [`ServicePlan::direct_children`].
+#[derive(Debug, Clone)]
+pub struct ChildLink {
+    /// The child resource singular — used as the navigation accessor method name (e.g. `schema`).
+    pub child_singular: String,
+    /// The child service's `base_path` / module segment (e.g. `schemas`), used to reference the
+    /// child's generated clients as `crate::codegen::<base_path>::…`.
+    pub child_base_path: String,
+    /// The child's full accessor params (ancestors + own leaf), e.g. `["catalog_name","schema_name"]`.
+    /// The leading entries equal the parent's accessor params (the prefix relation); the final entry
+    /// is the child's own name component.
+    pub child_accessor_params: Vec<String>,
 }
 
 /// Plan for generating code for a single method
@@ -104,6 +216,28 @@ pub struct MethodPlan {
     pub request_type: RequestType,
     /// The resource type name returned by this method (if any)
     pub output_resource_type: Option<String>,
+    /// Whether the HTTP request carries a JSON body (create / update / custom POST·PATCH).
+    ///
+    /// Derived once from [`RequestType`] so the client emitter doesn't re-match the enum to
+    /// decide whether to attach `.json(request)`.
+    pub has_request_body: bool,
+    /// Whether the Axum server extractor reads from request *parts* (path/query only) rather
+    /// than the body — i.e. this is a `FromRequestParts` method, not `FromRequest`.
+    ///
+    /// Derived once from [`RequestType`] so the server emitter (extractor selection and the
+    /// `RequestPartsExt` import) doesn't re-match the enum.
+    pub needs_request_parts: bool,
+    /// The verb name to call on a resource-scoped client (`get` / `update` / `delete`), or
+    /// `None` for methods that are not standard instance verbs.
+    ///
+    /// Derived once from [`RequestType`]; the scoped binding call uses this instead of
+    /// re-deciding the verb from the enum (see `MethodPlan::resource_client_method`).
+    pub scoped_verb: Option<String>,
+    /// Where this method sits relative to a resource (collection / instance / unbound).
+    ///
+    /// Assigned in `analyze_service` once the owning service's managed resources are known, so it
+    /// reflects both the method's verb/name shape and whether the service is resource-scoped.
+    pub shape: MethodShape,
 }
 
 impl MethodPlan {
@@ -234,6 +368,8 @@ pub struct BodyField {
     pub field_type: UnifiedType,
     /// Whether this field is a repeated (Vec) type
     pub repeated: bool,
+    /// Whether the field is explicitly marked `(google.api.field_behavior) = REQUIRED`.
+    pub required: bool,
     /// For oneof fields, the variants with their names and types
     pub oneof_variants: Option<Vec<OneofVariant>>,
     /// Documentation from protobuf field comments
@@ -243,11 +379,19 @@ pub struct BodyField {
 impl BodyField {
     /// Denotes whether this field should be treated as optional in builder APIs.
     ///
-    /// A field is optional when its `UnifiedType.is_optional` flag is set, when it is
-    /// repeated, or when its base type is `Map`, `Message`, or `OneOf` (complex types
-    /// always have a valid default and are therefore optional constructor parameters).
+    /// A field marked `REQUIRED` is never optional — even for complex types — so it becomes a
+    /// required constructor parameter rather than a `with_*` setter. (Without this, a required
+    /// message body like `tag_assignment` would be a no-arg-constructor + optional setter, and the
+    /// NAPI binding would execute with an empty body.)
+    ///
+    /// Otherwise a field is optional when its `UnifiedType.is_optional` flag is set, when it is
+    /// repeated, or when its base type is `Map`, `Message`, or `OneOf` (complex types have a valid
+    /// default and are treated as optional constructor parameters).
     pub fn is_optional(&self) -> bool {
         use crate::parsing::types::BaseType;
+        if self.required {
+            return false;
+        }
         self.field_type.is_optional
             || self.repeated
             || matches!(
@@ -446,6 +590,79 @@ impl<'a> MethodPlanner<'a> {
     }
 }
 
+/// Whether a request of this type carries a JSON body (create / update / custom POST·PATCH).
+///
+/// Single source of truth for the body-attach decision the client emitter previously re-derived.
+pub(crate) fn request_has_body(request_type: &RequestType) -> bool {
+    matches!(
+        request_type,
+        RequestType::Create
+            | RequestType::Update
+            | RequestType::Custom(Pattern::Post(_))
+            | RequestType::Custom(Pattern::Patch(_))
+    )
+}
+
+/// Whether the Axum server extractor reads request *parts* (path/query) rather than the body.
+///
+/// Single source of truth for the `FromRequestParts`-vs-`FromRequest` decision (and the
+/// `RequestPartsExt` import) the server emitter previously re-derived.
+pub(crate) fn request_needs_request_parts(request_type: &RequestType) -> bool {
+    matches!(
+        request_type,
+        RequestType::List | RequestType::Get | RequestType::Delete
+    ) || matches!(
+        request_type,
+        RequestType::Custom(Pattern::Get(_) | Pattern::Delete(_))
+    )
+}
+
+/// Whether a method is a collection-style operation (list / create / factory RPC).
+///
+/// Single source of truth for the collection/instance split. Standard `List`/`Create` always
+/// qualify; custom RPCs qualify by name convention — a `GET` named `List*` (a resource-less list)
+/// or a `POST` named `Generate*` (a factory RPC like `GenerateCredentials`). This is the only place
+/// the `List`/`Generate` proto-name heuristics live.
+pub(crate) fn is_collection_method(request_type: &RequestType, method_name: &str) -> bool {
+    matches!(request_type, RequestType::List | RequestType::Create)
+        || (matches!(request_type, RequestType::Custom(Pattern::Get(_)))
+            && method_name.starts_with("List"))
+        || (matches!(request_type, RequestType::Custom(Pattern::Post(_)))
+            && method_name.starts_with("Generate"))
+}
+
+/// Classify a method's [`MethodShape`] from its request type, proto name, and whether the owning
+/// service manages a `google.api.resource`.
+///
+/// - Resource-less service → [`MethodShape::Unbound`] for every method.
+/// - Resource service, collection-style method → [`MethodShape::CollectionScoped`].
+/// - Resource service, otherwise → [`MethodShape::InstanceScoped`].
+pub(crate) fn method_shape(
+    request_type: &RequestType,
+    method_name: &str,
+    service_has_resource: bool,
+) -> MethodShape {
+    if !service_has_resource {
+        MethodShape::Unbound
+    } else if is_collection_method(request_type, method_name) {
+        MethodShape::CollectionScoped
+    } else {
+        MethodShape::InstanceScoped
+    }
+}
+
+/// The verb to call on a resource-scoped client for standard instance operations, or `None`.
+///
+/// Single source of truth for the scoped-verb mapping the binding emitters previously re-derived.
+pub(crate) fn scoped_verb(request_type: &RequestType) -> Option<String> {
+    match request_type {
+        RequestType::Get => Some("get".to_string()),
+        RequestType::Update => Some("update".to_string()),
+        RequestType::Delete => Some("delete".to_string()),
+        _ => None,
+    }
+}
+
 /// Split body fields from a `MethodPlan` into required and optional subsets.
 ///
 /// Delegates to [`BodyField::is_optional`] for the classification. Optional fields
@@ -487,4 +704,213 @@ pub fn extract_managed_resources(
     }
 
     resources
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn custom(p: Pattern) -> RequestType {
+        RequestType::Custom(p)
+    }
+
+    #[test]
+    fn request_has_body_matches_write_verbs() {
+        assert!(request_has_body(&RequestType::Create));
+        assert!(request_has_body(&RequestType::Update));
+        assert!(request_has_body(&custom(Pattern::Post(String::new()))));
+        assert!(request_has_body(&custom(Pattern::Patch(String::new()))));
+
+        assert!(!request_has_body(&RequestType::List));
+        assert!(!request_has_body(&RequestType::Get));
+        assert!(!request_has_body(&RequestType::Delete));
+        assert!(!request_has_body(&custom(Pattern::Get(String::new()))));
+        assert!(!request_has_body(&custom(Pattern::Delete(String::new()))));
+    }
+
+    #[test]
+    fn needs_request_parts_matches_read_verbs() {
+        assert!(request_needs_request_parts(&RequestType::List));
+        assert!(request_needs_request_parts(&RequestType::Get));
+        assert!(request_needs_request_parts(&RequestType::Delete));
+        assert!(request_needs_request_parts(&custom(Pattern::Get(
+            String::new()
+        ))));
+        assert!(request_needs_request_parts(&custom(Pattern::Delete(
+            String::new()
+        ))));
+
+        assert!(!request_needs_request_parts(&RequestType::Create));
+        assert!(!request_needs_request_parts(&RequestType::Update));
+        assert!(!request_needs_request_parts(&custom(Pattern::Post(
+            String::new()
+        ))));
+        assert!(!request_needs_request_parts(&custom(Pattern::Patch(
+            String::new()
+        ))));
+    }
+
+    #[test]
+    fn has_body_and_needs_parts_are_mutually_exclusive_for_known_verbs() {
+        // A method either reads from parts or carries a body — never both, never neither —
+        // for the verb shapes the emitters actually produce extractors/clients for.
+        for rt in [
+            RequestType::List,
+            RequestType::Create,
+            RequestType::Get,
+            RequestType::Update,
+            RequestType::Delete,
+            custom(Pattern::Get(String::new())),
+            custom(Pattern::Post(String::new())),
+            custom(Pattern::Patch(String::new())),
+            custom(Pattern::Delete(String::new())),
+        ] {
+            assert_ne!(
+                request_has_body(&rt),
+                request_needs_request_parts(&rt),
+                "body vs request-parts should partition {rt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_collection_method_standard_and_name_heuristics() {
+        // Standard collection verbs always qualify, regardless of name.
+        assert!(is_collection_method(&RequestType::List, "ListThings"));
+        assert!(is_collection_method(&RequestType::Create, "CreateThing"));
+
+        // Custom GET named `List*` (resource-less list) qualifies; other custom GETs don't.
+        assert!(is_collection_method(
+            &custom(Pattern::Get(String::new())),
+            "ListTagAssignments"
+        ));
+        assert!(!is_collection_method(
+            &custom(Pattern::Get(String::new())),
+            "GetTagAssignment"
+        ));
+
+        // Custom POST named `Generate*` (factory RPC) qualifies; other custom POSTs don't.
+        assert!(is_collection_method(
+            &custom(Pattern::Post(String::new())),
+            "GenerateCredentials"
+        ));
+        assert!(!is_collection_method(
+            &custom(Pattern::Post(String::new())),
+            "RotateToken"
+        ));
+
+        // Instance verbs never qualify.
+        assert!(!is_collection_method(&RequestType::Get, "GetThing"));
+        assert!(!is_collection_method(&RequestType::Update, "UpdateThing"));
+        assert!(!is_collection_method(&RequestType::Delete, "DeleteThing"));
+    }
+
+    #[test]
+    fn method_shape_classification() {
+        // Resource-less service → everything Unbound, regardless of verb.
+        assert_eq!(
+            method_shape(&RequestType::List, "ListTagAssignments", false),
+            MethodShape::Unbound
+        );
+        assert_eq!(
+            method_shape(&RequestType::Get, "GetTagAssignment", false),
+            MethodShape::Unbound
+        );
+        assert_eq!(
+            method_shape(&custom(Pattern::Post(String::new())), "TouchTag", false),
+            MethodShape::Unbound
+        );
+
+        // Resource service → collection verbs are CollectionScoped, instance verbs InstanceScoped.
+        assert_eq!(
+            method_shape(&RequestType::List, "ListCatalogs", true),
+            MethodShape::CollectionScoped
+        );
+        assert_eq!(
+            method_shape(&RequestType::Create, "CreateCatalog", true),
+            MethodShape::CollectionScoped
+        );
+        assert_eq!(
+            method_shape(
+                &custom(Pattern::Post(String::new())),
+                "GenerateCredentials",
+                true
+            ),
+            MethodShape::CollectionScoped
+        );
+        assert_eq!(
+            method_shape(&RequestType::Get, "GetCatalog", true),
+            MethodShape::InstanceScoped
+        );
+        assert_eq!(
+            method_shape(&RequestType::Update, "UpdateCatalog", true),
+            MethodShape::InstanceScoped
+        );
+        assert_eq!(
+            method_shape(&RequestType::Delete, "DeleteCatalog", true),
+            MethodShape::InstanceScoped
+        );
+        // Resource-targeted custom POST (not a factory) stays instance-scoped.
+        assert_eq!(
+            method_shape(&custom(Pattern::Post(String::new())), "RotateToken", true),
+            MethodShape::InstanceScoped
+        );
+    }
+
+    #[test]
+    fn emit_shape_classification() {
+        // Standard verbs map directly.
+        assert_eq!(emit_shape(&RequestType::List, false), EmitShape::List);
+        assert_eq!(emit_shape(&RequestType::Create, false), EmitShape::Create);
+        assert_eq!(emit_shape(&RequestType::Get, false), EmitShape::GetUpdate);
+        assert_eq!(
+            emit_shape(&RequestType::Update, false),
+            EmitShape::GetUpdate
+        );
+        assert_eq!(emit_shape(&RequestType::Delete, false), EmitShape::Delete);
+
+        // A collection-style custom POST/PATCH (a factory, e.g. `Generate*`) is Create-shaped.
+        assert_eq!(
+            emit_shape(&custom(Pattern::Post(String::new())), true),
+            EmitShape::Create
+        );
+        assert_eq!(
+            emit_shape(&custom(Pattern::Patch(String::new())), true),
+            EmitShape::Create
+        );
+
+        // A resource-targeted (non-collection) custom POST/PATCH is GetUpdate-shaped.
+        assert_eq!(
+            emit_shape(&custom(Pattern::Post(String::new())), false),
+            EmitShape::GetUpdate
+        );
+
+        // A custom GET (even named `List*`, is_collection=true) is NOT List-shaped — it returns the
+        // full response message, matching the old flat dispatch's `Custom(_) => get_update` arm.
+        assert_eq!(
+            emit_shape(&custom(Pattern::Get(String::new())), true),
+            EmitShape::GetUpdate
+        );
+        assert_eq!(
+            emit_shape(&custom(Pattern::Get(String::new())), false),
+            EmitShape::GetUpdate
+        );
+        // A custom DELETE is GetUpdate-shaped (the old flat `Custom(_)` arm), not Delete.
+        assert_eq!(
+            emit_shape(&custom(Pattern::Delete(String::new())), false),
+            EmitShape::GetUpdate
+        );
+    }
+
+    #[test]
+    fn scoped_verb_only_for_standard_instance_ops() {
+        assert_eq!(scoped_verb(&RequestType::Get).as_deref(), Some("get"));
+        assert_eq!(scoped_verb(&RequestType::Update).as_deref(), Some("update"));
+        assert_eq!(scoped_verb(&RequestType::Delete).as_deref(), Some("delete"));
+
+        assert_eq!(scoped_verb(&RequestType::List), None);
+        assert_eq!(scoped_verb(&RequestType::Create), None);
+        assert_eq!(scoped_verb(&custom(Pattern::Post(String::new()))), None);
+        assert_eq!(scoped_verb(&custom(Pattern::Get(String::new()))), None);
+    }
 }

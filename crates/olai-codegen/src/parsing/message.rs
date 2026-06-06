@@ -172,6 +172,21 @@ pub(super) fn process_message(
         )?;
     }
 
+    // Process nested enums (e.g. an `Operation` enum declared inside a request message). These are
+    // registered under their fully-qualified `<Message>.<Enum>` key so fields referencing them
+    // resolve — without this they'd be undefined in generated bindings/typings.
+    // `enum_type` is field 4 in `DescriptorProto`.
+    for (enum_index, nested_enum) in message.enum_type.iter().enumerate() {
+        let nested_path = [path_prefix, &[4, enum_index as i32]].concat();
+        super::enum_parser::process_enum(
+            nested_enum,
+            codegen_metadata,
+            &full_type_name,
+            source_code_info,
+            &nested_path,
+        )?;
+    }
+
     Ok(())
 }
 

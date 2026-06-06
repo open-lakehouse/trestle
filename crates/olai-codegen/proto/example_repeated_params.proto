@@ -4,7 +4,9 @@ package example.catalog.v1;
 import "example_models.proto";
 import "google/api/annotations.proto";
 
-service SchemaService {
+// Resource-less service of custom query RPCs (no `google.api.resource`), used to exercise
+// repeated/enum query-param generation and `RequestType::Custom` classification.
+service QueryService {
   // Repeated string query param
   rpc ListByTags(ListByTagsRequest) returns (ListByTagsResponse) {
     option (google.api.http) = {get: "/schemas"};

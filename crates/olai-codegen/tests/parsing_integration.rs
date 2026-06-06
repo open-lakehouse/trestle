@@ -14,20 +14,35 @@ fn parse_meta() -> CodeGenMetadata {
 #[test]
 fn test_parses_services_and_methods() {
     let meta = parse_meta();
-    // CatalogService + SchemaService
-    assert_eq!(meta.services.len(), 2);
+    // CatalogService + SchemaService (nested child) + QueryService + TagAssignmentsService
+    assert_eq!(meta.services.len(), 4);
 
     let catalog = meta
         .services
         .get("CatalogService")
         .expect("CatalogService exists");
-    assert_eq!(catalog.methods.len(), 6); // Create/Get/List/Update/Delete + custom GenerateCatalogToken
+    assert_eq!(catalog.methods.len(), 7); // Create/Get/List/Update/Delete + custom GenerateCatalogToken + custom GetCatalogStatus
 
+    // Nested resource-scoped child of Catalog.
     let schema = meta
         .services
         .get("SchemaService")
         .expect("SchemaService exists");
-    assert_eq!(schema.methods.len(), 2); // ListByTags + ListByCatalogType
+    assert_eq!(schema.methods.len(), 5); // Create/Get/List/Update/Delete
+
+    // Resource-less service of custom query RPCs.
+    let query = meta
+        .services
+        .get("QueryService")
+        .expect("QueryService exists");
+    assert_eq!(query.methods.len(), 2); // ListByTags + ListByCatalogType
+
+    // Resource-less, composite-key service exercising the flat binding lowering.
+    let tags = meta
+        .services
+        .get("TagAssignmentsService")
+        .expect("TagAssignmentsService exists");
+    assert_eq!(tags.methods.len(), 5); // List/Create/Get/Delete + custom Touch (returns Empty)
 }
 
 #[test]
@@ -169,12 +184,12 @@ fn test_delete_method() {
 #[test]
 fn test_repeated_query_param() {
     let meta = parse_meta();
-    let schema_svc = meta
+    let query_svc = meta
         .services
-        .get("SchemaService")
-        .expect("SchemaService exists");
+        .get("QueryService")
+        .expect("QueryService exists");
 
-    let list_by_tags = schema_svc
+    let list_by_tags = query_svc
         .methods
         .iter()
         .find(|m| m.method_name == "ListByTags")
@@ -196,12 +211,12 @@ fn test_repeated_query_param() {
 #[test]
 fn test_enum_query_param() {
     let meta = parse_meta();
-    let schema_svc = meta
+    let query_svc = meta
         .services
-        .get("SchemaService")
-        .expect("SchemaService exists");
+        .get("QueryService")
+        .expect("QueryService exists");
 
-    let list_by_type = schema_svc
+    let list_by_type = query_svc
         .methods
         .iter()
         .find(|m| m.method_name == "ListByCatalogType")

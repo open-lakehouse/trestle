@@ -3,31 +3,35 @@
 use textwrap::{Options, dedent, fill, indent, refill};
 
 use super::{
-    DOCS_TARGET_WIDTH, clean_and_format_description, derive_resource_accessor_params,
-    extract_simple_type_name, is_list_method, python_type_annotation,
-    python_type_annotation_from_ident, resource_pattern_params, sanitize_python_field_name,
+    DOCS_TARGET_WIDTH, clean_and_format_description, extract_simple_type_name, is_list_method,
+    python_type_annotation, python_type_annotation_from_ident, resource_pattern_params,
+    sanitize_python_field_name,
 };
 use crate::analysis::RequestType;
 use crate::codegen::{MethodHandler, ServiceHandler};
 use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, UnifiedType, unified_to_python_type};
 use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo};
+use crate::utils::extract_qualified_type_name;
 
 /// Generate unified Python typings (.pyi file) for all services in a single file
 pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
     let metadata = services[0].metadata;
     let bindings = services[0].config.bindings.as_ref();
 
-    let mut content = vec![
-        "from __future__ import annotations".to_string(),
-        "from typing import Optional, List, Dict, Any, Literal".to_string(),
-        "import enum".to_string(),
-        "".to_string(),
-    ];
+    // Build the body first, then prepend only the `typing` imports it actually references — avoids
+    // unused-import lint noise (e.g. `Any`/`Literal` imported but never used).
+    let mut content: Vec<String> = Vec::new();
+
+    // Message types referenced directly as a method return type (e.g. a custom RPC returning a raw
+    // `*Response`). These must be emitted as classes even though `*Response` is otherwise skipped,
+    // or the method signatures reference undefined names.
+    let returned_types = referenced_return_types(services);
 
     let model_classes = generate_model_classes(
         metadata,
         bindings.and_then(|b| b.typings_package_filter.as_deref()),
+        &returned_types,
     );
     content.extend(model_classes);
 
@@ -42,6 +46,12 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
 
     for &i in &service_indices {
         let service = &services[i];
+        // Resource-less (Flat) services have no per-service scoped client in the real bindings
+        // (their methods live on the aggregate client), so they must not get a phantom scoped
+        // class in the `.pyi` either.
+        if !service.is_resource_scoped() {
+            continue;
+        }
         let service_class = generate_service_class_typings(service, services);
         content.push(service_class);
         content.push("".to_string());
@@ -57,7 +67,29 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
     );
     content.push(main_client_class);
 
-    content.join("\n")
+    let body = content.join("\n");
+
+    // Prepend the header: `from __future__` + only the `typing` names the body references + `enum`
+    // if used. A name is "used" if it appears as a word anywhere in the body.
+    let uses = |name: &str| {
+        body.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .any(|tok| tok == name)
+    };
+    let typing_names: Vec<&str> = ["Optional", "List", "Dict", "Any", "Literal"]
+        .into_iter()
+        .filter(|n| uses(n))
+        .collect();
+
+    let mut header = vec!["from __future__ import annotations".to_string()];
+    if !typing_names.is_empty() {
+        header.push(format!("from typing import {}", typing_names.join(", ")));
+    }
+    if uses("enum") {
+        header.push("import enum".to_string());
+    }
+    header.push(String::new());
+
+    format!("{}\n{}", header.join("\n"), body)
 }
 
 fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<String> {
@@ -125,10 +157,23 @@ fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<Strin
 }
 
 fn generate_method_parameters_for_typings(method: &MethodHandler<'_>) -> Vec<String> {
+    generate_method_parameters_for_typings_inner(method, true)
+}
+
+/// Build the parameter list for a `.pyi` method signature.
+///
+/// `drop_path` mirrors the bindings emitter (`resource_method_parameters` /
+/// `collection_method_parameters`): scoped clients already hold the path params (captured by the
+/// resource accessor), so they're dropped; flat (root-client) methods must accept every param,
+/// including path params.
+fn generate_method_parameters_for_typings_inner(
+    method: &MethodHandler<'_>,
+    drop_path: bool,
+) -> Vec<String> {
     let mut parameters = Vec::new();
 
     for param in method.required_parameters() {
-        if !param.is_path_param() {
+        if !(drop_path && param.is_path_param()) {
             let param_type = python_type_annotation(param.field_type());
             parameters.push(format!("{}: {}", param.name(), param_type));
         }
@@ -353,7 +398,13 @@ fn generate_resource_accessor_methods_for_typings(
 
         if annotation_match {
             let method_name = &child_resource.descriptor.singular;
-            let accessor_params = derive_resource_accessor_params(other);
+            // `other` is a resource service (it owns `child_resource`), so its accessor params
+            // are always populated.
+            let accessor_params = other
+                .plan
+                .resource_accessor_params
+                .clone()
+                .unwrap_or_default();
             let mut params = vec!["self".to_string()];
             params.extend(accessor_params.iter().map(|p| format!("{}: str", p)));
             let return_type = format!("{}", other.client_type());
@@ -435,6 +486,57 @@ fn generate_service_class_typings(
     generate_class_from_template(&client_ident, "", None, &body_content)
 }
 
+/// Render the `.pyi` stub for one method emitted directly on the aggregate client.
+///
+/// Used both for collection-style methods of resource-scoped services and for *every* method of
+/// resource-less (Flat) services. `drop_path` controls whether path params are included in the
+/// signature: scoped collection methods drop them, flat methods keep them — mirroring the bindings
+/// emitter (`collection_method_parameters` / `resource_method_parameters`).
+fn generate_aggregate_method_typing(
+    method: &MethodHandler<'_>,
+    drop_path: bool,
+) -> (String, String) {
+    let method_name = method.binding_method_name_str();
+
+    let return_type = match &method.plan.request_type {
+        RequestType::List => {
+            if let Some(items_field) = method.list_output_field() {
+                let item_type = python_type_annotation(&items_field.unified_type);
+                format!(
+                    "List[{}]",
+                    item_type.trim_start_matches("List[").trim_end_matches("]")
+                )
+            } else {
+                "Any".to_string()
+            }
+        }
+        _ => {
+            // Empty-returning RPCs (e.g. a `Touch*` custom method) are typed `None` in Python.
+            if let Some(output_type) = method.output_type() {
+                python_type_annotation_from_ident(&output_type)
+            } else {
+                "None".to_string()
+            }
+        }
+    };
+
+    let parameters = generate_method_parameters_for_typings_inner(method, drop_path);
+    let mut params = vec!["self".to_string()];
+    params.extend(parameters);
+
+    let docstring = format_method_docstring_with_params(method);
+    let docstring_text = if docstring.trim().is_empty() {
+        None
+    } else {
+        Some(docstring.trim())
+    };
+
+    (
+        method_name.clone(),
+        generate_method_template(&method_name, &params, &return_type, docstring_text, 1),
+    )
+}
+
 fn generate_main_client_class_typings(
     services: &[&ServiceHandler<'_>],
     client_class_name: &str,
@@ -442,56 +544,35 @@ fn generate_main_client_class_typings(
     let mut collection_methods = services
         .iter()
         .flat_map(|service| {
-            service
-                .methods()
-                .filter(|m| m.is_collection_method())
-                .filter_map(|method| {
-                    let method_name = method.plan.base_method_ident().to_string();
-                    let return_type = match &method.plan.request_type {
-                        RequestType::List => {
-                            if let Some(items_field) = method.list_output_field() {
-                                let item_type = python_type_annotation(&items_field.unified_type);
-                                format!(
-                                    "List[{}]",
-                                    item_type.trim_start_matches("List[").trim_end_matches("]")
-                                )
-                            } else {
-                                "Any".to_string()
-                            }
-                        }
-                        RequestType::Create
-                        | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_)) => {
-                            if let Some(output_type) = method.output_type() {
-                                python_type_annotation_from_ident(&output_type)
-                            } else {
-                                "Any".to_string()
-                            }
-                        }
-                        _ => return None,
-                    };
-
-                    let parameters = generate_method_parameters_for_typings(&method);
-                    let mut params = vec!["self".to_string()];
-                    params.extend(parameters);
-
-                    let docstring = format_method_docstring_with_params(&method);
-                    let docstring_text = if docstring.trim().is_empty() {
-                        None
-                    } else {
-                        Some(docstring.trim())
-                    };
-
-                    Some((
-                        method_name.clone(),
-                        generate_method_template(
-                            &method_name,
-                            &params,
-                            &return_type,
-                            docstring_text,
-                            1,
-                        ),
-                    ))
-                })
+            // Resource-scoped services contribute only their collection-style methods to the
+            // aggregate client (instance methods live on the scoped client). Resource-less (Flat)
+            // services contribute *all* of their methods, lowered flat with every param including
+            // path params — matching the real bindings.
+            let is_flat = !service.is_resource_scoped();
+            service.methods().filter_map(move |method| {
+                let emit = if is_flat {
+                    // Flat services emit every method (`flat_client_method` handles all request
+                    // types).
+                    true
+                } else {
+                    // Scoped services emit only the collection-style methods that
+                    // `collection_client_method` actually lowers onto the aggregate client:
+                    // list / create / factory POST|PATCH RPCs.
+                    method.is_collection_method()
+                        && matches!(
+                            method.plan.request_type,
+                            RequestType::List
+                                | RequestType::Create
+                                | RequestType::Custom(Pattern::Post(_) | Pattern::Patch(_))
+                        )
+                };
+                if !emit {
+                    return None;
+                }
+                // Collection methods of scoped services drop path params; flat methods keep them.
+                let drop_path = !is_flat;
+                Some(generate_aggregate_method_typing(&method, drop_path))
+            })
         })
         .collect::<Vec<_>>();
 
@@ -508,7 +589,12 @@ fn generate_main_client_class_typings(
             let resource = service.resource()?;
             let method_name = resource.descriptor.singular.clone();
             let client_name = format!("{}", service.client_type());
-            let pattern_params = derive_resource_accessor_params(service);
+            // Guarded by `resource()?` above, so accessor params are always populated.
+            let pattern_params = service
+                .plan
+                .resource_accessor_params
+                .clone()
+                .unwrap_or_default();
             let mut params = vec!["self".to_string()];
             params.extend(pattern_params.iter().map(|p| format!("{}: str", p)));
 
@@ -634,7 +720,39 @@ fn collect_field_types(ut: &UnifiedType, queue: &mut std::collections::VecDeque<
 
 // --- Model / enum class generation ---
 
-fn generate_model_classes(metadata: &CodeGenMetadata, package_filter: Option<&str>) -> Vec<String> {
+/// Simple names of message types referenced directly as a method return type.
+///
+/// A non-list method returns its raw output message; for a custom RPC that is a `*Response` type
+/// (e.g. `UpdatePermissionsResponse`), which is otherwise skipped by [`generate_model_classes`].
+/// Collecting these lets us emit exactly the response classes that are actually referenced, without
+/// emitting every (unused) response wrapper. List methods return the unwrapped item type, so they're
+/// excluded here.
+fn referenced_return_types(services: &[ServiceHandler<'_>]) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for service in services {
+        for method in service.methods() {
+            // Mirror the rendered return type: List methods return the unwrapped item (not the
+            // response wrapper), and Delete methods are typed `None`, so neither references the raw
+            // output message. Every other method returns its output message directly.
+            if matches!(
+                method.plan.request_type,
+                RequestType::List | RequestType::Delete
+            ) {
+                continue;
+            }
+            if let Some(ident) = method.output_type() {
+                set.insert(ident.to_string());
+            }
+        }
+    }
+    set
+}
+
+fn generate_model_classes(
+    metadata: &CodeGenMetadata,
+    package_filter: Option<&str>,
+    returned_types: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
     let mut classes = Vec::new();
     let (reachable_messages, _) = collect_reachable_types(metadata, package_filter);
 
@@ -642,7 +760,15 @@ fn generate_model_classes(metadata: &CodeGenMetadata, package_filter: Option<&st
         .iter()
         .filter(|name| {
             let simple = extract_simple_type_name(name);
-            !simple.ends_with("Request") && !simple.ends_with("Response")
+            // Request/Response wrappers are not part of the typed surface — except a Response that a
+            // method returns directly, which must be emitted so its signature reference resolves.
+            if simple.ends_with("Request") {
+                return false;
+            }
+            if simple.ends_with("Response") {
+                return returned_types.contains(simple.as_str());
+            }
+            true
         })
         .filter_map(|name| metadata.messages.get(name.as_str()))
         .collect();
@@ -662,15 +788,17 @@ fn generate_enum_classes(metadata: &CodeGenMetadata, package_filter: Option<&str
     let mut enums = Vec::new();
     let (_, reachable_enums) = collect_reachable_types(metadata, package_filter);
 
-    let mut matching_enums: Vec<_> = reachable_enums
+    // Keep the FQ key alongside the info so the emitted class name can be parent-qualified for
+    // nested enums (the bare `EnumInfo.name` loses the parent).
+    let mut matching_enums: Vec<(&String, &EnumInfo)> = reachable_enums
         .iter()
-        .filter_map(|name| metadata.enums.get(name.as_str()))
+        .filter_map(|name| metadata.enums.get(name.as_str()).map(|info| (name, info)))
         .collect();
 
-    matching_enums.sort_by_key(|enum_info| extract_simple_type_name(&enum_info.name));
+    matching_enums.sort_by_key(|(fq, _)| extract_qualified_type_name(fq));
 
-    for enum_info in matching_enums {
-        let enum_def = generate_enum_class_definition(enum_info);
+    for (fq, enum_info) in matching_enums {
+        let enum_def = generate_enum_class_definition(fq, enum_info);
         enums.push(enum_def);
         enums.push("".to_string());
     }
@@ -679,7 +807,8 @@ fn generate_enum_classes(metadata: &CodeGenMetadata, package_filter: Option<&str
 }
 
 fn generate_model_class_definition(message: &MessageInfo) -> String {
-    let class_name = extract_simple_type_name(&message.name);
+    // `MessageInfo.name` is fully qualified; nested messages get a parent-qualified class name.
+    let class_name = extract_qualified_type_name(&message.name);
     let docstring = message
         .documentation
         .as_ref()
@@ -733,8 +862,9 @@ fn generate_model_class_definition(message: &MessageInfo) -> String {
     generate_class_from_template(&class_name, "", docstring.as_deref(), &body_content)
 }
 
-fn generate_enum_class_definition(enum_info: &EnumInfo) -> String {
-    let enum_name = extract_simple_type_name(&enum_info.name);
+fn generate_enum_class_definition(fq_name: &str, enum_info: &EnumInfo) -> String {
+    let _ = &enum_info.name;
+    let enum_name = extract_qualified_type_name(fq_name);
     let docstring = enum_info
         .documentation
         .as_ref()

@@ -64,10 +64,10 @@ fn test_catalog_request_type(#[case] method_name: &str, #[case] expected: Reques
 #[rstest]
 #[case("ListByTags")]
 #[case("ListByCatalogType")]
-fn test_schema_service_custom_request_type(#[case] method_name: &str) {
+fn test_query_service_custom_request_type(#[case] method_name: &str) {
     let meta = parse_meta();
     let plan = analyze_metadata(&meta).unwrap();
-    let method_plan = find_method_plan(&plan, "SchemaService", method_name);
+    let method_plan = find_method_plan(&plan, "QueryService", method_name);
     assert!(matches!(method_plan.request_type, RequestType::Custom(_)));
 }
 

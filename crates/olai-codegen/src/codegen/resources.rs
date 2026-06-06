@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::analysis::{GenerationPlan, RequestType};
+use crate::analysis::{GenerationPlan, RequestType, is_standard_list_field};
 use crate::google::api::FieldBehavior;
 use crate::parsing::CodeGenMetadata;
 use crate::parsing::types::BaseType;
@@ -439,18 +439,6 @@ enum FieldRoleEntry {
     Identifier,
     Sensitive,
     Managed,
-}
-
-/// Standard AIP-132 `List` request fields that are never part of a resource's name.
-///
-/// These are pagination/filtering knobs, not parent-hierarchy components, so the heuristic
-/// path-name derivation must skip them (proto3 scalars carry no presence info, so they can't
-/// be told apart from real name fields by optionality alone).
-fn is_standard_list_field(name: &str) -> bool {
-    matches!(
-        name,
-        "page_token" | "page_size" | "max_results" | "order_by" | "filter"
-    )
 }
 
 /// Derive the ordered list of field names used to build a `ResourceName` for a resource.
@@ -915,6 +903,7 @@ mod tests {
                 node: None,
                 node_ts: None,
                 python_typings_filename: "client.pyi".into(),
+                generate_resource_clients: false,
             },
             generate_resource_enum: true,
             generate_store_integration: false,
@@ -936,6 +925,8 @@ mod tests {
                 managed_resources: vec![],
                 documentation: None,
                 hierarchy: vec![],
+                resource_accessor_params: None,
+                direct_children: vec![],
             }],
             skipped_methods: vec![],
         }

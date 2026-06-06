@@ -4,9 +4,7 @@ use quote::{format_ident, quote};
 
 use super::{doc_tokens, extract_type_ident, format_tokens};
 use crate::Result;
-use crate::analysis::RequestType;
 use crate::codegen::{MethodHandler, ServiceHandler};
-use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::BaseType;
 
 /// Generate client code for a service
@@ -18,7 +16,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
         method_tokens.push(method_code);
     }
 
-    let client_ident = service.client_type();
+    let client_ident = service.low_level_client_type();
     let mod_path = service.models_path();
     let result_path: syn::Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
@@ -62,13 +60,7 @@ pub fn client_method(method: MethodHandler<'_>) -> TokenStream {
     let url_formatting = generate_url_formatting(&method, has_query_params);
     let query_handling = generate_query_parameters(&method);
 
-    let body_handling = if matches!(
-        method.plan.request_type,
-        RequestType::Create
-            | RequestType::Update
-            | RequestType::Custom(Pattern::Post(_))
-            | RequestType::Custom(Pattern::Patch(_))
-    ) {
+    let body_handling = if method.plan.has_request_body {
         quote! { .json(request) }
     } else {
         quote! {}
@@ -116,42 +108,19 @@ fn generate_url_formatting(
     let path = path.trim_start_matches('/');
     let params = method.plan.path_parameters().collect_vec();
 
-    if needs_mut {
-        if params.is_empty() {
-            return quote! {
-                let mut url = self.base_url.join(#path)?;
-            };
-        }
-
-        let (format_string, format_args) = method.plan.http_pattern.to_format_string();
-
-        if format_args.is_empty() {
-            return quote! {
-                let mut url = self.base_url.join(#path)?;
-            };
-        }
-
-        let field_idents: Vec<_> = format_args
-            .iter()
-            .map(|template_param| format_ident!("{}", template_param))
-            .collect();
-        return quote! {
-            let formatted_path = format!(#format_string, #(request.#field_idents),*);
-            let mut url = self.base_url.join(&formatted_path)?;
-        };
-    }
-
-    if params.is_empty() {
-        return quote! {
-            let url = self.base_url.join(#path)?;
-        };
-    }
+    // Only the binding's mutability differs between the two callers.
+    let mut_kw = if needs_mut {
+        quote! { mut }
+    } else {
+        quote! {}
+    };
 
     let (format_string, format_args) = method.plan.http_pattern.to_format_string();
 
-    if format_args.is_empty() {
+    // No path params (or a template with no args) -> direct join; otherwise format then join.
+    if params.is_empty() || format_args.is_empty() {
         quote! {
-            let url = self.base_url.join(#path)?;
+            let #mut_kw url = self.base_url.join(#path)?;
         }
     } else {
         let field_idents: Vec<_> = format_args
@@ -160,7 +129,7 @@ fn generate_url_formatting(
             .collect();
         quote! {
             let formatted_path = format!(#format_string, #(request.#field_idents),*);
-            let url = self.base_url.join(&formatted_path)?;
+            let #mut_kw url = self.base_url.join(&formatted_path)?;
         }
     }
 }

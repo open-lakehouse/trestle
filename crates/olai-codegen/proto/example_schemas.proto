@@ -1,0 +1,105 @@
+syntax = "proto3";
+package example.schemas.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+
+// A Schema is a child resource of a Catalog. This fixture exercises the generated nested
+// resource-scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and the
+// cross-module model import for the create method's enum parameter (`SchemaType`).
+message Schema {
+  option (google.api.resource) = {
+    type: "example.io/Schema"
+    pattern: "catalogs/{catalog}/schemas/{schema}"
+    plural: "schemas"
+    singular: "schema"
+    name_field: "full_name"
+  };
+
+  // Dot-joined `catalog.schema` full name.
+  string full_name = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string comment = 2 [(google.api.field_behavior) = OPTIONAL];
+  SchemaType schema_type = 3;
+  int64 created_at = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum SchemaType {
+  SCHEMA_TYPE_UNSPECIFIED = 0;
+  MANAGED_SCHEMA = 1;
+  EXTERNAL_SCHEMA = 2;
+}
+
+service SchemaService {
+  rpc CreateSchema(CreateSchemaRequest) returns (Schema) {
+    option (google.api.http) = {
+      post: "/schemas"
+      body: "*"
+    };
+  }
+  rpc GetSchema(GetSchemaRequest) returns (Schema) {
+    option (google.api.http) = {get: "/schemas/{full_name}"};
+  }
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse) {
+    option (google.api.http) = {get: "/schemas"};
+  }
+  rpc UpdateSchema(UpdateSchemaRequest) returns (Schema) {
+    option (google.api.http) = {
+      patch: "/schemas/{full_name}"
+      body: "*"
+    };
+  }
+  rpc DeleteSchema(DeleteSchemaRequest) returns (DeleteSchemaResponse) {
+    option (google.api.http) = {delete: "/schemas/{full_name}"};
+  }
+}
+
+message CreateSchemaRequest {
+  // Schema's own name (the new component supplied by the caller).
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // Parent catalog name — filled from the parent `CatalogClient`'s captured component.
+  string catalog_name = 2 [(google.api.field_behavior) = REQUIRED];
+  // Required enum parameter whose type lives in this (schemas) models module — exercises the
+  // child-model import on the parent's generated `create_schema` method.
+  SchemaType schema_type = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetSchemaRequest {
+  // A *nested* enum (declared inside the request message). Exercises nested-enum parsing and the
+  // parent-qualified naming in the Python typings (`GetSchemaRequestView`), which must not collide
+  // with any other nested enum of the same simple name.
+  enum View {
+    VIEW_UNSPECIFIED = 0;
+    BASIC = 1;
+    FULL = 2;
+  }
+
+  string full_name = 1;
+  View view = 2;
+}
+
+message ListSchemasRequest {
+  // Parent scoping field carrying the child-type reference that makes Schema a child of Catalog.
+  string catalog_name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {child_type: "example.io/Schema"}
+  ];
+  int32 max_results = 2;
+  string page_token = 3;
+}
+
+message ListSchemasResponse {
+  repeated Schema schemas = 1;
+  string next_page_token = 2;
+}
+
+message UpdateSchemaRequest {
+  string full_name = 1;
+  Schema schema = 2;
+}
+
+message DeleteSchemaRequest {
+  string full_name = 1;
+}
+
+message DeleteSchemaResponse {}

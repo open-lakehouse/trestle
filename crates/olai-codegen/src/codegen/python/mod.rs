@@ -11,8 +11,8 @@ pub(crate) use bindings::{generate, main_module};
 pub(crate) use typings::generate_typings;
 
 use crate::analysis::RequestType;
-use crate::codegen::{MethodHandler, ServiceHandler};
-use crate::parsing::types::{BaseType, UnifiedType};
+use crate::codegen::MethodHandler;
+use crate::parsing::types::UnifiedType;
 use crate::utils::extract_simple_type_name;
 
 static DOCS_TARGET_WIDTH: usize = 100;
@@ -37,83 +37,6 @@ pub(super) fn resource_pattern_params(pattern: &str) -> Vec<String> {
         vec!["name".to_string()]
     } else {
         params
-    }
-}
-
-/// Derive the parameter names for a resource accessor method on the main client.
-///
-/// **Annotation-driven path** (preferred): when the service has `hierarchy` entries
-/// from `resource_reference { child_type }` annotations, the parent field names are
-/// taken directly from those entries (in List method query param order).
-///
-/// **Heuristic fallback** (when no `resource_reference` annotations are present):
-/// uses two signals to decide whether the resource name is composite:
-/// 1. `name_field` non-empty on the `ResourceDescriptor` → resource defines a dot-joined
-///    composite `full_name` backed by individual component fields. This means callers must
-///    supply each component separately.
-/// 2. Get method path param == `"name"` *and* the List method has required string params
-///    beyond path params → those extra params are the parent components (e.g. `catalog_name`,
-///    `schema_name`). This handles protos that use the `name` field for the full path but
-///    split it via List query params without `resource_reference` annotations.
-///
-/// If neither signal fires, a single `"name"` param is assumed (flat resource with no parents).
-pub(super) fn derive_resource_accessor_params(service: &ServiceHandler<'_>) -> Vec<String> {
-    let resource = match service.resource() {
-        Some(r) => r,
-        None => return vec!["name".to_string()],
-    };
-
-    // --- Annotation-driven path ---
-    // Find hierarchy entries for this resource's type string
-    let resource_type = &resource.descriptor.r#type;
-    if !service.plan.hierarchy.is_empty() && !resource_type.is_empty() {
-        let annotation_parents: Vec<String> = service
-            .plan
-            .hierarchy
-            .iter()
-            .filter(|h| &h.child_resource_type == resource_type)
-            .map(|h| h.parent_field_name.clone())
-            .collect();
-
-        if !annotation_parents.is_empty() {
-            let mut params = annotation_parents;
-            params.push(format!("{}_name", resource.descriptor.singular));
-            return params;
-        }
-    }
-
-    // --- Heuristic fallback ---
-    // Signal 1: proto explicitly declares a name_field, meaning it has a composite full_name.
-    let has_explicit_name_field = !resource.descriptor.name_field.is_empty();
-
-    // Signal 2: Get method uses path param `"name"` (opaque full path) and the List method has
-    // extra required string query params that represent parent components.
-    let get_path_param_name = service
-        .methods()
-        .find(|m| matches!(m.plan.request_type, RequestType::Get))
-        .and_then(|m| m.plan.path_parameters().next().map(|p| p.name.clone()));
-
-    let parent_params: Vec<String> = service
-        .methods()
-        .find(|m| matches!(m.plan.request_type, RequestType::List))
-        .map(|m| {
-            m.required_parameters()
-                .filter(|p| !p.is_path_param())
-                .filter(|p| matches!(p.field_type().base_type, BaseType::String))
-                .map(|p| p.name().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let should_decompose = has_explicit_name_field
-        || (get_path_param_name.as_deref() == Some("name") && !parent_params.is_empty());
-
-    if should_decompose {
-        let mut params = parent_params;
-        params.push(format!("{}_name", resource.descriptor.singular));
-        params
-    } else {
-        vec!["name".to_string()]
     }
 }
 

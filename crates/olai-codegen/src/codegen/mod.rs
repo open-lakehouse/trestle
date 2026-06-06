@@ -33,17 +33,19 @@ use crate::analysis::{
     BodyField, GenerationPlan, ManagedResource, MethodPlan, RequestParam, RequestType, ServicePlan,
     analyze_metadata, split_body_fields,
 };
-use crate::google::api::http_rule::Pattern;
 use crate::output;
 use crate::parsing::types::{self, RenderContext, UnifiedType};
 use crate::parsing::{CodeGenMetadata, MessageField, MessageInfo};
 
+mod aggregate;
+mod bindings;
 mod builder;
 mod client;
 mod config;
 mod handler;
 pub(crate) mod node;
 mod python;
+mod resource_client;
 mod resources;
 mod server;
 mod tokens;
@@ -51,13 +53,49 @@ mod tokens;
 pub use config::{BindingsConfig, CodeGenConfig, CodeGenOutput, ModelsPath};
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 
+/// How a language binding lowers a method's call into the underlying Rust client.
+///
+/// Resource services expose a scoped client (e.g. `CatalogClient`) that captures path params;
+/// resource-less services have no such client, so their methods live on the root client and must
+/// pass every param themselves (the "flat" shape, treated like collection methods).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingMode {
+    /// Method lives on a resource-scoped client that already holds the path params.
+    Scoped,
+    /// Method lives on the root client and receives all params, including path params.
+    Flat,
+}
+
+/// Language-agnostic description of a service's resource accessor method on the aggregate client.
+///
+/// Computed once from the IR (`ServicePlan::resource_accessor_params`) and rendered by each language
+/// emitter, so the param list and nested-vs-flat decision are shared by construction.
+pub(crate) struct AccessorSpec {
+    /// The resource singular, used as the accessor method name (e.g. `catalog`).
+    pub(crate) singular: String,
+    /// The ordered accessor params (ancestors + `<singular>_name` leaf), e.g.
+    /// `["catalog_name", "schema_name"]` or `["name"]`.
+    pub(crate) params: Vec<String>,
+    /// Whether the resource is nested (has parent components); its full name is the dot-joined
+    /// params and the accessor delegates through a `<singular>_from_full_name` helper.
+    pub(crate) nested: bool,
+}
+
+impl AccessorSpec {
+    /// The `format!` template for joining the params into a composite full name
+    /// (e.g. `"{}.{}"` for two params). Only meaningful when [`Self::nested`] is true.
+    pub(crate) fn join_format(&self) -> String {
+        std::iter::repeat_n("{}", self.params.len())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
 impl MethodPlan {
     pub(crate) fn resource_client_method(&self) -> Ident {
-        match self.request_type {
-            RequestType::Get => format_ident!("get"),
-            RequestType::Update => format_ident!("update"),
-            RequestType::Delete => format_ident!("delete"),
-            _ => format_ident!("{}", self.handler_function_name),
+        match &self.scoped_verb {
+            Some(verb) => format_ident!("{}", verb),
+            None => format_ident!("{}", self.handler_function_name),
         }
     }
 
@@ -267,7 +305,10 @@ fn generate_python_code(
         })
         .collect_vec();
 
-    for service in &handlers {
+    // Per-service scoped client modules are only meaningful for resource-scoped services. The
+    // methods of resource-less services live on the root client (emitted by `main_module`), so
+    // they don't get a scoped module of their own.
+    for service in handlers.iter().filter(|s| s.is_resource_scoped()) {
         let python_code = python::generate(service)?;
         files.insert(format!("{}.rs", service.plan.base_path), python_code);
     }
@@ -301,7 +342,9 @@ fn generate_node_code(
         })
         .collect_vec();
 
-    for service in &handlers {
+    // See `generate_python_code`: only resource-scoped services get a per-service scoped module;
+    // resource-less services' methods live on the root client.
+    for service in handlers.iter().filter(|s| s.is_resource_scoped()) {
         let napi_code = node::generate(service)?;
         files.insert(format!("{}.rs", service.plan.base_path), napi_code);
     }
@@ -331,6 +374,11 @@ fn generate_node_ts_code(
     let mut files = HashMap::new();
     files.insert("client.ts".to_string(), ts_code);
 
+    // The `models/index.ts` barrel re-exports every service's generated protobuf-es modules so
+    // `client.ts`'s `from "./models"` imports (message and service request/response types) resolve.
+    let models_barrel = node::typescript::generate_models_barrel(&handlers);
+    files.insert("models/index.ts".to_string(), models_barrel);
+
     Ok(GeneratedCode { files })
 }
 
@@ -351,11 +399,32 @@ fn generate_client_code(
         files.insert(format!("{}/client.rs", service.base_path), client_code);
         let builder_code = builder::generate(&handler)?;
         files.insert(format!("{}/builders.rs", service.base_path), builder_code);
-        let module_code = generate_client_module();
+
+        // Ergonomic resource-scoped client, when enabled and the service manages a resource.
+        // `plan` is passed so the emitter can resolve child services for navigation/create accessors.
+        let has_resource_client = if config.output.generate_resource_clients {
+            resource_client::generate(&handler, plan)?
+                .map(|code| {
+                    files.insert(format!("{}/resource.rs", service.base_path), code);
+                })
+                .is_some()
+        } else {
+            false
+        };
+
+        let module_code = generate_client_module(has_resource_client);
         files.insert(format!("{}/mod.rs", service.base_path), module_code);
     }
 
-    let module_code = generate_client_main_module(&plan.services);
+    // Top-level aggregate root client (e.g. `UnityCatalogClient`), emitted only when a bindings
+    // config (which carries the aggregate name) is present.
+    let has_aggregate = aggregate::generate(plan, metadata, config)?
+        .map(|aggregate_code| {
+            files.insert("client.rs".to_string(), aggregate_code);
+        })
+        .is_some();
+
+    let module_code = generate_client_main_module(&plan.services, has_aggregate);
     files.insert("mod.rs".to_string(), module_code);
 
     Ok(GeneratedCode { files })
@@ -381,10 +450,20 @@ fn generate_server_module(service: &ServicePlan) -> String {
     format_tokens_static(tokens)
 }
 
-fn generate_client_module() -> String {
+fn generate_client_module(has_resource_client: bool) -> String {
+    // Emit the scoped resource client module only when it was generated for this service.
+    let resource_module = if has_resource_client {
+        quote! {
+            pub use resource::*;
+            pub mod resource;
+        }
+    } else {
+        quote! {}
+    };
     let tokens = quote! {
         pub use client::*;
         pub use builders::*;
+        #resource_module
 
         pub mod client;
         pub mod builders;
@@ -407,7 +486,7 @@ pub fn main_module(services: &[ServicePlan]) -> String {
     format_tokens_static(tokens)
 }
 
-fn generate_client_main_module(services: &[ServicePlan]) -> String {
+fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) -> String {
     let service_modules: Vec<TokenStream> = services
         .iter()
         .map(|s| {
@@ -416,8 +495,21 @@ fn generate_client_main_module(services: &[ServicePlan]) -> String {
         })
         .collect();
 
+    // Export the aggregate root client (`client.rs`) when it was generated. Per-service files live
+    // under `<base_path>/`, so a top-level `client` module never collides with them.
+    let aggregate_module = if has_aggregate {
+        quote! {
+            pub mod client;
+            pub use client::*;
+        }
+    } else {
+        quote! {}
+    };
+
     let tokens = quote! {
         #(#service_modules)*
+
+        #aggregate_module
 
         use futures::Future;
 
@@ -616,6 +708,46 @@ impl ServiceHandler<'_> {
         self.plan.managed_resources.first()
     }
 
+    /// Whether this service manages a `google.api.resource` and therefore gets a resource-scoped
+    /// client (e.g. `CatalogClient` bound to a name).
+    ///
+    /// Resource-less services (entity tag assignments, temporary credentials, delta commits) have
+    /// no scoped client; their methods are emitted on the root client and pass every param
+    /// directly ([`BindingMode::Flat`]). See [`Self::binding_mode`].
+    pub(crate) fn is_resource_scoped(&self) -> bool {
+        self.resource().is_some()
+    }
+
+    /// The [`BindingMode`] used to lower this service's methods in language bindings.
+    pub(crate) fn binding_mode(&self) -> BindingMode {
+        if self.is_resource_scoped() {
+            BindingMode::Scoped
+        } else {
+            BindingMode::Flat
+        }
+    }
+
+    /// The language-agnostic spec for this service's resource accessor on the aggregate client, or
+    /// `None` for resource-less services.
+    ///
+    /// All four accessor emitters (Rust aggregate, Python, Node, TypeScript) render from this single
+    /// spec rather than re-deriving the param list and nesting decision, which previously diverged
+    /// between the Rust aggregate and the bindings.
+    pub(crate) fn accessor_spec(&self) -> Option<AccessorSpec> {
+        let resource = self.resource()?;
+        let params = self.plan.resource_accessor_params.clone()?;
+        // A resource is nested when its accessor params include parent components beyond its own
+        // name; its full name is then the dot-joined components. This is the single, converged
+        // nesting rule — previously the Rust aggregate used `len > 1` while Python/Node also gated
+        // on `name_field`, which could disagree.
+        let nested = params.len() > 1;
+        Some(AccessorSpec {
+            singular: resource.descriptor.singular.clone(),
+            params,
+            nested,
+        })
+    }
+
     pub(crate) fn methods(&self) -> impl Iterator<Item = MethodHandler<'_>> {
         self.plan.methods.iter().map(|plan| MethodHandler {
             plan,
@@ -623,6 +755,12 @@ impl ServiceHandler<'_> {
         })
     }
 
+    /// The ergonomic, public-facing client type for this service.
+    ///
+    /// For a resource-scoped service this is the **scoped resource client** (e.g. `CatalogClient`,
+    /// bound to a name) — the type callers and language bindings use. For a resource-less service it
+    /// is the single flat client (e.g. `TagAssignmentClient`). The low-level transport client (one
+    /// async method per RPC) is [`Self::low_level_client_type`].
     pub(crate) fn client_type(&self) -> Ident {
         if let Some(resource) = self.resource() {
             format_ident!(
@@ -638,6 +776,32 @@ impl ServiceHandler<'_> {
                     .trim_end_matches('s')
             )
         }
+    }
+
+    /// The low-level transport client type (`{ client: CloudClient, base_url: Url }` with one async
+    /// method per RPC), emitted by [`client`](super::client).
+    ///
+    /// For a resource-scoped service this is `<Singular>ServiceClient` (e.g. `CatalogServiceClient`),
+    /// distinct from the ergonomic scoped [`Self::client_type`] (`CatalogClient`). For a
+    /// resource-less service there is no scoped client, so the low-level client *is* the
+    /// [`Self::client_type`] (e.g. `TagAssignmentClient`).
+    pub(crate) fn low_level_client_type(&self) -> Ident {
+        if let Some(resource) = self.resource() {
+            format_ident!(
+                "{}ServiceClient",
+                resource.descriptor.singular.to_case(Case::Pascal)
+            )
+        } else {
+            self.client_type()
+        }
+    }
+
+    /// The ergonomic scoped resource client type, or `None` for a resource-less service.
+    ///
+    /// Same as [`Self::client_type`] but `Option`-typed to make "resource-scoped only" explicit at
+    /// call sites that generate the scoped client / its accessor.
+    pub(crate) fn scoped_client_type(&self) -> Option<Ident> {
+        self.resource().map(|_| self.client_type())
     }
 
     /// The module segment under which this service's generated models live.
@@ -689,15 +853,85 @@ pub(crate) struct MethodHandler<'a> {
 
 impl MethodHandler<'_> {
     pub(crate) fn is_collection_method(&self) -> bool {
-        matches!(
+        crate::analysis::is_collection_method(
+            &self.plan.request_type,
+            &self.plan.metadata.method_name,
+        )
+    }
+
+    /// The language-agnostic [`EmitShape`] for this method, derived once from its request type and
+    /// name. The Python/Node/TypeScript emitters branch on this instead of each re-matching
+    /// `RequestType`.
+    pub(crate) fn emit_shape(&self) -> crate::analysis::EmitShape {
+        crate::analysis::emit_shape(&self.plan.request_type, self.is_collection_method())
+    }
+
+    /// Whether this method is emitted as an instance method on a resource-scoped client
+    /// (`get`/`update`/`delete` or a resource-targeted custom `POST`/`PATCH`).
+    ///
+    /// This is the exact set the bindings previously matched in their `resource_client_method`
+    /// dispatch: standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
+    /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
+    /// deliberately **not** surfaced on the scoped client, matching prior behavior.
+    pub(crate) fn is_scoped_instance_method(&self) -> bool {
+        // Standard instance verbs are always scoped.
+        if matches!(
             self.plan.request_type,
-            RequestType::List | RequestType::Create
-        ) || (matches!(self.plan.request_type, RequestType::Custom(Pattern::Get(_)))
-            && self.plan.metadata.method_name.starts_with("List"))
-            || (matches!(
-                self.plan.request_type,
-                RequestType::Custom(Pattern::Post(_))
-            ) && self.plan.metadata.method_name.starts_with("Generate"))
+            RequestType::Get | RequestType::Update | RequestType::Delete
+        ) {
+            return true;
+        }
+        // A *resource-targeted* custom RPC (any verb) is a scoped instance method: it has at least
+        // one path param (so it operates on a specific resource) and is not a collection method
+        // (those — list / create / factory — live on the root client). This surfaces custom reads
+        // like `GetTableExists` / `GetPermissions` (`GET …/{name}/exists`) and resource-targeted
+        // custom POST/PATCH (`…/{name}:rotateToken`) on the scoped client, rather than leaving their
+        // generated builders orphaned/unreachable.
+        matches!(self.plan.request_type, RequestType::Custom(_))
+            && !self.is_collection_method()
+            && self.plan.path_parameters().next().is_some()
+    }
+
+    /// The ordered binding parameter list for `mode`, with shared filtering applied once.
+    ///
+    /// Required params come before optional ones (matching the previous
+    /// `required_parameters().chain(optional_parameters())` order). Filtering reproduces exactly what
+    /// the old per-language `collection_method_parameters` / `resource_method_parameters` did,
+    /// keyed on [`EmitShape`]:
+    ///
+    /// - **collection shapes** (`List`, `Create`): never drop path params (collection methods live
+    ///   on the root client and pass everything); drop `page_token` for `List` (streaming handles
+    ///   pagination).
+    /// - **instance shapes** (`GetUpdate`, `Delete`): drop path params in [`BindingMode::Scoped`]
+    ///   (the scoped client already holds them); never filter `page_token`.
+    ///
+    /// Per-language emitters render the returned `&RequestParam`s (applying their own type mapping /
+    /// capability filters) instead of each re-deriving this filtered list.
+    pub(crate) fn param_plan(&self, mode: BindingMode) -> Vec<&RequestParam> {
+        let (required, optional) = self.param_plan_split(mode);
+        required.into_iter().chain(optional).collect()
+    }
+
+    /// Like [`Self::param_plan`] but keeps the required/optional partition, for emitters (e.g.
+    /// TypeScript) that render the two groups differently (required positional args vs an optional
+    /// `options` object). Both groups have the same shared path/`page_token` filtering applied.
+    pub(crate) fn param_plan_split(
+        &self,
+        mode: BindingMode,
+    ) -> (Vec<&RequestParam>, Vec<&RequestParam>) {
+        use crate::analysis::EmitShape;
+        let shape = self.emit_shape();
+        let is_collection_shape = matches!(shape, EmitShape::List | EmitShape::Create);
+        let drop_path = !is_collection_shape && mode == BindingMode::Scoped;
+        let drop_page_token = shape == EmitShape::List;
+        let keep = |p: &&RequestParam| {
+            let is_dropped_path = drop_path && p.is_path_param();
+            let is_dropped_page_token = drop_page_token && p.name() == "page_token";
+            !is_dropped_path && !is_dropped_page_token
+        };
+        let required = self.required_parameters().filter(keep).collect();
+        let optional = self.optional_parameters().filter(keep).collect();
+        (required, optional)
     }
 
     pub(crate) fn output_message(&self) -> Option<MessageMeta<'_>> {
@@ -711,6 +945,20 @@ impl MethodHandler<'_> {
     pub(crate) fn output_type(&self) -> Option<Ident> {
         self.output_message()
             .map(|t| extract_type_ident(&t.info.name))
+    }
+
+    /// The method's output type as a `syn::Type`, falling back to the unit type `()` when the
+    /// RPC returns `Empty` (i.e. [`Self::output_message`] is `None`).
+    ///
+    /// Binding emitters splice the response type into `Result<T>` wrappers
+    /// (e.g. `PyUnityCatalogResult<T>`); interpolating a bare `Option::None` would produce an
+    /// uncompilable `PyUnityCatalogResult<>`. Use this so `Empty`-returning RPCs yield
+    /// `PyUnityCatalogResult<()>` instead.
+    pub(crate) fn output_type_or_unit(&self) -> syn::Type {
+        match self.output_type() {
+            Some(ident) => syn::parse_quote!(#ident),
+            None => syn::parse_quote!(()),
+        }
     }
 
     pub(crate) fn list_output_field(&self) -> Option<&MessageField> {
@@ -736,6 +984,29 @@ impl MethodHandler<'_> {
 
     pub(crate) fn builder_type(&self) -> Ident {
         format_ident!("{}Builder", self.plan.metadata.method_name)
+    }
+
+    /// The method name to expose in language bindings.
+    ///
+    /// Prefers the gnostic `operation_id` annotation (`gnostic.openapi.v3.operation`) when present,
+    /// snake-cased, so proto authors can give bindings a hand-tuned name. Falls back to the
+    /// proto-derived name ([`MethodPlan::base_method_ident`]).
+    ///
+    /// This affects only the *emitted* binding method name — the call into the underlying Rust
+    /// client still uses [`MethodPlan::base_method_ident`], so the handler/client API is unchanged.
+    pub(crate) fn binding_method_name(&self) -> Ident {
+        format_ident!("{}", self.binding_method_name_str())
+    }
+
+    /// The snake_case binding method name (see [`Self::binding_method_name`]).
+    ///
+    /// Provided as a `String` so the string-templated TypeScript generator can camel-case it and
+    /// stay consistent with the snake→camel name NAPI derives for the native method.
+    pub(crate) fn binding_method_name_str(&self) -> String {
+        match self.plan.metadata.operation.as_ref() {
+            Some(op) if !op.operation_id.is_empty() => op.operation_id.to_case(Case::Snake),
+            _ => self.plan.handler_function_name.clone(),
+        }
     }
 
     /// Get type representation for rust depending on context
@@ -782,8 +1053,11 @@ impl MethodHandler<'_> {
     }
 }
 
-/// Extract the final type name from a fully qualified protobuf type and convert to Ident
+/// Extract the final type name from a fully qualified protobuf type and convert to Ident.
+///
+/// Thin `Ident` adapter over [`crate::utils::extract_simple_type_name`] — the single source of
+/// truth for last-segment extraction. (Not [`crate::utils::extract_qualified_type_name`], which
+/// parent-prefixes nested types — different behavior.)
 pub(crate) fn extract_type_ident(full_type: &str) -> Ident {
-    let type_name = full_type.split('.').next_back().unwrap_or(full_type);
-    format_ident!("{}", type_name)
+    format_ident!("{}", crate::utils::extract_simple_type_name(full_type))
 }

@@ -5,9 +5,8 @@ use syn::{Path, Type};
 
 use super::format_tokens;
 use crate::{
-    analysis::{MethodPlan, RequestParam, RequestType},
+    analysis::{MethodPlan, RequestParam},
     codegen::{MethodHandler, ServiceHandler},
-    google::api::http_rule::Pattern,
     parsing::types::{BaseType, RenderContext},
 };
 
@@ -26,15 +25,7 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Res
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
 
     // Only import RequestPartsExt when there are FromRequestParts impls (path/query params).
-    let has_parts_extractors = service.methods().any(|m| {
-        matches!(
-            m.plan.request_type,
-            RequestType::List | RequestType::Get | RequestType::Delete
-        ) || matches!(
-            m.plan.request_type,
-            RequestType::Custom(Pattern::Get(_) | Pattern::Delete(_))
-        )
-    });
+    let has_parts_extractors = service.methods().any(|m| m.plan.needs_request_parts);
 
     let axum_imports = if has_parts_extractors {
         quote! { use axum::{RequestExt, RequestPartsExt}; }
@@ -81,18 +72,16 @@ pub(super) fn generate_server(service: &ServiceHandler<'_>) -> crate::error::Res
     format_tokens(tokens)
 }
 
-/// Generate extractor implementation for a specific method
+/// Generate extractor implementation for a specific method.
+///
+/// Path/query-only methods use `FromRequestParts`; body-bearing methods use `FromRequest`. The
+/// split is precomputed on the plan (`needs_request_parts`) so this no longer re-matches the
+/// `RequestType` enum.
 fn from_request_extractor(method: &MethodHandler<'_>) -> TokenStream {
-    match &method.plan.request_type {
-        RequestType::List | RequestType::Get | RequestType::Delete => {
-            from_request_parts_impl(method)
-        }
-        RequestType::Create | RequestType::Update => from_request_impl(method),
-        RequestType::Custom(pattern) => match pattern {
-            Pattern::Get(_) | Pattern::Delete(_) => from_request_parts_impl(method),
-            Pattern::Post(_) | Pattern::Patch(_) | Pattern::Put(_) => from_request_impl(method),
-            Pattern::Custom(_) => from_request_impl(method),
-        },
+    if method.plan.needs_request_parts {
+        from_request_parts_impl(method)
+    } else {
+        from_request_impl(method)
     }
 }
 
@@ -391,6 +380,12 @@ mod tests {
             has_response: true,
             request_type: RequestType::List,
             output_resource_type: None,
+            // Values for a List method: read-only (no body), extracted from request parts.
+            has_request_body: false,
+            needs_request_parts: true,
+            scoped_verb: None,
+            // Server extractor tests don't consult `shape`; the test service has no resource.
+            shape: crate::analysis::MethodShape::Unbound,
         }
     }
 

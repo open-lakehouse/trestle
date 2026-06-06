@@ -7,7 +7,7 @@ use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::utils::extract_simple_type_name;
+use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
 
 /// Context for rendering types in different situations
 #[derive(Debug, Clone, Copy)]
@@ -146,10 +146,16 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
 ///    repeated fields in `Option<T>`, even when the field is not marked optional in proto.
 fn should_wrap_in_option(ctx: RenderContext, ty: &UnifiedType) -> bool {
     let is_optional_non_builder = ty.is_optional && !matches!(ctx, RenderContext::BuilderMethod);
-    let is_ffi_collection = matches!(
+    let is_ffi = matches!(
         ctx,
         RenderContext::PythonParameter | RenderContext::NapiParameter
-    ) && (matches!(ty.base_type, BaseType::Map(_, _)) || ty.is_repeated);
+    );
+    // At FFI boundaries, collections (maps, repeated) are wrapped in `Option` so callers can
+    // distinguish "absent" from "empty". Message/oneof optionality is carried by `ty.is_optional`
+    // (set during analysis from the field's `REQUIRED` behavior), so a required message body
+    // renders as a bare `T` required param while an optional one renders as `Option<T>`.
+    let is_ffi_collection =
+        is_ffi && (matches!(ty.base_type, BaseType::Map(_, _)) || ty.is_repeated);
     is_optional_non_builder || is_ffi_collection
 }
 
@@ -174,6 +180,12 @@ pub fn field_assignment(
         BaseType::Map(_, _) => quote! {
             #field_ident.into_iter().map(|(k, v)| (k.into(), v.into())).collect()
         },
+        // Singular message/oneof fields are `Option<T>` in the prost-generated request struct, but
+        // a required one arrives as a bare `T` constructor param — wrap it in `Some` to assign.
+        // (Repeated messages are `Vec<T>`, not `Option`, so they fall through unchanged.)
+        BaseType::Message(_) | BaseType::OneOf(_) if !unified_type.is_repeated => {
+            quote! { Some(#field_ident) }
+        }
         _ => quote! { #field_ident },
     }
 }
@@ -187,9 +199,12 @@ pub fn unified_to_python_type(unified_type: &UnifiedType) -> String {
         BaseType::Float64 | BaseType::Float32 => "float".to_string(),
         BaseType::Bytes => "bytes".to_string(),
         BaseType::Unit => "None".to_string(),
-        BaseType::Message(name) => extract_simple_type_name(name),
-        BaseType::Enum(name) => extract_simple_type_name(name),
-        BaseType::OneOf(name) => extract_simple_type_name(name),
+        // Python typings emit flat classes, so nested types use the parent-qualified name (e.g.
+        // `GenerateTemporaryTableCredentialsRequestOperation`) to stay collision-free. Top-level
+        // types are unaffected (qualified == simple).
+        BaseType::Message(name) => extract_qualified_type_name(name),
+        BaseType::Enum(name) => extract_qualified_type_name(name),
+        BaseType::OneOf(name) => extract_qualified_type_name(name),
         BaseType::Map(key_type, value_type) => {
             let key_str = unified_to_python_type(key_type);
             let value_str = unified_to_python_type(value_type);

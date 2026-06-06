@@ -222,6 +222,14 @@ pub struct CodeGenOutput {
     pub server: Option<PathBuf>,
     /// Output directory for HTTP client code. Generation is skipped when `None`.
     pub client: Option<PathBuf>,
+    /// Whether to also emit ergonomic resource-scoped clients (`<service>/resource.rs`) alongside
+    /// the low-level per-service client and builders.
+    ///
+    /// A scoped client (e.g. `CatalogClient` bound to a name) captures the resource's name
+    /// components and exposes `get`/`update`/`delete` (+ resource-targeted custom RPCs) returning
+    /// the matching builder. Only emitted for resource-scoped services, and only when
+    /// [`client`](CodeGenOutput::client) is `Some`. Defaults to `false`.
+    pub generate_resource_clients: bool,
     /// Output directory for Python bindings. Generation is skipped when `None`.
     pub python: Option<PathBuf>,
     /// Output directory for Node.js NAPI bindings. Generation is skipped when `None`.
