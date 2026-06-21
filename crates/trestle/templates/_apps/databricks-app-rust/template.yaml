@@ -21,6 +21,10 @@ variables:
   - name: gh_owner
     default: "your-org"
     help: "GitHub owner/org used in Cargo.toml `repository`."
+  - name: runtime
+    default: "prost"
+    validate: "^(prost|buffa)$"
+    help: "Protobuf runtime the generated code consumes: prost (default) or buffa."
 
 # App-private categories. `options:` lists explicit values (not component names)
 # so the wizard can offer simple `react` / `none` style picks for things that

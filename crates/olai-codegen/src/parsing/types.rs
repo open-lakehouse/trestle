@@ -7,6 +7,7 @@ use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use crate::codegen::Runtime;
 use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
 
 /// Context for rendering types in different situations
@@ -79,7 +80,14 @@ impl TypeRenderer for TypeScriptRenderer {
     }
 }
 
-/// Convert a unified type to a Rust type string
+/// Convert a unified type to a Rust type string.
+///
+/// Note: the *type* a field renders as is currently runtime-independent. Under both prost
+/// and buffa, generated builder/constructor params and the query-deserialization struct use
+/// the bare enum type `E` (serde deserializes the variant-name string into it), and the
+/// runtime-specific wrapping (`as i32` / `EnumValue::Known`) is applied by
+/// [`field_assignment`]. If a future runtime needs a different field *type* (e.g. buffa
+/// zero-copy view types), thread a `Runtime` argument back in here.
 pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> String {
     let base_type_str = match &unified_type.base_type {
         BaseType::String => {
@@ -159,33 +167,52 @@ fn should_wrap_in_option(ctx: RenderContext, ty: &UnifiedType) -> bool {
     is_optional_non_builder || is_ffi_collection
 }
 
-/// Generate field assignment code
+/// Generate field assignment code.
+///
+/// Wraps a constructor/builder parameter so it can be stored into the request struct field.
+/// `runtime` selects the ABI of the protobuf library the generated code consumes:
+///
+/// - [`Runtime::Prost`]: open enums are `i32` (`#field as i32`); singular message/oneof
+///   fields are `Option<Box<T>>` (`Some(#field)`).
+/// - [`Runtime::Buffa`]: open enums are `EnumValue<E>` (`buffa::EnumValue::Known(#field)`);
+///   singular message/oneof fields are `MessageField<T>` (`buffa::MessageField::some(#field)`).
 pub fn field_assignment(
     unified_type: &UnifiedType,
     field_ident: &proc_macro2::Ident,
     ctx: &RenderContext,
+    runtime: Runtime,
 ) -> TokenStream {
     if matches!(ctx, RenderContext::BuilderMethod) {
-        return flexible_optional_field_assignment(unified_type, field_ident);
+        return flexible_optional_field_assignment(unified_type, field_ident, runtime);
     }
     match &unified_type.base_type {
         BaseType::String if !unified_type.is_optional => quote! { #field_ident.into() },
-        BaseType::Enum(_) => {
-            if unified_type.is_repeated {
+        BaseType::Enum(_) => match runtime {
+            Runtime::Prost if unified_type.is_repeated => {
                 quote! { #field_ident.into_iter().map(|v| v as i32).collect() }
-            } else {
-                quote! { #field_ident as i32 }
             }
-        }
+            Runtime::Prost => quote! { #field_ident as i32 },
+            Runtime::Buffa if unified_type.is_repeated => {
+                quote! { #field_ident.into_iter().map(buffa::EnumValue::Known).collect() }
+            }
+            Runtime::Buffa => quote! { buffa::EnumValue::Known(#field_ident) },
+        },
         BaseType::Map(_, _) => quote! {
             #field_ident.into_iter().map(|(k, v)| (k.into(), v.into())).collect()
         },
-        // Singular message/oneof fields are `Option<T>` in the prost-generated request struct, but
-        // a required one arrives as a bare `T` constructor param — wrap it in `Some` to assign.
-        // (Repeated messages are `Vec<T>`, not `Option`, so they fall through unchanged.)
-        BaseType::Message(_) | BaseType::OneOf(_) if !unified_type.is_repeated => {
+        // Singular message/oneof fields wrap the bare `T` constructor param into the request
+        // struct's optional-message representation. (Repeated messages are `Vec<T>`, not
+        // optional, so they fall through unchanged.) Oneof fields are `Option<Oneof>` under both
+        // runtimes, so they always take the `Some(..)` form regardless of `runtime`.
+        BaseType::OneOf(_) if !unified_type.is_repeated => {
             quote! { Some(#field_ident) }
         }
+        BaseType::Message(_) if !unified_type.is_repeated => match runtime {
+            // prost: `Option<Box<T>>`
+            Runtime::Prost => quote! { Some(#field_ident) },
+            // buffa: `MessageField<T>`
+            Runtime::Buffa => quote! { buffa::MessageField::some(#field_ident) },
+        },
         _ => quote! { #field_ident },
     }
 }
@@ -302,25 +329,31 @@ pub fn unified_to_typescript(unified_type: &UnifiedType) -> String {
 fn flexible_optional_field_assignment(
     unified_type: &UnifiedType,
     field_ident: &proc_macro2::Ident,
+    runtime: Runtime,
 ) -> TokenStream {
     if unified_type.is_optional {
-        match &unified_type.base_type {
-            BaseType::Enum(_) => quote! { #field_ident.into().map(|e| e as i32) },
+        match (&unified_type.base_type, runtime) {
+            (BaseType::Enum(_), Runtime::Prost) => quote! { #field_ident.into().map(|e| e as i32) },
+            (BaseType::Enum(_), Runtime::Buffa) => {
+                quote! { #field_ident.into().map(buffa::EnumValue::Known) }
+            }
             _ => quote! { #field_ident.into() },
         }
     } else {
-        match &unified_type.base_type {
-            BaseType::String => quote! { #field_ident.into() },
-            BaseType::Int32
-            | BaseType::Int64
-            | BaseType::Bool
-            | BaseType::Float64
-            | BaseType::Float32 => {
+        match (&unified_type.base_type, runtime) {
+            (BaseType::String, _) => quote! { #field_ident.into() },
+            (
+                BaseType::Int32
+                | BaseType::Int64
+                | BaseType::Bool
+                | BaseType::Float64
+                | BaseType::Float32,
+                _,
+            ) => {
                 quote! { #field_ident.into() }
             }
-            BaseType::Enum(_) => {
-                quote! { #field_ident as i32 }
-            }
+            (BaseType::Enum(_), Runtime::Prost) => quote! { #field_ident as i32 },
+            (BaseType::Enum(_), Runtime::Buffa) => quote! { buffa::EnumValue::Known(#field_ident) },
             // Message, OneOf, and Map types are always handled by their own
             // dedicated branches in `builder_with_impl` and never reach this path.
             _ => quote! { #field_ident },

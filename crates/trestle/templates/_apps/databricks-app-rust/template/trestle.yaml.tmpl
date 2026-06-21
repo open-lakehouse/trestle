@@ -8,6 +8,8 @@ descriptors: api.bin
 buf_gen: buf.gen.yaml
 
 generate:
+  # Protobuf runtime the generated code consumes: "prost" (default) or "buffa".
+  runtime: {{ runtime }}
   output_common: crates/common/src/models/_gen
   output_models: crates/common/src/models
   models_subdir: _gen

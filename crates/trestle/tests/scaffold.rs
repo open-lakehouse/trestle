@@ -88,6 +88,7 @@ fn render_lakehouse(selections: Vec<(&str, Vec<&str>)>) -> TempDir {
         overrides: overrides.into_iter().collect(),
         non_interactive: true,
         force: false,
+        runtime: None,
     };
     scaffold(args);
     tmp
@@ -130,6 +131,7 @@ fn render_rust_app(base_selections: Vec<(&str, Vec<&str>)>, frontend: &str, ci: 
         overrides: overrides.into_iter().collect(),
         non_interactive: true,
         force: false,
+        runtime: None,
     };
     scaffold(args);
     tmp
@@ -445,6 +447,7 @@ fn minimal_args(name: &str, out: std::path::PathBuf) -> NewArgs {
         overrides: overrides.into_iter().collect(),
         non_interactive: true,
         force: false,
+        runtime: None,
     }
 }
 

@@ -5,6 +5,9 @@ exclude = [
   # Templates are scaffolds containing project skeletons (frequently
   # uncompilable in isolation); they must never be picked up by `cargo build`.
   "crates/trestle/templates",
+  # Opt-in buffa end-to-end fixture: pulls in buffa/buffa-build + protoc, kept
+  # out of the default build/test. Run explicitly via its own --manifest-path.
+  "crates/olai-codegen/tests/buffa_e2e",
 ]
 
 [workspace.package]

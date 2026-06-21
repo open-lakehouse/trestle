@@ -85,6 +85,11 @@ pub struct NewArgs {
     #[clap(long = "set", short = 'D', value_parser = parse_key_val)]
     pub overrides: Vec<(String, String)>,
 
+    /// Protobuf runtime the generated code should consume: `prost` (default) or
+    /// `buffa`. Convenience for `--set runtime=<value>`.
+    #[clap(long, value_parser = ["prost", "buffa"])]
+    pub runtime: Option<String>,
+
     /// Skip all prompts; fail if any required variable is unset. Note that
     /// `post_init` hooks marked `confirm: true` are skipped in this mode (they
     /// cannot be confirmed without a prompt).
@@ -178,6 +183,13 @@ pub fn run(args: NewArgs) -> Result<()> {
     let mut overrides: BTreeMap<String, String> = args.overrides.iter().cloned().collect();
     if !overrides.contains_key("project_name") {
         overrides.insert("project_name".to_string(), args.name.clone());
+    }
+    // `--runtime` is a convenience alias for `--set runtime=<value>`; an explicit
+    // `--set runtime=...` still wins (insert only if absent).
+    if let Some(runtime) = &args.runtime {
+        overrides
+            .entry("runtime".to_string())
+            .or_insert_with(|| runtime.clone());
     }
     let mut selections: BTreeMap<String, Vec<String>> = args.selections.iter().cloned().collect();
     let mut chosen_app_names: Vec<String> = args.apps.clone();

@@ -1,0 +1,34 @@
+# Opt-in end-to-end proof that trestle's `Runtime::Buffa` codegen produces a
+# client that compiles against real `buffa`-generated models and round-trips JSON.
+#
+# This crate is intentionally EXCLUDED from the workspace (see the root
+# Cargo.toml `exclude` list) so `buffa`/`buffa-build` and `protoc` are not pulled
+# into the default `cargo build`/`cargo test`. Run it explicitly:
+#
+#     cargo test --manifest-path crates/olai-codegen/tests/buffa_e2e/Cargo.toml
+#
+# Requires `protoc` on PATH (buffa-build invokes it). The proto sources (with
+# their google.api deps) are vendored under `proto/exported/` via `buf export`,
+# so no network/buf is needed at test time.
+[package]
+name = "buffa-e2e"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+buffa = { version = "0.7", features = ["json"] }
+buffa-types = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+olai-http = { path = "../../../olai-http" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+thiserror = "2"
+async-trait = "0.1"
+futures = "0.3"
+
+[build-dependencies]
+buffa-build = "0.7"
+olai-codegen = { path = "../../" }
+protobuf = "3"

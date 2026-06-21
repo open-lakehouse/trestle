@@ -808,6 +808,7 @@ mod tests {
             models_path_template: "common::models::{service}::v1".into(),
             models_path_crate_template: "crate::models::{service}::v1".into(),
             resource_store_crate_name: "olai_store".into(),
+            runtime: crate::Runtime::Prost,
             output: CodeGenOutput {
                 common: "/tmp/c".into(),
                 models: None,

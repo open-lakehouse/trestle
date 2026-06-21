@@ -30,6 +30,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+{%- if runtime == 'buffa' %}
+buffa = "0.7"
+buffa-types = "0.7"
+{%- else %}
 prost = "0.14"
 prost-types = "0.14"
+{%- endif %}
 async-trait = "0.1"

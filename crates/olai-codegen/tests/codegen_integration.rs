@@ -23,6 +23,7 @@ fn make_test_config(
         models_path_template: "example_common::models::{service}::v1".to_string(),
         models_path_crate_template: "crate::models::{service}::v1".to_string(),
         resource_store_crate_name: "olai_store".to_string(),
+        runtime: olai_codegen::Runtime::Prost,
         output: CodeGenOutput {
             common,
             models: None,

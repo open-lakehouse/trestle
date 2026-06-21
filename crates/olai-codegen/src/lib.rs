@@ -63,6 +63,7 @@
 //!     bindings: None,
 //!     models_gen_dir: None,
 //!     resource_store_crate_name: "olai_store".into(),
+//!     runtime: olai_codegen::Runtime::Prost,
 //! };
 //!
 //! // 4. Optionally validate before running
@@ -83,7 +84,8 @@ pub mod parsing;
 pub mod utils;
 
 pub use codegen::{
-    BindingsConfig, CodeGenConfig, CodeGenOutput, GeneratedCode, generate_code, generate_models_mod,
+    BindingsConfig, CodeGenConfig, CodeGenOutput, GeneratedCode, Runtime, generate_code,
+    generate_models_mod,
 };
 
 pub use analysis::{

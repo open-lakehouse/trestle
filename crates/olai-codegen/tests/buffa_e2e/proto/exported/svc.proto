@@ -1,0 +1,32 @@
+syntax = "proto3";
+package demo.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  GREEN = 2;
+}
+
+message Widget {
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  Color color = 2;
+}
+
+message ListWidgetsRequest {
+  int32 max_results = 1;
+  string page_token = 2;
+  Color color = 3;
+}
+
+message ListWidgetsResponse {
+  repeated Widget widgets = 1;
+}
+
+service WidgetService {
+  rpc ListWidgets(ListWidgetsRequest) returns (ListWidgetsResponse) {
+    option (google.api.http) = { get: "/widgets" };
+  }
+}
