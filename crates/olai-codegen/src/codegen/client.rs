@@ -20,9 +20,19 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     let mod_path = service.models_path();
     let result_path: syn::Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
+    let transport_path: syn::Path =
+        syn::parse_str(&service.config.transport_type_path).expect("valid transport_type_path");
+    // Import the transport by its full path but refer to it by its final segment, so the
+    // emitted struct/fn signatures stay bare (`CloudClient`, not `olai_http::CloudClient`) —
+    // keeping default output byte-for-byte identical to the pre-seam generator.
+    let transport_ident = &transport_path
+        .segments
+        .last()
+        .expect("transport_type_path has at least one segment")
+        .ident;
 
     let tokens = quote! {
-        use olai_http::CloudClient;
+        use #transport_path;
         use url::Url;
         use #result_path;
         use #mod_path::*;
@@ -30,13 +40,13 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
         /// HTTP client for service operations
         #[derive(Clone)]
         pub struct #client_ident {
-            pub(crate) client: CloudClient,
+            pub(crate) client: #transport_ident,
             pub(crate) base_url: Url,
         }
 
         impl #client_ident {
             /// Create a new client instance
-            pub fn new(client: CloudClient, mut base_url: Url) -> Self {
+            pub fn new(client: #transport_ident, mut base_url: Url) -> Self {
                 if !base_url.path().ends_with('/') {
                     base_url.set_path(&format!("{}/", base_url.path()));
                 }

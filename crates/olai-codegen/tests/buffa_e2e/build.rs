@@ -45,6 +45,7 @@ fn main() {
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime: Runtime::Buffa,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common: common_dir,
             models: None,
@@ -55,6 +56,7 @@ fn main() {
             python: None,
             node: None,
             node_ts: None,
+            wasm: None,
             python_typings_filename: "client.pyi".into(),
         },
         generate_resource_enum: false,

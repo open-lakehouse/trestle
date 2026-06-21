@@ -48,6 +48,9 @@ pub struct GenerateArgs {
     #[clap(long, env = "UC_BUILD_OUTPUT_NODE_TS")]
     pub output_node_ts: Option<String>,
 
+    #[clap(long, env = "UC_BUILD_OUTPUT_WASM")]
+    pub output_wasm: Option<String>,
+
     #[clap(long, short, env = "UC_BUILD_DESCRIPTORS")]
     pub descriptors: Option<String>,
 
@@ -145,6 +148,15 @@ pub(crate) struct FileTsConfig {
     pub error_code_prefix: Option<String>,
 }
 
+/// WASM/browser `#[wasm_bindgen]` bindings + `.d.ts`. Reuses the shared binding identifiers
+/// (`aggregate_client_name`, `ts_error_base_class`, …) from the `typescript`/`node` config; only
+/// the output directory is wasm-specific. Implies `transport: wasm` and pairs with `runtime: buffa`.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FileWasmConfig {
+    pub output: Option<String>,
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileGenerateConfig {
@@ -167,9 +179,19 @@ pub(crate) struct FileGenerateConfig {
     pub resource_store_crate_name: Option<String>,
     /// Protobuf runtime the generated code consumes: `"prost"` (default) or `"buffa"`.
     pub runtime: Option<String>,
+    /// Friendly selector for the generated client's HTTP transport: `"cloud"` (default,
+    /// `olai_http::CloudClient`) or `"wasm"` (`olai_http_wasm::WasmClient`, a browser-buildable
+    /// client where the browser attaches the session). Ignored if `transport_type_path` is set.
+    pub transport: Option<String>,
+    /// Fully-qualified path to the HTTP transport type generated clients store and call. Overrides
+    /// `transport`. Defaults to `"olai_http::CloudClient"`. Use this for a custom transport that
+    /// exposes the verb-builder / `json`/`query`/`send` / `status`/`bytes` surface generated
+    /// clients require.
+    pub transport_type_path: Option<String>,
     pub python: Option<FilePythonConfig>,
     pub node: Option<FileNodeConfig>,
     pub typescript: Option<FileTsConfig>,
+    pub wasm: Option<FileWasmConfig>,
 }
 
 pub(crate) fn load_trestle_config(path: &Path) -> Result<TrestleConfig> {
@@ -246,6 +268,9 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         }
         if args.output_node_ts.is_none() {
             args.output_node_ts = cfg.typescript.as_ref().and_then(|c| c.output.clone());
+        }
+        if args.output_wasm.is_none() {
+            args.output_wasm = cfg.wasm.as_ref().and_then(|c| c.output.clone());
         }
 
         file_cfg = cfg;
@@ -326,6 +351,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         .as_deref()
         .map(resolve_dir)
         .transpose()?;
+    let output_wasm = args.output_wasm.as_deref().map(resolve_dir).transpose()?;
 
     let python_typings_filename = args
         .python_typings_filename
@@ -349,6 +375,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         python: output_python,
         node: output_node,
         node_ts: output_node_ts,
+        wasm: output_wasm,
         python_typings_filename,
         generate_resource_clients: file_cfg.generate_resource_clients.unwrap_or(false),
     };
@@ -468,6 +495,24 @@ fn build_config(
         }
     };
 
+    // Resolve the HTTP transport for generated clients. `transport_type_path` (an explicit Rust
+    // path) wins if set; otherwise the friendly `transport` alias selects a built-in. `wasm`
+    // emits a browser-buildable client (no signing; the browser attaches the session).
+    let transport_type_path = match (
+        file_cfg.transport_type_path.as_deref(),
+        file_cfg.transport.as_deref(),
+    ) {
+        (Some(path), _) => path.to_string(),
+        (None, None | Some("cloud")) => olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.to_string(),
+        (None, Some("wasm")) => "olai_http_wasm::WasmClient".to_string(),
+        (None, Some(other)) => {
+            return Err(Error::other(format!(
+                "unknown transport `{other}` in trestle.yaml (expected `cloud` or `wasm`, \
+                 or set `transport_type_path` to a custom path)"
+            )));
+        }
+    };
+
     Ok(CodeGenConfig {
         context_type_path: args
             .context_type
@@ -491,5 +536,6 @@ fn build_config(
             .clone()
             .unwrap_or_else(|| "olai_store".to_string()),
         runtime,
+        transport_type_path,
     })
 }

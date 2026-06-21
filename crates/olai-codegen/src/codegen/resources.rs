@@ -894,6 +894,7 @@ mod tests {
             models_path_crate_template: "crate::models::{service}::v1".into(),
             resource_store_crate_name: "olai_store".into(),
             runtime: crate::Runtime::Prost,
+            transport_type_path: crate::DEFAULT_TRANSPORT_TYPE_PATH.into(),
             output: crate::codegen::CodeGenOutput {
                 common: "/tmp/common".into(),
                 models: Some("/tmp/models".into()),
@@ -903,6 +904,7 @@ mod tests {
                 python: None,
                 node: None,
                 node_ts: None,
+                wasm: None,
                 python_typings_filename: "client.pyi".into(),
                 generate_resource_clients: false,
             },

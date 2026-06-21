@@ -61,6 +61,7 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common,
             models: Some(models),
@@ -70,6 +71,7 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
             python: None,
             node: None,
             node_ts: None,
+            wasm: None,
             python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },
@@ -80,6 +82,171 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         bindings: None,
         models_gen_dir: None,
     }
+}
+
+// ── WASM transport seam ──────────────────────────────────────────────────────
+
+/// With a custom (WASM) transport configured, generated clients store and import that transport
+/// instead of `CloudClient`, and the aggregate omits the cloud-only constructors — while the
+/// output still parses as valid Rust.
+#[test]
+fn wasm_transport_is_substituted_into_generated_clients() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.transport_type_path = "olai_http_wasm::WasmClient".into();
+    // The aggregate client (which carries the cloud-only ctors) is only emitted when bindings
+    // are configured, so set them to exercise the ctor-gating path too.
+    config.bindings = Some(BindingsConfig {
+        aggregate_client_name: "ExampleClient".into(),
+        client_crate_name: "example_client".into(),
+        py_error_type: "PyExampleError".into(),
+        py_result_type: "PyExampleResult".into(),
+        napi_error_ext_trait: "NapiErrorExt".into(),
+        typings_package_filter: None,
+        ts_error_base_class: "ExampleError".into(),
+        ts_error_code_prefix: "EX".into(),
+    });
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+
+    assert!(
+        client_src.contains("olai_http_wasm :: WasmClient")
+            || client_src.contains("olai_http_wasm::WasmClient"),
+        "expected the WASM transport to be imported into generated client code"
+    );
+    assert!(
+        !client_src.contains("use olai_http :: CloudClient")
+            && !client_src.contains("use olai_http::CloudClient"),
+        "CloudClient must not be imported when a WASM transport is configured"
+    );
+    // Cloud-only convenience ctors are meaningless for the browser transport.
+    assert!(
+        !client_src.contains("new_unauthenticated") && !client_src.contains("new_with_token"),
+        "cloud-only aggregate ctors must not be emitted for a non-CloudClient transport"
+    );
+
+    // Every emitted client file must still parse.
+    for path in walk(&tmp.path().join("client"))
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+    {
+        let src = std::fs::read_to_string(&path).expect("read generated file");
+        syn::parse_file(&src)
+            .unwrap_or_else(|e| panic!("generated {} is invalid Rust: {e}", path.display()));
+    }
+}
+
+/// The default config leaves `CloudClient` exactly as before (guards against the seam leaking
+/// the new transport path into default output — the golden tests cover bytes, this covers intent).
+#[test]
+fn default_transport_still_uses_cloud_client() {
+    let tmp = TempDir::new().unwrap();
+    let config = rust_config(tmp.path());
+    assert_eq!(config.transport_type_path, "olai_http::CloudClient");
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+    assert!(
+        client_src.contains("CloudClient"),
+        "default transport must still emit CloudClient"
+    );
+    assert!(
+        !client_src.contains("WasmClient"),
+        "default transport must not mention the WASM transport"
+    );
+}
+
+// ── WASM bindings (#[wasm_bindgen] + .d.ts) ───────────────────────────────────
+
+/// The `wasm` output emits a `#[wasm_bindgen]` wrapper layer (valid Rust, wired to the WASM
+/// transport + serde-wasm-bindgen) and a `client.d.ts` describing the JS surface.
+#[test]
+fn wasm_bindings_and_dts_are_emitted() {
+    let tmp = TempDir::new().unwrap();
+    let common = tmp.path().join("common");
+    let client = tmp.path().join("client");
+    let wasm = tmp.path().join("wasm");
+    for d in [&common, &client, &wasm] {
+        std::fs::create_dir_all(d).expect("create dir");
+    }
+    let config = CodeGenConfig {
+        context_type_path: "crate::Context".into(),
+        result_type_path: "crate::Result".into(),
+        models_path_template: "example_common::models::{service}::v1".into(),
+        models_path_crate_template: "crate::models::{service}::v1".into(),
+        resource_store_crate_name: "olai_store".into(),
+        // serde-native models + the browser transport are the intended pairing for wasm output.
+        runtime: olai_codegen::Runtime::Buffa,
+        transport_type_path: "olai_http_wasm::WasmClient".into(),
+        output: CodeGenOutput {
+            common,
+            models: None,
+            models_subdir: "_gen".into(),
+            server: None,
+            client: Some(client),
+            python: None,
+            node: None,
+            node_ts: None,
+            wasm: Some(wasm.clone()),
+            python_typings_filename: "client.pyi".into(),
+            generate_resource_clients: false,
+        },
+        generate_resource_enum: false,
+        generate_store_integration: false,
+        error_type_path: None,
+        generate_object_conversions: false,
+        bindings: Some(BindingsConfig {
+            aggregate_client_name: "ExampleClient".into(),
+            client_crate_name: "example_client".into(),
+            py_error_type: "PyExampleError".into(),
+            py_result_type: "PyExampleResult".into(),
+            napi_error_ext_trait: "NapiErrorExt".into(),
+            typings_package_filter: None,
+            ts_error_base_class: "ExampleError".into(),
+            ts_error_code_prefix: "EX".into(),
+        }),
+        models_gen_dir: None,
+    };
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    // bindings.rs: valid Rust, wasm-bindgen-annotated, wired to the wasm transport + serde bridge.
+    let bindings_rs =
+        std::fs::read_to_string(wasm.join("bindings.rs")).expect("bindings.rs written");
+    syn::parse_file(&bindings_rs).expect("generated wasm bindings.rs is valid Rust");
+    assert!(
+        bindings_rs.contains("wasm_bindgen"),
+        "missing #[wasm_bindgen]"
+    );
+    assert!(
+        bindings_rs.contains("olai_http_wasm") && bindings_rs.contains("WasmClient"),
+        "wasm bindings must use the WasmClient transport"
+    );
+    assert!(
+        bindings_rs.contains("serde_wasm_bindgen"),
+        "wasm bindings must marshal via serde-wasm-bindgen"
+    );
+    // The aggregate wrapper is constructed from a base URL (browser-session model).
+    assert!(
+        bindings_rs.contains("WasmExampleClient")
+            && bindings_rs.contains("js_class = \"ExampleClient\""),
+        "expected the aggregate wasm wrapper exposed to JS as ExampleClient"
+    );
+
+    // client.d.ts: declares the aggregate class with a string-URL constructor.
+    let dts = std::fs::read_to_string(wasm.join("client.d.ts")).expect("client.d.ts written");
+    assert!(
+        dts.contains("export class ExampleClient"),
+        "d.ts must declare the aggregate class"
+    );
+    assert!(
+        dts.contains("constructor(baseUrl: string)"),
+        "d.ts aggregate must take a base URL"
+    );
+    assert!(
+        dts.contains("): Promise<"),
+        "d.ts methods must return Promises"
+    );
 }
 
 // ── Generated code is syntactically valid Rust ───────────────────────────────
@@ -325,6 +492,7 @@ fn node_ts_bindings_generated() {
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common,
             models: None,
@@ -334,6 +502,7 @@ fn node_ts_bindings_generated() {
             python: None,
             node: None,
             node_ts: Some(node_ts.clone()),
+            wasm: None,
             python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },

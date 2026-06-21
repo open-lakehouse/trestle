@@ -73,14 +73,45 @@ pub(crate) fn generate(
         }
     });
 
-    let imports = generate_imports(&services);
+    let transport_path: syn::Path =
+        syn::parse_str(&config.transport_type_path).expect("valid transport_type_path");
+    // Refer to the transport by its final segment so default output stays bare (`CloudClient`);
+    // `generate_imports` brings the full path into scope.
+    let transport_ident = transport_path
+        .segments
+        .last()
+        .expect("transport_type_path has at least one segment")
+        .ident
+        .clone();
+
+    // Cloud-specific convenience constructors only make sense for `CloudClient`. A custom
+    // transport (e.g. the WASM/browser one) gets only the generic `new(transport, base_url)`;
+    // the browser attaches the session, so there is no unauthenticated/token variant.
+    let cloud_ctors = if config.uses_default_transport() {
+        quote! {
+            /// Create a new aggregate client with no authentication.
+            pub fn new_unauthenticated(base_url: Url) -> Self {
+                Self::new(#transport_ident::new_unauthenticated(), base_url)
+            }
+
+            /// Create a new aggregate client authenticating with a bearer token.
+            // `token` stays `impl ToString` to match `CloudClient::new_with_token`'s own signature.
+            pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
+                Self::new(#transport_ident::new_with_token(token), base_url)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let imports = generate_imports(&services, &transport_path);
 
     let tokens = quote! {
         #imports
 
         #[derive(Clone)]
         pub struct #aggregate_ident {
-            client: CloudClient,
+            client: #transport_ident,
             base_url: Url,
         }
 
@@ -89,23 +120,14 @@ pub(crate) fn generate(
             ///
             /// Per-service clients are constructed on demand (they only hold a cheaply-cloneable
             /// `CloudClient` + `Url`), so nothing is allocated per service here.
-            pub fn new(client: CloudClient, mut base_url: Url) -> Self {
+            pub fn new(client: #transport_ident, mut base_url: Url) -> Self {
                 if !base_url.path().ends_with('/') {
                     base_url.set_path(&format!("{}/", base_url.path()));
                 }
                 Self { client, base_url }
             }
 
-            /// Create a new aggregate client with no authentication.
-            pub fn new_unauthenticated(base_url: Url) -> Self {
-                Self::new(CloudClient::new_unauthenticated(), base_url)
-            }
-
-            /// Create a new aggregate client authenticating with a bearer token.
-            // `token` stays `impl ToString` to match `CloudClient::new_with_token`'s own signature.
-            pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
-                Self::new(CloudClient::new_with_token(token), base_url)
-            }
+            #cloud_ctors
 
             #(#passthrough_accessors)*
 
@@ -134,7 +156,7 @@ fn low_level_client_ctor(service: &ServiceHandler<'_>) -> TokenStream {
 
 /// Emit `use` statements the aggregate needs: cloud client + url, per-service low-level clients,
 /// builder types, models (for enum/message param types), and hand-written scoped clients.
-fn generate_imports(services: &[ServiceHandler<'_>]) -> TokenStream {
+fn generate_imports(services: &[ServiceHandler<'_>], transport_path: &syn::Path) -> TokenStream {
     // Per-service low-level clients and their builders both live under `crate::codegen::<base>`.
     let codegen_imports = services.iter().map(|s| {
         let module = format_ident!("{}", s.plan.base_path);
@@ -154,7 +176,7 @@ fn generate_imports(services: &[ServiceHandler<'_>]) -> TokenStream {
     // builders under `crate::codegen::<base>`, so the `codegen_imports` globs above already bring
     // them into scope — no separate import needed.
     quote! {
-        use olai_http::CloudClient;
+        use #transport_path;
         use url::Url;
         #(#codegen_imports)*
         #(#model_imports)*

@@ -46,6 +46,7 @@
 //!     python: None,
 //!     node: None,
 //!     node_ts: None,
+//!     wasm: None,
 //!     python_typings_filename: "client.pyi".into(),
 //!     generate_resource_clients: false,
 //! };
@@ -64,6 +65,7 @@
 //!     models_gen_dir: None,
 //!     resource_store_crate_name: "olai_store".into(),
 //!     runtime: olai_codegen::Runtime::Prost,
+//!     transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
 //! };
 //!
 //! // 4. Optionally validate before running
@@ -84,8 +86,8 @@ pub mod parsing;
 pub mod utils;
 
 pub use codegen::{
-    BindingsConfig, CodeGenConfig, CodeGenOutput, GeneratedCode, Runtime, generate_code,
-    generate_models_mod,
+    BindingsConfig, CodeGenConfig, CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, GeneratedCode,
+    Runtime, generate_code, generate_models_mod,
 };
 
 pub use analysis::{

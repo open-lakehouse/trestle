@@ -388,6 +388,60 @@ generate_code(&metadata, &config)?;
 | `bindings` | `Option<BindingsConfig>` | Language-binding configuration for Python/Node/TypeScript output |
 | `models_gen_dir` | `Option<String>` | Relative path to prost-generated `gen/` directory |
 | `resource_store_crate_name` | `String` | Name of the store crate (default: `olai_store`) |
+| `runtime` | `Runtime` | Protobuf runtime the generated code is shaped for: `Prost` (default) or `Buffa` |
+| `transport_type_path` | `String` | HTTP transport type generated clients store and call (default: `olai_http::CloudClient`). See [WASM / browser clients](#wasm--browser-clients) |
+
+### WASM / browser clients
+
+Generated clients are decoupled from their HTTP transport: the client struct stores whatever
+type `transport_type_path` names, and the method bodies only use a small surface — per-verb
+builders (`get`/`post`/`put`/`patch`/`delete`) returning a builder with `.json(..)`/`.query(..)`/
+`.send()`, whose response has `.status()`/`.bytes()`. [`olai_http::CloudClient`] (the default) and
+[`olai_http_wasm::WasmClient`] both satisfy this.
+
+Set the transport to the WASM client to emit a `wasm32-unknown-unknown`-buildable client for
+browser front-ends. In `trestle.yaml`:
+
+```yaml
+transport: wasm        # friendly alias; or set transport_type_path: "olai_http_wasm::WasmClient"
+```
+
+The WASM client carries **no** request signing, `ring`, `tokio`, or cloud-credential discovery —
+in the browser the **session is managed by the browser** (`fetch` is asked to include credentials,
+so cookies / auth headers ride along on same-origin or CORS-with-credentials requests). The
+cloud-only aggregate constructors (`new_unauthenticated`, `new_with_token`) are not emitted for a
+WASM transport; construct the client with `new(transport, base_url)`. Pair with `runtime: buffa`
+for serde-native, dependency-light models.
+
+#### JS/TS bindings (`#[wasm_bindgen]` + `.d.ts`)
+
+Set `output.wasm` (or `wasm.output` in `trestle.yaml`) to also emit a `#[wasm_bindgen]` wrapper
+layer for JS/browser consumption. Two files are generated:
+
+- `bindings.rs` — a `#[wasm_bindgen]` struct per service plus an aggregate root constructed from a
+  base URL. Each RPC is an `async` method that takes/returns plain JS objects, marshalled with
+  `serde-wasm-bindgen` (no `Buffer`/protobuf-es decode step). Compile this crate to
+  `wasm32-unknown-unknown` and package with `wasm-pack`.
+- `client.d.ts` — TypeScript declarations: the aggregate class (`new ExampleClient(baseUrl)`), its
+  per-service accessors, and each method typed `method(request: ReqType): Promise<RespType>` with
+  request/response types imported from `./models`.
+
+```yaml
+runtime: buffa          # required: serde-native models cross the JS boundary as objects
+transport: wasm
+wasm:
+  output: ./web/src/gen  # emits bindings.rs + client.d.ts
+```
+
+```js
+// after `wasm-pack build`
+import { ExampleClient } from "./gen";
+const client = new ExampleClient(window.location.origin);
+const cat = await client.catalog().createCatalog({ name: "c1" });  // browser attaches the session
+```
+
+The generated client crate must depend on `wasm-bindgen`, `wasm-bindgen-futures`,
+`serde-wasm-bindgen`, and `olai-http-wasm`.
 
 ### `CodeGenOutput`
 
@@ -401,6 +455,7 @@ generate_code(&metadata, &config)?;
 | `python` | `Option<PathBuf>` | Output dir for PyO3 bindings |
 | `node` | `Option<PathBuf>` | Output dir for NAPI-RS bindings |
 | `node_ts` | `Option<PathBuf>` | Output dir for TypeScript client |
+| `wasm` | `Option<PathBuf>` | Output dir for WASM `#[wasm_bindgen]` bindings + `client.d.ts`. See [JS/TS bindings](#jsts-bindings-wasm_bindgen--dts) |
 | `python_typings_filename` | `String` | Stub filename (default: `client.pyi`) |
 
 ## Examples

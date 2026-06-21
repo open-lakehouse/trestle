@@ -24,6 +24,7 @@ fn make_test_config(
         models_path_crate_template: "crate::models::{service}::v1".to_string(),
         resource_store_crate_name: "olai_store".to_string(),
         runtime: olai_codegen::Runtime::Prost,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.to_string(),
         output: CodeGenOutput {
             common,
             models: None,
@@ -33,6 +34,7 @@ fn make_test_config(
             python: Some(python),
             node: Some(node),
             node_ts: Some(node_ts),
+            wasm: None,
             python_typings_filename: "example_client.pyi".to_string(),
             generate_resource_clients: false,
         },

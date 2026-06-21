@@ -1,0 +1,30 @@
+[package]
+name = "olai-http-wasm"
+description = "Browser/WASM HTTP transport for olai-codegen-generated clients (browser-managed session)"
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+# `cdylib` lets a downstream generated client be packaged with wasm-bindgen/wasm-pack;
+# `rlib` lets it also be used as a normal Rust dependency (and built/tested natively).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# NOTE: a wasm-specific reqwest, NOT the workspace one. The workspace reqwest enables
+# native-only features (rustls-tls-native-roots, http2, stream) that do not compile for
+# wasm32. On wasm32 reqwest delegates to the browser Fetch API; the API surface we use
+# (verb builders, .json/.query/.send, response .status/.bytes) is identical across targets,
+# so the same generated client bodies compile natively and on wasm.
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { workspace = true }
+url = { workspace = true }
+
+# Browser glue, only needed when actually targeting wasm32. web-sys' RequestCredentials lets
+# us ask fetch to attach the browser-managed session (cookies / auth headers).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["RequestCredentials"] }
