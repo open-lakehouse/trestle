@@ -413,6 +413,36 @@ cloud-only aggregate constructors (`new_unauthenticated`, `new_with_token`) are 
 WASM transport; construct the client with `new(transport, base_url)`. Pair with `runtime: buffa`
 for serde-native, dependency-light models.
 
+#### JS/TS bindings (`#[wasm_bindgen]` + `.d.ts`)
+
+Set `output.wasm` (or `wasm.output` in `trestle.yaml`) to also emit a `#[wasm_bindgen]` wrapper
+layer for JS/browser consumption. Two files are generated:
+
+- `bindings.rs` — a `#[wasm_bindgen]` struct per service plus an aggregate root constructed from a
+  base URL. Each RPC is an `async` method that takes/returns plain JS objects, marshalled with
+  `serde-wasm-bindgen` (no `Buffer`/protobuf-es decode step). Compile this crate to
+  `wasm32-unknown-unknown` and package with `wasm-pack`.
+- `client.d.ts` — TypeScript declarations: the aggregate class (`new ExampleClient(baseUrl)`), its
+  per-service accessors, and each method typed `method(request: ReqType): Promise<RespType>` with
+  request/response types imported from `./models`.
+
+```yaml
+runtime: buffa          # required: serde-native models cross the JS boundary as objects
+transport: wasm
+wasm:
+  output: ./web/src/gen  # emits bindings.rs + client.d.ts
+```
+
+```js
+// after `wasm-pack build`
+import { ExampleClient } from "./gen";
+const client = new ExampleClient(window.location.origin);
+const cat = await client.catalog().createCatalog({ name: "c1" });  // browser attaches the session
+```
+
+The generated client crate must depend on `wasm-bindgen`, `wasm-bindgen-futures`,
+`serde-wasm-bindgen`, and `olai-http-wasm`.
+
 ### `CodeGenOutput`
 
 | Field | Type | Description |
@@ -425,6 +455,7 @@ for serde-native, dependency-light models.
 | `python` | `Option<PathBuf>` | Output dir for PyO3 bindings |
 | `node` | `Option<PathBuf>` | Output dir for NAPI-RS bindings |
 | `node_ts` | `Option<PathBuf>` | Output dir for TypeScript client |
+| `wasm` | `Option<PathBuf>` | Output dir for WASM `#[wasm_bindgen]` bindings + `client.d.ts`. See [JS/TS bindings](#jsts-bindings-wasm_bindgen--dts) |
 | `python_typings_filename` | `String` | Stub filename (default: `client.pyi`) |
 
 ## Examples

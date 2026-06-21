@@ -48,6 +48,9 @@ pub struct GenerateArgs {
     #[clap(long, env = "UC_BUILD_OUTPUT_NODE_TS")]
     pub output_node_ts: Option<String>,
 
+    #[clap(long, env = "UC_BUILD_OUTPUT_WASM")]
+    pub output_wasm: Option<String>,
+
     #[clap(long, short, env = "UC_BUILD_DESCRIPTORS")]
     pub descriptors: Option<String>,
 
@@ -145,6 +148,15 @@ pub(crate) struct FileTsConfig {
     pub error_code_prefix: Option<String>,
 }
 
+/// WASM/browser `#[wasm_bindgen]` bindings + `.d.ts`. Reuses the shared binding identifiers
+/// (`aggregate_client_name`, `ts_error_base_class`, …) from the `typescript`/`node` config; only
+/// the output directory is wasm-specific. Implies `transport: wasm` and pairs with `runtime: buffa`.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FileWasmConfig {
+    pub output: Option<String>,
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileGenerateConfig {
@@ -179,6 +191,7 @@ pub(crate) struct FileGenerateConfig {
     pub python: Option<FilePythonConfig>,
     pub node: Option<FileNodeConfig>,
     pub typescript: Option<FileTsConfig>,
+    pub wasm: Option<FileWasmConfig>,
 }
 
 pub(crate) fn load_trestle_config(path: &Path) -> Result<TrestleConfig> {
@@ -255,6 +268,9 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         }
         if args.output_node_ts.is_none() {
             args.output_node_ts = cfg.typescript.as_ref().and_then(|c| c.output.clone());
+        }
+        if args.output_wasm.is_none() {
+            args.output_wasm = cfg.wasm.as_ref().and_then(|c| c.output.clone());
         }
 
         file_cfg = cfg;
@@ -335,6 +351,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         .as_deref()
         .map(resolve_dir)
         .transpose()?;
+    let output_wasm = args.output_wasm.as_deref().map(resolve_dir).transpose()?;
 
     let python_typings_filename = args
         .python_typings_filename
@@ -358,6 +375,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         python: output_python,
         node: output_node,
         node_ts: output_node_ts,
+        wasm: output_wasm,
         python_typings_filename,
         generate_resource_clients: file_cfg.generate_resource_clients.unwrap_or(false),
     };

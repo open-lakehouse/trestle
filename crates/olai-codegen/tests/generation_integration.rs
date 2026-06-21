@@ -71,6 +71,7 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
             python: None,
             node: None,
             node_ts: None,
+            wasm: None,
             python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },
@@ -153,6 +154,98 @@ fn default_transport_still_uses_cloud_client() {
     assert!(
         !client_src.contains("WasmClient"),
         "default transport must not mention the WASM transport"
+    );
+}
+
+// ── WASM bindings (#[wasm_bindgen] + .d.ts) ───────────────────────────────────
+
+/// The `wasm` output emits a `#[wasm_bindgen]` wrapper layer (valid Rust, wired to the WASM
+/// transport + serde-wasm-bindgen) and a `client.d.ts` describing the JS surface.
+#[test]
+fn wasm_bindings_and_dts_are_emitted() {
+    let tmp = TempDir::new().unwrap();
+    let common = tmp.path().join("common");
+    let client = tmp.path().join("client");
+    let wasm = tmp.path().join("wasm");
+    for d in [&common, &client, &wasm] {
+        std::fs::create_dir_all(d).expect("create dir");
+    }
+    let config = CodeGenConfig {
+        context_type_path: "crate::Context".into(),
+        result_type_path: "crate::Result".into(),
+        models_path_template: "example_common::models::{service}::v1".into(),
+        models_path_crate_template: "crate::models::{service}::v1".into(),
+        resource_store_crate_name: "olai_store".into(),
+        // serde-native models + the browser transport are the intended pairing for wasm output.
+        runtime: olai_codegen::Runtime::Buffa,
+        transport_type_path: "olai_http_wasm::WasmClient".into(),
+        output: CodeGenOutput {
+            common,
+            models: None,
+            models_subdir: "_gen".into(),
+            server: None,
+            client: Some(client),
+            python: None,
+            node: None,
+            node_ts: None,
+            wasm: Some(wasm.clone()),
+            python_typings_filename: "client.pyi".into(),
+            generate_resource_clients: false,
+        },
+        generate_resource_enum: false,
+        generate_store_integration: false,
+        error_type_path: None,
+        generate_object_conversions: false,
+        bindings: Some(BindingsConfig {
+            aggregate_client_name: "ExampleClient".into(),
+            client_crate_name: "example_client".into(),
+            py_error_type: "PyExampleError".into(),
+            py_result_type: "PyExampleResult".into(),
+            napi_error_ext_trait: "NapiErrorExt".into(),
+            typings_package_filter: None,
+            ts_error_base_class: "ExampleError".into(),
+            ts_error_code_prefix: "EX".into(),
+        }),
+        models_gen_dir: None,
+    };
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    // bindings.rs: valid Rust, wasm-bindgen-annotated, wired to the wasm transport + serde bridge.
+    let bindings_rs =
+        std::fs::read_to_string(wasm.join("bindings.rs")).expect("bindings.rs written");
+    syn::parse_file(&bindings_rs).expect("generated wasm bindings.rs is valid Rust");
+    assert!(
+        bindings_rs.contains("wasm_bindgen"),
+        "missing #[wasm_bindgen]"
+    );
+    assert!(
+        bindings_rs.contains("olai_http_wasm") && bindings_rs.contains("WasmClient"),
+        "wasm bindings must use the WasmClient transport"
+    );
+    assert!(
+        bindings_rs.contains("serde_wasm_bindgen"),
+        "wasm bindings must marshal via serde-wasm-bindgen"
+    );
+    // The aggregate wrapper is constructed from a base URL (browser-session model).
+    assert!(
+        bindings_rs.contains("WasmExampleClient")
+            && bindings_rs.contains("js_class = \"ExampleClient\""),
+        "expected the aggregate wasm wrapper exposed to JS as ExampleClient"
+    );
+
+    // client.d.ts: declares the aggregate class with a string-URL constructor.
+    let dts = std::fs::read_to_string(wasm.join("client.d.ts")).expect("client.d.ts written");
+    assert!(
+        dts.contains("export class ExampleClient"),
+        "d.ts must declare the aggregate class"
+    );
+    assert!(
+        dts.contains("constructor(baseUrl: string)"),
+        "d.ts aggregate must take a base URL"
+    );
+    assert!(
+        dts.contains("): Promise<"),
+        "d.ts methods must return Promises"
     );
 }
 
@@ -409,6 +502,7 @@ fn node_ts_bindings_generated() {
             python: None,
             node: None,
             node_ts: Some(node_ts.clone()),
+            wasm: None,
             python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },

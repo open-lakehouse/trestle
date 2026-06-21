@@ -34,6 +34,7 @@ fn make_test_config(
             python: Some(python),
             node: Some(node),
             node_ts: Some(node_ts),
+            wasm: None,
             python_typings_filename: "example_client.pyi".to_string(),
             generate_resource_clients: false,
         },

@@ -49,6 +49,7 @@ mod resource_client;
 mod resources;
 mod server;
 mod tokens;
+mod wasm;
 
 pub use config::{
     BindingsConfig, CodeGenConfig, CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, ModelsPath, Runtime,
@@ -235,6 +236,11 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
         output::write_generated_code(&node_ts_code, node_ts_dir)?;
     }
 
+    if let Some(ref wasm_dir) = config.output.wasm {
+        let wasm_code = generate_wasm_code(&plan, metadata, config)?;
+        output::write_generated_code(&wasm_code, wasm_dir)?;
+    }
+
     Ok(())
 }
 
@@ -380,6 +386,37 @@ fn generate_node_ts_code(
     // `client.ts`'s `from "./models"` imports (message and service request/response types) resolve.
     let models_barrel = node::typescript::generate_models_barrel(&handlers);
     files.insert("models/index.ts".to_string(), models_barrel);
+
+    Ok(GeneratedCode { files })
+}
+
+/// Generate the WASM/browser `#[wasm_bindgen]` binding layer plus its `.d.ts`.
+///
+/// Emits `bindings.rs` (a `#[wasm_bindgen]` wrapper per service client, exchanging request/response
+/// values as plain JS objects via `serde-wasm-bindgen`) and `client.d.ts` (TypeScript declarations
+/// for JS/TS consumers). The wrapped clients are the generated low-level clients, which must be
+/// generated with the WASM transport (`transport_type_path = "olai_http_wasm::WasmClient"`).
+fn generate_wasm_code(
+    plan: &GenerationPlan,
+    metadata: &CodeGenMetadata,
+    config: &CodeGenConfig,
+) -> Result<GeneratedCode> {
+    let handlers = plan
+        .services
+        .iter()
+        .map(|service| ServiceHandler {
+            plan: service,
+            metadata,
+            config,
+        })
+        .collect_vec();
+
+    let mut files = HashMap::new();
+    files.insert(
+        "bindings.rs".to_string(),
+        wasm::generate_bindings(&handlers)?,
+    );
+    files.insert("client.d.ts".to_string(), wasm::generate_dts(&handlers));
 
     Ok(GeneratedCode { files })
 }

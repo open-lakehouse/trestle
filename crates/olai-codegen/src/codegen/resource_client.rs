@@ -819,6 +819,7 @@ mod tests {
                 python: None,
                 node: None,
                 node_ts: None,
+                wasm: None,
                 python_typings_filename: "client.pyi".into(),
                 generate_resource_clients: true,
             },

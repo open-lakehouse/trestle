@@ -87,6 +87,7 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
             python: Some(python),
             node: Some(node),
             node_ts: Some(node_ts),
+            wasm: None,
             python_typings_filename: "client.pyi".into(),
             generate_resource_clients: true,
         },

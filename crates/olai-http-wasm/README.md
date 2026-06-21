@@ -26,7 +26,8 @@ cargo build -p olai-http-wasm --target wasm32-unknown-unknown
 # downstream generated client crate -> package with wasm-pack / wasm-bindgen
 ```
 
-## Status
+## JS/TS bindings
 
-Transports request/response only. `#[wasm_bindgen]` JS wrappers and `.d.ts` emission for the
-generated client are a future addition (the Rust-level wasm client is independently usable today).
+`olai-codegen` can emit a `#[wasm_bindgen]` wrapper layer + `client.d.ts` over a client built on
+this transport (set `output.wasm` / `transport: wasm` + `runtime: buffa`). The generated bindings
+exchange plain JS objects via `serde-wasm-bindgen`. See the olai-codegen README, "JS/TS bindings".

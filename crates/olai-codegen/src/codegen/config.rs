@@ -230,8 +230,8 @@ impl CodeGenConfig {
     /// Checks that:
     /// - `models_path_template` and `models_path_crate_template` produce valid Rust paths after
     ///   `{service}` substitution.
-    /// - `bindings` is `Some` whenever `output.python`, `output.node`, or `output.node_ts` is
-    ///   `Some`.
+    /// - `bindings` is `Some` whenever `output.python`, `output.node`, `output.node_ts`, or
+    ///   `output.wasm` is `Some`.
     ///
     /// Call this at construction time to surface misconfiguration early, before generation runs.
     pub fn validate(&self) -> Result<()> {
@@ -239,7 +239,8 @@ impl CodeGenConfig {
         ModelsPath::new(&self.models_path_crate_template)?;
         if (self.output.python.is_some()
             || self.output.node.is_some()
-            || self.output.node_ts.is_some())
+            || self.output.node_ts.is_some()
+            || self.output.wasm.is_some())
             && self.bindings.is_none()
         {
             return Err(Error::MissingBindingsConfig);
@@ -285,6 +286,14 @@ pub struct CodeGenOutput {
     pub node: Option<PathBuf>,
     /// Output directory for Node.js TypeScript client. Generation is skipped when `None`.
     pub node_ts: Option<PathBuf>,
+    /// Output directory for WASM/browser `#[wasm_bindgen]` bindings + `.d.ts`. Generation is
+    /// skipped when `None`.
+    ///
+    /// Emits a `#[wasm_bindgen]` wrapper layer over the generated (WASM-transport) clients plus a
+    /// `client.d.ts` for JS/TS consumers. Request/response values cross the boundary as plain JS
+    /// objects via `serde-wasm-bindgen`, so this pairs with `runtime: Buffa` (serde-native models)
+    /// and `transport_type_path = "olai_http_wasm::WasmClient"`.
+    pub wasm: Option<PathBuf>,
     /// Filename for the generated Python typings stub.
     ///
     /// Default: `"client.pyi"`
