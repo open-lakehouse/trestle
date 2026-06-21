@@ -61,6 +61,7 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common,
             models: Some(models),
@@ -80,6 +81,79 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         bindings: None,
         models_gen_dir: None,
     }
+}
+
+// ── WASM transport seam ──────────────────────────────────────────────────────
+
+/// With a custom (WASM) transport configured, generated clients store and import that transport
+/// instead of `CloudClient`, and the aggregate omits the cloud-only constructors — while the
+/// output still parses as valid Rust.
+#[test]
+fn wasm_transport_is_substituted_into_generated_clients() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.transport_type_path = "olai_http_wasm::WasmClient".into();
+    // The aggregate client (which carries the cloud-only ctors) is only emitted when bindings
+    // are configured, so set them to exercise the ctor-gating path too.
+    config.bindings = Some(BindingsConfig {
+        aggregate_client_name: "ExampleClient".into(),
+        client_crate_name: "example_client".into(),
+        py_error_type: "PyExampleError".into(),
+        py_result_type: "PyExampleResult".into(),
+        napi_error_ext_trait: "NapiErrorExt".into(),
+        typings_package_filter: None,
+        ts_error_base_class: "ExampleError".into(),
+        ts_error_code_prefix: "EX".into(),
+    });
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+
+    assert!(
+        client_src.contains("olai_http_wasm :: WasmClient")
+            || client_src.contains("olai_http_wasm::WasmClient"),
+        "expected the WASM transport to be imported into generated client code"
+    );
+    assert!(
+        !client_src.contains("use olai_http :: CloudClient")
+            && !client_src.contains("use olai_http::CloudClient"),
+        "CloudClient must not be imported when a WASM transport is configured"
+    );
+    // Cloud-only convenience ctors are meaningless for the browser transport.
+    assert!(
+        !client_src.contains("new_unauthenticated") && !client_src.contains("new_with_token"),
+        "cloud-only aggregate ctors must not be emitted for a non-CloudClient transport"
+    );
+
+    // Every emitted client file must still parse.
+    for path in walk(&tmp.path().join("client"))
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+    {
+        let src = std::fs::read_to_string(&path).expect("read generated file");
+        syn::parse_file(&src)
+            .unwrap_or_else(|e| panic!("generated {} is invalid Rust: {e}", path.display()));
+    }
+}
+
+/// The default config leaves `CloudClient` exactly as before (guards against the seam leaking
+/// the new transport path into default output — the golden tests cover bytes, this covers intent).
+#[test]
+fn default_transport_still_uses_cloud_client() {
+    let tmp = TempDir::new().unwrap();
+    let config = rust_config(tmp.path());
+    assert_eq!(config.transport_type_path, "olai_http::CloudClient");
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+    assert!(
+        client_src.contains("CloudClient"),
+        "default transport must still emit CloudClient"
+    );
+    assert!(
+        !client_src.contains("WasmClient"),
+        "default transport must not mention the WASM transport"
+    );
 }
 
 // ── Generated code is syntactically valid Rust ───────────────────────────────
@@ -325,6 +399,7 @@ fn node_ts_bindings_generated() {
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common,
             models: None,

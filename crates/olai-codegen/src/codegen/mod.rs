@@ -50,7 +50,9 @@ mod resources;
 mod server;
 mod tokens;
 
-pub use config::{BindingsConfig, CodeGenConfig, CodeGenOutput, ModelsPath, Runtime};
+pub use config::{
+    BindingsConfig, CodeGenConfig, CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, ModelsPath, Runtime,
+};
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 
 /// How a language binding lowers a method's call into the underlying Rust client.

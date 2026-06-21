@@ -167,6 +167,15 @@ pub(crate) struct FileGenerateConfig {
     pub resource_store_crate_name: Option<String>,
     /// Protobuf runtime the generated code consumes: `"prost"` (default) or `"buffa"`.
     pub runtime: Option<String>,
+    /// Friendly selector for the generated client's HTTP transport: `"cloud"` (default,
+    /// `olai_http::CloudClient`) or `"wasm"` (`olai_http_wasm::WasmClient`, a browser-buildable
+    /// client where the browser attaches the session). Ignored if `transport_type_path` is set.
+    pub transport: Option<String>,
+    /// Fully-qualified path to the HTTP transport type generated clients store and call. Overrides
+    /// `transport`. Defaults to `"olai_http::CloudClient"`. Use this for a custom transport that
+    /// exposes the verb-builder / `json`/`query`/`send` / `status`/`bytes` surface generated
+    /// clients require.
+    pub transport_type_path: Option<String>,
     pub python: Option<FilePythonConfig>,
     pub node: Option<FileNodeConfig>,
     pub typescript: Option<FileTsConfig>,
@@ -468,6 +477,24 @@ fn build_config(
         }
     };
 
+    // Resolve the HTTP transport for generated clients. `transport_type_path` (an explicit Rust
+    // path) wins if set; otherwise the friendly `transport` alias selects a built-in. `wasm`
+    // emits a browser-buildable client (no signing; the browser attaches the session).
+    let transport_type_path = match (
+        file_cfg.transport_type_path.as_deref(),
+        file_cfg.transport.as_deref(),
+    ) {
+        (Some(path), _) => path.to_string(),
+        (None, None | Some("cloud")) => olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.to_string(),
+        (None, Some("wasm")) => "olai_http_wasm::WasmClient".to_string(),
+        (None, Some(other)) => {
+            return Err(Error::other(format!(
+                "unknown transport `{other}` in trestle.yaml (expected `cloud` or `wasm`, \
+                 or set `transport_type_path` to a custom path)"
+            )));
+        }
+    };
+
     Ok(CodeGenConfig {
         context_type_path: args
             .context_type
@@ -491,5 +518,6 @@ fn build_config(
             .clone()
             .unwrap_or_else(|| "olai_store".to_string()),
         runtime,
+        transport_type_path,
     })
 }

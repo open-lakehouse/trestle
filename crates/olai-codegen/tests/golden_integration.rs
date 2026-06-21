@@ -77,6 +77,7 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime,
+        transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common,
             models: Some(models),

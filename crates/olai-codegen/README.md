@@ -388,6 +388,30 @@ generate_code(&metadata, &config)?;
 | `bindings` | `Option<BindingsConfig>` | Language-binding configuration for Python/Node/TypeScript output |
 | `models_gen_dir` | `Option<String>` | Relative path to prost-generated `gen/` directory |
 | `resource_store_crate_name` | `String` | Name of the store crate (default: `olai_store`) |
+| `runtime` | `Runtime` | Protobuf runtime the generated code is shaped for: `Prost` (default) or `Buffa` |
+| `transport_type_path` | `String` | HTTP transport type generated clients store and call (default: `olai_http::CloudClient`). See [WASM / browser clients](#wasm--browser-clients) |
+
+### WASM / browser clients
+
+Generated clients are decoupled from their HTTP transport: the client struct stores whatever
+type `transport_type_path` names, and the method bodies only use a small surface — per-verb
+builders (`get`/`post`/`put`/`patch`/`delete`) returning a builder with `.json(..)`/`.query(..)`/
+`.send()`, whose response has `.status()`/`.bytes()`. [`olai_http::CloudClient`] (the default) and
+[`olai_http_wasm::WasmClient`] both satisfy this.
+
+Set the transport to the WASM client to emit a `wasm32-unknown-unknown`-buildable client for
+browser front-ends. In `trestle.yaml`:
+
+```yaml
+transport: wasm        # friendly alias; or set transport_type_path: "olai_http_wasm::WasmClient"
+```
+
+The WASM client carries **no** request signing, `ring`, `tokio`, or cloud-credential discovery —
+in the browser the **session is managed by the browser** (`fetch` is asked to include credentials,
+so cookies / auth headers ride along on same-origin or CORS-with-credentials requests). The
+cloud-only aggregate constructors (`new_unauthenticated`, `new_with_token`) are not emitted for a
+WASM transport; construct the client with `new(transport, base_url)`. Pair with `runtime: buffa`
+for serde-native, dependency-light models.
 
 ### `CodeGenOutput`
 

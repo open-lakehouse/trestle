@@ -198,9 +198,33 @@ pub struct CodeGenConfig {
     ///
     /// Defaults to [`Runtime::Prost`] for backward compatibility.
     pub runtime: Runtime,
+
+    /// Fully-qualified path to the HTTP transport type that generated clients store and call.
+    ///
+    /// The transport must expose the surface generated client bodies use: per-verb builder
+    /// methods (`get`/`post`/`patch`/`delete`/`put`) returning a request builder with
+    /// `.json(..)`/`.query(..)`/`.send()`, whose response has `.status()`/`.bytes()`.
+    /// [`olai_http::CloudClient`](https://docs.rs/olai-http) satisfies this.
+    ///
+    /// Defaults to `"olai_http::CloudClient"`, so native output is unchanged. A WASM/browser
+    /// client points this at a lightweight reqwest-Fetch transport that has no `ring`/`tokio`
+    /// dependency and lets the browser attach the session.
+    pub transport_type_path: String,
 }
 
+/// Default transport type path: the cloud client used by native (non-WASM) generated code.
+pub const DEFAULT_TRANSPORT_TYPE_PATH: &str = "olai_http::CloudClient";
+
 impl CodeGenConfig {
+    /// Whether generated clients use the default cloud transport ([`olai_http::CloudClient`]).
+    ///
+    /// Controls emission of cloud-specific aggregate constructors (`new_unauthenticated`,
+    /// `new_with_token`), which only make sense for `CloudClient`. A custom transport (e.g. the
+    /// WASM/browser one) gets only the generic `new(transport, base_url)`.
+    pub fn uses_default_transport(&self) -> bool {
+        self.transport_type_path == DEFAULT_TRANSPORT_TYPE_PATH
+    }
+
     /// Validate this config without running code generation.
     ///
     /// Checks that:
