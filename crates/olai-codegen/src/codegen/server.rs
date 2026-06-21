@@ -6,7 +6,7 @@ use syn::{Path, Type};
 use super::format_tokens;
 use crate::{
     analysis::{MethodPlan, RequestParam},
-    codegen::{MethodHandler, ServiceHandler},
+    codegen::{MethodHandler, Runtime, ServiceHandler},
     parsing::types::{BaseType, RenderContext},
 };
 
@@ -130,7 +130,7 @@ fn from_request_parts_impl(method: &MethodHandler<'_>) -> TokenStream {
     let input_type = method.input_type();
     let path_extractions = path_extractions(method);
     let query_extractions = query_extractions(method);
-    let field_assignments = field_assignments(method.plan);
+    let field_assignments = field_assignments(method.plan, method.config.runtime);
 
     quote! {
         impl<S: Send + Sync> axum::extract::FromRequestParts<S> for #input_type {
@@ -195,7 +195,7 @@ fn generate_hybrid_request_impl(method: &MethodHandler<'_>) -> TokenStream {
     let query_extractions = query_extractions(method);
     // Oneof fields deserialize from JSON like any other field, so no special treatment needed.
     let body_extractions = generate_body_extractions_tokens(method.plan, &input_type);
-    let field_assignments = field_assignments(method.plan);
+    let field_assignments = field_assignments(method.plan, method.config.runtime);
 
     quote! {
         impl<S: Send + Sync> axum::extract::FromRequest<S> for #input_type {
@@ -324,20 +324,31 @@ fn query_extractions(method: &MethodHandler<'_>) -> TokenStream {
     }
 }
 
-/// Generate field assignments for request struct construction as TokenStream
-fn field_assignments(method: &MethodPlan) -> TokenStream {
+/// Generate field assignments for request struct construction as TokenStream.
+///
+/// Enum query params are extracted as their actual Rust enum type (via the `QueryExtractor`
+/// context) but the request struct stores enums in the consumed runtime's representation, so
+/// we wrap here: `as i32` for prost, `buffa::EnumValue::Known(..)` for buffa.
+fn field_assignments(method: &MethodPlan, runtime: Runtime) -> TokenStream {
     let assignments = method.parameters.iter().map(|param| {
         let ident = param.field_ident();
-        // Enum query params are extracted as their actual Rust type (via QueryExtractor context)
-        // but prost struct fields store enums as i32, so we cast here.
         match param {
             RequestParam::Query(q) if matches!(q.field_type.base_type, BaseType::Enum(_)) => {
-                if q.field_type.is_repeated {
-                    quote! { #ident: #ident.into_iter().map(|v| v as i32).collect() }
-                } else if q.is_optional() {
-                    quote! { #ident: #ident.map(|v| v as i32) }
-                } else {
-                    quote! { #ident: #ident as i32 }
+                match runtime {
+                    Runtime::Prost if q.field_type.is_repeated => {
+                        quote! { #ident: #ident.into_iter().map(|v| v as i32).collect() }
+                    }
+                    Runtime::Prost if q.is_optional() => {
+                        quote! { #ident: #ident.map(|v| v as i32) }
+                    }
+                    Runtime::Prost => quote! { #ident: #ident as i32 },
+                    Runtime::Buffa if q.field_type.is_repeated => {
+                        quote! { #ident: #ident.into_iter().map(buffa::EnumValue::Known).collect() }
+                    }
+                    Runtime::Buffa if q.is_optional() => {
+                        quote! { #ident: #ident.map(buffa::EnumValue::Known) }
+                    }
+                    Runtime::Buffa => quote! { #ident: buffa::EnumValue::Known(#ident) },
                 }
             }
             _ => quote! { #ident },
@@ -431,7 +442,7 @@ mod tests {
     #[test]
     fn test_field_assignments_repeated_string_uses_shorthand() {
         let plan = make_query_plan(vec![repeated_string_param("tags")]);
-        let tokens = field_assignments(&plan).to_string();
+        let tokens = field_assignments(&plan, Runtime::Prost).to_string();
         // Repeated strings use struct shorthand (no cast needed)
         assert!(tokens.contains("tags"), "should emit 'tags'");
         assert!(!tokens.contains("as i32"), "should not cast string to i32");
@@ -440,7 +451,7 @@ mod tests {
     #[test]
     fn test_field_assignments_optional_enum_casts_to_i32() {
         let plan = make_query_plan(vec![optional_enum_param("item_type")]);
-        let tokens = field_assignments(&plan).to_string();
+        let tokens = field_assignments(&plan, Runtime::Prost).to_string();
         assert!(
             tokens.contains("map"),
             "optional enum should use .map(|v| v as i32)"
@@ -451,7 +462,7 @@ mod tests {
     #[test]
     fn test_field_assignments_repeated_enum_collects_as_i32() {
         let plan = make_query_plan(vec![repeated_enum_param("item_types")]);
-        let tokens = field_assignments(&plan).to_string();
+        let tokens = field_assignments(&plan, Runtime::Prost).to_string();
         assert!(
             tokens.contains("into_iter"),
             "repeated enum should use into_iter().map(|v| v as i32).collect()"
@@ -459,6 +470,34 @@ mod tests {
         assert!(
             tokens.contains("as i32"),
             "should cast enum variants to i32"
+        );
+    }
+
+    #[test]
+    fn test_field_assignments_optional_enum_buffa_wraps_enum_value() {
+        let plan = make_query_plan(vec![optional_enum_param("item_type")]);
+        let tokens = field_assignments(&plan, Runtime::Buffa).to_string();
+        assert!(
+            tokens.contains("EnumValue :: Known"),
+            "optional enum should wrap with buffa::EnumValue::Known under buffa, got: {tokens}"
+        );
+        assert!(
+            !tokens.contains("as i32"),
+            "buffa should not cast enum to i32"
+        );
+    }
+
+    #[test]
+    fn test_field_assignments_repeated_enum_buffa_collects_enum_value() {
+        let plan = make_query_plan(vec![repeated_enum_param("item_types")]);
+        let tokens = field_assignments(&plan, Runtime::Buffa).to_string();
+        assert!(
+            tokens.contains("into_iter") && tokens.contains("EnumValue :: Known"),
+            "repeated enum should collect via buffa::EnumValue::Known under buffa, got: {tokens}"
+        );
+        assert!(
+            !tokens.contains("as i32"),
+            "buffa should not cast enum variants to i32"
         );
     }
 }

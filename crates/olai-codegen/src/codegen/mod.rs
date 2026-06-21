@@ -50,7 +50,7 @@ mod resources;
 mod server;
 mod tokens;
 
-pub use config::{BindingsConfig, CodeGenConfig, CodeGenOutput, ModelsPath};
+pub use config::{BindingsConfig, CodeGenConfig, CodeGenOutput, ModelsPath, Runtime};
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 
 /// How a language binding lowers a method's call into the underlying Rust client.
@@ -752,6 +752,7 @@ impl ServiceHandler<'_> {
         self.plan.methods.iter().map(|plan| MethodHandler {
             plan,
             metadata: self.metadata,
+            config: self.config,
         })
     }
 
@@ -849,6 +850,7 @@ fn is_version_segment(seg: &str) -> bool {
 pub(crate) struct MethodHandler<'a> {
     plan: &'a MethodPlan,
     metadata: &'a CodeGenMetadata,
+    config: &'a CodeGenConfig,
 }
 
 impl MethodHandler<'_> {
@@ -1030,7 +1032,7 @@ impl MethodHandler<'_> {
         field_ident: &proc_macro2::Ident,
         ctx: &RenderContext,
     ) -> TokenStream {
-        types::field_assignment(field_type, field_ident, ctx)
+        types::field_assignment(field_type, field_ident, ctx, self.config.runtime)
     }
 
     pub(crate) fn required_parameters(&self) -> impl Iterator<Item = &RequestParam> {

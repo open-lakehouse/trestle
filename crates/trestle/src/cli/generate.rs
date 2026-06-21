@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use olai_codegen::{
-    BindingsConfig, CodeGenConfig, CodeGenOutput, generate_code, parse_file_descriptor_set,
+    BindingsConfig, CodeGenConfig, CodeGenOutput, Runtime, generate_code, parse_file_descriptor_set,
 };
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
@@ -165,6 +165,8 @@ pub(crate) struct FileGenerateConfig {
     pub generate_object_conversions: Option<bool>,
     pub generate_resource_clients: Option<bool>,
     pub resource_store_crate_name: Option<String>,
+    /// Protobuf runtime the generated code consumes: `"prost"` (default) or `"buffa"`.
+    pub runtime: Option<String>,
     pub python: Option<FilePythonConfig>,
     pub node: Option<FileNodeConfig>,
     pub typescript: Option<FileTsConfig>,
@@ -456,6 +458,16 @@ fn build_config(
     let generate_store_integration = file_cfg.generate_store_integration.unwrap_or(false);
     let generate_object_conversions = file_cfg.generate_object_conversions.unwrap_or(false);
 
+    let runtime = match file_cfg.runtime.as_deref() {
+        None | Some("prost") => Runtime::Prost,
+        Some("buffa") => Runtime::Buffa,
+        Some(other) => {
+            return Err(Error::other(format!(
+                "unknown runtime `{other}` in trestle.yaml (expected `prost` or `buffa`)"
+            )));
+        }
+    };
+
     Ok(CodeGenConfig {
         context_type_path: args
             .context_type
@@ -478,5 +490,6 @@ fn build_config(
             .resource_store_crate_name
             .clone()
             .unwrap_or_else(|| "olai_store".to_string()),
+        runtime,
     })
 }

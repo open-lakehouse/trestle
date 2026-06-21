@@ -24,7 +24,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use olai_codegen::parsing::parse_file_descriptor_set;
-use olai_codegen::{BindingsConfig, CodeGenConfig, CodeGenMetadata, CodeGenOutput, generate_code};
+use olai_codegen::{
+    BindingsConfig, CodeGenConfig, CodeGenMetadata, CodeGenOutput, Runtime, generate_code,
+};
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
 use tempfile::TempDir;
@@ -55,8 +57,9 @@ fn relative_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Build a config that drives **all** generators (Rust + every binding language) into `tmp`.
-fn full_config(tmp: &Path) -> CodeGenConfig {
+/// Build a config that drives **all** generators (Rust + every binding language) into `tmp`,
+/// targeting the given protobuf `runtime`.
+fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
     let common = tmp.join("common");
     let models = tmp.join("models");
     let server = tmp.join("server");
@@ -73,6 +76,7 @@ fn full_config(tmp: &Path) -> CodeGenConfig {
         models_path_template: "example_common::models::{service}::v1".into(),
         models_path_crate_template: "crate::models::{service}::v1".into(),
         resource_store_crate_name: "olai_store".into(),
+        runtime,
         output: CodeGenOutput {
             common,
             models: Some(models),
@@ -103,22 +107,77 @@ fn full_config(tmp: &Path) -> CodeGenConfig {
     }
 }
 
-fn golden_dir() -> PathBuf {
+fn golden_dir(subdir: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("golden")
+        .join(subdir)
 }
 
-/// Generate the full output tree into a temp dir and compare against the committed golden tree.
-///
-/// Set `BLESS=1` to overwrite the golden tree from current output instead of asserting.
+/// The committed prost golden tree is the byte-for-byte oracle for the default runtime.
 #[test]
 fn full_output_matches_golden() {
+    run_golden(Runtime::Prost, "golden");
+}
+
+/// The committed buffa golden tree captures the buffa-runtime codegen deltas (enum
+/// `EnumValue::Known` wrapping, `MessageField::some`, buffa query-param handling) so they
+/// stay reviewable. Re-bless both trees together when codegen output changes intentionally.
+#[test]
+fn full_output_matches_golden_buffa() {
+    run_golden(Runtime::Buffa, "golden_buffa");
+}
+
+/// The Python (PyO3) and TypeScript emitters contain no runtime-specific code: Python passes
+/// model enums/structs across the PyO3 boundary by their bare type (the client builder applies
+/// the runtime's `EnumValue`/`MessageField` wrapping internally), and TypeScript marshals via
+/// protobuf-es bytes. Their generated output must therefore be byte-identical across runtimes.
+///
+/// This locks that invariant in: if someone later threads runtime-specific code into the Python
+/// or TypeScript emitters, this fails and forces a deliberate decision (and a buffa golden re-bless).
+#[test]
+fn python_and_ts_output_is_runtime_invariant() {
+    let prost_tmp = TempDir::new().unwrap();
+    generate_code(&metadata(), &full_config(prost_tmp.path(), Runtime::Prost))
+        .expect("prost generation succeeds");
+    let buffa_tmp = TempDir::new().unwrap();
+    generate_code(&metadata(), &full_config(buffa_tmp.path(), Runtime::Buffa))
+        .expect("buffa generation succeeds");
+
+    for subtree in ["python", "node_ts"] {
+        let prost_files: BTreeSet<PathBuf> = relative_files(&prost_tmp.path().join(subtree))
+            .into_iter()
+            .collect();
+        let buffa_files: BTreeSet<PathBuf> = relative_files(&buffa_tmp.path().join(subtree))
+            .into_iter()
+            .collect();
+        assert_eq!(
+            prost_files, buffa_files,
+            "{subtree} file set differs between prost and buffa runtimes"
+        );
+        for rel in &prost_files {
+            let p = std::fs::read_to_string(prost_tmp.path().join(subtree).join(rel)).unwrap();
+            let b = std::fs::read_to_string(buffa_tmp.path().join(subtree).join(rel)).unwrap();
+            assert_eq!(
+                p,
+                b,
+                "{subtree}/{} differs between prost and buffa — the {subtree} emitter must stay \
+                 runtime-invariant (or this invariant + the buffa golden tree need updating)",
+                rel.display()
+            );
+        }
+    }
+}
+
+/// Generate the full output tree for `runtime` into a temp dir and compare against the committed
+/// golden tree under `tests/<subdir>`.
+///
+/// Set `BLESS=1` to overwrite the golden tree from current output instead of asserting.
+fn run_golden(runtime: Runtime, subdir: &str) {
     let tmp = TempDir::new().unwrap();
-    let config = full_config(tmp.path());
+    let config = full_config(tmp.path(), runtime);
     generate_code(&metadata(), &config).expect("generation succeeds");
 
-    let golden = golden_dir();
+    let golden = golden_dir(subdir);
 
     if std::env::var_os("BLESS").is_some() {
         // Rewrite the golden tree from scratch so deleted outputs don't linger.

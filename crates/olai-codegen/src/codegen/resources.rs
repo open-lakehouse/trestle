@@ -893,6 +893,7 @@ mod tests {
             models_path_template: "example_common::models::{service}::v1".into(),
             models_path_crate_template: "crate::models::{service}::v1".into(),
             resource_store_crate_name: "olai_store".into(),
+            runtime: crate::Runtime::Prost,
             output: crate::codegen::CodeGenOutput {
                 common: "/tmp/common".into(),
                 models: Some("/tmp/models".into()),

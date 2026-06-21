@@ -7,6 +7,26 @@ use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
+/// Protobuf runtime that the *generated* code is expected to consume.
+///
+/// This selects the ABI that emitted clients, handlers, and builders are shaped for —
+/// i.e. how generated code reads and writes the consuming project's model types. It does
+/// **not** affect how `olai-codegen` itself parses descriptors.
+///
+/// - [`Runtime::Prost`] (default): models are [prost](https://docs.rs/prost)-generated —
+///   open enums are bare `i32`, singular message fields are `Option<Box<T>>`.
+/// - [`Runtime::Buffa`]: models are [buffa](https://github.com/anthropics/buffa)-generated —
+///   open enums are `EnumValue<E>`, singular message fields are `MessageField<T>`, and the
+///   runtime provides native serde JSON (no separate `pbjson` layer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Runtime {
+    /// prost-generated models (the historical default).
+    #[default]
+    Prost,
+    /// buffa-generated models.
+    Buffa,
+}
+
 /// Validated model import path derived from a `{service}` template string.
 ///
 /// Constructed once from [`CodeGenConfig`] template fields. `resolve` performs the
@@ -173,6 +193,11 @@ pub struct CodeGenConfig {
     ///
     /// Default: `"olai_store"`
     pub resource_store_crate_name: String,
+
+    /// Protobuf runtime the generated code is shaped for. See [`Runtime`].
+    ///
+    /// Defaults to [`Runtime::Prost`] for backward compatibility.
+    pub runtime: Runtime,
 }
 
 impl CodeGenConfig {

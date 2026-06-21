@@ -4,7 +4,7 @@ use quote::{format_ident, quote};
 
 use super::{doc_tokens, extract_type_ident, format_tokens};
 use crate::Result;
-use crate::codegen::{MethodHandler, ServiceHandler};
+use crate::codegen::{MethodHandler, Runtime, ServiceHandler};
 use crate::parsing::types::BaseType;
 
 /// Generate client code for a service
@@ -145,17 +145,49 @@ fn generate_query_parameters(method: &MethodHandler<'_>) -> proc_macro2::TokenSt
         if field_type.is_repeated {
             if let BaseType::Enum(enum_name) = &field_type.base_type {
                 let enum_type_ident = extract_type_ident(enum_name);
-                param_assignments.push(quote! {
-                    for &raw in &request.#field_ident {
-                        if let Some(v) = #enum_type_ident::from_i32(raw) {
-                            url.query_pairs_mut().append_pair(#param_name, v.as_str_name());
+                param_assignments.push(match method.config.runtime {
+                    // prost: the field is `Vec<i32>`; recover the typed variant via `from_i32`.
+                    Runtime::Prost => quote! {
+                        for &raw in &request.#field_ident {
+                            if let Some(v) = #enum_type_ident::from_i32(raw) {
+                                url.query_pairs_mut().append_pair(#param_name, v.as_str_name());
+                            }
                         }
-                    }
+                    },
+                    // buffa: the field is `Vec<EnumValue<E>>`; emit only known variants by name.
+                    Runtime::Buffa => quote! {
+                        for v in &request.#field_ident {
+                            if let Some(known) = v.as_known() {
+                                use buffa::Enumeration as _;
+                                url.query_pairs_mut().append_pair(#param_name, known.proto_name());
+                            }
+                        }
+                    },
                 });
             } else {
                 param_assignments.push(quote! {
                     for value in &request.#field_ident {
                         url.query_pairs_mut().append_pair(#param_name, &value.to_string());
+                    }
+                });
+            }
+        } else if matches!(method.config.runtime, Runtime::Buffa)
+            && matches!(field_type.base_type, BaseType::Enum(_))
+        {
+            // buffa singular enum: the field is `EnumValue<E>` (or `Option<EnumValue<E>>`), which
+            // has no `Display`. Emit the known variant by its proto name; skip unknown/absent.
+            if param.is_optional() {
+                param_assignments.push(quote! {
+                    if let Some(known) = request.#field_ident.and_then(|v| v.as_known()) {
+                        use buffa::Enumeration as _;
+                        url.query_pairs_mut().append_pair(#param_name, known.proto_name());
+                    }
+                });
+            } else {
+                param_assignments.push(quote! {
+                    if let Some(known) = request.#field_ident.as_known() {
+                        use buffa::Enumeration as _;
+                        url.query_pairs_mut().append_pair(#param_name, known.proto_name());
                     }
                 });
             }

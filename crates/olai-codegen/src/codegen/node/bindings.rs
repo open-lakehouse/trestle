@@ -12,18 +12,39 @@ use super::super::format_tokens;
 use super::caps::{is_napi_supported, is_napi_supported_type, is_required_message_body};
 use crate::codegen::bindings::builder::{OptionalSetter, SetterRender, generate_builder_pattern};
 use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
-use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
+use crate::codegen::{BindingMode, MethodHandler, Runtime, ServiceHandler};
 use crate::parsing::types::{BaseType, RenderContext};
 
+/// The `use <crate>::Message;` import that brings the model runtime's `Message` trait
+/// (`encode_to_vec` / decode) into scope for the generated NAPI module.
+fn message_trait_import(runtime: Runtime) -> TokenStream {
+    match runtime {
+        Runtime::Prost => quote! { use prost::Message; },
+        Runtime::Buffa => quote! { use buffa::Message; },
+    }
+}
+
 /// NAPI-RS binding backend.
-pub(crate) struct NapiBackend;
+///
+/// Carries the target [`Runtime`] so the setter renderer (which only receives `&self`) can emit
+/// the correct enum conversion for the consumed model ABI.
+pub(crate) struct NapiBackend {
+    runtime: Runtime,
+}
 
 pub fn main_module(services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
-    NapiBackend.main_module(services)
+    let runtime = services
+        .first()
+        .map(|s| s.config.runtime)
+        .unwrap_or(Runtime::Prost);
+    NapiBackend { runtime }.main_module(services)
 }
 
 pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
-    NapiBackend.generate_service(service)
+    NapiBackend {
+        runtime: service.config.runtime,
+    }
+    .generate_service(service)
 }
 
 impl BindingBackend for NapiBackend {
@@ -42,13 +63,14 @@ impl BindingBackend for NapiBackend {
 
         let methods = driver::scoped_client_methods(self, service);
         let mod_path = service.models_path();
+        let message_import = message_trait_import(service.config.runtime);
 
         let tokens = quote! {
             #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
             use std::collections::HashMap;
             use napi::bindgen_prelude::Buffer;
             use napi_derive::napi;
-            use prost::Message;
+            #message_import
             use #client_crate::#rust_client_ident;
             use #mod_path::*;
             use crate::error::#napi_error_ext_ident;
@@ -113,6 +135,14 @@ impl BindingBackend for NapiBackend {
         let methods = driver::root_client_methods(self, &sorted_services);
         let resource_accessor_methods = driver::resource_accessor_methods(self, &sorted_services);
 
+        // All services in a generation share one runtime; read it off the first.
+        let message_import = message_trait_import(
+            services
+                .first()
+                .map(|s| s.config.runtime)
+                .unwrap_or(Runtime::Prost),
+        );
+
         let tokens = quote! {
             #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
             #(#service_modules)*
@@ -123,7 +153,7 @@ impl BindingBackend for NapiBackend {
             use napi::bindgen_prelude::{Buffer, ReadableStream};
             use napi::Env;
             use napi_derive::napi;
-            use prost::Message;
+            #message_import
             use #client_crate::#aggregate_client_ident;
             use crate::error::#napi_error_ext_ident;
             #(#mod_paths)*
@@ -204,12 +234,39 @@ impl BindingBackend for NapiBackend {
                             _ => unreachable!("is_required_message_body guarantees a message type"),
                         }
                     );
+                    // Decode the protobuf bytes back into the message using the consumed runtime's
+                    // `Message` trait: prost's `decode(impl Buf)` vs buffa's `decode_from_slice(&[u8])`.
+                    let decode_expr = match method.config.runtime {
+                        Runtime::Prost => quote! {
+                            <#msg_ty as prost::Message>::decode(#param_name.as_ref())
+                        },
+                        Runtime::Buffa => quote! {
+                            <#msg_ty as buffa::Message>::decode_from_slice(#param_name.as_ref())
+                        },
+                    };
                     quote! {
-                        <#msg_ty as prost::Message>::decode(#param_name.as_ref())
+                        #decode_expr
                             .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("invalid {} payload: {e}", stringify!(#msg_ty))))?
                     }
-                } else if matches!(param.field_type().base_type, BaseType::Enum(..)) {
-                    quote! { #param_name.try_into().map_err(|_| napi::Error::new(napi::Status::GenericFailure, "invalid enum value"))? }
+                } else if let BaseType::Enum(enum_name) = &param.field_type().base_type {
+                    // The enum crosses the NAPI boundary as `i32`; convert to the bare enum the
+                    // builder method expects (it wraps to the runtime representation internally).
+                    // prost enums impl `TryFrom<i32>`; buffa enums use `Enumeration::from_i32`.
+                    match method.config.runtime {
+                        Runtime::Prost => quote! {
+                            #param_name.try_into().map_err(|_| napi::Error::new(napi::Status::GenericFailure, "invalid enum value"))?
+                        },
+                        Runtime::Buffa => {
+                            let enum_ty = format_ident!(
+                                "{}",
+                                crate::utils::extract_simple_type_name(enum_name)
+                            );
+                            quote! {
+                                <#enum_ty as buffa::Enumeration>::from_i32(#param_name)
+                                    .ok_or_else(|| napi::Error::new(napi::Status::GenericFailure, "invalid enum value"))?
+                            }
+                        }
+                    }
                 } else {
                     quote! { #param_name }
                 }
@@ -416,12 +473,25 @@ impl SetterRender for NapiBackend {
                     request = request.#with_method(#param_ident);
                 }
             }
-        } else if matches!(setter.field_type.base_type, BaseType::Enum(_)) {
-            // Enums cross as `Option<i32>`; convert and drop invalid values.
-            quote! {
-                request = request.#with_method(
-                    #param_ident.map(|v| v.try_into().ok()).flatten()
-                );
+        } else if let BaseType::Enum(enum_name) = &setter.field_type.base_type {
+            // Enums cross as `Option<i32>`; convert to `Option<E>` (the bare enum the builder's
+            // `with_*` setter expects) and drop invalid values. prost enums impl `TryFrom<i32>`;
+            // buffa enums use `Enumeration::from_i32`.
+            match self.runtime {
+                Runtime::Prost => quote! {
+                    request = request.#with_method(
+                        #param_ident.map(|v| v.try_into().ok()).flatten()
+                    );
+                },
+                Runtime::Buffa => {
+                    let enum_ty =
+                        format_ident!("{}", crate::utils::extract_simple_type_name(enum_name));
+                    quote! {
+                        request = request.#with_method(
+                            #param_ident.and_then(<#enum_ty as buffa::Enumeration>::from_i32)
+                        );
+                    }
+                }
             }
         } else {
             quote! {
