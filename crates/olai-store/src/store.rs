@@ -31,12 +31,18 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
 /// Read-write interface for the object store.
 #[async_trait::async_trait]
 pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
-    /// Create a new object. The store generates the `id`, `created_at`, and `updated_at` fields.
+    /// Create a new object. The store generates `created_at` and `updated_at`.
+    ///
+    /// `id` lets the caller pre-allocate the object's id (e.g. a managed table
+    /// adopting the id reserved by its staging reservation, or a managed volume
+    /// embedding the id in its storage path); pass `None` to have the store
+    /// generate a time-ordered id.
     async fn create(
         &self,
         label: L,
         name: &ResourceName,
         properties: Option<serde_json::Value>,
+        id: Option<Uuid>,
     ) -> Result<Object<L>>;
 
     /// Update an existing object's properties.
@@ -116,8 +122,9 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
         label: L,
         name: &ResourceName,
         properties: Option<serde_json::Value>,
+        id: Option<Uuid>,
     ) -> Result<Object<L>> {
-        T::create(self, label, name, properties).await
+        T::create(self, label, name, properties, id).await
     }
 
     async fn update(&self, id: &Uuid, properties: Option<serde_json::Value>) -> Result<Object<L>> {

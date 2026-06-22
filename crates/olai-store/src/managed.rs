@@ -217,9 +217,10 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S, No
         label: L,
         name: &ResourceName,
         properties: Option<serde_json::Value>,
+        id: Option<Uuid>,
     ) -> Result<Object<L>> {
         let (stripped, _sensitive) = self.strip_fields(label, properties);
-        let mut object = self.inner.create(label, name, stripped).await?;
+        let mut object = self.inner.create(label, name, stripped, id).await?;
         self.inject_fields(&mut object);
         Ok(object)
     }
@@ -247,6 +248,7 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
         label: L,
         name: &ResourceName,
         properties: Option<serde_json::Value>,
+        id: Option<Uuid>,
     ) -> Result<Object<L>> {
         let (stripped, sensitive) = self.strip_fields(label, properties);
 
@@ -260,7 +262,7 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
                 .await?;
         }
 
-        let mut object = self.inner.create(label, name, stripped).await?;
+        let mut object = self.inner.create(label, name, stripped, id).await?;
         self.inject_fields(&mut object);
         Ok(object)
     }
@@ -562,9 +564,10 @@ mod tests {
             label: TestLabel,
             name: &ResourceName,
             properties: Option<serde_json::Value>,
+            id: Option<Uuid>,
         ) -> Result<Object<TestLabel>> {
             let object = Object {
-                id: Uuid::new_v4(),
+                id: id.unwrap_or_else(Uuid::new_v4),
                 label,
                 name: name.clone(),
                 properties,
@@ -780,6 +783,7 @@ mod tests {
                     "created_at": "client-supplied-time",
                     "color": "red",
                 })),
+                None,
             )
             .await
             .unwrap();
@@ -812,6 +816,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "blue", "api_key": "supersecret" })),
+                None,
             )
             .await
             .unwrap();
@@ -841,6 +846,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "green", "api_key": "topsecret" })),
+                None,
             )
             .await
             .unwrap();
@@ -887,6 +893,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "green" })),
+                None,
             )
             .await
             .unwrap();
@@ -922,6 +929,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "api_key": "old" })),
+                None,
             )
             .await
             .unwrap();
@@ -955,6 +963,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "green" })),
+                None,
             )
             .await
             .unwrap();
@@ -992,6 +1001,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "green" })),
+                None,
             )
             .await
             .unwrap();
@@ -1031,6 +1041,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "api_key": "s" })),
+                None,
             )
             .await
             .unwrap();
