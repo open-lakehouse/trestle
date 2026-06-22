@@ -188,6 +188,15 @@ pub(crate) fn build_user_delegation_sas(
 /// When `prefix` is non-empty the SAS includes `sdd=` for ADLS Gen2
 /// directory scoping. On flat-namespace accounts the parameter is ignored.
 ///
+/// When `emulator` is true the SAS targets the Azurite Blob emulator, which is
+/// served over **http** and uses a flat namespace:
+/// - `signedProtocol` is `https,http` instead of `https` (Azurite rejects an
+///   `https`-only SAS sent over http), and
+/// - `sdd=` directory-depth scoping is omitted (it is an ADLS Gen2 / HNS
+///   feature; including it on Azurite's flat namespace makes the signature
+///   mismatch). Prefix scoping for the emulator is enforced elsewhere (the
+///   object store is rooted at the container + blob prefix).
+///
 /// Uses the Service SAS signing algorithm (API version 2020-12-06).
 /// <https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas>
 pub(crate) fn build_storage_key_sas(
@@ -197,11 +206,18 @@ pub(crate) fn build_storage_key_sas(
     account_key_b64: &str,
     expiry: DateTime<Utc>,
     permissions: &str,
+    emulator: bool,
 ) -> Result<String> {
     let start = Utc::now();
     let start_str = start.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expiry_str = expiry.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let depth = signed_directory_depth(prefix);
+    // The emulator uses a flat namespace, so directory-depth scoping does not
+    // apply (and breaks the signature). Only compute `sdd` for real ADLS Gen2.
+    let depth = if emulator {
+        None
+    } else {
+        signed_directory_depth(prefix)
+    };
 
     let canonicalized_resource = if depth.is_some() && !prefix.is_empty() {
         let clean = prefix.trim_matches('/');
@@ -210,7 +226,9 @@ pub(crate) fn build_storage_key_sas(
         format!("/blob/{account}/{container}")
     };
 
-    let sdd_field = depth.map(|d| d.to_string()).unwrap_or_default();
+    // Azurite is http; real Azure is https-only. The protocol is part of the
+    // string-to-sign, so it must match the emitted `spr=` exactly.
+    let protocol = if emulator { "https,http" } else { "https" };
 
     // String-to-sign for Service SAS (container resource, API version 2020-12-06).
     // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas
@@ -219,28 +237,43 @@ pub(crate) fn build_storage_key_sas(
     //   signedIdentifier (empty), signedIP (empty), signedProtocol,
     //   signedVersion, signedResource, signedSnapshotTime (empty),
     //   signedEncryptionScope (empty), rscc (empty), rscd (empty), rsce (empty),
-    //   rscl (empty), rsct (empty), signedDirectoryDepth
-    let string_to_sign = format!(
-        "{permissions}\n{start}\n{expiry}\n{resource}\n\nhttps\n{version}\n{sr}\n\n\n\n\n\n\n\n{sdd}",
+    //   rscl (empty), rsct (empty), [signedDirectoryDepth]
+    //
+    // The trailing `signedDirectoryDepth` field is present ONLY when a directory
+    // depth is signed (ADLS Gen2). When absent, the field must be omitted
+    // entirely — an empty trailing field (a stray final `\n`) changes the
+    // signature and the service rejects it (verified against Azurite: a
+    // container-level SAS with a trailing empty `sdd` field 403s).
+    let base_string_to_sign = format!(
+        "{permissions}\n{start}\n{expiry}\n{resource}\n\n\n{protocol}\n{version}\n{sr}\n\n\n\n\n\n\n",
         permissions = permissions,
         start = start_str,
         expiry = expiry_str,
         resource = canonicalized_resource,
+        protocol = protocol,
         version = SAS_VERSION,
         sr = SAS_SIGNED_RESOURCE,
-        sdd = sdd_field,
     );
+    let string_to_sign = match depth {
+        Some(d) => format!("{base_string_to_sign}\n{d}"),
+        None => base_string_to_sign,
+    };
 
     let key_bytes = BASE64
         .decode(account_key_b64)
         .map_err(|e| crate::Error::Generic { source: e.into() })?;
     let signature = BASE64.encode(hmac_sha256(&key_bytes, string_to_sign.as_bytes()).as_ref());
 
+    // `st` (signedStart) is part of the string-to-sign above, so it MUST also
+    // appear in the emitted query — the service recomputes the signature from
+    // the query parameters, and an absent `st` is signed as empty → mismatch.
     let mut sas = format!(
-        "sv={version}&se={expiry}&sp={permissions}&spr=https&sr={resource}&sig={sig}",
+        "sv={version}&st={start}&se={expiry}&sp={permissions}&spr={protocol}&sr={resource}&sig={sig}",
         version = SAS_VERSION,
+        start = url_encode(&start_str),
         expiry = url_encode(&expiry_str),
         permissions = permissions,
+        protocol = protocol,
         resource = SAS_SIGNED_RESOURCE,
         sig = url_encode(&signature),
     );
@@ -304,7 +337,9 @@ pub async fn generate_user_delegation_sas(
 /// Generate a service SAS token scoped to an Azure Blob Storage container and
 /// optionally a directory prefix (ADLS Gen2 `sdd=` scoping) using a storage account key.
 ///
-/// This does not require an AAD token — useful for local Azurite testing.
+/// This does not require an AAD token. Set `emulator` to true when signing for
+/// the Azurite Blob emulator (served over http, flat namespace) — see
+/// [`build_storage_key_sas`] for the differences.
 pub fn generate_storage_key_sas(
     account: &str,
     container: &str,
@@ -312,6 +347,7 @@ pub fn generate_storage_key_sas(
     account_key_b64: &str,
     read_only: bool,
     ttl_secs: u64,
+    emulator: bool,
 ) -> Result<String> {
     let expiry = sas_expiry(ttl_secs);
     let permissions = if read_only { SAS_READ } else { SAS_READ_WRITE };
@@ -322,6 +358,7 @@ pub fn generate_storage_key_sas(
         account_key_b64,
         expiry,
         permissions,
+        emulator,
     )
 }
 
@@ -353,15 +390,20 @@ mod tests {
         assert_eq!(SAS_READ_WRITE, "racwdl");
     }
 
+    /// The well-known Azurite account key (also a valid base64 account key for
+    /// real-Azure signing tests — these tests don't talk to a server).
+    const TEST_KEY: &str =
+        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
     #[test]
     fn test_storage_key_sas_no_prefix_no_sdd() {
-        let azurite_key = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
-        let sas = generate_storage_key_sas("devstoreaccount1", "test", "", azurite_key, true, 3600)
+        let sas = generate_storage_key_sas("devstoreaccount1", "test", "", TEST_KEY, true, 3600, false)
             .expect("SAS generation failed");
         assert!(sas.contains("sv="), "missing sv");
         assert!(sas.contains("se="), "missing se");
         assert!(sas.contains("sp=rl"), "expected read permissions");
         assert!(sas.contains("sig="), "missing sig");
+        assert!(sas.contains("spr=https"), "non-emulator SAS is https-only");
         assert!(
             !sas.contains("sdd="),
             "should not have sdd for empty prefix"
@@ -370,14 +412,14 @@ mod tests {
 
     #[test]
     fn test_storage_key_sas_with_prefix_has_sdd() {
-        let azurite_key = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
         let sas = generate_storage_key_sas(
             "devstoreaccount1",
             "test",
             "data/events",
-            azurite_key,
+            TEST_KEY,
             true,
             3600,
+            false,
         )
         .expect("SAS generation failed");
         assert!(sas.contains("sdd=2"), "expected sdd=2 for data/events");
@@ -385,10 +427,37 @@ mod tests {
 
     #[test]
     fn test_storage_key_sas_read_write_permissions() {
-        let azurite_key = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
         let sas =
-            generate_storage_key_sas("devstoreaccount1", "test", "", azurite_key, false, 3600)
+            generate_storage_key_sas("devstoreaccount1", "test", "", TEST_KEY, false, 3600, false)
                 .expect("SAS generation failed");
+        assert!(sas.contains("sp=racwdl"), "expected read-write permissions");
+    }
+
+    /// The Azurite emulator SAS must allow http (`spr=https,http`) and must not
+    /// carry `sdd=` even with a non-empty prefix (flat namespace). The signature
+    /// covers the protocol, so `spr=` and the signed protocol must agree — a
+    /// regression here surfaces as an Azurite 403 (verified end-to-end against a
+    /// live Azurite in the open-lakehouse azurite stack).
+    #[test]
+    fn test_storage_key_sas_emulator_allows_http_and_omits_sdd() {
+        let sas = generate_storage_key_sas(
+            "devstoreaccount1",
+            "lakehouse",
+            "sales/orders",
+            TEST_KEY,
+            false,
+            3600,
+            true,
+        )
+        .expect("SAS generation failed");
+        assert!(
+            sas.contains("spr=https%2Chttp") || sas.contains("spr=https,http"),
+            "emulator SAS must permit http: {sas}"
+        );
+        assert!(
+            !sas.contains("sdd="),
+            "emulator SAS must omit sdd (flat namespace): {sas}"
+        );
         assert!(sas.contains("sp=racwdl"), "expected read-write permissions");
     }
 }
