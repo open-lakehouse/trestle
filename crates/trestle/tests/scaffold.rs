@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
-use tempfile::TempDir;
 use olai_testle::cli::new::{self, NewArgs};
+use tempfile::TempDir;
 
 fn scaffold(args: NewArgs) {
     new::run(args).expect("scaffold succeeded");

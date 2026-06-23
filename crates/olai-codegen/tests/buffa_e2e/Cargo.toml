@@ -32,3 +32,9 @@ futures = "0.3"
 buffa-build = "0.7"
 olai-codegen = { path = "../../" }
 protobuf = "3"
+
+# cargo-machete can't see these: they're exercised through code generated at
+# build time (the buffa client traits + models) rather than referenced directly
+# in this crate's source, so its static scan reports them as unused.
+[package.metadata.cargo-machete]
+ignored = ["async-trait", "buffa-types", "futures", "serde"]
