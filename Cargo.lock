@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "convert_case",
  "glob",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -1462,7 +1462,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http-wasm"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "reqwest",
  "serde",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "olai-store"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "cliclack",
