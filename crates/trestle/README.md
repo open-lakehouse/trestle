@@ -44,6 +44,73 @@ unified files (`docker/envoy/envoy.yaml`, `.env.example`, …).
 trestle new my-app --template databricks-app-rust --profile none --with local-stack-postgres
 ```
 
+## Advanced usage
+
+### Non-interactive scaffolding (CI)
+
+`--non-interactive` skips every prompt. Each variable must then be resolvable
+from a `--set` override, a `--values` file, or its manifest default, or the run
+fails with a "missing variable" error. `post_init` hooks marked `confirm: true`
+are skipped in this mode (they can't be confirmed without a prompt).
+
+```bash
+trestle new my-app \
+  --template databricks-app-rust \
+  --non-interactive \
+  --select frontend=react \
+  --set project_name=my-app
+```
+
+### Selecting components and options
+
+`--select <category>=<value>[,<value>...]` makes explicit category picks instead
+of answering the wizard. Repeat the flag for multiple categories; comma-separate
+values for a multi-select category. App-private categories are namespaced as
+`app.<app-name>.<category>`:
+
+```bash
+trestle new my-app -a databricks-app-rust \
+  --select storage=object-store \
+  --select app.databricks-app-rust.frontend=react,ci
+```
+
+Individual variables are set with `--set <name>=<value>` (short form `-D`).
+
+### Values file (`--values <file>`)
+
+For repeatable runs, supply a YAML file with up to three top-level keys:
+
+```yaml
+# values.yaml
+apps:               # apps to layer on the base (same as repeating --app)
+  - databricks-app-rust
+selections:         # same shape as --select; value may be a string or a list
+  storage: object-store
+  app.databricks-app-rust.frontend: [react, ci]
+variables:          # variable overrides (same as --set)
+  project_name: my-app
+  with_ci: true
+```
+
+```bash
+trestle new my-app --values values.yaml --non-interactive
+```
+
+CLI flags take precedence over the file: a `--set` override beats a `variables:`
+entry, and `--select`/`--app` are merged with `selections:`/`apps:`.
+
+## Troubleshooting
+
+- **`git ... failed` when using a git template.** Git templates are cloned with
+  the system `git` binary, so `git` must be on `PATH`. Install it (or use an
+  embedded name / local path with `--template`) and retry.
+- **"missing variable" under `--non-interactive`.** A variable had no override,
+  no `--values` entry, and no manifest default. Supply it with `--set` or in the
+  `--values` file.
+- **Output directory already exists and is non-empty.** Pass `--force` to render
+  into it anyway; existing files at generated paths are overwritten, others are
+  left untouched.
+
 ## Authoring a template
 
 ```text

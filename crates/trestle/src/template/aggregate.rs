@@ -28,7 +28,19 @@ pub struct StackContext {
     pub envoy_clusters: Vec<EnvoyClusterCtx>,
     pub env_vars: BTreeMap<String, String>,
     pub ports: Vec<PortCtx>,
-    /// Per-component extras, keyed by component name.
+    /// Free-form per-component extras, flattened from every active component's
+    /// [`Provides::extras`](crate::template::Provides) block.
+    ///
+    /// Each key is namespaced as `<component_name>__<key>` (component name and
+    /// the original extras key, joined by a double underscore) so contributions
+    /// from different components never collide. For example, a component named
+    /// `metastore` declaring `extras: { schema: bronze }` appears here as:
+    ///
+    /// ```text
+    /// { "metastore__schema": "bronze" }
+    /// ```
+    ///
+    /// and is read in a template as `{{ stack.extras["metastore__schema"] }}`.
     pub extras: BTreeMap<String, serde_yaml::Value>,
 }
 
