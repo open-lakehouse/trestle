@@ -1,6 +1,6 @@
 //! Browser/WASM HTTP transport for `olai-codegen`-generated clients.
 //!
-//! This is the WASM counterpart to [`olai_http::CloudClient`]. Generated client bodies call
+//! This is the WASM counterpart to `olai_http::CloudClient`. Generated client bodies call
 //! `self.client.<verb>(url).json(req).query(..).send().await?` and then `response.status()` /
 //! `response.bytes()`. [`WasmClient`] and [`WasmRequestBuilder`] expose exactly that surface, so
 //! the *same* generated code compiles against either transport — selected at generation time via
@@ -20,7 +20,7 @@ use serde::Serialize;
 
 /// Browser/WASM HTTP transport. Cheap to clone (wraps a [`reqwest::Client`]).
 ///
-/// Mirrors the verb surface of [`olai_http::CloudClient`] (`get`/`post`/`put`/`patch`/`delete`)
+/// Mirrors the verb surface of `olai_http::CloudClient` (`get`/`post`/`put`/`patch`/`delete`)
 /// so it is a drop-in transport for generated clients.
 #[derive(Clone, Debug)]
 pub struct WasmClient {

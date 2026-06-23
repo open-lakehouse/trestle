@@ -11,7 +11,7 @@ use crate::parsing::types::BaseType;
 /// Check if a parameter type is supported across the NAPI boundary.
 ///
 /// NAPI-RS supports: primitives, String, bool, Buffer, HashMap<String, String>,
-/// Vec<T> of supported types, Option<T> of supported types.
+/// `Vec<T>` of supported types, `Option<T>` of supported types.
 /// Enums are supported as i32 values. Complex messages/oneofs are not.
 ///
 /// NOTE: Enums should be annotated with `#[napi]` via `buf.gen.yaml` `enum_attribute`

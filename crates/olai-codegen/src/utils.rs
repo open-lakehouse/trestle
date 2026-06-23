@@ -1,4 +1,4 @@
-//! Shared utilities for the proto-gen crate
+//! Shared utilities for the olai-codegen crate
 //!
 //! This module contains common functions used across different parts of the code generation
 //! pipeline to reduce duplication and improve maintainability.

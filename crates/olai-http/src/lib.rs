@@ -1,3 +1,21 @@
+//! Unified cloud credential abstraction and HTTP client for AWS, Azure, GCP, and
+//! Databricks.
+//!
+//! A single [`CloudClient`] authenticates against every provider through one
+//! [`RequestSigner`] trait, so a service talking to multiple clouds doesn't need
+//! each vendor SDK. The credential machinery is extracted from the
+//! [`object_store`](https://crates.io/crates/object_store) crate's internal client.
+//!
+//! ```rust,ignore
+//! use olai_http::CloudClient;
+//!
+//! let client = CloudClient::new_with_token("my-token");
+//! let resp = client.get("https://api.example.com/data").send().await?;
+//! ```
+//!
+//! Enable the `recording` feature to capture HTTP interactions to JSON (with
+//! sensitive headers redacted) for test replay.
+
 #[cfg(feature = "recording")]
 use std::collections::HashMap;
 #[cfg(feature = "recording")]
@@ -86,7 +104,7 @@ pub struct CloudClient {
     signer: SharedSigner,
     reqwest_client: Client,
     service: Arc<dyn HttpService>,
-    /// Retry configuration stored for future use by [`CloudClient::send`].
+    /// Retry configuration stored for future use by [`CloudRequestBuilder::send`].
     ///
     /// Currently the retry policy is applied inside credential providers (token
     /// refresh), but is not yet applied to user-initiated requests. Stored here
