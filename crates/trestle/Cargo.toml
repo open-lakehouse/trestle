@@ -4,7 +4,7 @@
 # a `trestle` command.
 name = "olai-trestle"
 description = "Unified CLI for proto-driven code generation and full-project scaffolding"
-version = "0.0.1"
+version = "0.0.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -23,7 +23,7 @@ path = "src/main.rs"
 [dependencies]
 # `version` is required for `cargo publish` (a path-only dep can't be published).
 # release-plz keeps this in sync whenever it bumps olai-codegen.
-olai-codegen = { path = "../olai-codegen", version = "0.0.2" }
+olai-codegen = { path = "../olai-codegen", version = "0.0.3" }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
