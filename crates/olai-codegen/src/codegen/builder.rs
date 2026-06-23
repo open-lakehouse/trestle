@@ -1,3 +1,18 @@
+//! Request-builder generation for the low-level client.
+//!
+//! This is part of the **Generation** stage of the Analysis → Planning → Generation → Output
+//! pipeline (see [`super`]). For each method of a service it emits a fluent builder struct (e.g.
+//! `CreateCatalogBuilder`) plus the `impl` block that lets callers set optional fields and `await`
+//! the request. The builders are written to each service's `builders.rs` and complement the
+//! low-level client emitted by [`super::client`]: the client constructs a builder, and the builder
+//! drives the actual HTTP call.
+//!
+//! Builder setters carry the proto field documentation as `#[doc = "..."]` attributes, and
+//! required-vs-optional partitioning comes from the per-method
+//! [`GenerationPlan`](crate::analysis::GenerationPlan) computed during Planning. The emitted token
+//! streams are pretty-printed through `super::format_tokens` before being returned as source
+//! strings.
+
 use itertools::Itertools;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};

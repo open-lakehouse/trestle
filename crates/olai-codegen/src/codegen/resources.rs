@@ -1,3 +1,16 @@
+//! Resource-registry (`labels.rs`) generation.
+//!
+//! This is part of the **Generation** stage of the Analysis → Planning → Generation → Output
+//! pipeline (see [`super`]). It emits the `labels.rs` file for the generated models tree: a
+//! `Resource` enum and an `ObjectLabel` enum derived from the `google.api.resource` annotations on
+//! message types, giving the consuming project a single taxonomy of every resource it manages.
+//!
+//! Beyond the bare enums, this stage optionally emits resource <-> label conversion `impl`s, a
+//! `qualified_name()` accessor, and `olai-derive` object-conversion glue, depending on the
+//! `error_type_path` and `generate_object_conversions` configuration. The set of resources comes
+//! from the [`GenerationPlan`](crate::analysis::GenerationPlan) and the message metadata gathered
+//! during the Analysis stage; the package prefix is inferred from the services in the plan.
+
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 

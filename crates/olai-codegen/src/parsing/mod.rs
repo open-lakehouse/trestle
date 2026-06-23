@@ -73,9 +73,18 @@ const GOOGLE_API_RESOURCE_REFERENCE_EXTENSION: u32 = 1055; // google.api.resourc
 /// generate_code(&metadata, &config)?;
 /// ```
 ///
-/// Returns an error if a descriptor contains an annotation that cannot be
-/// decoded; methods without HTTP annotations are not an error here (they are
-/// recorded later, during [`analyze_metadata`](crate::analyze_metadata)).
+/// Methods without HTTP annotations are not an error here; they are recorded later,
+/// during [`analyze_metadata`](crate::analyze_metadata).
+///
+/// # Errors
+///
+/// Returns:
+///
+/// - [`Error::InvalidAnnotation`](crate::Error::InvalidAnnotation) if a `google.api.http`,
+///   `google.api.resource`, or `field_behavior` annotation is present but malformed (e.g. a
+///   resource pattern or HTTP rule that cannot be interpreted).
+/// - [`Error::Build`](crate::Error::Build) if an annotation extension cannot be decoded from its
+///   raw descriptor bytes.
 pub fn parse_file_descriptor_set(
     file_descriptor_set: &FileDescriptorSet,
 ) -> Result<CodeGenMetadata> {

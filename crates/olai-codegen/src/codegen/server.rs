@@ -1,3 +1,20 @@
+//! Axum server-side glue generation.
+//!
+//! This is part of the **Generation** stage of the Analysis → Planning → Generation → Output
+//! pipeline (see [`super`]). It emits the wiring that connects incoming HTTP requests to the
+//! handler trait produced by [`super::handler`]:
+//!
+//! - `axum::extract::FromRequestParts` extractors for path and query parameters and
+//!   `axum::extract::FromRequest` extractors for the JSON body (the "common" output, always
+//!   generated);
+//! - per-method route handler functions that build the typed request, call the handler trait, and
+//!   serialize the response (the "server" output).
+//!
+//! Which extractors and imports are emitted is driven by the per-method
+//! [`GenerationPlan`](crate::analysis::GenerationPlan) computed during Planning (e.g. only services
+//! with path/query params pull in `RequestPartsExt`). Emitted token streams are pretty-printed via
+//! `super::format_tokens`.
+
 use itertools::Itertools;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
