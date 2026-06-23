@@ -1,8 +1,8 @@
 # olai-http-wasm
 
-Browser/WASM HTTP transport for [`olai-codegen`](../olai-codegen)-generated clients.
+Browser/WASM HTTP transport for [`olai-codegen`](https://crates.io/crates/olai-codegen)-generated clients.
 
-This is the WASM counterpart to [`olai_http::CloudClient`](../olai-http). It exposes the exact
+This is the WASM counterpart to [`olai-http`](https://crates.io/crates/olai-http)'s `CloudClient`. It exposes the exact
 surface a generated client body uses — per-verb builders (`get`/`post`/`put`/`patch`/`delete`)
 returning a builder with `.json(..)`/`.query(..)`/`.send()`, whose response has
 `.status()`/`.bytes()` — so the **same** generated code compiles against either transport. Select
