@@ -1,10 +1,19 @@
 name: Bootstrap publish (one-shot)
 
-# ONE-TIME bootstrap to create the two never-published crate names on crates.io.
+# ONE-TIME bootstrap to create never-published crate names on crates.io.
 # crates.io OIDC trusted publishing cannot publish a name that has never
 # existed, so this job does the first publish with a CARGO_REGISTRY_TOKEN.
 #
-# After a successful run:
+# Scope: this publishes ONLY `olai-http-wasm`. `olai-testle` is intentionally
+# NOT here yet — its code uses olai-codegen APIs that are not in the published
+# olai-codegen 0.0.1, and `cargo publish` builds against the crates.io copy, so
+# it cannot publish until a newer olai-codegen is released. Sequence:
+#   1. Run this job to create `olai-http-wasm`.
+#   2. Let release-plz release a new olai-codegen (OIDC; the name exists).
+#   3. Bump olai-testle's olai-codegen dep to that version, then bootstrap
+#      olai-testle (re-add a step here for one run, or publish it manually).
+#
+# After all names exist:
 #   1. Delete this workflow file.
 #   2. Delete the CARGO_REGISTRY_TOKEN repository secret.
 #   3. Register Trusted Publishing for all crates on crates.io.
@@ -38,22 +47,12 @@ jobs:
         with:
           toolchain: "1.87"
 
-      # olai-http-wasm has no workspace deps. olai-testle depends on olai-codegen,
-      # which is already on crates.io at 0.0.1, so both resolve. --locked keeps
-      # the published artifact reproducible against the committed Cargo.lock.
+      # olai-http-wasm has no workspace deps, so it builds standalone against
+      # crates.io. --locked keeps the published artifact reproducible against
+      # the committed Cargo.lock.
       - name: Publish olai-http-wasm
         run: |
           cargo publish -p olai-http-wasm --locked \
-            ${{ inputs.dry_run && '--dry-run' || '' }}
-        env:
-          # zizmor: ignore[use-trusted-publishing] — intentional: OIDC trusted
-          # publishing cannot create a never-before-published crate name. This
-          # one-shot token bootstrap is removed once the names exist.
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Publish olai-testle
-        run: |
-          cargo publish -p olai-testle --locked \
             ${{ inputs.dry_run && '--dry-run' || '' }}
         env:
           # zizmor: ignore[use-trusted-publishing] — intentional: OIDC trusted
