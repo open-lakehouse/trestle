@@ -50,7 +50,7 @@ release-plz computes each crate's next version from the commit history:
 
 - **`<scope>`** should be the affected crate, so the bump and changelog land on
   the right crate: `olai-store`, `olai-http`, `olai-codegen`, `olai-http-wasm`,
-  `olai-testle`.
+  `olai-trestle`.
 - **Breaking changes** → append `!` after the type/scope (`feat(olai-store)!:`)
   or add a `BREAKING CHANGE:` footer. This triggers a **major** bump (or a minor
   bump while a crate is still `0.x`).
@@ -94,22 +94,22 @@ That's it — merging the Release PR is the release.
 
 Versions live in each crate's own `[package].version` (not in
 `[workspace.package]`), so crates bump independently. The only intra-workspace
-dependency is `olai-testle → olai-codegen`. When release-plz bumps
-`olai-codegen`, it automatically rewrites the `version` in `olai-testle`'s
-dependency on it, bumps `olai-testle` accordingly, and publishes `olai-codegen`
+dependency is `olai-trestle → olai-codegen`. When release-plz bumps
+`olai-codegen`, it automatically rewrites the `version` in `olai-trestle`'s
+dependency on it, bumps `olai-trestle` accordingly, and publishes `olai-codegen`
 first. You only ever maintain the `path` on that dependency; release-plz owns
 the `version`.
 
-### Published crates and the `trestle` / `olai-testle` naming
+### Published crates and the `trestle` / `olai-trestle` naming
 
 Five crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
-`olai-http-wasm`, and `olai-testle`.
+`olai-http-wasm`, and `olai-trestle`.
 
-The CLI crate is **published as `olai-testle`** (the name `trestle` was already
+The CLI crate is **published as `olai-trestle`** (the name `trestle` was already
 taken on crates.io), but it still installs a binary called **`trestle`**:
 
 ```bash
-cargo install olai-testle   # installs the `trestle` command
+cargo install olai-trestle   # installs the `trestle` command
 ```
 
 All user-facing surfaces — the `trestle` binary, the `trestle.yaml` config file,
@@ -126,7 +126,7 @@ Maintainer setup (one-time, per crate):
 - On crates.io, under each crate's **Settings → Trusted Publishing**, add the
   GitHub repo `open-lakehouse/trestle`, workflow `release-plz.yml`, and
   environment `release`.
-- **New crate names cannot be created by OIDC.** `olai-testle` and
+- **New crate names cannot be created by OIDC.** `olai-trestle` and
   `olai-http-wasm` have never been published, so each needs a **one-time
   bootstrap**: either a manual `cargo publish --registry crates-io` with a
   token, or a crates.io "pending crate" trusted-publisher registration. After

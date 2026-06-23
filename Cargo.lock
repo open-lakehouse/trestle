@@ -1487,7 +1487,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "olai-testle"
+name = "olai-trestle"
 version = "0.0.1"
 dependencies = [
  "clap",

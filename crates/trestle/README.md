@@ -8,10 +8,10 @@ The unified CLI for the Trestle framework. Two responsibilities:
 
 ## Install
 
-From crates.io (the crate is published as `olai-testle`; it installs a `trestle` binary):
+From crates.io (the crate is published as `olai-trestle`; it installs a `trestle` binary):
 
 ```bash
-cargo install olai-testle
+cargo install olai-trestle
 ```
 
 Or from git:

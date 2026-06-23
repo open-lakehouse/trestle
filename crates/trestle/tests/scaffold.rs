@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
-use olai_testle::cli::new::{self, NewArgs};
+use olai_trestle::cli::new::{self, NewArgs};
 use tempfile::TempDir;
 
 fn scaffold(args: NewArgs) {
