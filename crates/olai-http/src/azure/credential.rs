@@ -82,10 +82,17 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// An Azure storage credential
+/// An Azure storage credential.
+///
+/// Holds a long-lived secret used to authorize requests against Azure APIs, and
+/// must be handled as sensitive material — avoid logging it or otherwise
+/// exposing the inner value.
 #[derive(Debug, Eq, PartialEq)]
 pub enum AzureCredential {
-    /// An authorization token
+    /// An Azure AD OAuth 2.0 bearer token.
+    ///
+    /// The wrapped [`String`] is a secret access token; treat it as
+    /// confidential and do not log it.
     BearerToken(String),
 }
 
@@ -109,12 +116,17 @@ pub struct AzureAuthorizer<'a> {
 }
 
 impl<'a> AzureAuthorizer<'a> {
-    /// Create a new [`AzureAuthorizer`]
+    /// Create a new [`AzureAuthorizer`] that authorizes requests with the given
+    /// [`AzureCredential`].
     pub fn new(credential: &'a AzureCredential) -> Self {
         AzureAuthorizer { credential }
     }
 
-    /// Authorize `request`
+    /// Authorize `request` in place by appending the credential's
+    /// `Authorization` header.
+    ///
+    /// For an [`AzureCredential::BearerToken`] this appends an
+    /// `Authorization: Bearer <token>` header.
     pub fn authorize(&self, request: &mut Request) {
         match self.credential {
             AzureCredential::BearerToken(token) => {
@@ -206,6 +218,14 @@ impl ClientSecretOAuthProvider {
 impl TokenProvider for ClientSecretOAuthProvider {
     type Credential = AzureCredential;
 
+    /// Fetch a bearer token via the OAuth 2.0 `client_credentials` grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TokenRequest`] if the token request fails after the
+    /// configured retries are exhausted, or [`Error::TokenResponseBody`] if the
+    /// response body cannot be deserialized. The request is retried internally
+    /// per `retry`, so a returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -318,6 +338,14 @@ impl ImdsManagedIdentityProvider {
 impl TokenProvider for ImdsManagedIdentityProvider {
     type Credential = AzureCredential;
 
+    /// Fetch a bearer token from the Azure Instance Metadata Service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TokenRequest`] if the IMDS request fails after the
+    /// configured retries are exhausted, or [`Error::TokenResponseBody`] if the
+    /// response body cannot be deserialized. The request is retried internally
+    /// per `retry`, so a returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -410,6 +438,16 @@ impl WorkloadIdentityOAuthProvider {
 impl TokenProvider for WorkloadIdentityOAuthProvider {
     type Credential = AzureCredential;
 
+    /// Exchange the federated OIDC token for a bearer token via the
+    /// `client_credentials` grant with a JWT client assertion.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::FederatedTokenFile`] if the federated token file cannot
+    /// be read, [`Error::TokenRequest`] if the token request fails after the
+    /// configured retries are exhausted, or [`Error::TokenResponseBody`] if the
+    /// response body cannot be deserialized. The request is retried internally
+    /// per `retry`, so a returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,

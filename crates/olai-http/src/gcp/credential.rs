@@ -82,12 +82,25 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// A private RSA key for a service account
+/// A private RSA key for a service account.
+///
+/// Wraps the parsed RSA key pair used to sign self-signed JWTs. The key is
+/// sensitive long-lived material; treat any bytes passed to the factory methods
+/// as confidential.
 #[derive(Debug)]
 pub struct ServiceAccountKey(RsaKeyPair);
 
 impl ServiceAccountKey {
-    /// Parses a pem-encoded RSA key
+    /// Parses a PEM-encoded RSA private key.
+    ///
+    /// Accepts either a PKCS#8 (`BEGIN PRIVATE KEY`) or a PKCS#1
+    /// (`BEGIN RSA PRIVATE KEY`) PEM block; this is the format found in the
+    /// `private_key` field of a GCP service-account JSON key file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MissingKey`] if no RSA key is found in the input, or
+    /// [`Error::InvalidKey`] if the decoded key is rejected.
     pub fn from_pem(encoded: &[u8]) -> Result<Self> {
         use rustls_pemfile::Item;
         use std::io::Cursor;
@@ -103,21 +116,35 @@ impl ServiceAccountKey {
         }
     }
 
-    /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    /// Parses an unencrypted PKCS#8 DER-encoded RSA private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidKey`] if the DER bytes are not a valid,
+    /// supported RSA key.
     pub fn from_pkcs8(key: &[u8]) -> Result<Self> {
         Ok(Self(RsaKeyPair::from_pkcs8(key)?))
     }
 
-    /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    /// Parses an unencrypted PKCS#1 DER-encoded RSA private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidKey`] if the DER bytes are not a valid,
+    /// supported RSA key.
     pub fn from_der(key: &[u8]) -> Result<Self> {
         Ok(Self(RsaKeyPair::from_der(key)?))
     }
 }
 
-/// A Google Cloud Storage Credential
+/// A Google Cloud credential.
+///
+/// Wraps an OAuth 2.0 bearer token used to authorize requests against Google
+/// Cloud APIs. The token is a secret; treat it as confidential and avoid
+/// logging the [`bearer`](Self::bearer) field.
 #[derive(Debug, Eq, PartialEq)]
 pub struct GcpCredential {
-    /// An HTTP bearer token
+    /// An HTTP bearer token. This is secret material.
     pub bearer: String,
 }
 
@@ -209,7 +236,15 @@ impl SelfSignedJwt {
 impl TokenProvider for SelfSignedJwt {
     type Credential = GcpCredential;
 
-    /// Fetch a fresh token
+    /// Mint a fresh self-signed JWT bearer token.
+    ///
+    /// This performs no network I/O; the token is signed locally with the
+    /// service-account private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Encode`] if the JWT header or claims cannot be
+    /// serialized, or [`Error::Sign`] if signing with the RSA key fails.
     async fn fetch_token(
         &self,
         _client: &Client,
@@ -390,6 +425,14 @@ impl TokenProvider for InstanceCredentialProvider {
     /// environment variables.
     ///
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TokenRequest`] if the request to both the metadata host
+    /// and the IP fallback fails after the configured retries are exhausted, or
+    /// [`Error::TokenResponseBody`] if the response cannot be deserialized.
+    /// Requests are retried internally per `retry`, so a returned error is
+    /// terminal.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -494,6 +537,14 @@ pub(crate) struct AuthorizedUserCredentials {
 impl TokenProvider for AuthorizedUserCredentials {
     type Credential = GcpCredential;
 
+    /// Refresh an access token using the stored refresh token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TokenRequest`] if the refresh request fails after the
+    /// configured retries are exhausted, or [`Error::TokenResponseBody`] if the
+    /// response cannot be deserialized. The request is retried internally per
+    /// `retry`, so a returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -601,6 +652,18 @@ pub(crate) struct GcpWorkloadIdentityProvider {
 impl TokenProvider for GcpWorkloadIdentityProvider {
     type Credential = GcpCredential;
 
+    /// Exchange an external subject token for a federated (and optionally
+    /// impersonated) access token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Generic`](crate::Error::Generic) if no credential source
+    /// is configured or the subject token cannot be read from its file or
+    /// environment variable. Returns [`Error::TokenRequest`] if the STS exchange
+    /// or the optional impersonation request fails after the configured retries
+    /// are exhausted, or [`Error::TokenResponseBody`] if either response cannot
+    /// be deserialized. The requests are retried internally per `retry`, so a
+    /// returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,

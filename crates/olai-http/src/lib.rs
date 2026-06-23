@@ -1,16 +1,48 @@
 //! Unified cloud credential abstraction and HTTP client for AWS, Azure, GCP, and
 //! Databricks.
 //!
-//! A single [`CloudClient`] authenticates against every provider through one
-//! [`RequestSigner`] trait, so a service talking to multiple clouds doesn't need
-//! each vendor SDK. The credential machinery is extracted from the
+//! This crate provides a single authenticated HTTP client, [`CloudClient`], that
+//! signs outgoing requests for any supported cloud provider. Rather than pulling
+//! in a separate vendor SDK for each cloud, a service constructs one
+//! [`CloudClient`] per provider and issues requests through a familiar,
+//! `reqwest`-style builder ([`CloudRequestBuilder`]). Every provider is reached
+//! through the same [`RequestSigner`] trait, so credential resolution, token
+//! refresh, and request signing are uniform across clouds. The credential
+//! machinery is extracted from the
 //! [`object_store`](https://crates.io/crates/object_store) crate's internal client.
 //!
-//! ```rust,ignore
+//! # Providers
+//!
+//! Each provider has a builder under its own module and a matching
+//! [`CloudClient`] constructor:
+//!
+//! - **AWS** ([`aws`]) — SigV4 signing with static keys, IMDS, ECS/EKS task
+//!   roles, web identity, and STS `AssumeRole`. See [`CloudClient::new_aws`].
+//! - **Azure** ([`azure`]) — Azure AD bearer tokens via client secret, managed
+//!   identity, workload identity, or the Azure CLI. See [`CloudClient::new_azure`].
+//! - **Google Cloud** ([`gcp`]) — OAuth 2.0 bearer tokens via service-account
+//!   JWTs, the GCE metadata server, or workload identity federation. See
+//!   [`CloudClient::new_google`].
+//! - **Databricks** ([`databricks`]) — OAuth M2M and OIDC token exchange. See
+//!   [`CloudClient::new_databricks`].
+//!
+//! For a static token or no authentication at all, use
+//! [`CloudClient::new_with_token`] or [`CloudClient::new_unauthenticated`].
+//!
+//! # Examples
+//!
+//! ```no_run
 //! use olai_http::CloudClient;
 //!
+//! # async fn run() -> olai_http::Result<()> {
 //! let client = CloudClient::new_with_token("my-token");
-//! let resp = client.get("https://api.example.com/data").send().await?;
+//! let resp = client
+//!     .get("https://api.example.com/data")
+//!     .send()
+//!     .await?;
+//! println!("status: {}", resp.status());
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! Enable the `recording` feature to capture HTTP interactions to JSON (with
@@ -304,6 +336,11 @@ impl CloudClient {
         self
     }
 
+    /// Start building a request for the given HTTP `method` and `url`.
+    ///
+    /// The returned [`CloudRequestBuilder`] borrows this client's signer, so the
+    /// request is signed for the configured provider when
+    /// [`CloudRequestBuilder::send`] is called.
     pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> CloudRequestBuilder {
         CloudRequestBuilder {
             builder: self.reqwest_client.request(method, url),
@@ -313,42 +350,69 @@ impl CloudClient {
         }
     }
 
+    /// Start building a `GET` request for `url`. Shortcut for [`request`](Self::request).
     pub fn get<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::GET, url)
     }
 
+    /// Start building a `POST` request for `url`. Shortcut for [`request`](Self::request).
     pub fn post<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::POST, url)
     }
 
+    /// Start building a `PUT` request for `url`. Shortcut for [`request`](Self::request).
     pub fn put<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::PUT, url)
     }
 
+    /// Start building a `DELETE` request for `url`. Shortcut for [`request`](Self::request).
     pub fn delete<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::DELETE, url)
     }
 
+    /// Start building a `HEAD` request for `url`. Shortcut for [`request`](Self::request).
     pub fn head<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::HEAD, url)
     }
 
+    /// Start building a `PATCH` request for `url`. Shortcut for [`request`](Self::request).
     pub fn patch<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::PATCH, url)
     }
 
+    /// Start building an `OPTIONS` request for `url`. Shortcut for [`request`](Self::request).
     pub fn options<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::OPTIONS, url)
     }
 
+    /// Start building a `TRACE` request for `url`. Shortcut for [`request`](Self::request).
     pub fn trace<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::TRACE, url)
     }
 
+    /// Start building a `CONNECT` request for `url`. Shortcut for [`request`](Self::request).
     pub fn connect<U: IntoUrl>(&self, url: U) -> CloudRequestBuilder {
         self.request(Method::CONNECT, url)
     }
 
+    /// Enable request/response recording, writing each interaction to `out_dir`.
+    ///
+    /// Once set, every request sent through this client is captured to a
+    /// numbered JSON file (`0000.json`, `0001.json`, …) under `out_dir` for
+    /// later test replay. Sensitive response headers (`authorization`,
+    /// `x-amz-security-token`, `cookie`, and similar) are replaced with
+    /// `"<REDACTED>"` before anything is written to disk, so
+    /// recordings never persist bearer tokens or signing secrets. Request
+    /// headers are not recorded at all.
+    ///
+    /// `out_dir` is canonicalized eagerly, so it must already exist.
+    ///
+    /// Only available when the `recording` feature is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`io::Error`](std::io::Error) from canonicalizing `out_dir`,
+    /// for example if the directory does not exist or is not accessible.
     #[cfg(feature = "recording")]
     pub fn set_recording_dir(&mut self, out_dir: std::path::PathBuf) -> Result<(), std::io::Error> {
         let out_dir = std::fs::canonicalize(out_dir)?;
@@ -360,6 +424,11 @@ impl CloudClient {
     }
 }
 
+/// A builder for a single request issued through a [`CloudClient`].
+///
+/// Created by [`CloudClient::request`] and the per-verb shortcuts such as
+/// [`CloudClient::get`]. Configure the request with the builder methods, then
+/// call [`send`](Self::send) to sign and dispatch it.
 pub struct CloudRequestBuilder {
     builder: RequestBuilder,
     client: CloudClient,
@@ -438,6 +507,25 @@ impl CloudRequestBuilder {
         self
     }
 
+    /// Sign and send the request, returning the [`reqwest::Response`].
+    ///
+    /// The request is first passed to the client's [`RequestSigner`], which
+    /// attaches the provider-specific authentication (e.g. AWS SigV4 headers or
+    /// an `Authorization: Bearer` header), refreshing any cached credential as
+    /// needed. The signed request is then dispatched through the client's
+    /// [`HttpService`].
+    ///
+    /// When the `recording` feature is enabled and a recording directory has
+    /// been configured via `CloudClient::set_recording_dir`, the request and
+    /// response are also written to disk (with sensitive headers redacted)
+    /// before the response is returned to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if signing fails, if the request cannot be built, or
+    /// if the underlying HTTP transport returns an error. A non-success HTTP
+    /// status code is not itself an error; inspect [`reqwest::Response::status`]
+    /// on the returned response.
     pub async fn send(mut self) -> Result<reqwest::Response> {
         self.builder = self.client.signer.sign(self.builder).await?;
 

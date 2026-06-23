@@ -13,8 +13,13 @@ use crate::token::TemporaryToken;
 use crate::{RetryConfig, TokenProvider};
 
 /// Bearer token credential used by all Databricks auth paths.
+///
+/// Wraps an OAuth/OIDC bearer token used to authorize requests against
+/// Databricks REST APIs. The [`bearer`](Self::bearer) field is secret material;
+/// treat it as confidential and avoid logging it.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DatabricksCredential {
+    /// The bearer token. This is secret material.
     pub bearer: String,
 }
 

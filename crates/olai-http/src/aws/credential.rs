@@ -233,7 +233,18 @@ impl<'a> AwsAuthorizer<'a> {
 }
 
 pub(crate) trait CredentialExt {
-    /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
+    /// Sign a request with [AWS SigV4].
+    ///
+    /// If `authorizer` is `None` the request is returned unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the request cannot be built (e.g. an invalid URL was supplied
+    /// to the underlying [`RequestBuilder`]), or if the resolved credential
+    /// values cannot be encoded as HTTP header characters. Both conditions
+    /// indicate a programming error rather than a recoverable runtime failure.
+    ///
+    /// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html
     fn with_aws_sigv4(
         self,
         authorizer: Option<AwsAuthorizer<'_>>,
@@ -360,6 +371,16 @@ pub(crate) struct InstanceCredentialProvider {
 impl TokenProvider for InstanceCredentialProvider {
     type Credential = AwsCredential;
 
+    /// Fetch temporary credentials from the EC2 Instance Metadata Service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Generic`](crate::Error::Generic) if any IMDS request
+    /// (token, role name, or credentials) fails after the configured retries are
+    /// exhausted, or if the credentials response cannot be deserialized.
+    /// Transient transport and 5xx errors are retried internally per `retry`, so
+    /// a returned error is terminal. When `imdsv1_fallback` is set, a `403` from
+    /// the IMDSv2 token endpoint is not an error but triggers an IMDSv1 retry.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -401,6 +422,16 @@ pub(crate) struct WebIdentityProvider {
 impl TokenProvider for WebIdentityProvider {
     type Credential = AwsCredential;
 
+    /// Exchange the OIDC token for temporary credentials via STS
+    /// `AssumeRoleWithWebIdentity`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Generic`](crate::Error::Generic) if the OIDC token file
+    /// cannot be read, if the STS request fails after the configured retries are
+    /// exhausted, or if the `AssumeRoleWithWebIdentity` XML response cannot be
+    /// parsed. The STS request is retried internally per `retry`, so a returned
+    /// error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -530,6 +561,16 @@ pub(crate) struct AssumeRoleProvider {
 impl TokenProvider for AssumeRoleProvider {
     type Credential = AwsCredential;
 
+    /// Exchange the base credentials for temporary credentials via STS
+    /// `AssumeRole`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Generic`](crate::Error::Generic) if resolving the base
+    /// credentials fails, if the SigV4-signed STS request fails after the
+    /// configured retries are exhausted, or if the `AssumeRole` XML response
+    /// cannot be parsed. The STS request is retried internally per `retry`, so a
+    /// returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,
