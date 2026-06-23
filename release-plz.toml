@@ -64,12 +64,6 @@ changelog_path = "crates/olai-http-wasm/CHANGELOG.md"
 [[package]]
 name = "olai-trestle"
 changelog_path = "crates/trestle/CHANGELOG.md"
-# TEMPORARY: `olai-trestle` is a fresh, never-published crate name (renamed from
-# the typo'd `olai-testle`, which was bootstrap-published by mistake and yanked).
-# OIDC trusted publishing can't create a new name, so hold it out of the release
-# cycle until it's bootstrap-published under this name (see bootstrap-publish.yml),
-# then flip back to true (or delete this line) and release-plz will publish it.
-release = false
 
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.

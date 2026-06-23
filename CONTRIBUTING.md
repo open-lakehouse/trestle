@@ -126,11 +126,11 @@ Maintainer setup (one-time, per crate):
 - On crates.io, under each crate's **Settings → Trusted Publishing**, add the
   GitHub repo `open-lakehouse/trestle`, workflow `release-plz.yml`, and
   environment `release`.
-- **New crate names cannot be created by OIDC.** `olai-trestle` and
-  `olai-http-wasm` have never been published, so each needs a **one-time
-  bootstrap**: either a manual `cargo publish --registry crates-io` with a
-  token, or a crates.io "pending crate" trusted-publisher registration. After
-  the first publish, OIDC takes over for all subsequent releases.
+- **New crate names cannot be created by OIDC.** All current crates are already
+  published, so this is handled. If you ever add a brand-new publishable crate,
+  its first publish needs a **one-time bootstrap** (a manual
+  `cargo publish --registry crates-io` with a token, or a crates.io "pending
+  crate" trusted-publisher registration); after that, OIDC takes over.
 
 ### GitHub authentication
 
