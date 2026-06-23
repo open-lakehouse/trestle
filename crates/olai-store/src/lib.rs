@@ -19,6 +19,63 @@
 //! not intended for serious production workloads — back these traits with your
 //! own production-grade engine for those.
 //!
+//! # Examples
+//!
+//! Define a resource taxonomy by implementing [`Label`] for an enum. The store
+//! traits are generic over this type:
+//!
+//! ```
+//! use std::fmt;
+//! use std::str::FromStr;
+//!
+//! use olai_store::Label;
+//!
+//! #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+//! enum Kind {
+//!     Catalog,
+//!     Schema,
+//!     Table,
+//! }
+//!
+//! impl Kind {
+//!     fn as_str(&self) -> &'static str {
+//!         match self {
+//!             Kind::Catalog => "catalog",
+//!             Kind::Schema => "schema",
+//!             Kind::Table => "table",
+//!         }
+//!     }
+//! }
+//!
+//! impl fmt::Display for Kind {
+//!     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//!         f.write_str(self.as_str())
+//!     }
+//! }
+//!
+//! impl FromStr for Kind {
+//!     type Err = String;
+//!
+//!     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//!         match s {
+//!             "catalog" => Ok(Kind::Catalog),
+//!             "schema" => Ok(Kind::Schema),
+//!             "table" => Ok(Kind::Table),
+//!             other => Err(format!("unknown kind: {other}")),
+//!         }
+//!     }
+//! }
+//!
+//! impl Label for Kind {
+//!     fn as_str(&self) -> &str {
+//!         Kind::as_str(self)
+//!     }
+//! }
+//!
+//! assert_eq!(Kind::Table.as_str(), "table");
+//! assert_eq!("schema".parse::<Kind>(), Ok(Kind::Schema));
+//! ```
+//!
 //! [Trestle]: https://github.com/open-lakehouse/trestle
 
 pub mod error;
