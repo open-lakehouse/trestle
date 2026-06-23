@@ -64,6 +64,12 @@ changelog_path = "crates/olai-http-wasm/CHANGELOG.md"
 [[package]]
 name = "olai-testle"
 changelog_path = "crates/trestle/CHANGELOG.md"
+# TEMPORARY: olai-testle's code requires olai-codegen APIs not in the published
+# olai-codegen 0.0.1, and `cargo publish` builds against the crates.io copy — so
+# it can't publish until olai-codegen 0.0.2 is released. Hold it out of the
+# release cycle until then; flip back to true (or delete this line) once
+# olai-codegen 0.0.2 is on crates.io, and release-plz will sync its dep + publish.
+release = false
 
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.

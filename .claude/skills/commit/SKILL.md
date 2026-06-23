@@ -55,16 +55,26 @@ git commit --no-gpg-sign -F "$MSG_FILE" && rm "$MSG_FILE"
 ```
 
 ### Step 4 — Note the unsigned state
-Tell the user the commit(s) are unsigned and will be signed at the pre-PR gate.
-Don't offer a re-sign after each commit.
+Tell the user the commit(s) are unsigned and will be signed at the pre-push gate.
+Don't offer a re-sign after each commit. **Do not push yet** — pushing unsigned
+commits that then get signed forces a `--force-with-lease` re-push.
 
-## Signing — before pushing / opening a PR
+## Signing + push — before opening a PR
 
-Surface the command (don't run it); the user enters the GPG PIN once.
+Signing rewrites the commits (amend), so it must happen **before the first
+push**. The sequence is **sign → push → PR**. Don't run the push yourself while
+commits are unsigned; surface ONE command that signs and then pushes, for the
+user to run (one GPG PIN):
 
-- One commit (HEAD): `git commit --amend --no-edit -S`
+- One commit (HEAD):
+  ```bash
+  git commit --amend --no-edit -S && git push -u origin HEAD
+  ```
 - Range (normal case):
   ```bash
-  git rebase --exec 'git commit --amend --no-edit -S' "$(git merge-base main HEAD)"
+  git rebase --exec 'git commit --amend --no-edit -S' "$(git merge-base main HEAD)" && git push -u origin HEAD
   ```
 - Verify: `git log --format='%h %G? %s' main..HEAD` — every commit shows `G`.
+
+Only if commits were already pushed unsigned (avoid this) does the re-push need
+`git push --force-with-lease` — surface that explicitly when it applies.

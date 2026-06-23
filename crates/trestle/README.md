@@ -8,6 +8,14 @@ The unified CLI for the Trestle framework. Two responsibilities:
 
 ## Install
 
+From crates.io (the crate is published as `olai-testle`; it installs a `trestle` binary):
+
+```bash
+cargo install olai-testle
+```
+
+Or from git:
+
 ```bash
 cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
 ```
