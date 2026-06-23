@@ -15,7 +15,7 @@ user **signs once before pushing / opening a PR**.
 
 trestle is a pure-Rust workspace and uses raw `cargo` (no `just`). Conventional-
 commit **scopes are crate names** (`olai-store`, `olai-http`, `olai-codegen`,
-`olai-http-wasm`, `olai-testle`) — keep each commit focused on one crate where
+`olai-http-wasm`, `olai-trestle`) — keep each commit focused on one crate where
 practical.
 
 ## Workflow

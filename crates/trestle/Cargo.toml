@@ -1,8 +1,8 @@
 [package]
-# Published to crates.io as `olai-testle` (`trestle` is taken). The binary is
-# still `trestle` (see [[bin]] below), so `cargo install olai-testle` installs
+# Published to crates.io as `olai-trestle` (`trestle` is taken). The binary is
+# still `trestle` (see [[bin]] below), so `cargo install olai-trestle` installs
 # a `trestle` command.
-name = "olai-testle"
+name = "olai-trestle"
 description = "Unified CLI for proto-driven code generation and full-project scaffolding"
 version = "0.0.1"
 edition.workspace = true
