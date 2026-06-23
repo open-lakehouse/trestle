@@ -48,6 +48,6 @@ not valid Rust.
 
 Commits are GPG-signed; the message contract and signing flow are machine-wide
 (`~/.claude/CLAUDE.md`). Use the `/commit` skill (`.claude/skills/commit/SKILL.md`):
-commit **unsigned** as you go, then **sign and push in one step before opening a
-PR** (sign → push → PR — don't push unsigned then sign, that forces a re-push).
-Conventional-commit scopes are crate names; prefer small, per-crate commits.
+commit **unsigned** as you go, push and open the PR without waiting on signing,
+then **sign once at the end** with a single combined sign + `--force-with-lease`
+push. Conventional-commit scopes are crate names; prefer small, per-crate commits.

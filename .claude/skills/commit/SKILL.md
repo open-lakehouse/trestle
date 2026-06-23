@@ -54,27 +54,25 @@ heredocs break zsh). Format per `~/.claude/CLAUDE.md`. Then commit — no PIN:
 git commit --no-gpg-sign -F "$MSG_FILE" && rm "$MSG_FILE"
 ```
 
-### Step 4 — Note the unsigned state
-Tell the user the commit(s) are unsigned and will be signed at the pre-push gate.
-Don't offer a re-sign after each commit. **Do not push yet** — pushing unsigned
-commits that then get signed forces a `--force-with-lease` re-push.
+### Step 4 — Push and open the PR (don't wait on signing)
+Commit unsigned, then **push and open the PR in the same pass** — don't stop to
+wait for the GPG PIN mid-flow. Tell the user the commits are unsigned and will
+be signed in one bulk step at the end. Don't offer a re-sign after each commit.
 
-## Signing + push — before opening a PR
+## Signing — one bulk step at the end (after the PR is open)
 
-Signing rewrites the commits (amend), so it must happen **before the first
-push**. The sequence is **sign → push → PR**. Don't run the push yourself while
-commits are unsigned; surface ONE command that signs and then pushes, for the
-user to run (one GPG PIN):
+Signing rewrites the commits (amend), so the already-pushed branch needs a
+`--force-with-lease` re-push. That's safe on a solo feature branch and is
+preferred over splitting work across handoffs. Surface ONE combined command for
+the user to run (one GPG PIN); signatures aren't required to merge, so this can
+happen any time before merge:
 
 - One commit (HEAD):
   ```bash
-  git commit --amend --no-edit -S && git push -u origin HEAD
+  git commit --amend --no-edit -S && git push --force-with-lease
   ```
 - Range (normal case):
   ```bash
-  git rebase --exec 'git commit --amend --no-edit -S' "$(git merge-base main HEAD)" && git push -u origin HEAD
+  git rebase --exec 'git commit --amend --no-edit -S' "$(git merge-base main HEAD)" && git push --force-with-lease
   ```
 - Verify: `git log --format='%h %G? %s' main..HEAD` — every commit shows `G`.
-
-Only if commits were already pushed unsigned (avoid this) does the re-push need
-`git push --force-with-lease` — surface that explicitly when it applies.
