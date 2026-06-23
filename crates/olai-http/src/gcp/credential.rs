@@ -142,10 +142,21 @@ impl ServiceAccountKey {
 /// Wraps an OAuth 2.0 bearer token used to authorize requests against Google
 /// Cloud APIs. The token is a secret; treat it as confidential and avoid
 /// logging the [`bearer`](Self::bearer) field.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct GcpCredential {
     /// An HTTP bearer token. This is secret material.
     pub bearer: String,
+}
+
+// Manual `Debug` impl: a `GcpCredential` holds a long-lived bearer token, so we
+// never expose its value. See the credential-redaction convention in the
+// README.
+impl std::fmt::Debug for GcpCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpCredential")
+            .field("bearer", &"<redacted>")
+            .finish()
+    }
 }
 
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
@@ -770,6 +781,22 @@ mod tests {
 
     use super::*;
     use crate::service::ReqwestService;
+
+    #[test]
+    fn test_debug_does_not_leak_secrets() {
+        // Deliberately non-secret-looking sentinel value so the secret scanner
+        // doesn't flag this test; we only care that the Debug output does not
+        // echo it back.
+        let credential = GcpCredential {
+            bearer: "fake-token-do-not-print".to_string(),
+        };
+        let rendered = format!("{credential:?}");
+        assert!(
+            !rendered.contains("fake-token-do-not-print"),
+            "bearer token leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
+    }
 
     #[tokio::test]
     async fn test_metadata_server_token() {

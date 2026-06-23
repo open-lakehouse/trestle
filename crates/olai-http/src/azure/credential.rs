@@ -87,13 +87,24 @@ impl From<Error> for crate::Error {
 /// Holds a long-lived secret used to authorize requests against Azure APIs, and
 /// must be handled as sensitive material — avoid logging it or otherwise
 /// exposing the inner value.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub enum AzureCredential {
     /// An Azure AD OAuth 2.0 bearer token.
     ///
     /// The wrapped [`String`] is a secret access token; treat it as
     /// confidential and do not log it.
     BearerToken(String),
+}
+
+// Manual `Debug` impl: an `AzureCredential` holds a long-lived bearer token, so
+// we never expose its value. See the credential-redaction convention in the
+// README.
+impl std::fmt::Debug for AzureCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BearerToken(_) => f.debug_tuple("BearerToken").field(&"<redacted>").finish(),
+        }
+    }
 }
 
 /// A list of known Azure authority hosts
@@ -607,6 +618,20 @@ mod tests {
     use super::*;
     use crate::service::ReqwestService;
     use mockito;
+
+    #[test]
+    fn test_debug_does_not_leak_secrets() {
+        // Deliberately non-secret-looking sentinel value so the secret scanner
+        // doesn't flag this test; we only care that the Debug output does not
+        // echo it back.
+        let credential = AzureCredential::BearerToken("fake-token-do-not-print".to_string());
+        let rendered = format!("{credential:?}");
+        assert!(
+            !rendered.contains("fake-token-do-not-print"),
+            "bearer token leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
+    }
 
     #[tokio::test]
     async fn test_managed_identity() {

@@ -17,10 +17,21 @@ use crate::{RetryConfig, TokenProvider};
 /// Wraps an OAuth/OIDC bearer token used to authorize requests against
 /// Databricks REST APIs. The [`bearer`](Self::bearer) field is secret material;
 /// treat it as confidential and avoid logging it.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct DatabricksCredential {
     /// The bearer token. This is secret material.
     pub bearer: String,
+}
+
+// Manual `Debug` impl: a `DatabricksCredential` holds a long-lived bearer token,
+// so we never expose its value. See the credential-redaction convention in the
+// README.
+impl std::fmt::Debug for DatabricksCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabricksCredential")
+            .field("bearer", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Response shape shared by all Databricks OIDC token endpoints.
@@ -245,6 +256,22 @@ impl TokenProvider for OidcFileTokenProvider {
 mod tests {
     use super::*;
     use crate::service::ReqwestService;
+
+    #[test]
+    fn test_debug_does_not_leak_secrets() {
+        // Deliberately non-secret-looking sentinel value so the secret scanner
+        // doesn't flag this test; we only care that the Debug output does not
+        // echo it back.
+        let credential = DatabricksCredential {
+            bearer: "fake-token-do-not-print".to_string(),
+        };
+        let rendered = format!("{credential:?}");
+        assert!(
+            !rendered.contains("fake-token-do-not-print"),
+            "bearer token leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
+    }
 
     #[tokio::test]
     async fn test_m2m_fetch_token() {
