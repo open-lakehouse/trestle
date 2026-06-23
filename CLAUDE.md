@@ -4,14 +4,13 @@
 
 Multi-crate Rust workspace:
 
-- `crates/trestle/` — Unified CLI (`trestle new`, `trestle generate`, `trestle enrich-openapi`) + embedded templates and shared component library at `crates/trestle/templates/`
+- `crates/trestle/` — Unified CLI, published as `olai-trestle` (`trestle` binary): `trestle new` / `generate` / `enrich-openapi` + embedded templates at `crates/trestle/templates/`
 - `crates/olai-codegen/` — Proto-driven code generation (REST handlers, clients, bindings, resource registries)
 - `crates/olai-store/` — Generic resource store abstractions (Object, Association, Label, Registry)
 - `crates/olai-http/` — Cloud credential abstraction and HTTP client (AWS, Azure, GCP, Databricks)
+- `crates/olai-http-wasm/` — Browser/WASM HTTP transport for generated clients
 
-The `trestle` binary subsumes the old `proto-gen` binary; `trestle generate` and
-`trestle enrich-openapi` are the canonical entry points. `trestle new` scaffolds
-the four-crate "Recommended Project Structure" described in
+`trestle new` scaffolds the four-crate project layout described in
 `crates/olai-codegen/README.md`.
 
 ## Build & Test
@@ -30,7 +29,7 @@ not valid Rust.
 
 ## Coding Style
 
-- Rust Edition 2024, minimum Rust 1.85
+- Rust Edition 2024, MSRV 1.87 (the workspace `rust-version`; read it, don't assume)
 - Standard Rust conventions, 4-space indentation
 - `cargo fmt` + `cargo clippy` for formatting and linting
 
@@ -43,6 +42,15 @@ not valid Rust.
 - **No UC coupling**: This is a generic framework. Avoid hardcoding references to any
   specific data platform (Unity Catalog, Hive, etc.) in library code. Use generic
   examples in doc comments.
+
+## Credential redaction (olai-http)
+
+Credential structs hold long-lived secrets and must never leak them through
+`Debug` (easily triggered via `tracing`, `{:?}`, or panic messages). When adding
+a credential type: do **not** `#[derive(Debug)]`; hand-write `impl fmt::Debug`
+rendering `<redacted>` for every secret-bearing field (use `Some("<redacted>")`
+/ `None` for `Option`s so presence is still observable). See `AwsCredential` in
+`crates/olai-http/src/aws/credential.rs` for the reference.
 
 ## Commit Guidelines
 
