@@ -1,7 +1,10 @@
 [package]
-name = "trestle"
+# Published to crates.io as `olai-testle` (`trestle` is taken). The binary is
+# still `trestle` (see [[bin]] below), so `cargo install olai-testle` installs
+# a `trestle` command.
+name = "olai-testle"
 description = "Unified CLI for proto-driven code generation and full-project scaffolding"
-version.workspace = true
+version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,7 +21,9 @@ name = "trestle"
 path = "src/main.rs"
 
 [dependencies]
-olai-codegen = { path = "../olai-codegen" }
+# `version` is required for `cargo publish` (a path-only dep can't be published).
+# release-plz keeps this in sync whenever it bumps olai-codegen.
+olai-codegen = { path = "../olai-codegen", version = "0.0.1" }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

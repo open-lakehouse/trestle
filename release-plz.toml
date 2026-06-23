@@ -1,0 +1,93 @@
+# release-plz configuration — automated, independent per-crate releases.
+#
+# release-plz (https://release-plz.dev) is the Rust-native release tool (NOT
+# Google's release-please). It analyzes conventional commits *per crate* to
+# compute semver bumps, regenerates per-crate changelogs, keeps intra-workspace
+# dependency version requirements in sync, and publishes to crates.io in
+# topological order. See CONTRIBUTING.md for the end-to-end flow.
+#
+# Config reference: https://release-plz.dev/docs/config
+
+[workspace]
+# --- Versioning / changelog ---
+changelog_update = true        # regenerate per-crate CHANGELOG.md on each release
+dependencies_update = false    # don't `cargo update` during the release PR —
+                               # keeps Cargo.lock churn out of release commits
+semver_check = true            # run cargo-semver-checks before bumping, to catch
+                               # accidental breaking changes
+
+# --- Git tags & GitHub releases (per-crate) ---
+git_tag_enable = true
+# Per-crate tag scheme, e.g. `olai-codegen-v0.1.0`. This is release-plz's
+# default for multi-public-crate workspaces; pinned here so downstream tooling
+# can rely on it.
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_enable = true
+git_release_name = "{{ package }} v{{ version }}"
+git_release_body = "{{ changelog }}"
+
+# --- Publishing ---
+# release-plz runs `cargo publish` itself, in dependency order. With
+# `id-token: write` in the workflow it performs crates.io OIDC trusted
+# publishing, so NO CARGO_REGISTRY_TOKEN is required.
+publish = true
+publish_timeout = "30m"        # codegen/wasm crates are slow to verify
+
+# --- Release PR appearance ---
+pr_labels = ["release"]
+pr_draft = false
+
+# ---------------------------------------------------------------------------
+# Per-package overrides. All five crates default to publish=true + tag + release.
+# These blocks only pin the changelog path. `olai-testle`'s directory is still
+# `crates/trestle/` (only the package name changed), hence the path below.
+# `olai-testle` is the only crate with an intra-workspace dependency
+# (olai-codegen); release-plz auto-syncs its version requirement and publishes
+# olai-codegen first.
+# ---------------------------------------------------------------------------
+[[package]]
+name = "olai-store"
+changelog_path = "crates/olai-store/CHANGELOG.md"
+
+[[package]]
+name = "olai-http"
+changelog_path = "crates/olai-http/CHANGELOG.md"
+
+[[package]]
+name = "olai-codegen"
+changelog_path = "crates/olai-codegen/CHANGELOG.md"
+
+[[package]]
+name = "olai-http-wasm"
+changelog_path = "crates/olai-http-wasm/CHANGELOG.md"
+
+[[package]]
+name = "olai-testle"
+changelog_path = "crates/trestle/CHANGELOG.md"
+
+# ---------------------------------------------------------------------------
+# Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
+# Because commits use crate scopes (feat(olai-codegen): ...), each crate's
+# changelog naturally contains only commits that touched its files.
+# ---------------------------------------------------------------------------
+[changelog]
+protect_breaking_commits = true
+sort_commits = "newest"
+
+commit_parsers = [
+  { message = "^feat",     group = "Added" },
+  { message = "^fix",      group = "Fixed" },
+  { message = "^perf",     group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^doc",      group = "Documentation" },
+  { message = "^build",    group = "Build" },
+  { message = "^test",     skip = true },
+  { message = "^chore",    skip = true },
+  { message = "^ci",       skip = true },
+]
+
+# Strip the redundant "(scope)" from each rendered line — each crate's
+# changelog is already crate-scoped.
+commit_preprocessors = [
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-testle)\)', replace = "" },
+]

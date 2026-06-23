@@ -11,7 +11,8 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+# Versions are managed per-crate (independent versioning) by release-plz —
+# each crate owns its own `version` in its [package] section. See release-plz.toml.
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/open-lakehouse/trestle"

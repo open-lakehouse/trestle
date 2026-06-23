@@ -1,4 +1,4 @@
-use trestle::cli;
+use olai_testle::cli;
 
 fn main() {
     init_logging();
@@ -19,7 +19,7 @@ fn init_logging() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("TRESTLE_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,trestle=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,olai_testle=info")),
         )
         .with_target(false)
         .with_writer(std::io::stderr)

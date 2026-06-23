@@ -1487,6 +1487,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-testle"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "cliclack",
+ "convert_case",
+ "dirs",
+ "hex",
+ "ignore",
+ "minijinja",
+ "olai-codegen",
+ "protobuf",
+ "regex",
+ "rstest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2932,33 +2959,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "trestle"
-version = "0.0.1"
-dependencies = [
- "clap",
- "cliclack",
- "convert_case",
- "dirs",
- "hex",
- "ignore",
- "minijinja",
- "olai-codegen",
- "protobuf",
- "regex",
- "rstest",
- "rust-embed",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
- "walkdir",
 ]
 
 [[package]]
