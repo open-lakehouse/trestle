@@ -14,6 +14,26 @@
 //!
 //! On a native target the credential step is a no-op (there is no browser session), so the crate
 //! still builds and can be unit-tested off-wasm.
+//!
+//! # Examples
+//!
+//! Drive the same verb -> body -> query -> send chain that generated client bodies use. This
+//! reaches the network and (on wasm) the browser session, so it is marked `no_run`:
+//!
+//! ```no_run
+//! # async fn run() -> reqwest::Result<()> {
+//! use olai_http_wasm::WasmClient;
+//!
+//! let client = WasmClient::new();
+//! let response = client
+//!     .get("https://example.test/api/things")
+//!     .query(&[("page_size", "10")])
+//!     .send()
+//!     .await?;
+//! let _status = response.status();
+//! # Ok(())
+//! # }
+//! ```
 
 use reqwest::{Client, IntoUrl, Method};
 use serde::Serialize;
@@ -37,14 +57,16 @@ impl WasmClient {
     /// Create a new browser transport.
     ///
     /// The browser attaches the session, so there is no token/credential variant — unlike
-    /// `CloudClient::new_with_token` / `new_unauthenticated`.
+    /// `CloudClient::new_with_token` / `new_unauthenticated`. Requests run in the browser session:
+    /// [`WasmRequestBuilder::send`] asks `fetch` to include credentials. On a native target there
+    /// is no browser session, so that credential step is a no-op and requests are sent as built.
     pub fn new() -> Self {
         Self {
             client: Client::new(),
         }
     }
 
-    /// Build a transport from an existing [`reqwest::Client`] (e.g. one configured elsewhere).
+    /// Builds a transport from an existing [`reqwest::Client`] (e.g. one configured elsewhere).
     pub fn from_client(client: Client) -> Self {
         Self { client }
     }
@@ -55,22 +77,27 @@ impl WasmClient {
         }
     }
 
+    /// Starts a `GET` request to `url`.
     pub fn get<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
         self.request(Method::GET, url)
     }
 
+    /// Starts a `POST` request to `url`.
     pub fn post<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
         self.request(Method::POST, url)
     }
 
+    /// Starts a `PUT` request to `url`.
     pub fn put<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
         self.request(Method::PUT, url)
     }
 
+    /// Starts a `PATCH` request to `url`.
     pub fn patch<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
         self.request(Method::PATCH, url)
     }
 
+    /// Starts a `DELETE` request to `url`.
     pub fn delete<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
         self.request(Method::DELETE, url)
     }
@@ -84,18 +111,24 @@ pub struct WasmRequestBuilder {
 
 impl WasmRequestBuilder {
     /// Set a JSON request body.
+    ///
+    /// If `json` fails to serialize, the error is stored and surfaced later by
+    /// [`send`](Self::send) rather than reported here.
     pub fn json<T: Serialize + ?Sized>(mut self, json: &T) -> WasmRequestBuilder {
         self.builder = self.builder.json(json);
         self
     }
 
     /// Append query parameters to the URL.
+    ///
+    /// If `query` fails to serialize, the error is stored and surfaced later by
+    /// [`send`](Self::send) rather than reported here.
     pub fn query<T: Serialize + ?Sized>(mut self, query: &T) -> WasmRequestBuilder {
         self.builder = self.builder.query(query);
         self
     }
 
-    /// Send the request and return the [`reqwest::Response`].
+    /// Sends the request and returns the [`reqwest::Response`].
     ///
     /// On wasm we set `credentials: "include"` so the browser attaches its session (cookies /
     /// auth headers). On native there is no browser session, so this is a no-op and the request
@@ -103,6 +136,16 @@ impl WasmRequestBuilder {
     ///
     /// Returns a [`reqwest::Result`] exactly like reqwest, so generated bodies' `?` and the
     /// project's `parse_error_response(response)` / `response.bytes()` continue to work unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request cannot be completed, including:
+    ///
+    /// - a network failure (the host is unreachable, the connection drops, or the request
+    ///   times out);
+    /// - in the browser, a `fetch` rejection such as a CORS policy denial;
+    /// - a serialization error deferred from [`json`](Self::json) or [`query`](Self::query),
+    ///   which is held until `send` is called.
     pub async fn send(self) -> reqwest::Result<reqwest::Response> {
         self.with_browser_credentials().builder.send().await
     }
