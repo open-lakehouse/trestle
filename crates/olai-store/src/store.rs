@@ -11,14 +11,33 @@ use crate::object::{Association, Object};
 #[async_trait::async_trait]
 pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
     /// Get an object by its UUID.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists.
     async fn get(&self, id: &Uuid) -> Result<Object<L>>;
 
     /// Get an object by its label and name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with the given `label` and `name`
+    /// exists.
     async fn get_by_name(&self, label: L, name: &ResourceName) -> Result<Object<L>>;
 
     /// List objects of a given label, optionally scoped to a namespace prefix.
     ///
-    /// Returns the matching objects and an optional continuation token.
+    /// Returns the matching objects and an optional continuation token. Results
+    /// are returned in a stable order so that paging is deterministic. At most
+    /// `max_results` objects are returned per call; when more remain, the returned
+    /// token is `Some` and should be passed back as `page_token` to fetch the next
+    /// page. A returned token of `None` indicates the final page. `page_token`
+    /// must be a token previously produced by this method on the same query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is not a valid token for
+    /// this query.
     async fn list(
         &self,
         label: L,
@@ -37,6 +56,12 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     /// adopting the id reserved by its staging reservation, or a managed volume
     /// embedding the id in its storage path); pass `None` to have the store
     /// generate a time-ordered id.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::AlreadyExists`](crate::Error::AlreadyExists) if an object with the same `label` and `name`,
+    ///   or with the supplied `id`, already exists.
+    /// - [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `name` or `properties` are malformed.
     async fn create(
         &self,
         label: L,
@@ -46,9 +71,18 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     ) -> Result<Object<L>>;
 
     /// Update an existing object's properties.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists.
+    /// - [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `properties` are malformed.
     async fn update(&self, id: &Uuid, properties: Option<serde_json::Value>) -> Result<Object<L>>;
 
     /// Delete an object and all its associations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists.
     async fn delete(&self, id: &Uuid) -> Result<()>;
 }
 
@@ -57,7 +91,17 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
 pub trait AssociationStoreReader<L: Label>: Send + Sync + 'static {
     /// List associations from a given source object with a specific edge label.
     ///
-    /// Optionally filter by the target object's label.
+    /// Optionally filter by the target object's label. Results are returned in a
+    /// stable order; at most `max_results` associations are returned per call, and
+    /// when more remain the returned continuation token is `Some` and should be
+    /// passed back as `page_token` to fetch the next page (a `None` token marks the
+    /// final page). `page_token` must be a token previously produced by this method
+    /// on the same query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is not a valid token for
+    /// this query.
     async fn list(
         &self,
         from_id: Uuid,
@@ -70,14 +114,27 @@ pub trait AssociationStoreReader<L: Label>: Send + Sync + 'static {
 
 /// Read-write interface for the association (edge) store.
 ///
-/// Associations are directed edges between objects. Implementations should
-/// automatically create inverse edges when adding an association.
+/// Associations are directed edges between objects: an edge with `label` runs
+/// *from* a source object *to* a target object. The *inverse edge* is the edge
+/// pointing the other way — from the target back to the source — under the edge
+/// label's paired inverse label (for example, a `parent_of` edge has the inverse
+/// `child_of`). Maintaining the inverse edge lets the graph be traversed in both
+/// directions: listing the source's outgoing edges and the target's incoming
+/// edges both stay consistent. Implementations should create and remove the
+/// inverse edge alongside the primary edge whenever the edge label has one.
 #[async_trait::async_trait]
 pub trait AssociationStore<L: Label>: AssociationStoreReader<L> + Send + Sync + 'static {
     /// Add an association between two objects.
     ///
     /// The implementation should also create the inverse association if the
     /// edge label has one.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`](crate::Error::NotFound) if either `from_id` or `to_id` does not refer to an
+    ///   existing object.
+    /// - [`Error::AlreadyExists`](crate::Error::AlreadyExists) if the association already exists.
+    /// - [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `label` or `properties` are malformed.
     async fn add(
         &self,
         from_id: Uuid,
@@ -89,6 +146,11 @@ pub trait AssociationStore<L: Label>: AssociationStoreReader<L> + Send + Sync + 
     /// Remove an association between two objects.
     ///
     /// The implementation should also remove the inverse association.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no association with the given `label` exists
+    /// between `from_id` and `to_id`.
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()>;
 }
 
