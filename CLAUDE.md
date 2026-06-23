@@ -46,5 +46,7 @@ not valid Rust.
 
 ## Commit Guidelines
 
-GPG commit signing is required. **Never run `git commit` directly** — the GPG PIN
-prompt needs an interactive terminal. Prepare the commit command for the user to run.
+Commits are GPG-signed; the message contract and signing flow are machine-wide
+(`~/.claude/CLAUDE.md`). Use the `/commit` skill (`.claude/skills/commit/SKILL.md`):
+commit **unsigned** as you go, **sign the branch once before opening a PR**.
+Conventional-commit scopes are crate names; prefer small, per-crate commits.
