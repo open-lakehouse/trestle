@@ -1,3 +1,17 @@
+//! Server-side handler-trait generation.
+//!
+//! This is part of the **Generation** stage of the Analysis → Planning → Generation → Output
+//! pipeline (see [`super`]). For each service it emits an async handler trait (one method per RPC)
+//! that downstream code implements to provide the actual backend behavior. The generated route
+//! handlers in the sibling [`super::server`] module delegate to this trait, so a service author
+//! writes only the trait `impl` and mounts the generated handlers onto an `axum::Router` with that
+//! implementation as state.
+//!
+//! Each emitted file also carries a `//!` module header (built by `generate_module_header`)
+//! describing how to implement and compose the trait. Method signatures are derived from the
+//! per-service [`GenerationPlan`](crate::analysis::GenerationPlan); the result token stream is
+//! pretty-printed via `super::format_tokens` before being returned as source.
+
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 

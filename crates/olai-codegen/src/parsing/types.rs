@@ -440,18 +440,28 @@ fn convert_enum_name_to_rust(enum_name: &str) -> String {
     }
 }
 
-/// Unified type representation that can be converted to different target languages
+/// A language-neutral description of a protobuf field's type.
+///
+/// `UnifiedType` is the bridge between parsing and generation: a proto field's type and
+/// cardinality are normalized into this single shape once, then each language backend renders it
+/// via a [`TypeRenderer`] (e.g. [`unified_to_rust`]). The [`base_type`](Self::base_type) carries
+/// the underlying category while [`is_optional`](Self::is_optional) and
+/// [`is_repeated`](Self::is_repeated) describe the cardinality wrapping applied around it.
 #[derive(Debug, Clone)]
 pub struct UnifiedType {
-    /// The base type
+    /// The underlying type category.
     pub base_type: BaseType,
-    /// Whether this type is optional (`Option<T>` in Rust)
+    /// Whether this type is optional (`Option<T>` in Rust).
     pub is_optional: bool,
-    /// Whether this type is repeated (`Vec<T>` in Rust)
+    /// Whether this type is repeated (`Vec<T>` in Rust).
     pub is_repeated: bool,
 }
 
-/// Base type categories that can be converted to specific language types
+/// The underlying category of a [`UnifiedType`], independent of optional/repeated wrapping.
+///
+/// Scalars map directly to a primitive in each target language; the named variants
+/// ([`Message`](Self::Message), [`Enum`](Self::Enum), [`OneOf`](Self::OneOf)) carry the
+/// fully-qualified protobuf type name, from which renderers take the final segment.
 #[derive(Debug, Clone)]
 pub enum BaseType {
     /// String type

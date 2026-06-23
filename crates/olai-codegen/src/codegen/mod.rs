@@ -136,6 +136,24 @@ impl MethodPlan {
 ///
 /// Call [`CodeGenConfig::validate`] before this function to surface config errors at
 /// construction time rather than mid-generation.
+///
+/// # Errors
+///
+/// Returns:
+///
+/// - [`Error::InvalidModelsPathTemplate`] if `models_path_template` or `models_path_crate_template`
+///   is not a valid Rust path template.
+/// - [`Error::InvalidConfigPath`] if `context_type_path` or `result_type_path` is not a valid Rust
+///   path.
+/// - [`Error::MissingBindingsConfig`] if any of the `python`, `node`, or `node_ts` outputs is
+///   requested without a `bindings` config.
+/// - [`Error::MissingAnnotation`] or [`Error::Build`] surfaced while analyzing the metadata (e.g. a
+///   required `google.api` annotation is missing, or a service cannot be planned).
+/// - [`Error::InvalidRustPath`] if a proto message or field maps to an invalid Rust path, and
+///   [`Error::InvalidErrorTypePath`] if the configured `error_type_path` is not a valid Rust path.
+/// - [`Error::GeneratedParse`] if an internal generator produces tokens that do not parse as a Rust
+///   file.
+/// - [`Error::Io`] if creating the models directory or writing any generated file fails.
 pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Result<()> {
     // Validate templates early so callers get a clean error before any generation starts.
     let models_path = ModelsPath::new(&config.models_path_template)?;
@@ -714,10 +732,15 @@ pub fn generate_models_mod(
     format_tokens_static(tokens)
 }
 
-/// Generated code ready for output
+/// An in-memory bundle of generated source files awaiting output.
+///
+/// Each generator phase (common, server, client, bindings, …) returns one of these; the
+/// [`crate::output`] writer then materializes the [`files`](Self::files) onto disk, prepending the
+/// `// @generated` header to each. Keeping generation and writing separate lets generation stay
+/// pure (no I/O) and makes the produced files easy to assert on in tests.
 #[derive(Debug)]
 pub struct GeneratedCode {
-    /// Generated files mapped by relative path
+    /// Generated files keyed by path relative to the phase's output directory.
     pub files: HashMap<String, String>,
 }
 
@@ -730,12 +753,26 @@ impl CodeGenMetadata {
     }
 }
 
+/// A protobuf message paired with the metadata needed to resolve its references.
+///
+/// Wraps a single [`MessageInfo`](crate::parsing::MessageInfo) together with a borrow of the whole
+/// [`CodeGenMetadata`] it came from, so the generators can look up a message's fields while still
+/// being able to resolve types that point at other messages in the same descriptor set. Obtained
+/// via `CodeGenMetadata::get_message_meta`.
 pub(crate) struct MessageMeta<'a> {
     info: &'a MessageInfo,
     #[allow(dead_code)]
     metadata: &'a CodeGenMetadata,
 }
 
+/// The per-service generation context shared by every code generator.
+///
+/// Bundles the three borrows each generator phase needs for one service: its analyzed
+/// [`ServicePlan`](crate::analysis::ServicePlan), the full [`CodeGenMetadata`] (for resolving
+/// types referenced from other services), and the active [`CodeGenConfig`]. The various
+/// `codegen::*` submodules take a `&ServiceHandler` and read these plus the derived accessors on
+/// this type (client type names, models paths, [`Self::methods`]) rather than threading the three
+/// borrows separately. Methods are exposed as [`MethodHandler`]s via [`Self::methods`].
 pub(crate) struct ServiceHandler<'a> {
     pub(crate) plan: &'a ServicePlan,
     pub(crate) metadata: &'a CodeGenMetadata,
@@ -886,6 +923,14 @@ fn is_version_segment(seg: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
+/// The per-method counterpart of [`ServiceHandler`], scoped to a single RPC.
+///
+/// Pairs one analyzed [`MethodPlan`](crate::analysis::MethodPlan) with the same [`CodeGenMetadata`]
+/// and [`CodeGenConfig`] borrows, and exposes the per-method derivations the generators rely on:
+/// input/output message lookup, builder and binding method names, parameter plans
+/// ([`Self::param_plan`]), and the language-agnostic [`EmitShape`](crate::analysis::EmitShape).
+/// Yielded by [`ServiceHandler::methods`]; each generator iterates these to emit one unit of code
+/// (a trait method, a client method, a builder, …) per RPC.
 pub(crate) struct MethodHandler<'a> {
     plan: &'a MethodPlan,
     metadata: &'a CodeGenMetadata,

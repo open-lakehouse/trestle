@@ -1,3 +1,17 @@
+//! Low-level HTTP client generation.
+//!
+//! This is part of the **Generation** stage of the Analysis → Planning → Generation → Output
+//! pipeline (see [`super`]). For each service it emits a low-level client struct holding a
+//! transport client plus a base [`Url`](url::Url), with one async method per RPC that builds the
+//! request URL, serializes the body, and dispatches through the configured transport. The client
+//! is written to each service's `client.rs` and is the foundation that the request builders in
+//! [`super::builder`] and the ergonomic resource clients in [`super::resource_client`] build upon.
+//!
+//! The transport type is configurable (`transport_type_path`): the default cloud transport and the
+//! WASM browser transport are both selected here. URL routing, parameter sources, and body shape
+//! all come from the per-method [`GenerationPlan`](crate::analysis::GenerationPlan) produced during
+//! Planning; the emitted token stream is pretty-printed via `super::format_tokens`.
+
 use itertools::Itertools;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
