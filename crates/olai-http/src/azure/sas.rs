@@ -397,8 +397,9 @@ mod tests {
 
     #[test]
     fn test_storage_key_sas_no_prefix_no_sdd() {
-        let sas = generate_storage_key_sas("devstoreaccount1", "test", "", TEST_KEY, true, 3600, false)
-            .expect("SAS generation failed");
+        let sas =
+            generate_storage_key_sas("devstoreaccount1", "test", "", TEST_KEY, true, 3600, false)
+                .expect("SAS generation failed");
         assert!(sas.contains("sv="), "missing sv");
         assert!(sas.contains("se="), "missing se");
         assert!(sas.contains("sp=rl"), "expected read permissions");

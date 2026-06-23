@@ -7,7 +7,7 @@ keywords.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
-version.workspace = true
+version = "0.0.1"
 rust-version.workspace = true
 
 [dependencies]
