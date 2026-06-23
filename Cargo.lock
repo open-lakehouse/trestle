@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "convert_case",
  "glob",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "olai-store"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "bytes",
