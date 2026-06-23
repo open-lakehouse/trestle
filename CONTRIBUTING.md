@@ -22,8 +22,9 @@ cargo fmt                # Format
 
 ### Commit signing
 
-GPG commit signing is **required**. Commit with `-S` (or set
-`commit.gpgsign true`). The GPG PIN prompt needs an interactive terminal.
+Commits must be GPG-signed. The PIN needs an interactive terminal, so the agent
+commits **unsigned** (`git commit --no-gpg-sign`) and the branch is signed once
+before the PR — see `~/.claude/CLAUDE.md` and the `/commit` skill for the flow.
 
 ## Conventional commits (this is the release contract)
 
@@ -131,13 +132,17 @@ Maintainer setup (one-time, per crate):
   token, or a crates.io "pending crate" trusted-publisher registration. After
   the first publish, OIDC takes over for all subsequent releases.
 
-### Required repository secret
+### GitHub authentication
 
-The workflow uses `secrets.RELEASE_PLZ_TOKEN` — a fine-grained PAT or GitHub App
-token with **Contents: read/write** and **Pull requests: read/write**. This is
-required (instead of the default `GITHUB_TOKEN`) so that CI runs on the Release
-PR; the default token cannot trigger other workflows. Use a machine account so
-Release PRs aren't attributed to an individual.
+The workflow uses the built-in `secrets.GITHUB_TOKEN`, so no extra secret is
+required. The repo must have **Settings → Actions → General → "Allow GitHub
+Actions to create and approve pull requests"** enabled so release-plz can open
+the Release PR.
+
+Caveat: the default `GITHUB_TOKEN` cannot trigger other workflows, so **CI does
+not run on the Release PR**. If you want CI to run on it, create a fine-grained
+PAT or GitHub App token (Contents + Pull-requests read/write, ideally a machine
+account) and pass it as `GITHUB_TOKEN` in both jobs instead.
 
 ## Configuration reference
 

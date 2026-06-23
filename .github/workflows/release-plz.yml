@@ -40,9 +40,10 @@ jobs:
         with:
           command: release-pr
         env:
-          # A PAT / GitHub App token (NOT the default GITHUB_TOKEN) so that CI
-          # runs on the Release PR — the default token can't trigger workflows.
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          # Built-in token. NOTE: the default GITHUB_TOKEN cannot trigger other
+          # workflows, so CI does not run on the Release PR. To get CI on the
+          # Release PR, swap this for a PAT / GitHub App token secret.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # --- Tag + GitHub Release + cargo publish, after the Release PR is merged ---
   release-plz-release:
@@ -68,4 +69,4 @@ jobs:
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
