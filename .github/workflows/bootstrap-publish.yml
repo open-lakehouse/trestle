@@ -1,0 +1,62 @@
+name: Bootstrap publish (one-shot)
+
+# ONE-TIME bootstrap to create the two never-published crate names on crates.io.
+# crates.io OIDC trusted publishing cannot publish a name that has never
+# existed, so this job does the first publish with a CARGO_REGISTRY_TOKEN.
+#
+# After a successful run:
+#   1. Delete this workflow file.
+#   2. Delete the CARGO_REGISTRY_TOKEN repository secret.
+#   3. Register Trusted Publishing for all crates on crates.io.
+# Steady-state releases are handled by release-plz.yml via OIDC (no token).
+#
+# Manual trigger only — never runs automatically, so it can't race release-plz.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Package only, do not actually publish"
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  bootstrap-publish:
+    name: Bootstrap publish new crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release # reuse the protected release environment
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.87"
+
+      # olai-http-wasm has no workspace deps. olai-testle depends on olai-codegen,
+      # which is already on crates.io at 0.0.1, so both resolve. --locked keeps
+      # the published artifact reproducible against the committed Cargo.lock.
+      - name: Publish olai-http-wasm
+        run: |
+          cargo publish -p olai-http-wasm --locked \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          # zizmor: ignore[use-trusted-publishing] — intentional: OIDC trusted
+          # publishing cannot create a never-before-published crate name. This
+          # one-shot token bootstrap is removed once the names exist.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish olai-testle
+        run: |
+          cargo publish -p olai-testle --locked \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          # zizmor: ignore[use-trusted-publishing] — intentional: OIDC trusted
+          # publishing cannot create a never-before-published crate name. This
+          # one-shot token bootstrap is removed once the names exist.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
