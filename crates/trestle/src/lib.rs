@@ -2,8 +2,7 @@
 //!
 //! Trestle composes two responsibilities:
 //!
-//! 1. **Code generation** from protobuf descriptors (the original `proto-gen` toolchain
-//!    implemented in [`olai_codegen`]).
+//! 1. **Code generation** from protobuf descriptors (implemented in [`olai_codegen`]).
 //! 2. **Project scaffolding** from versioned template trees with composable platform-stack
 //!    components ("trestle new").
 //!

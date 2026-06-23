@@ -14,10 +14,11 @@ local Databricks emulation, and Databricks Apps deployment.
 
 | Crate | Description |
 |-------|-------------|
-| [`trestle`](crates/trestle) | Unified CLI: `trestle new` for scaffolding + `trestle generate`/`enrich-openapi` for codegen |
+| [`olai-trestle`](crates/trestle) | Unified CLI (`trestle` binary): `trestle new` for scaffolding + `trestle generate`/`enrich-openapi` for codegen |
 | [`olai-codegen`](crates/olai-codegen) | Proto-driven code generation for REST handlers, clients, resource registries, and language bindings |
 | [`olai-store`](crates/olai-store) | Generic, TAO-inspired object and association store with field-role enforcement |
-| [`olai-http`](crates/olai-http) | HTTP client based on reqwest with built-in authorization for many clouds. |
+| [`olai-http`](crates/olai-http) | Cloud credential abstraction + HTTP client (AWS, Azure, GCP, Databricks) |
+| [`olai-http-wasm`](crates/olai-http-wasm) | Browser/WASM HTTP transport for generated clients |
 
 ## How it works
 
@@ -46,7 +47,7 @@ descriptor.bin
 ### Scaffold a new project
 
 ```bash
-cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
+cargo install olai-trestle   # installs the `trestle` binary
 
 # A full Databricks-Apps-ready Rust service + React frontend, with a local
 # Postgres/MLflow/Envoy stack that emulates Databricks URLs.
@@ -64,11 +65,11 @@ what's available out of the box.
 
 ```toml
 [dependencies]
-olai-store = "0.1"
-olai-http = "0.1"
+olai-store = "0.0"
+olai-http = "0.0"
 
 [build-dependencies]
-olai-codegen = "0.1"
+olai-codegen = "0.0"
 ```
 
 See each crate's README for detailed usage. The recommended directory layout
@@ -91,7 +92,7 @@ Both templates draw from a shared library of platform-stack components at
 
 ## Requirements
 
-- Rust 1.85+ (Edition 2024)
+- Rust 1.87+ (Edition 2024)
 - [buf](https://buf.build/) for proto compilation (codegen only)
 - (Optional) Docker + Docker Compose for the local platform stack
 

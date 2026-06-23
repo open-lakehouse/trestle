@@ -1,79 +1,48 @@
-//! Code generation from protobuf descriptors.
+//! Proto-driven code generation from compiled protobuf descriptors.
 //!
-//! `proto-gen` turns compiled protobuf descriptor bytes into Rust REST-API glue code
-//! (Axum handlers, HTTP clients, PyO3 bindings, NAPI bindings, and TypeScript clients).
+//! Turns descriptor bytes (from `buf build`) into Rust REST-API glue code (Axum
+//! handlers, HTTP clients), resource registries, and optional PyO3 / NAPI /
+//! TypeScript bindings. Code generation is normally driven by the `trestle` CLI
+//! ([`olai-trestle`]); this is the library you embed for custom build tooling.
 //!
-//! ## Pipeline overview
+//! ## Pipeline
 //!
 //! ```text
 //! descriptor bytes
-//!      │
-//!      ▼
-//! parse_file_descriptor_set   ← parsing module
-//!      │  CodeGenMetadata
-//!      ▼
-//! analyze_metadata            ← analysis module
-//!      │  GenerationPlan
-//!      ▼
-//! generate_code               ← codegen module
-//!      │  writes files to CodeGenOutput dirs
-//!      ▼
-//! (generated Rust / Python / TypeScript source files)
+//!   └─ parse_file_descriptor_set ─▶ CodeGenMetadata
+//!        └─ generate_code(&metadata, &config) ─▶ files written to CodeGenOutput dirs
 //! ```
 //!
-//! ## Quick-start example
+//! ## Example
 //!
 //! ```rust,ignore
 //! use std::fs;
 //! use olai_codegen::{CodeGenConfig, CodeGenOutput, generate_code, parse_file_descriptor_set};
-//! use protobuf::Message;
-//! use protobuf::descriptor::FileDescriptorSet;
+//! use protobuf::{Message, descriptor::FileDescriptorSet};
 //!
-//! // 1. Load descriptor bytes (produced by `buf build`)
-//! let bytes = fs::read("descriptors.bin").unwrap();
-//! let fds = FileDescriptorSet::parse_from_bytes(&bytes).unwrap();
-//!
-//! // 2. Parse into metadata
-//! let metadata = parse_file_descriptor_set(&fds).unwrap();
-//!
-//! // 3. Configure outputs
-//! let output = CodeGenOutput {
-//!     common: "/tmp/out/common".into(),
-//!     models: Some("/tmp/out/models".into()),
-//!     models_subdir: "_gen".into(),
-//!     server: Some("/tmp/out/server".into()),
-//!     client: Some("/tmp/out/client".into()),
-//!     python: None,
-//!     node: None,
-//!     node_ts: None,
-//!     wasm: None,
-//!     python_typings_filename: "client.pyi".into(),
-//!     generate_resource_clients: false,
-//! };
+//! let bytes = fs::read("descriptors.bin")?;           // produced by `buf build`
+//! let fds = FileDescriptorSet::parse_from_bytes(&bytes)?;
+//! let metadata = parse_file_descriptor_set(&fds)?;
 //!
 //! let config = CodeGenConfig {
 //!     context_type_path: "crate::api::RequestContext".into(),
 //!     result_type_path: "crate::Result".into(),
 //!     models_path_template: "my_crate::models::{service}::v1".into(),
 //!     models_path_crate_template: "crate::models::{service}::v1".into(),
-//!     output,
 //!     generate_resource_enum: true,
-//!     generate_store_integration: false,
-//!     error_type_path: None,
-//!     generate_object_conversions: false,
-//!     bindings: None,
-//!     models_gen_dir: None,
-//!     resource_store_crate_name: "olai_store".into(),
-//!     runtime: olai_codegen::Runtime::Prost,
-//!     transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+//!     output: CodeGenOutput {
+//!         common: "out/common".into(),
+//!         server: Some("out/server".into()),
+//!         client: Some("out/client".into()),
+//!         ..Default::default()
+//!     },
+//!     ..Default::default()
 //! };
-//!
-//! // 4. Optionally validate before running
-//! config.validate().unwrap();
-//!
-//! // 5. Generate
-//! generate_code(&metadata, &config).unwrap();
+//! config.validate()?;
+//! generate_code(&metadata, &config)?;
 //! ```
+//!
+//! [`olai-trestle`]: https://crates.io/crates/olai-trestle
 
 pub use error::*;
 

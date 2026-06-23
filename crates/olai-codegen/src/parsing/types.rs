@@ -445,9 +445,9 @@ fn convert_enum_name_to_rust(enum_name: &str) -> String {
 pub struct UnifiedType {
     /// The base type
     pub base_type: BaseType,
-    /// Whether this type is optional (Option<T> in Rust)
+    /// Whether this type is optional (`Option<T>` in Rust)
     pub is_optional: bool,
-    /// Whether this type is repeated (Vec<T> in Rust)
+    /// Whether this type is repeated (`Vec<T>` in Rust)
     pub is_repeated: bool,
 }
 

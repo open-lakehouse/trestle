@@ -339,7 +339,7 @@ pub async fn generate_user_delegation_sas(
 ///
 /// This does not require an AAD token. Set `emulator` to true when signing for
 /// the Azurite Blob emulator (served over http, flat namespace) — see
-/// [`build_storage_key_sas`] for the differences.
+/// `build_storage_key_sas` for the differences.
 pub fn generate_storage_key_sas(
     account: &str,
     container: &str,

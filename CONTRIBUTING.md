@@ -134,15 +134,13 @@ Maintainer setup (one-time, per crate):
 
 ### GitHub authentication
 
-The workflow uses the built-in `secrets.GITHUB_TOKEN`, so no extra secret is
-required. The repo must have **Settings → Actions → General → "Allow GitHub
-Actions to create and approve pull requests"** enabled so release-plz can open
-the Release PR.
+The workflow uses the built-in `secrets.GITHUB_TOKEN`. The repo must have
+**Settings → Actions → General → "Allow GitHub Actions to create and approve
+pull requests"** enabled so release-plz can open the Release PR.
 
-Caveat: the default `GITHUB_TOKEN` cannot trigger other workflows, so **CI does
-not run on the Release PR**. If you want CI to run on it, create a fine-grained
-PAT or GitHub App token (Contents + Pull-requests read/write, ideally a machine
-account) and pass it as `GITHUB_TOKEN` in both jobs instead.
+Caveat: the default token can't trigger other workflows, so **CI doesn't run on
+the Release PR**. To change that, pass a fine-grained PAT / GitHub App token
+(Contents + Pull-requests read/write) as `GITHUB_TOKEN` in both jobs instead.
 
 ## Configuration reference
 

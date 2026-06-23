@@ -216,7 +216,7 @@ pub struct CodeGenConfig {
 pub const DEFAULT_TRANSPORT_TYPE_PATH: &str = "olai_http::CloudClient";
 
 impl CodeGenConfig {
-    /// Whether generated clients use the default cloud transport ([`olai_http::CloudClient`]).
+    /// Whether generated clients use the default cloud transport (`olai_http::CloudClient`).
     ///
     /// Controls emission of cloud-specific aggregate constructors (`new_unauthenticated`,
     /// `new_with_token`), which only make sense for `CloudClient`. A custom transport (e.g. the

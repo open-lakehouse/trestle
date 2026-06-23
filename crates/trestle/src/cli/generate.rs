@@ -1,7 +1,7 @@
 //! `trestle generate` — proto-driven code generation.
 //!
-//! This is the former `proto-gen generate` subcommand, ported verbatim into the
-//! trestle CLI. The YAML config schema, env vars, and behaviour are preserved.
+//! Reads a YAML config (and/or CLI flags) and drives [`olai_codegen`] to emit
+//! server/client/binding code from a compiled protobuf descriptor.
 
 use std::fs;
 use std::path::{Path, PathBuf};
