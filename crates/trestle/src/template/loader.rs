@@ -59,11 +59,19 @@ impl TemplateSource {
     }
 }
 
-/// A template on disk, plus its parsed top-level manifest.
+/// A materialised template on disk, plus its parsed top-level manifest.
+///
+/// For embedded sources the template is extracted into a temporary directory
+/// that lives as long as this value: a private `_keepalive` field holds the
+/// [`tempfile::TempDir`] guard so the extracted tree is not deleted while
+/// [`root`](Self::root) still points at it. The directory is removed when the
+/// `LoadedTemplate` is dropped, so callers must finish reading from `root`
+/// (e.g. rendering) before dropping it.
 pub struct LoadedTemplate {
     /// Root directory containing `template.yaml`, `template/`, and (optionally)
     /// `components/`. May point at a tempdir for embedded sources.
     pub root: PathBuf,
+    /// The parsed top-level manifest read from `<root>/template.yaml`.
     pub manifest: Manifest,
     /// Held to keep a tempdir alive for embedded sources. Dropped with the struct.
     _keepalive: Option<tempfile::TempDir>,
@@ -159,7 +167,15 @@ fn resolve_embedded_template_prefix(name: &str) -> Result<String> {
     })
 }
 
-/// Embedded base template (e.g. `lakehouse`).
+/// Loads an embedded **base** template by short name (e.g. `lakehouse`).
+///
+/// Extracts the template's subtree from the embedded bundle into a fresh
+/// tempdir and parses its manifest.
+///
+/// # Errors
+///
+/// Returns [`Error::TemplateNotFound`]
+/// if no embedded base template matches `name`.
 pub fn load_embedded_base(name: &str) -> Result<LoadedTemplate> {
     let prefix = format!("{BASE_TEMPLATES_PREFIX}{name}/");
     if !<Templates as RustEmbed>::iter().any(|p| p.starts_with(prefix.as_str())) {
@@ -177,7 +193,15 @@ pub fn load_embedded_base(name: &str) -> Result<LoadedTemplate> {
     })
 }
 
-/// Embedded app template (e.g. `databricks-app-rust`).
+/// Loads an embedded **app** template by short name (e.g. `databricks-app-rust`).
+///
+/// Extracts the template's subtree from the embedded bundle into a fresh
+/// tempdir and parses its manifest.
+///
+/// # Errors
+///
+/// Returns [`Error::TemplateNotFound`]
+/// if no embedded app template matches `name`.
 pub fn load_embedded_app(name: &str) -> Result<LoadedTemplate> {
     let prefix = format!("{APP_TEMPLATES_PREFIX}{name}/");
     if !<Templates as RustEmbed>::iter().any(|p| p.starts_with(prefix.as_str())) {
@@ -195,12 +219,12 @@ pub fn load_embedded_app(name: &str) -> Result<LoadedTemplate> {
     })
 }
 
-/// Iterate over the names of all known embedded base templates.
+/// Returns the short names of all embedded base templates.
 pub fn list_embedded_bases() -> Vec<String> {
     embedded_base_names()
 }
 
-/// Iterate over the names of all known embedded apps.
+/// Returns the short names of all embedded app templates.
 pub fn list_embedded_apps() -> Vec<String> {
     embedded_app_names()
 }
