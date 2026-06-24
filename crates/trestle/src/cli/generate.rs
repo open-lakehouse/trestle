@@ -62,11 +62,11 @@ pub struct GenerateArgs {
     #[clap(long, env = "UC_BUILD_RESULT_TYPE")]
     pub result_type: Option<String>,
 
-    /// Template for the external model import path. Use `{service}` as placeholder.
+    /// Template for the external model import path. Use `{service}` and `{version}` as placeholders.
     #[clap(long, env = "UC_BUILD_MODELS_PATH_TEMPLATE")]
     pub models_path_template: Option<String>,
 
-    /// Template for the crate-local model import path. Use `{service}` as placeholder.
+    /// Template for the crate-local model import path. Use `{service}` and `{version}` as placeholders.
     #[clap(long, env = "UC_BUILD_MODELS_PATH_CRATE_TEMPLATE")]
     pub models_path_crate_template: Option<String>,
 
@@ -310,11 +310,12 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
             let crate_name = file_cfg.models_crate_name.as_deref().ok_or_else(|| {
                 Error::other("models_crate_name is required in generate config when buf_gen is set")
             })?;
-            args.models_path_template = Some(format!("{crate_name}::models::{{service}}::v1"));
+            args.models_path_template =
+                Some(format!("{crate_name}::models::{{service}}::{{version}}"));
         }
     }
     if args.models_path_crate_template.is_none() && buf_gen_path.is_some() {
-        args.models_path_crate_template = Some("crate::models::{service}::v1".to_string());
+        args.models_path_crate_template = Some("crate::models::{service}::{version}".to_string());
     }
     if models_out_abs.is_none() {
         if let Some(ref bgp) = buf_gen_path {

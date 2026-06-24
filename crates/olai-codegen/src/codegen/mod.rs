@@ -978,15 +978,34 @@ impl ServiceHandler<'_> {
         }
     }
 
+    /// The version segment under which this service's generated models live
+    /// (e.g. `unitycatalog.tags.v1` → `v1`, `unitycatalog.agents.v0alpha1` → `v0alpha1`).
+    ///
+    /// Matches where the proto plugin actually wrote the types. Falls back to `v1` when the
+    /// package carries no recognizable version segment.
+    fn models_version(&self) -> String {
+        let segs: Vec<&str> = self
+            .plan
+            .package
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .collect();
+        match segs.as_slice() {
+            [.., _name, version] if is_version_segment(version) => version.to_string(),
+            _ => "v1".to_string(),
+        }
+    }
+
     pub(crate) fn models_path(&self) -> syn::Path {
         // Templates (and each service's substitution) are validated by `generate_code` before
         // any `ServiceHandler` is used, so skip the redundant re-validation `new` would do.
-        ModelsPath::from_template(&self.config.models_path_template).resolve(&self.models_segment())
+        ModelsPath::from_template(&self.config.models_path_template)
+            .resolve(&self.models_segment(), &self.models_version())
     }
 
     pub(crate) fn models_path_crate(&self) -> syn::Path {
         ModelsPath::from_template(&self.config.models_path_crate_template)
-            .resolve(&self.models_segment())
+            .resolve(&self.models_segment(), &self.models_version())
     }
 }
 
