@@ -128,17 +128,50 @@ Produce a concrete list of doc edits needed **before** release.
   (commit unsigned → push → open PR → surface the one bulk sign command). Do
   **not** re-implement the GPG signing flow here. Use `doc(<scope>):` commits so
   they themselves flow through release-plz.
-- Cross-link the PRs so the gate is visible:
-  ```bash
-  gh pr comment <release-pr> --body "Blocked by #<doc-pr> (pre-release doc fixes)."
-  gh pr edit <release-pr> --body "<existing body>\n\n- [ ] #<doc-pr> merged"
-  ```
-- Be honest in your report: "blocking" here is a **review convention**, not a
-  hard GitHub merge-gate, unless branch protection / required-status checks are
-  configured.
 - Note that merging the doc PR re-triggers release-plz, which folds the new
   `doc:` entries into the Release PR automatically — so the changelog (and your
   Step 2 table) will refresh.
+
+**Register the dependency.** GitHub has no native "PR blocks PR" primitive, so
+register the block at the strongest tier the repo supports, then fall back:
+
+1. **Issue dependency (preferred).** GitHub's *issue* dependencies API
+   (`blocked_by`) is the only first-class "blocked by" relationship. It is
+   issue→issue, so:
+   - Create (or reuse) a **tracking issue for the release** and a **tracking
+     issue for the doc fix** (the doc issue can be the one the doc-fix PR closes
+     via `Closes #<doc-issue>`):
+     ```bash
+     rel_issue=$(gh issue create --title "Release: <crates/version>" \
+       --body "Tracks Release PR #<release-pr>." --json number -q .number)
+     doc_issue=$(gh issue create --title "Pre-release doc fixes for <release>" \
+       --body "Tracked by doc PR #<doc-pr>." --json number -q .number)
+     ```
+   - Resolve the doc issue's **internal numeric `id`** (the API wants `id`, *not*
+     `number`):
+     ```bash
+     doc_id=$(gh api repos/{owner}/{repo}/issues/$doc_issue --jq .id)
+     ```
+   - Mark the release issue blocked-by the doc issue:
+     ```bash
+     gh api --method POST \
+       repos/{owner}/{repo}/issues/$rel_issue/dependencies/blocked_by \
+       -f issue_id=$doc_id
+     ```
+   - Link the release tracking issue from the Release PR body so reviewers see it.
+   - This API is in **public preview** (version `2026-03-10`) and must be enabled
+     on the repo/org. If the POST returns 404/403/422, the feature isn't
+     available — drop to tier 2 and say so. Don't assume a raw PR number works as
+     `issue_id`; use a real issue's `id` as above.
+2. **Convention checklist (always-available fallback).** Cross-link so the gate
+   is at least visible to reviewers:
+   ```bash
+   gh pr comment <release-pr> --body "Blocked by #<doc-pr> (pre-release doc fixes)."
+   gh pr edit <release-pr> --body "$(printf '%s\n\n- [ ] #<doc-pr> merged' "<existing body>")"
+   ```
+
+Be honest in the report about **which tier actually took effect** — tier 1 (with
+the feature enabled) is a real relationship; tier 2 is advisory.
 
 ### Step 6 — Draft the highlights
 
