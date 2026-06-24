@@ -8,13 +8,22 @@ project := "{{ project_name | kebab_case }}"
 # ------------------------------------------------------------------------------
 
 # Regenerate all code from proto: buf plugins (models{% if with_connect %} + Connect facade{% endif %}),
-# then the trestle-generated server/client/TS.
+# then the trestle-generated server/client/TS{% if with_frontend %}, then the browser WASM client{% endif %}.
 regen:
     buf generate
     buf build -o api.bin
     trestle generate -c trestle.yaml
-{% if with_frontend -%}
+{%- if with_frontend %}
+    just build-wasm
     cd frontend && npm install
+{%- endif %}
+
+{% if with_frontend -%}
+# Compile the generated client crate to a browser WASM module (requires
+# `wasm-pack`: `cargo install wasm-pack`). Output lands in `frontend/src/wasm/`,
+# imported by the app via the `@/wasm` alias.
+build-wasm:
+    wasm-pack build crates/client --target web --out-dir ../../frontend/src/wasm --out-name client
 {% endif %}
 
 # ------------------------------------------------------------------------------

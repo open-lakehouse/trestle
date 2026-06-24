@@ -6,11 +6,14 @@ api.bin
 .data/
 .cache/
 
-# Generated code (`crates/*/src/{_gen,gen}/`, `frontend/src/api/`,
+# Generated Rust/TS code (`crates/*/src/{_gen,gen}/`,
 # `crates/server/src/connect_gen/`) is intentionally COMMITTED for this reference
 # example, so a checkout builds without running `just regen` and reviewers can
 # read the generated output. It is still re-derived from `proto/` — do not edit
 # by hand. Add the paths back here if you prefer a regen-on-checkout workflow.
 
+# The browser WASM client, by contrast, is a binary build artifact from
+# `just build-wasm` (wasm-pack) — regenerated, not committed.
+frontend/src/wasm/
 frontend/node_modules/
 frontend/dist/

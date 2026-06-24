@@ -12,7 +12,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "@/api": path.resolve(__dirname, "./src/api"),
+      // The generated browser client, compiled to WASM by `just build-wasm`
+      // (wasm-pack `--target web`): `import init, { ...Client } from "@/wasm/client"`.
+      "@/wasm": path.resolve(__dirname, "./src/wasm"),
     },
   },
   server: {

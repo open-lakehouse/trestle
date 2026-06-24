@@ -1,9 +1,9 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut, clippy::too_many_arguments)]
-use super::handler::GreetingHandler;
 use crate::api::Result;
-use axum::extract::State;
 use golden_path_app_common::models::golden_path_app::v1::*;
+use super::handler::GreetingHandler;
+use axum::extract::State;
 pub async fn create_greeting<T, Cx>(
     State(handler): State<T>,
     context: Cx,

@@ -37,6 +37,9 @@ pub mod api {
         }
     }
 
+    // The cloud transport's error only exists off-wasm. On wasm32 the browser
+    // transport surfaces `reqwest::Error` (handled above), so no extra impl.
+    #[cfg(not(target_arch = "wasm32"))]
     impl From<olai_http::Error> for Error {
         fn from(e: olai_http::Error) -> Self {
             Error::Http(e.to_string())
@@ -87,3 +90,9 @@ pub mod error {
 pub mod codegen;
 
 pub use codegen::*;
+
+/// `#[wasm_bindgen]` browser bindings (generated into `wasm/bindings.rs`). The
+/// file self-gates on `cfg(target_arch = "wasm32")`, so a native build compiles
+/// it away; `wasm-pack` (via `just build-wasm`) packages it into the frontend.
+#[path = "wasm/bindings.rs"]
+mod wasm_bindings;

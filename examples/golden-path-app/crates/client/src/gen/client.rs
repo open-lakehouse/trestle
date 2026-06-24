@@ -1,11 +1,14 @@
 // @generated — do not edit by hand.
+#[cfg(not(target_arch = "wasm32"))]
+use ::olai_http::CloudClient as Transport;
+#[cfg(target_arch = "wasm32")]
+use ::olai_http_wasm::WasmClient as Transport;
+use url::Url;
 use crate::codegen::greeting::*;
 use golden_path_app_common::models::golden_path_app::v1::*;
-use olai_http::CloudClient;
-use url::Url;
 #[derive(Clone)]
 pub struct GoldenPathAppClient {
-    client: CloudClient,
+    client: Transport,
     base_url: Url,
 }
 impl GoldenPathAppClient {
@@ -13,19 +16,27 @@ impl GoldenPathAppClient {
     ///
     /// Per-service clients are constructed on demand (they only hold a cheaply-cloneable
     /// `CloudClient` + `Url`), so nothing is allocated per service here.
-    pub fn new(client: CloudClient, mut base_url: Url) -> Self {
+    pub fn new(client: Transport, mut base_url: Url) -> Self {
         if !base_url.path().ends_with('/') {
             base_url.set_path(&format!("{}/", base_url.path()));
         }
         Self { client, base_url }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     /// Create a new aggregate client with no authentication.
     pub fn new_unauthenticated(base_url: Url) -> Self {
-        Self::new(CloudClient::new_unauthenticated(), base_url)
+        Self::new(Transport::new_unauthenticated(), base_url)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     /// Create a new aggregate client authenticating with a bearer token.
     pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
-        Self::new(CloudClient::new_with_token(token), base_url)
+        Self::new(Transport::new_with_token(token), base_url)
+    }
+    #[cfg(target_arch = "wasm32")]
+    /// Create a new aggregate client. The browser supplies the session
+    /// (cookies / forwarded auth) on each request.
+    pub fn new_in_browser(base_url: Url) -> Self {
+        Self::new(Transport::new(), base_url)
     }
     ///Low-level `greeting` client exposing request/response passthrough methods.
     pub fn greeting_client(&self) -> crate::codegen::greeting::GreetingServiceClient {
