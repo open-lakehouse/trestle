@@ -1,0 +1,79 @@
+---
+description: Step-by-step recipe for adding a new RPC end-to-end
+---
+
+# Adding an RPC
+
+End-to-end recipe for: define → generate → implement → wire up → call.
+
+## 1. Define in proto
+
+Add the message types and RPC to `proto/golden_path_app/v1/service.proto`.
+Follow [`proto-conventions.md`](proto-conventions.md).
+
+## 2. Regenerate
+
+```bash
+just regen
+```
+
+This produces:
+
+- `crates/common/src/models/_gen/…`    — model types
+- `crates/server/src/gen/…`            — handler trait + Axum router
+- `crates/client/src/gen/…`            — typed Rust client
+- `frontend/src/api/…`                 — typed TS client (consumed by React)
+
+## 3. Implement the handler
+
+In `crates/server/src/handlers/<svc>.rs`, impl the trait the codegen produced.
+The signature gives you `RequestContext` (OBO info) and typed request/response
+proto messages.
+
+```rust
+use crate::api::{RequestContext, Result, Error};
+use crate::gen::server::greeting::server::HandlerTrait;
+use golden_path_app_common::models::greeting::v1::*;
+
+#[async_trait::async_trait]
+impl HandlerTrait for Service {
+    async fn create_greeting(&self, ctx: RequestContext, req: CreateGreetingRequest)
+        -> Result<Greeting>
+    {
+        let g = req.greeting.ok_or_else(|| Error::BadRequest("greeting required".into()))?;
+        Ok(Greeting {
+            name: format!("greetings/{}", uuid::Uuid::new_v4()),
+            recipient: g.recipient.clone(),
+            message: format!("hello, {}!", g.recipient),
+        })
+    }
+}
+```
+
+## 4. Register the route
+
+In `crates/server/src/main.rs`:
+
+```rust
+use crate::handlers::greeting::Service;
+use crate::gen::server::greeting::server as greeting_server;
+
+let svc = Service::new();
+let app = Router::new()
+    .route("/healthz", get(|| async { "ok" }))
+    .merge(greeting_server::router(svc))
+    .layer(...);
+```
+
+## 5. Call it
+
+From React, import the generated client:
+
+```tsx
+import { GoldenPathAppClient } from "@/api";
+
+const client = new GoldenPathAppClient({ baseUrl: "/" });
+const greeting = await client.greeting.createGreeting({
+    greeting: { name: "", recipient: "world", message: "" },
+});
+```

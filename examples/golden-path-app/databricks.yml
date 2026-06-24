@@ -1,0 +1,30 @@
+# Databricks Asset Bundle for golden-path-app.
+#
+# `databricks bundle deploy` uploads the source + binary to the workspace and
+# registers an app. The bundle name doubles as the asset prefix in the workspace,
+# so keep it stable across deploys.
+bundle:
+  name: golden_path_app
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${var.databricks_host}
+
+  prod:
+    mode: production
+    workspace:
+      host: ${var.databricks_host}
+
+variables:
+  databricks_host:
+    description: "Workspace URL"
+
+resources:
+  apps:
+    golden_path_app:
+      name: golden-path-app
+      description: "golden-path-app (scaffolded by trestle)"
+      source_code_path: ./

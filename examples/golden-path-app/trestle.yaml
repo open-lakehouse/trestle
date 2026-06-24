@@ -1,0 +1,30 @@
+# Trestle code-generation config for golden-path-app.
+#
+# `trestle generate -c trestle.yaml` reads this file, builds the proto descriptor
+# (run `just regen` first to refresh `api.bin`), and writes Rust + TypeScript
+# code into the four output directories below.
+
+descriptors: api.bin
+buf_gen: buf.gen.yaml
+
+generate:
+  # Protobuf runtime the generated code consumes: "prost" (default) or "buffa".
+  runtime: buffa
+  output_common: crates/common/src/models/_gen
+  output_models: crates/common/src/models
+  models_subdir: _gen
+  output_server: crates/server/src/gen
+  output_client: crates/client/src/gen
+  context_type: crate::api::RequestContext
+  result_type: crate::api::Result
+  models_crate_name: "golden_path_app_common"
+  models_path_template: "golden_path_app_common::models::{service}::v1"
+  models_path_crate_template: "crate::models::{service}::v1"
+  python_typings_filename: client.pyi
+
+  typescript:
+    output: frontend/src/api
+    aggregate_client_name: "GoldenPathAppClient"
+    client_crate_name: "golden-path-app-client"
+    error_base_class: "ApiError"
+    error_code_prefix: "GOLDEN_PATH_APP_"

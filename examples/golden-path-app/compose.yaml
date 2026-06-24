@@ -1,0 +1,26 @@
+# Top-level compose entrypoint. The `services.app` block builds the Rust binary
+# and exposes it to Envoy as the `app` cluster; every other service comes from
+# a `_components/local-stack-*` fragment via `include:`.
+name: golden-path-app
+
+include:
+  - path: ./docker/compose/envoy.yaml
+    project_directory: .
+  - path: ./docker/compose/seaweedfs.yaml
+    project_directory: .
+  - path: ./docker/compose/postgres.yaml
+    project_directory: .
+
+services:
+  golden-path-app-server:
+    profiles: [dev, svc, full, app]
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    restart: unless-stopped
+    env_file: [.env.local]
+    environment:
+      DATABRICKS_APP_PORT: "8080"
+      APP_LOG: ${APP_LOG:-info}
+    expose:
+      - "8080"

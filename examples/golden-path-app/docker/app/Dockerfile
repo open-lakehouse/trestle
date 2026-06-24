@@ -1,0 +1,26 @@
+# Build the golden-path-app server binary in a multi-stage container.
+#
+# The binary path matches `app.yaml`'s `command:` so the same image works
+# locally and on Databricks Apps. Adjust the build dependencies if your
+# proto/codegen pipeline grows.
+
+FROM rust:1.85-slim AS build
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev ca-certificates protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock* ./
+COPY crates ./crates
+COPY proto ./proto
+
+RUN cargo build --release --bin golden-path-app-server
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /src/target/release/golden-path-app-server ./golden-path-app-server
+EXPOSE 8080
+CMD ["./golden-path-app-server"]

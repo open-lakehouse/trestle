@@ -1,0 +1,8 @@
+// Re-exports for the generated proto-derived model types. The contents under
+// `_gen/` are produced by `trestle generate` (configured in `trestle.yaml`).
+//
+// Run `just regen` to refresh.
+
+#[path = "_gen/mod.rs"]
+mod _gen;
+pub use _gen::*;

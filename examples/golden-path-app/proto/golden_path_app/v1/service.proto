@@ -1,0 +1,39 @@
+// Starter RPCs for the golden-path-app service.
+//
+// `google.api.http` annotations declare the REST mapping that trestle's codegen
+// turns into Axum routes + a typed TypeScript client.
+syntax = "proto3";
+
+package golden_path_app.v1;
+
+import "google/api/annotations.proto";
+import "google/api/client.proto";
+import "google/api/field_behavior.proto";
+import "golden_path_app/v1/models.proto";
+
+service GreetingService {
+  option (google.api.default_host) = "localhost:8080";
+
+  // Create a new greeting.
+  rpc CreateGreeting(CreateGreetingRequest) returns (Greeting) {
+    option (google.api.http) = {
+      post: "/v1/greetings"
+      body: "greeting"
+    };
+  }
+
+  // Fetch a greeting by name.
+  rpc GetGreeting(GetGreetingRequest) returns (Greeting) {
+    option (google.api.http) = {
+      get: "/v1/{name=greetings/*}"
+    };
+  }
+}
+
+message CreateGreetingRequest {
+  Greeting greeting = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetGreetingRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
