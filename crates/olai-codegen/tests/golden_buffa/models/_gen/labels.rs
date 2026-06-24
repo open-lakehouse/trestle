@@ -83,6 +83,55 @@ impl TryFrom<Resource> for super::schemas::v1::Schema {
         }
     }
 }
+use crate::Error;
+use crate::models::object::Object;
+use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
+impl TryFrom<Object> for super::catalog::v1::Catalog {
+    type Error = Error;
+    fn try_from(object: Object) -> Result<Self, Self::Error> {
+        let props = object
+            .properties
+            .ok_or_else(|| Error::generic("expected properties"))?;
+        let mut res: super::catalog::v1::Catalog = ::serde_json::from_value(props)?;
+        res.name = object.id.hyphenated().to_string();
+        Ok(res)
+    }
+}
+impl TryFrom<super::catalog::v1::Catalog> for Object {
+    type Error = Error;
+    fn try_from(obj: super::catalog::v1::Catalog) -> Result<Self, Self::Error> {
+        let id = ::uuid::Uuid::parse_str(&obj.name)
+            .unwrap_or_else(|_| ::uuid::Uuid::nil());
+        Ok(Object {
+            id,
+            name: obj.resource_name(),
+            label: ObjectLabel::Catalog,
+            properties: Some(::serde_json::to_value(obj)?),
+            updated_at: None,
+            created_at: chrono::Utc::now(),
+        })
+    }
+}
+impl ResourceExt for super::catalog::v1::Catalog {
+    fn resource_name(&self) -> ResourceName {
+        ResourceName::new([&self.name])
+    }
+    fn resource_ref(&self) -> ResourceRef {
+        ::uuid::Uuid::parse_str(&self.name)
+            .ok()
+            .map(ResourceRef::Uuid)
+            .unwrap_or_else(|| ResourceRef::Name(self.resource_name()))
+    }
+    fn resource_ident(&self) -> ResourceIdent {
+        (ObjectLabel::Catalog).to_ident(self.resource_ref())
+    }
+}
+impl super::catalog::v1::Catalog {
+    /// Returns the fully-qualified dot-separated name computed from component fields.
+    pub fn qualified_name(&self) -> String {
+        self.name.clone()
+    }
+}
 impl ::olai_store::Label for ObjectLabel {
     fn as_str(&self) -> &str {
         self.as_ref()
@@ -100,7 +149,7 @@ pub static RESOURCE_DESCRIPTORS: &[::olai_store::ResourceTypeDescriptor<ObjectLa
         fields: &[
             ::olai_store::ResourceFieldDescriptor {
                 name: "name",
-                role: ::olai_store::FieldRole::Data,
+                role: ::olai_store::FieldRole::Identifier,
             },
             ::olai_store::ResourceFieldDescriptor {
                 name: "comment",

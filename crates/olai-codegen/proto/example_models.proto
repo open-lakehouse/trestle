@@ -12,7 +12,7 @@ message Catalog {
     singular: "catalog"
   };
 
-  string name = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
   string comment = 2 [(google.api.field_behavior) = OPTIONAL];
   CatalogType catalog_type = 3;
   map<string, string> properties = 4;
