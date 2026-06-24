@@ -784,6 +784,10 @@ pub fn generate_models_mod(
         // `#[cfg(feature = "grpc")]`. Consumers that don't define a `grpc`
         // feature would otherwise see `unexpected_cfgs`; allow it here.
         #![allow(unexpected_cfgs)]
+        // The grpc-gated `tonic.rs` includes carry empty (`///`) doc comments on
+        // generated service methods; allow them so `clippy -D warnings` stays
+        // green when the `grpc` feature is enabled.
+        #![allow(clippy::empty_docs)]
 
         use std::collections::HashMap;
 
