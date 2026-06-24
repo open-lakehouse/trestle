@@ -70,15 +70,34 @@ pub(crate) fn generate_bindings(services: &[ServiceHandler<'_>]) -> crate::error
         #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
 
         use wasm_bindgen::prelude::*;
-        use olai_http_wasm::WasmClient;
+        use olai_http_wasm::{CredentialsMode, WasmClient};
+        use olai_http_wasm::reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
         use url::Url;
         #(#client_imports)*
         #(#model_imports)*
 
         #(#service_wrappers)*
 
+        /// Optional client options, passed as the second constructor argument from JS.
+        ///
+        /// All fields are optional; the no-options / base-URL-only call keeps the default
+        /// browser-session (cookie) behavior.
+        #[derive(Default, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ClientOptions {
+            /// Bearer token. When set, every request carries `Authorization: Bearer <token>`.
+            #[serde(default)]
+            auth_token: Option<String>,
+            /// `fetch` credentials mode: `"include"` (default), `"same-origin"`, or `"omit"`.
+            #[serde(default)]
+            credentials: Option<String>,
+        }
+
         /// Browser entry point: construct from a base URL, then access per-service clients.
-        /// The browser manages the session (cookies / auth headers ride along with `fetch`).
+        ///
+        /// By default the browser manages the session (cookies / auth headers ride along with
+        /// `fetch`). Pass an optional options object to use bearer-token auth instead and/or to
+        /// choose the `fetch` credentials mode.
         #[wasm_bindgen(js_name = #aggregate_js_name)]
         pub struct #wasm_aggregate_ident {
             client: WasmClient,
@@ -87,14 +106,55 @@ pub(crate) fn generate_bindings(services: &[ServiceHandler<'_>]) -> crate::error
 
         #[wasm_bindgen(js_class = #aggregate_js_name)]
         impl #wasm_aggregate_ident {
+            /// Construct the client.
+            ///
+            /// `options` is optional: omit it (or pass `undefined`/`null`) to keep the
+            /// browser-session cookie behavior. Supported fields:
+            /// `{ authToken?: string, credentials?: "include" | "same-origin" | "omit" }`.
             #[wasm_bindgen(constructor)]
-            pub fn new(base_url: String) -> Result<#wasm_aggregate_ident, JsValue> {
+            pub fn new(base_url: String, options: Option<JsValue>) -> Result<#wasm_aggregate_ident, JsValue> {
                 let mut base_url = Url::parse(&base_url)
                     .map_err(|e| JsValue::from_str(&format!("invalid base_url: {e}")))?;
                 if !base_url.path().ends_with('/') {
                     base_url.set_path(&format!("{}/", base_url.path()));
                 }
-                Ok(Self { client: WasmClient::new(), base_url })
+
+                // Deserialize options, treating undefined/null as "no options".
+                let options: ClientOptions = match options {
+                    Some(v) if !v.is_undefined() && !v.is_null() => {
+                        serde_wasm_bindgen::from_value(v)
+                            .map_err(|e| JsValue::from_str(&format!("invalid options: {e}")))?
+                    }
+                    _ => ClientOptions::default(),
+                };
+
+                let mut client = WasmClient::new();
+                if let Some(credentials) = options.credentials.as_deref() {
+                    let mode = match credentials {
+                        "include" => CredentialsMode::Include,
+                        "same-origin" => CredentialsMode::SameOrigin,
+                        "omit" => CredentialsMode::Omit,
+                        other => return Err(JsValue::from_str(&format!(
+                            "invalid credentials mode: {other:?} (expected \"include\", \"same-origin\", or \"omit\")"
+                        ))),
+                    };
+                    client = client.with_credentials(mode);
+                } else if options.auth_token.is_some() {
+                    // A bearer token without an explicit credentials choice defaults to omitting
+                    // the browser session so a stale cookie can't shadow the Authorization header.
+                    client = client.with_credentials(CredentialsMode::Omit);
+                }
+                if let Some(token) = options.auth_token {
+                    let value = HeaderValue::from_str(&format!("Bearer {token}"))
+                        .map_err(|e| JsValue::from_str(&format!("invalid authToken: {e}")))?;
+                    client = client.with_auth(move || {
+                        let mut headers = HeaderMap::new();
+                        headers.insert(AUTHORIZATION, value.clone());
+                        headers
+                    });
+                }
+
+                Ok(Self { client, base_url })
             }
 
             #(#accessors)*

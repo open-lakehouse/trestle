@@ -232,6 +232,15 @@ fn wasm_bindings_and_dts_are_emitted() {
             && bindings_rs.contains("js_class = \"ExampleClient\""),
         "expected the aggregate wasm wrapper exposed to JS as ExampleClient"
     );
+    // The constructor takes optional options and wires bearer-token auth / credentials mode onto
+    // the transport without forcing cookie mode off when no token is supplied.
+    assert!(
+        bindings_rs.contains("options: Option<JsValue>")
+            && bindings_rs.contains("auth_token")
+            && bindings_rs.contains("with_auth")
+            && bindings_rs.contains("with_credentials"),
+        "wasm bindings constructor must support an optional auth-token / credentials options object"
+    );
 
     // client.d.ts: declares the aggregate class with a string-URL constructor.
     let dts = std::fs::read_to_string(wasm.join("client.d.ts")).expect("client.d.ts written");
@@ -240,8 +249,14 @@ fn wasm_bindings_and_dts_are_emitted() {
         "d.ts must declare the aggregate class"
     );
     assert!(
-        dts.contains("constructor(baseUrl: string)"),
+        dts.contains("constructor(baseUrl: string"),
         "d.ts aggregate must take a base URL"
+    );
+    // The constructor accepts optional auth/session options (bearer token + credentials mode)
+    // while keeping the base-URL-only call working.
+    assert!(
+        dts.contains("options?:") && dts.contains("authToken?:"),
+        "d.ts aggregate constructor must document the optional auth options"
     );
     assert!(
         dts.contains("): Promise<"),
