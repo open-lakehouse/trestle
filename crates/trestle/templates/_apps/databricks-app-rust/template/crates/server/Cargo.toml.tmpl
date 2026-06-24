@@ -41,3 +41,7 @@ prost-types = { workspace = true }
 {%- endif %}
 chrono = { workspace = true }
 uuid = { workspace = true }
+{%- if with_connect %}
+connectrpc = { workspace = true }
+http-body = { workspace = true }
+{%- endif %}

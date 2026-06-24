@@ -11,6 +11,9 @@ api.bin
 crates/common/src/models/_gen/
 crates/server/src/gen/
 crates/client/src/gen/
+{%- if with_connect %}
+crates/server/src/connect_gen/
+{%- endif %}
 {% if with_frontend -%}
 frontend/src/api/
 frontend/node_modules/

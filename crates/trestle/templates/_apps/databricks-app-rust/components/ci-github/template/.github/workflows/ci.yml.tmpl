@@ -44,10 +44,15 @@ jobs:
       - uses: bufbuild/buf-setup-action@v1
       - name: install trestle
         run: cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
-      - name: rebuild proto descriptor
-        run: buf build -o api.bin
+{%- if with_connect %}
+      - name: install connect codegen plugins
+        run: cargo install protoc-gen-connect-rust protoc-gen-buffa-packaging
+{%- endif %}
       - name: regenerate code
-        run: trestle generate -c trestle.yaml
+        run: |
+          buf generate
+          buf build -o api.bin
+          trestle generate -c trestle.yaml
       - name: assert clean tree
         run: |
           git diff --exit-code || {

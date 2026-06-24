@@ -1,0 +1,12 @@
+//! Hand-written handler implementations.
+//!
+//! `core` holds the protocol-agnostic business logic; `greeting` is the REST
+//! adapter implementing the generated `GreetingHandler` trait{% if with_connect %}, and
+//! `greeting_connect` is the Connect-RPC adapter{% endif %}. {% if with_connect %}Both adapters{% else %}It{% endif %} delegate into
+//! the shared `core`.
+
+pub mod core;
+pub mod greeting;
+{%- if with_connect %}
+pub mod greeting_connect;
+{%- endif %}
