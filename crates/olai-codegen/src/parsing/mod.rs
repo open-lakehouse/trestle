@@ -1,3 +1,17 @@
+//! Parsing stage: compiled descriptor → [`CodeGenMetadata`].
+//!
+//! This is the first stage of the code-generation pipeline. It walks every
+//! message, enum, and service in a [`FileDescriptorSet`] and extracts the
+//! annotations that drive generation into a structured, runtime-friendly form.
+//!
+//! The generator reads **standard Google API extensions only** — there are no
+//! custom Trestle proto extensions. The recognized extensions and their field
+//! numbers are the `*_EXTENSION` module constants below (`google.api.http`,
+//! `google.api.resource`, `google.api.field_behavior`,
+//! `google.api.resource_reference`, and `gnostic.openapi.v3.operation`), plus the
+//! core `debug_redact` option (`google.protobuf.FieldOptions` field 16, handled
+//! in the `message` submodule). [`parse_file_descriptor_set`] is the entry point.
+
 use std::collections::HashMap;
 
 pub use self::http::{HttpPattern, UrlSegment, extract_http_rule_pattern, extract_path_parameters};
