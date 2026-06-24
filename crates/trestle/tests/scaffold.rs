@@ -153,8 +153,6 @@ fn lakehouse_minimal() {
     // Always-present files from the base template/ tree.
     for path in [
         "README.md",
-        "AGENTS.md",
-        "CLAUDE.md",
         "compose.yaml",
         ".env.example",
         ".gitignore",
