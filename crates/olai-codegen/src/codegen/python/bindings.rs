@@ -14,6 +14,17 @@ use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
 use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
 use crate::parsing::types::{BaseType, RenderContext};
 
+/// `mut` keyword for the `let request = ...` binding, but only when there are
+/// optional-field setter calls that actually mutate it. Without setters the
+/// binding is never reassigned, so `let mut` would trip `unused_mut`.
+fn mut_if_setters(builder_calls: &[TokenStream]) -> TokenStream {
+    if builder_calls.is_empty() {
+        quote! {}
+    } else {
+        quote! { mut }
+    }
+}
+
 /// PyO3 binding backend. Holds the configured Python error/result type idents so the method bodies
 /// can wrap calls in the right `PyResult`/error conversion.
 pub(crate) struct PyBackend {
@@ -104,9 +115,15 @@ impl BindingBackend for PyBackend {
     fn main_module(&self, services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
         // Only resource-scoped services have a per-service scoped module; resource-less services'
         // methods live on the root client.
+        // Generated PyO3 modules structurally trip dead_code (full surface
+        // emitted), too_many_arguments (flat `#[pymethods]`), and unused_imports
+        // (per-module use-prelude). Allow them so the binding crate builds clean.
         let service_modules = services.iter().filter(|s| s.is_resource_scoped()).map(|s| {
             let module_name = format_ident!("{}", s.plan.base_path);
-            quote! { pub mod #module_name; }
+            quote! {
+                #[allow(dead_code, unused_imports, clippy::too_many_arguments)]
+                pub mod #module_name;
+            }
         });
 
         let bindings = services
@@ -143,6 +160,10 @@ impl BindingBackend for PyBackend {
         let resource_accessor_methods = driver::resource_accessor_methods(self, &sorted_services);
 
         let tokens = quote! {
+            // The aggregate module file carries the root `#[pyclass]` (flat methods →
+            // too_many_arguments) and a use-prelude that not every build consumes.
+            #![allow(dead_code, unused_imports, clippy::too_many_arguments)]
+
             #(#service_modules)*
 
             use std::collections::HashMap;
@@ -212,6 +233,7 @@ impl BindingBackend for PyBackend {
         let signature = pyo3_signature(method, parts.mode);
         let client_call = &parts.client_call;
         let builder_calls = generate_builder_pattern(method, true, self);
+        let mut_kw = mut_if_setters(&builder_calls);
 
         let items_field = method
             .list_output_field()
@@ -225,7 +247,7 @@ impl BindingBackend for PyBackend {
                 py: Python,
                 #(#param_defs,)*
             ) -> #py_result_type<#response_type> {
-                let mut request = #client_call;
+                let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
                 py.allow_threads(|| {
@@ -246,6 +268,7 @@ impl BindingBackend for PyBackend {
         let signature = pyo3_signature(method, parts.mode);
         let client_call = &parts.client_call;
         let builder_calls = generate_builder_pattern(method, false, self);
+        let mut_kw = mut_if_setters(&builder_calls);
 
         quote! {
             #signature
@@ -254,12 +277,13 @@ impl BindingBackend for PyBackend {
                 py: Python,
                 #(#param_defs,)*
             ) -> #py_result_type<#response_type> {
-                let mut request = #client_call;
+                let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
                 py.allow_threads(|| {
-                    let result = runtime.block_on(request.into_future())?;
-                    Ok::<_, #py_error_type>(result)
+                    // Inlined rather than `let result = ...; Ok(result)` so unit-returning
+                    // methods don't trip `clippy::let_unit_value`.
+                    Ok::<_, #py_error_type>(runtime.block_on(request.into_future())?)
                 })
             }
         }
@@ -278,6 +302,7 @@ impl BindingBackend for PyBackend {
         let signature = pyo3_signature(method, parts.mode);
         let client_call = &parts.client_call;
         let builder_calls = generate_builder_pattern(method, false, self);
+        let mut_kw = mut_if_setters(&builder_calls);
 
         quote! {
             #signature
@@ -286,12 +311,13 @@ impl BindingBackend for PyBackend {
                 py: Python,
                 #(#param_defs,)*
             ) -> #py_result_type<#response_type> {
-                let mut request = #client_call;
+                let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
                 py.allow_threads(|| {
-                    let result = runtime.block_on(request.into_future())?;
-                    Ok::<_, #py_error_type>(result)
+                    // Inlined rather than `let result = ...; Ok(result)` so unit-returning
+                    // methods don't trip `clippy::let_unit_value`.
+                    Ok::<_, #py_error_type>(runtime.block_on(request.into_future())?)
                 })
             }
         }
@@ -309,6 +335,7 @@ impl BindingBackend for PyBackend {
         let signature = pyo3_signature(method, parts.mode);
         let client_call = &parts.client_call;
         let builder_calls = generate_builder_pattern(method, false, self);
+        let mut_kw = mut_if_setters(&builder_calls);
 
         quote! {
             #signature
@@ -317,7 +344,7 @@ impl BindingBackend for PyBackend {
                 py: Python,
                 #(#param_defs,)*
             ) -> #py_result_type<()> {
-                let mut request = #client_call;
+                let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
                 py.allow_threads(|| {

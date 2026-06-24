@@ -1,9 +1,8 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+use futures::future::BoxFuture;
 use std::future::IntoFuture;
 use crate::Result;
-use super::super::stream_paginated;
 use example_common::models::tags::v1::*;
 use super::client::*;
 /// Builder for tag assignments

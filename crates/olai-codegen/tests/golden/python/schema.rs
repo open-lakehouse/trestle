@@ -17,11 +17,10 @@ impl PySchemaClient {
         py: Python,
         view: get_schema_request::View,
     ) -> PyExampleResult<Schema> {
-        let mut request = self.client.get(view);
+        let request = self.client.get(view);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
         })
     }
     #[pyo3(signature = (schema = None))]
@@ -30,12 +29,11 @@ impl PySchemaClient {
         request = request.with_schema(schema);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
         })
     }
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {
-        let mut request = self.client.delete();
+        let request = self.client.delete();
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
             runtime.block_on(request.into_future())?;

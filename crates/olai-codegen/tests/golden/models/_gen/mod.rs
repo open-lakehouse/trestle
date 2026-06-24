@@ -1,4 +1,5 @@
 // @generated — do not edit by hand.
+#![allow(unexpected_cfgs)]
 use std::collections::HashMap;
 pub mod labels;
 pub use labels::{ObjectLabel, Resource};

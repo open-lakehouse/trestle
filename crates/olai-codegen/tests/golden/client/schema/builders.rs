@@ -1,9 +1,9 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
 use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+use super::super::stream_paginated;
 use std::future::IntoFuture;
 use crate::Result;
-use super::super::stream_paginated;
 use example_common::models::schemas::v1::*;
 use super::client::*;
 /// Builder for creating a schema
@@ -24,7 +24,6 @@ impl CreateSchemaBuilder {
             name: name.into(),
             catalog_name: catalog_name.into(),
             schema_type: schema_type as i32,
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -54,7 +53,6 @@ impl GetSchemaBuilder {
         let request = GetSchemaRequest {
             full_name: full_name.into(),
             view: view as i32,
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -86,7 +84,6 @@ impl ListSchemasBuilder {
             catalog_name: catalog_name.into(),
             max_results,
             page_token: page_token.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -170,7 +167,6 @@ impl DeleteSchemaBuilder {
     ) -> Self {
         let request = DeleteSchemaRequest {
             full_name: full_name.into(),
-            ..Default::default()
         };
         Self { client, request }
     }

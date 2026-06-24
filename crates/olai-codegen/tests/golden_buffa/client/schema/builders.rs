@@ -1,9 +1,9 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
 use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+use super::super::stream_paginated;
 use std::future::IntoFuture;
 use crate::Result;
-use super::super::stream_paginated;
 use example_common::models::schemas::v1::*;
 use super::client::*;
 /// Builder for creating a schema

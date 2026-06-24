@@ -12,11 +12,10 @@ pub struct PyCatalogClient {
 #[pymethods]
 impl PyCatalogClient {
     pub fn get(&self, py: Python) -> PyExampleResult<Catalog> {
-        let mut request = self.client.get();
+        let request = self.client.get();
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
         })
     }
     #[pyo3(signature = (catalog = None))]
@@ -29,12 +28,11 @@ impl PyCatalogClient {
         request = request.with_catalog(catalog);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
         })
     }
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {
-        let mut request = self.client.delete();
+        let request = self.client.delete();
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
             runtime.block_on(request.into_future())?;
@@ -42,11 +40,10 @@ impl PyCatalogClient {
         })
     }
     pub fn get_catalog_status(&self, py: Python) -> PyExampleResult<CatalogStatus> {
-        let mut request = self.client.get_catalog_status();
+        let request = self.client.get_catalog_status();
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
         })
     }
 }
