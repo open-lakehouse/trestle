@@ -1,6 +1,5 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use crate::Result;
 use crate::models::catalog::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListByTagsRequest {
@@ -22,6 +21,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListByTagsRequest {
         Ok(ListByTagsRequest {
             tags,
             max_results,
+            ..Default::default()
         })
     }
 }
@@ -41,6 +41,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListByCatalogTypeReq
             .map_err(axum::response::IntoResponse::into_response)?;
         Ok(ListByCatalogTypeRequest {
             catalog_type: buffa::EnumValue::Known(catalog_type),
+            ..Default::default()
         })
     }
 }

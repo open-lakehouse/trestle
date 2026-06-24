@@ -219,7 +219,17 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
 
         let gen_dir = config.models_gen_dir.as_deref().unwrap_or("../gen");
         let include_labels = config.generate_resource_enum;
-        let mod_content = generate_models_mod(&plan.services, gen_dir, include_labels, metadata);
+        // When `output_common` resolves to this same directory, this `mod.rs`
+        // overwrites the common generator's — so it must re-declare the
+        // per-service extractor submodules it emitted.
+        let common_colocated = subdir == config.output.common;
+        let mod_content = generate_models_mod(
+            &plan.services,
+            gen_dir,
+            include_labels,
+            metadata,
+            common_colocated,
+        );
         // Route through write_generated_code so the `// @generated` header is prepended like
         // every other emitted file, rather than writing it raw.
         let mut mod_files = GeneratedCode {
@@ -632,6 +642,7 @@ pub fn generate_models_mod(
     gen_dir: &str,
     include_labels: bool,
     metadata: &CodeGenMetadata,
+    common_colocated: bool,
 ) -> String {
     // Services are keyed by proto package, not by service: multiple services can share a
     // package (e.g. `CatalogService` and `SchemaService` both in `example.catalog.v1`), and
@@ -717,6 +728,27 @@ pub fn generate_models_mod(
         quote! {}
     };
 
+    // When the `output_common` extractors share this directory (the default
+    // layout, where `output_common` == `output_models`/`<models_subdir>`), this
+    // `mod.rs` overwrites the one the common generator emitted — so it must also
+    // declare the per-service extractor submodules. They are axum-coupled, so
+    // gate them on the `axum` feature (matching the `<service>/mod.rs` the common
+    // generator writes). Without this, the `FromRequest`/`FromRequestParts` impls
+    // never compile and the generated route fns can't be mounted.
+    let common_mods: TokenStream = if common_colocated {
+        let decls: Vec<TokenStream> = services
+            .iter()
+            .map(|s| format_ident!("{}", s.base_path))
+            // Dedupe: multiple services can share a base_path.
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|m| quote! { #[cfg(feature = "axum")] pub mod #m; })
+            .collect();
+        quote! { #(#decls)* }
+    } else {
+        quote! {}
+    };
+
     let tokens = quote! {
         use std::collections::HashMap;
 
@@ -727,6 +759,8 @@ pub fn generate_models_mod(
         pub type PropertyMap = HashMap<String, serde_json::Value>;
 
         #(#service_mods)*
+
+        #common_mods
     };
 
     format_tokens_static(tokens)

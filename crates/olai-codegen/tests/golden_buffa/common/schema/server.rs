@@ -1,6 +1,5 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use crate::Result;
 use crate::models::schemas::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateSchemaRequest {
@@ -37,6 +36,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetSchemaRequest {
         Ok(GetSchemaRequest {
             full_name,
             view: buffa::EnumValue::Known(view),
+            ..Default::default()
         })
     }
 }
@@ -62,6 +62,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListSchemasRequest {
             catalog_name,
             max_results,
             page_token,
+            ..Default::default()
         })
     }
 }
@@ -85,6 +86,7 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for UpdateSchemaRequest {
         Ok(UpdateSchemaRequest {
             full_name,
             schema,
+            ..Default::default()
         })
     }
 }
@@ -98,6 +100,9 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteSchemaRequest 
             .extract::<axum::extract::Path<String>>()
             .await
             .map_err(axum::response::IntoResponse::into_response)?;
-        Ok(DeleteSchemaRequest { full_name })
+        Ok(DeleteSchemaRequest {
+            full_name,
+            ..Default::default()
+        })
     }
 }
