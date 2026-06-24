@@ -17,7 +17,12 @@ use axum::http::HeaderMap;
 use axum::http::request::Parts;
 
 /// Identity + auth context for the current request.
+///
+/// `#[allow(dead_code)]`: the starter handler doesn't read these yet, but real
+/// handlers use them (OBO token to call downstream Databricks APIs, identity for
+/// audit/authorization). Kept so the scaffold compiles under `-D warnings`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RequestContext {
     /// OBO token used to call downstream Databricks APIs (Unity Catalog, MLflow, …).
     pub access_token: Option<String>,

@@ -30,6 +30,11 @@ pub struct GreetingCore {
 }
 
 impl GreetingCore {
+    // `#[allow(dead_code)]`: the starter wires the core via `Service::default()`
+    // (which uses `GreetingCore::default()`); this explicit constructor is here
+    // for when you build the core yourself. Kept so the scaffold compiles under
+    // `-D warnings`.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }

@@ -25,14 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABRICKS_HOST: ${{ '{{' }} vars.DATABRICKS_HOST {{ '}}' }}
+      # Resolved once here so the deploy steps reference `$TARGET` instead of
+      # expanding `${{ '{{' }} ... {{ '}}' }}` inline in `run:` (template-injection).
+      TARGET: ${{ '{{' }} github.event.inputs.target || 'dev' {{ '}}' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: bufbuild/buf-setup-action@v1
-
-{% if with_frontend -%}
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+{% if with_frontend %}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
@@ -58,13 +64,13 @@ jobs:
           databricks auth env-vars > /dev/null
 
       - name: bundle validate
-        run: databricks bundle validate -t ${{ '{{' }} github.event.inputs.target || 'dev' {{ '}}' }}
+        run: databricks bundle validate -t "$TARGET"
 
       - name: bundle deploy
-        run: databricks bundle deploy -t ${{ '{{' }} github.event.inputs.target || 'dev' {{ '}}' }}
+        run: databricks bundle deploy -t "$TARGET"
 
       - name: bundle run
-        run: databricks bundle run -t ${{ '{{' }} github.event.inputs.target || 'dev' {{ '}}' }} {{ project_name | snake_case }}
+        run: databricks bundle run -t "$TARGET" {{ project_name | snake_case }}
 
       - name: smoke test /healthz
         run: |
