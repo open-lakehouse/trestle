@@ -144,7 +144,9 @@ jobs:
       - name: Install trestle + codegen plugins
         run: |
           cargo install --path crates/trestle --bin trestle --locked
-          cargo install protoc-gen-connect-rust protoc-gen-buffa-packaging
+          # The `protoc-gen-connect-rust` binary ships in the `connectrpc-codegen`
+          # crate (the crate literally named `protoc-gen-connect-rust` is empty).
+          cargo install --locked connectrpc-codegen protoc-gen-buffa protoc-gen-buffa-packaging
       # Regenerate everything the committed example ships, then prove it neither
       # diverges nor breaks. The committed deps are the published versions (the
       # registry has them; a developer's proxy may lag, hence local path-dep +
