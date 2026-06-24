@@ -66,13 +66,28 @@ pub(crate) fn generate_dts(services: &[ServiceHandler<'_>]) -> String {
 
     // Aggregate class.
     out.push_str(
-        "/** Browser entry point. Construct from a base URL; the browser manages the session. */\n",
+        "/** Browser entry point. Construct from a base URL; the browser manages the session\n\
+        \x20  by default, or pass options for bearer-token auth. */\n",
     );
     out.push_str(&format!("export class {aggregate} {{\n"));
     out.push_str(
-        "  /** @param baseUrl Absolute base URL of the API (same-origin for cookie auth). */\n",
+        "  /**\n\
+        \x20  * @param baseUrl Absolute base URL of the API (same-origin for cookie auth).\n\
+        \x20  * @param options Optional auth/session settings. Omit to keep the default\n\
+        \x20  *   browser-session (cookie) behavior, where `fetch` sends credentials with\n\
+        \x20  *   `credentials: \"include\"`.\n\
+        \x20  *\n\
+        \x20  *   - `authToken` — when set, every request carries\n\
+        \x20  *     `Authorization: Bearer <authToken>`. Unless `credentials` is given too,\n\
+        \x20  *     this also switches the `fetch` credentials mode to `\"omit\"` so a stale\n\
+        \x20  *     cookie can't shadow the header.\n\
+        \x20  *   - `credentials` — the `fetch` credentials mode: `\"include\"` (default),\n\
+        \x20  *     `\"same-origin\"`, or `\"omit\"`.\n\
+        \x20  */\n",
     );
-    out.push_str("  constructor(baseUrl: string);\n");
+    out.push_str(
+        "  constructor(baseUrl: string, options?: { authToken?: string; credentials?: \"include\" | \"same-origin\" | \"omit\" });\n",
+    );
     for service in services {
         let accessor = service.plan.base_path.to_case(Case::Camel);
         let class = service.low_level_client_type().to_string();
