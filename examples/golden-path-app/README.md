@@ -64,17 +64,6 @@ just lint           # cargo clippy + buf lint + frontend lint
 just test           # cargo test
 ```
 
-## AI agents
-
-This project ships AI-onboarding artefacts at:
-
-- [`AGENTS.md`](AGENTS.md) — top-level guide
-- [`.cursor/rules/`](.cursor/rules) — focused, file-scoped rules
-- [`CLAUDE.md`](CLAUDE.md) — mirror of `AGENTS.md` for Claude Code
-
-If you ask an agent to "add a new RPC", point it at
-[`adding-an-rpc.md`](.cursor/rules/adding-an-rpc.md) first.
-
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
