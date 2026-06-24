@@ -1,11 +1,11 @@
 // @generated — do not edit by hand.
 #![cfg(target_arch = "wasm32")]
 #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
-use wasm_bindgen::prelude::*;
-use olai_http_wasm::WasmClient;
-use url::Url;
 use crate::codegen::greeting::*;
 use crate::models::golden_path_app::v1::*;
+use olai_http_wasm::WasmClient;
+use url::Url;
+use wasm_bindgen::prelude::*;
 ///WASM/browser binding for the `greeting` service.
 #[wasm_bindgen]
 pub struct WasmGreetingServiceClient {

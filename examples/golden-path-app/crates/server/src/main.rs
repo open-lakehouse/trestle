@@ -61,7 +61,10 @@ fn build_router() -> Router {
         // GET /v1/greetings/{uuid}  (google.api.http: get "/v1/{name=greetings/*}").
         // Wildcard so the captured `name` keeps the `greetings/` prefix that makes
         // up the resource name the client sends back.
-        .route("/v1/{*name}", get(get_greeting::<Service, api::RequestContext>))
+        .route(
+            "/v1/{*name}",
+            get(get_greeting::<Service, api::RequestContext>),
+        )
         .with_state(svc.clone());
 
     // The Connect surface (generated facade; POSTs to

@@ -17,3 +17,7 @@ api.bin
 frontend/src/wasm/
 frontend/node_modules/
 frontend/dist/
+# Lock file: regenerated per environment. The example straddles local (proxy,
+# may lag the registry) and CI (full registry), so a committed lock cannot be
+# valid in both. A real scaffolded project (single registry) should commit it.
+Cargo.lock
