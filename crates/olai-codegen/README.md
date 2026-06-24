@@ -31,13 +31,20 @@ The generator reads standard [Google API extensions](https://github.com/googleap
 |---|---|
 | `google.api.resource` | Registers a managed resource type; drives resource enums and labels |
 | `google.api.http` | Maps each RPC to an HTTP method/URI; drives routes and client methods |
-| `google.api.field_behavior` | `OUTPUT_ONLY`/`REQUIRED`/`IDENTIFIER`/…; shapes extractors and builders |
+| `google.api.field_behavior` | `IDENTIFIER`/`REQUIRED`/`OUTPUT_ONLY`/`OPTIONAL`/`INPUT_ONLY`/`IMMUTABLE`/`UNORDERED_LIST`/`NON_EMPTY_DEFAULT`; shapes extractors, builders, and store field roles |
 | `google.api.resource_reference` | Parent-child relationships; drives hierarchical names |
+| `debug_redact` | Marks a secret field; routed to a `SecretManager` and redacted (see `olai-store`) |
 
 ```proto
 message Catalog {
-  option (google.api.resource) = { type: "example.io/Catalog" pattern: "catalogs/{catalog}" };
-  string name = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  option (google.api.resource) = {
+    type: "example.io/Catalog"
+    pattern: "catalogs/{catalog}"
+    plural: "catalogs"
+    singular: "catalog"
+  };
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];   // maps to the store's Object.id
+  string comment = 2 [(google.api.field_behavior) = OPTIONAL];
 }
 service CatalogService {
   rpc GetCatalog(GetCatalogRequest) returns (Catalog) {
@@ -45,6 +52,24 @@ service CatalogService {
   }
 }
 ```
+
+### Routing & hierarchy model
+
+Unlike Google AIP's nested collections (`/catalogs/{c}/schemas/{s}/tables`),
+Trestle follows the **Databricks Unity Catalog** design: every resource gets a
+**flat, top-level route** (`/catalogs`, `/schemas`, `/tables`) and the parent is
+named by a request field, not a URL segment. This keeps resources directly
+addressable and avoids the N+1 navigation of resolving every ancestor just to
+build a URL.
+
+The logical hierarchy (`Catalog → Schema → Table`) is still encoded, but it is
+**discovered** from annotations rather than the URL: each child's `List` (and
+`Create`) request carries a parent-scoping field annotated
+`google.api.resource_reference = { child_type: "<this service's resource>" }`.
+The generator collects those edges across services and reconstructs the
+depth-ordered chain, driving `parent_label`/`path_names` in the resource registry
+and resource-scoped client navigation. See `docs/codegen-design.md` for the
+binding-mode details.
 
 ## Usage
 
