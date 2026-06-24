@@ -6,9 +6,17 @@ edition.workspace = true
 license.workspace = true
 {%- endif %}
 
+[features]
+# The generated request extractors (`models/_gen/<service>/server.rs`) are
+# axum-coupled and gated behind `#[cfg(feature = "axum")]`. The server crate
+# enables this; pure-model consumers (clients, bindings) leave it off so the
+# models crate stays transport-neutral.
+axum = ["dep:axum"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+axum = { workspace = true, optional = true }
 {%- if runtime == 'buffa' %}
 buffa = { workspace = true, features = ["json"] }
 buffa-types = { workspace = true }

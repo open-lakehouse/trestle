@@ -8,11 +8,15 @@ use std::env;
 use std::net::SocketAddr;
 
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 mod api;
+// `gen` is a reserved keyword in Rust 2024, so the generated `gen/` directory is
+// mounted under the `codegen` alias (matching the client crate).
+#[path = "gen/mod.rs"]
+mod codegen;
 mod handlers;
 
 #[tokio::main]
@@ -34,19 +38,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn build_router() -> Router {
+    // The starter `Greeting` service. `Service` implements the generated
+    // `GreetingHandler` trait (in `crate::codegen::greeting`); the generated
+    // route fns (in `crate::codegen::greeting::server`) take it as Axum state.
+    //
+    // To add a service: define its RPCs in `proto/`, run `just regen`, implement
+    // the new handler trait in `handlers/`, then `.merge` its routes here. A
+    // single struct may implement several handler traits.
+    let svc = handlers::greeting::Service::new();
+
+    use crate::codegen::greeting::server::{create_greeting, get_greeting};
+    use handlers::greeting::Service;
+    let greeting_routes = Router::new()
+        // POST /v1/greetings  (google.api.http: post "/v1/greetings", body "greeting")
+        .route(
+            "/v1/greetings",
+            post(create_greeting::<Service, api::RequestContext>),
+        )
+        // GET /v1/greetings/{uuid}  (google.api.http: get "/v1/{name=greetings/*}").
+        // Wildcard so the captured `name` keeps the `greetings/` prefix that makes
+        // up the resource name the client sends back.
+        .route("/v1/{*name}", get(get_greeting::<Service, api::RequestContext>))
+        .with_state(svc);
+
     Router::new()
         // Liveness/readiness for Databricks Apps and CI smoke tests.
         .route("/healthz", get(|| async { "ok" }))
-        // Mount generated routes here once `just regen` has run. The generator emits one Axum
-        // handler function per RPC (in `crate::gen::server::greeting::server`); wire them onto a
-        // router with your service as state. Example:
-        //   let svc = handlers::greeting::Service::default();
-        //   use crate::gen::server::greeting::server::*;
-        //   .merge(
-        //       Router::new()
-        //           .route("/greetings", post(create_greeting::<_, _>))
-        //           .with_state(svc),
-        //   )
+        .merge(greeting_routes)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
