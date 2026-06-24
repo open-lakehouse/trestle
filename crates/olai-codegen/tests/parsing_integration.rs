@@ -74,8 +74,8 @@ fn test_parses_field_behavior() {
     assert!(
         name_field
             .field_behavior
-            .contains(&FieldBehavior::OutputOnly),
-        "name field should be OUTPUT_ONLY"
+            .contains(&FieldBehavior::Identifier),
+        "name field should be IDENTIFIER"
     );
 }
 
