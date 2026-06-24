@@ -1,5 +1,5 @@
 // @generated — do not edit by hand.
-#![allow(unused_mut)]
+#![allow(unused_mut, unused_imports)]
 use crate::models::golden_path_app::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateGreetingRequest {

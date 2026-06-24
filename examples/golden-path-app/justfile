@@ -7,8 +7,10 @@ project := "golden-path-app"
 # Codegen
 # ------------------------------------------------------------------------------
 
-# Build the proto descriptor + regenerate Rust + TS code.
+# Regenerate all code from proto: buf plugins (models + Connect facade),
+# then the trestle-generated server/client/TS.
 regen:
+    buf generate
     buf build -o api.bin
     trestle generate -c trestle.yaml
 cd frontend && npm install

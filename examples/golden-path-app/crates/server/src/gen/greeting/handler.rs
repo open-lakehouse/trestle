@@ -9,8 +9,8 @@
 //!
 //! A single struct can implement multiple handler traits to serve multiple
 //! services. Use [`axum::Router::merge`] to compose per-service routers together.
-use async_trait::async_trait;
 use crate::api::Result;
+use async_trait::async_trait;
 use golden_path_app_common::models::golden_path_app::v1::*;
 #[async_trait]
 pub trait GreetingHandler<Cx = crate::api::RequestContext>: Send + Sync + 'static {
@@ -21,9 +21,5 @@ pub trait GreetingHandler<Cx = crate::api::RequestContext>: Send + Sync + 'stati
         context: Cx,
     ) -> Result<Greeting>;
     /// Fetch a greeting by name.
-    async fn get_greeting(
-        &self,
-        request: GetGreetingRequest,
-        context: Cx,
-    ) -> Result<Greeting>;
+    async fn get_greeting(&self, request: GetGreetingRequest, context: Cx) -> Result<Greeting>;
 }

@@ -1,4 +1,4 @@
-//! Connect-RPC handler for the `Greeting` service.
+//! Connect-RPC handler for the starter `Greeting` service.
 //!
 //! Implements the generated Connect `GreetingService` trait (in
 //! `crate::connect_gen`) by delegating to the SAME [`GreetingCore`] the REST
@@ -7,6 +7,9 @@
 //! differ in shape (owned request + `crate::api::Result` for REST; zero-copy
 //! `ServiceRequest` + `ServiceResult`/`ConnectError` for Connect), but both
 //! reduce to the same `core.create(...)` / `core.get(...)` calls.
+//!
+//! NOTE: this references generated code under `crate::connect_gen`, so run
+//! `just regen` before the first `cargo build` on a freshly-scaffolded tree.
 
 use connectrpc::{ConnectError, RequestContext, Response, ServiceRequest, ServiceResult};
 use golden_path_app_common::models::golden_path_app::v1::{
@@ -14,7 +17,7 @@ use golden_path_app_common::models::golden_path_app::v1::{
 };
 
 use crate::connect_gen::golden_path_app::v1::GreetingService;
-use crate::handlers::core::{CoreError, GreetingCore};
+use crate::handlers::core::CoreError;
 use crate::handlers::greeting::Service;
 
 /// Map domain errors onto the Connect error envelope.
@@ -27,6 +30,11 @@ impl From<CoreError> for ConnectError {
     }
 }
 
+// The generated trait declares `-> impl Future<Output = ServiceResult<impl
+// Encodable<T>>>`; implementing it with `async fn -> ServiceResult<T>` returns the
+// concrete `T` (which `impl Encodable<T>` admits). That narrowing trips the
+// `refining_impl_trait` lint — expected and idiomatic for these handlers.
+#[allow(refining_impl_trait)]
 impl GreetingService for Service {
     async fn create_greeting(
         &self,
@@ -40,8 +48,7 @@ impl GreetingService for Service {
             .into_option()
             .map(|g| g.recipient)
             .ok_or_else(|| ConnectError::invalid_argument("greeting is required"))?;
-        let core: &GreetingCore = &self.core();
-        Response::ok(core.create(&recipient)?)
+        Response::ok(self.core().create(&recipient)?)
     }
 
     async fn get_greeting(

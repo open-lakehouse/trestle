@@ -1,19 +1,19 @@
-//! The business core — protocol-agnostic domain logic for greetings.
+//! The business core — protocol-agnostic domain logic for the starter
+//! `Greeting` service.
 //!
-//! Both the REST handler (`handlers::greeting`) and the Connect handler
+//! The REST handler (`handlers::greeting`) and the Connect handler
 //! (`handlers::greeting_connect`) delegate into this one type, so the actual
 //! behaviour lives in exactly one place regardless of how the request arrived.
 //! Swap the in-memory map for a real backend (Postgres, Unity Catalog, …) and
-//! both transports follow.
+//! the transport adapters stay put.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use golden_path_app_common::models::golden_path_app::v1::Greeting;
 
-/// Domain-level errors, independent of HTTP or Connect. Each transport maps
-/// these into its own error envelope (`api::Error` for REST, `ConnectError`
-/// for Connect).
+/// Domain-level errors, independent of HTTP or Connect. Each transport adapter
+/// maps these into its own error envelope.
 #[derive(Debug)]
 pub enum CoreError {
     InvalidArgument(String),
