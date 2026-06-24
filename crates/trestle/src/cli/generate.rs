@@ -96,6 +96,7 @@ pub(crate) struct TrestleConfig {
 #[derive(Debug, serde::Deserialize)]
 struct BufGenPlugin {
     remote: Option<String>,
+    local: Option<String>,
     out: String,
 }
 
@@ -104,22 +105,33 @@ struct BufGenConfig {
     plugins: Vec<BufGenPlugin>,
 }
 
-/// Find the prost plugin's output path in a buf.gen.yaml file.
-fn find_prost_out(buf_gen_path: &Path) -> Result<PathBuf> {
+/// Find the model-plugin's output path in a buf.gen.yaml file.
+///
+/// The relevant plugin depends on the runtime: prost projects look for the
+/// `neoeinstein-prost` plugin (excluding the `-serde` / `-tonic` companions),
+/// while buffa projects look for the `buffa` plugin. The plugin may be declared
+/// as either `remote:` (BSR) or `local:`, so both fields are matched.
+fn find_models_out(buf_gen_path: &Path, runtime: Runtime) -> Result<PathBuf> {
     let text = fs::read_to_string(buf_gen_path).map_err(|e| Error::io_at(buf_gen_path, e))?;
     let cfg: BufGenConfig =
         serde_yaml::from_str(&text).map_err(|e| Error::yaml_at(buf_gen_path, e))?;
-    let prost = cfg
-        .plugins
-        .iter()
-        .find(|p| {
-            p.remote
-                .as_deref()
-                .map(|r| r.contains("prost") && !r.contains("serde") && !r.contains("tonic"))
-                .unwrap_or(false)
+    let matches = |p: &BufGenPlugin| {
+        let names = [p.remote.as_deref(), p.local.as_deref()];
+        names.into_iter().flatten().any(|name| match runtime {
+            Runtime::Prost => {
+                name.contains("prost") && !name.contains("serde") && !name.contains("tonic")
+            }
+            Runtime::Buffa => name.contains("buffa") && !name.contains("packaging"),
         })
-        .ok_or_else(|| Error::other("no prost plugin found in buf.gen.yaml"))?;
-    Ok(PathBuf::from(&prost.out))
+    };
+    let plugin = cfg.plugins.iter().find(|p| matches(p)).ok_or_else(|| {
+        let kind = match runtime {
+            Runtime::Prost => "prost",
+            Runtime::Buffa => "buffa",
+        };
+        Error::other(format!("no {kind} plugin found in buf.gen.yaml"))
+    })?;
+    Ok(PathBuf::from(&plugin.out))
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -276,13 +288,25 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
         file_cfg = cfg;
     }
 
-    // Auto-derive path templates from buf.gen.yaml when not explicitly set.
-    let mut prost_out_abs: Option<PathBuf> = None;
+    let runtime = match file_cfg.runtime.as_deref() {
+        None | Some("prost") => Runtime::Prost,
+        Some("buffa") => Runtime::Buffa,
+        Some(other) => {
+            return Err(Error::other(format!(
+                "unknown runtime `{other}` in trestle.yaml (expected `prost` or `buffa`)"
+            )));
+        }
+    };
+
+    // Auto-derive path templates from buf.gen.yaml when not explicitly set. The
+    // model plugin's `out` dir (prost or buffa, depending on the runtime) anchors
+    // the relative import path the generated code uses to reach the models.
+    let mut models_out_abs: Option<PathBuf> = None;
     if args.models_path_template.is_none() {
         if let Some(ref bgp) = buf_gen_path {
-            let prost_out = find_prost_out(bgp)?;
-            prost_out_abs =
-                Some(fs::canonicalize(&prost_out).map_err(|e| Error::io_at(&prost_out, e))?);
+            let models_out = find_models_out(bgp, runtime)?;
+            models_out_abs =
+                Some(fs::canonicalize(&models_out).map_err(|e| Error::io_at(&models_out, e))?);
             let crate_name = file_cfg.models_crate_name.as_deref().ok_or_else(|| {
                 Error::other("models_crate_name is required in generate config when buf_gen is set")
             })?;
@@ -292,12 +316,12 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
     if args.models_path_crate_template.is_none() && buf_gen_path.is_some() {
         args.models_path_crate_template = Some("crate::models::{service}::v1".to_string());
     }
-    if prost_out_abs.is_none() {
+    if models_out_abs.is_none() {
         if let Some(ref bgp) = buf_gen_path {
-            let prost_out = find_prost_out(bgp)?;
-            if prost_out.exists() {
-                prost_out_abs =
-                    Some(fs::canonicalize(&prost_out).map_err(|e| Error::io_at(&prost_out, e))?);
+            let models_out = find_models_out(bgp, runtime)?;
+            if models_out.exists() {
+                models_out_abs =
+                    Some(fs::canonicalize(&models_out).map_err(|e| Error::io_at(&models_out, e))?);
             }
         }
     }
@@ -332,7 +356,11 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
 
     let metadata = parse_file_descriptor_set(&file_descriptor_set)?;
 
+    // Output directories may not exist yet on a freshly-scaffolded tree (the
+    // generator owns everything under them), so create them before canonicalizing
+    // — `fs::canonicalize` errors on a missing path.
     let resolve_dir = |p: &str| -> Result<PathBuf> {
+        fs::create_dir_all(p).map_err(|e| Error::io_at(p, e))?;
         fs::canonicalize(PathBuf::from(p)).map_err(|e| Error::io_at(p, e))
     };
 
@@ -360,7 +388,7 @@ pub fn run(mut args: GenerateArgs) -> Result<()> {
 
     let models_gen_dir: Option<String> = output_models
         .as_deref()
-        .zip(prost_out_abs.as_deref())
+        .zip(models_out_abs.as_deref())
         .map(|(models_dir, prost_out)| {
             let subdir_path = models_dir.join(&models_subdir);
             relative_path(&subdir_path, prost_out)
