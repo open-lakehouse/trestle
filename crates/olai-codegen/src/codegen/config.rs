@@ -38,11 +38,12 @@ pub struct ModelsPath {
 }
 
 impl ModelsPath {
-    /// Build a `ModelsPath` from a template string containing `{service}`.
+    /// Build a `ModelsPath` from a template string containing `{service}` and,
+    /// optionally, `{version}`.
     ///
     /// Performs a test substitution at construction to validate the template.
     pub fn new(template: &str) -> Result<Self> {
-        let test = template.replace("{service}", "test");
+        let test = template.replace("{service}", "test").replace("{version}", "v1");
         syn::parse_str::<syn::Path>(&test).map_err(|e| Error::InvalidModelsPathTemplate {
             template: template.to_string(),
             source: e,
@@ -68,8 +69,8 @@ impl ModelsPath {
     /// isn't a valid path component (leading digit, hyphen, reserved word) can still fail here.
     /// Call this once per service up front (see [`ModelsPath::validate_for`]) so failures surface
     /// as a clean [`Error::InvalidModelsPathTemplate`] before generation rather than panicking.
-    pub fn try_resolve(&self, service: &str) -> Result<syn::Path> {
-        let path = self.template.replace("{service}", service);
+    pub fn try_resolve(&self, service: &str, version: &str) -> Result<syn::Path> {
+        let path = self.substitute(service, version);
         syn::parse_str(&path).map_err(|source| Error::InvalidModelsPathTemplate {
             template: path,
             source,
@@ -77,21 +78,33 @@ impl ModelsPath {
     }
 
     /// Validate that `service` substitutes into a parseable path. Used up front, per service.
+    ///
+    /// Validates against the conventional `v1` version; the actual version segment is a plain
+    /// path component derived from the proto package, so it cannot make a `{service}`-valid
+    /// template fail to parse.
     pub fn validate_for(&self, service: &str) -> Result<()> {
-        self.try_resolve(service).map(|_| ())
+        self.try_resolve(service, "v1").map(|_| ())
     }
 
-    /// Replace `{service}` with `service` and return the parsed [`syn::Path`].
+    /// Replace `{service}`/`{version}` and return the parsed [`syn::Path`].
     ///
     /// # Panics
     ///
     /// Panics if the substituted path doesn't parse. Generation validates every service segment
     /// up front via [`ModelsPath::validate_for`], so this is unreachable on the generation path;
     /// prefer [`ModelsPath::try_resolve`] anywhere that hasn't already validated.
-    pub fn resolve(&self, service: &str) -> syn::Path {
-        let path = self.template.replace("{service}", service);
+    pub fn resolve(&self, service: &str, version: &str) -> syn::Path {
+        let path = self.substitute(service, version);
         syn::parse_str(&path)
             .unwrap_or_else(|e| panic!("Invalid models path `{path}` after substitution: {e}"))
+    }
+
+    /// Substitute the `{service}` and `{version}` placeholders. A template without `{version}`
+    /// is left as-is for that placeholder, preserving any literal version it already encodes.
+    fn substitute(&self, service: &str, version: &str) -> String {
+        self.template
+            .replace("{service}", service)
+            .replace("{version}", version)
     }
 }
 
