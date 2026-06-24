@@ -533,6 +533,22 @@ fn apply_app_category_compat(
                             crate::template::VariableValue::Bool(on),
                         );
                     }
+                    "connect" => {
+                        let on = chosen.iter().any(|v| v == "on");
+                        vars.insert(
+                            "with_connect".to_string(),
+                            crate::template::VariableValue::Bool(on),
+                        );
+                        // ConnectRPC is generated against buffa views, so it
+                        // requires the buffa runtime. Force it on when connect is
+                        // selected, overriding any `prost` default/pick.
+                        if on {
+                            vars.insert(
+                                "runtime".to_string(),
+                                crate::template::VariableValue::String("buffa".to_string()),
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }

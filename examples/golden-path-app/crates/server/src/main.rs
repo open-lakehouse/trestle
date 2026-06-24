@@ -17,7 +17,7 @@ mod api;
 // mounted under the `codegen` alias (matching the client crate).
 #[path = "gen/mod.rs"]
 mod codegen;
-// Generated Connect-RPC service facade (buffa views + connectrpc traits).
+// Generated ConnectRPC service facade (buffa views + connectrpc traits).
 #[path = "connect_gen/mod.rs"]
 mod connect_gen;
 mod handlers;
@@ -41,39 +41,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn build_router() -> Router {
-    use std::sync::Arc;
+    // The starter `Greeting` service. `Service` implements the generated
+    // `GreetingHandler` trait (in `crate::codegen::greeting`); the generated
+    // route fns (in `crate::codegen::greeting::server`) take it as Axum state.
+    //
+    // To add a service: define its RPCs in `proto/`, run `just regen`, implement
+    // the new handler trait in `handlers/`, then `.merge` its routes here. A
+    // single struct may implement several handler traits.
+    let svc = handlers::greeting::Service::new();
 
-    use handlers::greeting::Service;
-
-    // One service instance backing BOTH transports. `Service` clones share the
-    // same underlying `GreetingCore` (an `Arc`), so a create over REST is
-    // visible to a get over Connect and vice-versa.
-    let svc = Service::new();
-
-    // --- REST surface (generated Axum route fns from the proto's google.api.http) ---
     use crate::codegen::greeting::server::{create_greeting, get_greeting};
+    use handlers::greeting::Service;
     let rest_routes = Router::new()
         // POST /v1/greetings  (google.api.http: post "/v1/greetings", body "greeting")
         .route(
             "/v1/greetings",
             post(create_greeting::<Service, api::RequestContext>),
         )
-        // GET  /v1/greetings/{uuid}  (google.api.http: get "/v1/{name=greetings/*}").
-        // Wildcard so the captured `name` keeps the `greetings/` prefix.
-        .route("/v1/{*name}", get(get_greeting::<Service, api::RequestContext>))
+        // GET /v1/greetings/{uuid}  (google.api.http: get "/v1/{name=greetings/*}").
+        // Wildcard so the captured `name` keeps the `greetings/` prefix that makes
+        // up the resource name the client sends back.
+        .route(
+            "/v1/{*name}",
+            get(get_greeting::<Service, api::RequestContext>),
+        )
         .with_state(svc.clone());
 
-    // --- Connect surface (generated connectrpc facade; POSTs to
-    //     /golden_path_app.v1.GreetingService/<Method>) ---
+    // The Connect surface (generated facade; POSTs to
+    // `/golden_path_app.v1.GreetingService/<Method>`). `Service`
+    // also implements the Connect `GreetingService` trait (see
+    // `handlers::greeting_connect`), delegating to the same shared core — so a
+    // create over REST is visible to a get over Connect and vice-versa.
     use crate::connect_gen::golden_path_app::v1::GreetingServiceExt;
-    let connect_router = GreetingServiceExt::register(Arc::new(svc), connectrpc::Router::new());
+    let connect_router =
+        GreetingServiceExt::register(std::sync::Arc::new(svc), connectrpc::Router::new());
 
-    // Both on one listener: REST routes are explicit; everything else (the
-    // Connect RPC paths) falls through to the Connect service.
     Router::new()
         // Liveness/readiness for Databricks Apps and CI smoke tests.
         .route("/healthz", get(|| async { "ok" }))
         .merge(rest_routes)
+        // Both on one listener: REST routes are explicit; everything else (the
+        // Connect RPC paths) falls through to the Connect service.
         .fallback_service(connect_router.into_axum_service())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

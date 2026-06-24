@@ -12,11 +12,11 @@
 //! `just regen` before the first `cargo build` on a freshly-scaffolded tree.
 
 use connectrpc::{ConnectError, RequestContext, Response, ServiceRequest, ServiceResult};
-use golden_path_app_common::models::golden_path_app::v1::{
+use {{ project_name | snake_case }}_common::models::{{ project_name | snake_case }}::v1::{
     CreateGreetingRequest, GetGreetingRequest, Greeting,
 };
 
-use crate::connect_gen::golden_path_app::v1::GreetingService;
+use crate::connect_gen::{{ project_name | snake_case }}::v1::GreetingService;
 use crate::handlers::core::CoreError;
 use crate::handlers::greeting::Service;
 

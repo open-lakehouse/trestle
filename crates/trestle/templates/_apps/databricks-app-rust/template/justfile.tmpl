@@ -7,8 +7,10 @@ project := "{{ project_name | kebab_case }}"
 # Codegen
 # ------------------------------------------------------------------------------
 
-# Build the proto descriptor + regenerate Rust + TS code.
+# Regenerate all code from proto: buf plugins (models{% if with_connect %} + Connect facade{% endif %}),
+# then the trestle-generated server/client/TS.
 regen:
+    buf generate
     buf build -o api.bin
     trestle generate -c trestle.yaml
 {% if with_frontend -%}

@@ -44,6 +44,16 @@ categories:
     default: github
     options: [github, none]
     help: "Workflow flavour for the rendered .github/ directory."
+  - id: connect
+    display_name: "ConnectRPC API"
+    multi: false
+    optional: true
+    default: none
+    options: [on, none]
+    help: >-
+      Also serve a buf ConnectRPC API alongside REST on the same port. Forces
+      the buffa runtime and requires the `protoc-gen-connect-rust` +
+      `protoc-gen-buffa-packaging` plugins (cargo install). Off by default.
 
 # Lakehouse-side dependencies. `hard:` is silently auto-enabled; `soft:` is
 # pre-checked in the relevant category multi-select but can be deselected.
@@ -60,6 +70,7 @@ lakehouse_requires:
 components:
   - { name: frontend-react, kind: local, path: components/frontend-react, when: "with_frontend" }
   - { name: ci-github,      kind: local, path: components/ci-github,      when: "with_ci" }
+  - { name: connect-rust,   kind: local, path: components/connect-rust,   when: "with_connect" }
 
 template_context:
   has_app: true

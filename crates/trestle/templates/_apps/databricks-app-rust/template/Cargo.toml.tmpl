@@ -41,3 +41,8 @@ prost = "0.14"
 prost-types = "0.14"
 {%- endif %}
 async-trait = "0.1"
+{%- if with_connect %}
+# ConnectRPC server runtime + the http-body trait its generated client refers to.
+connectrpc = { version = "0.7", features = ["server", "axum"] }
+http-body = "1"
+{%- endif %}

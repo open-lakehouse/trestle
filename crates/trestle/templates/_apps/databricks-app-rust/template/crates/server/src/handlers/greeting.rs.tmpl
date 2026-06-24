@@ -1,9 +1,9 @@
-//! Implementation of the starter `Greeting` service.
+//! REST handler for the starter `Greeting` service.
 //!
-//! The handler trait (`GreetingHandler`) is generated from the proto under
-//! `crate::codegen::greeting`; this file implements it. Storage here is a trivial
-//! in-memory map standing in for a real backend (Postgres, Unity Catalog, …) —
-//! swap `Service`'s store for your backend and the handler logic stays put.
+//! Implements the generated `GreetingHandler` trait (in `crate::codegen::greeting`)
+//! by delegating to the protocol-agnostic [`GreetingCore`].{% if with_connect %} The Connect handler
+//! (`handlers::greeting_connect`) delegates to the SAME core, so both transports
+//! share one implementation.{% endif %}
 //!
 //! To add an RPC: edit `proto/{{ project_name | snake_case }}/v1/service.proto`,
 //! run `just regen` (regenerates the trait + route fns), then add the method
@@ -12,25 +12,40 @@
 //! NOTE: this references generated code, so run `just regen` before the first
 //! `cargo build` on a freshly-scaffolded tree.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
 use async_trait::async_trait;
 use {{ project_name | snake_case }}_common::models::{{ project_name | snake_case }}::v1::*;
 
 use crate::api::{Error, RequestContext, Result};
 use crate::codegen::greeting::GreetingHandler;
+use crate::handlers::core::{CoreError, GreetingCore};
 
-/// In-memory greeting store — the "business core". Keyed by resource name
-/// (`greetings/{uuid}`). Cloneable so it can be Axum router state.
+/// REST-facing service: a thin wrapper over the shared [`GreetingCore`].
 #[derive(Default, Clone)]
 pub struct Service {
-    store: Arc<Mutex<HashMap<String, Greeting>>>,
+    core: GreetingCore,
 }
 
 impl Service {
     pub fn new() -> Self {
         Self::default()
+    }
+{%- if with_connect %}
+
+    /// Expose the shared core so `main.rs` can hand the same instance to the
+    /// Connect handler (so both transports see the same data).
+    pub fn core(&self) -> GreetingCore {
+        self.core.clone()
+    }
+{%- endif %}
+}
+
+/// Map domain errors onto the REST error envelope.
+impl From<CoreError> for Error {
+    fn from(e: CoreError) -> Self {
+        match e {
+            CoreError::InvalidArgument(m) => Error::BadRequest(m),
+            CoreError::NotFound(m) => Error::NotFound(m),
+        }
     }
 }
 
@@ -43,23 +58,11 @@ impl GreetingHandler for Service {
     ) -> Result<Greeting> {
         let input = request
             .greeting
+            {%- if runtime == 'buffa' %}
             .into_option()
+            {%- endif %}
             .ok_or_else(|| Error::BadRequest("greeting is required".into()))?;
-        if input.recipient.is_empty() {
-            return Err(Error::BadRequest("recipient is required".into()));
-        }
-
-        // Server-assigned identity + the OUTPUT_ONLY rendered message.
-        let name = format!("greetings/{}", uuid::Uuid::new_v4());
-        let greeting = Greeting {
-            name: name.clone(),
-            recipient: input.recipient.clone(),
-            message: format!("hello, {}!", input.recipient),
-            ..Default::default()
-        };
-
-        self.store.lock().unwrap().insert(name, greeting.clone());
-        Ok(greeting)
+        Ok(self.core.create(&input.recipient)?)
     }
 
     async fn get_greeting(
@@ -67,11 +70,6 @@ impl GreetingHandler for Service {
         request: GetGreetingRequest,
         _context: RequestContext,
     ) -> Result<Greeting> {
-        self.store
-            .lock()
-            .unwrap()
-            .get(&request.name)
-            .cloned()
-            .ok_or_else(|| Error::NotFound(format!("greeting `{}` not found", request.name)))
+        Ok(self.core.get(&request.name)?)
     }
 }

@@ -9,13 +9,12 @@ name = "golden-path-app-server"
 path = "src/main.rs"
 
 [features]
-# The generated server route fns (`gen/<service>/server.rs`) are gated behind an
-# `axum` feature (`#[cfg(feature = "axum")]`). Making the `axum` dependency
-# optional auto-creates a matching feature; enable it by default so the binary
-# builds out of the box.
+# The generated route fns (`gen/<service>/server.rs`) and the request extractors
+# in the common crate are gated behind an `axum` feature. Making `axum` an
+# optional dep auto-creates the matching feature; enabling it also turns on the
+# common crate's `axum` feature so its extractors compile. On by default so the
+# binary builds out of the box.
 default = ["axum"]
-# Enabling the server's `axum` feature must also turn on the matching feature in
-# the common crate, so its generated request extractors compile.
 axum = ["dep:axum", "golden-path-app-common/axum"]
 
 [dependencies]
@@ -33,7 +32,7 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 buffa = { workspace = true, features = ["json"] }
 buffa-types = { workspace = true }
-connectrpc = { workspace = true }
-http-body = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+connectrpc = { workspace = true }
+http-body = { workspace = true }

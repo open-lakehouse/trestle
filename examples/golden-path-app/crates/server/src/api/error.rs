@@ -8,7 +8,11 @@ use serde_json::json;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+// `#[allow(dead_code)]`: the starter handler only constructs a couple of these
+// variants; the rest are the standard set real handlers reach for. Kept so the
+// scaffold compiles under `-D warnings`.
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum Error {
     #[error("{0}")]
     BadRequest(String),

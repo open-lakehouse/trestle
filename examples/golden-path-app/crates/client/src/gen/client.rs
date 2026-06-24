@@ -1,8 +1,8 @@
 // @generated — do not edit by hand.
-use olai_http::CloudClient;
-use url::Url;
 use crate::codegen::greeting::*;
 use golden_path_app_common::models::golden_path_app::v1::*;
+use olai_http::CloudClient;
+use url::Url;
 #[derive(Clone)]
 pub struct GoldenPathAppClient {
     client: CloudClient,

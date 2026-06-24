@@ -1,9 +1,16 @@
-//! REST handler for the `Greeting` service.
+//! REST handler for the starter `Greeting` service.
 //!
 //! Implements the generated `GreetingHandler` trait (in `crate::codegen::greeting`)
 //! by delegating to the protocol-agnostic [`GreetingCore`]. The Connect handler
 //! (`handlers::greeting_connect`) delegates to the SAME core, so both transports
 //! share one implementation.
+//!
+//! To add an RPC: edit `proto/golden_path_app/v1/service.proto`,
+//! run `just regen` (regenerates the trait + route fns), then add the method
+//! here and mount its route in `main.rs`.
+//!
+//! NOTE: this references generated code, so run `just regen` before the first
+//! `cargo build` on a freshly-scaffolded tree.
 
 use async_trait::async_trait;
 use golden_path_app_common::models::golden_path_app::v1::*;

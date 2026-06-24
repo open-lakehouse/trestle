@@ -16,11 +16,14 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --workspace --lib --tests
@@ -28,26 +31,42 @@ jobs:
   proto:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: bufbuild/buf-setup-action@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
       - run: buf lint
       - name: buf breaking against main
         if: github.event_name == 'pull_request'
-        run: buf breaking --against "${{ '{{' }} github.event.pull_request.base.repo.clone_url {{ '}}' }}#branch=${{ '{{' }} github.base_ref {{ '}}' }}"
+        # Pass the refs through `env`, not direct expansion in the run script, so
+        # an attacker-controlled value can't inject shell (zizmor template-injection).
+        env:
+          BASE_REPO_URL: ${{ '{{' }} github.event.pull_request.base.repo.clone_url {{ '}}' }}
+          BASE_REF: ${{ '{{' }} github.base_ref {{ '}}' }}
+        run: buf breaking --against "${BASE_REPO_URL}#branch=${BASE_REF}"
 
   codegen-drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: bufbuild/buf-setup-action@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
       - name: install trestle
         run: cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
-      - name: rebuild proto descriptor
-        run: buf build -o api.bin
+{%- if with_connect %}
+      - name: install connect codegen plugins
+        run: cargo install protoc-gen-connect-rust protoc-gen-buffa-packaging
+{%- endif %}
       - name: regenerate code
-        run: trestle generate -c trestle.yaml
+        run: |
+          buf generate
+          buf build -o api.bin
+          trestle generate -c trestle.yaml
       - name: assert clean tree
         run: |
           git diff --exit-code || {
@@ -62,8 +81,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm

@@ -17,6 +17,11 @@ mod api;
 // mounted under the `codegen` alias (matching the client crate).
 #[path = "gen/mod.rs"]
 mod codegen;
+{%- if with_connect %}
+// Generated ConnectRPC service facade (buffa views + connectrpc traits).
+#[path = "connect_gen/mod.rs"]
+mod connect_gen;
+{%- endif %}
 mod handlers;
 
 #[tokio::main]
@@ -49,7 +54,7 @@ fn build_router() -> Router {
 
     use crate::codegen::greeting::server::{create_greeting, get_greeting};
     use handlers::greeting::Service;
-    let greeting_routes = Router::new()
+    let rest_routes = Router::new()
         // POST /v1/greetings  (google.api.http: post "/v1/greetings", body "greeting")
         .route(
             "/v1/greetings",
@@ -59,12 +64,28 @@ fn build_router() -> Router {
         // Wildcard so the captured `name` keeps the `greetings/` prefix that makes
         // up the resource name the client sends back.
         .route("/v1/{*name}", get(get_greeting::<Service, api::RequestContext>))
-        .with_state(svc);
+        .with_state(svc{% if with_connect %}.clone(){% endif %});
+{%- if with_connect %}
+
+    // The Connect surface (generated facade; POSTs to
+    // `/{{ project_name | snake_case }}.v1.GreetingService/<Method>`). `Service`
+    // also implements the Connect `GreetingService` trait (see
+    // `handlers::greeting_connect`), delegating to the same shared core — so a
+    // create over REST is visible to a get over Connect and vice-versa.
+    use crate::connect_gen::{{ project_name | snake_case }}::v1::GreetingServiceExt;
+    let connect_router =
+        GreetingServiceExt::register(std::sync::Arc::new(svc), connectrpc::Router::new());
+{%- endif %}
 
     Router::new()
         // Liveness/readiness for Databricks Apps and CI smoke tests.
         .route("/healthz", get(|| async { "ok" }))
-        .merge(greeting_routes)
+        .merge(rest_routes)
+{%- if with_connect %}
+        // Both on one listener: REST routes are explicit; everything else (the
+        // Connect RPC paths) falls through to the Connect service.
+        .fallback_service(connect_router.into_axum_service())
+{%- endif %}
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
 }
