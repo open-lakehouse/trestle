@@ -1,5 +1,6 @@
 // @generated — do not edit by hand.
 #![allow(unexpected_cfgs)]
+#![allow(clippy::empty_docs)]
 use std::collections::HashMap;
 pub use golden_path_app::v1::Greeting;
 pub type PropertyMap = HashMap<String, serde_json::Value>;

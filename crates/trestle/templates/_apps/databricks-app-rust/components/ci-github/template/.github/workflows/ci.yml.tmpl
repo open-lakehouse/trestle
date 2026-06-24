@@ -60,7 +60,8 @@ jobs:
         run: cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
 {%- if with_connect %}
       - name: install connect codegen plugins
-        run: cargo install protoc-gen-connect-rust protoc-gen-buffa-packaging
+        # `protoc-gen-connect-rust` ships in the `connectrpc-codegen` crate.
+        run: cargo install --locked connectrpc-codegen protoc-gen-buffa protoc-gen-buffa-packaging
 {%- endif %}
       - name: regenerate code
         run: |

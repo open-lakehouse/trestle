@@ -1,6 +1,8 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
+type BoxStr<'a, T> = ::futures::stream::BoxStream<'a, T>;
+use futures::{TryStreamExt, StreamExt};
 use super::super::stream_paginated;
 use std::future::IntoFuture;
 use crate::Result;
@@ -28,7 +30,7 @@ impl CreateCatalogBuilder {
 }
 impl IntoFuture for CreateCatalogBuilder {
     type Output = Result<Catalog>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -53,7 +55,7 @@ impl GetCatalogBuilder {
 }
 impl IntoFuture for GetCatalogBuilder {
     type Output = Result<Catalog>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -81,9 +83,9 @@ impl ListCatalogsBuilder {
         Self { client, request }
     }
     /// Convert paginated request into stream of results
-    pub fn into_stream(self) -> BoxStream<'static, Result<Catalog>> {
+    pub fn into_stream(self) -> BoxStr<'static, Result<Catalog>> {
         let remaining = self.request.max_results;
-        stream_paginated(
+        let stream = stream_paginated(
                 (self, remaining),
                 move |(mut builder, mut remaining), page_token| async move {
                     builder.request.page_token = page_token;
@@ -100,13 +102,13 @@ impl ListCatalogsBuilder {
                 },
             )
             .map_ok(|resp| futures::stream::iter(resp.catalogs.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+            .try_flatten();
+        stream.boxed()
     }
 }
 impl IntoFuture for ListCatalogsBuilder {
     type Output = Result<ListCatalogsResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -136,7 +138,7 @@ impl UpdateCatalogBuilder {
 }
 impl IntoFuture for UpdateCatalogBuilder {
     type Output = Result<Catalog>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -161,7 +163,7 @@ impl DeleteCatalogBuilder {
 }
 impl IntoFuture for DeleteCatalogBuilder {
     type Output = Result<DeleteCatalogResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -189,7 +191,7 @@ impl GenerateCatalogTokenBuilder {
 }
 impl IntoFuture for GenerateCatalogTokenBuilder {
     type Output = Result<CatalogToken>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -214,7 +216,7 @@ impl GetCatalogStatusBuilder {
 }
 impl IntoFuture for GetCatalogStatusBuilder {
     type Output = Result<CatalogStatus>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;

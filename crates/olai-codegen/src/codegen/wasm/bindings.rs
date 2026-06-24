@@ -63,6 +63,10 @@ pub(crate) fn generate_bindings(services: &[ServiceHandler<'_>]) -> crate::error
     });
 
     let tokens = quote! {
+        // The whole bindings module is browser-only: it pulls in `wasm-bindgen`
+        // and `olai-http-wasm` (both wasm32-target deps). Gating the file means a
+        // native `cargo build` of the same client crate skips it entirely.
+        #![cfg(target_arch = "wasm32")]
         #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
 
         use wasm_bindgen::prelude::*;

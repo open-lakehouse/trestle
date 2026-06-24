@@ -37,3 +37,9 @@ async-trait = "0.1"
 # ConnectRPC server runtime + the http-body trait its generated client refers to.
 connectrpc = { version = "0.7", features = ["server", "axum"] }
 http-body = "1"
+# Browser client: the generated client compiles to wasm32 against this fetch-based
+# transport, with wasm-bindgen glue (built by `just build-wasm`).
+olai-http-wasm = "0.0.2"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"

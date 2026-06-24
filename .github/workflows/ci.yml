@@ -125,3 +125,53 @@ jobs:
           toolchain: "1.87"
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - run: cargo build --locked --release --all-targets
+
+  example:
+    name: Golden-path example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+      # `examples/golden-path-app` is `connect=on`, so it needs trestle (this
+      # working tree) + the local connect/buffa codegen plugins.
+      - name: Install trestle + codegen plugins
+        run: |
+          cargo install --path crates/trestle --bin trestle --locked
+          # The `protoc-gen-connect-rust` binary ships in the `connectrpc-codegen`
+          # crate (the crate literally named `protoc-gen-connect-rust` is empty).
+          cargo install --locked connectrpc-codegen protoc-gen-buffa protoc-gen-buffa-packaging
+      # Regenerate everything the committed example ships, then prove it neither
+      # diverges nor breaks. The committed deps are the published versions (the
+      # registry has them; a developer's proxy may lag, hence local path-dep +
+      # revert-before-push — see examples/golden-path-app/Cargo.toml).
+      - name: Regenerate the example
+        working-directory: examples/golden-path-app
+        run: |
+          buf dep update
+          buf generate
+          buf build -o api.bin
+          trestle generate -c trestle.yaml
+      - name: Apply the post-codegen pass (clippy --fix + fmt)
+        working-directory: examples/golden-path-app
+        run: |
+          cargo clippy --fix --allow-dirty --allow-staged --workspace --all-targets || true
+          cargo fmt
+      - name: Assert the committed example does not diverge
+        working-directory: examples/golden-path-app
+        run: |
+          git diff --exit-code -- . ':(exclude)api.bin' || {
+            echo "::error::The committed example diverges from a fresh regen + clippy-fix + fmt. Run 'just regen' in examples/golden-path-app and commit the result."
+            exit 1
+          }
+      - name: Build + lint the example
+        working-directory: examples/golden-path-app
+        run: |
+          cargo build --workspace
+          cargo clippy --all-targets -- -D warnings

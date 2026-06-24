@@ -22,9 +22,17 @@ generate:
   models_path_crate_template: "crate::models::{service}::v1"
   python_typings_filename: client.pyi
 
+  # JS/TS binding names, shared by the WASM bindings below. (No `output:` here, so
+  # the NAPI TypeScript client is NOT generated — the browser uses the WASM client.)
   typescript:
-    output: frontend/src/api
     aggregate_client_name: "GoldenPathAppClient"
     client_crate_name: "golden-path-app-client"
     error_base_class: "ApiError"
     error_code_prefix: "GOLDEN_PATH_APP_"
+
+  # Browser client: `#[wasm_bindgen]` glue + `client.d.ts`, compiled to wasm32
+  # from the client crate by `wasm-pack` (`just build-wasm`). Enabling this also
+  # flips the generated Rust client into dual-transport (cfg-gated CloudClient /
+  # WasmClient) mode.
+  wasm:
+    output: crates/client/src/wasm

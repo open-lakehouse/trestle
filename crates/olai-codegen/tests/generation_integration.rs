@@ -249,6 +249,64 @@ fn wasm_bindings_and_dts_are_emitted() {
     );
 }
 
+/// When WASM output is enabled, the generated client crate is built to compile
+/// BOTH natively (`CloudClient`) and for the browser (`WasmClient`), selected by
+/// `cfg(target_arch = "wasm32")` — so one crate serves server-side Rust consumers
+/// and the frontend. The cloud-only ctors are gated to native; a browser ctor is
+/// gated to wasm.
+#[test]
+fn wasm_output_emits_dual_cfg_gated_transport() {
+    let tmp = TempDir::new().unwrap();
+    let common = tmp.path().join("common");
+    let client = tmp.path().join("client");
+    let wasm = tmp.path().join("wasm");
+    for d in [&common, &client, &wasm] {
+        std::fs::create_dir_all(d).expect("create dir");
+    }
+    let mut config = rust_config(tmp.path());
+    // Enabling wasm output flips the client into dual-transport mode.
+    config.output.wasm = Some(wasm);
+    config.bindings = Some(BindingsConfig {
+        aggregate_client_name: "ExampleClient".into(),
+        client_crate_name: "example_client".into(),
+        py_error_type: "PyExampleError".into(),
+        py_result_type: "PyExampleResult".into(),
+        napi_error_ext_trait: "NapiErrorExt".into(),
+        typings_package_filter: None,
+        ts_error_base_class: "ExampleError".into(),
+        ts_error_code_prefix: "EX".into(),
+    });
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+
+    // Both transports present, each gated by target arch.
+    assert!(
+        client_src.contains("cfg(target_arch = \"wasm32\")")
+            || client_src.contains("cfg(target_arch = \"wasm32\")"),
+        "dual-transport client must gate on target_arch"
+    );
+    assert!(
+        client_src.contains("CloudClient") && client_src.contains("WasmClient"),
+        "dual-transport client must reference both CloudClient and WasmClient"
+    );
+    // Cloud ctors gated to native; browser ctor gated to wasm.
+    assert!(
+        client_src.contains("new_with_token") && client_src.contains("new_in_browser"),
+        "expected native cloud ctors + the browser ctor"
+    );
+
+    // Every emitted client file must still parse as valid Rust.
+    for path in walk(&tmp.path().join("client"))
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+    {
+        let src = std::fs::read_to_string(&path).expect("read generated file");
+        syn::parse_file(&src)
+            .unwrap_or_else(|e| panic!("generated {} is invalid Rust: {e}", path.display()));
+    }
+}
+
 // ── Generated code is syntactically valid Rust ───────────────────────────────
 
 /// Every emitted `.rs` file must parse as a Rust source file.

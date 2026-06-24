@@ -1,6 +1,8 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
+type BoxStr<'a, T> = ::futures::stream::BoxStream<'a, T>;
+use futures::{TryStreamExt, StreamExt};
 use super::super::stream_paginated;
 use std::future::IntoFuture;
 use crate::Result;
@@ -30,7 +32,7 @@ impl CreateSchemaBuilder {
 }
 impl IntoFuture for CreateSchemaBuilder {
     type Output = Result<Schema>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -59,7 +61,7 @@ impl GetSchemaBuilder {
 }
 impl IntoFuture for GetSchemaBuilder {
     type Output = Result<Schema>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -88,9 +90,9 @@ impl ListSchemasBuilder {
         Self { client, request }
     }
     /// Convert paginated request into stream of results
-    pub fn into_stream(self) -> BoxStream<'static, Result<Schema>> {
+    pub fn into_stream(self) -> BoxStr<'static, Result<Schema>> {
         let remaining = self.request.max_results;
-        stream_paginated(
+        let stream = stream_paginated(
                 (self, remaining),
                 move |(mut builder, mut remaining), page_token| async move {
                     builder.request.page_token = page_token;
@@ -107,13 +109,13 @@ impl ListSchemasBuilder {
                 },
             )
             .map_ok(|resp| futures::stream::iter(resp.schemas.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+            .try_flatten();
+        stream.boxed()
     }
 }
 impl IntoFuture for ListSchemasBuilder {
     type Output = Result<ListSchemasResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -146,7 +148,7 @@ impl UpdateSchemaBuilder {
 }
 impl IntoFuture for UpdateSchemaBuilder {
     type Output = Result<Schema>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -173,7 +175,7 @@ impl DeleteSchemaBuilder {
 }
 impl IntoFuture for DeleteSchemaBuilder {
     type Output = Result<DeleteSchemaResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;

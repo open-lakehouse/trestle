@@ -72,19 +72,54 @@ fn generate_builders_module(
     let has_list = service
         .methods()
         .any(|m| matches!(m.plan.request_type, RequestType::List));
-    let stream_imports = if has_list {
+
+    // Boxed future/stream aliases the `IntoFuture` / `into_stream` impls return.
+    // Natively they're `Send` (`BoxFuture`/`BoxStream`). In dual-transport (WASM)
+    // mode the browser transport's futures are `!Send`, so on wasm32 we alias to
+    // the `Local*` (non-Send) variants — keeping one set of impls that compile
+    // for both targets.
+    let box_aliases = if service.config.dual_transport() {
+        let stream_alias = if has_list {
+            quote! {
+                #[cfg(not(target_arch = "wasm32"))]
+                type BoxStr<'a, T> = ::futures::stream::BoxStream<'a, T>;
+                #[cfg(target_arch = "wasm32")]
+                type BoxStr<'a, T> = ::futures::stream::LocalBoxStream<'a, T>;
+            }
+        } else {
+            quote! {}
+        };
         quote! {
-            use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+            #[cfg(not(target_arch = "wasm32"))]
+            type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
+            #[cfg(target_arch = "wasm32")]
+            type BoxFut<'a, T> = ::futures::future::LocalBoxFuture<'a, T>;
+            #stream_alias
+        }
+    } else {
+        let stream_alias = if has_list {
+            quote! { type BoxStr<'a, T> = ::futures::stream::BoxStream<'a, T>; }
+        } else {
+            quote! {}
+        };
+        quote! {
+            type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
+            #stream_alias
+        }
+    };
+    let stream_helper_imports = if has_list {
+        quote! {
+            use futures::{TryStreamExt, StreamExt};
             use super::super::stream_paginated;
         }
     } else {
-        // Non-list builders still return a `BoxFuture` from `IntoFuture`.
-        quote! { use futures::future::BoxFuture; }
+        quote! {}
     };
 
     let tokens = quote! {
         #![allow(unused_mut)]
-        #stream_imports
+        #box_aliases
+        #stream_helper_imports
         use std::future::IntoFuture;
         use #result_path;
         use #mod_path::*;
@@ -404,7 +439,7 @@ fn generate_into_future_impl(
         quote! {
             impl IntoFuture for #builder_ident {
                 type Output = Result<#out_ident>;
-                type IntoFuture = BoxFuture<'static, Self::Output>;
+                type IntoFuture = BoxFut<'static, Self::Output>;
 
                 fn into_future(self) -> Self::IntoFuture {
                     let client = self.client;
@@ -417,7 +452,7 @@ fn generate_into_future_impl(
         quote! {
             impl IntoFuture for #builder_ident {
                 type Output = Result<()>;
-                type IntoFuture = BoxFuture<'static, Self::Output>;
+                type IntoFuture = BoxFut<'static, Self::Output>;
 
                 fn into_future(self) -> Self::IntoFuture {
                     let client = self.client;
@@ -477,11 +512,25 @@ fn generate_into_stream_impl(
     let item_field_ident = format_ident!("{}", items_field.name);
     let output_type_ident = items_field.unified_type.type_ident();
 
+    // The browser stream is `!Send`, so on wasm32 box it with `boxed_local()`
+    // (→ `LocalBoxStream`, the `BoxStr` alias resolves to). Natively, `boxed()`.
+    let boxer = if method.config.dual_transport() {
+        quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            let stream = stream.boxed();
+            #[cfg(target_arch = "wasm32")]
+            let stream = stream.boxed_local();
+            stream
+        }
+    } else {
+        quote! { stream.boxed() }
+    };
+
     Ok(quote! {
         /// Convert paginated request into stream of results
-        pub fn into_stream(self) -> BoxStream<'static, Result<#output_type_ident>> {
+        pub fn into_stream(self) -> BoxStr<'static, Result<#output_type_ident>> {
             let remaining = self.request.max_results;
-            stream_paginated((self, remaining), move |(mut builder, mut remaining), page_token| async move {
+            let stream = stream_paginated((self, remaining), move |(mut builder, mut remaining), page_token| async move {
                 builder.request.page_token = page_token;
                 let res = builder.client.#client_method_name(&builder.request).await?;
                 if let Some(ref mut rem) = remaining {
@@ -495,8 +544,8 @@ fn generate_into_stream_impl(
                 Ok((res, (builder, remaining), next_page_token))
             })
             .map_ok(|resp| futures::stream::iter(resp.#item_field_ident.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+            .try_flatten();
+            #boxer
         }
     })
 }

@@ -1,27 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-// Once `just regen` has run, swap this stub for the real client:
-//
-//   import { GoldenPathAppClient, ApiError } from "@/api";
-//
-// The generated client targets the same origin the app is served from, so the
-// React app works locally (via Vite's /v1 proxy) and on Databricks (via the
-// platform edge) with zero env-conditional code.
+// The browser client is generated from your proto and compiled to WASM by
+// `just build-wasm` (output in `src/wasm/`). It speaks to the same origin the
+// app is served from, so this works locally (via Vite's /v1 proxy) and on
+// Databricks (via the platform edge) with zero env-conditional code.
+import init, { GoldenPathAppClient } from "@/wasm/client";
 
 interface Greeting {
   name: string;
   recipient: string;
   message: string;
-}
-
-async function createGreeting(recipient: string): Promise<Greeting> {
-  const r = await fetch("/v1/greetings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ greeting: { recipient } }),
-  });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
 }
 
 const PAGE_STYLE = { fontFamily: "system-ui", padding: 24 } as const;
@@ -30,15 +18,26 @@ const RESULT_STYLE = { marginTop: 16 } as const;
 const ERROR_STYLE = { color: "crimson" } as const;
 
 export default function App() {
+  const [client, setClient] = useState<GoldenPathAppClient | null>(null);
   const [recipient, setRecipient] = useState("world");
   const [greeting, setGreeting] = useState<Greeting | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Initialize the WASM module once, then construct the generated client.
+  useEffect(() => {
+    init()
+      .then(() => setClient(new GoldenPathAppClient(window.location.origin)))
+      .catch((e) => setError(String(e)));
+  }, []);
 
 
   return (
     <div style={PAGE_STYLE}>
       <h1>golden-path-app</h1>
-      <p>Local Databricks-style Rust app, scaffolded by trestle.</p>
+      <p>
+        Local Databricks-style Rust app, scaffolded by trestle. The greeting
+        below is created through the generated WASM client.
+      </p>
 
       <input
         value={recipient}
@@ -46,9 +45,15 @@ export default function App() {
         style={INPUT_STYLE}
       />
       <button
+        disabled={!client}
         onClick={async () => {
           try {
-            setGreeting(await createGreeting(recipient));
+            // `greeting()` is the per-service accessor; `createGreeting` takes the
+            // RPC request ({ greeting: { recipient } }) and returns the created resource.
+            const created = await client!
+              .greeting()
+              .createGreeting({ greeting: { recipient } });
+            setGreeting(created as Greeting);
             setError(null);
           } catch (e) {
             setError(String(e));

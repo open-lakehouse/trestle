@@ -34,19 +34,10 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     let mod_path = service.models_path();
     let result_path: syn::Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
-    let transport_path: syn::Path =
-        syn::parse_str(&service.config.transport_type_path).expect("valid transport_type_path");
-    // Import the transport by its full path but refer to it by its final segment, so the
-    // emitted struct/fn signatures stay bare (`CloudClient`, not `olai_http::CloudClient`) —
-    // keeping default output byte-for-byte identical to the pre-seam generator.
-    let transport_ident = &transport_path
-        .segments
-        .last()
-        .expect("transport_type_path has at least one segment")
-        .ident;
+    let (transport_import, transport_ident) = transport_tokens(service.config);
 
     let tokens = quote! {
-        use #transport_path;
+        #transport_import
         use url::Url;
         use #result_path;
         use #mod_path::*;
@@ -72,6 +63,39 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     };
 
     format_tokens(tokens)
+}
+
+/// The transport import + the identifier generated client code refers to it by.
+///
+/// - **Single transport** (default): emit `use <transport_type_path>;` and refer
+///   to the transport by its final segment (`CloudClient`), keeping native-only
+///   output simple.
+/// - **Dual transport** ([`CodeGenConfig::dual_transport`], i.e. WASM output is
+///   enabled): emit a `cfg(target_arch = "wasm32")`-gated alias so the one client
+///   crate builds natively against `CloudClient` and for the browser against
+///   `olai_http_wasm::WasmClient`, and refer to it by the alias `Transport`.
+pub(crate) fn transport_tokens(
+    config: &crate::codegen::CodeGenConfig,
+) -> (TokenStream, proc_macro2::Ident) {
+    if config.dual_transport() {
+        let import = quote! {
+            #[cfg(not(target_arch = "wasm32"))]
+            use ::olai_http::CloudClient as Transport;
+            #[cfg(target_arch = "wasm32")]
+            use ::olai_http_wasm::WasmClient as Transport;
+        };
+        (import, format_ident!("Transport"))
+    } else {
+        let transport_path: syn::Path =
+            syn::parse_str(&config.transport_type_path).expect("valid transport_type_path");
+        let ident = transport_path
+            .segments
+            .last()
+            .expect("transport_type_path has at least one segment")
+            .ident
+            .clone();
+        (quote! { use #transport_path; }, ident)
+    }
 }
 
 /// Generate client method implementation

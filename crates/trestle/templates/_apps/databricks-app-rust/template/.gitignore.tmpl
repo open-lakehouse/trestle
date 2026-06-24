@@ -15,7 +15,9 @@ crates/client/src/gen/
 crates/server/src/connect_gen/
 {%- endif %}
 {% if with_frontend -%}
-frontend/src/api/
+# Browser WASM client: a build artifact from `just build-wasm` (wasm-pack), not
+# committed — regenerate it rather than tracking the .wasm binary.
+frontend/src/wasm/
 frontend/node_modules/
 frontend/dist/
 {%- endif %}

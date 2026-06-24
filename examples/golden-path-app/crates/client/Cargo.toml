@@ -6,13 +6,15 @@ license.workspace = true
 
 [lib]
 doctest = false
+# `cdylib` so the client can be built to a browser module with `wasm-pack`
+# (`just build-wasm`); `rlib` keeps it usable as a normal Rust dependency.
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 golden-path-app-common = { path = "../common" }
 reqwest = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
-olai-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -20,3 +22,18 @@ buffa = { workspace = true, features = ["json"] }
 buffa-types = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+
+# Transport is selected by target: the native cloud client off-wasm, the
+# browser (fetch) client on wasm32. The generated client picks between them with
+# `cfg(target_arch = "wasm32")`, so the one crate builds both ways.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+olai-http = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+olai-http-wasm = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+# `uuid` needs a browser randomness source on wasm32 (it errors at compile time
+# otherwise); the `js` feature wires it to the Web Crypto API.
+uuid = { workspace = true, features = ["js"] }

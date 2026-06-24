@@ -421,8 +421,10 @@ fn build_config(
     file_cfg: &FileGenerateConfig,
     models_gen_dir: Option<String>,
 ) -> Result<CodeGenConfig> {
-    let has_bindings_output =
-        output.python.is_some() || output.node.is_some() || output.node_ts.is_some();
+    let has_bindings_output = output.python.is_some()
+        || output.node.is_some()
+        || output.node_ts.is_some()
+        || output.wasm.is_some();
 
     // Several binding names become Rust identifiers (`format_ident!`) deep in the generators,
     // which panic on empty input. Validate up front and fail with an actionable error naming
@@ -442,9 +444,12 @@ fn build_config(
         let node = file_cfg.node.as_ref();
         let ts = file_cfg.typescript.as_ref();
 
-        // Only enforce names for the outputs actually requested.
+        // The TS/JS binding names (aggregate client, client crate, error base
+        // class) are shared by the NAPI TypeScript client and the WASM bindings —
+        // both read them from the `typescript:` block. Require them when either is
+        // requested.
         let (aggregate_client_name, client_crate_name, ts_error_base_class) =
-            if output.node_ts.is_some() {
+            if output.node_ts.is_some() || output.wasm.is_some() {
                 (
                     require(
                         ts.and_then(|c| c.aggregate_client_name.clone()),

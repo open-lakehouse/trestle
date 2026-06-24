@@ -8,12 +8,19 @@ project := "golden-path-app"
 # ------------------------------------------------------------------------------
 
 # Regenerate all code from proto: buf plugins (models + Connect facade),
-# then the trestle-generated server/client/TS.
+# then the trestle-generated server/client/TS, then the browser WASM client.
 regen:
     buf generate
     buf build -o api.bin
     trestle generate -c trestle.yaml
-cd frontend && npm install
+    just build-wasm
+    cd frontend && npm install
+
+# Compile the generated client crate to a browser WASM module (requires
+# `wasm-pack`: `cargo install wasm-pack`). Output lands in `frontend/src/wasm/`,
+# imported by the app via the `@/wasm` alias.
+build-wasm:
+    wasm-pack build crates/client --target web --out-dir ../../frontend/src/wasm --out-name client
 
 
 # ------------------------------------------------------------------------------
