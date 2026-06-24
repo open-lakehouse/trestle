@@ -1,27 +1,77 @@
-//! Implementation of the starter `Greeting` service. Replace this with your
-//! real handlers; the pattern is the same:
+//! Implementation of the starter `Greeting` service.
 //!
-//! 1. Define your RPCs in `proto/{{ project_name | snake_case }}/v1/service.proto`.
-//! 2. Run `just regen` to produce the handler trait + per-RPC route handler functions.
-//! 3. Implement the trait here.
-//! 4. Mount the generated handler functions onto an `axum::Router` in `main.rs`
-//!    (see `build_router`), with this `Service` as state.
+//! The handler trait (`GreetingHandler`) is generated from the proto under
+//! `crate::codegen::greeting`; this file implements it. Storage here is a trivial
+//! in-memory map standing in for a real backend (Postgres, Unity Catalog, …) —
+//! swap `Service`'s store for your backend and the handler logic stays put.
+//!
+//! To add an RPC: edit `proto/{{ project_name | snake_case }}/v1/service.proto`,
+//! run `just regen` (regenerates the trait + route fns), then add the method
+//! here and mount its route in `main.rs`.
+//!
+//! NOTE: this references generated code, so run `just regen` before the first
+//! `cargo build` on a freshly-scaffolded tree.
 
-use crate::api::{RequestContext, Result};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+use {{ project_name | snake_case }}_common::models::{{ project_name | snake_case }}::v1::*;
+
+use crate::api::{Error, RequestContext, Result};
+use crate::codegen::greeting::GreetingHandler;
+
+/// In-memory greeting store — the "business core". Keyed by resource name
+/// (`greetings/{uuid}`). Cloneable so it can be Axum router state.
 #[derive(Default, Clone)]
-pub struct Service;
+pub struct Service {
+    store: Arc<Mutex<HashMap<String, Greeting>>>,
+}
 
 impl Service {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl GreetingHandler for Service {
+    async fn create_greeting(
+        &self,
+        request: CreateGreetingRequest,
+        _context: RequestContext,
+    ) -> Result<Greeting> {
+        let input = request
+            .greeting
+            .into_option()
+            .ok_or_else(|| Error::BadRequest("greeting is required".into()))?;
+        if input.recipient.is_empty() {
+            return Err(Error::BadRequest("recipient is required".into()));
+        }
+
+        // Server-assigned identity + the OUTPUT_ONLY rendered message.
+        let name = format!("greetings/{}", uuid::Uuid::new_v4());
+        let greeting = Greeting {
+            name: name.clone(),
+            recipient: input.recipient.clone(),
+            message: format!("hello, {}!", input.recipient),
+            ..Default::default()
+        };
+
+        self.store.lock().unwrap().insert(name, greeting.clone());
+        Ok(greeting)
     }
 
-    /// Hand-written stub. Once `just regen` runs the generated trait, replace
-    /// this signature with the trait method (the compiler will tell you what to
-    /// change). Until then, keep this method around so `cargo check` succeeds
-    /// on a freshly-scaffolded tree.
-    pub async fn hello(&self, _ctx: RequestContext, who: &str) -> Result<String> {
-        Ok(format!("hello, {who}!"))
+    async fn get_greeting(
+        &self,
+        request: GetGreetingRequest,
+        _context: RequestContext,
+    ) -> Result<Greeting> {
+        self.store
+            .lock()
+            .unwrap()
+            .get(&request.name)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("greeting `{}` not found", request.name)))
     }
 }

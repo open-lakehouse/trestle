@@ -54,7 +54,14 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      # Scope to `crates/` (the library code). The `examples/` tree is a rendered
+      # template whose deps are all used only after `trestle generate` runs; the
+      # generated code isn't scanned here, so machete would false-positive on it.
+      # Excluding it centrally keeps the example's Cargo.toml honest (no fake
+      # ignore-lists that would mislead users who render the template).
       - uses: bnjbvr/cargo-machete@ac30a525c0a8d163a92d727b3ff079ee3f6ecb08 # v0.9.2
+        with:
+          args: crates
 
   msrv:
     name: MSRV

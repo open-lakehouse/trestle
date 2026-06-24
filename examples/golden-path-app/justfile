@@ -1,0 +1,74 @@
+set dotenv-load := true
+set dotenv-filename := ".env.local"
+
+project := "golden-path-app"
+
+# ------------------------------------------------------------------------------
+# Codegen
+# ------------------------------------------------------------------------------
+
+# Build the proto descriptor + regenerate Rust + TS code.
+regen:
+    buf build -o api.bin
+    trestle generate -c trestle.yaml
+cd frontend && npm install
+
+
+# ------------------------------------------------------------------------------
+# Dev loop
+# ------------------------------------------------------------------------------
+
+# Run the server (and frontend, if enabled) in watch mode.
+dev:
+    docker compose --profile dev up -d
+    cargo run -p golden-path-app-server &
+    cd frontend && npm run dev
+
+# ------------------------------------------------------------------------------
+# Local stack (delegated to compose)
+# ------------------------------------------------------------------------------
+
+# Bring up the local platform stack (Postgres, MLflow, Envoy, ...).
+up profile="svc":
+    docker compose --profile {{profile}} up -d
+
+# Stop everything and wipe volumes.
+down:
+    docker compose down -v
+
+# Tail logs (e.g. `just logs mlflow`).
+logs svc:
+    docker compose logs -f {{svc}}
+
+# Print the active envoy route table.
+routes:
+    @sed -n '/match: { prefix:/p' docker/envoy/envoy.yaml
+
+# ------------------------------------------------------------------------------
+# Databricks Apps
+# ------------------------------------------------------------------------------
+
+# Validate the asset bundle (no deploy).
+bundle-validate:
+    databricks bundle validate
+
+# Deploy the bundle.
+deploy:
+    databricks bundle deploy
+    databricks bundle run golden_path_app
+
+# ------------------------------------------------------------------------------
+# Quality
+# ------------------------------------------------------------------------------
+
+fmt:
+    cargo fmt --all
+cd frontend && npm run format
+
+lint:
+    cargo clippy --all-targets -- -D warnings
+    buf lint
+cd frontend && npm run lint
+
+test:
+    cargo test --workspace --lib --tests

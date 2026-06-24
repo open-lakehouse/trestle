@@ -1,0 +1,17 @@
+# Databricks Apps manifest for golden-path-app.
+#
+# When `databricks bundle deploy` packages the app, this file declares the
+# runtime entrypoint and the env vars the platform should inject. The HTTP
+# port is published via DATABRICKS_APP_PORT (Apps' default is 8000–8999).
+command: ["./golden-path-app-server"]
+env:
+  - name: APP_LOG
+    value: "info"
+  # Databricks Apps automatically injects these; we list them here as a
+  # reminder of the contract our code depends on.
+  - name: DATABRICKS_HOST
+    value: "$DATABRICKS_HOST"
+  - name: DATABRICKS_APP_URL
+    value: "$DATABRICKS_APP_URL"
+  - name: DATABRICKS_APP_PORT
+    value: "$DATABRICKS_APP_PORT"

@@ -1,6 +1,5 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use crate::Result;
 use crate::models::catalog::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateCatalogRequest {

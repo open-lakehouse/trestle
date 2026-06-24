@@ -21,8 +21,7 @@ generate:
   models_path_template: "{{ project_name | snake_case }}_common::models::{service}::v1"
   models_path_crate_template: "crate::models::{service}::v1"
   python_typings_filename: client.pyi
-
-{% if with_frontend -%}
+{% if with_frontend %}
   typescript:
     output: frontend/src/api
     aggregate_client_name: "{{ project_name | pascal_case }}Client"

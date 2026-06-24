@@ -1,6 +1,5 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use crate::Result;
 use crate::models::tags::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListTagAssignmentsRequest {
@@ -27,6 +26,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListTagAssignmentsRe
             entity_name,
             max_results,
             page_token,
+            ..Default::default()
         })
     }
 }
@@ -51,6 +51,7 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateTagAssignmentReques
             entity_type,
             entity_name,
             tag,
+            ..Default::default()
         })
     }
 }
@@ -68,6 +69,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetTagAssignmentRequ
             entity_type,
             entity_name,
             tag_key,
+            ..Default::default()
         })
     }
 }
@@ -85,6 +87,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteTagAssignmentR
             entity_type,
             entity_name,
             tag_key,
+            ..Default::default()
         })
     }
 }
@@ -104,6 +107,7 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for TouchTagAssignmentRequest
             entity_type,
             entity_name,
             tag_key,
+            ..Default::default()
         })
     }
 }

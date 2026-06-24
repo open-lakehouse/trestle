@@ -1,6 +1,5 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use crate::Result;
 use crate::models::catalog::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateCatalogRequest {
@@ -26,7 +25,10 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetCatalogRequest {
             .extract::<axum::extract::Path<String>>()
             .await
             .map_err(axum::response::IntoResponse::into_response)?;
-        Ok(GetCatalogRequest { name })
+        Ok(GetCatalogRequest {
+            name,
+            ..Default::default()
+        })
     }
 }
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListCatalogsRequest {
@@ -47,6 +49,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListCatalogsRequest 
         Ok(ListCatalogsRequest {
             max_results,
             page_token,
+            ..Default::default()
         })
     }
 }
@@ -70,6 +73,7 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for UpdateCatalogRequest {
         Ok(UpdateCatalogRequest {
             name,
             catalog,
+            ..Default::default()
         })
     }
 }
@@ -83,7 +87,10 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteCatalogRequest
             .extract::<axum::extract::Path<String>>()
             .await
             .map_err(axum::response::IntoResponse::into_response)?;
-        Ok(DeleteCatalogRequest { name })
+        Ok(DeleteCatalogRequest {
+            name,
+            ..Default::default()
+        })
     }
 }
 impl<S: Send + Sync> axum::extract::FromRequest<S> for GenerateCatalogTokenRequest {
@@ -109,6 +116,9 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetCatalogStatusRequ
             .extract::<axum::extract::Path<String>>()
             .await
             .map_err(axum::response::IntoResponse::into_response)?;
-        Ok(GetCatalogStatusRequest { name })
+        Ok(GetCatalogStatusRequest {
+            name,
+            ..Default::default()
+        })
     }
 }

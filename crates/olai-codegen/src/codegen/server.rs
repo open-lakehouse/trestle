@@ -38,8 +38,6 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Res
         .map(|method| from_request_extractor(&method))
         .collect_vec();
     let mod_path = service.models_path_crate();
-    let result_path: Path =
-        syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
 
     // Only import RequestPartsExt when there are FromRequestParts impls (path/query params).
     let has_parts_extractors = service.methods().any(|m| m.plan.needs_request_parts);
@@ -50,9 +48,13 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Res
         quote! { use axum::RequestExt; }
     };
 
+    // NB: these extractor impls return `Result<Self, Self::Rejection>` — the
+    // 2-arg std `Result` from the prelude, NOT the app's 1-arg `result_type`
+    // alias. This file lands in the models crate (`output_common`), which has no
+    // `crate::api`, so importing the configured `result_type` here would be both
+    // unresolvable and an arity mismatch. Do not import it.
     let tokens = quote! {
         #![allow(unused_mut)]
-        use #result_path;
         use #mod_path::*;
         #axum_imports
 
@@ -371,7 +373,15 @@ fn field_assignments(method: &MethodPlan, runtime: Runtime) -> TokenStream {
             _ => quote! { #ident },
         }
     });
-    quote! { #(#assignments,)* }
+    // buffa messages carry a hidden `__buffa_unknown_fields` field, so the
+    // struct literal can't be exhaustive — close it with `..Default::default()`.
+    // prost requests, by contrast, are fully composed of path/query/body params,
+    // so the literal is already exhaustive and a spread would be a
+    // `clippy::needless_update` warning. Only emit it for buffa.
+    match runtime {
+        Runtime::Buffa => quote! { #(#assignments,)* ..Default::default() },
+        Runtime::Prost => quote! { #(#assignments,)* },
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,29 @@
+// Starter resource for the golden-path-app service.
+//
+// The `(google.api.resource)` annotation is what tells trestle's codegen to
+// treat `Greeting` as a REST resource. The `(google.api.field_behavior)`
+// annotations control which fields are required, optional, output-only, etc.
+syntax = "proto3";
+
+package golden_path_app.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+
+message Greeting {
+  option (google.api.resource) = {
+    type: "golden-path-app.io/Greeting"
+    pattern: "greetings/{greeting}"
+    plural: "greetings"
+    singular: "greeting"
+  };
+
+  // Server-assigned. Format: `greetings/{uuid}`.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Who is being greeted.
+  string recipient = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // The rendered greeting, e.g. "hello, world!".
+  string message = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
