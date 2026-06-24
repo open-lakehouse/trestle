@@ -43,7 +43,9 @@ impl ModelsPath {
     ///
     /// Performs a test substitution at construction to validate the template.
     pub fn new(template: &str) -> Result<Self> {
-        let test = template.replace("{service}", "test").replace("{version}", "v1");
+        let test = template
+            .replace("{service}", "test")
+            .replace("{version}", "v1");
         syn::parse_str::<syn::Path>(&test).map_err(|e| Error::InvalidModelsPathTemplate {
             template: template.to_string(),
             source: e,
