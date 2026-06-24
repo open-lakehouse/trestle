@@ -1,6 +1,6 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::future::BoxFuture;
+type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
 use std::future::IntoFuture;
 use crate::Result;
 use example_common::models::catalog::v1::*;
@@ -28,7 +28,7 @@ impl ListByTagsBuilder {
 }
 impl IntoFuture for ListByTagsBuilder {
     type Output = Result<ListByTagsResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -53,7 +53,7 @@ impl ListByCatalogTypeBuilder {
 }
 impl IntoFuture for ListByCatalogTypeBuilder {
     type Output = Result<ListByTagsResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;

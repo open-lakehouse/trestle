@@ -1,6 +1,6 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::future::BoxFuture;
+type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
 use std::future::IntoFuture;
 use crate::Result;
 use example_common::models::tags::v1::*;
@@ -32,7 +32,7 @@ impl ListTagAssignmentsBuilder {
 }
 impl IntoFuture for ListTagAssignmentsBuilder {
     type Output = Result<ListTagAssignmentsResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -67,7 +67,7 @@ impl CreateTagAssignmentBuilder {
 }
 impl IntoFuture for CreateTagAssignmentBuilder {
     type Output = Result<TagAssignment>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -99,7 +99,7 @@ impl GetTagAssignmentBuilder {
 }
 impl IntoFuture for GetTagAssignmentBuilder {
     type Output = Result<TagAssignment>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -131,7 +131,7 @@ impl DeleteTagAssignmentBuilder {
 }
 impl IntoFuture for DeleteTagAssignmentBuilder {
     type Output = Result<DeleteTagAssignmentResponse>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;
@@ -163,7 +163,7 @@ impl TouchTagAssignmentBuilder {
 }
 impl IntoFuture for TouchTagAssignmentBuilder {
     type Output = Result<()>;
-    type IntoFuture = BoxFuture<'static, Self::Output>;
+    type IntoFuture = BoxFut<'static, Self::Output>;
     fn into_future(self) -> Self::IntoFuture {
         let client = self.client;
         let request = self.request;

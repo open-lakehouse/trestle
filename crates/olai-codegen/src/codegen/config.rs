@@ -225,6 +225,20 @@ impl CodeGenConfig {
         self.transport_type_path == DEFAULT_TRANSPORT_TYPE_PATH
     }
 
+    /// Whether the generated client should carry **both** transports, selected at
+    /// compile time by `cfg(target_arch = "wasm32")` — `CloudClient` for native
+    /// targets, `olai_http_wasm::WasmClient` for the browser.
+    ///
+    /// Enabled when WASM bindings output is requested (`output.wasm`): a project
+    /// that wants a browser client needs the same client crate to build both ways
+    /// (native for server-side/tests, wasm32 for the frontend). Native-only
+    /// projects leave `output.wasm` unset and keep the single
+    /// [`transport_type_path`](Self::transport_type_path) transport with no WASM
+    /// dependency.
+    pub fn dual_transport(&self) -> bool {
+        self.output.wasm.is_some()
+    }
+
     /// Validate this config without running code generation.
     ///
     /// Checks that:
