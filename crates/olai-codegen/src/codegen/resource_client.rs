@@ -678,7 +678,7 @@ mod tests {
     /// arg), `catalog_name` is the parent component (filled from `&self.catalog_name`).
     #[test]
     fn create_schema_args_split_by_parent_components() {
-        let required = vec![path("name"), path("catalog_name")];
+        let required = [path("name"), path("catalog_name")];
         let refs: Vec<&RequestParam> = required.iter().collect();
         let parents = vec!["catalog_name".to_string()];
         assert_eq!(
@@ -691,7 +691,7 @@ mod tests {
     /// arg; both `schema_name` and `catalog_name` are parent components. Order is preserved.
     #[test]
     fn create_table_args_split_preserves_builder_order() {
-        let required = vec![path("name"), path("schema_name"), path("catalog_name")];
+        let required = [path("name"), path("schema_name"), path("catalog_name")];
         let refs: Vec<&RequestParam> = required.iter().collect();
         let parents = vec!["catalog_name".to_string(), "schema_name".to_string()];
         assert_eq!(
@@ -707,7 +707,7 @@ mod tests {
     /// Extra required non-name fields (e.g. `table_type`) stay method args.
     #[test]
     fn create_args_extra_required_fields_are_method_args() {
-        let required = vec![path("name"), path("catalog_name"), path("table_type")];
+        let required = [path("name"), path("catalog_name"), path("table_type")];
         let refs: Vec<&RequestParam> = required.iter().collect();
         let parents = vec!["catalog_name".to_string()];
         assert_eq!(
@@ -725,7 +725,7 @@ mod tests {
     /// pagination knobs become method args. Order is preserved.
     #[test]
     fn list_args_parent_filter_then_pagination() {
-        let required = vec![
+        let required = [
             path("catalog_name"),
             path("max_results"),
             path("page_token"),
@@ -746,7 +746,7 @@ mod tests {
     /// filters, each filled from `self`.
     #[test]
     fn list_args_multi_parent_filters() {
-        let required = vec![
+        let required = [
             path("catalog_name"),
             path("schema_name"),
             path("max_results"),
