@@ -1,0 +1,83 @@
+// Domain model for Casper's Ghost Kitchen driver facilitation.
+//
+// SKETCH — blog narrative material, not yet wired into a built app. The
+// annotations are the same ones the working `examples/golden-path-app` uses, so
+// every "this generates …" note below is faithful to trestle's codegen.
+//
+// Proto is the source of truth: these annotations drive the resource registry,
+// the REST routes, the typed Rust client, and the browser WASM client — you
+// don't hand-write any of those.
+syntax = "proto3";
+
+package caspers.drivers.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/timestamp.proto";
+
+// A driver checked in at a ghost-kitchen site, with their availability state.
+//
+// `(google.api.resource)` registers Driver as a managed resource → it gets an
+// `ObjectLabel::Driver` variant + a `RESOURCE_DESCRIPTORS` entry (labels.rs),
+// resource-scoped clients, and hierarchical naming.
+message Driver {
+  option (google.api.resource) = {
+    type: "caspers.io/Driver"
+    pattern: "drivers/{driver}"
+    plural: "drivers"
+    singular: "driver"
+  };
+
+  // Server-assigned identity. Format `drivers/{uuid}`. IDENTIFIER → maps to the
+  // store's `Object.id`; the server fills it on check-in.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // The driver's display name. REQUIRED → a validator + a required builder arg.
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // e.g. "bike", "car". OPTIONAL → a `with_vehicle(..)` setter on the builder.
+  string vehicle = 3 [(google.api.field_behavior) = OPTIONAL];
+
+  // Availability, managed by the server (check-in / accept-order / check-out).
+  // OUTPUT_ONLY → injected on read, never accepted from the client.
+  DriverStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // When the driver checked in. OUTPUT_ONLY.
+  google.protobuf.Timestamp checked_in_at = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum DriverStatus {
+  DRIVER_STATUS_UNSPECIFIED = 0;
+  AVAILABLE = 1;     // checked in, waiting for an order
+  ON_DELIVERY = 2;   // accepted an order, out delivering
+  OFF = 3;           // checked out
+}
+
+// A delivery order, assigned to a driver. Order is a CHILD of Driver: an order
+// belongs to the driver who is delivering it.
+message Order {
+  option (google.api.resource) = {
+    type: "caspers.io/Order"
+    // Nested pattern declares Order as a child resource of Driver → the
+    // generated client exposes `driver.order(name)` navigation.
+    pattern: "drivers/{driver}/orders/{order}"
+    plural: "orders"
+    singular: "order"
+  };
+
+  // Server-assigned. Format `drivers/{driver}/orders/{uuid}`.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  // Where the food is going. REQUIRED.
+  string destination = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // Fulfillment state. OUTPUT_ONLY (server transitions it).
+  OrderStatus status = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;     // awaiting a driver
+  ASSIGNED = 2;    // handed to a driver
+  DELIVERED = 3;
+}
