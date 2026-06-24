@@ -176,7 +176,10 @@ fn low_level_client_ctor(service: &ServiceHandler<'_>) -> TokenStream {
 
 /// Emit `use` statements the aggregate needs: cloud client + url, per-service low-level clients,
 /// builder types, models (for enum/message param types), and hand-written scoped clients.
-fn generate_imports(services: &[ServiceHandler<'_>], transport_import: &TokenStream) -> TokenStream {
+fn generate_imports(
+    services: &[ServiceHandler<'_>],
+    transport_import: &TokenStream,
+) -> TokenStream {
     // Per-service low-level clients and their builders both live under `crate::codegen::<base>`.
     let codegen_imports = services.iter().map(|s| {
         let module = format_ident!("{}", s.plan.base_path);
