@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod query;
 pub mod schema;
 pub mod tag_assignments;
+#[allow(clippy::too_many_arguments, clippy::doc_lazy_continuation)]
 pub mod client;
 pub use client::*;
 use futures::Future;

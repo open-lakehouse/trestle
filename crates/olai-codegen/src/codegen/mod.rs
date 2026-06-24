@@ -519,9 +519,19 @@ fn generate_server_module(service: &ServicePlan) -> String {
 
 fn generate_client_module(has_resource_client: bool) -> String {
     // Emit the scoped resource client module only when it was generated for this service.
+    // Generated client modules structurally trip a few lints: the full client
+    // surface is emitted whether or not a given consumer calls every builder
+    // (`dead_code`), flat methods can exceed the arg-count threshold
+    // (`too_many_arguments`), and proto comment prose may wrap list items
+    // (`doc_lazy_continuation`). Allow these on the module so consumers' own
+    // `-D warnings` builds stay clean; genuine issues are fixed in the generator.
+    let allow = quote! {
+        #[allow(dead_code, clippy::too_many_arguments, clippy::doc_lazy_continuation)]
+    };
     let resource_module = if has_resource_client {
         quote! {
             pub use resource::*;
+            #allow
             pub mod resource;
         }
     } else {
@@ -532,7 +542,9 @@ fn generate_client_module(has_resource_client: bool) -> String {
         pub use builders::*;
         #resource_module
 
+        #allow
         pub mod client;
+        #allow
         pub mod builders;
     };
     format_tokens_static(tokens)
@@ -564,10 +576,70 @@ fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) ->
 
     // Export the aggregate root client (`client.rs`) when it was generated. Per-service files live
     // under `<base_path>/`, so a top-level `client` module never collides with them.
+    // The aggregate client has many flat methods (arg-count) and renders proto
+    // comment prose (doc list wrapping), so allow those structural lints.
     let aggregate_module = if has_aggregate {
         quote! {
+            #[allow(clippy::too_many_arguments, clippy::doc_lazy_continuation)]
             pub mod client;
             pub use client::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    // The `stream_paginated` helper (and its `futures::Future` import) is used
+    // only by `List` builders' `into_stream`. Emit it solely when some service
+    // has a List method, so it isn't dead code otherwise.
+    let has_list = services
+        .iter()
+        .flat_map(|s| s.methods.iter())
+        .any(|m| matches!(m.request_type, RequestType::List));
+    let pagination = if has_list {
+        quote! {
+            use futures::Future;
+
+            pub(super) fn stream_paginated<F, Fut, S, T>(
+                state: S,
+                op: F,
+            ) -> impl futures::Stream<Item = crate::Result<T>>
+            where
+                F: Fn(S, Option<String>) -> Fut + Copy,
+                Fut: Future<Output = crate::Result<(T, S, Option<String>)>>,
+            {
+                enum PaginationState<T> {
+                    Start(T),
+                    HasMore(T, String),
+                    Done,
+                }
+
+                futures::stream::unfold(
+                    PaginationState::Start(state),
+                    move |state| async move {
+                        let (s, page_token) = match state {
+                            PaginationState::Start(s) => (s, None),
+                            PaginationState::HasMore(s, page_token) if !page_token.is_empty() => {
+                                (s, Some(page_token))
+                            }
+                            _ => {
+                                return None;
+                            }
+                        };
+
+                        let (resp, s, continuation) = match op(s, page_token).await {
+                            Ok(resp) => resp,
+                            Err(e) => return Some((Err(e), PaginationState::Done)),
+                        };
+
+                        let next_state = match continuation {
+                            Some(token) => PaginationState::HasMore(s, token),
+                            None => PaginationState::Done,
+                        };
+
+                        Some((Ok(resp), next_state))
+                    },
+                )
+            }
         }
     } else {
         quote! {}
@@ -578,49 +650,7 @@ fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) ->
 
         #aggregate_module
 
-        use futures::Future;
-
-        pub(super) fn stream_paginated<F, Fut, S, T>(
-            state: S,
-            op: F,
-        ) -> impl futures::Stream<Item = crate::Result<T>>
-        where
-            F: Fn(S, Option<String>) -> Fut + Copy,
-            Fut: Future<Output = crate::Result<(T, S, Option<String>)>>,
-        {
-            enum PaginationState<T> {
-                Start(T),
-                HasMore(T, String),
-                Done,
-            }
-
-            futures::stream::unfold(
-                PaginationState::Start(state),
-                move |state| async move {
-                    let (s, page_token) = match state {
-                        PaginationState::Start(s) => (s, None),
-                        PaginationState::HasMore(s, page_token) if !page_token.is_empty() => {
-                            (s, Some(page_token))
-                        }
-                        _ => {
-                            return None;
-                        }
-                    };
-
-                    let (resp, s, continuation) = match op(s, page_token).await {
-                        Ok(resp) => resp,
-                        Err(e) => return Some((Err(e), PaginationState::Done)),
-                    };
-
-                    let next_state = match continuation {
-                        Some(token) => PaginationState::HasMore(s, token),
-                        None => PaginationState::Done,
-                    };
-
-                    Some((Ok(resp), next_state))
-                },
-            )
-        }
+        #pagination
     };
     format_tokens_static(tokens)
 }
@@ -750,6 +780,11 @@ pub fn generate_models_mod(
     };
 
     let tokens = quote! {
+        // The per-package modules below gate a `tonic.rs` include on
+        // `#[cfg(feature = "grpc")]`. Consumers that don't define a `grpc`
+        // feature would otherwise see `unexpected_cfgs`; allow it here.
+        #![allow(unexpected_cfgs)]
+
         use std::collections::HashMap;
 
         #labels_decl

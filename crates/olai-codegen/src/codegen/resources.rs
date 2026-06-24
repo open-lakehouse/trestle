@@ -826,7 +826,7 @@ fn emit_to_object(
                 .as_ref()
                 .map(|id| ::uuid::Uuid::parse_str(id))
                 .transpose()?
-                .unwrap_or_else(|| ::uuid::Uuid::nil());
+                .unwrap_or_else(::uuid::Uuid::nil);
         }
     } else {
         quote! {

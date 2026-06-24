@@ -33,6 +33,7 @@ fn field_doc_attr(doc: Option<&str>, field_name: &str) -> TokenStream {
 
 use super::format_tokens;
 use crate::analysis::{BodyField, RequestParam, RequestType};
+use crate::codegen::config::Runtime;
 use crate::codegen::{MethodHandler, ServiceHandler};
 use crate::parsing::types::{BaseType, RenderContext, unified_to_rust};
 
@@ -65,12 +66,27 @@ fn generate_builders_module(
     let result_path: Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
 
+    // The streaming machinery (`into_stream`, `stream_paginated`, the futures
+    // `Stream` traits) is emitted only for `List` methods. Pull its imports in
+    // only when the service has at least one, so the imports aren't unused.
+    let has_list = service
+        .methods()
+        .any(|m| matches!(m.plan.request_type, RequestType::List));
+    let stream_imports = if has_list {
+        quote! {
+            use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+            use super::super::stream_paginated;
+        }
+    } else {
+        // Non-list builders still return a `BoxFuture` from `IntoFuture`.
+        quote! { use futures::future::BoxFuture; }
+    };
+
     let tokens = quote! {
         #![allow(unused_mut)]
-        use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+        #stream_imports
         use std::future::IntoFuture;
         use #result_path;
-        use super::super::stream_paginated;
         use #mod_path::*;
         use super::client::*;
 
@@ -106,12 +122,22 @@ fn generate_request_builder(
         .filter(|p| matches!(p, RequestParam::Query(_)))
         .collect();
 
+    // The `..Default::default()` spread in the constructor is only meaningful
+    // when some field is left unset there: either optional fields (set later via
+    // `with_*`) exist, or the buffa runtime's hidden `__buffa_unknown_fields`
+    // needs filling. When the constructor already sets every field (a prost
+    // request with only required params), the spread trips `clippy::needless_update`.
+    let has_optional_fields = !optional_body.is_empty() || !optional_query.is_empty();
+    let needs_default_spread =
+        has_optional_fields || matches!(method.config.runtime, Runtime::Buffa);
+
     // Generate constructor
     let constructor = generate_constructor(
         &method,
         &request_type_ident,
         &client_type_ident,
         &required_params,
+        needs_default_spread,
     );
 
     // Generate with_* methods: body fields first (handles oneof variants), then query params
@@ -182,6 +208,7 @@ fn generate_constructor(
     request_type_ident: &proc_macro2::Ident,
     client_type_ident: &proc_macro2::Ident,
     required_params: &[&RequestParam],
+    needs_default_spread: bool,
 ) -> TokenStream {
     let param_list = required_params.iter().map(|param| {
         let field_ident = param.field_ident();
@@ -209,13 +236,18 @@ fn generate_constructor(
         " Obtain via the corresponding method on `{}`.",
         client_type_ident
     );
+    let default_spread = if needs_default_spread {
+        quote! { ..Default::default() }
+    } else {
+        quote! {}
+    };
     quote! {
         #[doc = " Create a new builder instance."]
         #[doc = #obtain_doc]
         pub(crate) fn new(client: #client_type_ident, #(#param_list),*) -> Self {
             let request = #request_type_ident {
                 #(#field_assignments,)*
-                ..Default::default()
+                #default_spread
             };
             Self { client, request }
         }

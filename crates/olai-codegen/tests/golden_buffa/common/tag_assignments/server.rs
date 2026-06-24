@@ -1,5 +1,5 @@
 // @generated — do not edit by hand.
-#![allow(unused_mut)]
+#![allow(unused_mut, unused_imports)]
 use crate::models::tags::v1::*;
 use axum::{RequestExt, RequestPartsExt};
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListTagAssignmentsRequest {
@@ -97,12 +97,11 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for TouchTagAssignmentRequest
         mut req: axum::extract::Request<axum::body::Body>,
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
-        let (mut parts, body) = req.into_parts();
+        let (mut parts, _body) = req.into_parts();
         let axum::extract::Path((entity_type, entity_name, tag_key)) = parts
             .extract::<axum::extract::Path<(String, String, String)>>()
             .await
             .map_err(axum::response::IntoResponse::into_response)?;
-        let body_req = axum::extract::Request::from_parts(parts, body);
         Ok(TouchTagAssignmentRequest {
             entity_type,
             entity_name,

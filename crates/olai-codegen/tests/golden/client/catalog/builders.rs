@@ -1,9 +1,9 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
 use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+use super::super::stream_paginated;
 use std::future::IntoFuture;
 use crate::Result;
-use super::super::stream_paginated;
 use example_common::models::catalog::v1::*;
 use super::client::*;
 /// Builder for creating a catalog
@@ -46,7 +46,6 @@ impl GetCatalogBuilder {
     pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
         let request = GetCatalogRequest {
             name: name.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -76,7 +75,6 @@ impl ListCatalogsBuilder {
         let request = ListCatalogsRequest {
             max_results,
             page_token: page_token.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -154,7 +152,6 @@ impl DeleteCatalogBuilder {
     pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
         let request = DeleteCatalogRequest {
             name: name.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -182,7 +179,6 @@ impl GenerateCatalogTokenBuilder {
     ) -> Self {
         let request = GenerateCatalogTokenRequest {
             catalog_id: catalog_id.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -207,7 +203,6 @@ impl GetCatalogStatusBuilder {
     pub(crate) fn new(client: CatalogServiceClient, name: impl Into<String>) -> Self {
         let request = GetCatalogStatusRequest {
             name: name.into(),
-            ..Default::default()
         };
         Self { client, request }
     }

@@ -54,7 +54,10 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Res
     // `crate::api`, so importing the configured `result_type` here would be both
     // unresolvable and an arity mismatch. Do not import it.
     let tokens = quote! {
-        #![allow(unused_mut)]
+        // `unused_imports`: `RequestExt`/the model glob are only used by some
+        // extractor shapes. `unused_mut`: the `mut req`/`mut parts` bindings
+        // aren't always mutated.
+        #![allow(unused_mut, unused_imports)]
         use #mod_path::*;
         #axum_imports
 
@@ -78,7 +81,9 @@ pub(super) fn generate_server(service: &ServiceHandler<'_>) -> crate::error::Res
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
 
     let tokens = quote! {
-        #![allow(unused_mut)]
+        // Generated route fns: `too_many_arguments` for flat methods with many
+        // path/query params; `unused_mut` for the `State`/extractor bindings.
+        #![allow(unused_mut, clippy::too_many_arguments)]
         use #result_path;
         use #mod_path::*;
         use #trait_path;
@@ -216,6 +221,14 @@ fn generate_hybrid_request_impl(method: &MethodHandler<'_>) -> TokenStream {
     let body_extractions = generate_body_extractions_tokens(method.plan, &input_type);
     let field_assignments = field_assignments(method.plan, method.config.runtime);
 
+    // When the method has no body fields, the request body is unused — bind it to
+    // `_body` so it doesn't trip `unused_variables`.
+    let body_binding = if method.plan.body_fields().next().is_some() {
+        quote! { body }
+    } else {
+        quote! { _body }
+    };
+
     quote! {
         impl<S: Send + Sync> axum::extract::FromRequest<S> for #input_type {
             type Rejection = axum::response::Response;
@@ -225,12 +238,11 @@ fn generate_hybrid_request_impl(method: &MethodHandler<'_>) -> TokenStream {
                 _state: &S,
             ) -> Result<Self, Self::Rejection> {
                 // Extract path and query parameters
-                let (mut parts, body) = req.into_parts();
+                let (mut parts, #body_binding) = req.into_parts();
                 #path_extractions
                 #query_extractions
 
-                // Extract body fields
-                let body_req = axum::extract::Request::from_parts(parts, body);
+                // Extract body fields (only when the request has a body).
                 #body_extractions
 
                 Ok(#input_type {
@@ -260,6 +272,7 @@ fn generate_body_extractions_tokens(method: &MethodPlan, response_type: &Ident) 
             quote! { let (#(#field_names),*) = (#(body.#field_names),*); }
         };
         quote! {
+            let body_req = axum::extract::Request::from_parts(parts, body);
             let axum::extract::Json::<#response_type>(body) = body_req
                 .extract()
                 .await

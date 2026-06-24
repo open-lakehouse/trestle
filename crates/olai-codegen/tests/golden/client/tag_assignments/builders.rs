@@ -1,9 +1,8 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+use futures::future::BoxFuture;
 use std::future::IntoFuture;
 use crate::Result;
-use super::super::stream_paginated;
 use example_common::models::tags::v1::*;
 use super::client::*;
 /// Builder for tag assignments
@@ -26,7 +25,6 @@ impl ListTagAssignmentsBuilder {
             entity_name: entity_name.into(),
             max_results,
             page_token: page_token.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -93,7 +91,6 @@ impl GetTagAssignmentBuilder {
             entity_type: entity_type.into(),
             entity_name: entity_name.into(),
             tag_key: tag_key.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -125,7 +122,6 @@ impl DeleteTagAssignmentBuilder {
             entity_type: entity_type.into(),
             entity_name: entity_name.into(),
             tag_key: tag_key.into(),
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -157,7 +153,6 @@ impl TouchTagAssignmentBuilder {
             entity_type: entity_type.into(),
             entity_name: entity_name.into(),
             tag_key: tag_key.into(),
-            ..Default::default()
         };
         Self { client, request }
     }

@@ -1,9 +1,8 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
-use futures::{future::BoxFuture, stream::BoxStream, TryStreamExt, StreamExt};
+use futures::future::BoxFuture;
 use std::future::IntoFuture;
 use crate::Result;
-use super::super::stream_paginated;
 use example_common::models::catalog::v1::*;
 use super::client::*;
 /// Builder for by tags
@@ -22,7 +21,6 @@ impl ListByTagsBuilder {
         let request = ListByTagsRequest {
             tags: tags.into(),
             max_results,
-            ..Default::default()
         };
         Self { client, request }
     }
@@ -47,7 +45,6 @@ impl ListByCatalogTypeBuilder {
     pub(crate) fn new(client: QueryClient, catalog_type: CatalogType) -> Self {
         let request = ListByCatalogTypeRequest {
             catalog_type: catalog_type as i32,
-            ..Default::default()
         };
         Self { client, request }
     }
