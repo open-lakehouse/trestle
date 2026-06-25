@@ -72,9 +72,10 @@ The lowering reuses the `RequestParam` list that analysis already computed from 
 URL template (path/query/body, in template order) — it does **not** invent a parallel
 resource-based param derivation.
 
-`Empty` returns are handled by `MethodHandler::output_type_or_unit()`, which yields
-`()` so wrappers become `PyUnityCatalogResult<()>` (Python) / `Promise<void>` (TS) /
-`napi::Result<()>` (Node).
+`Empty` returns are handled per-emitter from `MethodHandler::output_type()` being
+`None`: the Python emitter (`wrap_single_output`) yields `()` so the wrapper becomes
+`PyUnityCatalogResult<()>`; the TS/Node emitters likewise yield `Promise<void>` /
+`napi::Result<()>`.
 
 ### Generated Rust aggregate root client
 
@@ -199,7 +200,7 @@ golden files. Re-bless intended output changes with
 
 - **`OutputShape` enum.** Considered, but the Empty/response/streamed-item handling is already DRY:
   every path funnels through `MethodHandler::output_message()` (the single `Empty` detection point)
-  via `output_type()` / `output_type_or_unit()` / `has_response` / `list_output_field()`. There is
+  via `output_type()` / `has_response` / `list_output_field()`. There is
   no re-derived logic to collapse, so an enum would be churn without benefit.
 - **Classify resource-less standard verbs.** A resource-less `ListTagAssignments` is still
   `RequestType::Custom` (List/Get/Delete classification requires `google.api.resource`), and the

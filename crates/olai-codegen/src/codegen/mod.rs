@@ -224,7 +224,7 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
         // in the generated `mod.rs`.
         let mut include_pyo3_impls = false;
         if config.output.python.is_some() {
-            let pyo3_impls = python::generate_pyo3_impls(&plan, metadata)?;
+            let pyo3_impls = python::generate_pyo3_impls(&plan, metadata, config.runtime)?;
             if !pyo3_impls.is_empty() {
                 let mut pyo3_files = GeneratedCode {
                     files: std::collections::HashMap::new(),
@@ -785,7 +785,12 @@ pub fn generate_models_mod(
     let pyo3_impls_decl: TokenStream = if include_pyo3_impls {
         quote! {
             #[cfg(feature = "python")]
-            mod pyo3_impls;
+            pub mod pyo3_impls;
+            // Re-export the `Py*` wrapper `#[pyclass]` types at the models root so the
+            // generated language bindings (and consumers) can name them without
+            // reaching into the `pyo3_impls` submodule.
+            #[cfg(feature = "python")]
+            pub use pyo3_impls::*;
         }
     } else {
         quote! {}
@@ -1042,6 +1047,23 @@ impl ServiceHandler<'_> {
         ModelsPath::from_template(&self.config.models_path_crate_template)
             .resolve(&self.models_segment(), &self.models_version())
     }
+
+    /// The models *root* module path — the prefix of [`Self::models_path`] before the
+    /// per-service/version segments (e.g. `example_common::models` for the template
+    /// `example_common::models::{service}::v1`).
+    ///
+    /// The `Py*` wrapper `#[pyclass]` types are re-exported here (see
+    /// `generate_models_mod`), so the Python bindings import them from this path.
+    /// Returns `None` if the template has no `{service}` placeholder to split on.
+    pub(crate) fn models_root_path(&self) -> Option<syn::Path> {
+        let template = &self.config.models_path_template;
+        let prefix = template.split("{service}").next()?;
+        let trimmed = prefix.trim_end_matches(':');
+        if trimmed.is_empty() {
+            return None;
+        }
+        syn::parse_str(trimmed).ok()
+    }
 }
 
 /// Whether a proto package segment is a version marker like `v1`, `v2beta1`, etc.
@@ -1158,20 +1180,6 @@ impl MethodHandler<'_> {
     pub(crate) fn output_type(&self) -> Option<Ident> {
         self.output_message()
             .map(|t| extract_type_ident(&t.info.name))
-    }
-
-    /// The method's output type as a `syn::Type`, falling back to the unit type `()` when the
-    /// RPC returns `Empty` (i.e. [`Self::output_message`] is `None`).
-    ///
-    /// Binding emitters splice the response type into `Result<T>` wrappers
-    /// (e.g. `PyUnityCatalogResult<T>`); interpolating a bare `Option::None` would produce an
-    /// uncompilable `PyUnityCatalogResult<>`. Use this so `Empty`-returning RPCs yield
-    /// `PyUnityCatalogResult<()>` instead.
-    pub(crate) fn output_type_or_unit(&self) -> syn::Type {
-        match self.output_type() {
-            Some(ident) => syn::parse_quote!(#ident),
-            None => syn::parse_quote!(()),
-        }
     }
 
     pub(crate) fn list_output_field(&self) -> Option<&MessageField> {

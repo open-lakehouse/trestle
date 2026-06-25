@@ -910,7 +910,16 @@ fn generate_field_definition(field: &MessageField) -> String {
         type_annotation = format!("List[{}]", type_annotation);
     }
 
-    if field.unified_type.is_optional && !type_annotation.starts_with("Optional[") {
+    // Singular (non-repeated) message fields carry proto presence semantics; the
+    // wrapper getter returns `Optional[...]`, so the attribute annotation matches.
+    let singular_message = !field.unified_type.is_repeated
+        && matches!(
+            field.unified_type.base_type,
+            BaseType::Message(_) | BaseType::OneOf(_)
+        );
+    if (field.unified_type.is_optional || singular_message)
+        && !type_annotation.starts_with("Optional[")
+    {
         type_annotation = format!("Optional[{}]", type_annotation);
     }
 
@@ -928,61 +937,37 @@ fn generate_field_definition(field: &MessageField) -> String {
     lines.join("\n")
 }
 
+/// The `Optional[...]`-wrapped Python type for a wrapper constructor keyword
+/// parameter. Mirrors [`python_type_annotation`] but always wraps in `Optional`
+/// exactly once (its base already carries `List[...]`/`Dict[...]` cardinality).
+fn constructor_param_type(ty: &UnifiedType) -> String {
+    let base = python_type_annotation(ty);
+    if base.starts_with("Optional[") {
+        base
+    } else {
+        format!("Optional[{}]", base)
+    }
+}
+
 fn generate_constructor_definition(message: &MessageInfo) -> String {
     let mut params = vec!["self".to_string()];
 
     let mut field_indices: Vec<usize> = (0..message.fields.len()).collect();
     field_indices.sort_by_key(|&i| &message.fields[i].name);
 
-    let mut required_fields = Vec::new();
-    let mut optional_fields = Vec::new();
-
+    // The PyO3 wrapper's `#[new]` exposes *every* field as an optional keyword
+    // argument defaulting to `None` (omitted fields fall back to the model's
+    // `Default`), so the stub mirrors that: all params are `name: Optional[T] = None`
+    // regardless of proto cardinality. See `model_conversions::constructor`.
     for &i in &field_indices {
         let field = &message.fields[i];
         if field.oneof_variants.is_some() {
             continue;
         }
 
-        if !field.unified_type.is_optional && !field.unified_type.is_repeated {
-            required_fields.push(field);
-        } else {
-            optional_fields.push(field);
-        }
-    }
-
-    for field in &required_fields {
-        let mut type_annotation = python_type_annotation(&field.unified_type);
-
-        if field.unified_type.is_repeated {
-            if type_annotation.starts_with("List[") && type_annotation.ends_with("]") {
-                type_annotation = type_annotation[5..type_annotation.len() - 1].to_string();
-            }
-            type_annotation = format!("List[{}]", type_annotation);
-        }
-
         let safe_field_name = sanitize_python_field_name(&field.name);
-        params.push(format!("{}: {}", safe_field_name, type_annotation));
-    }
-
-    for field in &optional_fields {
-        let mut type_annotation = python_type_annotation(&field.unified_type);
-
-        let safe_field_name = sanitize_python_field_name(&field.name);
-
-        if field.unified_type.is_repeated {
-            if type_annotation.starts_with("List[") && type_annotation.ends_with("]") {
-                type_annotation = type_annotation[5..type_annotation.len() - 1].to_string();
-            }
-            type_annotation = format!("Optional[List[{}]]", type_annotation);
-            params.push(format!("{}: {} = None", safe_field_name, type_annotation));
-        } else if field.unified_type.is_optional {
-            if !type_annotation.starts_with("Optional[") {
-                type_annotation = format!("Optional[{}]", type_annotation);
-            }
-            params.push(format!("{}: {} = None", safe_field_name, type_annotation));
-        } else {
-            params.push(format!("{}: {} = None", safe_field_name, type_annotation));
-        }
+        let type_annotation = constructor_param_type(&field.unified_type);
+        params.push(format!("{}: {} = None", safe_field_name, type_annotation));
     }
 
     for &i in &field_indices {
