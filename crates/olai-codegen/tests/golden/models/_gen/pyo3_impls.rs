@@ -198,7 +198,7 @@ impl PyCatalog {
         }
         {
             let value = storage_config;
-            inner.storage_config = value.map(|w| ::std::boxed::Box::new(w.into()));
+            inner.storage_config = value.map(|w| w.into());
         }
         if let ::core::option::Option::Some(value) = created_at {
             inner.created_at = value;
@@ -230,7 +230,7 @@ impl PyCatalog {
     }
     #[getter]
     fn storage_config(&self) -> ::core::option::Option<PyStorageConfig> {
-        self.0.storage_config.clone().map(|b| PyStorageConfig::from(*b))
+        self.0.storage_config.clone().map(PyStorageConfig::from)
     }
     #[getter]
     fn created_at(&self) -> i64 {
@@ -259,7 +259,7 @@ impl PyCatalog {
     }
     #[setter(storage_config)]
     fn set_storage_config(&mut self, value: ::core::option::Option<PyStorageConfig>) {
-        self.0.storage_config = value.map(|w| ::std::boxed::Box::new(w.into()));
+        self.0.storage_config = value.map(|w| w.into());
     }
     #[setter(created_at)]
     fn set_created_at(&mut self, value: i64) {
@@ -374,17 +374,17 @@ impl PyCreateCatalogRequest {
         let mut inner = <super::catalog::v1::CreateCatalogRequest as ::core::default::Default>::default();
         {
             let value = catalog;
-            inner.catalog = value.map(|w| ::std::boxed::Box::new(w.into()));
+            inner.catalog = value.map(|w| w.into());
         }
         Self(inner)
     }
     #[getter]
     fn catalog(&self) -> ::core::option::Option<PyCatalog> {
-        self.0.catalog.clone().map(|b| PyCatalog::from(*b))
+        self.0.catalog.clone().map(PyCatalog::from)
     }
     #[setter(catalog)]
     fn set_catalog(&mut self, value: ::core::option::Option<PyCatalog>) {
-        self.0.catalog = value.map(|w| ::std::boxed::Box::new(w.into()));
+        self.0.catalog = value.map(|w| w.into());
     }
     fn __repr__(&self) -> ::std::string::String {
         ::std::format!("{:?}", self.0)
@@ -955,7 +955,7 @@ impl PyUpdateCatalogRequest {
         }
         {
             let value = catalog;
-            inner.catalog = value.map(|w| ::std::boxed::Box::new(w.into()));
+            inner.catalog = value.map(|w| w.into());
         }
         Self(inner)
     }
@@ -965,7 +965,7 @@ impl PyUpdateCatalogRequest {
     }
     #[getter]
     fn catalog(&self) -> ::core::option::Option<PyCatalog> {
-        self.0.catalog.clone().map(|b| PyCatalog::from(*b))
+        self.0.catalog.clone().map(PyCatalog::from)
     }
     #[setter(name)]
     fn set_name(&mut self, value: ::std::string::String) {
@@ -973,7 +973,7 @@ impl PyUpdateCatalogRequest {
     }
     #[setter(catalog)]
     fn set_catalog(&mut self, value: ::core::option::Option<PyCatalog>) {
-        self.0.catalog = value.map(|w| ::std::boxed::Box::new(w.into()));
+        self.0.catalog = value.map(|w| w.into());
     }
     fn __repr__(&self) -> ::std::string::String {
         ::std::format!("{:?}", self.0)
@@ -1441,7 +1441,7 @@ impl PyUpdateSchemaRequest {
         }
         {
             let value = schema;
-            inner.schema = value.map(|w| ::std::boxed::Box::new(w.into()));
+            inner.schema = value.map(|w| w.into());
         }
         Self(inner)
     }
@@ -1451,7 +1451,7 @@ impl PyUpdateSchemaRequest {
     }
     #[getter]
     fn schema(&self) -> ::core::option::Option<PySchema> {
-        self.0.schema.clone().map(|b| PySchema::from(*b))
+        self.0.schema.clone().map(PySchema::from)
     }
     #[setter(full_name)]
     fn set_full_name(&mut self, value: ::std::string::String) {
@@ -1459,7 +1459,7 @@ impl PyUpdateSchemaRequest {
     }
     #[setter(schema)]
     fn set_schema(&mut self, value: ::core::option::Option<PySchema>) {
-        self.0.schema = value.map(|w| ::std::boxed::Box::new(w.into()));
+        self.0.schema = value.map(|w| w.into());
     }
     fn __repr__(&self) -> ::std::string::String {
         ::std::format!("{:?}", self.0)
@@ -1502,7 +1502,7 @@ impl PyCreateTagAssignmentRequest {
         }
         {
             let value = tag;
-            inner.tag = value.map(|w| ::std::boxed::Box::new(w.into()));
+            inner.tag = value.map(|w| w.into());
         }
         Self(inner)
     }
@@ -1516,7 +1516,7 @@ impl PyCreateTagAssignmentRequest {
     }
     #[getter]
     fn tag(&self) -> ::core::option::Option<PyTagAssignment> {
-        self.0.tag.clone().map(|b| PyTagAssignment::from(*b))
+        self.0.tag.clone().map(PyTagAssignment::from)
     }
     #[setter(entity_type)]
     fn set_entity_type(&mut self, value: ::std::string::String) {
@@ -1528,7 +1528,7 @@ impl PyCreateTagAssignmentRequest {
     }
     #[setter(tag)]
     fn set_tag(&mut self, value: ::core::option::Option<PyTagAssignment>) {
-        self.0.tag = value.map(|w| ::std::boxed::Box::new(w.into()));
+        self.0.tag = value.map(|w| w.into());
     }
     fn __repr__(&self) -> ::std::string::String {
         ::std::format!("{:?}", self.0)
