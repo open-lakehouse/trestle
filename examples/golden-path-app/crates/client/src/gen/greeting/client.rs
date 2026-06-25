@@ -1,4 +1,5 @@
 // @generated — do not edit by hand.
+#![allow(unused_imports)]
 use crate::api::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use ::olai_http::CloudClient as Transport;

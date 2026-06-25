@@ -25,9 +25,11 @@
 //!
 //! Unlike the old pythonize impls, the wrapper *bodies* are runtime-aware: buffa
 //! stores singular messages as `MessageField<T>` and enums as `EnumValue<E>`,
-//! while prost uses `Option<Box<T>>` and bare `i32`. The accessor expressions are
-//! selected by [`Runtime`]; the *public* wrapper surface (class + method names +
-//! Python-visible types) is identical across runtimes.
+//! while prost uses `Option<T>` (or `Option<Box<T>>` for fields prost boxes to
+//! break a recursion cycle) and bare `i32`. The accessor expressions are selected
+//! by [`Runtime`] and, for messages, by per-field boxing (see [`boxed_fields`]);
+//! the *public* wrapper surface (class + method names + Python-visible types) is
+//! identical across runtimes.
 //!
 //! [`FromPyObject`]: pyo3::FromPyObject
 //! [`IntoPyObject`]: pyo3::IntoPyObject
@@ -261,9 +263,13 @@ fn message_wrapper(
 
     let packages = metadata_packages(metadata);
     let project_pkg_refs: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
+    let boxed = boxed_fields(metadata, runtime);
     let accessors: Vec<FieldAccessor> = fields
         .iter()
-        .map(|f| FieldAccessor::new(f, runtime, &packages, &project_pkg_refs))
+        .map(|f| {
+            let is_boxed = boxed.contains(&(fq_name.to_string(), f.name.clone()));
+            FieldAccessor::new(f, runtime, &packages, &project_pkg_refs, is_boxed)
+        })
         .collect();
 
     let getters = accessors.iter().map(FieldAccessor::getter);
@@ -316,6 +322,74 @@ fn metadata_packages(metadata: &CodeGenMetadata) -> BTreeSet<String> {
         .collect()
 }
 
+/// The set of `(message_fq_name, field_name)` pairs that the prost model plugin
+/// stores as `Option<Box<T>>` rather than `Option<T>`.
+///
+/// prost only boxes a singular message field when leaving it unboxed would make
+/// the struct infinitely sized — i.e. the field's message type can transitively
+/// reach back to the containing message through a chain of singular (non-repeated,
+/// non-map) message fields. Repeated and map fields already introduce an
+/// indirection (`Vec`/`HashMap`), so they break the cycle and are never boxed.
+///
+/// We replicate that rule here so the PyO3 read/write accessors deref/box exactly
+/// the fields prost boxed. Returns an empty set for the buffa runtime, which uses
+/// `MessageField<T>` uniformly and never boxes.
+fn boxed_fields(metadata: &CodeGenMetadata, runtime: Runtime) -> BTreeSet<(String, String)> {
+    let mut boxed = BTreeSet::new();
+    if runtime != Runtime::Prost {
+        return boxed;
+    }
+    for (msg_name, info) in &metadata.messages {
+        for field in &info.fields {
+            // Only singular message fields can be boxed; repeated/map fields carry
+            // their own indirection, and scalars/enums are never boxed.
+            if field.unified_type.is_repeated
+                || matches!(field.unified_type.base_type, BaseType::Map(_, _))
+            {
+                continue;
+            }
+            let BaseType::Message(target) = &field.unified_type.base_type else {
+                continue;
+            };
+            // Box iff the field's type can reach back to the containing message.
+            if reaches(metadata, target, msg_name) {
+                boxed.insert((msg_name.clone(), field.name.clone()));
+            }
+        }
+    }
+    boxed
+}
+
+/// Whether message `from` can transitively reach message `target` by following
+/// singular (non-repeated, non-map) message fields. Used to detect the recursion
+/// cycles that drive prost's automatic field boxing.
+fn reaches(metadata: &CodeGenMetadata, from: &str, target: &str) -> bool {
+    let mut stack = vec![from.to_string()];
+    let mut seen = BTreeSet::new();
+    while let Some(cur) = stack.pop() {
+        if cur == target {
+            return true;
+        }
+        if !seen.insert(cur.clone()) {
+            continue;
+        }
+        let Some(info) = metadata.messages.get(&cur) else {
+            continue;
+        };
+        for field in &info.fields {
+            if field.unified_type.is_repeated
+                || matches!(field.unified_type.base_type, BaseType::Map(_, _))
+            {
+                continue;
+            }
+            if let BaseType::Message(next) = &field.unified_type.base_type {
+                stack.push(next.clone());
+            }
+        }
+    }
+    false
+}
+
 /// A single message field, resolved into the Rust expressions needed to expose it
 /// across the PyO3 boundary as a native, typed Python attribute.
 struct FieldAccessor {
@@ -329,6 +403,10 @@ struct FieldAccessor {
     /// In-crate Rust path of a referenced message/enum (e.g. `super::catalog::v1::Color`),
     /// when in-project; used by enum/message read expressions. `None` otherwise.
     inner_rust_path: Option<TokenStream>,
+    /// Whether the prost model stores this singular message field as
+    /// `Option<Box<T>>` (it sits on a recursion cycle). Drives whether the read
+    /// path derefs the box and the write path re-boxes. Always `false` for buffa.
+    is_boxed: bool,
 }
 
 impl FieldAccessor {
@@ -337,6 +415,7 @@ impl FieldAccessor {
         runtime: Runtime,
         packages: &BTreeSet<String>,
         project_pkg_refs: &BTreeSet<&str>,
+        is_boxed: bool,
     ) -> Self {
         let ident = format_ident!("{}", super::sanitize_python_field_name(&field.name));
         let in_project = match &field.unified_type.base_type {
@@ -357,6 +436,7 @@ impl FieldAccessor {
             runtime,
             in_project,
             inner_rust_path,
+            is_boxed,
         }
     }
 
@@ -375,7 +455,7 @@ impl FieldAccessor {
         // Singular (non-repeated) message fields carry proto presence semantics, so
         // they are always Python-visible as `Optional[...]` — the read path returns
         // `Option<Wrapper>` for both runtimes (buffa `MessageField::into_option`,
-        // prost `Option<Box<T>>`).
+        // prost `Option<T>` or `Option<Box<T>>` for recursion-boxed fields).
         if self.is_singular_message() {
             return quote! { ::core::option::Option<#base> };
         }
@@ -520,9 +600,13 @@ impl FieldAccessor {
             Runtime::Buffa => quote! {
                 #access.clone().into_option().map(#base::from)
             },
-            // prost: Option<Box<T>>
-            Runtime::Prost => quote! {
+            // prost recursion-boxed field: Option<Box<T>> — deref the box.
+            Runtime::Prost if self.is_boxed => quote! {
                 #access.clone().map(|b| #base::from(*b))
+            },
+            // prost plain singular message: Option<T>.
+            Runtime::Prost => quote! {
+                #access.clone().map(#base::from)
             },
         }
     }
@@ -543,7 +627,14 @@ impl FieldAccessor {
                         .map(#base::from)
                 },
             },
-            // Option<String>/Option<Vec<u8>>/Option<{int,bool,float}>: clone through.
+            // Option<{int,bool,float}>: the inner scalar is `Copy`, so the `Option`
+            // copies by value — `.clone()` here would trip `clippy::clone_on_copy`.
+            BaseType::Int32
+            | BaseType::Int64
+            | BaseType::Bool
+            | BaseType::Float32
+            | BaseType::Float64 => quote! { #access },
+            // Option<String>/Option<Vec<u8>>: non-Copy, clone through.
             _ => quote! { #access.clone() },
         }
     }
@@ -628,9 +719,13 @@ impl FieldAccessor {
             Runtime::Buffa => quote! {
                 value.map(|w| ::buffa::MessageField::some(w.into())).unwrap_or_default()
             },
-            // prost: Option<Box<T>>
-            Runtime::Prost => quote! {
+            // prost recursion-boxed field: Option<Box<T>> — re-box on store.
+            Runtime::Prost if self.is_boxed => quote! {
                 value.map(|w| ::std::boxed::Box::new(w.into()))
+            },
+            // prost plain singular message: Option<T>.
+            Runtime::Prost => quote! {
+                value.map(|w| w.into())
             },
         }
     }
@@ -894,5 +989,104 @@ mod tests {
             wrapper_ident(".example.catalog.v1.Catalog.Nested").to_string(),
             "PyCatalogNested"
         );
+    }
+
+    // --- boxing detection -------------------------------------------------
+
+    fn msg_field(name: &str, ty: UnifiedType) -> MessageField {
+        MessageField {
+            name: name.to_string(),
+            unified_type: ty,
+            documentation: None,
+            oneof_variants: None,
+            field_behavior: vec![],
+            is_sensitive: false,
+            resource_reference: None,
+        }
+    }
+
+    fn singular_message(target: &str) -> UnifiedType {
+        UnifiedType {
+            base_type: BaseType::Message(target.to_string()),
+            is_optional: true,
+            is_repeated: false,
+        }
+    }
+
+    fn repeated_message(target: &str) -> UnifiedType {
+        UnifiedType {
+            base_type: BaseType::Message(target.to_string()),
+            is_optional: false,
+            is_repeated: true,
+        }
+    }
+
+    fn metadata_with(messages: Vec<(&str, Vec<MessageField>)>) -> CodeGenMetadata {
+        let mut meta = CodeGenMetadata::default();
+        for (name, fields) in messages {
+            meta.messages.insert(
+                name.to_string(),
+                MessageInfo {
+                    name: name.to_string(),
+                    fields,
+                    resource_descriptor: None,
+                    documentation: None,
+                },
+            );
+        }
+        meta
+    }
+
+    #[test]
+    fn non_recursive_singular_message_is_not_boxed() {
+        // A.f: B, B has no message fields -> no cycle -> unboxed.
+        let meta = metadata_with(vec![
+            (".pkg.A", vec![msg_field("f", singular_message(".pkg.B"))]),
+            (".pkg.B", vec![]),
+        ]);
+        assert!(boxed_fields(&meta, Runtime::Prost).is_empty());
+    }
+
+    #[test]
+    fn direct_self_recursion_boxes_the_field() {
+        // A.next: A -> cycle -> boxed.
+        let meta = metadata_with(vec![(
+            ".pkg.A",
+            vec![msg_field("next", singular_message(".pkg.A"))],
+        )]);
+        let boxed = boxed_fields(&meta, Runtime::Prost);
+        assert!(boxed.contains(&(".pkg.A".to_string(), "next".to_string())));
+        assert_eq!(boxed.len(), 1);
+    }
+
+    #[test]
+    fn mutual_recursion_boxes_both_back_edges() {
+        // A.b: B and B.a: A -> A<->B cycle -> both boxed.
+        let meta = metadata_with(vec![
+            (".pkg.A", vec![msg_field("b", singular_message(".pkg.B"))]),
+            (".pkg.B", vec![msg_field("a", singular_message(".pkg.A"))]),
+        ]);
+        let boxed = boxed_fields(&meta, Runtime::Prost);
+        assert!(boxed.contains(&(".pkg.A".to_string(), "b".to_string())));
+        assert!(boxed.contains(&(".pkg.B".to_string(), "a".to_string())));
+    }
+
+    #[test]
+    fn repeated_field_breaks_the_cycle_and_is_not_boxed() {
+        // A.items: repeated A -> Vec breaks the size cycle -> never boxed.
+        let meta = metadata_with(vec![(
+            ".pkg.A",
+            vec![msg_field("items", repeated_message(".pkg.A"))],
+        )]);
+        assert!(boxed_fields(&meta, Runtime::Prost).is_empty());
+    }
+
+    #[test]
+    fn buffa_runtime_never_boxes() {
+        let meta = metadata_with(vec![(
+            ".pkg.A",
+            vec![msg_field("next", singular_message(".pkg.A"))],
+        )]);
+        assert!(boxed_fields(&meta, Runtime::Buffa).is_empty());
     }
 }

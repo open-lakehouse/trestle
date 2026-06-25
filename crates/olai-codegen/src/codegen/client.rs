@@ -37,6 +37,10 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     let (transport_import, transport_ident) = transport_tokens(service.config);
 
     let tokens = quote! {
+        // `use #mod_path::*` is a convenience-wide model glob; a service that
+        // references only some model types (common under buffa) would otherwise
+        // trip `unused_imports` under `-D warnings`.
+        #![allow(unused_imports)]
         #transport_import
         use url::Url;
         use #result_path;

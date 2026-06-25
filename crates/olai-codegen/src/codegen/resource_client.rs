@@ -69,6 +69,10 @@ pub(crate) fn generate(
     let mod_path = service.models_path();
 
     let tokens = quote! {
+        // The model/builder glob imports below are convenience-wide and not every
+        // resource-scoped client references every imported name (more so under buffa,
+        // where field shapes differ), so silence unused-import noise for the module.
+        #![allow(unused_imports)]
         use #mod_path::*;
         #(#child_model_imports)*
         use super::builders::*;

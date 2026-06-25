@@ -1,5 +1,6 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut)]
+#![allow(unused_imports)]
 #[cfg(not(target_arch = "wasm32"))]
 type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
 #[cfg(target_arch = "wasm32")]

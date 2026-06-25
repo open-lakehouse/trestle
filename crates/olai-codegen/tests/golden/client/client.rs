@@ -1,4 +1,5 @@
 // @generated — do not edit by hand.
+#![allow(unused_imports)]
 use olai_http::CloudClient;
 use url::Url;
 use crate::codegen::catalog::*;

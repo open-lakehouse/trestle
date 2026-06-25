@@ -1,4 +1,5 @@
 // @generated — do not edit by hand.
+#![allow(unused_imports)]
 use example_common::models::catalog::v1::*;
 use example_common::models::schemas::v1::*;
 use super::builders::*;

@@ -250,6 +250,7 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
             include_pyo3_impls,
             metadata,
             common_colocated,
+            config.runtime,
         );
         // Route through write_generated_code so the `// @generated` header is prepended like
         // every other emitted file, rather than writing it raw.
@@ -549,8 +550,14 @@ fn generate_client_module(has_resource_client: bool) -> String {
     let allow = quote! {
         #[allow(dead_code, clippy::too_many_arguments, clippy::doc_lazy_continuation)]
     };
+    // Glob re-exports of the per-service submodules. Not every submodule
+    // contributes a name that the parent's consumers use directly, so a
+    // `pub use <mod>::*` can trip `unused_imports` under `-D warnings` (notably
+    // under buffa, where some helper types are unreferenced); allow it.
+    let reexport_allow = quote! { #[allow(unused_imports)] };
     let resource_module = if has_resource_client {
         quote! {
+            #reexport_allow
             pub use resource::*;
             #allow
             pub mod resource;
@@ -559,7 +566,9 @@ fn generate_client_module(has_resource_client: bool) -> String {
         quote! {}
     };
     let tokens = quote! {
+        #reexport_allow
         pub use client::*;
+        #reexport_allow
         pub use builders::*;
         #resource_module
 
@@ -603,6 +612,7 @@ fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) ->
         quote! {
             #[allow(clippy::too_many_arguments, clippy::doc_lazy_continuation)]
             pub mod client;
+            #[allow(unused_imports)]
             pub use client::*;
         }
     } else {
@@ -695,6 +705,7 @@ pub fn generate_models_mod(
     include_pyo3_impls: bool,
     metadata: &CodeGenMetadata,
     common_colocated: bool,
+    runtime: Runtime,
 ) -> String {
     // Services are keyed by proto package, not by service: multiple services can share a
     // package (e.g. `CatalogService` and `SchemaService` both in `example.catalog.v1`), and
@@ -752,13 +763,26 @@ pub fn generate_models_mod(
         let ver_mod = format_ident!("{}", ver_seg);
 
         let main_include = format!("./{}/{}.rs", gen_dir, package);
-        let tonic_include = format!("./{}/{}.tonic.rs", gen_dir, package);
+        // The separate `<package>.tonic.rs` (grpc service stubs over the prost
+        // `ProstCodec`) is only emitted by the prost model plugin. The buffa plugin
+        // produces no such file, so including it would break the build whenever the
+        // `grpc` feature is enabled (e.g. CI's `--all-features`). Gate the include on
+        // the runtime, not just the `grpc` cfg.
+        let tonic_include_tokens = match runtime {
+            Runtime::Prost => {
+                let tonic_include = format!("./{}/{}.tonic.rs", gen_dir, package);
+                quote! {
+                    #[cfg(feature = "grpc")]
+                    include!(#tonic_include);
+                }
+            }
+            Runtime::Buffa => quote! {},
+        };
         service_mods.push(quote! {
             pub mod #svc_mod {
                 pub mod #ver_mod {
                     include!(#main_include);
-                    #[cfg(feature = "grpc")]
-                    include!(#tonic_include);
+                    #tonic_include_tokens
                 }
             }
         });
@@ -817,6 +841,21 @@ pub fn generate_models_mod(
         quote! {}
     };
 
+    // Lints to silence across this module and every `include!`d model file below.
+    // These are inner attributes, so they cover the descendant `pub mod <svc>::<v1>`
+    // modules the per-package files are pasted into.
+    let lint_allows = match runtime {
+        // The buffa model plugin emits enum variants with their proto SCREAMING_SNAKE
+        // names (`non_camel_case_types`) and explicit `Default` impls a `#[derive]`
+        // could replace (`clippy::derivable_impls`). The generated files carry no
+        // allows of their own, so silence both here to keep `clippy -D warnings` green.
+        Runtime::Buffa => quote! {
+            #![allow(non_camel_case_types)]
+            #![allow(clippy::derivable_impls)]
+        },
+        Runtime::Prost => quote! {},
+    };
+
     let tokens = quote! {
         // The per-package modules below gate a `tonic.rs` include on
         // `#[cfg(feature = "grpc")]`. Consumers that don't define a `grpc`
@@ -826,6 +865,7 @@ pub fn generate_models_mod(
         // generated service methods; allow them so `clippy -D warnings` stays
         // green when the `grpc` feature is enabled.
         #![allow(clippy::empty_docs)]
+        #lint_allows
 
         use std::collections::HashMap;
 
