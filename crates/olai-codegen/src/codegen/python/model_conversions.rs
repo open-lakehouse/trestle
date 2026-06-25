@@ -627,7 +627,14 @@ impl FieldAccessor {
                         .map(#base::from)
                 },
             },
-            // Option<String>/Option<Vec<u8>>/Option<{int,bool,float}>: clone through.
+            // Option<{int,bool,float}>: the inner scalar is `Copy`, so the `Option`
+            // copies by value — `.clone()` here would trip `clippy::clone_on_copy`.
+            BaseType::Int32
+            | BaseType::Int64
+            | BaseType::Bool
+            | BaseType::Float32
+            | BaseType::Float64 => quote! { #access },
+            // Option<String>/Option<Vec<u8>>: non-Copy, clone through.
             _ => quote! { #access.clone() },
         }
     }
