@@ -145,7 +145,10 @@ impl UpdateSchemaBuilder {
     }
     /// Set schema
     pub fn with_schema(mut self, schema: impl Into<Option<Schema>>) -> Self {
-        self.request.schema = schema.into();
+        self.request.schema = {
+            let schema: ::core::option::Option<_> = schema.into();
+            buffa::MessageField::from(schema)
+        };
         self
     }
 }

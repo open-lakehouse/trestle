@@ -61,17 +61,17 @@ impl PyGetSchemaRequestView {
         }
     }
 }
-impl ::core::convert::From<super::schemas::v1::GetSchemaRequest::View>
+impl ::core::convert::From<super::schemas::v1::get_schema_request::View>
 for PyGetSchemaRequestView {
-    fn from(value: super::schemas::v1::GetSchemaRequest::View) -> Self {
+    fn from(value: super::schemas::v1::get_schema_request::View) -> Self {
         PyGetSchemaRequestView::__from_proto_i32(value as i32)
     }
 }
 impl ::core::convert::From<PyGetSchemaRequestView>
-for super::schemas::v1::GetSchemaRequest::View {
+for super::schemas::v1::get_schema_request::View {
     fn from(value: PyGetSchemaRequestView) -> Self {
         let n = value.__to_proto_i32();
-        <super::schemas::v1::GetSchemaRequest::View as ::core::convert::TryFrom<
+        <super::schemas::v1::get_schema_request::View as ::core::convert::TryFrom<
             i32,
         >>::try_from(n)
             .unwrap_or_default()
@@ -178,7 +178,7 @@ impl PyCatalog {
         properties: ::core::option::Option<
             ::std::collections::HashMap<::std::string::String, ::std::string::String>,
         >,
-        storage_config: ::core::option::Option<::core::option::Option<PyStorageConfig>>,
+        storage_config: ::core::option::Option<PyStorageConfig>,
         created_at: ::core::option::Option<i64>,
     ) -> Self {
         let mut inner = <super::catalog::v1::Catalog as ::core::default::Default>::default();
@@ -196,7 +196,8 @@ impl PyCatalog {
         if let ::core::option::Option::Some(value) = properties {
             inner.properties = value;
         }
-        if let ::core::option::Option::Some(value) = storage_config {
+        {
+            let value = storage_config;
             inner.storage_config = value.map(|w| ::std::boxed::Box::new(w.into()));
         }
         if let ::core::option::Option::Some(value) = created_at {
@@ -369,9 +370,10 @@ pub struct PyCreateCatalogRequest(pub super::catalog::v1::CreateCatalogRequest);
 impl PyCreateCatalogRequest {
     #[new]
     #[pyo3(signature = (catalog = None))]
-    fn new(catalog: ::core::option::Option<::core::option::Option<PyCatalog>>) -> Self {
+    fn new(catalog: ::core::option::Option<PyCatalog>) -> Self {
         let mut inner = <super::catalog::v1::CreateCatalogRequest as ::core::default::Default>::default();
-        if let ::core::option::Option::Some(value) = catalog {
+        {
+            let value = catalog;
             inner.catalog = value.map(|w| ::std::boxed::Box::new(w.into()));
         }
         Self(inner)
@@ -945,13 +947,14 @@ impl PyUpdateCatalogRequest {
     #[pyo3(signature = (name = None, catalog = None))]
     fn new(
         name: ::core::option::Option<::std::string::String>,
-        catalog: ::core::option::Option<::core::option::Option<PyCatalog>>,
+        catalog: ::core::option::Option<PyCatalog>,
     ) -> Self {
         let mut inner = <super::catalog::v1::UpdateCatalogRequest as ::core::default::Default>::default();
         if let ::core::option::Option::Some(value) = name {
             inner.name = value;
         }
-        if let ::core::option::Option::Some(value) = catalog {
+        {
+            let value = catalog;
             inner.catalog = value.map(|w| ::std::boxed::Box::new(w.into()));
         }
         Self(inner)
@@ -1156,7 +1159,7 @@ impl PyGetSchemaRequest {
             inner.full_name = value;
         }
         if let ::core::option::Option::Some(value) = view {
-            inner.view = <super::schemas::v1::GetSchemaRequest::View as ::core::convert::From<
+            inner.view = <super::schemas::v1::get_schema_request::View as ::core::convert::From<
                 _,
             >>::from(value) as i32;
         }
@@ -1169,7 +1172,7 @@ impl PyGetSchemaRequest {
     #[getter]
     fn view(&self) -> PyGetSchemaRequestView {
         PyGetSchemaRequestView::from(
-            <super::schemas::v1::GetSchemaRequest::View as ::core::convert::TryFrom<
+            <super::schemas::v1::get_schema_request::View as ::core::convert::TryFrom<
                 i32,
             >>::try_from(self.0.view)
                 .unwrap_or_default(),
@@ -1181,7 +1184,7 @@ impl PyGetSchemaRequest {
     }
     #[setter(view)]
     fn set_view(&mut self, value: PyGetSchemaRequestView) {
-        self.0.view = <super::schemas::v1::GetSchemaRequest::View as ::core::convert::From<
+        self.0.view = <super::schemas::v1::get_schema_request::View as ::core::convert::From<
             _,
         >>::from(value) as i32;
     }
@@ -1430,13 +1433,14 @@ impl PyUpdateSchemaRequest {
     #[pyo3(signature = (full_name = None, schema = None))]
     fn new(
         full_name: ::core::option::Option<::std::string::String>,
-        schema: ::core::option::Option<::core::option::Option<PySchema>>,
+        schema: ::core::option::Option<PySchema>,
     ) -> Self {
         let mut inner = <super::schemas::v1::UpdateSchemaRequest as ::core::default::Default>::default();
         if let ::core::option::Option::Some(value) = full_name {
             inner.full_name = value;
         }
-        if let ::core::option::Option::Some(value) = schema {
+        {
+            let value = schema;
             inner.schema = value.map(|w| ::std::boxed::Box::new(w.into()));
         }
         Self(inner)
@@ -1487,7 +1491,7 @@ impl PyCreateTagAssignmentRequest {
     fn new(
         entity_type: ::core::option::Option<::std::string::String>,
         entity_name: ::core::option::Option<::std::string::String>,
-        tag: ::core::option::Option<::core::option::Option<PyTagAssignment>>,
+        tag: ::core::option::Option<PyTagAssignment>,
     ) -> Self {
         let mut inner = <super::tags::v1::CreateTagAssignmentRequest as ::core::default::Default>::default();
         if let ::core::option::Option::Some(value) = entity_type {
@@ -1496,7 +1500,8 @@ impl PyCreateTagAssignmentRequest {
         if let ::core::option::Option::Some(value) = entity_name {
             inner.entity_name = value;
         }
-        if let ::core::option::Option::Some(value) = tag {
+        {
+            let value = tag;
             inner.tag = value.map(|w| ::std::boxed::Box::new(w.into()));
         }
         Self(inner)

@@ -11,8 +11,19 @@ enum Color {
 }
 
 message Widget {
+  // A message-nested enum: buffa/prost nest it under a snake_case module named
+  // after the parent message (`widget::Size`), so the PyO3 wrapper and the
+  // node/builder enum references must resolve through that path, not the bare leaf
+  // name. This is the case that drove the buffa nested-enum path fix.
+  enum Size {
+    SIZE_UNSPECIFIED = 0;
+    SMALL = 1;
+    LARGE = 2;
+  }
+
   string name = 1 [(google.api.field_behavior) = IDENTIFIER];
   Color color = 2;
+  Size size = 3;
 }
 
 message ListWidgetsRequest {

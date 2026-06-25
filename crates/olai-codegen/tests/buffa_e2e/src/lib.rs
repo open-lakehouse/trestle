@@ -128,16 +128,20 @@ mod tests {
     #[cfg(feature = "python")]
     #[test]
     fn buffa_model_wraps_as_real_pyclass() {
-        use crate::models::pyo3_impls::{PyColor, PyWidget};
+        use crate::models::demo::v1::widget::Size;
+        use crate::models::pyo3_impls::{PyColor, PyWidget, PyWidgetSize};
         use pyo3::prelude::*;
         use pyo3::types::{PyAnyMethods, PyType};
 
         Python::initialize();
         Python::attach(|py| {
-            // Construct via the bare model, then wrap.
+            // Construct via the bare model, then wrap. `size` is a *message-nested*
+            // enum (`widget::Size`) — its wrapper must resolve through the snake_case
+            // parent module, the case the buffa nested-enum path fix addresses.
             let widget = Widget {
                 name: "gizmo".into(),
                 color: EnumValue::Known(Color::Green),
+                size: EnumValue::Known(Size::LARGE),
                 ..Default::default()
             };
             let wrapper: PyWidget = widget.clone().into();
@@ -164,12 +168,22 @@ mod tests {
             let color_back: PyColor = color.extract().unwrap();
             assert_eq!(color_back, PyColor::GREEN);
 
-            // `From`/`Into` bridge round-trips the data back to the bare model.
+            // The *nested* enum field is exposed as a real Python enum member. Its
+            // class is parent-qualified (`WidgetSize`) to stay collision-free, and
+            // resolving it proves the snake_case parent-module path works end to end.
+            let size = obj.getattr("size").unwrap();
+            assert_eq!(size.get_type().name().unwrap().to_string(), "WidgetSize");
+            let size_back: PyWidgetSize = size.extract().unwrap();
+            assert_eq!(size_back, PyWidgetSize::LARGE);
+
+            // `From`/`Into` bridge round-trips the data (incl. the nested enum) back to
+            // the bare model.
             let back: Widget = wrapper.into();
             assert_eq!(widget, back);
 
-            // The wrapper type registers as a Python class.
+            // The wrapper types register as Python classes.
             let _ = PyType::new::<PyWidget>(py);
+            let _ = PyType::new::<PyWidgetSize>(py);
         });
     }
 }
