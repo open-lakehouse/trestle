@@ -17,7 +17,7 @@ pub mod models {
     // reproduce that here with a child `pyo3_impls` module so `super` is this
     // `models` module and `super::demo::v1::*` resolves to the buffa models above.
     #[cfg(feature = "python")]
-    mod pyo3_impls {
+    pub mod pyo3_impls {
         include!(concat!(env!("OUT_DIR"), "/models_gen/_gen/pyo3_impls.rs"));
     }
 }
@@ -113,43 +113,63 @@ mod tests {
         assert_eq!(decoded.name, "w");
     }
 
-    /// The PyO3 boundary impls trestle emits (`pyo3_impls.rs`) must compile against
-    /// real buffa models AND preserve data through a Rust → Python → Rust round
-    /// trip. This is the gap the buffa/Python support closes: the generated
-    /// bindings pass models across the FFI boundary by their bare type, which only
-    /// works once these `IntoPyObject`/`FromPyObject` impls exist.
+    /// The PyO3 wrapper `#[pyclass]` types trestle emits (`pyo3_impls.rs`) must
+    /// compile against real buffa models AND expose them as *real Python objects*:
+    /// native attribute access, a keyword constructor, real enum members, and
+    /// `From`/`Into` bridges to the bare model type so the generated client
+    /// bindings can convert at the boundary.
     ///
-    /// The enum field exercises the proto-name-string contract end to end: buffa
-    /// serializes `Color::Green` as `"GREEN"`, pythonize carries that string into
-    /// Python and back, and `FromPyObject` reconstructs the `EnumValue::Known`.
+    /// This is the gap the wrapper approach closes over the earlier pythonize
+    /// impls, which only ever produced plain Python dicts.
+    ///
+    /// The enum field exercises the wrapper-enum bridge end to end: the buffa field
+    /// is `EnumValue<Color>`, the wrapper getter yields a `PyColor` enum member, and
+    /// the `From`/`Into` impls map through `Color`.
     #[cfg(feature = "python")]
     #[test]
-    fn buffa_model_roundtrips_through_pyo3() {
+    fn buffa_model_wraps_as_real_pyclass() {
+        use crate::models::pyo3_impls::{PyColor, PyWidget};
         use pyo3::prelude::*;
-        use pyo3::types::PyAnyMethods;
+        use pyo3::types::{PyAnyMethods, PyType};
 
         Python::initialize();
         Python::attach(|py| {
+            // Construct via the bare model, then wrap.
             let widget = Widget {
                 name: "gizmo".into(),
                 color: EnumValue::Known(Color::Green),
                 ..Default::default()
             };
+            let wrapper: PyWidget = widget.clone().into();
 
-            // Rust → Python (IntoPyObject via pythonize).
-            let obj = widget.clone().into_pyobject(py).expect("into_pyobject");
-            // pythonize maps a proto message to a Python dict; the enum is its
-            // proto name string.
-            let color: String = obj
-                .get_item("color")
-                .expect("color key")
-                .extract()
-                .expect("color is a str");
-            assert_eq!(color, "GREEN", "enum crosses the boundary as its proto name");
+            let obj = wrapper.clone().into_pyobject(py).expect("wrapper -> py object");
 
-            // Python → Rust (FromPyObject via depythonize) round-trips the data.
-            let back: Widget = obj.extract().expect("extract Widget");
+            // `isinstance(obj, Widget)` — a real class, not a dict.
+            let widget_cls = obj.get_type();
+            assert_eq!(
+                widget_cls.name().unwrap().to_string(),
+                "Widget",
+                "wrapper is exposed as the `Widget` class"
+            );
+
+            // Native attribute access: `obj.name` returns the value, not a dict key.
+            let name: String = obj.getattr("name").unwrap().extract().unwrap();
+            assert_eq!(name, "gizmo");
+
+            // The enum field is a real Python enum member (`Color.GREEN`), and it is
+            // an instance of the `Color` pyclass enum.
+            let color = obj.getattr("color").unwrap();
+            let color_cls = color.get_type();
+            assert_eq!(color_cls.name().unwrap().to_string(), "Color");
+            let color_back: PyColor = color.extract().unwrap();
+            assert_eq!(color_back, PyColor::GREEN);
+
+            // `From`/`Into` bridge round-trips the data back to the bare model.
+            let back: Widget = wrapper.into();
             assert_eq!(widget, back);
+
+            // The wrapper type registers as a Python class.
+            let _ = PyType::new::<PyWidget>(py);
         });
     }
 }

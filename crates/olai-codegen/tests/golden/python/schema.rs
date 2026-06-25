@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use pyo3::prelude::*;
 use example_client::SchemaClient;
 use example_common::models::schemas::v1::*;
+use example_common::models::*;
 use crate::error::{PyExampleError, PyExampleResult};
 use crate::runtime::get_runtime;
 #[pyclass(name = "SchemaClient")]
@@ -12,24 +13,28 @@ pub struct PySchemaClient {
 #[pymethods]
 impl PySchemaClient {
     #[pyo3(signature = (view))]
-    pub fn get(
-        &self,
-        py: Python,
-        view: get_schema_request::View,
-    ) -> PyExampleResult<Schema> {
-        let request = self.client.get(view);
+    pub fn get(&self, py: Python, view: PyView) -> PyExampleResult<PySchema> {
+        let request = self.client.get(view.into());
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PySchema::from(result))
         })
     }
     #[pyo3(signature = (schema = None))]
-    pub fn update(&self, py: Python, schema: Option<Schema>) -> PyExampleResult<Schema> {
+    pub fn update(
+        &self,
+        py: Python,
+        schema: ::core::option::Option<PySchema>,
+    ) -> PyExampleResult<PySchema> {
         let mut request = self.client.update();
-        request = request.with_schema(schema);
+        request = request.with_schema(schema.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PySchema::from(result))
         })
     }
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {

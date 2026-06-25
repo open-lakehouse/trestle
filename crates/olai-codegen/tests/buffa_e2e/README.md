@@ -13,21 +13,23 @@ is the heavier "does it actually compile and run" check.
 ## Scope: client, server, node, python
 
 This fixture compiles the generated **client** (and exercises the **node/NAPI**
-marshalling idioms) against real buffa models. The **Python (PyO3)** emitter is
-runtime-invariant — it passes model enums/structs across the PyO3 boundary by
-their bare type and lets the client builder apply the runtime's
-`EnumValue`/`MessageField` wrapping, so it emits identical code for prost and
-buffa (enforced by `python_and_ts_output_is_runtime_invariant` in the golden
-test).
+marshalling idioms) against real buffa models.
 
-For those bare-type boundaries to compile, the model crate must carry
-`FromPyObject`/`IntoPyObject` impls. trestle now emits these into the model
-module (`models/_gen/pyo3_impls.rs`, gated on the `python` feature) via
-`pythonize` over the models' serde derives — see `generate_pyo3_impls`. The
-`python`-feature build of this fixture `include!`s that file and the
-`buffa_model_roundtrips_through_pyo3` test proves it compiles against real buffa
-types and round-trips a model (including an enum field, which crosses the
-boundary as its proto name) Rust → Python → Rust:
+The **Python (PyO3)** emitter wraps each model message/enum in a newtype
+`#[pyclass]` (`PyWidget(Widget)`, `PyColor`) with native typed getters/setters, a
+keyword constructor, and `From`/`Into` bridges to the bare model type — so a model
+is a *real Python object* (attribute access, `isinstance`, real enum members), not
+a plain dict. The wrapper *bodies* are runtime-aware (buffa `EnumValue<E>` /
+`MessageField<T>` vs prost `i32` / `Option<Box<T>>`); the public surface (class +
+method names + Python-visible types) is identical across runtimes.
+
+trestle emits the wrappers into the model module
+(`models/_gen/pyo3_impls.rs`, gated on the `python` feature) — see
+`generate_pyo3_impls`. The `python`-feature build of this fixture `include!`s that
+file and the `buffa_model_wraps_as_real_pyclass` test proves it compiles against
+real buffa types and that a model wraps as a real Python object — native
+attribute access, an `isinstance`-checkable class, a real enum member, and a
+`From`/`Into` round-trip back to the bare model:
 
 ```sh
 cargo test --manifest-path crates/olai-codegen/tests/buffa_e2e/Cargo.toml --features python

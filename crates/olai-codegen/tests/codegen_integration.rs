@@ -411,3 +411,61 @@ fn test_aggregate_client_emits_flat_builders_for_resource_less_service() {
         "client mod.rs must export the aggregate module:\n{client_mod}"
     );
 }
+
+/// The generated Python output — the PyO3 client bindings (`python/*.rs`) and the
+/// model wrapper `#[pyclass]` types (`models/_gen/pyo3_impls.rs`) — must be valid
+/// Rust. `syn::parse_file` is a syntax-only gate (it does not resolve `pyo3` or the
+/// model crate), but it catches structural breakage in the wrapper/binding
+/// emitters without a full PyO3 toolchain. Run for both runtimes, since the wrapper
+/// bodies differ (buffa `EnumValue`/`MessageField` vs prost `i32`/`Option<Box<T>>`).
+#[test]
+fn generated_python_output_is_valid_rust() {
+    for runtime in [olai_codegen::Runtime::Prost, olai_codegen::Runtime::Buffa] {
+        let descriptor = load_descriptor();
+        let metadata = parse_file_descriptor_set(&descriptor).expect("parse succeeded");
+
+        let tmp = TempDir::new().expect("tempdir");
+        let common_dir = tmp.path().join("common");
+        let models_dir = tmp.path().join("models");
+        let python_dir = tmp.path().join("python");
+        let node_ts_dir = tmp.path().join("node_ts");
+        let node_dir = tmp.path().join("node");
+        for dir in &[
+            &common_dir,
+            &models_dir,
+            &python_dir,
+            &node_ts_dir,
+            &node_dir,
+        ] {
+            std::fs::create_dir_all(dir).expect("create dir");
+        }
+
+        let mut config = make_test_config(common_dir, node_ts_dir, python_dir.clone(), node_dir);
+        config.runtime = runtime;
+        // Enable models output so the wrapper `pyo3_impls.rs` is emitted alongside
+        // the bindings.
+        config.output.models = Some(models_dir.clone());
+        config.models_gen_dir = Some("../gen".to_string());
+
+        generate_code(&metadata, &config).expect("generate_code succeeded");
+
+        let mut checked = 0usize;
+        for path in walkdir(tmp.path()) {
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read generated file");
+            syn::parse_file(&src).unwrap_or_else(|e| {
+                panic!(
+                    "generated file is not valid Rust ({runtime:?}): {}\n{e}",
+                    path.display()
+                )
+            });
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "expected to parse-check at least one generated .rs file ({runtime:?})"
+        );
+    }
+}

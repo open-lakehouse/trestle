@@ -6,7 +6,7 @@ import enum
 class AzureConfig():
     container: str
 
-    def __init__(self, container: str) -> None:
+    def __init__(self, container: Optional[str] = None) -> None:
         ...
 
 class Catalog():
@@ -15,30 +15,30 @@ class Catalog():
     created_at: int
     name: str
     properties: Dict[str, str]
-    storage_config: StorageConfig
+    storage_config: Optional[StorageConfig]
 
     def __init__(
 
             self,
-            catalog_type: CatalogType,
-            comment: str,
-            created_at: int,
-            name: str,
-            properties: Dict[str, str],
-            storage_config: StorageConfig
+            catalog_type: Optional[CatalogType] = None,
+            comment: Optional[str] = None,
+            created_at: Optional[int] = None,
+            name: Optional[str] = None,
+            properties: Optional[Dict[str, str]] = None,
+            storage_config: Optional[StorageConfig] = None
         ) -> None:
         ...
 
 class CatalogStatus():
     state: str
 
-    def __init__(self, state: str) -> None:
+    def __init__(self, state: Optional[str] = None) -> None:
         ...
 
 class CatalogToken():
     token: str
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: Optional[str] = None) -> None:
         ...
 
 class DeleteTagAssignmentResponse():
@@ -54,13 +54,13 @@ class ListTagAssignmentsResponse():
     next_page_token: str
     tag_assignments: List[TagAssignment]
 
-    def __init__(self, next_page_token: str, tag_assignments: Optional[List[TagAssignment]] = None) -> None:
+    def __init__(self, next_page_token: Optional[str] = None, tag_assignments: Optional[List[TagAssignment]] = None) -> None:
         ...
 
 class S3Config():
     bucket: str
 
-    def __init__(self, bucket: str) -> None:
+    def __init__(self, bucket: Optional[str] = None) -> None:
         ...
 
 class Schema():
@@ -76,10 +76,10 @@ model import for the create method's enum parameter (`SchemaType`)."""
     def __init__(
 
             self,
-            comment: str,
-            created_at: int,
-            full_name: str,
-            schema_type: SchemaType
+            comment: Optional[str] = None,
+            created_at: Optional[int] = None,
+            full_name: Optional[str] = None,
+            schema_type: Optional[SchemaType] = None
         ) -> None:
         ...
 
@@ -99,10 +99,10 @@ class TagAssignment():
     def __init__(
 
             self,
-            entity_name: str,
-            entity_type: str,
-            tag_key: str,
-            tag_value: str
+            entity_name: Optional[str] = None,
+            entity_type: Optional[str] = None,
+            tag_key: Optional[str] = None,
+            tag_value: Optional[str] = None
         ) -> None:
         ...
 
