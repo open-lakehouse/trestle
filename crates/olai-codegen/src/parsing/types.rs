@@ -337,6 +337,16 @@ fn flexible_optional_field_assignment(
             (BaseType::Enum(_), Runtime::Buffa) => {
                 quote! { #field_ident.into().map(buffa::EnumValue::Known) }
             }
+            // buffa stores singular message/oneof fields as `MessageField<T>`. The
+            // setter arg is `impl Into<Option<T>>`, so resolve to `Option<T>` first
+            // (annotating the intermediate disambiguates the chained `.into()`), then
+            // convert via `MessageField: From<Option<T>>`.
+            (BaseType::Message(_) | BaseType::OneOf(_), Runtime::Buffa) => quote! {
+                {
+                    let #field_ident: ::core::option::Option<_> = #field_ident.into();
+                    buffa::MessageField::from(#field_ident)
+                }
+            },
             _ => quote! { #field_ident.into() },
         }
     } else {
@@ -375,7 +385,7 @@ fn flexible_optional_field_assignment(
 /// The correct fix (Phase 3): accept a `package_prefix: &str` parameter so
 /// callers can strip the known package prefix and always identify the boundary
 /// between package segments and message/enum names deterministically.
-fn convert_protobuf_enum_to_rust_type(proto_type: &str) -> String {
+pub(crate) fn convert_protobuf_enum_to_rust_type(proto_type: &str) -> String {
     if let Some(enum_name) = proto_type.strip_prefix("TYPE_ENUM:") {
         // Remove leading dot if present
         let enum_name = enum_name.trim_start_matches('.');

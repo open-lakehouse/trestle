@@ -35,6 +35,7 @@
 
 use std::collections::BTreeSet;
 
+use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -378,6 +379,12 @@ impl FieldAccessor {
         if self.is_singular_message() {
             return quote! { ::core::option::Option<#base> };
         }
+        // Explicit-presence scalars/enums (proto3 `optional`) are stored as
+        // `Option<T>` by both the buffa and prost model plugins, so the wrapper
+        // surfaces them as `Optional[...]` too.
+        if self.is_optional_scalar() {
+            return quote! { ::core::option::Option<#base> };
+        }
         base
     }
 
@@ -388,6 +395,25 @@ impl FieldAccessor {
     fn is_singular_message(&self) -> bool {
         !self.ty.is_repeated
             && matches!(self.ty.base_type, BaseType::Message(_) | BaseType::OneOf(_))
+    }
+
+    /// Whether [`Self::py_type`] is itself an `Option<..>` — i.e. the field is a
+    /// singular message or an explicit-presence scalar/enum. Such fields must not be
+    /// re-wrapped in the keyword constructor (would yield ambiguous `Option<Option<T>>`).
+    fn py_type_is_optional(&self) -> bool {
+        self.is_singular_message() || self.is_optional_scalar()
+    }
+
+    /// An explicit-presence scalar or enum (proto3 `optional`): stored as
+    /// `Option<T>` (scalar) or `Option<EnumValue<E>>`/`Option<i32>` (enum) by the
+    /// model plugins, as opposed to messages whose presence is intrinsic.
+    fn is_optional_scalar(&self) -> bool {
+        self.ty.is_optional
+            && !self.ty.is_repeated
+            && !matches!(
+                self.ty.base_type,
+                BaseType::Message(_) | BaseType::OneOf(_) | BaseType::Map(_, _)
+            )
     }
 
     /// `#[getter]` returning the field as its Python-visible type.
@@ -427,6 +453,9 @@ impl FieldAccessor {
         }
         if let BaseType::Map(_, v) = &self.ty.base_type {
             return read_map(&access, v, self.in_project);
+        }
+        if self.is_optional_scalar() {
+            return self.read_optional_scalar(&access);
         }
 
         match &self.ty.base_type {
@@ -498,6 +527,27 @@ impl FieldAccessor {
         }
     }
 
+    /// Read an explicit-presence (proto3 `optional`) scalar/enum field, whose
+    /// stored type is `Option<..>` — surfaced to Python as `Option<base>`.
+    fn read_optional_scalar(&self, access: &TokenStream) -> TokenStream {
+        let base = self.base_py_type();
+        let inner = self.inner_rust_path.as_ref();
+        match &self.ty.base_type {
+            // buffa: Option<EnumValue<E>>; prost: Option<i32>.
+            BaseType::Enum(_) => match self.runtime {
+                Runtime::Buffa => quote! {
+                    #access.as_ref().and_then(|e| e.as_known()).map(#base::from)
+                },
+                Runtime::Prost => quote! {
+                    #access.and_then(|v| <#inner as ::core::convert::TryFrom<i32>>::try_from(v).ok())
+                        .map(#base::from)
+                },
+            },
+            // Option<String>/Option<Vec<u8>>/Option<{int,bool,float}>: clone through.
+            _ => quote! { #access.clone() },
+        }
+    }
+
     /// Expression converting a Python-typed `value` back into the inner field
     /// representation for storage.
     fn write_expr(&self) -> TokenStream {
@@ -507,9 +557,30 @@ impl FieldAccessor {
         if let BaseType::Map(_, _) = &self.ty.base_type {
             return quote! { value };
         }
+        if self.is_optional_scalar() {
+            return self.write_optional_scalar();
+        }
         match &self.ty.base_type {
             BaseType::Enum(_) => self.write_enum(),
             BaseType::Message(_) | BaseType::OneOf(_) => self.write_message(),
+            _ => quote! { value },
+        }
+    }
+
+    /// Store an explicit-presence scalar/enum: `value` is `Option<base>`.
+    fn write_optional_scalar(&self) -> TokenStream {
+        let inner = self.inner_rust_path.as_ref();
+        match &self.ty.base_type {
+            // buffa: Option<EnumValue<E>>; prost: Option<i32>.
+            BaseType::Enum(_) => match self.runtime {
+                Runtime::Buffa => quote! {
+                    value.map(|e| ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(e)))
+                },
+                Runtime::Prost => quote! {
+                    value.map(|e| <#inner as ::core::convert::From<_>>::from(e) as i32)
+                },
+            },
+            // Option<String> etc. store directly.
             _ => quote! { value },
         }
     }
@@ -627,7 +698,15 @@ fn constructor(accessors: &[FieldAccessor], inner: &syn::Path) -> TokenStream {
     let params = accessors.iter().map(|a| {
         let ident = &a.ident;
         let ty = a.py_type();
-        quote! { #ident: ::core::option::Option<#ty> }
+        // Fields whose Python type is *already* `Option<..>` (singular messages,
+        // explicit-presence scalars) must not be double-wrapped: `Option<Option<T>>`
+        // makes pyo3's `#[new]` arg-coercion ambiguous (`SomeWrap`). For those the
+        // single `Option` already encodes the "omitted/None" keyword default.
+        if a.py_type_is_optional() {
+            quote! { #ident: #ty }
+        } else {
+            quote! { #ident: ::core::option::Option<#ty> }
+        }
     });
 
     let sig_parts = accessors
@@ -641,9 +720,20 @@ fn constructor(accessors: &[FieldAccessor], inner: &syn::Path) -> TokenStream {
         let ident = &a.ident;
         // Reuse the setter's write expression by binding `value`.
         let store = a.write_expr();
-        quote! {
-            if let ::core::option::Option::Some(value) = #ident {
-                inner.#ident = #store;
+        if a.py_type_is_optional() {
+            // `value` is the whole (already-`Option`) argument; store unconditionally
+            // (an omitted kwarg arrives as `None`, the field's natural absent value).
+            quote! {
+                {
+                    let value = #ident;
+                    inner.#ident = #store;
+                }
+            }
+        } else {
+            quote! {
+                if let ::core::option::Option::Some(value) = #ident {
+                    inner.#ident = #store;
+                }
             }
         }
     });
@@ -721,7 +811,20 @@ fn type_rust_path(fq_name: &str, project_packages: &BTreeSet<&str>) -> Option<St
         pkg_parts[0].to_string()
     };
 
-    let type_path = remainder.replace('.', "::");
+    // `remainder` is the dot-joined type path within the package, e.g.
+    // `GenerateTableCredentialsRequest.Operation` for a message-nested enum. Both
+    // the prost and buffa model trees nest a type defined inside a message under a
+    // *snake_case module* named after that parent message, with only the leaf type
+    // keeping its proto (PascalCase) name. So snake_case every segment except the
+    // last (`generate_table_credentials_request::Operation`), not a flat `::` join.
+    let segments: Vec<&str> = remainder.split('.').collect();
+    let (leaf, parents) = segments.split_last()?;
+    let type_path = parents
+        .iter()
+        .map(|seg| seg.to_case(Case::Snake))
+        .chain(std::iter::once((*leaf).to_string()))
+        .collect::<Vec<_>>()
+        .join("::");
     Some(format!("super::{}::{}", module_path, type_path))
 }
 
@@ -752,11 +855,26 @@ mod tests {
     }
 
     #[test]
-    fn nested_message_keeps_parent_in_path() {
+    fn nested_type_lives_in_snake_cased_parent_module() {
         let p = pkgs(&["example.catalog.v1"]);
+        // A type defined inside a message is nested under a snake_case module named
+        // after the parent message; only the leaf keeps its proto name.
         assert_eq!(
             type_rust_path(".example.catalog.v1.Catalog.Nested", &p).as_deref(),
-            Some("super::catalog::v1::Catalog::Nested")
+            Some("super::catalog::v1::catalog::Nested")
+        );
+    }
+
+    #[test]
+    fn deeply_nested_type_snake_cases_every_parent() {
+        let p = pkgs(&["example.creds.v1"]);
+        assert_eq!(
+            type_rust_path(
+                ".example.creds.v1.GenerateTableCredentialsRequest.Operation",
+                &p
+            )
+            .as_deref(),
+            Some("super::creds::v1::generate_table_credentials_request::Operation")
         );
     }
 

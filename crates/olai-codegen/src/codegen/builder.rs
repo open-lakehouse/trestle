@@ -368,10 +368,33 @@ fn builder_with_impl(method: &MethodHandler<'_>, field: &BodyField) -> TokenStre
                 }
             }
         } else {
+            // Catch-all for non-enum, non-repeated fields: singular messages/oneofs
+            // (stored as buffa `MessageField<T>` / prost `Option<Box<T>>`) and optional
+            // scalars (`Option<T>`). The arg is `impl Into<Option<T>>`.
+            //
+            // Only buffa's `MessageField` needs the explicit `From<Option<T>>` step
+            // (with the intermediate annotated to disambiguate the chained `.into()`);
+            // optional scalars and the prost message representation are reached by a
+            // plain `Option::into`.
+            let is_singular_message = matches!(
+                field.field_type.base_type,
+                BaseType::Message(_) | BaseType::OneOf(_)
+            );
+            let assignment =
+                if is_singular_message && matches!(method.config.runtime, Runtime::Buffa) {
+                    quote! {
+                        {
+                            let #field_ident: ::core::option::Option<_> = #field_ident.into();
+                            buffa::MessageField::from(#field_ident)
+                        }
+                    }
+                } else {
+                    quote! { #field_ident.into() }
+                };
             quote! {
                 #doc_attr
                 pub fn #method_name(mut self, #field_ident: impl Into<Option<#field_type>>) -> Self {
-                    self.request.#field_ident = #field_ident.into();
+                    self.request.#field_ident = #assignment;
                     self
                 }
             }

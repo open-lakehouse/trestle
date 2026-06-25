@@ -24,6 +24,20 @@ fn wrapper_ident(model_ident: &Ident) -> Ident {
     format_ident!("Py{}", model_ident)
 }
 
+/// The `Py`-prefixed wrapper ident for a (possibly nested) model type, using the
+/// **parent-qualified** emitted name so a message-nested type resolves to the same
+/// ident the wrapper is defined under (e.g. the nested `…Request.Operation` enum →
+/// `PyGenerate…RequestOperation`, not the colliding bare `PyOperation`). For a
+/// top-level type this is identical to [`wrapper_ident`] of the simple name.
+fn qualified_wrapper_ident(ty: &UnifiedType) -> Ident {
+    match &ty.base_type {
+        BaseType::Message(name) | BaseType::Enum(name) | BaseType::OneOf(name) => {
+            format_ident!("Py{}", crate::utils::extract_qualified_type_name(name))
+        }
+        _ => wrapper_ident(&ty.type_ident()),
+    }
+}
+
 /// Wrap a model output ident as its `Py` wrapper return type, and produce the
 /// expression converting the bare client result `result` into it.
 ///
@@ -529,7 +543,7 @@ fn wrap_param_type(ty: &UnifiedType, rendered: &syn::Type) -> TokenStream {
     if !param_needs_conversion(ty) {
         return quote! { #rendered };
     }
-    let wrapper = wrapper_ident(&ty.type_ident());
+    let wrapper = qualified_wrapper_ident(ty);
     let mut inner = quote! { #wrapper };
     if ty.is_repeated {
         inner = quote! { ::std::vec::Vec<#inner> };
