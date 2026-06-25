@@ -10,7 +10,7 @@ automated, in-CI regression coverage for buffa codegen output lives in the
 `golden_buffa/` snapshot tree (see `tests/golden_integration.rs`); this fixture
 is the heavier "does it actually compile and run" check.
 
-## Scope: client, server, node — not python
+## Scope: client, server, node, python
 
 This fixture compiles the generated **client** (and exercises the **node/NAPI**
 marshalling idioms) against real buffa models. The **Python (PyO3)** emitter is
@@ -18,9 +18,20 @@ runtime-invariant — it passes model enums/structs across the PyO3 boundary by
 their bare type and lets the client builder apply the runtime's
 `EnumValue`/`MessageField` wrapping, so it emits identical code for prost and
 buffa (enforced by `python_and_ts_output_is_runtime_invariant` in the golden
-test). A full PyO3 compile would additionally require the *model* crate to derive
-`FromPyObject`/`IntoPyObject` on the buffa types, which is the consuming
-project's responsibility, not trestle's codegen — so it is out of scope here.
+test).
+
+For those bare-type boundaries to compile, the model crate must carry
+`FromPyObject`/`IntoPyObject` impls. trestle now emits these into the model
+module (`models/_gen/pyo3_impls.rs`, gated on the `python` feature) via
+`pythonize` over the models' serde derives — see `generate_pyo3_impls`. The
+`python`-feature build of this fixture `include!`s that file and the
+`buffa_model_roundtrips_through_pyo3` test proves it compiles against real buffa
+types and round-trips a model (including an enum field, which crosses the
+boundary as its proto name) Rust → Python → Rust:
+
+```sh
+cargo test --manifest-path crates/olai-codegen/tests/buffa_e2e/Cargo.toml --features python
+```
 
 ## Running
 

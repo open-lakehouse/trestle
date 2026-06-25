@@ -8,6 +8,18 @@
 
 pub mod models {
     include!(concat!(env!("OUT_DIR"), "/models/_include.rs"));
+
+    // PyO3 boundary conversions for the buffa model types, emitted by trestle into
+    // the models output dir. The generated impls address models as
+    // `super::demo::v1::Widget`, i.e. relative to the *models module's* parent —
+    // exactly as they resolve in the real flow where trestle emits
+    // `#[cfg(feature = "python")] mod pyo3_impls;` inside the models `mod.rs`. We
+    // reproduce that here with a child `pyo3_impls` module so `super` is this
+    // `models` module and `super::demo::v1::*` resolves to the buffa models above.
+    #[cfg(feature = "python")]
+    mod pyo3_impls {
+        include!(concat!(env!("OUT_DIR"), "/models_gen/_gen/pyo3_impls.rs"));
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -45,9 +57,17 @@ pub mod error {
 
 /// The trestle-generated client, emitted for `Runtime::Buffa` against the buffa
 /// models above. If this `include!` fails to compile, the buffa codegen is wrong.
-pub mod client {
+///
+/// Named `codegen` because the generated aggregate root client (emitted once a
+/// `bindings` config is present) refers to the per-service clients as
+/// `crate::codegen::<service>` — the module layout trestle assumes for the client
+/// crate.
+pub mod codegen {
     include!(concat!(env!("OUT_DIR"), "/client/mod.rs"));
 }
+
+/// Back-compat alias: earlier the generated client was mounted at `crate::client`.
+pub use codegen as client;
 
 #[cfg(test)]
 mod tests {
@@ -91,5 +111,45 @@ mod tests {
             .encode_to_vec();
         let decoded = <Widget as buffa::Message>::decode_from_slice(&bytes).expect("decodes");
         assert_eq!(decoded.name, "w");
+    }
+
+    /// The PyO3 boundary impls trestle emits (`pyo3_impls.rs`) must compile against
+    /// real buffa models AND preserve data through a Rust → Python → Rust round
+    /// trip. This is the gap the buffa/Python support closes: the generated
+    /// bindings pass models across the FFI boundary by their bare type, which only
+    /// works once these `IntoPyObject`/`FromPyObject` impls exist.
+    ///
+    /// The enum field exercises the proto-name-string contract end to end: buffa
+    /// serializes `Color::Green` as `"GREEN"`, pythonize carries that string into
+    /// Python and back, and `FromPyObject` reconstructs the `EnumValue::Known`.
+    #[cfg(feature = "python")]
+    #[test]
+    fn buffa_model_roundtrips_through_pyo3() {
+        use pyo3::prelude::*;
+        use pyo3::types::PyAnyMethods;
+
+        Python::initialize();
+        Python::attach(|py| {
+            let widget = Widget {
+                name: "gizmo".into(),
+                color: EnumValue::Known(Color::Green),
+                ..Default::default()
+            };
+
+            // Rust → Python (IntoPyObject via pythonize).
+            let obj = widget.clone().into_pyobject(py).expect("into_pyobject");
+            // pythonize maps a proto message to a Python dict; the enum is its
+            // proto name string.
+            let color: String = obj
+                .get_item("color")
+                .expect("color key")
+                .extract()
+                .expect("color is a str");
+            assert_eq!(color, "GREEN", "enum crosses the boundary as its proto name");
+
+            // Python → Rust (FromPyObject via depythonize) round-trips the data.
+            let back: Widget = obj.extract().expect("extract Widget");
+            assert_eq!(widget, back);
+        });
     }
 }

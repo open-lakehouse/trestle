@@ -5,9 +5,11 @@
 //! - `typings`: `.pyi` type stub generation for Python IDE support
 
 mod bindings;
+mod model_conversions;
 mod typings;
 
 pub(crate) use bindings::{generate, main_module};
+pub(crate) use model_conversions::generate_pyo3_impls;
 pub(crate) use typings::generate_typings;
 
 use crate::analysis::RequestType;

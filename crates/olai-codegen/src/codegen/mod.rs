@@ -217,6 +217,26 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
             output::write_generated_code(&models_files, &subdir)?;
         }
 
+        // When Python bindings are generated, the bindings pass model types
+        // across the FFI boundary by their bare type, so the model crate must
+        // carry `FromPyObject`/`IntoPyObject` impls. Emit them here (orphan rule:
+        // the model types are local to this crate). Gated on the `python` feature
+        // in the generated `mod.rs`.
+        let mut include_pyo3_impls = false;
+        if config.output.python.is_some() {
+            let pyo3_impls = python::generate_pyo3_impls(&plan, metadata)?;
+            if !pyo3_impls.is_empty() {
+                let mut pyo3_files = GeneratedCode {
+                    files: std::collections::HashMap::new(),
+                };
+                pyo3_files
+                    .files
+                    .insert("pyo3_impls.rs".to_string(), pyo3_impls);
+                output::write_generated_code(&pyo3_files, &subdir)?;
+                include_pyo3_impls = true;
+            }
+        }
+
         let gen_dir = config.models_gen_dir.as_deref().unwrap_or("../gen");
         let include_labels = config.generate_resource_enum;
         // When `output_common` resolves to this same directory, this `mod.rs`
@@ -227,6 +247,7 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
             &plan.services,
             gen_dir,
             include_labels,
+            include_pyo3_impls,
             metadata,
             common_colocated,
         );
@@ -671,6 +692,7 @@ pub fn generate_models_mod(
     services: &[ServicePlan],
     gen_dir: &str,
     include_labels: bool,
+    include_pyo3_impls: bool,
     metadata: &CodeGenMetadata,
     common_colocated: bool,
 ) -> String {
@@ -758,6 +780,17 @@ pub fn generate_models_mod(
         quote! {}
     };
 
+    // PyO3 boundary conversions for the model types (see `python::generate_pyo3_impls`).
+    // Gated on the `python` feature so non-Python consumers never pull in pyo3.
+    let pyo3_impls_decl: TokenStream = if include_pyo3_impls {
+        quote! {
+            #[cfg(feature = "python")]
+            mod pyo3_impls;
+        }
+    } else {
+        quote! {}
+    };
+
     // When the `output_common` extractors share this directory (the default
     // layout, where `output_common` == `output_models`/`<models_subdir>`), this
     // `mod.rs` overwrites the one the common generator emitted — so it must also
@@ -792,6 +825,8 @@ pub fn generate_models_mod(
         use std::collections::HashMap;
 
         #labels_decl
+
+        #pyo3_impls_decl
 
         #(#reexports)*
 

@@ -12,11 +12,19 @@ license.workspace = true
 # enables this; pure-model consumers (clients, bindings) leave it off so the
 # models crate stays transport-neutral.
 axum = ["dep:axum"]
+# Emits `FromPyObject`/`IntoPyObject` impls for the model types
+# (`models/_gen/pyo3_impls.rs`, gated on this feature) so the generated PyO3
+# bindings can pass models across the FFI boundary by their bare type. Enable
+# this when building the Python bindings crate; pure-Rust/WASM consumers leave it
+# off so pyo3 stays out of their dependency tree.
+python = ["dep:pyo3", "dep:pythonize"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 axum = { workspace = true, optional = true }
+pyo3 = { workspace = true, optional = true }
+pythonize = { workspace = true, optional = true }
 {%- if runtime == 'buffa' %}
 buffa = { workspace = true, features = ["json"] }
 buffa-types = { workspace = true }

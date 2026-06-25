@@ -24,7 +24,8 @@ fn main() {
 
     // 2. trestle client codegen, buffa runtime.
     use olai_codegen::{
-        CodeGenConfig, CodeGenOutput, Runtime, generate_code, parse_file_descriptor_set,
+        BindingsConfig, CodeGenConfig, CodeGenOutput, Runtime, generate_code,
+        parse_file_descriptor_set,
     };
     use protobuf::Message;
     use protobuf::descriptor::FileDescriptorSet;
@@ -35,8 +36,16 @@ fn main() {
 
     let client_dir = out.join("client");
     let common_dir = out.join("common_gen");
+    // The PyO3 boundary conversions (`pyo3_impls.rs`) are emitted into the models
+    // output dir, alongside the (otherwise empty) generated `mod.rs`/`labels.rs`.
+    // We only `include!` `pyo3_impls.rs` (under the `python` feature), so the
+    // models dir doubles as where that file lands.
+    let models_dir = out.join("models_gen");
+    let python_dir = out.join("python");
     std::fs::create_dir_all(&client_dir).unwrap();
     std::fs::create_dir_all(&common_dir).unwrap();
+    std::fs::create_dir_all(&models_dir).unwrap();
+    std::fs::create_dir_all(&python_dir).unwrap();
 
     let config = CodeGenConfig {
         context_type_path: "crate::Context".into(),
@@ -48,12 +57,15 @@ fn main() {
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         output: CodeGenOutput {
             common: common_dir,
-            models: None,
+            models: Some(models_dir),
             models_subdir: "_gen".into(),
             server: None,
             client: Some(client_dir),
             generate_resource_clients: false,
-            python: None,
+            // Enabling Python output makes the models block emit `pyo3_impls.rs`
+            // (FromPyObject/IntoPyObject for the buffa model types) — the thing
+            // this fixture proves compiles & round-trips against real buffa types.
+            python: Some(python_dir),
             node: None,
             node_ts: None,
             wasm: None,
@@ -63,7 +75,20 @@ fn main() {
         generate_store_integration: false,
         error_type_path: None,
         generate_object_conversions: false,
-        bindings: None,
+        // Python output requires a bindings config. We don't include! the PyO3
+        // client wrappers (they reference a `crate::error`/`crate::runtime` we
+        // don't define here) — only `pyo3_impls.rs` from the models dir — but the
+        // config still has to be present for generation to run.
+        bindings: Some(BindingsConfig {
+            aggregate_client_name: "DemoClient".into(),
+            client_crate_name: "buffa_e2e".into(),
+            py_error_type: "PyDemoError".into(),
+            py_result_type: "PyDemoResult".into(),
+            napi_error_ext_trait: "NapiErrorExt".into(),
+            typings_package_filter: Some(".demo.".into()),
+            ts_error_base_class: "DemoError".into(),
+            ts_error_code_prefix: "DEMO".into(),
+        }),
         models_gen_dir: None,
     };
     generate_code(&metadata, &config).unwrap();

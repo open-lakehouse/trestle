@@ -16,6 +16,12 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[features]
+# Compiles the generated `pyo3_impls.rs` (FromPyObject/IntoPyObject for the buffa
+# model types) and the PyO3 round-trip test. Off by default so the base fixture
+# stays pyo3-free; the dedicated test below runs it with `--features python`.
+python = ["dep:pyo3", "dep:pythonize"]
+
 [dependencies]
 buffa = { version = "0.7", features = ["json"] }
 buffa-types = "0.7"
@@ -27,6 +33,8 @@ url = "2"
 thiserror = "2"
 async-trait = "0.1"
 futures = "0.3"
+pyo3 = { version = "0.26", optional = true }
+pythonize = { version = "0.26", optional = true }
 
 [build-dependencies]
 buffa-build = "0.7"
@@ -37,4 +45,7 @@ protobuf = "3"
 # build time (the buffa client traits + models) rather than referenced directly
 # in this crate's source, so its static scan reports them as unused.
 [package.metadata.cargo-machete]
-ignored = ["async-trait", "buffa-types", "futures", "serde"]
+# pyo3/pythonize are exercised only through the build-time-generated
+# `pyo3_impls.rs` (under the `python` feature), so machete's static scan can't
+# see them.
+ignored = ["async-trait", "buffa-types", "futures", "serde", "pyo3", "pythonize"]
