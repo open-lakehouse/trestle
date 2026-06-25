@@ -159,8 +159,19 @@ pub(super) fn process_message(
         .messages
         .insert(full_type_name.clone(), message_info);
 
-    // Process nested messages
+    // Process nested messages. Skip synthetic map-entry messages (`option
+    // map_entry = true`): they are an implementation detail of `map<K, V>`
+    // fields (already resolved inline as `BaseType::Map`), not real types a
+    // consumer can name — registering them pollutes `messages` with types like
+    // `Catalog.PropertiesEntry` that have no addressable Rust path.
     for (nested_index, nested_message) in message.nested_type.iter().enumerate() {
+        let is_map_entry = nested_message
+            .options
+            .as_ref()
+            .is_some_and(|opts: &MessageOptions| opts.map_entry());
+        if is_map_entry {
+            continue;
+        }
         let nested_path = [path_prefix, &[3, nested_index as i32]].concat();
         process_message(
             nested_message,
