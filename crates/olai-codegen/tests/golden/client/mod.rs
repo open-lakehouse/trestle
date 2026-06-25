@@ -5,6 +5,7 @@ pub mod schema;
 pub mod tag_assignments;
 #[allow(clippy::too_many_arguments, clippy::doc_lazy_continuation)]
 pub mod client;
+#[allow(unused_imports)]
 pub use client::*;
 use futures::Future;
 pub(super) fn stream_paginated<F, Fut, S, T>(

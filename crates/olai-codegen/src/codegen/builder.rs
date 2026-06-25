@@ -118,6 +118,10 @@ fn generate_builders_module(
 
     let tokens = quote! {
         #![allow(unused_mut)]
+        // The `use #mod_path::*` / `super::client::*` globs are convenience-wide;
+        // not every builders module references every imported name (more so under
+        // buffa). Silence unused-import noise rather than per-name pruning.
+        #![allow(unused_imports)]
         #box_aliases
         #stream_helper_imports
         use std::future::IntoFuture;

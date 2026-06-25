@@ -1,6 +1,8 @@
 // @generated — do not edit by hand.
 #![allow(unexpected_cfgs)]
 #![allow(clippy::empty_docs)]
+#![allow(non_camel_case_types)]
+#![allow(clippy::derivable_impls)]
 use std::collections::HashMap;
 pub mod labels;
 pub use labels::{ObjectLabel, Resource};
@@ -14,21 +16,15 @@ pub type PropertyMap = HashMap<String, serde_json::Value>;
 pub mod catalog {
     pub mod v1 {
         include!("./../gen/example.catalog.v1.rs");
-        #[cfg(feature = "grpc")]
-        include!("./../gen/example.catalog.v1.tonic.rs");
     }
 }
 pub mod schemas {
     pub mod v1 {
         include!("./../gen/example.schemas.v1.rs");
-        #[cfg(feature = "grpc")]
-        include!("./../gen/example.schemas.v1.tonic.rs");
     }
 }
 pub mod tags {
     pub mod v1 {
         include!("./../gen/example.tags.v1.rs");
-        #[cfg(feature = "grpc")]
-        include!("./../gen/example.tags.v1.tonic.rs");
     }
 }

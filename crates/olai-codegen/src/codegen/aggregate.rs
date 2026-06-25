@@ -127,6 +127,11 @@ pub(crate) fn generate(
     let imports = generate_imports(&services, &transport_import);
 
     let tokens = quote! {
+        // The per-service (`crate::codegen::<svc>::*`) and model globs below are
+        // convenience-wide; the aggregate root only references a subset directly,
+        // so a model whose types it never names (common under buffa) would trip
+        // `unused_imports` under `-D warnings`.
+        #![allow(unused_imports)]
         #imports
 
         #[derive(Clone)]
