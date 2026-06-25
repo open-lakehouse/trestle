@@ -14,6 +14,7 @@ use example_common::models::catalog::v1::*;
 use example_common::models::catalog::v1::*;
 use example_common::models::schemas::v1::*;
 use example_common::models::tags::v1::*;
+use example_common::models::*;
 use crate::codegen::catalog::PyCatalogClient;
 use crate::codegen::schema::PySchemaClient;
 #[pyclass(name = "ExampleClient")]
@@ -39,13 +40,15 @@ impl PyExampleClient {
     pub fn create_catalog(
         &self,
         py: Python,
-        catalog: Option<Catalog>,
-    ) -> PyExampleResult<Catalog> {
+        catalog: ::core::option::Option<PyCatalog>,
+    ) -> PyExampleResult<PyCatalog> {
         let mut request = self.client.create_catalog();
-        request = request.with_catalog(catalog);
+        request = request.with_catalog(catalog.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyCatalog::from(result))
         })
     }
     #[pyo3(signature = (max_results))]
@@ -53,13 +56,13 @@ impl PyExampleClient {
         &self,
         py: Python,
         max_results: i32,
-    ) -> PyExampleResult<Vec<Catalog>> {
+    ) -> PyExampleResult<::std::vec::Vec<PyCatalog>> {
         let request = self.client.list_catalogs(max_results, page_token);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime
+            let result: ::std::vec::Vec<_> = runtime
                 .block_on(async move { request.into_stream().try_collect().await })?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(result.into_iter().map(PyCatalog::from).collect())
         })
     }
     #[pyo3(signature = (catalog_id))]
@@ -67,11 +70,13 @@ impl PyExampleClient {
         &self,
         py: Python,
         catalog_id: String,
-    ) -> PyExampleResult<CatalogToken> {
+    ) -> PyExampleResult<PyCatalogToken> {
         let request = self.client.generate_catalog_token(catalog_id);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyCatalogToken::from(result))
         })
     }
     #[pyo3(signature = (tags, max_results))]
@@ -80,23 +85,27 @@ impl PyExampleClient {
         py: Python,
         tags: Option<Vec<String>>,
         max_results: i32,
-    ) -> PyExampleResult<ListByTagsResponse> {
+    ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_tags(tags, max_results);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
         })
     }
     #[pyo3(signature = (catalog_type))]
     pub fn list_by_catalog_type(
         &self,
         py: Python,
-        catalog_type: CatalogType,
-    ) -> PyExampleResult<ListByTagsResponse> {
-        let request = self.client.list_by_catalog_type(catalog_type);
+        catalog_type: PyCatalogType,
+    ) -> PyExampleResult<PyListByTagsResponse> {
+        let request = self.client.list_by_catalog_type(catalog_type.into());
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
         })
     }
     #[pyo3(signature = (name, catalog_name, schema_type))]
@@ -105,12 +114,14 @@ impl PyExampleClient {
         py: Python,
         name: String,
         catalog_name: String,
-        schema_type: SchemaType,
-    ) -> PyExampleResult<Schema> {
-        let request = self.client.create_schema(name, catalog_name, schema_type);
+        schema_type: PySchemaType,
+    ) -> PyExampleResult<PySchema> {
+        let request = self.client.create_schema(name, catalog_name, schema_type.into());
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PySchema::from(result))
         })
     }
     #[pyo3(signature = (catalog_name, max_results))]
@@ -119,13 +130,13 @@ impl PyExampleClient {
         py: Python,
         catalog_name: String,
         max_results: i32,
-    ) -> PyExampleResult<Vec<Schema>> {
+    ) -> PyExampleResult<::std::vec::Vec<PySchema>> {
         let request = self.client.list_schemas(catalog_name, max_results, page_token);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            let result = runtime
+            let result: ::std::vec::Vec<_> = runtime
                 .block_on(async move { request.into_stream().try_collect().await })?;
-            Ok::<_, PyExampleError>(result)
+            Ok::<_, PyExampleError>(result.into_iter().map(PySchema::from).collect())
         })
     }
     #[pyo3(signature = (entity_type, entity_name, max_results, page_token))]
@@ -136,13 +147,15 @@ impl PyExampleClient {
         entity_name: String,
         max_results: i32,
         page_token: String,
-    ) -> PyExampleResult<ListTagAssignmentsResponse> {
+    ) -> PyExampleResult<PyListTagAssignmentsResponse> {
         let request = self
             .client
             .list_tag_assignments(entity_type, entity_name, max_results, page_token);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyListTagAssignmentsResponse::from(result))
         })
     }
     #[pyo3(signature = (entity_type, entity_name, tag = None))]
@@ -151,13 +164,15 @@ impl PyExampleClient {
         py: Python,
         entity_type: String,
         entity_name: String,
-        tag: Option<TagAssignment>,
-    ) -> PyExampleResult<TagAssignment> {
+        tag: ::core::option::Option<PyTagAssignment>,
+    ) -> PyExampleResult<PyTagAssignment> {
         let mut request = self.client.create_tag_assignment(entity_type, entity_name);
-        request = request.with_tag(tag);
+        request = request.with_tag(tag.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyTagAssignment::from(result))
         })
     }
     #[pyo3(signature = (entity_type, entity_name, tag_key))]
@@ -167,11 +182,13 @@ impl PyExampleClient {
         entity_type: String,
         entity_name: String,
         tag_key: String,
-    ) -> PyExampleResult<TagAssignment> {
+    ) -> PyExampleResult<PyTagAssignment> {
         let request = self.client.get_tag_assignment(entity_type, entity_name, tag_key);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyTagAssignment::from(result))
         })
     }
     #[pyo3(signature = (entity_type, entity_name, tag_key))]
@@ -181,13 +198,15 @@ impl PyExampleClient {
         entity_type: String,
         entity_name: String,
         tag_key: String,
-    ) -> PyExampleResult<DeleteTagAssignmentResponse> {
+    ) -> PyExampleResult<PyDeleteTagAssignmentResponse> {
         let request = self
             .client
             .delete_tag_assignment(entity_type, entity_name, tag_key);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyDeleteTagAssignmentResponse::from(result))
         })
     }
     #[pyo3(signature = (entity_type, entity_name, tag_key))]
@@ -203,7 +222,9 @@ impl PyExampleClient {
             .touch_tag_assignment(entity_type, entity_name, tag_key);
         let runtime = get_runtime(py)?;
         py.allow_threads(|| {
-            Ok::<_, PyExampleError>(runtime.block_on(request.into_future())?)
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(result)
         })
     }
     pub fn catalog(&self, catalog_name: String) -> PyCatalogClient {

@@ -24,7 +24,10 @@ impl CreateCatalogBuilder {
     }
     /// Set catalog
     pub fn with_catalog(mut self, catalog: impl Into<Option<Catalog>>) -> Self {
-        self.request.catalog = catalog.into();
+        self.request.catalog = {
+            let catalog: ::core::option::Option<_> = catalog.into();
+            buffa::MessageField::from(catalog)
+        };
         self
     }
 }
@@ -132,7 +135,10 @@ impl UpdateCatalogBuilder {
     }
     /// Set catalog
     pub fn with_catalog(mut self, catalog: impl Into<Option<Catalog>>) -> Self {
-        self.request.catalog = catalog.into();
+        self.request.catalog = {
+            let catalog: ::core::option::Option<_> = catalog.into();
+            buffa::MessageField::from(catalog)
+        };
         self
     }
 }

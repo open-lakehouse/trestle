@@ -61,7 +61,10 @@ impl CreateTagAssignmentBuilder {
     }
     /// Set tag
     pub fn with_tag(mut self, tag: impl Into<Option<TagAssignment>>) -> Self {
-        self.request.tag = tag.into();
+        self.request.tag = {
+            let tag: ::core::option::Option<_> = tag.into();
+            buffa::MessageField::from(tag)
+        };
         self
     }
 }

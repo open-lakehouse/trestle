@@ -5,7 +5,9 @@ use std::collections::HashMap;
 pub mod labels;
 pub use labels::{ObjectLabel, Resource};
 #[cfg(feature = "python")]
-mod pyo3_impls;
+pub mod pyo3_impls;
+#[cfg(feature = "python")]
+pub use pyo3_impls::*;
 pub use catalog::v1::Catalog;
 pub use schemas::v1::Schema;
 pub type PropertyMap = HashMap<String, serde_json::Value>;

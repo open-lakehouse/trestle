@@ -257,10 +257,10 @@ impl BindingBackend for NapiBackend {
                             #param_name.try_into().map_err(|_| napi::Error::new(napi::Status::GenericFailure, "invalid enum value"))?
                         },
                         Runtime::Buffa => {
-                            let enum_ty = format_ident!(
-                                "{}",
-                                crate::utils::extract_simple_type_name(enum_name)
-                            );
+                            // Resolve to the enum's in-crate Rust path: a nested (message-defined)
+                            // enum lives in a snake_case parent module (`req::Operation`) and is not
+                            // reachable by the model glob import, so the bare name won't resolve.
+                            let enum_ty = enum_rust_type_path(enum_name);
                             quote! {
                                 <#enum_ty as buffa::Enumeration>::from_i32(#param_name)
                                     .ok_or_else(|| napi::Error::new(napi::Status::GenericFailure, "invalid enum value"))?
@@ -484,8 +484,7 @@ impl SetterRender for NapiBackend {
                     );
                 },
                 Runtime::Buffa => {
-                    let enum_ty =
-                        format_ident!("{}", crate::utils::extract_simple_type_name(enum_name));
+                    let enum_ty = enum_rust_type_path(enum_name);
                     quote! {
                         request = request.#with_method(
                             #param_ident.and_then(<#enum_ty as buffa::Enumeration>::from_i32)
@@ -499,4 +498,19 @@ impl SetterRender for NapiBackend {
             }
         }
     }
+}
+
+/// In-crate Rust path for an enum referenced from generated node bindings.
+///
+/// The buffa conversion (`Enumeration::from_i32`) names the enum type explicitly,
+/// so a message-nested enum must be reached through its snake_case parent module
+/// (`generate_temporary_table_credentials_request::Operation`) rather than the bare
+/// leaf name, which the model glob import does not bring into scope. Top-level enums
+/// resolve to their simple name unchanged.
+fn enum_rust_type_path(enum_name: &str) -> TokenStream {
+    let path = crate::parsing::types::convert_protobuf_enum_to_rust_type(&format!(
+        "TYPE_ENUM:{enum_name}"
+    ));
+    path.parse()
+        .expect("enum rust path is a valid token stream")
 }

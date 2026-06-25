@@ -18,7 +18,7 @@ impl NapiSchemaClient {
         let mut request = self
             .client
             .get(
-                <View as buffa::Enumeration>::from_i32(view)
+                <get_schema_request::View as buffa::Enumeration>::from_i32(view)
                     .ok_or_else(|| napi::Error::new(
                         napi::Status::GenericFailure,
                         "invalid enum value",
