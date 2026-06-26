@@ -11,6 +11,82 @@ use crate::analysis::{EmitShape, RequestParam, RequestType};
 use crate::codegen::{BindingMode, BindingsConfig, MethodHandler, ServiceHandler};
 use crate::parsing::types::unified_to_typescript;
 
+/// JS globals that Biome's `noShadowRestrictedNames` rule forbids re-binding. A proto message
+/// named after one of these (e.g. `Function`, `Object`, `Date`) would shadow the global when
+/// imported under its bare name, so its TypeScript *type* reference is aliased via
+/// [`ts_type_ident`]. Kept in sync with Biome's restricted set.
+const RESTRICTED_GLOBAL_NAMES: &[&str] = &[
+    "Array",
+    "ArrayBuffer",
+    "Atomics",
+    "BigInt",
+    "BigInt64Array",
+    "BigUint64Array",
+    "Boolean",
+    "DataView",
+    "Date",
+    "Error",
+    "EvalError",
+    "Float32Array",
+    "Float64Array",
+    "Function",
+    "Infinity",
+    "Int16Array",
+    "Int32Array",
+    "Int8Array",
+    "Intl",
+    "JSON",
+    "Map",
+    "Math",
+    "NaN",
+    "Number",
+    "Object",
+    "Promise",
+    "Proxy",
+    "RangeError",
+    "ReferenceError",
+    "Reflect",
+    "RegExp",
+    "Set",
+    "SharedArrayBuffer",
+    "String",
+    "Symbol",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+    "Uint16Array",
+    "Uint32Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "WeakMap",
+    "WeakSet",
+    "undefined",
+];
+
+/// The TypeScript identifier to use when *referencing* a model type. Most types are referenced by
+/// their bare name; a type whose name collides with a JS global (see [`RESTRICTED_GLOBAL_NAMES`])
+/// is referenced through a trailing-`$` alias so it doesn't shadow the global. The matching import
+/// is emitted as `type Name as Name$` by [`ts_type_import_clause`].
+///
+/// Schema names (`<Name>Schema`) never collide, so they are left untouched.
+fn ts_type_ident(name: &str) -> String {
+    if RESTRICTED_GLOBAL_NAMES.contains(&name) {
+        format!("{name}$")
+    } else {
+        name.to_string()
+    }
+}
+
+/// The `type` import clause for a model type: `type Name`, or `type Name as Name$` when the bare
+/// name would shadow a JS global. Mirrors [`ts_type_ident`].
+fn ts_type_import_clause(name: &str) -> String {
+    if RESTRICTED_GLOBAL_NAMES.contains(&name) {
+        format!("type {name} as {name}$")
+    } else {
+        format!("type {name}")
+    }
+}
+
 /// Format optional documentation as a JSDoc comment block.
 fn format_jsdoc(documentation: Option<&str>, indent: &str) -> String {
     let Some(doc) = documentation else {
@@ -228,6 +304,14 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
         }
 
         for method in service.methods() {
+            // Only methods that actually surface on a client emit `fromBinary`/`toBinary` calls,
+            // so only those contribute imports. A method that is dropped from both the scoped and
+            // aggregate surfaces (e.g. a resource-collection custom verb on a Scoped service) must
+            // not pull its types in, or Biome flags them as unused. See `method_is_emitted`.
+            if !method_is_emitted(service, &method) {
+                continue;
+            }
+
             // Import exactly the type each method's generated code decodes (see
             // `decoded_type_name`): item type for standard list unwrapping, otherwise the full
             // output message. This keeps imports in lockstep with emitted `fromBinary` calls,
@@ -272,7 +356,7 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
 
     let type_imports = type_names
         .iter()
-        .map(|t| format!("  type {},", t))
+        .map(|t| format!("  {},", ts_type_import_clause(t)))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -319,6 +403,30 @@ fn decoded_type_name(_service: &ServiceHandler<'_>, method: &MethodHandler<'_>) 
                 .to_string(),
         ),
         _ => method.output_type().map(|t| t.to_string()),
+    }
+}
+
+/// Whether a method produces any code on the generated client surface — and therefore contributes
+/// imports. This mirrors the emit decisions made by [`generate_resource_client_class`] (the scoped
+/// client) and [`generate_aggregate_client_sorted`] (the root client):
+///
+/// - **Flat** services emit *every* method onto the root client.
+/// - **Scoped** services emit only their standard instance verbs (`Get`/`Update`/`Delete`) onto the
+///   scoped client, plus their `List`/`Create` collection methods onto the root client. Both
+///   surfaces match strictly on `request_type` — a `Custom` verb on a Scoped service is emitted by
+///   neither, so its decoded/body types must not be imported or Biome flags them as unused.
+fn method_is_emitted(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> bool {
+    match service.binding_mode() {
+        BindingMode::Flat => true,
+        BindingMode::Scoped => match &method.plan.request_type {
+            // Surfaced on the scoped client (see `generate_resource_client_class`).
+            RequestType::Get | RequestType::Update | RequestType::Delete => true,
+            // Surfaced on the root client when classified as a collection method
+            // (see `generate_aggregate_client_sorted`).
+            RequestType::List | RequestType::Create => method.is_collection_method(),
+            // Custom verbs on a Scoped service land on neither surface.
+            RequestType::Custom(_) => false,
+        },
     }
 }
 
@@ -395,16 +503,34 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
         }
     }
 
-    Some(format!(
-        r#"export class {client_type} {{
-  private readonly inner: {native_type};
+    // A scoped resource with no instance verbs (no get/update/delete) yields a class with no
+    // members that read `inner`. Declaring `private readonly inner` + assigning it would then trip
+    // Biome's `noUnusedPrivateClassMembers`; a plain `constructor(inner) {}` trips
+    // `noUselessConstructor`. A TypeScript parameter property (`constructor(private readonly
+    // inner)`) threads between both — the accessor can still `new` it with the native handle, and
+    // the unused-field signal is at worst a non-failing warning on an intentionally inert class.
+    let body = if methods.is_empty() {
+        format!(
+            r#"  /** @internal */
+  constructor(private readonly inner: {native_type}) {{}}
+"#
+        )
+    } else {
+        format!(
+            r#"  private readonly inner: {native_type};
 
   /** @internal */
   constructor(inner: {native_type}) {{
     this.inner = inner;
   }}
 
-{methods}}}
+{methods}"#
+        )
+    };
+
+    Some(format!(
+        r#"export class {client_type} {{
+{body}}}
 "#
     ))
 }
@@ -504,6 +630,7 @@ fn generate_instance_returning_method(
     verb: &str,
 ) -> String {
     let schema_name = format!("{}Schema", type_name);
+    let type_ref = ts_type_ident(type_name);
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let (ts_name, native_name) = instance_method_names(method, mode, verb);
 
@@ -516,7 +643,7 @@ fn generate_instance_returning_method(
     } = spec;
 
     format!(
-        r#"{jsdoc}  async {ts_name}({full_param_list}): Promise<{type_name}> {{
+        r#"{jsdoc}  async {ts_name}({full_param_list}): Promise<{type_ref}> {{
 {optional_destructure}    try {{
       return fromBinary({schema_name}, await this.inner.{native_name}({all_args}));
     }} catch (e) {{ throw parseNativeError(e); }}
@@ -666,9 +793,10 @@ impl MethodCallSpec {
             .map(|p| {
                 // A required message body is accepted as its typed object (e.g.
                 // `tagPolicy: TagPolicy`) and serialized to bytes when forwarded to the native
-                // binding (see `all_args` below).
+                // binding (see `all_args` below). Reference the type through its (possibly aliased)
+                // import name so a body named after a JS global resolves to its `$` alias.
                 let ty = match message_type_name(p) {
-                    Some(name) if is_required_message_body(p) => name,
+                    Some(name) if is_required_message_body(p) => ts_type_ident(&name),
                     _ => unified_to_typescript(p.field_type()).replace(" | undefined", ""),
                 };
                 format!("{}: {}", p.name().to_case(Case::Camel), ty)
@@ -739,6 +867,7 @@ fn generate_collection_list_method(
     };
     let item_type_name = items_field.unified_type.type_ident().to_string();
     let schema_name = format!("{}Schema", item_type_name);
+    let item_type_ref = ts_type_ident(&item_type_name);
 
     let (required_params, optional_params) = ts_collection_param_split(method, drop_path, true);
 
@@ -750,7 +879,7 @@ fn generate_collection_list_method(
     } = spec;
 
     format!(
-        r#"{jsdoc}  async {method_name}({full_param_list}): Promise<{item_type_name}[]> {{
+        r#"{jsdoc}  async {method_name}({full_param_list}): Promise<{item_type_ref}[]> {{
 {optional_destructure}    try {{
       return (await this.inner.{method_name}({all_args})).map((data) =>
         fromBinary({schema_name}, data),
@@ -782,6 +911,7 @@ fn generate_collection_list_stream_method(
     };
     let item_type_name = items_field.unified_type.type_ident().to_string();
     let schema_name = format!("{}Schema", item_type_name);
+    let item_type_ref = ts_type_ident(&item_type_name);
 
     let (required_params, optional_params) = ts_collection_param_split(method, drop_path, true);
 
@@ -793,7 +923,7 @@ fn generate_collection_list_stream_method(
     } = spec;
 
     format!(
-        r#"{jsdoc}  async *{stream_method_name}({full_param_list}): AsyncIterable<{item_type_name}> {{
+        r#"{jsdoc}  async *{stream_method_name}({full_param_list}): AsyncIterable<{item_type_ref}> {{
 {optional_destructure}    try {{
       for await (const data of this.inner.{base_method_name}Stream({all_args})) {{
         yield fromBinary({schema_name}, data);
@@ -815,6 +945,7 @@ fn generate_collection_create_method(
         None => return generate_void_create_method(method, drop_path),
     };
     let schema_name = format!("{}Schema", output_type);
+    let output_type_ref = ts_type_ident(&output_type);
 
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let method_name = method.binding_method_name_str().to_case(Case::Camel);
@@ -829,7 +960,7 @@ fn generate_collection_create_method(
     } = spec;
 
     format!(
-        r#"{jsdoc}  async {method_name}({full_param_list}): Promise<{output_type}> {{
+        r#"{jsdoc}  async {method_name}({full_param_list}): Promise<{output_type_ref}> {{
 {optional_destructure}    try {{
       return fromBinary({schema_name}, await this.inner.{method_name}({all_args}));
     }} catch (e) {{ throw parseNativeError(e); }}
