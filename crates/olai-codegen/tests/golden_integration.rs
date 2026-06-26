@@ -60,8 +60,11 @@ fn relative_files(dir: &Path) -> Vec<PathBuf> {
 /// Build a config that drives **all** generators (Rust + every binding language) into `tmp`,
 /// targeting the given protobuf `runtime`.
 fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
-    let common = tmp.join("common");
+    // Models + Axum extractors are co-located: the common (extractor) dir is the
+    // models `_gen` subdir, so the generated `mod.rs` `include!`s its sibling model
+    // files with `./<pkg>.rs`.
     let models = tmp.join("models");
+    let common = models.join("_gen");
     let server = tmp.join("server");
     let client = tmp.join("client");
     let python = tmp.join("python");
@@ -105,7 +108,6 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
             ts_error_base_class: "ExampleError".into(),
             ts_error_code_prefix: "EX".into(),
         }),
-        models_gen_dir: None,
     }
 }
 

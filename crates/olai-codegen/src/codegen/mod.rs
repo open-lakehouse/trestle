@@ -237,19 +237,16 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
             }
         }
 
-        let gen_dir = config.models_gen_dir.as_deref().unwrap_or("../gen");
         let include_labels = config.generate_resource_enum;
-        // When `output_common` resolves to this same directory, this `mod.rs`
-        // overwrites the common generator's — so it must re-declare the
-        // per-service extractor submodules it emitted.
-        let common_colocated = subdir == config.output.common;
+        // The Axum extractors are co-located in this same directory (the common
+        // generator wrote `<svc>/server.rs` + `<svc>/mod.rs` here), and this
+        // `mod.rs` overwrites the common generator's top-level `mod.rs` — so it
+        // re-declares the per-service extractor submodules it emitted.
         let mod_content = generate_models_mod(
             &plan.services,
-            gen_dir,
             include_labels,
             include_pyo3_impls,
             metadata,
-            common_colocated,
             config.runtime,
         );
         // Route through write_generated_code so the `// @generated` header is prepended like
@@ -462,10 +459,9 @@ fn generate_wasm_code(
         .collect_vec();
 
     let mut files = HashMap::new();
-    files.insert(
-        "bindings.rs".to_string(),
-        wasm::generate_bindings(&handlers)?,
-    );
+    // Emit as `mod.rs` so the client crate mounts the bindings with a plain
+    // `mod wasm;` (no `#[path]` alias) over the `wasm/` convention subdir.
+    files.insert("mod.rs".to_string(), wasm::generate_bindings(&handlers)?);
     files.insert("client.d.ts".to_string(), wasm::generate_dts(&handlers));
 
     Ok(GeneratedCode { files })
@@ -688,11 +684,10 @@ fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) ->
 
 /// Generate the `mod.rs` for `crates/common/src/models/`.
 ///
-/// Emits `pub mod <service> { pub mod <version> { include!(...) } }` blocks for every
-/// service in the plan, plus static re-exports and module declarations.
-///
-/// `gen_dir` is the relative path (from the subdir) to the prost-generated files,
-/// e.g. `"../gen"`.
+/// Emits `pub mod <service> { pub mod <version> { include!("./<pkg>.rs") } }` blocks
+/// for every service in the plan, plus static re-exports and module declarations.
+/// The model files are co-located in this directory (written by the buf plugin), so
+/// the includes are plain sibling references.
 ///
 /// When `include_labels` is `true`, also emits `pub mod labels; pub use labels::{ObjectLabel, Resource};`.
 ///
@@ -700,11 +695,9 @@ fn generate_client_main_module(services: &[ServicePlan], has_aggregate: bool) ->
 /// directly by an RPC) so they can be included in `pub use` re-exports.
 pub fn generate_models_mod(
     services: &[ServicePlan],
-    gen_dir: &str,
     include_labels: bool,
     include_pyo3_impls: bool,
     metadata: &CodeGenMetadata,
-    common_colocated: bool,
     runtime: Runtime,
 ) -> String {
     // Services are keyed by proto package, not by service: multiple services can share a
@@ -762,7 +755,10 @@ pub fn generate_models_mod(
         let svc_mod = format_ident!("{}", svc_seg);
         let ver_mod = format_ident!("{}", ver_seg);
 
-        let main_include = format!("./{}/{}.rs", gen_dir, package);
+        // Models are co-located: the buf plugin writes `<package>.rs` (and, for
+        // prost, `<package>.serde.rs` / `<package>.tonic.rs`) into this same
+        // directory, so the include is a plain sibling reference.
+        let main_include = format!("./{package}.rs");
         // The separate `<package>.tonic.rs` (grpc service stubs over the prost
         // `ProstCodec`) is only emitted by the prost model plugin. The buffa plugin
         // produces no such file, so including it would break the build whenever the
@@ -770,7 +766,7 @@ pub fn generate_models_mod(
         // the runtime, not just the `grpc` cfg.
         let tonic_include_tokens = match runtime {
             Runtime::Prost => {
-                let tonic_include = format!("./{}/{}.tonic.rs", gen_dir, package);
+                let tonic_include = format!("./{package}.tonic.rs");
                 quote! {
                     #[cfg(feature = "grpc")]
                     include!(#tonic_include);
@@ -820,14 +816,14 @@ pub fn generate_models_mod(
         quote! {}
     };
 
-    // When the `output_common` extractors share this directory (the default
-    // layout, where `output_common` == `output_models`/`<models_subdir>`), this
-    // `mod.rs` overwrites the one the common generator emitted — so it must also
-    // declare the per-service extractor submodules. They are axum-coupled, so
+    // The Axum extractors are always co-located in this directory: the common
+    // generator wrote `<svc>/server.rs` + `<svc>/mod.rs` here, and this `mod.rs`
+    // overwrites the top-level `mod.rs` the common generator emitted — so it must
+    // re-declare the per-service extractor submodules. They are axum-coupled, so
     // gate them on the `axum` feature (matching the `<service>/mod.rs` the common
     // generator writes). Without this, the `FromRequest`/`FromRequestParts` impls
     // never compile and the generated route fns can't be mounted.
-    let common_mods: TokenStream = if common_colocated {
+    let common_mods: TokenStream = {
         let decls: Vec<TokenStream> = services
             .iter()
             .map(|s| format_ident!("{}", s.base_path))
@@ -837,8 +833,6 @@ pub fn generate_models_mod(
             .map(|m| quote! { #[cfg(feature = "axum")] pub mod #m; })
             .collect();
         quote! { #(#decls)* }
-    } else {
-        quote! {}
     };
 
     // Lints to silence across this module and every `include!`d model file below.

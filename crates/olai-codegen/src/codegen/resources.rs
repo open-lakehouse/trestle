@@ -926,7 +926,6 @@ mod tests {
             error_type_path,
             generate_object_conversions: false,
             bindings: None,
-            models_gen_dir: None,
         }
     }
 

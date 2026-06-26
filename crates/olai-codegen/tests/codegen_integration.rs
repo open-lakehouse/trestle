@@ -52,7 +52,6 @@ fn make_test_config(
             ts_error_base_class: "ExampleError".to_string(),
             ts_error_code_prefix: "EX".to_string(),
         }),
-        models_gen_dir: None,
     }
 }
 
@@ -425,8 +424,10 @@ fn generated_python_output_is_valid_rust() {
         let metadata = parse_file_descriptor_set(&descriptor).expect("parse succeeded");
 
         let tmp = TempDir::new().expect("tempdir");
-        let common_dir = tmp.path().join("common");
+        // Models + extractors are co-located: the common (extractor) dir is the
+        // models `_gen` subdir.
         let models_dir = tmp.path().join("models");
+        let common_dir = models_dir.join("_gen");
         let python_dir = tmp.path().join("python");
         let node_ts_dir = tmp.path().join("node_ts");
         let node_dir = tmp.path().join("node");
@@ -445,7 +446,6 @@ fn generated_python_output_is_valid_rust() {
         // Enable models output so the wrapper `pyo3_impls.rs` is emitted alongside
         // the bindings.
         config.output.models = Some(models_dir.clone());
-        config.models_gen_dir = Some("../gen".to_string());
 
         generate_code(&metadata, &config).expect("generate_code succeeded");
 

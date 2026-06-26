@@ -80,7 +80,6 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         error_type_path: Some("crate::Error".into()),
         generate_object_conversions: false,
         bindings: None,
-        models_gen_dir: None,
     }
 }
 
@@ -206,14 +205,13 @@ fn wasm_bindings_and_dts_are_emitted() {
             ts_error_base_class: "ExampleError".into(),
             ts_error_code_prefix: "EX".into(),
         }),
-        models_gen_dir: None,
     };
     generate_code(&metadata(), &config).expect("generation succeeds");
 
-    // bindings.rs: valid Rust, wasm-bindgen-annotated, wired to the wasm transport + serde bridge.
-    let bindings_rs =
-        std::fs::read_to_string(wasm.join("bindings.rs")).expect("bindings.rs written");
-    syn::parse_file(&bindings_rs).expect("generated wasm bindings.rs is valid Rust");
+    // mod.rs: valid Rust, wasm-bindgen-annotated, wired to the wasm transport + serde bridge.
+    // Emitted as `mod.rs` so the client crate mounts it with a plain `mod wasm;`.
+    let bindings_rs = std::fs::read_to_string(wasm.join("mod.rs")).expect("wasm mod.rs written");
+    syn::parse_file(&bindings_rs).expect("generated wasm mod.rs is valid Rust");
     assert!(
         bindings_rs.contains("wasm_bindgen"),
         "missing #[wasm_bindgen]"
@@ -593,7 +591,6 @@ fn node_ts_bindings_generated() {
             ts_error_base_class: "ExampleError".into(),
             ts_error_code_prefix: "EX".into(),
         }),
-        models_gen_dir: None,
     };
     generate_code(&metadata(), &config).expect("generation succeeds");
 
