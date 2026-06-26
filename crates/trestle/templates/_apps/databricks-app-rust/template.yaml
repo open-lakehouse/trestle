@@ -52,8 +52,9 @@ categories:
     options: [on, none]
     help: >-
       Also serve a buf ConnectRPC API alongside REST on the same port. Forces
-      the buffa runtime and requires the `protoc-gen-connect-rust` +
-      `protoc-gen-buffa-packaging` plugins (cargo install). Off by default.
+      the buffa runtime. The Connect facade comes from the remote
+      `buf.build/anthropics/connect-rust` plugin; only the local
+      `protoc-gen-buffa-packaging` plugin needs a cargo install. Off by default.
 
 # Lakehouse-side dependencies. `hard:` is silently auto-enabled; `soft:` is
 # pre-checked in the relevant category multi-select but can be deselected.

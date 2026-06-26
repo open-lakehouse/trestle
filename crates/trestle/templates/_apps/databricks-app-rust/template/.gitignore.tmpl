@@ -9,10 +9,13 @@ api.bin
 # Generated artefacts. Re-derived from `proto/` by `trestle generate`; do NOT
 # edit by hand. Comment these out if you prefer to commit generated code.
 crates/common/src/models/_gen/
-crates/server/src/gen/
-crates/client/src/gen/
+crates/server/src/codegen/
+crates/client/src/codegen/
 {%- if with_connect %}
-crates/server/src/connect_gen/
+crates/server/src/connect/
+{%- endif %}
+{%- if with_frontend %}
+crates/client/src/wasm/
 {%- endif %}
 {% if with_frontend -%}
 # Browser WASM client: a build artifact from `just build-wasm` (wasm-pack), not

@@ -1,14 +1,14 @@
 //! Connect-RPC handler for the starter `Greeting` service.
 //!
 //! Implements the generated Connect `GreetingService` trait (in
-//! `crate::connect_gen`) by delegating to the SAME [`GreetingCore`] the REST
+//! `crate::connect`) by delegating to the SAME [`GreetingCore`] the REST
 //! handler uses. This is the seam that lets one binary serve both REST and
 //! Connect on one port against one implementation: the two generated traits
 //! differ in shape (owned request + `crate::api::Result` for REST; zero-copy
 //! `ServiceRequest` + `ServiceResult`/`ConnectError` for Connect), but both
 //! reduce to the same `core.create(...)` / `core.get(...)` calls.
 //!
-//! NOTE: this references generated code under `crate::connect_gen`, so run
+//! NOTE: this references generated code under `crate::connect`, so run
 //! `just regen` before the first `cargo build` on a freshly-scaffolded tree.
 
 use connectrpc::{ConnectError, RequestContext, Response, ServiceRequest, ServiceResult};
@@ -16,7 +16,7 @@ use {{ project_name | snake_case }}_common::models::{{ project_name | snake_case
     CreateGreetingRequest, GetGreetingRequest, Greeting,
 };
 
-use crate::connect_gen::{{ project_name | snake_case }}::v1::GreetingService;
+use crate::connect::{{ project_name | snake_case }}::v1::GreetingService;
 use crate::handlers::core::CoreError;
 use crate::handlers::greeting::Service;
 

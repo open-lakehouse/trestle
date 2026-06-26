@@ -8,8 +8,8 @@ pub use golden_path_app::v1::Greeting;
 pub type PropertyMap = HashMap<String, serde_json::Value>;
 pub mod golden_path_app {
     pub mod v1 {
-        include!("././golden_path_app.v1.rs");
+        include!("./golden_path_app.v1.rs");
     }
 }
 #[cfg(feature = "axum")]
-pub mod greeting;
+pub mod extractors;

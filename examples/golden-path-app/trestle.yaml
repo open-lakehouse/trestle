@@ -1,38 +1,38 @@
-# Trestle code-generation config for golden-path-app.
-#
-# `trestle generate -c trestle.yaml` reads this file, builds the proto descriptor
-# (run `just regen` first to refresh `api.bin`), and writes Rust + TypeScript
-# code into the four output directories below.
+# Trestle project config. Generated/edited by `trestle config`.
+# `trestle generate -c trestle.yaml` reads this; `buf.gen.yaml` is derived from it.
 
-descriptors: api.bin
-buf_gen: buf.gen.yaml
-
+version: 1
+project:
+  name: golden-path-app
+  id: 356c5627-785e-4b39-a3ea-2596b6446917
 generate:
-  # Protobuf runtime the generated code consumes: "prost" (default) or "buffa".
-  runtime: buffa
-  output_common: crates/common/src/models/_gen
-  output_models: crates/common/src/models
-  models_subdir: _gen
-  output_server: crates/server/src/gen
-  output_client: crates/client/src/gen
-  context_type: crate::api::RequestContext
-  result_type: crate::api::Result
-  models_crate_name: "golden_path_app_common"
-  models_path_template: "golden_path_app_common::models::{service}::v1"
-  models_path_crate_template: "crate::models::{service}::v1"
-  python_typings_filename: client.pyi
-
-  # JS/TS binding names, shared by the WASM bindings below. (No `output:` here, so
-  # the NAPI TypeScript client is NOT generated — the browser uses the WASM client.)
-  typescript:
-    aggregate_client_name: "GoldenPathAppClient"
-    client_crate_name: "golden-path-app-client"
-    error_base_class: "ApiError"
-    error_code_prefix: "GOLDEN_PATH_APP_"
-
-  # Browser client: `#[wasm_bindgen]` glue + `client.d.ts`, compiled to wasm32
-  # from the client crate by `wasm-pack` (`just build-wasm`). Enabling this also
-  # flips the generated Rust client into dual-transport (cfg-gated CloudClient /
-  # WasmClient) mode.
-  wasm:
-    output: crates/client/src/wasm
+  proto_lib: buffa
+  descriptors: api.bin
+  servers:
+    rest: true
+    connect: true
+  clients:
+    rust:
+      output: crates/client/src
+      transport: cloud
+    node:
+      wasm:
+        output: crates/client/src
+  bindings:
+    aggregate_client_name: GoldenPathAppClient
+    client_crate_name: golden-path-app-client
+    error_base_class: ApiError
+    error_code_prefix: GOLDEN_PATH_APP_
+  models:
+    dir: crates/common/src/models
+    crate_name: golden_path_app_common
+    path_template: golden_path_app_common::models::{service}::{version}
+    path_crate_template: crate::models::{service}::{version}
+  server:
+    output: crates/server/src
+    context_type: crate::api::RequestContext
+    result_type: crate::api::Result
+    resource_enum: false
+    store_integration: false
+    object_conversions: false
+    resource_clients: false

@@ -30,7 +30,7 @@ gaps before committing it to a polished template.
 3. **Implement once.** You write a `GreetingCore` — the business logic — and a
    thin adapter that implements the generated `GreetingHandler` trait by calling
    into it.
-4. **Add Connect.** One more codegen plugin (`protoc-gen-connect-rust`) emits a
+4. **Add Connect.** One more codegen plugin (remote `buf.build/anthropics/connect-rust`) emits a
    ConnectRPC service facade **against the very same models**. A second thin
    adapter implements that trait, delegating to the same `GreetingCore`.
 5. **Serve both on one port.** `main.rs` builds the REST router and mounts the
@@ -50,7 +50,7 @@ protocols, one port.
 
 REST and Connect want **different-shaped handlers**:
 
-| | REST (trestle) | Connect (`protoc-gen-connect-rust`) |
+| | REST (trestle) | Connect (`buf.build/anthropics/connect-rust`) |
 |---|---|---|
 | request | owned `CreateGreetingRequest` | `ServiceRequest<'_, …>` (zero-copy view) |
 | context | generic `Cx = RequestContext` | `connectrpc::RequestContext` |

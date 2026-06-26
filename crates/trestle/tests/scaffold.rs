@@ -412,13 +412,13 @@ fn databricks_app_rust_connect() {
     // Connect forces buffa.
     let trestle_yaml = std::fs::read_to_string(root.join("trestle.yaml")).unwrap();
     assert!(
-        trestle_yaml.contains("runtime: buffa"),
+        trestle_yaml.contains("proto_lib: buffa"),
         "connect must force buffa"
     );
 
-    // buf.gen.yaml drives the connect plugins.
+    // buf.gen.yaml drives the connect plugins (now the remote connect-rust plugin).
     let buf_gen = std::fs::read_to_string(root.join("buf.gen.yaml")).unwrap();
-    assert!(buf_gen.contains("protoc-gen-connect-rust"));
+    assert!(buf_gen.contains("buf.build/anthropics/connect-rust"));
     assert!(buf_gen.contains("buffa_module=::test_app_common::models"));
 
     // Server crate gets the connect deps + same-port serve wiring.
@@ -426,13 +426,13 @@ fn databricks_app_rust_connect() {
     assert!(server_cargo.contains("connectrpc"));
     assert!(server_cargo.contains("http-body"));
     let main_rs = std::fs::read_to_string(root.join("crates/server/src/main.rs")).unwrap();
-    assert!(main_rs.contains("mod connect_gen"));
+    assert!(main_rs.contains("mod connect;"));
     assert!(main_rs.contains("fallback_service"));
 
     assert_no_unrendered_tokens(&root);
     // NB: no `cargo check` here — the connect path needs `buf generate` with the
-    // locally-installed connect plugins to populate `connect_gen/` first, which
-    // the slow-test harness doesn't run. The committed `examples/golden-path-app`
+    // locally-installed connect plugins to populate `connect/` first, which the
+    // slow-test harness doesn't run. The committed `examples/golden-path-app`
     // exercises the full build + dual-protocol serve.
 }
 

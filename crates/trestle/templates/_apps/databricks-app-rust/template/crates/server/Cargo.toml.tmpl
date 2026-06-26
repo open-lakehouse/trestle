@@ -11,7 +11,7 @@ name = "{{ project_name | kebab_case }}-server"
 path = "src/main.rs"
 
 [features]
-# The generated route fns (`gen/<service>/server.rs`) and the request extractors
+# The generated route fns (`codegen/<service>/server.rs`) and the request extractors
 # in the common crate are gated behind an `axum` feature. Making `axum` an
 # optional dep auto-creates the matching feature; enabling it also turns on the
 # common crate's `axum` feature so its extractors compile. On by default so the

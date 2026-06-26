@@ -89,7 +89,6 @@ fn main() {
             ts_error_base_class: "DemoError".into(),
             ts_error_code_prefix: "DEMO".into(),
         }),
-        models_gen_dir: None,
     };
     generate_code(&metadata, &config).unwrap();
 

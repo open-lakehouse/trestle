@@ -318,6 +318,12 @@ pub fn run(args: NewArgs) -> Result<()> {
         );
     }
 
+    // ----- Emit the structured config + derived buf.gen.yaml -----------------
+    // `trestle.yaml` / `buf.gen.yaml` are no longer templated; they are produced
+    // programmatically from the same selections so they stay in lockstep with the
+    // codegen the CLI understands.
+    emit_project_config(&args.name, &vars, &out_dir)?;
+
     // ----- Post-init hooks ---------------------------------------------------
     run_post_init(
         &base.manifest.post_init,
@@ -498,6 +504,103 @@ fn merge_static_context(
         }
     }
     out
+}
+
+/// Build the structured [`TrestleConfig`](crate::config::TrestleConfig) from the
+/// scaffold's resolved variables and write `trestle.yaml` + the derived
+/// `buf.gen.yaml` into the project root. Replaces the old `trestle.yaml.tmpl` /
+/// `buf.gen.yaml.tmpl` templating so the scaffolded config always matches what
+/// the CLI's `config` / `generate` commands understand.
+fn emit_project_config(
+    project_name: &str,
+    vars: &BTreeMap<String, crate::template::VariableValue>,
+    out_dir: &std::path::Path,
+) -> Result<()> {
+    use crate::config::{
+        Bindings, Clients, GenerateConfig, Models, NodeClient, ProjectMeta, ProtoLib, RustClient,
+        Server, Servers, Transport, TrestleConfig, WasmBindings,
+    };
+
+    let bool_var = |key: &str| {
+        matches!(
+            vars.get(key),
+            Some(crate::template::VariableValue::Bool(true))
+        )
+    };
+    let with_frontend = bool_var("with_frontend");
+    let with_connect = bool_var("with_connect");
+    // Connect RPC and the WASM browser client (frontend) both require buffa, so
+    // force it regardless of the `runtime` var when either is on.
+    let proto_lib = if with_connect
+        || with_frontend
+        || vars.get("runtime").and_then(|v| v.as_str()) == Some("buffa")
+    {
+        ProtoLib::Buffa
+    } else {
+        ProtoLib::Prost
+    };
+
+    // The frontend uses the WASM browser client (no NAPI / TS in the scaffolded
+    // app — the browser consumes the wasm bindings directly).
+    let node = with_frontend.then(|| NodeClient {
+        napi: None,
+        ts: None,
+        wasm: Some(WasmBindings {
+            output: "crates/client/src".to_string(),
+        }),
+    });
+
+    let mut cfg = TrestleConfig {
+        version: crate::config::CONFIG_VERSION,
+        project: ProjectMeta {
+            name: project_name.to_string(),
+            id: None,
+            description: None,
+        },
+        generate: GenerateConfig {
+            proto_lib,
+            descriptors: "api.bin".to_string(),
+            servers: Servers {
+                rest: true,
+                connect: with_connect,
+            },
+            clients: Clients {
+                rust: Some(RustClient {
+                    output: "crates/client/src".to_string(),
+                    transport: Transport::Cloud,
+                    transport_type_path: None,
+                }),
+                python: None,
+                node,
+            },
+            bindings: with_frontend.then(Bindings::default),
+            models: Models {
+                dir: "crates/common/src/models".to_string(),
+                crate_name: None,
+                path_template: None,
+                path_crate_template: None,
+            },
+            server: Server {
+                output: Some("crates/server/src".to_string()),
+                context_type: Some("crate::api::RequestContext".to_string()),
+                result_type: Some("crate::api::Result".to_string()),
+                ..Server::default()
+            },
+        },
+        enrich_openapi: None,
+    };
+
+    cfg.derive_defaults();
+    cfg.ensure_id();
+    // Connect/WASM both require buffa; force it here rather than prompting mid-scaffold.
+    cfg.validate(false)?;
+
+    let trestle_yaml = out_dir.join("trestle.yaml");
+    cfg.write(&trestle_yaml, true)?;
+    let buf_gen = out_dir.join("buf.gen.yaml");
+    fs::write(&buf_gen, crate::config::emit_buf_gen(&cfg.generate))
+        .map_err(|e| Error::io_at(&buf_gen, e))?;
+    Ok(())
 }
 
 /// Project `frontend=react` / `ci=github` selections back onto the legacy

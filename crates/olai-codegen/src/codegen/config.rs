@@ -200,10 +200,6 @@ pub struct CodeGenConfig {
     /// `output.node`, or `output.node_ts` is `Some`.
     pub bindings: Option<BindingsConfig>,
 
-    /// Relative path of the prost-generated `gen/` dir from the models subdirectory.
-    /// Required when `output.models` is `Some`. E.g. `"../gen"`.
-    pub models_gen_dir: Option<String>,
-
     /// Crate name for the resource store types used in generated `RESOURCE_DESCRIPTORS`.
     ///
     /// Default: `"olai_store"`
@@ -289,9 +285,11 @@ pub struct CodeGenOutput {
     pub common: PathBuf,
     /// Parent models directory (e.g. `crates/common/src/models`).
     ///
-    /// When `Some`, the generator writes both `labels.rs` and `mod.rs` into a
-    /// subdirectory named [`models_subdir`](CodeGenOutput::models_subdir) inside this path.
-    /// The prost-generated `gen/` directory is expected to be a sibling of that subdirectory.
+    /// When `Some`, the generator writes `labels.rs`, `pyo3_impls.rs`, and `mod.rs`
+    /// into a subdirectory named [`models_subdir`](CodeGenOutput::models_subdir)
+    /// inside this path. The buf proto plugin co-locates the compiled model files
+    /// (`<pkg>.rs` / `.serde.rs` / `.tonic.rs`) in that same subdirectory, so the
+    /// `mod.rs` includes them with `include!("./<pkg>.rs")`.
     pub models: Option<PathBuf>,
     /// Name of the generated subdirectory inside [`models`](CodeGenOutput::models).
     ///

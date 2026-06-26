@@ -832,7 +832,6 @@ mod tests {
             error_type_path: None,
             generate_object_conversions: false,
             bindings: None,
-            models_gen_dir: None,
         }
     }
 

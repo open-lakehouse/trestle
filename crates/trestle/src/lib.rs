@@ -10,6 +10,7 @@
 //! the templating engine internals.
 
 pub mod cli;
+pub mod config;
 pub mod embedded;
 pub mod error;
 pub mod template;
