@@ -426,13 +426,13 @@ fn databricks_app_rust_connect() {
     assert!(server_cargo.contains("connectrpc"));
     assert!(server_cargo.contains("http-body"));
     let main_rs = std::fs::read_to_string(root.join("crates/server/src/main.rs")).unwrap();
-    assert!(main_rs.contains("mod connect_gen"));
+    assert!(main_rs.contains("mod connect;"));
     assert!(main_rs.contains("fallback_service"));
 
     assert_no_unrendered_tokens(&root);
     // NB: no `cargo check` here — the connect path needs `buf generate` with the
-    // locally-installed connect plugins to populate `connect_gen/` first, which
-    // the slow-test harness doesn't run. The committed `examples/golden-path-app`
+    // locally-installed connect plugins to populate `connect/` first, which the
+    // slow-test harness doesn't run. The committed `examples/golden-path-app`
     // exercises the full build + dual-protocol serve.
 }
 
