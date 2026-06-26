@@ -115,6 +115,13 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    # The workflow-level env sets RUSTC_WRAPPER=sccache, but this job uses
+    # Swatinem/rust-cache instead of installing sccache (instrument-coverage
+    # builds don't cache usefully through sccache). Unset the wrapper so cargo
+    # doesn't fail trying to exec a binary that isn't on PATH.
+    env:
+      RUSTC_WRAPPER: ""
+      SCCACHE_GHA_ENABLED: ""
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -148,7 +155,7 @@ jobs:
           cargo llvm-cov --no-report --locked --lib --tests -p olai-store --features sqlx
           cargo llvm-cov --no-report --locked --lib --tests -p olai-http --features recording
           cargo llvm-cov report --codecov --output-path codecov.json \
-            --ignore-filename-regex '(olai-codegen/src/gen/|olai-codegen/tests/golden|/templates/|/examples/)'
+            --ignore-filename-regex 'olai-codegen/src/(\./)?gen/|olai-codegen/tests/golden|/templates/|/examples/'
       # Authenticate with the repository upload token (CODECOV_TOKEN secret).
       # Never fails CI on a flaky upload, and codecov.yml keeps the status
       # informational so it can't block a PR.
