@@ -1,5 +1,6 @@
 //! Command-line entry point for the `trestle` binary.
 
+pub mod config;
 pub mod enrich_openapi;
 pub mod generate;
 pub mod list;
@@ -25,6 +26,8 @@ pub struct Cli {
 pub enum Commands {
     /// Scaffold a new project from a base template + zero or more apps.
     New(Box<new::NewArgs>),
+    /// Author or update the structured project config (`trestle.yaml` + `buf.gen.yaml`).
+    Config(Box<config::ConfigArgs>),
     /// Generate Rust/Python/Node.js code from a proto descriptor.
     Generate(Box<generate::GenerateArgs>),
     /// Enrich an OpenAPI YAML spec with validation rules from buf JSON Schema files.
@@ -45,6 +48,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::New(args) => new::run(*args),
+        Commands::Config(args) => config::run(*args),
         Commands::Generate(args) => generate::run(*args),
         Commands::EnrichOpenapi(args) => enrich_openapi::run(args),
         Commands::ListTemplates => list::run_templates(),

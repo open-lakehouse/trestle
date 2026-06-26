@@ -27,20 +27,23 @@ pub struct EnrichOpenApiArgs {
     pub camel_case: Option<bool>,
 }
 
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct FileEnrichOpenApiConfig {
+pub struct FileEnrichOpenApiConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jsonschema_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camel_case: Option<bool>,
 }
 
 pub fn run(mut args: EnrichOpenApiArgs) -> Result<()> {
     if let Some(config_path) = args.config.clone() {
-        let file = super::generate::load_trestle_config(&config_path)?;
+        let file = crate::config::TrestleConfig::load(&config_path)?;
 
         if args.descriptors.is_none() {
-            args.descriptors = file.descriptors.map(PathBuf::from);
+            args.descriptors = Some(PathBuf::from(file.generate.descriptors));
         }
 
         let cfg = file.enrich_openapi.unwrap_or_default();
