@@ -1,44 +1,46 @@
 [package]
 name = "olai-http"
 description = "Cloud provider credential abstraction for AWS, Azure, and GCP"
+version = "0.0.3"
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-license.workspace = true
-repository.workspace = true
-readme = "README.md"
-rust-version.workspace = true
-version = "0.0.3"
 
 [dependencies]
+# workspace dependencies (in alphabetical order)
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
+# crates.io dependencies (in alphabetical order)
 async-trait = "0.1.53"
+base64 = { version = "0.22", default-features = false, features = ["std"] }
 bytes = "1.0"
 chrono = { version = "0.4.34", default-features = false, features = [
   "clock",
   "serde",
 ] }
 futures = "0.3"
+http = "1"
 humantime = "2.1"
-percent-encoding = "2.1"
-tracing = { version = "0.1" }
-url = "2.2"
-base64 = { version = "0.22", default-features = false, features = ["std"] }
 hyper = { version = "1.2", default-features = false }
+percent-encoding = "2.1"
 quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"] }
-serde = { version = "1.0", default-features = false, features = ["derive"] }
 rand = { version = "0.9", default-features = false, features = [
   "std",
   "std_rng",
   "thread_rng",
 ] }
 ring = { version = "0.17", default-features = false, features = ["std"] }
+rust-ini = "0.21"
 rustls-pemfile = { version = "2.0", default-features = false, features = [
   "std",
 ] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 tokio = { version = "1.29.0", features = [
   "sync",
   "macros",
@@ -46,8 +48,8 @@ tokio = { version = "1.29.0", features = [
   "time",
   "io-util",
 ] }
-http = "1"
-rust-ini = "0.21"
+tracing = { version = "0.1" }
+url = "2.2"
 
 [dev-dependencies]
 hyper = { version = "1.2", features = ["server"] }

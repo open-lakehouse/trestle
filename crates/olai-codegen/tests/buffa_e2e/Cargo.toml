@@ -23,22 +23,28 @@ publish = false
 python = ["dep:pyo3", "dep:pythonize"]
 
 [dependencies]
+# local crates (in alphabetical order)
+olai-http = { path = "../../../olai-http" }
+
+# crates.io dependencies (in alphabetical order)
+async-trait = "0.1"
 buffa = { version = "0.7", features = ["json"] }
 buffa-types = "0.7"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-olai-http = { path = "../../../olai-http" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-url = "2"
-thiserror = "2"
-async-trait = "0.1"
 futures = "0.3"
 pyo3 = { version = "0.26", optional = true }
 pythonize = { version = "0.26", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
 
 [build-dependencies]
-buffa-build = "0.7"
+# local crates (in alphabetical order)
 olai-codegen = { path = "../../" }
+
+# crates.io dependencies (in alphabetical order)
+buffa-build = "0.7"
 protobuf = "3"
 
 # cargo-machete can't see these: they're exercised through code generated at

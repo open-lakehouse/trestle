@@ -31,3 +31,7 @@ cargo build -p olai-http-wasm --target wasm32-unknown-unknown
 `olai-codegen` can emit a `#[wasm_bindgen]` wrapper layer + `client.d.ts` over a client built on
 this transport (set `output.wasm` / `transport: wasm` + `runtime: buffa`). The generated bindings
 exchange plain JS objects via `serde-wasm-bindgen`. See the olai-codegen README, "JS/TS bindings".
+
+## License
+
+Apache-2.0

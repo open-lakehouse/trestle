@@ -14,22 +14,25 @@ keywords.workspace = true
 doctest = false
 
 [dependencies]
+# workspace dependencies (in alphabetical order)
+itertools = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-itertools = { workspace = true }
-protobuf = "3.0"
+
+# crates.io dependencies (in alphabetical order)
 convert_case = "0.7"
-syn = { version = "2.0", features = ["full", "parsing", "printing", "clone-impls"] }
-quote = "1.0"
-proc-macro2 = "1.0"
+glob = "0.3"
 prettyplease = "0.2"
-textwrap = "0.16"
+proc-macro2 = "1.0"
+protobuf = "3.0"
+quote = "1.0"
 serde_json = "1"
 serde_yaml = "0.9"
-glob = "0.3"
+syn = { version = "2.0", features = ["full", "parsing", "printing", "clone-impls"] }
+textwrap = "0.16"
 
 [dev-dependencies]
 rstest = "0.23"

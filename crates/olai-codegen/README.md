@@ -7,7 +7,8 @@ Python/Node.js/TypeScript bindings. The single source of truth is your annotated
 
 It's the engine behind [`olai-trestle`](https://crates.io/crates/olai-trestle)'s
 `trestle generate`; this crate is the library you embed if you need codegen in
-your own build tool.
+your own build tool. For how it fits the wider Trestle pipeline, see the
+[architecture overview](https://github.com/open-lakehouse/trestle/blob/main/docs/architecture.md).
 
 ## What it generates
 
