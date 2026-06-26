@@ -7,6 +7,7 @@
 **Build typed, proto-driven data-platform services in Rust — from `.proto` to a running, scaffolded project.**
 
 [![CI](https://github.com/open-lakehouse/trestle/actions/workflows/ci.yml/badge.svg)](https://github.com/open-lakehouse/trestle/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/open-lakehouse/trestle/branch/main/graph/badge.svg)](https://codecov.io/gh/open-lakehouse/trestle)
 [![crates.io](https://img.shields.io/crates/v/olai-trestle.svg)](https://crates.io/crates/olai-trestle)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 

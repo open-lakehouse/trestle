@@ -40,9 +40,6 @@ jobs:
         with:
           command: release-pr
         env:
-          # Built-in token. NOTE: the default GITHUB_TOKEN cannot trigger other
-          # workflows, so CI does not run on the Release PR. To get CI on the
-          # Release PR, swap this for a PAT / GitHub App token secret.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # --- Tag + GitHub Release + cargo publish, after the Release PR is merged ---
@@ -62,8 +59,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: "1.87"
-      # No crates-io-auth-action and no CARGO_REGISTRY_TOKEN: release-plz does
-      # the crates.io OIDC token exchange itself via `id-token: write`.
       - name: Run release-plz (release)
         uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
