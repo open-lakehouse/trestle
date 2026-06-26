@@ -1,7 +1,4 @@
 [package]
-# Published to crates.io as `olai-trestle` (`trestle` is taken). The binary is
-# still `trestle` (see [[bin]] below), so `cargo install olai-trestle` installs
-# a `trestle` command.
 name = "olai-trestle"
 description = "Unified CLI for proto-driven code generation and full-project scaffolding"
 version = "0.0.2"
@@ -21,29 +18,32 @@ name = "trestle"
 path = "src/main.rs"
 
 [dependencies]
-# `version` is required for `cargo publish` (a path-only dep can't be published).
-# release-plz keeps this in sync whenever it bumps olai-codegen.
+# local crates (release-plz keeps versions in sync) (in alphabetical order)
 olai-codegen = { path = "../olai-codegen", version = "0.0.3" }
-clap = { version = "4", features = ["derive", "env"] }
+
+# workspace dependencies (in alphabetical order)
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = "0.9"
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-minijinja = { version = "2.19", features = ["loader", "json", "preserve_order"] }
-rust-embed = { version = "8.11", features = ["debug-embed", "include-exclude"] }
-cliclack = "0.5.4"
-walkdir = "2.5"
-regex = "1"
-ignore = "0.4"
-convert_case = "0.7"
-sha2 = "0.10"
-hex = "0.4"
-dirs = "5"
-protobuf = "3.0"
-tempfile = "3"
 uuid = { workspace = true, features = ["v4"] }
+
+# crates.io dependencies (in alphabetical order)
+clap = { version = "4", features = ["derive", "env"] }
+cliclack = "0.5.4"
+convert_case = "0.7"
+dirs = "5"
+hex = "0.4"
+ignore = "0.4"
+minijinja = { version = "2.19", features = ["loader", "json", "preserve_order"] }
+protobuf = "3.0"
+regex = "1"
+rust-embed = { version = "8.11", features = ["debug-embed", "include-exclude"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir = "2.5"
 
 [dev-dependencies]
 rstest = "0.23"

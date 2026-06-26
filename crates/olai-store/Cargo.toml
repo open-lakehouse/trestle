@@ -1,25 +1,22 @@
 [package]
 name = "olai-store"
 description = "Generic, TAO-inspired object and association store with field-role enforcement"
+version = "0.0.3"
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-license.workspace = true
-repository.workspace = true
-readme = "README.md"
-version = "0.0.3"
-rust-version.workspace = true
 
 [dependencies]
+# workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-uuid = { workspace = true }
-
 # convenience for downstream crates that want to use certain types with sqlx
 sqlx = { workspace = true, optional = true, features = [
   "uuid",
@@ -27,6 +24,9 @@ sqlx = { workspace = true, optional = true, features = [
   "chrono",
   "json",
 ] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
 
 [features]
 default = []

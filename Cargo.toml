@@ -24,6 +24,7 @@ homepage = "https://github.com/open-lakehouse/trestle"
 keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store"]
 
 [workspace.dependencies]
+# crates.io dependencies (in alphabetical order)
 async-trait = "0.1"
 bytes = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -32,20 +33,20 @@ pbjson = "0.9"
 pbjson-types = "0.9"
 prost = "0.14"
 prost-types = "0.14"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-strum = { version = "0.27", features = ["derive"] }
-sqlx = "0.8"
-thiserror = "2"
-tracing = { version = "0.1", features = ["log"] }
-url = { version = "2.5", features = ["serde", "std"], default-features = false }
-uuid = { version = "1", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls-native-roots",
   "http2",
   "json",
   "stream",
 ] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = "0.8"
+strum = { version = "0.27", features = ["derive"] }
+thiserror = "2"
+tracing = { version = "0.1", features = ["log"] }
+url = { version = "2.5", features = ["serde", "std"], default-features = false }
+uuid = { version = "1", features = ["serde"] }
 
 [profile.release]
 lto = true
