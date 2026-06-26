@@ -546,7 +546,7 @@ fn emit_project_config(
         napi: None,
         ts: None,
         wasm: Some(WasmBindings {
-            output: "crates/client/src/wasm".to_string(),
+            output: "crates/client/src".to_string(),
         }),
     });
 
@@ -566,7 +566,7 @@ fn emit_project_config(
             },
             clients: Clients {
                 rust: Some(RustClient {
-                    output: "crates/client/src/gen".to_string(),
+                    output: "crates/client/src".to_string(),
                     transport: Transport::Cloud,
                     transport_type_path: None,
                 }),
@@ -575,15 +575,13 @@ fn emit_project_config(
             },
             bindings: with_frontend.then(Bindings::default),
             models: Models {
-                common_output: "crates/common/src/models/_gen".to_string(),
-                parent_output: Some("crates/common/src/models".to_string()),
-                subdir: "_gen".to_string(),
+                dir: "crates/common/src/models".to_string(),
                 crate_name: None,
                 path_template: None,
                 path_crate_template: None,
             },
             server: Server {
-                output: Some("crates/server/src/gen".to_string()),
+                output: Some("crates/server/src".to_string()),
                 context_type: Some("crate::api::RequestContext".to_string()),
                 result_type: Some("crate::api::Result".to_string()),
                 ..Server::default()

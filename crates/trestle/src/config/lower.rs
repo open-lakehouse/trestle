@@ -1,17 +1,24 @@
 //! Lower a validated [`TrestleConfig`] to [`olai_codegen::CodeGenConfig`].
 //!
 //! This is the bridge between the user-facing nested config and the flat config
-//! the generator consumes. It resolves output directories on disk (creating them
-//! if needed, since the generator owns everything under them) and computes the
-//! relative path from the models subdirectory to the generated models `gen/` dir.
+//! the generator consumes. Config supplies each crate's `src` root; this layer
+//! appends the fixed convention subdirectory (`codegen` for handler/client glue,
+//! `wasm` for browser bindings, `_gen` for the co-located model tree) and resolves
+//! the result on disk (creating dirs if needed, since the generator owns
+//! everything under them).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use olai_codegen::{BindingsConfig, CodeGenConfig, CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH};
 
-use super::{GenerateConfig, Transport, TrestleConfig};
+use super::{GenerateConfig, MODELS_GEN_SUBDIR, Transport, TrestleConfig};
 use crate::error::{Error, Result};
+
+/// Convention subdir for handler/client/binding glue (mounted `mod codegen;`).
+const CODEGEN_SUBDIR: &str = "codegen";
+/// Convention subdir for the browser `#[wasm_bindgen]` bindings (mounted `mod wasm;`).
+const WASM_SUBDIR: &str = "wasm";
 
 impl TrestleConfig {
     /// Resolve output directories and lower to [`CodeGenConfig`].
@@ -25,58 +32,54 @@ impl TrestleConfig {
 
 impl GenerateConfig {
     fn lower(&self) -> Result<CodeGenConfig> {
-        let common = resolve_dir(&self.models.common_output)?;
-        let models = self
-            .models
-            .parent_output
-            .as_deref()
-            .map(resolve_dir)
-            .transpose()?;
+        // Models + Axum extractors are co-located in `<models.dir>/_gen`. The
+        // generator's `common` (extractor) output and the models `_gen` subdir are
+        // the same directory, so `mod.rs` includes the buf-written model files as
+        // plain siblings (`./<pkg>.rs`).
+        let models_root = resolve_dir(&self.models.dir)?;
+        let common = resolve_dir_joined(&self.models.dir, MODELS_GEN_SUBDIR)?;
+        let models = Some(models_root);
+
         let server = self
             .servers
             .rest
             .then_some(self.server.output.as_deref())
             .flatten()
-            .map(resolve_dir)
+            .map(|src| resolve_dir_joined(src, CODEGEN_SUBDIR))
             .transpose()?;
         let client = self
             .clients
             .rust
             .as_ref()
-            .map(|r| resolve_dir(&r.output))
+            .map(|r| resolve_dir_joined(&r.output, CODEGEN_SUBDIR))
             .transpose()?;
         let python = self
             .clients
             .python
             .as_ref()
-            .map(|p| resolve_dir(&p.output))
+            .map(|p| resolve_dir_joined(&p.output, CODEGEN_SUBDIR))
             .transpose()?;
         let (node, node_ts, wasm) = match &self.clients.node {
             Some(n) => (
                 n.napi
                     .as_ref()
-                    .map(|b| resolve_dir(&b.output))
+                    .map(|b| resolve_dir_joined(&b.output, CODEGEN_SUBDIR))
                     .transpose()?,
-                n.ts.as_ref().map(|b| resolve_dir(&b.output)).transpose()?,
+                n.ts.as_ref()
+                    .map(|b| resolve_dir_joined(&b.output, CODEGEN_SUBDIR))
+                    .transpose()?,
                 n.wasm
                     .as_ref()
-                    .map(|b| resolve_dir(&b.output))
+                    .map(|b| resolve_dir_joined(&b.output, WASM_SUBDIR))
                     .transpose()?,
             ),
             None => (None, None, None),
         };
 
-        // Relative path from the models subdirectory to the generated models dir
-        // (`common_output`). The generator emits model imports relative to this.
-        let models_gen_dir = models.as_deref().map(|models_dir| {
-            let subdir_path = models_dir.join(&self.models.subdir);
-            relative_path(&subdir_path, &common)
-        });
-
         let output = CodeGenOutput {
             common,
             models,
-            models_subdir: self.models.subdir.clone(),
+            models_subdir: MODELS_GEN_SUBDIR.to_string(),
             server,
             client,
             generate_resource_clients: self.server.resource_clients,
@@ -109,7 +112,6 @@ impl GenerateConfig {
             error_type_path: self.server.error_type_path.clone(),
             generate_object_conversions: self.server.object_conversions,
             bindings,
-            models_gen_dir,
             resource_store_crate_name: self
                 .server
                 .resource_store_crate_name
@@ -223,26 +225,10 @@ fn resolve_dir(p: &str) -> Result<PathBuf> {
     fs::canonicalize(PathBuf::from(p)).map_err(|e| Error::io_at(p, e))
 }
 
-/// POSIX-style relative path from `base` to `target` (both absolute).
-fn relative_path(base: &Path, target: &Path) -> String {
-    let base_components: Vec<_> = base.components().collect();
-    let target_components: Vec<_> = target.components().collect();
-
-    let common_len = base_components
-        .iter()
-        .zip(target_components.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let up_count = base_components.len() - common_len;
-    let mut parts: Vec<std::borrow::Cow<str>> = (0..up_count).map(|_| "..".into()).collect();
-    for comp in &target_components[common_len..] {
-        parts.push(comp.as_os_str().to_string_lossy());
-    }
-
-    if parts.is_empty() {
-        ".".to_string()
-    } else {
-        parts.join("/")
-    }
+/// Resolve `<root>/<subdir>` — the crate `src` root joined with its convention
+/// subdirectory, creating it if missing and canonicalizing.
+fn resolve_dir_joined(root: &str, subdir: &str) -> Result<PathBuf> {
+    let joined = Path::new(root).join(subdir);
+    let joined = joined.to_string_lossy();
+    resolve_dir(&joined)
 }

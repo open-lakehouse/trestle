@@ -151,9 +151,7 @@ fn default_config() -> TrestleConfig {
             clients: Clients::default(),
             bindings: None,
             models: Models {
-                common_output: "crates/common/src/models/_gen".to_string(),
-                parent_output: Some("crates/common/src/models".to_string()),
-                subdir: "_gen".to_string(),
+                dir: "crates/common/src/models".to_string(),
                 crate_name: None,
                 path_template: None,
                 path_crate_template: None,
@@ -193,14 +191,14 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
                 _ => Transport::Cloud,
             };
             g.clients.rust = Some(RustClient {
-                output: "crates/client/src/gen".to_string(),
+                output: "crates/client/src".to_string(),
                 transport,
                 transport_type_path: None,
             });
         }
         if args.clients.contains(&ClientArg::Python) {
             g.clients.python = Some(PythonClient {
-                output: "crates/client/python".to_string(),
+                output: "crates/client/python/src".to_string(),
                 error_type: String::new(),
                 result_type: String::new(),
                 typings_package_filter: None,
@@ -213,14 +211,14 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
             let napi = args.node_napi || !any_variant;
             g.clients.node = Some(NodeClient {
                 napi: napi.then(|| NapiBindings {
-                    output: "crates/client/node".to_string(),
+                    output: "crates/client/node/src".to_string(),
                     error_ext_trait: String::new(),
                 }),
                 ts: args.node_ts.then(|| TsBindings {
-                    output: "crates/client/ts".to_string(),
+                    output: "crates/client/ts/src".to_string(),
                 }),
                 wasm: args.node_wasm.then(|| WasmBindings {
-                    output: "crates/client/src/wasm".to_string(),
+                    output: "crates/client/src".to_string(),
                 }),
             });
         }
@@ -288,7 +286,7 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
     }
     if clients.contains(&ClientSel::Python) && cfg.generate.clients.python.is_none() {
         cfg.generate.clients.python = Some(PythonClient {
-            output: "crates/client/python".to_string(),
+            output: "crates/client/python/src".to_string(),
             error_type: String::new(),
             result_type: String::new(),
             typings_package_filter: None,
@@ -301,12 +299,12 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
             .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
         cfg.generate.clients.node = Some(NodeClient {
             napi: Some(NapiBindings {
-                output: "crates/client/node".to_string(),
+                output: "crates/client/node/src".to_string(),
                 error_ext_trait: String::new(),
             }),
             ts: None,
             wasm: wasm.then(|| WasmBindings {
-                output: "crates/client/src/wasm".to_string(),
+                output: "crates/client/src".to_string(),
             }),
         });
     }

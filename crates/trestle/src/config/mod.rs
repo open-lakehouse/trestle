@@ -178,7 +178,8 @@ pub enum Transport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RustClient {
-    /// Output directory for the generated client.
+    /// Client crate `src` root. The generated client lands in the `codegen/`
+    /// subdirectory beneath it.
     pub output: String,
     /// HTTP transport selector. Ignored if `transport_type_path` is set.
     #[serde(default)]
@@ -192,7 +193,8 @@ pub struct RustClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PythonClient {
-    /// Output directory.
+    /// Python client crate `src` root. The generated client lands in the
+    /// `codegen/` subdirectory beneath it.
     pub output: String,
     /// Fully-qualified Python error type. Required.
     pub error_type: String,
@@ -222,7 +224,8 @@ pub struct NodeClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NapiBindings {
-    /// Output directory.
+    /// NAPI crate `src` root. Generated bindings land in the `codegen/`
+    /// subdirectory beneath it.
     pub output: String,
     /// Fully-qualified error extension trait. Required.
     pub error_ext_trait: String,
@@ -232,7 +235,8 @@ pub struct NapiBindings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TsBindings {
-    /// Output directory.
+    /// TypeScript client `src` root. The generated client lands in the `codegen/`
+    /// subdirectory beneath it.
     pub output: String,
 }
 
@@ -240,7 +244,8 @@ pub struct TsBindings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WasmBindings {
-    /// Output directory.
+    /// Client crate `src` root. The generated `#[wasm_bindgen]` bindings land in
+    /// the `wasm/` subdirectory beneath it.
     pub output: String,
 }
 
@@ -267,14 +272,11 @@ pub struct Bindings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Models {
-    /// Common output directory (e.g. `crates/common/src/models/_gen`).
-    pub common_output: String,
-    /// Parent models directory (e.g. `crates/common/src/models`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_output: Option<String>,
-    /// Generated subdirectory name. Defaults to `_gen`.
-    #[serde(default = "default_subdir")]
-    pub subdir: String,
+    /// Models module directory (e.g. `crates/common/src/models`). Trestle writes
+    /// the generated tree into the fixed `_gen` subdirectory beneath this, and the
+    /// buf proto plugin co-locates the compiled model files there too. The
+    /// hand-owned `<dir>/mod.rs` re-exports `_gen`.
+    pub dir: String,
     /// Models crate name. Derived from project name (`<snake>_common`) when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crate_name: Option<String>,
@@ -288,15 +290,16 @@ pub struct Models {
     pub path_crate_template: Option<String>,
 }
 
-fn default_subdir() -> String {
-    "_gen".to_string()
-}
+/// Fixed subdirectory name for the generated model tree (under [`Models::dir`]).
+/// Hidden-dir convention, not user-configurable.
+pub(crate) const MODELS_GEN_SUBDIR: &str = "_gen";
 
 /// Server-side codegen knobs.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Server {
-    /// Server output directory (required when `servers.rest` is set).
+    /// Server crate `src` root (required when `servers.rest` is set). Generated
+    /// handler traits + routes land in the `codegen/` subdirectory beneath it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     /// Request context type path. Defaults to `crate::api::RequestContext`.
@@ -374,7 +377,7 @@ mod tests {
     fn minimal_yaml() -> &'static str {
         "version: 1\n\
          project:\n  name: demo\n\
-         generate:\n  models:\n    common_output: crates/common/src/models/_gen\n"
+         generate:\n  models:\n    dir: crates/common/src/models\n"
     }
 
     #[test]
@@ -384,7 +387,7 @@ mod tests {
         assert_eq!(cfg.project.name, "demo");
         assert_eq!(cfg.generate.descriptors, "api.bin");
         assert_eq!(cfg.generate.proto_lib, ProtoLib::Prost);
-        assert_eq!(cfg.generate.models.subdir, "_gen");
+        assert_eq!(cfg.generate.models.dir, "crates/common/src/models");
         assert!(!cfg.generate.servers.rest);
     }
 
@@ -394,7 +397,7 @@ mod tests {
         let p = dir.path().join("trestle.yaml");
         fs::write(
             &p,
-            "version: 9999\nproject:\n  name: demo\ngenerate:\n  models:\n    common_output: x\n",
+            "version: 9999\nproject:\n  name: demo\ngenerate:\n  models:\n    dir: x\n",
         )
         .unwrap();
         assert!(TrestleConfig::load(&p).is_err());

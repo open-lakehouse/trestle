@@ -74,9 +74,7 @@ mod tests {
                 clients: Clients::default(),
                 bindings: None,
                 models: Models {
-                    common_output: "x".into(),
-                    parent_output: None,
-                    subdir: "_gen".into(),
+                    dir: "x".into(),
                     crate_name: None,
                     path_template: None,
                     path_crate_template: None,
