@@ -1,38 +1,46 @@
-# Trestle code-generation config for golden-path-app.
+# Trestle project config for golden-path-app.
 #
-# `trestle generate -c trestle.yaml` reads this file, builds the proto descriptor
-# (run `just regen` first to refresh `api.bin`), and writes Rust + TypeScript
-# code into the four output directories below.
+# `trestle generate -c trestle.yaml` reads this; `buf.gen.yaml` is derived from
+# it by `trestle config`. Run `just regen` first to refresh `api.bin`.
 
-descriptors: api.bin
-buf_gen: buf.gen.yaml
-
+version: 1
+project:
+  name: golden-path-app
 generate:
-  # Protobuf runtime the generated code consumes: "prost" (default) or "buffa".
-  runtime: buffa
-  output_common: crates/common/src/models/_gen
-  output_models: crates/common/src/models
-  models_subdir: _gen
-  output_server: crates/server/src/gen
-  output_client: crates/client/src/gen
-  context_type: crate::api::RequestContext
-  result_type: crate::api::Result
-  models_crate_name: "golden_path_app_common"
-  models_path_template: "golden_path_app_common::models::{service}::v1"
-  models_path_crate_template: "crate::models::{service}::v1"
-  python_typings_filename: client.pyi
+  # Proto library the generated code consumes. buffa is required here because
+  # both Connect RPC and the WASM browser client need serde-native models.
+  proto_lib: buffa
+  descriptors: api.bin
 
-  # JS/TS binding names, shared by the WASM bindings below. (No `output:` here, so
-  # the NAPI TypeScript client is NOT generated — the browser uses the WASM client.)
-  typescript:
-    aggregate_client_name: "GoldenPathAppClient"
-    client_crate_name: "golden-path-app-client"
-    error_base_class: "ApiError"
-    error_code_prefix: "GOLDEN_PATH_APP_"
+  servers:
+    rest: true
+    connect: true
 
-  # Browser client: `#[wasm_bindgen]` glue + `client.d.ts`, compiled to wasm32
-  # from the client crate by `wasm-pack` (`just build-wasm`). Enabling this also
-  # flips the generated Rust client into dual-transport (cfg-gated CloudClient /
-  # WasmClient) mode.
-  wasm:
-    output: crates/client/src/wasm
+  clients:
+    # Rust client. Emitting the WASM browser client below flips this into
+    # dual-transport (cfg-gated CloudClient / WasmClient) mode.
+    rust:
+      output: crates/client/src/gen
+    # Browser client: `#[wasm_bindgen]` glue + `client.d.ts`, compiled to wasm32
+    # from the client crate by `wasm-pack` (`just build-wasm`).
+    node:
+      wasm:
+        output: crates/client/src/wasm
+
+  # JS/TS binding identity, shared by the WASM bindings above.
+  bindings:
+    aggregate_client_name: GoldenPathAppClient
+    client_crate_name: golden-path-app-client
+    error_base_class: ApiError
+    error_code_prefix: GOLDEN_PATH_APP_
+
+  models:
+    common_output: crates/common/src/models/_gen
+    parent_output: crates/common/src/models
+    subdir: _gen
+    crate_name: golden_path_app_common
+
+  server:
+    output: crates/server/src/gen
+    context_type: crate::api::RequestContext
+    result_type: crate::api::Result
