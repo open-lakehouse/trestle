@@ -109,6 +109,56 @@ jobs:
       - name: Run tests (olai-http recording feature)
         run: cargo test --locked --lib --tests -p olai-http --features recording
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.87"
+          components: llvm-tools-preview
+      # Coverage recompiles with -C instrument-coverage, so it cannot reuse the
+      # sccache-backed "ci" caches used by the other jobs — give it its own key.
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          shared-key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@8b3c737da4b541bf0fb5a3e0488ff20535badac9 # v2.82.1
+        with:
+          tool: cargo-llvm-cov
+      # Accumulate coverage across the same feature combinations the `test` job
+      # exercises (default + the two opt-in features), then emit one merged
+      # report. `--no-report` collects raw profdata; the final `report` step
+      # writes codecov.json. Doctests are disabled workspace-wide (see
+      # CLAUDE.md), so there is no separate doctest pass.
+      #
+      # `--ignore-filename-regex` drops committed prost output (olai-codegen/src/gen)
+      # and the golden/scaffolding/example trees from the report itself, mirroring
+      # codecov.yml's `ignore`. Keep the two in sync. Note `src/codegen` is the
+      # hand-written template logic and is intentionally NOT excluded.
+      - name: Collect coverage
+        run: |
+          cargo llvm-cov --no-report --locked --lib --tests
+          cargo llvm-cov --no-report --locked --lib --tests -p olai-store --features sqlx
+          cargo llvm-cov --no-report --locked --lib --tests -p olai-http --features recording
+          cargo llvm-cov report --codecov --output-path codecov.json \
+            --ignore-filename-regex '(olai-codegen/src/gen/|olai-codegen/tests/golden|/templates/|/examples/)'
+      # Authenticate with the repository upload token (CODECOV_TOKEN secret).
+      # Never fails CI on a flaky upload, and codecov.yml keeps the status
+      # informational so it can't block a PR.
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: codecov.json
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   build-release:
     name: Build / release / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
