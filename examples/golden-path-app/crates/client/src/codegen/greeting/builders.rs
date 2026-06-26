@@ -5,10 +5,10 @@
 type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
 #[cfg(target_arch = "wasm32")]
 type BoxFut<'a, T> = ::futures::future::LocalBoxFuture<'a, T>;
-use std::future::IntoFuture;
+use super::client::*;
 use crate::api::Result;
 use golden_path_app_common::models::golden_path_app::v1::*;
-use super::client::*;
+use std::future::IntoFuture;
 /// Builder for creating a greeting
 pub struct CreateGreetingBuilder {
     client: GreetingServiceClient,

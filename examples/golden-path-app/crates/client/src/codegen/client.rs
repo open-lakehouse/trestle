@@ -1,12 +1,12 @@
 // @generated — do not edit by hand.
 #![allow(unused_imports)]
+use crate::codegen::greeting::*;
 #[cfg(not(target_arch = "wasm32"))]
 use ::olai_http::CloudClient as Transport;
 #[cfg(target_arch = "wasm32")]
 use ::olai_http_wasm::WasmClient as Transport;
-use url::Url;
-use crate::codegen::greeting::*;
 use golden_path_app_common::models::golden_path_app::v1::*;
+use url::Url;
 #[derive(Clone)]
 pub struct GoldenPathAppClient {
     client: Transport,
