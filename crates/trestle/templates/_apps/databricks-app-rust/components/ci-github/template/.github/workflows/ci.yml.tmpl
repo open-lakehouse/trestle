@@ -59,9 +59,11 @@ jobs:
       - name: install trestle
         run: cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
 {%- if with_connect %}
-      - name: install connect codegen plugins
-        # `protoc-gen-connect-rust` ships in the `connectrpc-codegen` crate.
-        run: cargo install --locked connectrpc-codegen protoc-gen-buffa protoc-gen-buffa-packaging
+      - name: install connect packaging plugin
+        # The Connect facade + buffa models come from remote BSR plugins
+        # (`buf.build/anthropics/connect-rust` + `…/buffa`); only the local
+        # packaging plugin (the per-service mod.rs stitcher) needs installing.
+        run: cargo install --locked protoc-gen-buffa-packaging
 {%- endif %}
       - name: regenerate code
         run: |

@@ -93,7 +93,7 @@ write anyway — minus the parts that are now generated.
 Here's the design insight at the center of the golden path. REST and Connect want
 **different-shaped handlers**:
 
-| | REST (trestle) | Connect (`protoc-gen-connect-rust`) |
+| | REST (trestle) | Connect (`buf.build/anthropics/connect-rust`) |
 |---|---|---|
 | request | owned `CheckInRequest` | `ServiceRequest<'_, …>` (zero-copy view) |
 | context | generic `Cx = RequestContext` | `connectrpc::RequestContext` |
