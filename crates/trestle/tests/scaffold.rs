@@ -412,13 +412,13 @@ fn databricks_app_rust_connect() {
     // Connect forces buffa.
     let trestle_yaml = std::fs::read_to_string(root.join("trestle.yaml")).unwrap();
     assert!(
-        trestle_yaml.contains("runtime: buffa"),
+        trestle_yaml.contains("proto_lib: buffa"),
         "connect must force buffa"
     );
 
-    // buf.gen.yaml drives the connect plugins.
+    // buf.gen.yaml drives the connect plugins (now the remote connect-rust plugin).
     let buf_gen = std::fs::read_to_string(root.join("buf.gen.yaml")).unwrap();
-    assert!(buf_gen.contains("protoc-gen-connect-rust"));
+    assert!(buf_gen.contains("buf.build/anthropics/connect-rust"));
     assert!(buf_gen.contains("buffa_module=::test_app_common::models"));
 
     // Server crate gets the connect deps + same-port serve wiring.
