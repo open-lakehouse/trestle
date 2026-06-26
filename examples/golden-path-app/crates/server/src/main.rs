@@ -13,13 +13,10 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 mod api;
-// `gen` is a reserved keyword in Rust 2024, so the generated `gen/` directory is
-// mounted under the `codegen` alias (matching the client crate).
-#[path = "gen/mod.rs"]
+// Generated REST handler traits + routes (overwritten by `trestle generate`).
 mod codegen;
 // Generated ConnectRPC service facade (buffa views + connectrpc traits).
-#[path = "connect_gen/mod.rs"]
-mod connect_gen;
+mod connect;
 mod handlers;
 
 #[tokio::main]
@@ -72,7 +69,7 @@ fn build_router() -> Router {
     // also implements the Connect `GreetingService` trait (see
     // `handlers::greeting_connect`), delegating to the same shared core — so a
     // create over REST is visible to a get over Connect and vice-versa.
-    use crate::connect_gen::golden_path_app::v1::GreetingServiceExt;
+    use crate::connect::golden_path_app::v1::GreetingServiceExt;
     let connect_router =
         GreetingServiceExt::register(std::sync::Arc::new(svc), connectrpc::Router::new());
 

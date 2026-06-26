@@ -1,12 +1,12 @@
 // @generated — do not edit by hand.
 #![cfg(target_arch = "wasm32")]
 #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
+use wasm_bindgen::prelude::*;
+use olai_http_wasm::{CredentialsMode, WasmClient};
+use olai_http_wasm::reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use url::Url;
 use crate::codegen::greeting::*;
 use crate::models::golden_path_app::v1::*;
-use olai_http_wasm::reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-use olai_http_wasm::{CredentialsMode, WasmClient};
-use url::Url;
-use wasm_bindgen::prelude::*;
 ///WASM/browser binding for the `greeting` service.
 #[wasm_bindgen]
 pub struct WasmGreetingServiceClient {
@@ -81,8 +81,10 @@ impl WasmGoldenPathAppClient {
             base_url.set_path(&format!("{}/", base_url.path()));
         }
         let options: ClientOptions = match options {
-            Some(v) if !v.is_undefined() && !v.is_null() => serde_wasm_bindgen::from_value(v)
-                .map_err(|e| JsValue::from_str(&format!("invalid options: {e}")))?,
+            Some(v) if !v.is_undefined() && !v.is_null() => {
+                serde_wasm_bindgen::from_value(v)
+                    .map_err(|e| JsValue::from_str(&format!("invalid options: {e}")))?
+            }
             _ => ClientOptions::default(),
         };
         let mut client = WasmClient::new();
@@ -92,9 +94,13 @@ impl WasmGoldenPathAppClient {
                 "same-origin" => CredentialsMode::SameOrigin,
                 "omit" => CredentialsMode::Omit,
                 other => {
-                    return Err(JsValue::from_str(&format!(
-                        "invalid credentials mode: {other:?} (expected \"include\", \"same-origin\", or \"omit\")"
-                    )));
+                    return Err(
+                        JsValue::from_str(
+                            &format!(
+                                "invalid credentials mode: {other:?} (expected \"include\", \"same-origin\", or \"omit\")"
+                            ),
+                        ),
+                    );
                 }
             };
             client = client.with_credentials(mode);
@@ -104,11 +110,12 @@ impl WasmGoldenPathAppClient {
         if let Some(token) = options.auth_token {
             let value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|e| JsValue::from_str(&format!("invalid authToken: {e}")))?;
-            client = client.with_auth(move || {
-                let mut headers = HeaderMap::new();
-                headers.insert(AUTHORIZATION, value.clone());
-                headers
-            });
+            client = client
+                .with_auth(move || {
+                    let mut headers = HeaderMap::new();
+                    headers.insert(AUTHORIZATION, value.clone());
+                    headers
+                });
         }
         Ok(Self { client, base_url })
     }

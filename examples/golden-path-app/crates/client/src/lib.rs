@@ -4,7 +4,7 @@
 //! and is re-exported from the crate root. The hand-written `api` and `error`
 //! modules below provide the `Result` / `Error` types and the
 //! `parse_error_response` helper the generated code calls — these are stable and
-//! safe to edit; everything under `gen/` is overwritten on every regen.
+//! safe to edit; everything under `codegen/` is overwritten on every regen.
 
 pub use golden_path_app_common::models;
 
@@ -86,13 +86,11 @@ pub mod error {
 
 /// The generated client (typed per-service clients + builders + the aggregate
 /// `GoldenPathAppClient`). Overwritten by `trestle generate`.
-#[path = "gen/mod.rs"]
 pub mod codegen;
 
 pub use codegen::*;
 
-/// `#[wasm_bindgen]` browser bindings (generated into `wasm/bindings.rs`). The
-/// file self-gates on `cfg(target_arch = "wasm32")`, so a native build compiles
-/// it away; `wasm-pack` (via `just build-wasm`) packages it into the frontend.
-#[path = "wasm/bindings.rs"]
-mod wasm_bindings;
+/// `#[wasm_bindgen]` browser bindings (generated into `wasm/mod.rs`). The file
+/// self-gates on `cfg(target_arch = "wasm32")`, so a native build compiles it
+/// away; `wasm-pack` (via `just build-wasm`) packages it into the frontend.
+mod wasm;

@@ -1,46 +1,38 @@
-# Trestle project config for golden-path-app.
-#
-# `trestle generate -c trestle.yaml` reads this; `buf.gen.yaml` is derived from
-# it by `trestle config`. Run `just regen` first to refresh `api.bin`.
+# Trestle project config. Generated/edited by `trestle config`.
+# `trestle generate -c trestle.yaml` reads this; `buf.gen.yaml` is derived from it.
 
 version: 1
 project:
   name: golden-path-app
+  id: 356c5627-785e-4b39-a3ea-2596b6446917
 generate:
-  # Proto library the generated code consumes. buffa is required here because
-  # both Connect RPC and the WASM browser client need serde-native models.
   proto_lib: buffa
   descriptors: api.bin
-
   servers:
     rest: true
     connect: true
-
   clients:
-    # Rust client. Emitting the WASM browser client below flips this into
-    # dual-transport (cfg-gated CloudClient / WasmClient) mode.
     rust:
-      output: crates/client/src/gen
-    # Browser client: `#[wasm_bindgen]` glue + `client.d.ts`, compiled to wasm32
-    # from the client crate by `wasm-pack` (`just build-wasm`).
+      output: crates/client/src
+      transport: cloud
     node:
       wasm:
-        output: crates/client/src/wasm
-
-  # JS/TS binding identity, shared by the WASM bindings above.
+        output: crates/client/src
   bindings:
     aggregate_client_name: GoldenPathAppClient
     client_crate_name: golden-path-app-client
     error_base_class: ApiError
     error_code_prefix: GOLDEN_PATH_APP_
-
   models:
-    common_output: crates/common/src/models/_gen
-    parent_output: crates/common/src/models
-    subdir: _gen
+    dir: crates/common/src/models
     crate_name: golden_path_app_common
-
+    path_template: golden_path_app_common::models::{service}::{version}
+    path_crate_template: crate::models::{service}::{version}
   server:
-    output: crates/server/src/gen
+    output: crates/server/src
     context_type: crate::api::RequestContext
     result_type: crate::api::Result
+    resource_enum: false
+    store_integration: false
+    object_conversions: false
+    resource_clients: false
