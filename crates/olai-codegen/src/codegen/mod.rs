@@ -305,10 +305,27 @@ fn generate_common_code(
             config,
         };
         let server_code = server::generate_common(&handler)?;
-        files.insert(format!("{}/server.rs", service.base_path), server_code);
+        // Nest the extractors under an `extractors/` subdir so their per-service
+        // module names can't collide with the co-located model package modules
+        // (e.g. a `unitycatalog.agent_skills.v0alpha1` package yields a model
+        // module `agent_skills` that would otherwise clash with the `agent_skills`
+        // service extractor module).
+        files.insert(
+            format!("{EXTRACTORS_SUBDIR}/{}/server.rs", service.base_path),
+            server_code,
+        );
         let module_code = generate_common_module();
-        files.insert(format!("{}/mod.rs", service.base_path), module_code);
+        files.insert(
+            format!("{EXTRACTORS_SUBDIR}/{}/mod.rs", service.base_path),
+            module_code,
+        );
     }
+
+    // The `extractors/mod.rs` that declares the per-service extractor submodules.
+    files.insert(
+        format!("{EXTRACTORS_SUBDIR}/mod.rs"),
+        generate_extractors_module(&plan.services),
+    );
 
     let module_code = main_module(&plan.services);
     files.insert("mod.rs".to_string(), module_code);
@@ -521,6 +538,26 @@ fn generate_common_module() -> String {
         pub mod server;
     };
     format_tokens_static(tokens)
+}
+
+/// Subdirectory (under the co-located models `_gen/` dir) that holds the Axum
+/// request extractors, one `<service>/server.rs` per service. Nesting them keeps
+/// their module names from colliding with the model package modules that share
+/// the dir.
+pub(crate) const EXTRACTORS_SUBDIR: &str = "extractors";
+
+/// The `extractors/mod.rs` that declares one `pub mod <service>;` per service.
+/// Axum-coupled, so gated on the `axum` feature.
+fn generate_extractors_module(services: &[ServicePlan]) -> String {
+    let decls: Vec<TokenStream> = services
+        .iter()
+        .map(|s| format_ident!("{}", s.base_path))
+        // Dedupe: multiple services can share a base_path.
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|m| quote! { #[cfg(feature = "axum")] pub mod #m; })
+        .collect();
+    format_tokens_static(quote! { #(#decls)* })
 }
 
 fn generate_server_module(service: &ServicePlan) -> String {
@@ -816,23 +853,18 @@ pub fn generate_models_mod(
         quote! {}
     };
 
-    // The Axum extractors are always co-located in this directory: the common
-    // generator wrote `<svc>/server.rs` + `<svc>/mod.rs` here, and this `mod.rs`
-    // overwrites the top-level `mod.rs` the common generator emitted — so it must
-    // re-declare the per-service extractor submodules. They are axum-coupled, so
-    // gate them on the `axum` feature (matching the `<service>/mod.rs` the common
-    // generator writes). Without this, the `FromRequest`/`FromRequestParts` impls
-    // never compile and the generated route fns can't be mounted.
-    let common_mods: TokenStream = {
-        let decls: Vec<TokenStream> = services
-            .iter()
-            .map(|s| format_ident!("{}", s.base_path))
-            // Dedupe: multiple services can share a base_path.
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|m| quote! { #[cfg(feature = "axum")] pub mod #m; })
-            .collect();
-        quote! { #(#decls)* }
+    // The Axum extractors are always co-located in this directory under an
+    // `extractors/` subdir (the common generator wrote `extractors/<svc>/...`
+    // here), and this `mod.rs` overwrites the top-level `mod.rs` the common
+    // generator emitted — so it must re-declare the `extractors` module.
+    // Axum-coupled, so gate it on the `axum` feature. Without this, the
+    // `FromRequest`/`FromRequestParts` impls never compile and the generated
+    // route fns can't be mounted. Nesting under `extractors` also avoids the
+    // per-service module names clashing with the model package modules above.
+    let extractors_mod = format_ident!("{EXTRACTORS_SUBDIR}");
+    let common_mods: TokenStream = quote! {
+        #[cfg(feature = "axum")]
+        pub mod #extractors_mod;
     };
 
     // Lints to silence across this module and every `include!`d model file below.

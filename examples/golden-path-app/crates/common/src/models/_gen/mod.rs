@@ -12,4 +12,4 @@ pub mod golden_path_app {
     }
 }
 #[cfg(feature = "axum")]
-pub mod greeting;
+pub mod extractors;
