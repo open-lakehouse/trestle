@@ -41,18 +41,29 @@
 //! Catalog loading (embedding a baseline, merging on-disk overlays) is a separate,
 //! feature-gated concern so pure consumers stay free of those dependencies.
 
+mod catalog;
 mod endpoint;
+mod module;
 mod placement;
 mod plan;
+mod plan_env;
 mod render;
 mod resolve;
+mod resolve_graph;
 mod role;
 mod surface;
 
+pub use catalog::{Catalog, baseline_catalog};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
+pub use module::{Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec};
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
+pub use plan_env::{
+    ClusterConfig, ComposeInclude, EnvironmentPlan, GatewayConfig, GatewayRoute, HeadFile,
+    ListenerConfig, PlanCtx, PlanError, Selection, plan,
+};
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
+pub use resolve_graph::{Edge, ResolveError, ResolvedGraph, resolve, resolve_with};
 pub use role::{Role, ServiceSpec};
 pub use surface::SurfaceMode;
