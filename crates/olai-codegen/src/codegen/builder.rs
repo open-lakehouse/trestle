@@ -70,8 +70,13 @@ fn generate_builders_module(
 ) -> crate::error::Result<String> {
     let builder_tokens: Vec<TokenStream> = builders
         .iter()
-        .map(|b| syn::parse_str::<TokenStream>(b).unwrap_or_else(|_| quote! {}))
-        .collect();
+        .map(|b| {
+            syn::parse_str::<TokenStream>(b).map_err(|source| crate::error::Error::GeneratedParse {
+                tokens: b.clone(),
+                source,
+            })
+        })
+        .collect::<crate::error::Result<_>>()?;
     let mod_path: Path = service.models_path();
     let result_path: Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
