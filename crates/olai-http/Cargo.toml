@@ -20,12 +20,18 @@ thiserror = { workspace = true }
 async-trait = "0.1.53"
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 bytes = "1.0"
+# Optional: the ConnectRPC transport bridge (enabled by the `connectrpc` feature).
+connectrpc = { version = "0.7", optional = true, default-features = false, features = [
+  "client",
+] }
 chrono = { version = "0.4.34", default-features = false, features = [
   "clock",
   "serde",
 ] }
 futures = "0.3"
 http = "1"
+# Optional: only needed by the `connectrpc` transport bridge to collect bodies.
+http-body-util = { version = "0.1", optional = true }
 humantime = "2.1"
 hyper = { version = "1.2", default-features = false }
 percent-encoding = "2.1"
@@ -61,6 +67,10 @@ mockito = "1.4"
 [features]
 default = []
 recording = []
+# A `connectrpc::client::ClientTransport` backed by `CloudClient`, so generated
+# ConnectRPC clients can authenticate against cloud-fronted servers. Pulls in
+# `connectrpc` (raising the effective MSRV to 1.88) only when enabled.
+connectrpc = ["dep:connectrpc", "dep:http-body-util"]
 
 [package.metadata.cargo-machete]
 ignored = ["rust-ini"]

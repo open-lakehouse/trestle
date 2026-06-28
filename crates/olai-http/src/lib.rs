@@ -62,6 +62,7 @@ use reqwest::{Body, Client, IntoUrl, Method, RequestBuilder};
 use serde::Serialize;
 use tokio::runtime::Handle;
 
+use self::retry::RetryExt;
 use self::service::{HttpService, make_service};
 pub use self::token::{TemporaryToken, TokenCache};
 
@@ -70,6 +71,8 @@ pub mod azure;
 mod backoff;
 mod client;
 mod config;
+#[cfg(feature = "connectrpc")]
+pub mod connectrpc;
 mod credential;
 pub mod databricks;
 mod error;
@@ -136,12 +139,12 @@ pub struct CloudClient {
     signer: SharedSigner,
     reqwest_client: Client,
     service: Arc<dyn HttpService>,
-    /// Retry configuration stored for future use by [`CloudRequestBuilder::send`].
+    /// Retry configuration applied to requests sent through this client.
     ///
-    /// Currently the retry policy is applied inside credential providers (token
-    /// refresh), but is not yet applied to user-initiated requests. Stored here
-    /// so that a `with_retry_config()` builder method can expose it without a
-    /// breaking change.
+    /// Used both by credential providers (token refresh) and by user-initiated
+    /// requests via [`CloudRequestBuilder::send`] and
+    /// [`CloudClient::sign_and_send`]. Override with
+    /// [`CloudClient::with_retry_config`].
     pub retry_config: RetryConfig,
     #[cfg(feature = "recording")]
     recording: Option<RecordingState>,
@@ -336,6 +339,54 @@ impl CloudClient {
         self
     }
 
+    /// Override the [`RetryConfig`] applied to requests sent through this client.
+    ///
+    /// Requests issued via [`CloudRequestBuilder::send`] and
+    /// [`sign_and_send`](Self::sign_and_send) are retried per this config
+    /// (exponential backoff with jitter; safe/idempotent requests are also
+    /// retried on timeout). The [default](RetryConfig::default) allows up to 10
+    /// retries — lower it for latency-sensitive interactive calls.
+    pub fn with_retry_config(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
+    /// Sign an already-built [`reqwest::Request`] and dispatch it, with retries.
+    ///
+    /// This is the request-level counterpart to the [`CloudRequestBuilder`]
+    /// flow: it applies the client's [`RequestSigner`] (refreshing credentials
+    /// as needed) and sends the request through the configured [`HttpService`],
+    /// retrying transient failures per the client's [`RetryConfig`]. It is
+    /// useful when the request is produced elsewhere (for example by a protocol
+    /// stack such as ConnectRPC) and only needs authentication and transport.
+    ///
+    /// The request body must be in memory (not a stream): retries clone the
+    /// request, and provider signers such as AWS SigV4 hash the body to sign it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if signing fails or if the request ultimately fails
+    /// after exhausting retries. A non-success HTTP status code is not itself an
+    /// error; inspect [`reqwest::Response::status`] on the returned response.
+    pub async fn sign_and_send(&self, request: reqwest::Request) -> Result<reqwest::Response> {
+        // The signer operates on a `RequestBuilder`; reconstruct one from the
+        // pre-built request (cloning the in-memory body) so the existing
+        // sign + retry path applies unchanged.
+        let builder = self
+            .reqwest_client
+            .request(request.method().clone(), request.url().clone());
+        let builder = builder.headers(request.headers().clone());
+        let builder = match request.body().and_then(|b| b.as_bytes()) {
+            Some(bytes) => builder.body(bytes.to_vec()),
+            None => builder,
+        };
+        let builder = self.signer.sign(builder).await?;
+        builder
+            .send_retry(&self.retry_config, self.service.clone())
+            .await
+            .map_err(|e| e.error())
+    }
+
     /// Start building a request for the given HTTP `method` and `url`.
     ///
     /// The returned [`CloudRequestBuilder`] borrows this client's signer, so the
@@ -513,12 +564,15 @@ impl CloudRequestBuilder {
     /// attaches the provider-specific authentication (e.g. AWS SigV4 headers or
     /// an `Authorization: Bearer` header), refreshing any cached credential as
     /// needed. The signed request is then dispatched through the client's
-    /// [`HttpService`].
+    /// [`HttpService`], retrying transient failures per the client's
+    /// [`RetryConfig`] and mapping a non-success status to the matching
+    /// [`Error`].
     ///
     /// When the `recording` feature is enabled and a recording directory has
     /// been configured via `CloudClient::set_recording_dir`, the request and
-    /// response are also written to disk (with sensitive headers redacted)
-    /// before the response is returned to the caller.
+    /// response are instead captured to disk (with sensitive headers redacted)
+    /// in a single round-trip — this capture path does **not** retry or map
+    /// status codes to errors, so use the default build for production traffic.
     ///
     /// # Errors
     ///
@@ -531,9 +585,10 @@ impl CloudRequestBuilder {
 
         #[cfg(not(feature = "recording"))]
         {
-            let request = self.builder.build()?;
-            let response = self.client.service.call(request).await?;
-            Ok(response)
+            self.builder
+                .send_retry(&self.client.retry_config, self.client.service.clone())
+                .await
+                .map_err(|e| e.error())
         }
         #[cfg(feature = "recording")]
         {
@@ -1067,5 +1122,118 @@ mod tests {
         let parsed: RequestResponseInfo = serde_json::from_str(&content)
             .expect("recording file must be valid JSON even after redaction");
         assert_eq!(parsed.response.status, 200);
+    }
+}
+
+// These assert the production send path's retry + error-mapping contract.
+// The `recording` feature replaces that path with a single-shot capture (no
+// retry, no status->error mapping — see `send_record`), so they are scoped to
+// the non-recording build where the behavior under test actually applies.
+#[cfg(all(test, not(feature = "recording")))]
+mod retry_integration_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn fast_retry(max_retries: usize) -> RetryConfig {
+        RetryConfig {
+            backoff: crate::backoff::BackoffConfig {
+                init_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(5),
+                base: 2.,
+            },
+            max_retries,
+            retry_timeout: Duration::from_secs(30),
+        }
+    }
+
+    // A 5xx is retried by CloudClient::send: a single 503 followed by a 200
+    // should surface the 200, proving the user-request path now honors
+    // retry_config (previously it did a bare service.call with no retry).
+    #[tokio::test]
+    async fn send_retries_server_error_then_succeeds() {
+        let mut server = mockito::Server::new_async().await;
+        let fail = server
+            .mock("GET", "/r")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+        let ok = server
+            .mock("GET", "/r")
+            .with_status(200)
+            .with_body("ok")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new_unauthenticated().with_retry_config(fast_retry(3));
+        let resp = client
+            .get(format!("{}/r", server.url()))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.text().await.unwrap(), "ok");
+        fail.assert_async().await;
+        ok.assert_async().await;
+    }
+
+    // A 4xx is not retryable: it must surface immediately as an error without
+    // consuming retries (a second mock would go unmatched).
+    #[tokio::test]
+    async fn send_does_not_retry_client_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/r")
+            .with_status(404)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new_unauthenticated().with_retry_config(fast_retry(3));
+        let err = client
+            .get(format!("{}/r", server.url()))
+            .send()
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::NotFound { .. }), "got {err:?}");
+        mock.assert_async().await;
+    }
+
+    // sign_and_send takes a pre-built reqwest::Request, applies the signer
+    // (here a bearer token), and retries transient failures just like send.
+    #[tokio::test]
+    async fn sign_and_send_signs_and_retries() {
+        let mut server = mockito::Server::new_async().await;
+        let fail = server
+            .mock("POST", "/rpc")
+            .match_header("authorization", "Bearer tok")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+        let ok = server
+            .mock("POST", "/rpc")
+            .match_header("authorization", "Bearer tok")
+            .with_status(200)
+            .with_body("pong")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new_with_token("tok").with_retry_config(fast_retry(3));
+        let request = reqwest::Client::new()
+            .post(format!("{}/rpc", server.url()))
+            .body("ping")
+            .build()
+            .unwrap();
+        let resp = client.sign_and_send(request).await.unwrap();
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.text().await.unwrap(), "pong");
+        fail.assert_async().await;
+        ok.assert_async().await;
     }
 }
