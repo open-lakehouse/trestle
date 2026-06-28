@@ -44,7 +44,7 @@ use tracing::warn;
 use crate::Result;
 use crate::google::api::FieldBehavior;
 use crate::parsing::types::BaseType;
-use crate::parsing::{CodeGenMetadata, MessageField, MethodMetadata, ServiceInfo};
+use crate::parsing::{CodeGenMetadata, HttpPattern, MessageField, MethodMetadata, ServiceInfo};
 use crate::utils::strings;
 
 pub(crate) use types::MethodPlanner;
@@ -59,9 +59,12 @@ mod types;
 
 /// Analyze collected metadata and create a generation plan.
 ///
-/// Methods with missing HTTP annotations are excluded from the plan and recorded in
-/// [`GenerationPlan::skipped_methods`] so callers can distinguish "zero methods generated"
-/// from "all methods were silently dropped".
+/// Analysis is **protocol-agnostic**: every method gets a [`MethodPlan`]. REST analysis is a
+/// superset of what ConnectRPC needs, so a method with a `google.api.http` annotation carries the
+/// full REST shape (path/query/body split, URL template) and one without carries the routeless
+/// shape (all request fields as body). [`MethodPlan::has_http_route`] distinguishes them: the REST
+/// emitters generate only routed methods; the ConnectRPC emitter generates all. No method is
+/// dropped here, so [`GenerationPlan::skipped_methods`] is empty.
 ///
 /// Hierarchy derivation uses a two-phase cross-service algorithm:
 /// 1. Build all service plans (hierarchy empty).
@@ -383,23 +386,14 @@ fn analyze_service(
     let handler_name = strings::service_to_handler_name(&info.name);
     let base_path = strings::service_to_base_path(&info.name);
 
+    // Analysis is protocol-agnostic: every method gets a plan. Methods without an HTTP annotation
+    // get the routeless shape (`has_http_route == false`); the REST emitters skip them while the
+    // ConnectRPC emitter uses them. So no method is dropped at analysis time.
     let mut method_plans = Vec::new();
-    let mut skipped = Vec::new();
+    let skipped = Vec::new();
 
     for method in &info.methods {
-        if let Some(method_plan) = analyze_method(metadata, method)? {
-            method_plans.push(method_plan);
-        } else {
-            warn!(
-                "Skipping method {}.{} - incomplete metadata",
-                info.name, method.method_name
-            );
-            skipped.push(SkippedMethod {
-                service_name: info.name.clone(),
-                method_name: method.method_name.clone(),
-                reason: "missing HTTP annotation".to_string(),
-            });
-        }
+        method_plans.push(analyze_method(metadata, method)?);
     }
 
     let managed_resources = types::extract_managed_resources(metadata, &method_plans);
@@ -435,20 +429,23 @@ fn analyze_service(
 
 /// Analyze a single method and create a method plan.
 ///
-/// Returns `None` if the method has incomplete metadata (e.g., missing HTTP annotation).
+/// Analysis is **protocol-agnostic** and produces the superset of information both the REST and the
+/// ConnectRPC emitters consume. Every method gets a plan:
+///
+/// - With a `google.api.http` annotation: the full REST shape (path/query/body split, URL template,
+///   request type). [`MethodPlan::has_http_route`] is `true`. The Connect emitter ignores the
+///   routing fields and reads only the body fields + input/output types.
+/// - Without one: the routeless shape (all request fields as body, no path/query — see
+///   [`analyze_routeless_method`]). `has_http_route` is `false`; the REST emitters skip it (it has
+///   no route to call), the Connect emitter emits it.
 pub(crate) fn analyze_method(
     metadata: &CodeGenMetadata,
     method: &MethodMetadata,
-) -> Result<Option<MethodPlan>> {
-    let http_method = match method.http_method() {
-        Some(m) => m.to_string(),
-        None => {
-            warn!(
-                "Method {}.{} missing HTTP info",
-                method.service_name, method.method_name
-            );
-            return Ok(None);
-        }
+) -> Result<MethodPlan> {
+    let Some(http_method) = method.http_method().map(|m| m.to_string()) else {
+        // No HTTP annotation: still produce a plan (the routeless / Connect-degenerate shape) so the
+        // ConnectRPC emitter can use it. REST emitters gate on `has_http_route`.
+        return analyze_routeless_method(metadata, method);
     };
 
     let planner = MethodPlanner::try_new(method, metadata)?;
@@ -471,7 +468,7 @@ pub(crate) fn analyze_method(
     let needs_request_parts = types::request_needs_request_parts(&request_type);
     let scoped_verb = types::scoped_verb(&request_type);
 
-    Ok(Some(MethodPlan {
+    Ok(MethodPlan {
         metadata: method.clone(),
         handler_function_name: method.method_name.to_case(Case::Snake),
         http_method,
@@ -486,7 +483,103 @@ pub(crate) fn analyze_method(
         // Provisional: `shape` depends on the owning service's managed resources, which aren't
         // known here. `analyze_service` overwrites this once `extract_managed_resources` has run.
         shape: types::MethodShape::Unbound,
-    }))
+        has_http_route: true,
+    })
+}
+
+/// Analyze a method that has no `google.api.http` annotation (the ConnectRPC-degenerate shape).
+///
+/// ConnectRPC dispatch sends the whole request message as the body and reads the whole response, so
+/// there is no path/query/body split and no URL template. Every non-`OUTPUT_ONLY` request field
+/// becomes a [`BodyField`], partitioned required-vs-optional purely from
+/// `google.api.field_behavior` — the same `BodyField` shape the REST builders consume, so the
+/// builder layer ([`crate::codegen::builder`]) is reused unchanged.
+///
+/// The HTTP-only fields of [`MethodPlan`] (`http_method`, `http_pattern`) are left empty/default and
+/// [`MethodPlan::has_http_route`] is `false`; the REST emitters skip such methods, so those fields
+/// are never read for them.
+fn analyze_routeless_method(
+    metadata: &CodeGenMetadata,
+    method: &MethodMetadata,
+) -> Result<MethodPlan> {
+    let input_fields = metadata.get_message_fields(&method.input_type);
+    let body_fields = routeless_body_fields(&input_fields);
+
+    // A routeless method carries no REST request shape. `Custom` keeps it off the REST collection /
+    // instance code paths (resource-scoped clients, pagination heuristics) while still flowing
+    // through the shared builder generator. The verb is irrelevant for Connect dispatch; `POST`
+    // is the conventional placeholder.
+    let request_type =
+        RequestType::Custom(crate::google::api::http_rule::Pattern::Post(String::new()));
+    let has_response = !method.output_type.is_empty() && !method.output_type.ends_with("Empty");
+
+    Ok(MethodPlan {
+        metadata: method.clone(),
+        handler_function_name: method.method_name.to_case(Case::Snake),
+        http_method: String::new(),
+        parameters: body_fields.into_iter().map(Into::into).collect(),
+        has_response,
+        request_type,
+        output_resource_type: None,
+        http_pattern: HttpPattern::default(),
+        // The request message is always carried as the body for Connect dispatch.
+        has_request_body: true,
+        needs_request_parts: false,
+        scoped_verb: None,
+        shape: types::MethodShape::Unbound,
+        has_http_route: false,
+    })
+}
+
+/// Classify a routeless request message's fields into [`BodyField`]s.
+///
+/// `OUTPUT_ONLY` fields are dropped (server-generated). Oneof fields are optional body fields with
+/// their variants preserved. Every other field is a body field whose `required` flag is taken from
+/// `google.api.field_behavior` REQUIRED — mirroring the `body: "*"` branch of
+/// [`extract_request_fields`], minus the path/query split that ConnectRPC has no notion of.
+fn routeless_body_fields(input_fields: &[MessageField]) -> Vec<BodyField> {
+    let mut body_fields = Vec::new();
+    for field in input_fields {
+        if field.field_behavior.contains(&FieldBehavior::OutputOnly) {
+            continue;
+        }
+
+        if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
+            body_fields.push(BodyField {
+                name: field.name.clone(),
+                field_type: field.unified_type.clone().optional(),
+                repeated: false,
+                required: false,
+                oneof_variants: field.oneof_variants.clone(),
+                documentation: field.documentation.clone(),
+            });
+            continue;
+        }
+
+        let required = field.field_behavior.contains(&FieldBehavior::Required);
+        // Match the REST body branch: mark non-required singular message bodies optional on the
+        // type so they become `with_*(impl Into<Option<T>>)` setters rather than required args.
+        let needs_optional_marker = !required
+            && !field.unified_type.is_repeated
+            && matches!(
+                field.unified_type.base_type,
+                BaseType::Message(_) | BaseType::OneOf(_)
+            );
+        let field_type = if needs_optional_marker {
+            field.unified_type.clone().optional()
+        } else {
+            field.unified_type.clone()
+        };
+        body_fields.push(BodyField {
+            name: field.name.clone(),
+            field_type,
+            repeated: field.unified_type.is_repeated,
+            required,
+            oneof_variants: None,
+            documentation: field.documentation.clone(),
+        });
+    }
+    body_fields
 }
 
 /// Extract and classify request fields from an input message into path, query, and body buckets.
@@ -722,7 +815,7 @@ mod tests {
     }
 
     #[test]
-    fn test_analyze_method_missing_http_pattern_returns_none() {
+    fn test_analyze_method_missing_http_pattern_is_routeless() {
         let metadata = CodeGenMetadata::default();
         let method = MethodMetadata {
             service_name: "SomeService".to_string(),
@@ -740,8 +833,112 @@ mod tests {
             http_pattern: HttpPattern::parse(""),
             documentation: None,
         };
-        let result = analyze_method(&metadata, &method).unwrap();
-        assert!(result.is_none());
+        // Protocol-agnostic analysis still produces a plan, but flags it as having no HTTP route so
+        // the REST emitters skip it while the Connect emitter uses it.
+        let plan = analyze_method(&metadata, &method).unwrap();
+        assert!(!plan.has_http_route);
+        assert!(plan.http_method.is_empty());
+    }
+
+    #[test]
+    fn test_routeless_method_partitions_body_by_field_behavior() {
+        use crate::parsing::MessageInfo;
+
+        // A request with one REQUIRED field and one unmarked (optional) field, and NO HTTP rule.
+        let req = MessageInfo {
+            name: "DoThingRequest".to_string(),
+            fields: vec![
+                {
+                    let mut f = make_string_field("name", false);
+                    f.field_behavior = vec![FieldBehavior::Required];
+                    f
+                },
+                make_string_field("comment", false),
+            ],
+            resource_descriptor: None,
+            documentation: None,
+        };
+        let mut messages = HashMap::new();
+        messages.insert("DoThingRequest".to_string(), req);
+        let metadata = CodeGenMetadata {
+            messages,
+            ..Default::default()
+        };
+
+        let method = MethodMetadata {
+            service_name: "ThingService".to_string(),
+            method_name: "DoThing".to_string(),
+            input_type: "DoThingRequest".to_string(),
+            output_type: "DoThingResponse".to_string(),
+            operation: None,
+            http_rule: HttpRule {
+                selector: "".to_string(),
+                pattern: None, // no HTTP annotation
+                body: "".to_string(),
+                response_body: "".to_string(),
+                additional_bindings: vec![],
+            },
+            http_pattern: HttpPattern::default(),
+            documentation: None,
+        };
+
+        let plan = analyze_method(&metadata, &method).unwrap();
+        assert!(!plan.has_http_route);
+
+        // No path/query params: every field is a body field.
+        assert_eq!(plan.path_parameters().count(), 0);
+        assert_eq!(plan.query_parameters().count(), 0);
+        let body: Vec<_> = plan.body_fields().collect();
+        assert_eq!(body.len(), 2);
+
+        // Required vs optional follows field_behavior: `name` (REQUIRED) is required, `comment` not.
+        let name = body.iter().find(|b| b.name == "name").unwrap();
+        let comment = body.iter().find(|b| b.name == "comment").unwrap();
+        assert!(name.required, "REQUIRED field should be a constructor arg");
+        assert!(
+            !comment.required,
+            "unmarked field should be an optional with_* setter"
+        );
+        assert_eq!(plan.handler_function_name, "do_thing");
+        assert!(plan.has_response);
+    }
+
+    #[test]
+    fn test_routeless_method_drops_output_only_fields() {
+        use crate::parsing::MessageInfo;
+
+        let req = MessageInfo {
+            name: "MakeReq".to_string(),
+            fields: vec![make_string_field("input", false), {
+                let mut f = make_string_field("server_set", false);
+                f.field_behavior = vec![FieldBehavior::OutputOnly];
+                f
+            }],
+            resource_descriptor: None,
+            documentation: None,
+        };
+        let mut messages = HashMap::new();
+        messages.insert("MakeReq".to_string(), req);
+        let metadata = CodeGenMetadata {
+            messages,
+            ..Default::default()
+        };
+
+        let method = MethodMetadata {
+            service_name: "S".to_string(),
+            method_name: "Make".to_string(),
+            input_type: "MakeReq".to_string(),
+            output_type: "MakeResp".to_string(),
+            operation: None,
+            http_rule: HttpRule::default(),
+            http_pattern: HttpPattern::default(),
+            documentation: None,
+        };
+
+        let plan = analyze_method(&metadata, &method).unwrap();
+        let body: Vec<_> = plan.body_fields().collect();
+        assert_eq!(body.len(), 1, "OUTPUT_ONLY field must be dropped");
+        assert_eq!(body[0].name, "input");
     }
 
     // --- extract_request_fields unit tests ---

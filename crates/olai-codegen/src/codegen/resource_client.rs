@@ -43,7 +43,7 @@ pub(crate) fn generate(
         return Ok(None);
     };
 
-    let low_level_ident = service.low_level_client_type();
+    let low_level_ident = service.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let components: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
     let join_format = spec.join_format();
 
@@ -184,7 +184,7 @@ fn child_nav_method(
     parent_components: &[proc_macro2::Ident],
 ) -> Option<TokenStream> {
     let child_scoped = child.scoped_client_type()?;
-    let child_low_level = child.low_level_client_type();
+    let child_low_level = child.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let module = format_ident!("{}", link.child_base_path);
 
     let method_name = format_ident!("{}", link.child_singular);
@@ -220,7 +220,7 @@ fn child_create_method(
     let create = child
         .methods()
         .find(|m| m.plan.request_type == RequestType::Create)?;
-    let child_low_level = child.low_level_client_type();
+    let child_low_level = child.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let module = format_ident!("{}", link.child_base_path);
     let builder_ty = create.builder_type();
     let method_name = format_ident!("create_{}", link.child_singular);
@@ -258,7 +258,7 @@ fn child_list_method(
     let list = child
         .methods()
         .find(|m| m.plan.request_type == RequestType::List)?;
-    let child_low_level = child.low_level_client_type();
+    let child_low_level = child.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let module = format_ident!("{}", link.child_base_path);
     let builder_ty = list.builder_type();
     // Match the aggregate's list method name (e.g. `list_schemas`).
@@ -814,6 +814,8 @@ mod tests {
             resource_store_crate_name: "olai_store".into(),
             runtime: crate::Runtime::Prost,
             transport_type_path: crate::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+            client_protocols: crate::ClientProtocols::default(),
+            connect_client_path: None,
             output: CodeGenOutput {
                 common: "/tmp/c".into(),
                 models: None,

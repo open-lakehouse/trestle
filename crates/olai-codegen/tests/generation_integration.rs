@@ -62,6 +62,8 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+        client_protocols: olai_codegen::ClientProtocols::default(),
+        connect_client_path: None,
         output: CodeGenOutput {
             common,
             models: Some(models),
@@ -178,6 +180,8 @@ fn wasm_bindings_and_dts_are_emitted() {
         // serde-native models + the browser transport are the intended pairing for wasm output.
         runtime: olai_codegen::Runtime::Buffa,
         transport_type_path: "olai_http_wasm::WasmClient".into(),
+        client_protocols: olai_codegen::ClientProtocols::default(),
+        connect_client_path: None,
         output: CodeGenOutput {
             common,
             models: None,
@@ -564,6 +568,8 @@ fn node_ts_bindings_generated() {
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+        client_protocols: olai_codegen::ClientProtocols::default(),
+        connect_client_path: None,
         output: CodeGenOutput {
             common,
             models: None,

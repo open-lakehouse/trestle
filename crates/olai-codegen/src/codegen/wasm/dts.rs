@@ -52,7 +52,9 @@ pub(crate) fn generate_dts(services: &[ServiceHandler<'_>]) -> String {
 
     // Per-service classes.
     for service in services {
-        let class = service.low_level_client_type().to_string();
+        let class = service
+            .low_level_client_type(crate::codegen::ClientProtocol::Rest)
+            .to_string();
         out.push_str(&format!(
             "/** WASM/browser binding for the `{}` service. */\n",
             service.plan.base_path
@@ -90,7 +92,9 @@ pub(crate) fn generate_dts(services: &[ServiceHandler<'_>]) -> String {
     );
     for service in services {
         let accessor = service.plan.base_path.to_case(Case::Camel);
-        let class = service.low_level_client_type().to_string();
+        let class = service
+            .low_level_client_type(crate::codegen::ClientProtocol::Rest)
+            .to_string();
         out.push_str(&format!(
             "  /** Access the `{}` service. */\n  {accessor}(): {class};\n",
             service.plan.base_path

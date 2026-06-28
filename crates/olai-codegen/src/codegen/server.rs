@@ -34,13 +34,13 @@ use crate::{
 /// - FromRequest extractor implementations for JSON body
 pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
     let extractor_impls = service
-        .methods()
+        .rest_methods()
         .map(|method| from_request_extractor(&method))
         .collect_vec();
     let mod_path = service.models_path_crate();
 
     // Only import RequestPartsExt when there are FromRequestParts impls (path/query params).
-    let has_parts_extractors = service.methods().any(|m| m.plan.needs_request_parts);
+    let has_parts_extractors = service.rest_methods().any(|m| m.plan.needs_request_parts);
 
     let axum_imports = if has_parts_extractors {
         quote! { use axum::{RequestExt, RequestPartsExt}; }
@@ -69,7 +69,7 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Res
 
 pub(super) fn generate_server(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
     let handler_function_impls = service
-        .methods()
+        .rest_methods()
         .map(|method| axum_route_handler_impl(&method, &service.plan.handler_name))
         .collect_vec();
 
@@ -437,6 +437,7 @@ mod tests {
             scoped_verb: None,
             // Server extractor tests don't consult `shape`; the test service has no resource.
             shape: crate::analysis::MethodShape::Unbound,
+            has_http_route: true,
         }
     }
 

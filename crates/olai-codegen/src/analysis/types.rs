@@ -238,6 +238,13 @@ pub struct MethodPlan {
     /// Assigned in `analyze_service` once the owning service's managed resources are known, so it
     /// reflects both the method's verb/name shape and whether the service is resource-scoped.
     pub shape: MethodShape,
+    /// Whether this method has a `google.api.http` route.
+    ///
+    /// Analysis is protocol-agnostic: every method gets a plan. A method without an HTTP
+    /// annotation still produces a plan (with all request fields as body, no path/query) so the
+    /// ConnectRPC emitter can use it — but it has no REST route, so the REST client/handler
+    /// emitters skip it. `true` for methods with an HTTP annotation, `false` otherwise.
+    pub has_http_route: bool,
 }
 
 impl MethodPlan {

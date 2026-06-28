@@ -43,7 +43,7 @@ pub(crate) fn generate_bindings(services: &[ServiceHandler<'_>]) -> crate::error
     let service_wrappers = services.iter().map(service_wrapper);
     let accessors = services.iter().map(|s| {
         let module = format_ident!("{}", s.plan.base_path);
-        let low_level = s.low_level_client_type();
+        let low_level = s.low_level_client_type(crate::codegen::ClientProtocol::Rest);
         let wasm_wrapper = format_ident!("Wasm{}", low_level);
         let accessor = format_ident!("{}", s.plan.base_path);
         let js_accessor = s.plan.base_path.to_case(Case::Camel);
@@ -166,7 +166,7 @@ pub(crate) fn generate_bindings(services: &[ServiceHandler<'_>]) -> crate::error
 
 /// Emit one `#[wasm_bindgen]` wrapper struct + impl for a single service's low-level client.
 fn service_wrapper(service: &ServiceHandler<'_>) -> TokenStream {
-    let low_level = service.low_level_client_type();
+    let low_level = service.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let wasm_wrapper = format_ident!("Wasm{}", low_level);
 
     let methods = service.methods().map(|method| {

@@ -37,11 +37,21 @@ use crate::codegen::config::Runtime;
 use crate::codegen::{MethodHandler, ServiceHandler};
 use crate::parsing::types::{BaseType, RenderContext, unified_to_rust};
 
-/// Generate builder code for all request types in a service
-pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<String> {
+/// Generate builder code for all request types in a service, targeting `protocol`.
+///
+/// The builder layer is shared between REST and ConnectRPC — it only constructs the request proto
+/// and calls `client.<method>(&request)`, which both low-level clients expose. `protocol` selects
+/// which low-level client type the builders bind to (see
+/// [`ServiceHandler::low_level_client_type`]) and which methods are in scope: REST builders are
+/// emitted only for methods with an HTTP route; ConnectRPC builders are emitted for every method.
+pub(crate) fn generate(
+    service: &ServiceHandler<'_>,
+    protocol: crate::codegen::ClientProtocol,
+) -> crate::error::Result<String> {
     let builder_impls: Vec<_> = service
         .methods()
-        .map(|method| generate_request_builder(method, service))
+        .filter(|m| protocol == crate::codegen::ClientProtocol::Connect || m.plan.has_http_route)
+        .map(|method| generate_request_builder(method, service, protocol))
         .try_collect()?;
 
     if builder_impls.is_empty() {
@@ -139,6 +149,7 @@ fn generate_builders_module(
 fn generate_request_builder(
     method: MethodHandler<'_>,
     service: &ServiceHandler<'_>,
+    protocol: crate::codegen::ClientProtocol,
 ) -> crate::error::Result<String> {
     let builder_ident = method.builder_type();
     let request_type_ident = method.input_type().ok_or_else(|| {
@@ -148,7 +159,7 @@ fn generate_request_builder(
         ))
     })?;
     let output_type_ident = method.output_type();
-    let client_type_ident = service.low_level_client_type();
+    let client_type_ident = service.low_level_client_type(protocol);
     let method_name = format_ident!("{}", method.plan.handler_function_name);
 
     // Constructor params: all required parameters (path + required body fields)

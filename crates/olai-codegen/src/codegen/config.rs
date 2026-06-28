@@ -7,6 +7,87 @@ use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
+/// Wire protocol a *generated* client speaks.
+///
+/// A single client layer. The set of layers to emit is [`ClientProtocols`]; a server that exposes
+/// both REST and ConnectRPC for the same proto can emit both from one generation run.
+///
+/// - [`ClientProtocol::Rest`]: the HTTP/JSON low-level client ([`super::client`]) plus fluent
+///   builders. Methods are routed from `google.api.http`; a method without an annotation has no
+///   route and is skipped by the REST emitter.
+/// - [`ClientProtocol::Connect`]: fluent builders over the **connect-rust** (BSR plugin) generated
+///   `{Service}Client<T>`, dispatched via [`connectrpc`](https://docs.rs/connectrpc). No
+///   `google.api.http` annotation is required — the whole request message is the body, and
+///   required-vs-optional partitioning comes purely from `google.api.field_behavior`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClientProtocol {
+    /// HTTP/JSON client routed from `google.api.http` (the historical default).
+    #[default]
+    Rest,
+    /// ConnectRPC client layered over the connect-rust generated service client.
+    Connect,
+}
+
+impl ClientProtocol {
+    /// The convention subdirectory name for this protocol's client when both are emitted side by
+    /// side (`<service>/rest/`, `<service>/connect/`).
+    pub(crate) fn subdir(self) -> &'static str {
+        match self {
+            ClientProtocol::Rest => "rest",
+            ClientProtocol::Connect => "connect",
+        }
+    }
+}
+
+/// Which client protocol layer(s) to emit.
+///
+/// Analysis is protocol-agnostic (REST analysis is a superset of what ConnectRPC needs), so this is
+/// purely an *emit-time* selection. Emitting both is supported: a server fronting the same proto
+/// over REST and ConnectRPC can hand out either client.
+///
+/// File layout:
+/// - exactly one protocol: emitted **flat** under `<service>/` (`<service>/client.rs`,
+///   `<service>/builders.rs`) — unchanged from single-protocol output.
+/// - both: each protocol gets its own convention subdir (`<service>/rest/`, `<service>/connect/`),
+///   re-exported from `<service>/mod.rs`.
+///
+/// Defaults to REST only, so existing output is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientProtocols {
+    /// Emit the REST (HTTP/JSON) client.
+    pub rest: bool,
+    /// Emit the ConnectRPC client.
+    pub connect: bool,
+}
+
+impl Default for ClientProtocols {
+    fn default() -> Self {
+        Self {
+            rest: true,
+            connect: false,
+        }
+    }
+}
+
+impl ClientProtocols {
+    /// Whether more than one protocol is selected (drives the subdir-vs-flat layout decision).
+    pub(crate) fn is_multi(self) -> bool {
+        self.rest && self.connect
+    }
+
+    /// The selected protocols, in deterministic order (REST before Connect).
+    pub(crate) fn selected(self) -> Vec<ClientProtocol> {
+        let mut v = Vec::new();
+        if self.rest {
+            v.push(ClientProtocol::Rest);
+        }
+        if self.connect {
+            v.push(ClientProtocol::Connect);
+        }
+        v
+    }
+}
+
 /// Protobuf runtime that the *generated* code is expected to consume.
 ///
 /// This selects the ABI that emitted clients, handlers, and builders are shaped for —
@@ -221,6 +302,23 @@ pub struct CodeGenConfig {
     /// client points this at a lightweight reqwest-Fetch transport that has no `ring`/`tokio`
     /// dependency and lets the browser attach the session.
     pub transport_type_path: String,
+
+    /// Which client protocol layer(s) to emit. See [`ClientProtocols`].
+    ///
+    /// Defaults to REST only, so existing HTTP/JSON output is unchanged.
+    pub client_protocols: ClientProtocols,
+
+    /// Import path of the **connect-rust** (BSR plugin) generated client module, used only when
+    /// [`client_protocols`](Self::client_protocols) includes Connect.
+    ///
+    /// The generated Connect builder layer references the connect-rust client type as
+    /// `<connect_client_path>::{Service}Client`. The path should resolve to the module that
+    /// holds the per-service `{Service}Client<T>` structs (e.g.
+    /// `"headwaters_proto::connect_gen::headwaters::read::v1"`).
+    ///
+    /// Required (non-`None`) whenever Connect is selected and client output is enabled; ignored for
+    /// REST-only output.
+    pub connect_client_path: Option<String>,
 }
 
 /// Default transport type path: the cloud client used by native (non-WASM) generated code.
@@ -262,13 +360,24 @@ impl CodeGenConfig {
     pub fn validate(&self) -> Result<()> {
         ModelsPath::new(&self.models_path_template)?;
         ModelsPath::new(&self.models_path_crate_template)?;
-        if (self.output.python.is_some()
+        let wants_bindings = self.output.python.is_some()
             || self.output.node.is_some()
             || self.output.node_ts.is_some()
-            || self.output.wasm.is_some())
-            && self.bindings.is_none()
-        {
+            || self.output.wasm.is_some();
+        if wants_bindings && self.bindings.is_none() {
             return Err(Error::MissingBindingsConfig);
+        }
+        // The Connect client layers over the connect-rust generated client, whose import path the
+        // emitter needs. Only required when client output is actually requested.
+        if self.client_protocols.connect
+            && self.output.client.is_some()
+            && self.connect_client_path.is_none()
+        {
+            return Err(Error::MissingConnectClientPath);
+        }
+        // Language bindings call into the REST aggregate client, so they need REST enabled.
+        if wants_bindings && !self.client_protocols.rest {
+            return Err(Error::BindingsRequireRest);
         }
         Ok(())
     }
