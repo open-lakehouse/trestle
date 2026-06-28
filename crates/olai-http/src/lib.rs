@@ -564,12 +564,15 @@ impl CloudRequestBuilder {
     /// attaches the provider-specific authentication (e.g. AWS SigV4 headers or
     /// an `Authorization: Bearer` header), refreshing any cached credential as
     /// needed. The signed request is then dispatched through the client's
-    /// [`HttpService`].
+    /// [`HttpService`], retrying transient failures per the client's
+    /// [`RetryConfig`] and mapping a non-success status to the matching
+    /// [`Error`].
     ///
     /// When the `recording` feature is enabled and a recording directory has
     /// been configured via `CloudClient::set_recording_dir`, the request and
-    /// response are also written to disk (with sensitive headers redacted)
-    /// before the response is returned to the caller.
+    /// response are instead captured to disk (with sensitive headers redacted)
+    /// in a single round-trip — this capture path does **not** retry or map
+    /// status codes to errors, so use the default build for production traffic.
     ///
     /// # Errors
     ///
@@ -1122,7 +1125,11 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// These assert the production send path's retry + error-mapping contract.
+// The `recording` feature replaces that path with a single-shot capture (no
+// retry, no status->error mapping — see `send_record`), so they are scoped to
+// the non-recording build where the behavior under test actually applies.
+#[cfg(all(test, not(feature = "recording")))]
 mod retry_integration_tests {
     use super::*;
     use std::time::Duration;
