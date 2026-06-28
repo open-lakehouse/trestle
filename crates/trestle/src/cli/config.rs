@@ -194,6 +194,8 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
                 output: "crates/client/src".to_string(),
                 transport,
                 transport_type_path: None,
+                protocols: vec![crate::config::ClientProtocol::Rest],
+                connect_client_path: None,
             });
         }
         if args.clients.contains(&ClientArg::Python) {
@@ -282,6 +284,8 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
             output: "crates/client/src/gen".to_string(),
             transport: Transport::Cloud,
             transport_type_path: None,
+            protocols: vec![crate::config::ClientProtocol::Rest],
+            connect_client_path: None,
         });
     }
     if clients.contains(&ClientSel::Python) && cfg.generate.clients.python.is_none() {
