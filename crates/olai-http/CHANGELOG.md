@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.3...olai-http-v0.0.4) - 2026-06-28
+
+### Added
+
+- *(http)* ConnectRPC transport backed by CloudClient + retry fix (#49)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.2...olai-http-v0.0.3) - 2026-06-23
 
 ### Documentation
