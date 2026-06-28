@@ -126,11 +126,18 @@ Maintainer setup (one-time, per crate):
 - On crates.io, under each crate's **Settings → Trusted Publishing**, add the
   GitHub repo `open-lakehouse/trestle`, workflow `release-plz.yml`, and
   environment `release`.
-- **New crate names cannot be created by OIDC.** All current crates are already
-  published, so this is handled. If you ever add a brand-new publishable crate,
-  its first publish needs a **one-time bootstrap** (a manual
-  `cargo publish --registry crates-io` with a token, or a crates.io "pending
-  crate" trusted-publisher registration); after that, OIDC takes over.
+- **New crate names cannot be created by OIDC** — there is no crate yet to
+  attach a Trusted Publisher policy to. A brand-new publishable crate needs a
+  **one-time bootstrap** first publish with a token, after which OIDC takes over.
+  Run the **Bootstrap publish** workflow (`.github/workflows/bootstrap-publish.yml`,
+  `workflow_dispatch`): trigger it with the package name (e.g.
+  `olai-stack-topology`), leaving `dry_run` on first to confirm the package is
+  publishable, then re-run with `dry_run` off to create the crate. It authenticates
+  with `CARGO_REGISTRY_TOKEN` stored in the protected `release` environment. Then:
+  1. On crates.io, register the Trusted Publisher for the new crate (repo
+     `open-lakehouse/trestle`, workflow `release-plz.yml`, environment `release`).
+  2. From then on the crate releases through `release-plz.yml` like the others;
+     never run the bootstrap workflow for it again.
 
 ### GitHub authentication
 

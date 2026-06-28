@@ -1565,6 +1565,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-stack-topology"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
 name = "olai-store"
 version = "0.0.4"
 dependencies = [
