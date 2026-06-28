@@ -55,8 +55,8 @@ pub mod parsing;
 pub mod utils;
 
 pub use codegen::{
-    BindingsConfig, CodeGenConfig, CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, GeneratedCode,
-    Runtime, generate_code, generate_models_mod,
+    BindingsConfig, ClientProtocol, ClientProtocols, CodeGenConfig, CodeGenOutput,
+    DEFAULT_TRANSPORT_TYPE_PATH, GeneratedCode, Runtime, generate_code, generate_models_mod,
 };
 
 pub use analysis::{

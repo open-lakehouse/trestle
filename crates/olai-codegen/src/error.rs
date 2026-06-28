@@ -8,6 +8,14 @@ pub enum Error {
     #[error("bindings config is required when python, node, or node_ts output is enabled")]
     MissingBindingsConfig,
 
+    #[error("connect_client_path is required when the Connect client protocol is enabled")]
+    MissingConnectClientPath,
+
+    #[error(
+        "language bindings (python/node/node_ts/wasm) build on the REST client; they require the REST client protocol to be enabled"
+    )]
+    BindingsRequireRest,
+
     #[error("Missing annotation for {object}: {message}")]
     MissingAnnotation { object: String, message: String },
 

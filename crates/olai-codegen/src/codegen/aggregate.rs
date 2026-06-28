@@ -37,6 +37,14 @@ pub(crate) fn generate(
         return Ok(None);
     };
 
+    // The aggregate root client is REST-shaped: it stores a `CloudClient` + base `Url` and builds
+    // HTTP low-level clients on demand. It is only meaningful for the REST client; when REST is not
+    // emitted there is no REST per-service client for it to aggregate. (A ConnectRPC aggregate is a
+    // follow-up; ConnectRPC dispatch owns its own transport.)
+    if !config.client_protocols.rest {
+        return Ok(None);
+    }
+
     let aggregate_ident = format_ident!("{}", bindings.aggregate_client_name);
 
     let mut services = plan
@@ -167,7 +175,7 @@ pub(crate) fn generate(
 /// e.g. `crate::codegen::catalogs::CatalogServiceClient`.
 fn low_level_client_path(service: &ServiceHandler<'_>) -> TokenStream {
     let module = format_ident!("{}", service.plan.base_path);
-    let client = service.low_level_client_type();
+    let client = service.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     quote! { crate::codegen::#module::#client }
 }
 
@@ -216,7 +224,8 @@ fn service_methods(service: &ServiceHandler<'_>) -> Vec<TokenStream> {
     let mode = service.binding_mode();
 
     let mut methods = Vec::new();
-    for method in service.methods() {
+    // The aggregate is REST-only, so it surfaces only routed methods.
+    for method in service.rest_methods() {
         match mode {
             // Scoped services contribute only collection-style methods (list/create/factory);
             // their instance methods live on the generated scoped client.

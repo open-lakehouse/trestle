@@ -81,6 +81,8 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
         resource_store_crate_name: "olai_store".into(),
         runtime,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+        client_protocols: olai_codegen::ClientProtocols::default(),
+        connect_client_path: None,
         output: CodeGenOutput {
             common,
             models: Some(models),

@@ -174,6 +174,17 @@ pub enum Transport {
     Wasm,
 }
 
+/// Wire protocol a generated Rust client speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientProtocol {
+    /// HTTP/JSON, routed from `google.api.http` annotations (default).
+    #[default]
+    Rest,
+    /// ConnectRPC, layered over the connect-rust generated service client.
+    Connect,
+}
+
 /// Rust client config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -181,12 +192,25 @@ pub struct RustClient {
     /// Client crate `src` root. The generated client lands in the `codegen/`
     /// subdirectory beneath it.
     pub output: String,
-    /// HTTP transport selector. Ignored if `transport_type_path` is set.
+    /// HTTP transport selector. Ignored if `transport_type_path` is set, or when
+    /// `protocols` is `connect`-only (Connect dispatch owns its own transport).
     #[serde(default)]
     pub transport: Transport,
     /// Fully-qualified custom transport type path; overrides `transport`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport_type_path: Option<String>,
+    /// Which wire protocol layer(s) the generated client speaks. Defaults to `["rest"]`. List both
+    /// (`["rest", "connect"]`) to emit a REST client and a ConnectRPC client side by side.
+    #[serde(default = "default_protocols")]
+    pub protocols: Vec<ClientProtocol>,
+    /// Import path of the connect-rust generated client module (e.g.
+    /// `"my_proto::connect_gen::my::pkg::v1"`). Required when `protocols` includes `connect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_client_path: Option<String>,
+}
+
+fn default_protocols() -> Vec<ClientProtocol> {
+    vec![ClientProtocol::Rest]
 }
 
 /// Python (PyO3) client config.

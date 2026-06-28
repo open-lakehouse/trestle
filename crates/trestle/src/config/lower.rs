@@ -119,7 +119,33 @@ impl GenerateConfig {
                 .unwrap_or_else(|| "olai_store".to_string()),
             runtime: self.proto_lib.to_runtime(),
             transport_type_path,
+            client_protocols: self.client_protocols(),
+            connect_client_path: self
+                .clients
+                .rust
+                .as_ref()
+                .and_then(|r| r.connect_client_path.clone()),
         })
+    }
+
+    /// Which client protocol layer(s) to emit for the generated Rust client.
+    ///
+    /// Maps the TOML `clients.rust.protocols` selection (defaulting to REST only) to the codegen
+    /// [`ClientProtocols`](olai_codegen::ClientProtocols) set.
+    fn client_protocols(&self) -> olai_codegen::ClientProtocols {
+        match self.clients.rust.as_ref() {
+            Some(rust) => olai_codegen::ClientProtocols {
+                rest: rust
+                    .protocols
+                    .iter()
+                    .any(|p| matches!(p, crate::config::ClientProtocol::Rest)),
+                connect: rust
+                    .protocols
+                    .iter()
+                    .any(|p| matches!(p, crate::config::ClientProtocol::Connect)),
+            },
+            None => olai_codegen::ClientProtocols::default(),
+        }
     }
 
     /// The HTTP transport path for generated Rust clients. An explicit

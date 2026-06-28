@@ -8,7 +8,11 @@ pub enum UrlSegment {
 }
 
 /// Parsed representation of an HTTP rule pattern
-#[derive(Debug, Clone)]
+///
+/// The [`Default`] is an empty pattern (no template, no segments). It exists for client protocols
+/// that carry no HTTP routing (e.g. ConnectRPC), where a `MethodPlan` still needs an `http_pattern`
+/// field but the REST emitters that read it are never invoked.
+#[derive(Debug, Clone, Default)]
 pub struct HttpPattern {
     /// The original template string
     pub template: String,

@@ -517,8 +517,8 @@ fn emit_project_config(
     out_dir: &std::path::Path,
 ) -> Result<()> {
     use crate::config::{
-        Bindings, Clients, GenerateConfig, Models, NodeClient, ProjectMeta, ProtoLib, RustClient,
-        Server, Servers, Transport, TrestleConfig, WasmBindings,
+        Bindings, ClientProtocol, Clients, GenerateConfig, Models, NodeClient, ProjectMeta,
+        ProtoLib, RustClient, Server, Servers, Transport, TrestleConfig, WasmBindings,
     };
 
     let bool_var = |key: &str| {
@@ -569,6 +569,8 @@ fn emit_project_config(
                     output: "crates/client/src".to_string(),
                     transport: Transport::Cloud,
                     transport_type_path: None,
+                    protocols: vec![ClientProtocol::Rest],
+                    connect_client_path: None,
                 }),
                 python: None,
                 node,

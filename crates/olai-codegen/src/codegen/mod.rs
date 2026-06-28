@@ -42,6 +42,7 @@ mod bindings;
 mod builder;
 mod client;
 mod config;
+mod connect_client;
 mod handler;
 pub(crate) mod node;
 mod python;
@@ -52,7 +53,8 @@ mod tokens;
 mod wasm;
 
 pub use config::{
-    BindingsConfig, CodeGenConfig, CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, ModelsPath, Runtime,
+    BindingsConfig, ClientProtocol, ClientProtocols, CodeGenConfig, CodeGenOutput,
+    DEFAULT_TRANSPORT_TYPE_PATH, ModelsPath, Runtime,
 };
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 
@@ -180,6 +182,14 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
         && config.bindings.is_none()
     {
         return Err(Error::MissingBindingsConfig);
+    }
+
+    // The Connect client emitter needs the connect-rust client's import path.
+    if config.client_protocols.connect
+        && config.output.client.is_some()
+        && config.connect_client_path.is_none()
+    {
+        return Err(Error::MissingConnectClientPath);
     }
 
     let plan = analyze_metadata(metadata)?;
@@ -490,6 +500,8 @@ fn generate_client_code(
     config: &CodeGenConfig,
 ) -> Result<GeneratedCode> {
     let mut files = HashMap::new();
+    let protocols = config.client_protocols.selected();
+    let multi = config.client_protocols.is_multi();
 
     for service in &plan.services {
         let handler = ServiceHandler {
@@ -497,25 +509,56 @@ fn generate_client_code(
             metadata,
             config,
         };
-        let client_code = client::generate(&handler)?;
-        files.insert(format!("{}/client.rs", service.base_path), client_code);
-        let builder_code = builder::generate(&handler)?;
-        files.insert(format!("{}/builders.rs", service.base_path), builder_code);
 
-        // Ergonomic resource-scoped client, when enabled and the service manages a resource.
-        // `plan` is passed so the emitter can resolve child services for navigation/create accessors.
-        let has_resource_client = if config.output.generate_resource_clients {
-            resource_client::generate(&handler, plan)?
-                .map(|code| {
-                    files.insert(format!("{}/resource.rs", service.base_path), code);
-                })
-                .is_some()
-        } else {
-            false
-        };
+        // Emit each selected protocol's low-level client + builders. With a single protocol the
+        // files are flat under `<service>/`; with both they go under `<service>/<protocol>/` to
+        // avoid the two `client.rs`/`builders.rs` colliding. The shared builder layer binds to the
+        // protocol's low-level client and only calls `client.<method>(&request)`.
+        let mut emitted_resource_client = false;
+        for &protocol in &protocols {
+            let prefix = if multi {
+                format!("{}/{}", service.base_path, protocol.subdir())
+            } else {
+                service.base_path.clone()
+            };
 
-        let module_code = generate_client_module(has_resource_client);
-        files.insert(format!("{}/mod.rs", service.base_path), module_code);
+            let client_code = match protocol {
+                ClientProtocol::Rest => client::generate(&handler)?,
+                ClientProtocol::Connect => connect_client::generate(&handler)?,
+            };
+            files.insert(format!("{prefix}/client.rs"), client_code);
+            files.insert(
+                format!("{prefix}/builders.rs"),
+                builder::generate(&handler, protocol)?,
+            );
+
+            // Ergonomic resource-scoped clients are a REST-only feature (driven by
+            // `google.api.resource` hierarchies). ConnectRPC-only protos rarely carry those, so the
+            // Connect client emits just the flat per-service client + builders.
+            let has_resource_client = protocol == ClientProtocol::Rest
+                && config.output.generate_resource_clients
+                && resource_client::generate(&handler, plan)?
+                    .map(|code| {
+                        files.insert(format!("{prefix}/resource.rs"), code);
+                    })
+                    .is_some();
+
+            files.insert(
+                format!("{prefix}/mod.rs"),
+                generate_client_module(has_resource_client),
+            );
+            emitted_resource_client |= has_resource_client;
+        }
+
+        // When both protocols are emitted under subdirs, the `<service>/mod.rs` mounts and re-exports
+        // them. (Single-protocol output already wrote a flat `<service>/mod.rs` above.)
+        if multi {
+            files.insert(
+                format!("{}/mod.rs", service.base_path),
+                generate_protocol_split_module(&protocols),
+            );
+        }
+        let _ = emitted_resource_client;
     }
 
     // Top-level aggregate root client (e.g. `UnityCatalogClient`), emitted only when a bindings
@@ -611,6 +654,26 @@ fn generate_client_module(has_resource_client: bool) -> String {
         pub mod builders;
     };
     format_tokens_static(tokens)
+}
+
+/// The `<service>/mod.rs` for a service that emits **both** protocols: mount each protocol's client
+/// as its own submodule (`pub mod rest;` / `pub mod connect;`).
+///
+/// They are *not* glob-re-exported into the service module: both protocols define identically-named
+/// types (`GetThingBuilder`, …), so a flat re-export would collide. Callers disambiguate by module
+/// (`read::rest::GetThingBuilder` vs `read::connect::GetThingBuilder`).
+fn generate_protocol_split_module(protocols: &[ClientProtocol]) -> String {
+    let allow = quote! {
+        #[allow(dead_code, clippy::too_many_arguments, clippy::doc_lazy_continuation)]
+    };
+    let mods: Vec<TokenStream> = protocols
+        .iter()
+        .map(|p| {
+            let m = format_ident!("{}", p.subdir());
+            quote! { #allow pub mod #m; }
+        })
+        .collect();
+    format_tokens_static(quote! { #(#mods)* })
 }
 
 pub fn main_module(services: &[ServicePlan]) -> String {
@@ -1011,6 +1074,13 @@ impl ServiceHandler<'_> {
         })
     }
 
+    /// The methods that have a `google.api.http` route — the ones the REST emitters (client,
+    /// handler, server, aggregate) can generate. Routeless methods (no HTTP annotation) are emitted
+    /// only by the ConnectRPC client, which iterates [`Self::methods`] directly.
+    pub(crate) fn rest_methods(&self) -> impl Iterator<Item = MethodHandler<'_>> {
+        self.methods().filter(|m| m.plan.has_http_route)
+    }
+
     /// The ergonomic, public-facing client type for this service.
     ///
     /// For a resource-scoped service this is the **scoped resource client** (e.g. `CatalogClient`,
@@ -1041,7 +1111,16 @@ impl ServiceHandler<'_> {
     /// distinct from the ergonomic scoped [`Self::client_type`] (`CatalogClient`). For a
     /// resource-less service there is no scoped client, so the low-level client *is* the
     /// [`Self::client_type`] (e.g. `TagAssignmentClient`).
-    pub(crate) fn low_level_client_type(&self) -> Ident {
+    pub(crate) fn low_level_client_type(&self, protocol: crate::codegen::ClientProtocol) -> Ident {
+        // ConnectRPC: a single adapter type per service, named deterministically from the proto
+        // service so it never collides with (nor is confused for) the connect-rust `{Service}Client`
+        // it wraps. Connect has no scoped resource client, so this is always the low-level type.
+        if protocol == crate::codegen::ClientProtocol::Connect {
+            return format_ident!(
+                "{}ConnectClient",
+                self.plan.service_name.to_case(Case::Pascal)
+            );
+        }
         if let Some(resource) = self.resource() {
             format_ident!(
                 "{}ServiceClient",
@@ -1050,6 +1129,29 @@ impl ServiceHandler<'_> {
         } else {
             self.client_type()
         }
+    }
+
+    /// The connect-rust generated client type for this service, as a fully-qualified path.
+    ///
+    /// Resolves to `<connect_client_path>::<ServiceName>Client` (e.g.
+    /// `headwaters_proto::connect_gen::headwaters::read::v1::ReadServiceClient`). Used only in
+    /// [`ClientProtocol::Connect`](crate::codegen::ClientProtocol) mode; errors if
+    /// `connect_client_path` is unset.
+    pub(crate) fn connect_inner_client_path(&self) -> crate::Result<syn::Path> {
+        let base = self.config.connect_client_path.as_deref().ok_or_else(|| {
+            crate::Error::Build(
+                "client_protocol = Connect requires `connect_client_path` to be set".to_string(),
+            )
+        })?;
+        let full = format!(
+            "{base}::{}Client",
+            self.plan.service_name.to_case(Case::Pascal)
+        );
+        syn::parse_str(&full).map_err(|source| crate::error::Error::InvalidRustPath {
+            path: full.clone(),
+            message: "connect_client_path + service client name".to_string(),
+            source,
+        })
     }
 
     /// The ergonomic scoped resource client type, or `None` for a resource-less service.

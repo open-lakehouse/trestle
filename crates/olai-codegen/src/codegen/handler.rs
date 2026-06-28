@@ -23,7 +23,9 @@ use crate::codegen::{MethodHandler, ServiceHandler};
 pub(super) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     let context_ident = last_segment(&service.config.context_type_path);
     let mut trait_methods = Vec::new();
-    for method in service.methods() {
+    // The handler trait backs the Axum (REST) server, so it covers only routed methods. Routeless
+    // (ConnectRPC-only) methods get no REST handler; a ConnectRPC server facade is a follow-up.
+    for method in service.rest_methods() {
         let method_code = handler_trait_method(&method, &context_ident);
         trait_methods.push(method_code);
     }
