@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.3...olai-codegen-v0.0.4) - 2026-06-28
+
+### Added
+
+- real #[pyclass] wrapper models for Python (#43)
+- support buffa + Python via generated PyO3 model conversions (#42)
+- injectable auth-header hook for the WASM client (with_auth / with_credentials) (#41)
+- browser WASM client — the frontend consumes the generated client (#37)
+- golden-path example — REST + buf ConnectRPC on one port, with the generator/template fixes to get there (#29)
+
+### Changed
+
+- structured config + co-located codegen path reconciliation (#45)
+
+### Documentation
+
+- scaffold testle skill (#31)
+
+### Fixed
+
+- correct PyO3 prost boxing + buffa-runtime lint cleanups (#44)
+- handle proto package versions (#39)
+- *(codegen)* allow empty docs in generated tonic code (#36)
+- eliminate clippy warnings in generated code (#35)
+- annotate example Catalog.name as IDENTIFIER (#33)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.2...olai-codegen-v0.0.3) - 2026-06-23
 
 ### Documentation
