@@ -65,6 +65,10 @@ changelog_path = "crates/olai-http-wasm/CHANGELOG.md"
 name = "olai-trestle"
 changelog_path = "crates/trestle/CHANGELOG.md"
 
+[[package]]
+name = "olai-stack-topology"
+changelog_path = "crates/stack-topology/CHANGELOG.md"
+
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
 # Because commits use crate scopes (feat(olai-codegen): ...), each crate's
@@ -89,5 +93,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|olai-stack-topology)\)', replace = "" },
 ]
