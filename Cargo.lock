@@ -1569,6 +1569,7 @@ name = "olai-stack-topology"
 version = "0.0.1"
 dependencies = [
  "serde",
+ "serde_yaml",
  "thiserror 2.0.18",
  "url",
 ]

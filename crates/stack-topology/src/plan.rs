@@ -12,8 +12,9 @@
 //! [`ServiceSpec`](crate::ServiceSpec): an endpoint with an assigned route resolves
 //! through the gateway under the assigned prefix; an endpoint with none resolves
 //! directly. The plan is also what the render step reads to wire a UI's chosen
-//! `base_path` back into its fragment (via the endpoint's
-//! [`PrefixKnob`](crate::PrefixKnob)).
+//! [`base_path`](AssignedRoute::base_path) back into its fragment — *how* the
+//! service consumes it (a `--static-prefix` flag, an env var, a line in a mounted
+//! config file) is the template's concern, not this model's.
 
 use std::collections::BTreeMap;
 
@@ -58,9 +59,10 @@ pub struct AssignedRoute {
     #[serde(default)]
     pub listener: Listener,
     /// For a [`UiPrefixable`](crate::RouteIntent::UiPrefixable) endpoint, the base
-    /// path the planner chose and that must be fed back into the service (via its
-    /// [`PrefixKnob`](crate::PrefixKnob)) so its self-referential links resolve.
-    /// Normally equals `prefix`. `None` for APIs and fixed-path UIs.
+    /// path the planner chose and that must be fed back into the service (however
+    /// the template wires it — a flag, an env var, a mounted config line) so its
+    /// self-referential links resolve. Normally equals `prefix`. `None` for APIs
+    /// and fixed-path UIs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_path: Option<String>,
 }

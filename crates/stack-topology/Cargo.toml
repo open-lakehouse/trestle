@@ -12,8 +12,15 @@ homepage.workspace = true
 # the codegen crates, not this pure topology/addressing model.
 keywords = ["lakehouse", "topology", "docker-compose", "service-discovery"]
 
+[features]
+# Off by default: keeps the pure core free of YAML parsing. Enables building a
+# catalog from on-disk `module.yaml` manifests (`Catalog::from_manifests`).
+default = []
+catalog = ["dep:serde_yaml"]
+
 [dependencies]
 # workspace dependencies (in alphabetical order)
 serde = { workspace = true }
+serde_yaml = { workspace = true, optional = true }
 thiserror = { workspace = true }
 url = { workspace = true }
