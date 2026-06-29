@@ -1,18 +1,15 @@
 # MLflow tracking server
 #
-# This fragment is a `RenderSpec::Template`, so it is rendered with MiniJinja against the
-# plan-time `RenderCtx`. It reads three kinds of value:
+# This fragment is a `RenderSpec::Template`, rendered with MiniJinja against the plan-time
+# `RenderCtx`. Everything it needs is already in that context, so the fragment is rendered
+# whole — no compose `${VAR}` substitution layered on top. It reads:
 #
-#   * MiniJinja `env.X` refs — plan-time, render-only values the planner injected that never
-#     reach `.env`, e.g. `BASE_PATH` (the gateway base path chosen for MLflow's prefixable
-#     UI). These must be MiniJinja refs, not compose `${VAR}`, since compose could not
-#     resolve a var absent from `.env`.
-#   * MiniJinja typed objects — `dependencies` (the `depends_on` gates, each chosen
-#     provider's service + condition) and `connections.object_store.0` (the object-store
-#     connection the fragment branches on by credential flavour).
-#   * `${X}` — run-time compose substitutions resolved from `.env` (the bound connection
-#     coordinates: `MLFLOW_BACKEND_STORE_URI`, `MLFLOW_ARTIFACTS_DESTINATION`,
-#     `MLFLOW_S3_ENDPOINT_URL`).
+#   * `connections.<role>.0` — the typed connections the planner resolved for MLflow's
+#     demands: `relational_db` (the backend-store URL) and `object_store` (the artifact
+#     store's `uri`/`endpoint`, plus the credential the fragment branches on by flavour).
+#   * `env.X` — plan-time, render-only values, e.g. `BASE_PATH` (the gateway base path
+#     chosen for MLflow's prefixable UI).
+{%- set db = connections.relational_db.0 %}
 {%- set obj = connections.object_store.0 %}
 services:
   mlflow:
@@ -28,9 +25,9 @@ services:
       - "mlflow"
       - "server"
       - "--backend-store-uri"
-      - "${MLFLOW_BACKEND_STORE_URI}"
+      - "{{ db.url }}"
       - "--artifacts-destination"
-      - "${MLFLOW_ARTIFACTS_DESTINATION}"
+      - "{{ obj.uri }}"
       - "--serve-artifacts"
       - "--host"
       - "0.0.0.0"
@@ -40,7 +37,7 @@ services:
       - "{{ env.BASE_PATH }}"
     environment:
 {%- if obj.credential.flavour == "s3" %}
-      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+      MLFLOW_S3_ENDPOINT_URL: {{ obj.endpoint }}
       AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
       AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
       AWS_DEFAULT_REGION: {{ obj.credential.region }}
