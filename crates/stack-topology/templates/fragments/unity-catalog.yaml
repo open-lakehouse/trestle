@@ -4,6 +4,13 @@
 # (`unitycatalog/unitycatalog`). To swap in the Rust implementation while it
 # remains pre-release, set `UC_IMAGE=unitycatalog-rs:dev` in `.env.local` and
 # adjust the `command:` to `["server", "--rest", "--use-db"]`.
+#
+# This fragment is a `RenderSpec::Template`: it branches on the chosen object-store
+# credential flavour. `connections.object_store.0` is the typed connection the planner
+# resolved for UC's object_store demand — S3 vends static keys + a `seaweedfs-init`
+# dependency, Azure vends a connection string + an `azurite-init` dependency. The
+# role-generic `UC_DATABASE_URL`/`S3_ENDPOINT`/`UC_IMAGE` stay as compose `${VAR}` refs.
+{%- set obj = connections.object_store.0 %}
 services:
   unitycatalog:
     image: ${UC_IMAGE:-unitycatalog/unitycatalog:latest}
@@ -12,18 +19,27 @@ services:
     depends_on:
       db:
         condition: service_healthy
+{%- if obj.credential.flavour == "s3" %}
       seaweedfs-init:
         condition: service_completed_successfully
+{%- else %}
+      azurite-init:
+        condition: service_completed_successfully
+{%- endif %}
     environment:
       # DATABASE_URL and S3_ENDPOINT are injected coordinates (the chosen relational_db `url`
-      # and object_store `endpoint`), so UC follows whichever providers were chosen. The AWS_*
-      # credentials come from the chosen S3 provider's env contribution, read with `:-`
-      # fallbacks.
+      # and object_store `endpoint`), so UC follows whichever providers were chosen.
       DATABASE_URL: ${UC_DATABASE_URL}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
-      AWS_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
       S3_ENDPOINT: ${S3_ENDPOINT}
+{%- if obj.credential.flavour == "s3" %}
+      # S3 credentials come straight from the typed S3 credential the planner resolved — no
+      # `${AWS_*:-}` fallback, and absent entirely under an Azure provider.
+      AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
+      AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
+      AWS_REGION: {{ obj.credential.region }}
+{%- else %}
+      AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
+{%- endif %}
     expose:
       - "8080"
     healthcheck:

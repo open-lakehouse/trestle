@@ -114,6 +114,16 @@ fn fragment(text: &str) -> RenderSpec {
     }
 }
 
+/// Helper: a `RenderSpec::Template` (MiniJinja) carrying just a compose fragment. Used by a
+/// module whose fragment must branch on a resolved [`Connection`](crate::Connection) — e.g.
+/// the chosen object-store credential flavour — which flat `${VAR}` substitution cannot do.
+fn template(text: &str) -> RenderSpec {
+    RenderSpec::Template {
+        fragment: text.to_string(),
+        files: vec![],
+    }
+}
+
 /// `local-stack-envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
 /// `TopologyCtx`, not as a routed endpoint. Its rendered Envoy bootstrap config is a
@@ -521,7 +531,7 @@ fn unity_catalog() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/unity-catalog.yaml")),
+        render: template(include_str!("../../templates/fragments/unity-catalog.yaml")),
     }
 }
 

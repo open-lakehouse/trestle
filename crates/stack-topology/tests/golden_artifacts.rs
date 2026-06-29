@@ -252,6 +252,81 @@ fn compose_includes_the_same_fragments() {
 }
 
 #[test]
+fn unity_catalog_template_branches_on_the_object_store_credential() {
+    use olai_stack_topology::ModuleId;
+
+    // UC's fragment is a `RenderSpec::Template`: it branches on the chosen object-store
+    // credential flavour, so the rendered compose differs between an S3 and an Azure backend.
+    // Select UC + its hard `requires` only, letting the object_store demand resolve via the
+    // catalog default / `ctx` preference (so the chosen provider is unambiguous).
+    let uc_fragment = |ctx: PlanCtx| -> String {
+        let sel = Selection::modules(["local-stack-unity-catalog"]);
+        let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
+        let (_, out) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("local-stack-unity-catalog"))
+            .expect("UC is in the render set");
+        // Valid YAML in either branch.
+        let _: Value =
+            serde_yaml::from_str(&out.fragment).expect("rendered UC fragment must be valid YAML");
+        out.fragment.clone()
+    };
+
+    // Default → SeaweedFS (S3): static AWS keys from the typed credential, a `seaweedfs-init`
+    // dependency, and no `${AWS_*:-}` fallback hack or Azure connection string.
+    let s3 = uc_fragment(PlanCtx::default());
+    assert!(s3.contains("seaweedfs-init:"), "S3 init dependency: {s3}");
+    assert!(s3.contains("AWS_ACCESS_KEY_ID: seaweedfs"), "S3 keys: {s3}");
+    assert!(
+        !s3.contains("${AWS_ACCESS_KEY_ID:-"),
+        "no fallback hack: {s3}"
+    );
+    assert!(
+        !s3.contains("AZURE_STORAGE_CONNECTION_STRING"),
+        "no Azure leak: {s3}"
+    );
+
+    // Azurite-preferred → the Azure branch: a connection string, an `azurite-init`
+    // dependency, and no AWS keys.
+    let mut preference = BTreeMap::new();
+    preference.insert(
+        "object_store".to_string(),
+        vec![
+            ModuleId::from("local-stack-azurite"),
+            ModuleId::from("local-stack-seaweedfs"),
+        ],
+    );
+    let azure = uc_fragment(PlanCtx {
+        provider_preference: preference,
+        ..Default::default()
+    });
+    // Assert on the rendered compose body, not the header comment (which names both inits).
+    let azure_yaml: Value = serde_yaml::from_str(&azure).expect("valid YAML");
+    let uc = &azure_yaml["services"]["unitycatalog"];
+    assert!(
+        !uc["depends_on"]["azurite-init"].is_null(),
+        "Azure init dependency: {azure}"
+    );
+    assert!(
+        uc["depends_on"]["seaweedfs-init"].is_null(),
+        "no S3 init under Azure: {azure}"
+    );
+    let env = &uc["environment"];
+    assert_eq!(
+        env["AZURE_STORAGE_CONNECTION_STRING"]
+            .as_str()
+            .map(|s| s.starts_with("DefaultEndpointsProtocol=")),
+        Some(true),
+        "Azure connection string from the typed credential: {azure}"
+    );
+    assert!(
+        env["AWS_ACCESS_KEY_ID"].is_null(),
+        "no AWS keys under Azure: {azure}"
+    );
+}
+
+#[test]
 fn adding_trino_and_jaeger_aggregates_their_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
     let sel = Selection::modules([
