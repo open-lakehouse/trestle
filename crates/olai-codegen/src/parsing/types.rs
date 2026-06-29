@@ -112,7 +112,7 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
             ) {
                 "i32".to_string()
             } else {
-                convert_protobuf_enum_to_rust_type(&format!("TYPE_ENUM:{}", name))
+                convert_protobuf_enum_to_rust_type(&format!("TYPE_ENUM:{name}"))
             }
         }
         BaseType::OneOf(name) => extract_simple_type_name(name),
@@ -122,7 +122,7 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
             } else {
                 let key_str = unified_to_rust(key_type, context);
                 let value_str = unified_to_rust(value_type, context);
-                format!("HashMap<{}, {}>", key_str, value_str)
+                format!("HashMap<{key_str}, {value_str}>")
             }
         }
     };
@@ -131,11 +131,11 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
 
     // In builder methods we require the inner type only.
     if unified_type.is_repeated && !matches!(context, RenderContext::BuilderMethod) {
-        result = format!("Vec<{}>", result);
+        result = format!("Vec<{result}>");
     }
 
     if should_wrap_in_option(context, unified_type) {
-        result = format!("Option<{}>", result);
+        result = format!("Option<{result}>");
     }
 
     result
@@ -235,18 +235,18 @@ pub fn unified_to_python_type(unified_type: &UnifiedType) -> String {
         BaseType::Map(key_type, value_type) => {
             let key_str = unified_to_python_type(key_type);
             let value_str = unified_to_python_type(value_type);
-            format!("Dict[{}, {}]", key_str, value_str)
+            format!("Dict[{key_str}, {value_str}]")
         }
     };
 
     let mut result = base_type_str;
 
     if unified_type.is_repeated {
-        result = format!("List[{}]", result);
+        result = format!("List[{result}]");
     }
 
     if unified_type.is_optional {
-        result = format!("Optional[{}]", result);
+        result = format!("Optional[{result}]");
     }
 
     result
@@ -267,26 +267,26 @@ pub fn unified_to_napi(unified_type: &UnifiedType) -> String {
         BaseType::Bytes => "Vec<u8>".to_string(),
         BaseType::Unit => "()".to_string(),
         BaseType::Message(name) => extract_simple_type_name(name),
-        BaseType::Enum(name) => convert_protobuf_enum_to_rust_type(&format!("TYPE_ENUM:{}", name)),
+        BaseType::Enum(name) => convert_protobuf_enum_to_rust_type(&format!("TYPE_ENUM:{name}")),
         BaseType::OneOf(name) => extract_simple_type_name(name),
         BaseType::Map(key_type, value_type) => {
             let key_str = unified_to_napi(key_type);
             let value_str = unified_to_napi(value_type);
-            format!("HashMap<{}, {}>", key_str, value_str)
+            format!("HashMap<{key_str}, {value_str}>")
         }
     };
 
     let mut result = base_type_str;
 
     if unified_type.is_repeated {
-        result = format!("Vec<{}>", result);
+        result = format!("Vec<{result}>");
     }
 
     if unified_type.is_optional
         || matches!(unified_type.base_type, BaseType::Map(_, _))
         || unified_type.is_repeated
     {
-        result = format!("Option<{}>", result);
+        result = format!("Option<{result}>");
     }
 
     result
@@ -309,18 +309,18 @@ pub fn unified_to_typescript(unified_type: &UnifiedType) -> String {
         BaseType::Map(key_type, value_type) => {
             let key_str = unified_to_typescript(key_type);
             let value_str = unified_to_typescript(value_type);
-            format!("Record<{}, {}>", key_str, value_str)
+            format!("Record<{key_str}, {value_str}>")
         }
     };
 
     let mut result = base_type_str;
 
     if unified_type.is_repeated {
-        result = format!("{}[]", result);
+        result = format!("{result}[]");
     }
 
     if unified_type.is_optional {
-        result = format!("{} | undefined", result);
+        result = format!("{result} | undefined");
     }
 
     result
@@ -422,7 +422,7 @@ pub(crate) fn convert_protobuf_enum_to_rust_type(proto_type: &str) -> String {
                         enum_simple_name.to_string()
                     };
 
-                    format!("{}::{}", snake_case_module, enum_rust_name)
+                    format!("{snake_case_module}::{enum_rust_name}")
                 } else {
                     // This is a package-level enum - just use the simple name
                     convert_enum_name_to_rust(enum_simple_name)

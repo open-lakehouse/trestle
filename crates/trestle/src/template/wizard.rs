@@ -220,7 +220,7 @@ fn ask_category(
     let eligible = catalog.components_for_category(&cat.id);
     if eligible.is_empty() {
         // Nothing to pick. Still print the category for clarity.
-        cliclack::log::info(format!("  {} → (no components available)", prompt)).map_err(io_err)?;
+        cliclack::log::info(format!("  {prompt} → (no components available)")).map_err(io_err)?;
         return Ok(Vec::new());
     }
 

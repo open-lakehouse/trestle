@@ -33,7 +33,7 @@ pub(super) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     let trait_code = handler_trait(service, &service.plan.handler_name, &trait_methods)?;
     let module_header = generate_module_header(service);
 
-    Ok(format!("{}{}", module_header, trait_code))
+    Ok(format!("{module_header}{trait_code}"))
 }
 
 /// Extract the final path segment as an `Ident`.
@@ -66,7 +66,7 @@ fn generate_module_header(service: &ServiceHandler<'_>) -> String {
             if line.is_empty() {
                 lines.push("//!".to_string());
             } else {
-                lines.push(format!("//! {}", line));
+                lines.push(format!("//! {line}"));
             }
         }
     }

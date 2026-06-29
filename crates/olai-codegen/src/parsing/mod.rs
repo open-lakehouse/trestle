@@ -135,7 +135,7 @@ pub fn process_file_descriptor(
         let type_prefix = if package_name.is_empty() {
             String::new()
         } else {
-            format!(".{}", package_name)
+            format!(".{package_name}")
         };
         enum_parser::process_enum(
             enum_desc,
@@ -152,7 +152,7 @@ pub fn process_file_descriptor(
         let type_prefix = if package_name.is_empty() {
             String::new()
         } else {
-            format!(".{}", package_name)
+            format!(".{package_name}")
         };
 
         message::process_message(

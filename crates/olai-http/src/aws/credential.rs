@@ -1119,7 +1119,7 @@ mod tests {
         let retry = RetryConfig::default();
 
         let provider = TaskCredentialProvider {
-            url: format!("{}/v2/credentials/test", endpoint),
+            url: format!("{endpoint}/v2/credentials/test"),
             auth_token_file: None,
             retry: retry.clone(),
             client: client.clone(),
@@ -1160,7 +1160,7 @@ mod tests {
         let retry = RetryConfig::default();
 
         let provider = TaskCredentialProvider {
-            url: format!("{}/v2/credentials/eks", endpoint),
+            url: format!("{endpoint}/v2/credentials/eks"),
             auth_token_file: Some(auth_file.path().to_str().unwrap().to_owned()),
             retry: retry.clone(),
             client: client.clone(),
@@ -1212,7 +1212,7 @@ mod tests {
         let provider = AssumeRoleProvider {
             role_arn: "arn:aws:iam::123456789012:role/AssumedRole".into(),
             session_name: "test-assume-session".into(),
-            endpoint: format!("{}/", sts_endpoint),
+            endpoint: format!("{sts_endpoint}/"),
             base_credentials: base_provider,
             region: "us-east-1".into(),
             policy: None,

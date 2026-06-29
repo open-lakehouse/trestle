@@ -709,7 +709,7 @@ async fn send_record(builder: CloudRequestBuilder) -> Result<reqwest::Response> 
         .as_ref()
         .map(|r| r.counter.fetch_add(1, Ordering::SeqCst))
         .unwrap_or(0);
-    let file_path = out_dir.join(format!("{:04}.json", counter));
+    let file_path = out_dir.join(format!("{counter:04}.json"));
     if let Err(e) = std::fs::File::create(&file_path)
         .and_then(|f| serde_json::to_writer_pretty(f, &recording).map_err(Into::into))
     {

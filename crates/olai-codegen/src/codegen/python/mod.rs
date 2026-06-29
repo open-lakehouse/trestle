@@ -31,7 +31,7 @@ pub(super) fn resource_pattern_params(pattern: &str) -> Vec<String> {
         .filter(|seg| seg.starts_with('{') && seg.ends_with('}'))
         .map(|seg| {
             let inner = &seg[1..seg.len() - 1];
-            format!("{}_name", inner)
+            format!("{inner}_name")
         })
         .collect();
 
@@ -75,7 +75,7 @@ fn sanitize_python_field_name(field_name: &str) -> String {
         | "try" | "except" | "finally" | "with" | "as" | "import" | "from" | "pass" | "break"
         | "continue" | "return" | "yield" | "raise" | "assert" | "del" | "global" | "nonlocal"
         | "lambda" | "None" | "True" | "False" | "async" | "await" => {
-            format!("{}_", field_name)
+            format!("{field_name}_")
         }
         _ => field_name.to_string(),
     }

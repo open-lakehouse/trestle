@@ -593,7 +593,7 @@ mod tests {
         do_request().await.unwrap();
 
         // Test sensitive URL handling
-        let sensitive_url = format!("{}/SENSITIVE", server_url);
+        let sensitive_url = format!("{server_url}/SENSITIVE");
         let _sensitive_mock = server
             .mock("GET", "/SENSITIVE")
             .with_status(502)

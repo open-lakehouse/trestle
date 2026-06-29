@@ -35,13 +35,13 @@ pub fn run(
             ))
         })?;
         let fds = protobuf::descriptor::FileDescriptorSet::parse_from_bytes(&bytes)
-            .map_err(|e| crate::Error::Build(format!("Failed to parse descriptors: {}", e)))?;
+            .map_err(|e| crate::Error::Build(format!("Failed to parse descriptors: {e}")))?;
         let metadata = parse_file_descriptor_set(&fds)?;
         dedup_path_params(&mut doc, &metadata);
     }
 
     let out = serde_yaml::to_string(&doc)
-        .map_err(|e| crate::Error::Build(format!("Failed to serialize YAML: {}", e)))?;
+        .map_err(|e| crate::Error::Build(format!("Failed to serialize YAML: {e}")))?;
     fs::write(spec, out)
         .map_err(|e| crate::Error::Build(format!("Failed to write {}: {}", spec.display(), e)))?;
 
@@ -95,7 +95,7 @@ fn enrich_from_jsonschema(
         .into_owned();
 
     let mut files: Vec<std::path::PathBuf> = glob(&pattern)
-        .map_err(|e| crate::Error::Build(format!("Glob pattern error: {}", e)))?
+        .map_err(|e| crate::Error::Build(format!("Glob pattern error: {e}")))?
         .filter_map(|r: Result<std::path::PathBuf, _>| r.ok())
         .collect();
     files.sort();

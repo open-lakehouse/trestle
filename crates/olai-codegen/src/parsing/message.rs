@@ -22,9 +22,9 @@ pub(super) fn process_message(
 ) -> Result<()> {
     let message_name = message.name();
     let full_type_name = if type_prefix.is_empty() {
-        format!(".{}", message_name)
+        format!(".{message_name}")
     } else {
-        format!("{}.{}", type_prefix, message_name)
+        format!("{type_prefix}.{message_name}")
     };
 
     // Pre-collect which nested messages are map entries so we can detect map fields
@@ -322,7 +322,7 @@ fn extract_resource_reference(field: &FieldDescriptorProto) -> Result<Option<Res
                 Err(e) => {
                     return Err(Error::InvalidAnnotation {
                         object: field.name().to_string(),
-                        message: format!("Failed to parse google.api.resource_reference: {}", e),
+                        message: format!("Failed to parse google.api.resource_reference: {e}"),
                     });
                 }
             }
@@ -408,7 +408,7 @@ fn extract_message_resource_option(
                 Err(e) => {
                     return Err(Error::InvalidAnnotation {
                         object: message.name().to_string(),
-                        message: format!("Failed to parse google.api.resource: {}", e),
+                        message: format!("Failed to parse google.api.resource: {e}"),
                     });
                 }
             }

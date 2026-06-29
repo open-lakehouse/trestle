@@ -49,7 +49,7 @@ pub mod strings {
         if let Some(base) = service_name.strip_suffix("Service") {
             format!("{}Handler", singularize(base))
         } else {
-            format!("{}Handler", service_name)
+            format!("{service_name}Handler")
         }
     }
 

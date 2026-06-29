@@ -920,7 +920,7 @@ fn type_rust_path(fq_name: &str, project_packages: &BTreeSet<&str>) -> Option<St
         .chain(std::iter::once((*leaf).to_string()))
         .collect::<Vec<_>>()
         .join("::");
-    Some(format!("super::{}::{}", module_path, type_path))
+    Some(format!("super::{module_path}::{type_path}"))
 }
 
 #[cfg(test)]

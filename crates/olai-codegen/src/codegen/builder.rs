@@ -26,7 +26,7 @@ fn field_doc_attr(doc: Option<&str>, field_name: &str) -> TokenStream {
         let doc_spaced = format!(" {}", doc.trim_start());
         quote! { #[doc = #doc_spaced] }
     } else {
-        let set_msg = format!(" Set {}", field_name);
+        let set_msg = format!(" Set {field_name}");
         quote! { #[doc = #set_msg] }
     }
 }
@@ -214,12 +214,12 @@ fn generate_request_builder(
         .unwrap_or(&method.plan.handler_function_name)
         .replace('_', " ");
     let builder_doc = match method.plan.request_type {
-        RequestType::List => format!(" Builder for listing {}", resource_name),
-        RequestType::Create => format!(" Builder for creating a {}", resource_name),
-        RequestType::Get => format!(" Builder for getting a {}", resource_name),
-        RequestType::Update => format!(" Builder for updating a {}", resource_name),
-        RequestType::Delete => format!(" Builder for deleting a {}", resource_name),
-        RequestType::Custom(_) => format!(" Builder for {}", resource_name),
+        RequestType::List => format!(" Builder for listing {resource_name}"),
+        RequestType::Create => format!(" Builder for creating a {resource_name}"),
+        RequestType::Get => format!(" Builder for getting a {resource_name}"),
+        RequestType::Update => format!(" Builder for updating a {resource_name}"),
+        RequestType::Delete => format!(" Builder for deleting a {resource_name}"),
+        RequestType::Custom(_) => format!(" Builder for {resource_name}"),
     };
 
     let into_stream_impl = if matches!(method.plan.request_type, RequestType::List) {
@@ -287,10 +287,7 @@ fn generate_constructor(
         }
     });
 
-    let obtain_doc = format!(
-        " Obtain via the corresponding method on `{}`.",
-        client_type_ident
-    );
+    let obtain_doc = format!(" Obtain via the corresponding method on `{client_type_ident}`.");
     let default_spread = if needs_default_spread {
         quote! { ..Default::default() }
     } else {

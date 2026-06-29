@@ -123,8 +123,7 @@ fn test_codegen_produces_no_unitycatalog_strings() {
         let lower = content.to_lowercase();
         assert!(
             !lower.contains("unitycatalog"),
-            "generated output contains 'unitycatalog': {:.200}",
-            content
+            "generated output contains 'unitycatalog': {content:.200}"
         );
         assert!(
             !lower.contains("pyunitycatalog"),

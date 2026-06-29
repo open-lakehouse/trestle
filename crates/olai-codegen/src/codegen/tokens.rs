@@ -26,7 +26,7 @@ pub(crate) fn doc_tokens(documentation: Option<&str>) -> TokenStream {
             if line.is_empty() {
                 quote! { #[doc = ""] }
             } else {
-                let spaced = format!(" {}", line);
+                let spaced = format!(" {line}");
                 quote! { #[doc = #spaced] }
             }
         })
