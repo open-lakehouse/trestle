@@ -263,14 +263,19 @@ impl RenderSpec {
     /// Produce the [`RenderOutput`] for this spec given the planner's render context.
     ///
     /// For [`Static`](RenderSpec::Static), `${VAR}` placeholders are substituted from the
-    /// context's [`env`](RenderCtx::env) (no templating engine). For
+    /// context's [`env`](RenderCtx::env) (no templating engine; cannot fail). For
     /// [`Template`](RenderSpec::Template), the source is rendered with MiniJinja against the
     /// full [`RenderCtx`] — so a fragment can branch on a demand's typed
     /// [`Connection`](crate::Connection) (e.g. `{% if c.credential.flavour == "s3" %}`),
     /// which flat `${VAR}` substitution cannot express.
-    pub fn render(&self, ctx: &RenderCtx<'_>) -> RenderOutput {
+    ///
+    /// Returns [`RenderError`] when a `Template` fails to compile or render — e.g. a
+    /// malformed fragment, or a reference to a field absent from the context (a module
+    /// authored as an on-disk `module.yaml` is external input, so this is a recoverable
+    /// error the planner surfaces, not a panic).
+    pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, RenderError> {
         match self {
-            RenderSpec::Static { fragment, files } => RenderOutput {
+            RenderSpec::Static { fragment, files } => Ok(RenderOutput {
                 fragment: substitute(fragment, ctx.env),
                 files: files
                     .iter()
@@ -279,20 +284,34 @@ impl RenderSpec {
                         contents: substitute(&f.contents, ctx.env),
                     })
                     .collect(),
-            },
-            RenderSpec::Template { fragment, files } => RenderOutput {
-                fragment: render_template(fragment, ctx),
-                files: files
-                    .iter()
-                    .map(|f| RenderFile {
-                        path: render_template(&f.path, ctx),
-                        contents: render_template(&f.contents, ctx),
-                    })
-                    .collect(),
-            },
+            }),
+            RenderSpec::Template { fragment, files } => {
+                let mut env = minijinja::Environment::new();
+                Ok(RenderOutput {
+                    fragment: render_template(&mut env, fragment, ctx)?,
+                    files: files
+                        .iter()
+                        .map(|f| {
+                            Ok(RenderFile {
+                                path: render_template(&mut env, &f.path, ctx)?,
+                                contents: render_template(&mut env, &f.contents, ctx)?,
+                            })
+                        })
+                        .collect::<Result<_, RenderError>>()?,
+                })
+            }
         }
     }
 }
+
+/// A [`Template`](RenderSpec::Template) fragment failed to compile or render.
+///
+/// Carries the templating engine's message. Surfaced (not panicked) because a module can
+/// be authored as an external on-disk `module.yaml`, so a bad template is recoverable
+/// input, not an internal invariant violation.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("rendering module template failed: {0}")]
+pub struct RenderError(pub String);
 
 /// The context a module's render reads: the planner-decided [`InjectedEnv`] plus the typed
 /// [`Connection`](crate::Connection)s resolved for the module's demands, grouped by role.
@@ -322,19 +341,19 @@ impl<'a> RenderCtx<'a> {
     }
 }
 
-/// Render one MiniJinja template string against the [`RenderCtx`].
+/// Render one MiniJinja template string against the [`RenderCtx`], reusing `env`.
 ///
-/// Pure and in-memory (no `loader`, no filesystem). A malformed template or a reference to
-/// a missing field is a module-authoring bug, surfaced as a panic with the engine's message
-/// — the same posture as the embedded Envoy template renderer.
-fn render_template(source: &str, ctx: &RenderCtx<'_>) -> String {
-    let mut env = minijinja::Environment::new();
-    env.add_template("fragment", source)
-        .expect("module template source is valid MiniJinja");
-    env.get_template("fragment")
-        .expect("the template was just added")
-        .render(ctx)
-        .expect("rendering a module template with a valid context cannot fail")
+/// Pure and in-memory (no `loader`, no filesystem). A compile or render failure (malformed
+/// source, or a reference to a field absent from `ctx`) is returned as a [`RenderError`]
+/// rather than panicking — a `Template` can come from an external on-disk manifest.
+/// `render_named_str` compiles and renders in one call, so no template name is registered.
+fn render_template(
+    env: &mut minijinja::Environment<'_>,
+    source: &str,
+    ctx: &RenderCtx<'_>,
+) -> Result<String, RenderError> {
+    env.render_named_str("fragment", source, ctx)
+        .map_err(|e| RenderError(e.to_string()))
 }
 
 impl Default for RenderSpec {
@@ -469,9 +488,10 @@ mod tests {
         e
     }
 
-    /// Render `spec` against an env-only context (no connections).
+    /// Render `spec` against an env-only context (no connections). `Static` never errors.
     fn render_env(spec: &RenderSpec, env: &InjectedEnv) -> RenderOutput {
         spec.render(&RenderCtx::from_env(env))
+            .expect("static render")
     }
 
     #[test]
@@ -549,10 +569,12 @@ mod tests {
         let mut connections = BTreeMap::new();
         connections.insert("object_store".to_string(), vec![s3]);
         let env = env(&[("DB_URL", "postgresql://db/x")]);
-        let out = spec.render(&RenderCtx {
-            env: &env,
-            connections,
-        });
+        let out = spec
+            .render(&RenderCtx {
+                env: &env,
+                connections,
+            })
+            .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
         assert!(
             out.fragment.contains("key: AKIA"),
@@ -561,6 +583,35 @@ mod tests {
         assert!(
             !out.fragment.contains("conn:"),
             "Azure branch skipped: {out:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_template_is_a_recoverable_error_not_a_panic() {
+        // A `Template` can come from an external on-disk manifest, so a bad fragment is a
+        // returned `RenderError`, never a panic.
+        let bad_syntax = RenderSpec::Template {
+            fragment: "{% if %}".into(), // unparseable
+            files: vec![],
+        };
+        assert!(
+            bad_syntax
+                .render(&RenderCtx::from_env(&InjectedEnv::new()))
+                .is_err(),
+            "malformed template syntax must return Err"
+        );
+
+        // Referencing a context field that isn't there (no object_store connection) also
+        // errors rather than panicking.
+        let missing_field = RenderSpec::Template {
+            fragment: "{{ connections.object_store.0.uri }}".into(),
+            files: vec![],
+        };
+        assert!(
+            missing_field
+                .render(&RenderCtx::from_env(&InjectedEnv::new()))
+                .is_err(),
+            "indexing an absent connection must return Err"
         );
     }
 

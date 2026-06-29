@@ -193,6 +193,17 @@ pub enum PlanError {
         /// The connection field the variant does not carry.
         field: crate::connection::ConnectionField,
     },
+    /// A module's [`Template`](crate::RenderSpec::Template) fragment failed to compile or
+    /// render — a malformed template or a reference to a field absent from the render
+    /// context. Recoverable because a module can be authored as an external on-disk manifest.
+    #[error("module `{module}` failed to render: {source}")]
+    Render {
+        /// The module whose template failed.
+        module: String,
+        /// The underlying templating error.
+        #[source]
+        source: crate::module::RenderError,
+    },
     /// Two or more providers of the same resource role are in one environment without an
     /// explicit per-demand pin selecting each. The fix is to pin each demand's provider or
     /// drop one provider from the selection.
@@ -555,7 +566,13 @@ pub fn plan(
             env: &module_env,
             connections,
         };
-        let out = module.render.render(&render_ctx);
+        let out = module
+            .render
+            .render(&render_ctx)
+            .map_err(|source| PlanError::Render {
+                module: module.id.0.clone(),
+                source,
+            })?;
         if !out.fragment.trim().is_empty() {
             includes.push(ComposeInclude {
                 module: module.id.clone(),
