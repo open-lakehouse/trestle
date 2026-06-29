@@ -581,6 +581,13 @@ pub trait Module: Send + Sync {
     }
 }
 
+/// The ids of a slice of modules, for the hand-written `Debug` impls on the trait-object
+/// collections (`Catalog`, `ResolvedGraph`) — an `Arc<dyn Module>` is not itself `Debug`, so
+/// they render the module list by id. Shared so the projection lives in one place.
+pub(crate) fn module_ids(modules: &[std::sync::Arc<dyn Module>]) -> Vec<&ModuleId> {
+    modules.iter().map(|m| m.id()).collect()
+}
+
 /// A passive, data-authored [`Module`]: it holds its services and metadata as plain fields and
 /// performs no knob-driven logic. [`services`](Module::services) returns its static
 /// [`service_specs`](DataModule::service_specs) verbatim — any knob effects for such a module

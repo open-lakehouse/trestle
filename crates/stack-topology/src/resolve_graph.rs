@@ -71,10 +71,7 @@ pub struct ResolvedGraph {
 impl std::fmt::Debug for ResolvedGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedGraph")
-            .field(
-                "nodes",
-                &self.nodes.iter().map(|m| m.id()).collect::<Vec<_>>(),
-            )
+            .field("nodes", &crate::module::module_ids(&self.nodes))
             .field("edges", &self.edges)
             .finish()
     }

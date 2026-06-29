@@ -187,4 +187,74 @@ impl Endpoint {
     pub fn is_surface(&self) -> bool {
         self.intent.is_surface()
     }
+
+    /// An [`Internal`](RouteIntent::Internal) endpoint (a database/inter-service port the
+    /// gateway never fronts), with the given scheme and ports. No mount prefix or rewrite.
+    pub(crate) fn internal(
+        id: &str,
+        scheme: Scheme,
+        internal_port: u16,
+        host_port: Option<u16>,
+    ) -> Endpoint {
+        Endpoint {
+            id: id.into(),
+            scheme,
+            internal_port,
+            host_port,
+            intent: RouteIntent::Internal,
+            path: String::new(),
+            mount_prefix: None,
+            rewrite: Rewrite::Inherit,
+        }
+    }
+
+    /// An HTTP [`Api`](RouteIntent::Api) endpoint mounted at `mount_prefix`, with the given
+    /// [`Rewrite`] policy. Its `path` stays empty so the resolver round-trips the prefix.
+    pub(crate) fn api(
+        id: &str,
+        internal_port: u16,
+        mount_prefix: &str,
+        rewrite: Rewrite,
+    ) -> Endpoint {
+        Endpoint {
+            id: id.into(),
+            scheme: Scheme::Http,
+            internal_port,
+            host_port: None,
+            intent: RouteIntent::Api,
+            path: String::new(),
+            mount_prefix: Some(mount_prefix.into()),
+            rewrite,
+        }
+    }
+
+    /// An HTTP [`UiPrefixable`](RouteIntent::UiPrefixable) endpoint (its base path is the
+    /// owning service's [`base_path`](crate::ServiceSpec::base_path)).
+    pub(crate) fn ui_prefixable(id: &str, internal_port: u16, host_port: Option<u16>) -> Endpoint {
+        Endpoint {
+            id: id.into(),
+            scheme: Scheme::Http,
+            internal_port,
+            host_port,
+            intent: RouteIntent::UiPrefixable,
+            path: String::new(),
+            mount_prefix: None,
+            rewrite: Rewrite::Inherit,
+        }
+    }
+
+    /// An HTTP [`Gatewayed`](RouteIntent::Gatewayed) endpoint (a whole-service backend, e.g.
+    /// an object store, reached through its own dedicated listener serving `/`).
+    pub(crate) fn gatewayed(id: &str, internal_port: u16) -> Endpoint {
+        Endpoint {
+            id: id.into(),
+            scheme: Scheme::Http,
+            internal_port,
+            host_port: None,
+            intent: RouteIntent::Gatewayed,
+            path: String::new(),
+            mount_prefix: None,
+            rewrite: Rewrite::Inherit,
+        }
+    }
 }

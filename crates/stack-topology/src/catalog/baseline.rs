@@ -47,7 +47,7 @@ use std::sync::Arc;
 
 use super::Catalog;
 use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
-use crate::endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
+use crate::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::module::{
     ConnectionBinding, DataModule, Knob, KnobKind, Module, ModuleId, Provides, RenderSpec,
     ResolvedKnobs, ResourceDemand,
@@ -123,71 +123,6 @@ fn container(service: &str) -> Placement {
     }
 }
 
-/// Helper: an [`Internal`](RouteIntent::Internal) endpoint (a database/inter-service port
-/// the gateway never fronts), with the given scheme and ports.
-fn internal_endpoint(
-    id: &str,
-    scheme: Scheme,
-    internal_port: u16,
-    host_port: Option<u16>,
-) -> Endpoint {
-    Endpoint {
-        id: id.into(),
-        scheme,
-        internal_port,
-        host_port,
-        intent: RouteIntent::Internal,
-        path: String::new(),
-        mount_prefix: None,
-        rewrite: Rewrite::Inherit,
-    }
-}
-
-/// Helper: an HTTP [`Api`](RouteIntent::Api) endpoint mounted at `mount_prefix`, with the
-/// given [`Rewrite`] policy. Its `path` stays empty so the resolver round-trips the prefix.
-fn api_endpoint(id: &str, internal_port: u16, mount_prefix: &str, rewrite: Rewrite) -> Endpoint {
-    Endpoint {
-        id: id.into(),
-        scheme: Scheme::Http,
-        internal_port,
-        host_port: None,
-        intent: RouteIntent::Api,
-        path: String::new(),
-        mount_prefix: Some(mount_prefix.into()),
-        rewrite,
-    }
-}
-
-/// Helper: an HTTP [`UiPrefixable`](RouteIntent::UiPrefixable) endpoint (its base path is the
-/// owning service's [`base_path`](ServiceSpec::base_path)).
-fn ui_prefixable_endpoint(id: &str, internal_port: u16, host_port: Option<u16>) -> Endpoint {
-    Endpoint {
-        id: id.into(),
-        scheme: Scheme::Http,
-        internal_port,
-        host_port,
-        intent: RouteIntent::UiPrefixable,
-        path: String::new(),
-        mount_prefix: None,
-        rewrite: Rewrite::Inherit,
-    }
-}
-
-/// Helper: an HTTP [`Gatewayed`](RouteIntent::Gatewayed) endpoint (a whole-service backend,
-/// e.g. an object store, reached through its own dedicated listener).
-fn gatewayed_endpoint(id: &str, internal_port: u16) -> Endpoint {
-    Endpoint {
-        id: id.into(),
-        scheme: Scheme::Http,
-        internal_port,
-        host_port: None,
-        intent: RouteIntent::Gatewayed,
-        path: String::new(),
-        mount_prefix: None,
-        rewrite: Rewrite::Inherit,
-    }
-}
-
 /// Helper: a [`RenderSpec::Template`] (MiniJinja) carrying just a compose fragment (no extra
 /// files). Every module's fragment is rendered against the typed [`RenderCtx`](crate::RenderCtx),
 /// so it reads plan-resolved values (`{{ env.X }}`, `{{ connections.* }}`) directly.
@@ -229,7 +164,7 @@ fn envoy() -> Arc<dyn Module> {
             name: "envoy".into(),
             role: Role::gateway(),
             placement: container("envoy"),
-            endpoints: vec![internal_endpoint("http", Scheme::Http, 10000, Some(9080))],
+            endpoints: vec![Endpoint::internal("http", Scheme::Http, 10000, Some(9080))],
             depends_on: vec![],
             base_path: String::new(),
         }],
@@ -286,7 +221,7 @@ fn postgres() -> Arc<dyn Module> {
             name: "db".into(),
             role: Role::relational_db(),
             placement: container("db"),
-            endpoints: vec![internal_endpoint("sql", Scheme::Tcp, 5432, Some(5432))],
+            endpoints: vec![Endpoint::internal("sql", Scheme::Tcp, 5432, Some(5432))],
             depends_on: vec![],
             base_path: String::new(),
         }],
@@ -357,7 +292,7 @@ fn seaweedfs() -> Arc<dyn Module> {
             placement: container("seaweedfs"),
             // No raw host port: the store is reached through the gateway on its own dedicated
             // listener (Gatewayed), not a direct compose `ports:` publish.
-            endpoints: vec![gatewayed_endpoint("s3", 8333)],
+            endpoints: vec![Endpoint::gatewayed("s3", 8333)],
             depends_on: vec![],
             base_path: String::new(),
         }],
@@ -422,7 +357,7 @@ fn azurite() -> Arc<dyn Module> {
             role: Role::object_store(),
             placement: container("azurite"),
             // No raw host port: reached through the gateway's dedicated listener.
-            endpoints: vec![gatewayed_endpoint("blob", 10000)],
+            endpoints: vec![Endpoint::gatewayed("blob", 10000)],
             depends_on: vec![],
             base_path: String::new(),
         }],
@@ -499,9 +434,9 @@ fn mlflow() -> Arc<dyn Module> {
             // (`Passthrough`), and the UI is fronted at the base path.
             base_path: "/mlflow".into(),
             endpoints: vec![
-                api_endpoint("tracking", 5000, "/api/2.0/mlflow", Rewrite::Inherit),
-                api_endpoint("otel", 5000, "/api/2.0/otel", Rewrite::Passthrough),
-                ui_prefixable_endpoint("ui", 5000, None),
+                Endpoint::api("tracking", 5000, "/api/2.0/mlflow", Rewrite::Inherit),
+                Endpoint::api("otel", 5000, "/api/2.0/otel", Rewrite::Passthrough),
+                Endpoint::ui_prefixable("ui", 5000, None),
             ],
             // No hand-listed startup edges: MLflow's `depends_on` is demand-driven. The
             // planner injects the chosen relational-db / object-store providers' gates
@@ -562,8 +497,8 @@ fn unity_catalog() -> Arc<dyn Module> {
             // second alias to the same service.
             base_path: String::new(),
             endpoints: vec![
-                api_endpoint("rest", 8080, "/api/2.1/unity-catalog", Rewrite::Inherit),
-                api_endpoint("rest_alias", 8080, "/unity-catalog", Rewrite::Inherit),
+                Endpoint::api("rest", 8080, "/api/2.1/unity-catalog", Rewrite::Inherit),
+                Endpoint::api("rest_alias", 8080, "/unity-catalog", Rewrite::Inherit),
             ],
             // Demand-driven, like MLflow: the planner injects the chosen providers' gates
             // (see the fragment's `depends_on`), so nothing is hand-listed here.
@@ -600,9 +535,9 @@ fn jaeger() -> Arc<dyn Module> {
             // The Jaeger UI is fronted at `/jaeger`.
             base_path: "/jaeger".into(),
             endpoints: vec![
-                ui_prefixable_endpoint("ui", 16686, Some(16686)),
+                Endpoint::ui_prefixable("ui", 16686, Some(16686)),
                 // OTLP/gRPC ingest, reached directly (not gatewayed).
-                internal_endpoint("otlp_grpc", Scheme::Grpc, 4317, Some(4317)),
+                Endpoint::internal("otlp_grpc", Scheme::Grpc, 4317, Some(4317)),
             ],
             depends_on: vec![],
         }],
@@ -645,6 +580,7 @@ const HEADWATERS_API_PREFIX: &str = "/api/v1/lineage";
 /// It demands only a `relational_db` (named `lineage`); Postgres provisions the database and
 /// the planner injects the `db:service_healthy` gate.
 struct Headwaters {
+    id: ModuleId,
     needs: Vec<ResourceDemand>,
     knobs: Vec<Knob>,
     provides: Provides,
@@ -653,10 +589,9 @@ struct Headwaters {
 }
 
 impl Headwaters {
-    const ID: &'static str = "headwaters";
-
     fn new() -> Self {
         Headwaters {
+            id: ModuleId::from("headwaters"),
             // Only the gateway is a hard module dependency; the relational store arrives as a
             // demand (auto-provisioned), and its startup gate is injected by the planner.
             requires: vec![ModuleId::from("envoy")],
@@ -705,8 +640,7 @@ impl Headwaters {
 
 impl Module for Headwaters {
     fn id(&self) -> &ModuleId {
-        static ID: std::sync::OnceLock<ModuleId> = std::sync::OnceLock::new();
-        ID.get_or_init(|| ModuleId::from(Headwaters::ID))
+        &self.id
     }
     fn display_name(&self) -> Option<&str> {
         Some("Headwaters lineage")
@@ -752,14 +686,14 @@ impl Module for Headwaters {
             (
                 "/lineage".to_string(),
                 vec![
-                    ui_prefixable_endpoint("ui", 8091, None),
-                    api_endpoint("api", 8091, HEADWATERS_API_PREFIX, Rewrite::Inherit),
+                    Endpoint::ui_prefixable("ui", 8091, None),
+                    Endpoint::api("api", 8091, HEADWATERS_API_PREFIX, Rewrite::Inherit),
                 ],
             )
         } else {
             (
                 String::new(),
-                vec![api_endpoint(
+                vec![Endpoint::api(
                     "api",
                     8091,
                     HEADWATERS_API_PREFIX,

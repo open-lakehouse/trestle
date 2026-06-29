@@ -301,16 +301,7 @@ mod tests {
             placement: Placement::Container {
                 service: "db".into(),
             },
-            endpoints: vec![Endpoint {
-                id: "sql".into(),
-                scheme: Scheme::Tcp,
-                internal_port: 5432,
-                host_port: None,
-                intent: RouteIntent::Internal,
-                path: String::new(),
-                mount_prefix: None,
-                rewrite: crate::endpoint::Rewrite::Inherit,
-            }],
+            endpoints: vec![Endpoint::internal("sql", Scheme::Tcp, 5432, None)],
             depends_on: vec![],
             base_path: String::new(),
         }
@@ -324,16 +315,12 @@ mod tests {
             placement: Placement::Container {
                 service: "marquez-api".into(),
             },
-            endpoints: vec![Endpoint {
-                id: "lineage".into(),
-                scheme: Scheme::Http,
-                internal_port: 5000,
-                host_port: None,
-                intent: RouteIntent::Api,
-                path: String::new(),
-                mount_prefix: Some("/api/2.1/lineage".into()),
-                rewrite: crate::endpoint::Rewrite::Inherit,
-            }],
+            endpoints: vec![Endpoint::api(
+                "lineage",
+                5000,
+                "/api/2.1/lineage",
+                crate::endpoint::Rewrite::Inherit,
+            )],
             depends_on: vec![],
             base_path: String::new(),
         }
@@ -348,16 +335,7 @@ mod tests {
             placement: Placement::Container {
                 service: "mlflow".into(),
             },
-            endpoints: vec![Endpoint {
-                id: "ui".into(),
-                scheme: Scheme::Http,
-                internal_port: 5000,
-                host_port: None,
-                intent: RouteIntent::UiPrefixable,
-                path: String::new(),
-                mount_prefix: None,
-                rewrite: crate::endpoint::Rewrite::Inherit,
-            }],
+            endpoints: vec![Endpoint::ui_prefixable("ui", 5000, None)],
             depends_on: vec![],
             base_path: String::new(),
         }

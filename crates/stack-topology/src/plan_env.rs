@@ -391,6 +391,10 @@ pub struct EnvironmentPlan {
     pub routes: RoutePlan,
     /// Each module's injected env (the values the planner decided for it).
     pub injected: BTreeMap<ModuleId, InjectedEnv>,
+    /// Each module's services, resolved against its knobs (the same values the planner routed
+    /// over). Exposed so consumers — and the artifact renderers — read the settled services
+    /// instead of recomputing `module.services(...)`.
+    pub services: BTreeMap<ModuleId, Vec<ServiceSpec>>,
     /// The typed [`Connection`] resolved for each demand, keyed by `(demanding module id,
     /// demand index)`. The same handshake the planner flattens into [`injected`](Self::injected)
     /// today, exposed in typed form so a consumer can make explicit per-flavour rendering
@@ -847,6 +851,7 @@ pub fn plan(
         graph,
         routes,
         injected,
+        services: services_of,
         connections,
         renders,
         head,

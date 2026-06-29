@@ -47,10 +47,7 @@ pub struct Catalog {
 impl std::fmt::Debug for Catalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Catalog")
-            .field(
-                "modules",
-                &self.modules.iter().map(|m| m.id()).collect::<Vec<_>>(),
-            )
+            .field("modules", &crate::module::module_ids(&self.modules))
             .field("default_provider", &self.default_provider)
             .finish()
     }
