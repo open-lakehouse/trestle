@@ -3,8 +3,8 @@
 #
 # This fragment is a `RenderSpec::Template`: the planner hands it `published_ports`, one
 # `host:container` mapping per gateway listener — the shared listener plus a dedicated one for
-# each gatewayed backend (e.g. an object store) — so the host can reach every listener without
-# this file hard-coding a port list. The admin port is fixed.
+# each gatewayed backend (e.g. an object store), plus the Envoy admin endpoint — so the host can
+# reach every listener without this file hard-coding a port list.
 services:
   envoy:
     image: envoyproxy/envoy:v1.34-latest
@@ -18,4 +18,3 @@ services:
 {%- for p in published_ports %}
       - "{{ p.host }}:{{ p.container }}"
 {%- endfor %}
-      - "9901:9901"
