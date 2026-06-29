@@ -519,6 +519,16 @@ pub fn plan(
         for (k, v) in module.provides.env_vars.iter() {
             env.set(k, v);
         }
+        // A provider contributes its connections' conventional SDK env vars (an object
+        // store's `AWS_*` / `AZURE_STORAGE_CONNECTION_STRING`), derived from the typed
+        // credential so it is stated once. Only an in-graph (i.e. chosen) provider reaches
+        // here, so an unselected backend's credentials never leak into `.env`. The values
+        // are name-independent, so the template's credential is read directly.
+        for template in module.provides.resource_kinds.values() {
+            for (k, v) in template.0.standard_env() {
+                env.set(k, v);
+            }
+        }
         for (idx, demand) in module.needs.iter().enumerate() {
             let connection = &chosen[&(module.id.clone(), idx)].connection;
             bind_connection(&mut env, &module.id, demand, connection)?;

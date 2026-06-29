@@ -112,6 +112,42 @@ impl ConnectionTemplate {
 }
 
 impl ObjectStoreCredential {
+    /// `AWS_ACCESS_KEY_ID` — the env var an S3 credential's access key id lands under.
+    pub const AWS_ACCESS_KEY_ID: &'static str = "AWS_ACCESS_KEY_ID";
+    /// `AWS_SECRET_ACCESS_KEY` — the env var an S3 credential's secret lands under.
+    pub const AWS_SECRET_ACCESS_KEY: &'static str = "AWS_SECRET_ACCESS_KEY";
+    /// `AWS_DEFAULT_REGION` — the env var an S3 credential's region lands under.
+    pub const AWS_DEFAULT_REGION: &'static str = "AWS_DEFAULT_REGION";
+    /// `AZURE_STORAGE_CONNECTION_STRING` — the env var an Azure credential lands under.
+    pub const AZURE_STORAGE_CONNECTION_STRING: &'static str = "AZURE_STORAGE_CONNECTION_STRING";
+
+    /// The conventional `(env-var, value)` pairs an SDK reads to authenticate to a store of
+    /// this flavour — `AWS_*` for [`S3`](ObjectStoreCredential::S3),
+    /// `AZURE_STORAGE_CONNECTION_STRING` for [`AzureBlob`](ObjectStoreCredential::AzureBlob).
+    ///
+    /// The planner folds these into `.env` for the chosen object-store provider, so the
+    /// typed credential is the single source for both the values a [`Template`] fragment
+    /// reads and the conventional SDK env vars — no hand-listing, no drift.
+    ///
+    /// [`Template`]: crate::RenderSpec::Template
+    pub fn standard_env(&self) -> Vec<(&'static str, String)> {
+        match self {
+            ObjectStoreCredential::S3 {
+                access_key_id,
+                secret_access_key,
+                region,
+            } => vec![
+                (Self::AWS_ACCESS_KEY_ID, access_key_id.clone()),
+                (Self::AWS_SECRET_ACCESS_KEY, secret_access_key.clone()),
+                (Self::AWS_DEFAULT_REGION, region.clone()),
+            ],
+            ObjectStoreCredential::AzureBlob { connection_string } => vec![(
+                Self::AZURE_STORAGE_CONNECTION_STRING,
+                connection_string.clone(),
+            )],
+        }
+    }
+
     /// Resolve `{name}` in every field. Credential values rarely template on `{name}`, but
     /// resolving uniformly keeps [`ConnectionTemplate::resolve`] total.
     fn resolve(&self, name: &str) -> ObjectStoreCredential {
@@ -177,6 +213,18 @@ impl Connection {
             (Connection::ObjectStore { credential, .. }, _) => credential.field(field),
             (Connection::RelationalDb { url }, F::Url) => Some(url),
             _ => None,
+        }
+    }
+
+    /// The conventional `(env-var, value)` pairs a provider of this connection contributes
+    /// to `.env` so an SDK can authenticate — the object store's
+    /// [`ObjectStoreCredential::standard_env`]. A [`RelationalDb`](Connection::RelationalDb)
+    /// has none: its credential is embedded in the URL a consumer binds, not a stack-wide
+    /// env var.
+    pub fn standard_env(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Connection::ObjectStore { credential, .. } => credential.standard_env(),
+            Connection::RelationalDb { .. } => Vec::new(),
         }
     }
 }
@@ -263,5 +311,47 @@ mod tests {
         );
         // S3-only fields are absent under an Azure credential.
         assert_eq!(c.field(ConnectionField::AccessKeyId), None);
+    }
+
+    #[test]
+    fn standard_env_derives_the_conventional_sdk_vars() {
+        let s3 = Connection::ObjectStore {
+            uri: "s3://b".into(),
+            bucket: "b".into(),
+            endpoint: "http://s:1".into(),
+            credential: ObjectStoreCredential::S3 {
+                access_key_id: "ak".into(),
+                secret_access_key: "sk".into(),
+                region: "us-east-1".into(),
+            },
+        };
+        assert_eq!(
+            s3.standard_env(),
+            vec![
+                ("AWS_ACCESS_KEY_ID", "ak".to_string()),
+                ("AWS_SECRET_ACCESS_KEY", "sk".to_string()),
+                ("AWS_DEFAULT_REGION", "us-east-1".to_string()),
+            ]
+        );
+
+        let azure = Connection::ObjectStore {
+            uri: "wasbs://b@a".into(),
+            bucket: "b".into(),
+            endpoint: "http://a:1".into(),
+            credential: ObjectStoreCredential::AzureBlob {
+                connection_string: "Conn=x".into(),
+            },
+        };
+        assert_eq!(
+            azure.standard_env(),
+            vec![("AZURE_STORAGE_CONNECTION_STRING", "Conn=x".to_string())]
+        );
+
+        // A relational connection contributes no provider-side env vars (its credential is
+        // embedded in the URL a consumer binds).
+        let db = Connection::RelationalDb {
+            url: "postgresql://db/x".into(),
+        };
+        assert!(db.standard_env().is_empty());
     }
 }

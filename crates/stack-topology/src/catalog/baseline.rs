@@ -219,14 +219,12 @@ fn postgres() -> Module {
 /// list.
 fn seaweedfs() -> Module {
     let mut provides = Provides::default();
-    // The S3 credentials this flavour needs are the provider's own stack contribution: they
-    // enter `.env` only when SeaweedFS is the selected object_store, so an S3-shaped consumer
-    // (MLflow, UC) reads `AWS_*` when — and only when — an S3 provider backs it. They are
-    // *also* exposed as coordinates below, for a consumer that prefers explicit injection.
+    // Only this flavour's non-credential ports are hand-listed. The S3 credentials
+    // (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are *not*
+    // listed here: the planner derives them from the typed S3 credential below (via
+    // `Connection::standard_env`), so they are stated once and enter `.env` only when
+    // SeaweedFS is the chosen object_store — no `AWS_*` leak under an Azure provider.
     for (k, v) in [
-        ("AWS_ACCESS_KEY_ID", "seaweedfs"),
-        ("AWS_SECRET_ACCESS_KEY", "seaweedfs"),
-        ("AWS_DEFAULT_REGION", "us-east-1"),
         ("SEAWEEDFS_S3_PORT", "9000"),
         ("SEAWEEDFS_MASTER_PORT", "9333"),
     ] {
@@ -284,12 +282,10 @@ fn seaweedfs() -> Module {
 fn azurite() -> Module {
     const CONN: &str = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;";
     let mut provides = Provides::default();
-    // Azurite's own stack contribution: the Azure connection string enters `.env` only when
-    // Azurite is the selected object_store (so no AWS_* leak under Azurite). Also exposed as
-    // the `connection_string` coordinate below.
-    provides
-        .env_vars
-        .insert("AZURE_STORAGE_CONNECTION_STRING".into(), CONN.into());
+    // Only the non-credential port is hand-listed. `AZURE_STORAGE_CONNECTION_STRING` is *not*
+    // listed here: the planner derives it from the typed Azure credential below (via
+    // `Connection::standard_env`), so it is stated once and enters `.env` only when Azurite
+    // is the chosen object_store.
     provides
         .env_vars
         .insert("AZURITE_BLOB_PORT".into(), "10000".into());
