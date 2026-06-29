@@ -4,7 +4,6 @@ services:
   seaweedfs:
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
-    profiles: [svc, full]
     command: mini -dir=/data
     ports:
       - "${SEAWEEDFS_MASTER_PORT:-9333}:9333"

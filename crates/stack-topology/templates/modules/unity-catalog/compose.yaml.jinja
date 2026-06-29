@@ -17,7 +17,6 @@ services:
   unitycatalog:
     image: ${UC_IMAGE:-unitycatalog/unitycatalog:latest}
     restart: unless-stopped
-    profiles: [svc, full]
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:

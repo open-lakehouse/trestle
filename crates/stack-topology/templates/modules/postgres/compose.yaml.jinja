@@ -3,7 +3,6 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
-    profiles: [db, svc, full]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-postgres}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
