@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::connection::{ConnectionField, ConnectionTemplate};
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
 use crate::role::ServiceSpec;
 
@@ -84,10 +85,11 @@ pub struct Provides {
     /// Resource kinds this module *provisions* for other modules, keyed by kind
     /// (e.g. `"relational_db"`, `"object_store"`). A consuming module declares a
     /// [`ResourceDemand`] for a kind; the planner finds the provider here, ensures it
-    /// is deployed, provisions the named resource, and renders the provider's
-    /// coordinate templates back into the consumer (see [`ResourceProvider`]).
+    /// is deployed, provisions the named resource, and resolves the provider's
+    /// [`ConnectionTemplate`] into a typed [`Connection`](crate::Connection) the consumer
+    /// binds back (see [`ResourceDemand`] and [`ConnectionBinding`]).
     #[serde(default)]
-    pub resource_kinds: BTreeMap<String, ResourceProvider>,
+    pub resource_kinds: BTreeMap<String, ConnectionTemplate>,
     /// Named, defaulted ports this module exposes (a knob-like surface for ports
     /// without forcing every one through [`Knob`]).
     #[serde(default)]
@@ -118,97 +120,18 @@ pub struct PortDecl {
     pub internal_only: bool,
 }
 
-/// How a provider module renders the runtime *coordinates* of a resource it
-/// provisions, so a consumer can discover it.
-///
-/// A coordinate is a named, renderable fact about a provisioned resource — a
-/// connection URL, the bucket name, an endpoint. Each template may use the
-/// placeholder `{name}` for the concrete resource name (substituted by the planner at
-/// plan time) and `${VAR}` compose-style refs (left untouched, resolved at run time by
-/// compose). For example a relational-DB provider might offer a `"url"` coordinate
-/// `postgresql://${POSTGRES_USER:-postgres}@db:5432/{name}`, and an object store a
-/// `"bucket"` coordinate `{name}`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResourceProvider {
-    /// A stable tag identifying this provider's *flavour* of the role (e.g. `"s3"`,
-    /// `"azure_blob"`). A consumer that genuinely must adapt its fragment to the chosen
-    /// backend branches on this; consumers that read only the role's standard
-    /// coordinates can ignore it. Surfaced as the reserved `provider_kind` coordinate.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_kind: Option<String>,
-    /// The named coordinate templates a consumer can request, keyed by coordinate
-    /// name (e.g. `"url"`, `"endpoint"`, `"uri"`). The well-known names are the
-    /// `*_COORDINATE` constants on this type.
-    ///
-    /// A **resource role** defines a *coordinate contract* (a [`RoleContract`](crate::RoleContract))
-    /// — the names every provider for that role renders — so a consumer reads the same keys
-    /// regardless of which provider the planner chose. For example the `object_store` role's
-    /// contract is `uri`, `bucket`, `endpoint`, and the `provider_kind` tag; SeaweedFS fills
-    /// them with the `s3://` shape, Azurite with the `wasbs://` shape.
-    #[serde(default)]
-    pub coordinates: BTreeMap<String, String>,
-}
-
-impl ResourceProvider {
-    /// The reserved coordinate name carrying the
-    /// [`provider_kind`](ResourceProvider::provider_kind) tag.
-    pub const PROVIDER_KIND_COORDINATE: &'static str = "provider_kind";
-
-    /// The S3 flavour of the `object_store` role.
-    pub const KIND_S3: &'static str = "s3";
-    /// The Azure Blob flavour of the `object_store` role.
-    pub const KIND_AZURE_BLOB: &'static str = "azure_blob";
-    /// The Postgres flavour of the `relational_db` role.
-    pub const KIND_POSTGRES: &'static str = "postgres";
-
-    // --- Well-known coordinate names ---
-    //
-    // The vocabulary a role's coordinate contract draws from. Like
-    // [`PROVIDER_KIND_COORDINATE`](ResourceProvider::PROVIDER_KIND_COORDINATE), these are
-    // *conventions* a consumer can rely on across providers of a role — not a closed set.
-    // A role declares which it requires via a `RoleContract`; flavour-specific credential
-    // coordinates are well-known but optional (a consumer injects whichever its
-    // `provider_kind` needs).
-
-    /// A role-generic, client-addressable URI for the resource at `{name}` (e.g.
-    /// `s3://{name}`, `wasbs://{name}@…`).
-    pub const URI_COORDINATE: &'static str = "uri";
-    /// The bucket/container name (typically just `{name}`).
-    pub const BUCKET_COORDINATE: &'static str = "bucket";
-    /// The service endpoint a client connects to (e.g. `http://seaweedfs:8333`).
-    pub const ENDPOINT_COORDINATE: &'static str = "endpoint";
-    /// An access key id (S3-style credentials).
-    pub const ACCESS_KEY_ID_COORDINATE: &'static str = "access_key_id";
-    /// A secret access key (S3-style credentials).
-    pub const SECRET_ACCESS_KEY_COORDINATE: &'static str = "secret_access_key";
-    /// A region (S3-style credentials).
-    pub const REGION_COORDINATE: &'static str = "region";
-    /// A connection string (Azure-style credentials).
-    pub const CONNECTION_STRING_COORDINATE: &'static str = "connection_string";
-    /// A connection URL (e.g. a `relational_db` provider's `postgresql://…/{name}`).
-    pub const URL_COORDINATE: &'static str = "url";
-
-    /// The template for a named coordinate, if this provider offers it. The reserved
-    /// `provider_kind` coordinate resolves to the provider's
-    /// [`provider_kind`](ResourceProvider::provider_kind) tag.
-    pub fn coordinate(&self, name: &str) -> Option<&str> {
-        if name == Self::PROVIDER_KIND_COORDINATE {
-            return self.provider_kind.as_deref();
-        }
-        self.coordinates.get(name).map(String::as_str)
-    }
-}
-
-/// A resource a module needs: a `(role, name)` the planner must ensure exists, plus
-/// where to inject the resolved coordinates back.
+/// A resource a module needs: a `(role, name)` the planner must ensure exists, plus how
+/// to bind the resolved [`Connection`](crate::Connection) back into this module's env.
 ///
 /// [`resource`](ResourceDemand::resource) names an abstract *role* (e.g.
 /// `"object_store"`), not a specific implementation — the planner chooses which
 /// registered provider satisfies it (by [`provider`](ResourceDemand::provider) pin,
 /// `PlanCtx` preference, uniqueness, or catalog default), deploys it if absent,
-/// provisions the named resource, and renders each [`Injection`]'s coordinate into this
-/// module's environment. Naming the role (not the implementation) is what lets one
-/// consumer run on, say, SeaweedFS in one environment and Azurite in another.
+/// provisions the named resource, resolves the provider's
+/// [`ConnectionTemplate`](crate::ConnectionTemplate), and binds each
+/// [`ConnectionBinding`] field into this module's environment. Naming the role (not the
+/// implementation) is what lets one consumer run on, say, SeaweedFS in one environment and
+/// Azurite in another.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceDemand {
     /// The resource *role* needed (e.g. `"object_store"`, `"relational_db"`) — matched
@@ -221,22 +144,25 @@ pub struct ResourceDemand {
     /// and the planner chooses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ModuleId>,
-    /// The coordinates to inject back into the demanding module's environment so it
-    /// can discover the resource at run time.
+    /// How the resolved connection's typed fields map into the demanding module's env so
+    /// it can discover the resource at run time.
     #[serde(default)]
-    pub inject: Vec<Injection>,
+    pub bind: ConnectionBinding,
 }
 
-/// One coordinate value the planner injects back into the demanding module's
-/// [`InjectedEnv`] under [`key`](Injection::key), sourced from the provider's named
-/// [`coordinate`](ResourceProvider::coordinate).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Injection {
-    /// The env-var name the resolved value lands under in the consumer (e.g.
-    /// `"UC_DATABASE_URL"`); the consumer's fragment/files read it as `${KEY}`.
-    pub key: String,
-    /// Which of the provider's named coordinates to render (e.g. `"url"`, `"bucket"`).
-    pub coordinate: String,
+/// How a demand maps the resolved [`Connection`](crate::Connection)'s typed fields into
+/// the consuming module's [`InjectedEnv`].
+///
+/// Each `(field, key)` pair binds one [`ConnectionField`] to the env-var `key` the
+/// consumer's fragment/files read as `${KEY}` (e.g. `(ConnectionField::Url,
+/// "UC_DATABASE_URL")`). A field the chosen provider's connection variant does not carry
+/// is a [`PlanError::UnboundConnectionField`](crate::PlanError::UnboundConnectionField).
+/// The default (empty) binding injects nothing — the demand still provisions the resource.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConnectionBinding {
+    /// The `(typed field, env-var name)` pairs to bind, in declaration order.
+    pub bind: Vec<(ConnectionField, String)>,
 }
 
 /// The kind of value a [`Knob`] holds — the bridge to a generated config UI.
