@@ -4,6 +4,6 @@ services:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.14.1
     restart: unless-stopped
     command: ["--set=extensions.jaeger_query.base_path=/jaeger"]
-    ports:
-      - "16686:16686"
-      - "4317:4317"
+    expose:
+      - "16686"
+      - "4317"

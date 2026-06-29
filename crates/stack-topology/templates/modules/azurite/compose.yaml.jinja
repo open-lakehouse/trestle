@@ -1,25 +1,12 @@
-# Azurite (Azure Blob emulator) — object-store provider, an alternative to SeaweedFS.
-#
-# This fragment is a `RenderSpec::Template`, rendered whole against the typed `RenderCtx` —
-# no compose `${VAR}` substitution layered on top. As a provider, Azurite renders against its
-# own role:
-#
-#   * `connections.object_store.0` — its own resolved connection; the fragment reads the
-#     credential's `connection_string` directly.
-#   * `objects` — the container names the stack provisions on it; the one-shot init iterates
-#     them to create each, instead of the planner splicing pre-formatted shell lines.
-#
-# The blob port is the emulator's fixed 10000, written directly. Durable blob state is
-# persisted under the stack's data root (`env.DATA_ROOT`, default ./.data), resolved at plan
-# time — relocating the stack's data is a single `PlanCtx.data_root` knob, not a per-fragment edit.
+# Azurite (Azure Blob emulator)
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
     restart: unless-stopped
     command:
       ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
-    ports:
-      - "10000:10000"
+    expose:
+      - "10000"
     volumes:
       - {{ env.DATA_ROOT }}/azurite:/data
     healthcheck:
@@ -36,7 +23,6 @@ services:
   azurite-init:
     image: mcr.microsoft.com/azure-cli:2.87.0
     restart: "no"
-    profiles: [svc, full]
     depends_on:
       azurite:
         condition: service_healthy

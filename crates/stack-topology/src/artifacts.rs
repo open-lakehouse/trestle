@@ -39,6 +39,8 @@ struct EnvoyCtx<'a> {
     /// listeners (one per fixed-path UI / gatewayed backend) on their own ports.
     listeners: Vec<ListenerCtx<'a>>,
     clusters: Vec<ClusterCtx<'a>>,
+    /// The Envoy admin port (bound on both sides).
+    admin_port: u16,
 }
 
 /// One Envoy listener: the port it binds and its route table. Only the shared listener
@@ -150,6 +152,7 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
     let ctx = EnvoyCtx {
         listeners,
         clusters,
+        admin_port: gateway.admin_port,
     };
 
     let mut env = minijinja::Environment::new();

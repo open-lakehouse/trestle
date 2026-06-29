@@ -92,6 +92,10 @@ pub struct PlanCtx {
     pub gateway_internal_port: u16,
     /// The gateway's host-published port (e.g. `9080`).
     pub gateway_host_port: u16,
+    /// The gateway's Envoy admin port, on both sides (`address:0.0.0.0:<port>` in the
+    /// bootstrap and the `<port>:<port>` host publish). Configurable so two stacks rendered
+    /// on the same host don't collide on the admin endpoint. Defaults to `9901`.
+    pub gateway_admin_port: u16,
     /// Explicit host ports to hand out, in order, to endpoints that need their own
     /// dedicated listener ([`UiFixed`](RouteIntent::UiFixed) /
     /// [`Gatewayed`](RouteIntent::Gatewayed)). Consumed first; once exhausted the planner
@@ -128,6 +132,7 @@ impl Default for PlanCtx {
             gateway_service: "envoy".into(),
             gateway_internal_port: 10000,
             gateway_host_port: 9080,
+            gateway_admin_port: 9901,
             dedicated_listener_ports: Vec::new(),
             dedicated_listener_port_base: 9100,
             provider_preference: BTreeMap::new(),
@@ -290,6 +295,10 @@ pub struct GatewayConfig {
     pub listeners: Vec<ListenerConfig>,
     /// The upstream clusters, deduplicated by name.
     pub clusters: Vec<ClusterConfig>,
+    /// The Envoy admin port (bound on both sides). Set from
+    /// [`PlanCtx::gateway_admin_port`]; the `Default` of `0` is only ever a transient
+    /// accumulator value the planner overwrites.
+    pub admin_port: u16,
 }
 
 /// A compose `include:` entry contributed by a module.
@@ -461,7 +470,10 @@ pub fn plan(
     rewrite_gatewayed_object_store_endpoints(&mut chosen, &graph, ctx, &dedicated_ports);
 
     let mut routes = RoutePlan::new();
-    let mut gateway = GatewayConfig::default();
+    let mut gateway = GatewayConfig {
+        admin_port: ctx.gateway_admin_port,
+        ..GatewayConfig::default()
+    };
     let mut injected: BTreeMap<ModuleId, InjectedEnv> = BTreeMap::new();
 
     let mut shared_routes: Vec<GatewayRoute> = Vec::new();
@@ -680,6 +692,12 @@ pub fn plan(
                     host: l.host_port,
                     container: l.internal_port,
                 })
+                // The Envoy admin endpoint is not a routing listener, so it isn't in
+                // `gateway.listeners`; publish it explicitly (1:1) alongside them.
+                .chain(std::iter::once(crate::module::PortMapping {
+                    host: ctx.gateway_admin_port,
+                    container: ctx.gateway_admin_port,
+                }))
                 .collect()
         } else {
             Vec::new()

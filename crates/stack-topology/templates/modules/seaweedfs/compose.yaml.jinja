@@ -1,19 +1,13 @@
-# SeaweedFS + one-shot bucket init — contributed by the `seaweedfs` module.
-#
-# Rendered whole against the typed `RenderCtx`. As the object_store provider, SeaweedFS reads
-# its own resolved connection (`connections.object_store.0`) for the S3 credential, and iterates
-# the buckets it provisions (`objects`) to build the one-shot init — no compose-var credential
-# fallbacks and no planner-spliced shell placeholder.
+# SeaweedFS + one-shot bucket init
 services:
   seaweedfs:
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
     command: mini -dir=/data
-    ports:
-      - "9333:9333"
-      - "9000:8333"
+    expose:
+      - "9333"
+      - "8333"
     volumes:
-      # Durable object state under the stack's data root (default ./.data).
       - {{ env.DATA_ROOT }}/seaweedfs:/data
     healthcheck:
       test:
@@ -29,7 +23,6 @@ services:
   seaweedfs-init:
     image: amazon/aws-cli:latest
     restart: on-failure
-    profiles: [svc, full]
     depends_on:
       seaweedfs:
         condition: service_healthy
