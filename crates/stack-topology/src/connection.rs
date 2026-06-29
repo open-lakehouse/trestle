@@ -60,7 +60,14 @@ pub enum Connection {
 ///
 /// `#[non_exhaustive]` so a future object-store flavour (GCS, …) is not a breaking change
 /// for downstream `match`es.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` is **hand-written to redact** the secret-bearing fields (the secret access key
+/// and the Azure connection string, plus the access key id, itself a sensitive
+/// identifier): these are long-lived secrets that must never leak through `{:?}`,
+/// `tracing`, or a panic message. `Connection`'s derived `Debug` defers to this impl, so a
+/// whole plan can be logged without exposing them. (Mirrors the `AwsCredential` convention
+/// in `olai-http`.) The non-secret `region` stays visible.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "flavour")]
 #[non_exhaustive]
 pub enum ObjectStoreCredential {
@@ -78,6 +85,23 @@ pub enum ObjectStoreCredential {
         /// The full `AZURE_STORAGE_CONNECTION_STRING` value.
         connection_string: String,
     },
+}
+
+impl std::fmt::Debug for ObjectStoreCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObjectStoreCredential::S3 { region, .. } => f
+                .debug_struct("S3")
+                .field("access_key_id", &"<redacted>")
+                .field("secret_access_key", &"<redacted>")
+                .field("region", region)
+                .finish(),
+            ObjectStoreCredential::AzureBlob { .. } => f
+                .debug_struct("AzureBlob")
+                .field("connection_string", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 /// A provider's connection *template*: a [`Connection`] whose string fields may contain
@@ -353,5 +377,45 @@ mod tests {
             url: "postgresql://db/x".into(),
         };
         assert!(db.standard_env().is_empty());
+    }
+
+    #[test]
+    fn debug_redacts_secret_credential_fields() {
+        let s3 = ObjectStoreCredential::S3 {
+            access_key_id: "AKIAEXAMPLE".into(),
+            secret_access_key: "topsecret".into(),
+            region: "us-east-1".into(),
+        };
+        let rendered = format!("{s3:?}");
+        assert!(
+            !rendered.contains("AKIAEXAMPLE"),
+            "access key id leaked: {rendered}"
+        );
+        assert!(!rendered.contains("topsecret"), "secret leaked: {rendered}");
+        assert!(rendered.contains("<redacted>"));
+        // The non-secret region stays visible for observability.
+        assert!(
+            rendered.contains("us-east-1"),
+            "region should stay visible: {rendered}"
+        );
+
+        let azure = ObjectStoreCredential::AzureBlob {
+            connection_string: "AccountKey=supersecret==".into(),
+        };
+        let rendered = format!("{azure:?}");
+        assert!(
+            !rendered.contains("supersecret"),
+            "conn string leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"));
+
+        // And the secret is hidden when the credential is nested inside a Connection's Debug.
+        let conn = Connection::ObjectStore {
+            uri: "s3://b".into(),
+            bucket: "b".into(),
+            endpoint: "http://s:1".into(),
+            credential: s3,
+        };
+        assert!(!format!("{conn:?}").contains("topsecret"));
     }
 }
