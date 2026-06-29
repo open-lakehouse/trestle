@@ -81,14 +81,13 @@ impl std::fmt::Display for ModuleId {
 /// any free-form extras.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provides {
-    /// Postgres database names this module needs provisioned, deduplicated by the
-    /// planner across modules.
+    /// Resource kinds this module *provisions* for other modules, keyed by kind
+    /// (e.g. `"postgres_database"`, `"s3_bucket"`). A consuming module declares a
+    /// [`ResourceDemand`] for a kind; the planner finds the provider here, ensures it
+    /// is deployed, provisions the named resource, and renders the provider's
+    /// coordinate templates back into the consumer (see [`ResourceProvider`]).
     #[serde(default)]
-    pub postgres_databases: Vec<String>,
-    /// Object-store (S3) bucket names this module needs, deduplicated by the
-    /// planner across modules.
-    #[serde(default)]
-    pub s3_buckets: Vec<String>,
+    pub resource_kinds: BTreeMap<String, ResourceProvider>,
     /// Named, defaulted ports this module exposes (a knob-like surface for ports
     /// without forcing every one through [`Knob`]).
     #[serde(default)]
@@ -117,6 +116,63 @@ pub struct PortDecl {
     /// host-published).
     #[serde(default)]
     pub internal_only: bool,
+}
+
+/// How a provider module renders the runtime *coordinates* of a resource it
+/// provisions, so a consumer can discover it.
+///
+/// A coordinate is a named, renderable fact about a provisioned resource — a
+/// connection URL, the bucket name, an endpoint. Each template may use the
+/// placeholder `{name}` for the concrete resource name (substituted by the planner at
+/// plan time) and `${VAR}` compose-style refs (left untouched, resolved at run time by
+/// compose). For example a relational-DB provider might offer a `"url"` coordinate
+/// `postgresql://${POSTGRES_USER:-postgres}@db:5432/{name}`, and an object store a
+/// `"bucket"` coordinate `{name}`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceProvider {
+    /// The named coordinate templates a consumer can request, keyed by coordinate
+    /// name (e.g. `"url"`, `"bucket"`, `"endpoint"`).
+    #[serde(default)]
+    pub coordinates: BTreeMap<String, String>,
+}
+
+impl ResourceProvider {
+    /// The template for a named coordinate, if this provider offers it.
+    pub fn coordinate(&self, name: &str) -> Option<&str> {
+        self.coordinates.get(name).map(String::as_str)
+    }
+}
+
+/// A resource a module needs from a provider: a `(kind, name)` the planner must
+/// ensure exists, plus where to inject the resolved coordinates back.
+///
+/// The planner resolves `resource` (the kind) to a provider module via the catalog's
+/// resource index, deploys that provider if it isn't already selected, provisions the
+/// named resource, and renders each [`Injection`]'s coordinate into this module's
+/// environment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceDemand {
+    /// The resource kind needed (e.g. `"postgres_database"`, `"s3_bucket"`) — matched
+    /// against providers' [`Provides::resource_kinds`].
+    pub resource: String,
+    /// The concrete resource name to provision (e.g. `"unitycatalog"`, `"unity"`).
+    pub name: String,
+    /// The coordinates to inject back into the demanding module's environment so it
+    /// can discover the resource at run time.
+    #[serde(default)]
+    pub inject: Vec<Injection>,
+}
+
+/// One coordinate value the planner injects back into the demanding module's
+/// [`InjectedEnv`] under [`key`](Injection::key), sourced from the provider's named
+/// [`coordinate`](ResourceProvider::coordinate).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Injection {
+    /// The env-var name the resolved value lands under in the consumer (e.g.
+    /// `"UC_DATABASE_URL"`); the consumer's fragment/files read it as `${KEY}`.
+    pub key: String,
+    /// Which of the provider's named coordinates to render (e.g. `"url"`, `"bucket"`).
+    pub coordinate: String,
 }
 
 /// The kind of value a [`Knob`] holds — the bridge to a generated config UI.
@@ -274,10 +330,18 @@ pub struct Module {
     /// selection containing both.
     #[serde(default)]
     pub conflicts_with: Vec<ModuleId>,
+    /// Resources this module needs a provider to vend (databases, buckets, …). Unlike
+    /// [`requires`](Module::requires) — a dependency on a *specific* module — a
+    /// [`ResourceDemand`] names a resource *kind*; the planner finds (and auto-deploys)
+    /// a provider for it, provisions the named resource, and injects its coordinates
+    /// back into this module.
+    #[serde(default)]
+    pub needs: Vec<ResourceDemand>,
     /// The topology services this module contributes (often more than one).
     #[serde(default)]
     pub services: Vec<ServiceSpec>,
-    /// Non-routing declarative contributions (databases, buckets, ports, extras).
+    /// Non-routing declarative contributions (resource kinds it provisions, ports,
+    /// env vars, extras).
     #[serde(default)]
     pub provides: Provides,
     /// User-tunable config knobs this module exposes.

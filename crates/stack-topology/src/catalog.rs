@@ -99,6 +99,39 @@ impl Catalog {
         index
     }
 
+    /// The ids of modules that provision `resource_kind` (declare it under
+    /// [`Provides::resource_kinds`](crate::Provides::resource_kinds)), in catalog
+    /// order. This is the resource index the planner uses to auto-provision a provider
+    /// for a [`ResourceDemand`](crate::ResourceDemand).
+    pub fn providers_for(&self, resource_kind: &str) -> Vec<&ModuleId> {
+        self.modules
+            .iter()
+            .filter(|m| m.provides.resource_kinds.contains_key(resource_kind))
+            .map(|m| &m.id)
+            .collect()
+    }
+
+    /// The single provider for `resource_kind`, if exactly one module provisions it.
+    ///
+    /// Returns `Ok(None)` when no module provides the kind, `Ok(Some(id))` for exactly
+    /// one, and `Err(ids)` (all candidates, sorted) when more than one does — the
+    /// planner turns these into `UnsatisfiedDemand` / `AmbiguousProvider`.
+    pub fn unique_provider_for(
+        &self,
+        resource_kind: &str,
+    ) -> Result<Option<&ModuleId>, Vec<ModuleId>> {
+        let providers = self.providers_for(resource_kind);
+        match providers.len() {
+            0 => Ok(None),
+            1 => Ok(Some(providers[0])),
+            _ => {
+                let mut ids: Vec<ModuleId> = providers.into_iter().cloned().collect();
+                ids.sort();
+                Err(ids)
+            }
+        }
+    }
+
     /// Parse and assemble a catalog from a sequence of module-manifest YAML strings.
     ///
     /// Each element is the text of one module manifest (a `module.yaml`), a single

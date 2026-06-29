@@ -33,7 +33,9 @@
 
 use super::Catalog;
 use crate::endpoint::{Endpoint, RouteIntent, Scheme};
-use crate::module::{Module, ModuleId, Provides, RenderSpec};
+use crate::module::{
+    Injection, Module, ModuleId, Provides, RenderSpec, ResourceDemand, ResourceProvider,
+};
 use crate::placement::Placement;
 use crate::role::{Role, ServiceSpec};
 
@@ -115,6 +117,7 @@ fn envoy() -> Module {
         provider_of: Some("gateway".into()),
         requires: vec![],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![ServiceSpec {
             name: "envoy".into(),
             role: Role::new("gateway"),
@@ -148,6 +151,16 @@ fn postgres() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
+    // Provisions `postgres_database` resources; vends a connection-string coordinate.
+    let mut pg = ResourceProvider::default();
+    pg.coordinates.insert(
+        "url".into(),
+        "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
+            .into(),
+    );
+    provides
+        .resource_kinds
+        .insert("postgres_database".into(), pg);
     Module {
         id: ModuleId::from("local-stack-postgres"),
         display_name: Some("Postgres".into()),
@@ -156,6 +169,7 @@ fn postgres() -> Module {
         provider_of: Some("relational_db".into()),
         requires: vec![],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![ServiceSpec {
             name: "db".into(),
             role: Role::new("relational_db"),
@@ -191,6 +205,13 @@ fn seaweedfs() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
+    // Provisions `s3_bucket` resources; vends the bucket name and the in-network S3
+    // endpoint as coordinates.
+    let mut s3 = ResourceProvider::default();
+    s3.coordinates.insert("bucket".into(), "{name}".into());
+    s3.coordinates
+        .insert("endpoint".into(), "http://seaweedfs:8333".into());
+    provides.resource_kinds.insert("s3_bucket".into(), s3);
     Module {
         id: ModuleId::from("local-stack-seaweedfs"),
         display_name: Some("SeaweedFS (local S3)".into()),
@@ -199,6 +220,7 @@ fn seaweedfs() -> Module {
         provider_of: Some("object_store".into()),
         requires: vec![],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![ServiceSpec {
             name: "seaweedfs".into(),
             role: Role::new("object_store"),
@@ -225,8 +247,6 @@ fn seaweedfs() -> Module {
 /// is the override exception (passes through unchanged).
 fn mlflow() -> Module {
     let mut provides = Provides::default();
-    provides.postgres_databases.push("mlflow".into());
-    provides.s3_buckets.push("mlflow".into());
     provides
         .extras
         .insert(BASE_PATH_EXTRA.into(), "/mlflow".into());
@@ -262,12 +282,25 @@ fn mlflow() -> Module {
         summary: Some("Experiment + model tracking; Databricks-shaped URLs.".into()),
         category: Some("ml".into()),
         provider_of: Some("experiment_tracking".into()),
-        requires: vec![
-            ModuleId::from("local-stack-postgres"),
-            ModuleId::from("local-stack-seaweedfs"),
-            ModuleId::from("local-stack-envoy"),
-        ],
+        // Only the gateway is a hard module dependency; the relational store and
+        // object store arrive via resource demands (auto-provisioned).
+        requires: vec![ModuleId::from("local-stack-envoy")],
         conflicts_with: vec![],
+        // MLflow's fragment hard-codes how it reaches Postgres/S3, so these demands
+        // exist to *provision* the `mlflow` database and bucket (no coordinate
+        // injection needed back).
+        needs: vec![
+            ResourceDemand {
+                resource: "postgres_database".into(),
+                name: "mlflow".into(),
+                inject: vec![],
+            },
+            ResourceDemand {
+                resource: "s3_bucket".into(),
+                name: "mlflow".into(),
+                inject: vec![],
+            },
+        ],
         services: vec![ServiceSpec {
             name: "mlflow".into(),
             role: Role::new("experiment_tracking"),
@@ -311,8 +344,6 @@ fn mlflow() -> Module {
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Module {
     let mut provides = Provides::default();
-    provides.postgres_databases.push("unitycatalog".into());
-    provides.s3_buckets.push("unity".into());
     provides
         .extras
         .insert(BASE_PATH_EXTRA.into(), String::new());
@@ -327,10 +358,8 @@ fn unity_catalog() -> Module {
     provides
         .env_vars
         .insert("UC_IMAGE".into(), "unitycatalog/unitycatalog:latest".into());
-    provides.env_vars.insert(
-        "UC_DATABASE_URL".into(),
-        "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/unitycatalog".into(),
-    );
+    // `UC_DATABASE_URL` is no longer hard-coded: it's the connection-string coordinate
+    // the relational-DB provider renders for UC's demanded `unitycatalog` database.
 
     Module {
         id: ModuleId::from("local-stack-unity-catalog"),
@@ -338,12 +367,26 @@ fn unity_catalog() -> Module {
         summary: Some("Databricks UC server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
         provider_of: Some("data_catalog".into()),
-        requires: vec![
-            ModuleId::from("local-stack-postgres"),
-            ModuleId::from("local-stack-seaweedfs"),
-            ModuleId::from("local-stack-envoy"),
-        ],
+        // Only the gateway is a hard module dependency; Postgres + S3 arrive as demands.
+        requires: vec![ModuleId::from("local-stack-envoy")],
         conflicts_with: vec![],
+        needs: vec![
+            ResourceDemand {
+                resource: "postgres_database".into(),
+                name: "unitycatalog".into(),
+                // The provider's connection-string coordinate lands in UC's env as
+                // `UC_DATABASE_URL`, which its fragment reads.
+                inject: vec![Injection {
+                    key: "UC_DATABASE_URL".into(),
+                    coordinate: "url".into(),
+                }],
+            },
+            ResourceDemand {
+                resource: "s3_bucket".into(),
+                name: "unity".into(),
+                inject: vec![],
+            },
+        ],
         services: vec![ServiceSpec {
             name: "unitycatalog".into(),
             role: Role::new("data_catalog"),
@@ -389,6 +432,7 @@ fn trino() -> Module {
         provider_of: Some("sql_engine".into()),
         requires: vec![ModuleId::from("local-stack-envoy")],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![ServiceSpec {
             name: "trino".into(),
             role: Role::new("sql_engine"),
@@ -430,6 +474,7 @@ fn jaeger() -> Module {
         provider_of: Some("tracing".into()),
         requires: vec![ModuleId::from("local-stack-envoy")],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![ServiceSpec {
             name: "jaeger".into(),
             role: Role::new("tracing"),
@@ -478,6 +523,7 @@ fn notebooks() -> Module {
         provider_of: Some("notebook_server".into()),
         requires: vec![ModuleId::from("local-stack-envoy")],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![ServiceSpec {
             name: "notebooks".into(),
             role: Role::new("notebook_server"),
@@ -523,6 +569,7 @@ fn databricks_emulator_env() -> Module {
         provider_of: Some("databricks_apps_contract".into()),
         requires: vec![],
         conflicts_with: vec![],
+        needs: vec![],
         services: vec![],
         provides,
         knobs: vec![],

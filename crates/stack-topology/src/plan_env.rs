@@ -152,6 +152,35 @@ pub enum PlanError {
         /// The conflicting port a later endpoint declared.
         second: u16,
     },
+    /// A module demands a resource kind no catalog module provisions.
+    #[error("no module provides resource kind `{resource}` demanded by `{module}`")]
+    UnsatisfiedDemand {
+        /// The demanding module.
+        module: String,
+        /// The unmet resource kind.
+        resource: String,
+    },
+    /// More than one catalog module provisions a demanded resource kind and there is
+    /// no tie-break, so the planner will not guess which to deploy.
+    #[error(
+        "resource kind `{resource}` has multiple providers {providers:?}; selection is ambiguous"
+    )]
+    AmbiguousProvider {
+        /// The demanded resource kind.
+        resource: String,
+        /// The candidate provider module ids (sorted).
+        providers: Vec<ModuleId>,
+    },
+    /// A demand requests a coordinate the chosen provider does not offer.
+    #[error("provider for `{resource}` offers no coordinate `{coordinate}` (needed by `{module}`)")]
+    UnknownCoordinate {
+        /// The demanding module.
+        module: String,
+        /// The resource kind.
+        resource: String,
+        /// The missing coordinate name.
+        coordinate: String,
+    },
 }
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -258,8 +287,26 @@ pub fn plan(
     catalog: &Catalog,
     ctx: &PlanCtx,
 ) -> Result<EnvironmentPlan, PlanError> {
-    let selected = resolve_selection(selection, catalog)?;
-    let graph = resolve(&selected, catalog.modules())?;
+    // Resolve the selection, auto-provisioning a provider for every resource demand
+    // (a demanded relational store, object store, …) before anything else runs.
+    let graph = resolve_with_demands(selection, catalog)?;
+
+    // Resources to provision = every demand's (kind, name) across the graph, deduped,
+    // in dependency order. These drive the provider init artifacts.
+    let mut by_kind: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for module in &graph.nodes {
+        for demand in &module.needs {
+            let names = by_kind.entry(demand.resource.clone()).or_default();
+            if !names.contains(&demand.name) {
+                names.push(demand.name.clone());
+            }
+        }
+    }
+    let postgres_databases = by_kind
+        .get("postgres_database")
+        .cloned()
+        .unwrap_or_default();
+    let s3_buckets = by_kind.get("s3_bucket").cloned().unwrap_or_default();
 
     let mut routes = RoutePlan::new();
     let mut gateway = GatewayConfig::default();
@@ -275,23 +322,6 @@ pub fn plan(
     // is keyed by its port; dedicated listeners never collide (own port).
     let mut claimed: BTreeMap<String, String> = BTreeMap::new();
 
-    // Aggregate set-like resources across modules in dependency order (dedup,
-    // order-preserving) for the artifacts the planner renders downstream.
-    let mut postgres_databases: Vec<String> = Vec::new();
-    let mut s3_buckets: Vec<String> = Vec::new();
-    for module in &graph.nodes {
-        for db in &module.provides.postgres_databases {
-            if !postgres_databases.contains(db) {
-                postgres_databases.push(db.clone());
-            }
-        }
-        for b in &module.provides.s3_buckets {
-            if !s3_buckets.contains(b) {
-                s3_buckets.push(b.clone());
-            }
-        }
-    }
-
     // Walk modules in dependency order so emitted routes/clusters are deterministic.
     for module in &graph.nodes {
         let mut module_env = InjectedEnv::new();
@@ -302,6 +332,14 @@ pub fn plan(
         }
         if module.id.as_str() == "local-stack-seaweedfs" {
             module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
+        }
+        // Inject each demand's requested coordinates back into the consuming module's
+        // env, rendered from the provider's coordinate template.
+        for demand in &module.needs {
+            for injection in &demand.inject {
+                let value = resolve_coordinate(catalog, demand, &injection.coordinate)?;
+                module_env.set(&injection.key, value);
+            }
         }
         for service in &module.services {
             for endpoint in &service.endpoints {
@@ -412,13 +450,21 @@ pub fn plan(
     gateway.listeners.extend(dedicated);
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Aggregate the stack's env vars for `.env` — only modules' *declared* env vars,
-    // last-writer-wins in dependency order. (Render-only injections like `BASE_PATH`
-    // and `S3_BUCKET_MB_LINES` stay out of `.env`; they belong to a module's fragment.)
+    // Aggregate the stack's env vars for `.env`, last-writer-wins in dependency order:
+    // each module's *declared* env vars, plus the coordinates injected to satisfy its
+    // demands (a fragment reads those as `${VAR}`, so compose must resolve them from
+    // `.env` at run time). Render-only injections (`BASE_PATH`, `S3_BUCKET_MB_LINES`)
+    // stay out of `.env` — they are substituted into the fragment at plan time.
     let mut env = InjectedEnv::new();
     for module in &graph.nodes {
         for (k, v) in module.provides.env_vars.iter() {
             env.set(k, v);
+        }
+        for demand in &module.needs {
+            for injection in &demand.inject {
+                let value = resolve_coordinate(catalog, demand, &injection.coordinate)?;
+                env.set(&injection.key, value);
+            }
         }
     }
 
@@ -480,6 +526,127 @@ fn resolve_selection(selection: &Selection, catalog: &Catalog) -> Result<Vec<Mod
         }
     }
     Ok(out)
+}
+
+/// Resolve a selection, growing it until every resource demand is satisfied.
+///
+/// A module's [`ResourceDemand`] names a resource *kind*; the planner finds the catalog
+/// module that provisions it and adds it to the selection if absent. Because a
+/// just-added provider may itself `require` or `need` more, this is a fixed point:
+/// resolve → scan demands → add missing providers → re-resolve, until a pass adds
+/// nothing. The `requires` closure / topo-sort / cycle detection all live in
+/// [`resolve`]; this only decides *which* modules to feed it.
+fn resolve_with_demands(
+    selection: &Selection,
+    catalog: &Catalog,
+) -> Result<ResolvedGraph, PlanError> {
+    // Each consuming module's demanded providers, recorded as it is discovered, so the
+    // final resolve can treat "needs a resource from X" as a dependency edge on X
+    // (provider ordered before consumer, like a `requires`).
+    let mut demand_edges: BTreeMap<ModuleId, Vec<ModuleId>> = BTreeMap::new();
+    let mut selected = resolve_selection(selection, catalog)?;
+
+    // Fixed point: resolve → scan demands → add missing providers → repeat. Bounded by
+    // the catalog size (each iteration adds ≥1 module).
+    for _ in 0..=catalog.modules().len() {
+        let graph = resolve(&selected, catalog.modules())?;
+        let mut added = false;
+        for module in &graph.nodes {
+            for demand in &module.needs {
+                let provider = match catalog.unique_provider_for(&demand.resource) {
+                    Ok(Some(id)) => id.clone(),
+                    Ok(None) => {
+                        return Err(PlanError::UnsatisfiedDemand {
+                            module: module.id.0.clone(),
+                            resource: demand.resource.clone(),
+                        });
+                    }
+                    Err(providers) => {
+                        return Err(PlanError::AmbiguousProvider {
+                            resource: demand.resource.clone(),
+                            providers,
+                        });
+                    }
+                };
+                let edges = demand_edges.entry(module.id.clone()).or_default();
+                if !edges.contains(&provider) {
+                    edges.push(provider.clone());
+                }
+                if !selected.contains(&provider) {
+                    selected.push(provider);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            // Final resolve against an augmented catalog where each consumer also
+            // `requires` its demanded providers, so providers start before consumers.
+            let augmented = augment_requires(catalog.modules(), &demand_edges);
+            return resolve(&selected, &augmented).map_err(Into::into);
+        }
+    }
+    // Unreachable in practice (the loop bound exceeds the max modules addable).
+    let augmented = augment_requires(catalog.modules(), &demand_edges);
+    resolve(&selected, &augmented).map_err(Into::into)
+}
+
+/// Clone the catalog modules, extending each module's `requires` with the providers it
+/// demands, so the resolver orders a provider before the module that needs its resource.
+fn augment_requires(
+    modules: &[Module],
+    demand_edges: &BTreeMap<ModuleId, Vec<ModuleId>>,
+) -> Vec<Module> {
+    modules
+        .iter()
+        .map(|m| {
+            let mut m = m.clone();
+            if let Some(providers) = demand_edges.get(&m.id) {
+                for p in providers {
+                    if !m.requires.contains(p) {
+                        m.requires.push(p.clone());
+                    }
+                }
+            }
+            m
+        })
+        .collect()
+}
+
+/// Render the value of `coordinate` for `demand`'s provider: look up the unique
+/// provider for the demanded kind, take its coordinate template, and substitute
+/// `{name}` with the demanded resource name (leaving `${VAR}` refs for compose).
+fn resolve_coordinate(
+    catalog: &Catalog,
+    demand: &crate::module::ResourceDemand,
+    coordinate: &str,
+) -> Result<String, PlanError> {
+    let provider_id = match catalog.unique_provider_for(&demand.resource) {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Err(PlanError::UnsatisfiedDemand {
+                module: String::new(),
+                resource: demand.resource.clone(),
+            });
+        }
+        Err(providers) => {
+            return Err(PlanError::AmbiguousProvider {
+                resource: demand.resource.clone(),
+                providers,
+            });
+        }
+    };
+    let provider = catalog.get(provider_id).expect("provider id is in catalog");
+    let template = provider
+        .provides
+        .resource_kinds
+        .get(&demand.resource)
+        .and_then(|rp| rp.coordinate(coordinate))
+        .ok_or_else(|| PlanError::UnknownCoordinate {
+            module: String::new(),
+            resource: demand.resource.clone(),
+            coordinate: coordinate.to_string(),
+        })?;
+    Ok(template.replace("{name}", &demand.name))
 }
 
 /// Claim `prefix` for `service.endpoint`, erroring if another endpoint already did.
@@ -675,6 +842,7 @@ mod tests {
             provider_of: None,
             requires: vec![],
             conflicts_with: vec![],
+            needs: vec![],
             services: vec![ServiceSpec {
                 name: id.to_string(),
                 role: crate::role::Role::new("svc"),

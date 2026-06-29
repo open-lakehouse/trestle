@@ -62,7 +62,10 @@ pub use artifacts::{
 };
 pub use catalog::{Catalog, baseline_catalog, baseline_selection};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
-pub use module::{Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec};
+pub use module::{
+    Injection, Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec, ResourceDemand,
+    ResourceProvider,
+};
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
 pub use plan_env::{

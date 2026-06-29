@@ -114,6 +114,7 @@ fn real_prefix_collision_fails_loudly() {
             provider_of: None,
             requires: vec![],
             conflicts_with: vec![],
+            needs: vec![],
             services: vec![ServiceSpec {
                 name: id.to_string(),
                 role: Role::new("svc"),
