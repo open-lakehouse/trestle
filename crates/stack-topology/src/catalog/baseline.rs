@@ -25,8 +25,9 @@
 //!
 //! # Compose fragments
 //!
-//! Each module's compose `services:` snippet lives as a sibling `.yaml` file in
-//! `fragments/`, embedded via `include_str!` and carried on the module's
+//! Each module's compose `services:` snippet lives as a `.yaml` file in the crate-root
+//! `templates/fragments/` directory (a sibling of `src/`), embedded via `include_str!`
+//! (relative paths reach out of `src/` as `../../templates/fragments/`) and carried on the module's
 //! [`RenderSpec::Static`]. Snippets use only `${VAR}` substitution; the one
 //! stack-dependent part — SeaweedFS's bucket-init lines — is a `${S3_BUCKET_MB_LINES}`
 //! placeholder the planner fills from the aggregated `s3_buckets`.
@@ -144,7 +145,7 @@ fn envoy() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/envoy.yaml")),
+        render: fragment(include_str!("../../templates/fragments/envoy.yaml")),
     }
 }
 
@@ -196,7 +197,7 @@ fn postgres() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/postgres.yaml")),
+        render: fragment(include_str!("../../templates/fragments/postgres.yaml")),
     }
 }
 
@@ -258,7 +259,7 @@ fn seaweedfs() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/seaweedfs.yaml")),
+        render: fragment(include_str!("../../templates/fragments/seaweedfs.yaml")),
     }
 }
 
@@ -324,7 +325,7 @@ fn azurite() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/azurite.yaml")),
+        render: fragment(include_str!("../../templates/fragments/azurite.yaml")),
     }
 }
 
@@ -424,7 +425,7 @@ fn mlflow() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/mlflow.yaml")),
+        render: fragment(include_str!("../../templates/fragments/mlflow.yaml")),
     }
 }
 
@@ -504,7 +505,7 @@ fn unity_catalog() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/unity-catalog.yaml")),
+        render: fragment(include_str!("../../templates/fragments/unity-catalog.yaml")),
     }
 }
 
@@ -540,7 +541,7 @@ fn trino() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/trino.yaml")),
+        render: fragment(include_str!("../../templates/fragments/trino.yaml")),
     }
 }
 
@@ -593,7 +594,7 @@ fn jaeger() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/jaeger.yaml")),
+        render: fragment(include_str!("../../templates/fragments/jaeger.yaml")),
     }
 }
 
@@ -631,7 +632,7 @@ fn notebooks() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/notebooks.yaml")),
+        render: fragment(include_str!("../../templates/fragments/notebooks.yaml")),
     }
 }
 

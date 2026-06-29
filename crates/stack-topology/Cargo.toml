@@ -13,13 +13,9 @@ homepage.workspace = true
 keywords = ["lakehouse", "topology", "docker-compose", "service-discovery"]
 
 [features]
-# Off by default to keep the pure addressing core dependency-free.
 default = []
 # Build a catalog from on-disk `module.yaml` manifests (`Catalog::from_manifests`).
 catalog = ["dep:serde_yaml"]
-# Render the stack-aggregated text artifacts (Envoy config, Postgres init, `.env`,
-# top-level compose) from an `EnvironmentPlan`.
-render = []
 
 [dependencies]
 # workspace dependencies (in alphabetical order)
@@ -27,6 +23,12 @@ serde = { workspace = true }
 serde_yaml = { workspace = true, optional = true }
 thiserror = { workspace = true }
 url = { workspace = true }
+# Templating for the rendered stack artifacts (the Envoy gateway config). Rendering is
+# always available and pure (it produces strings + filenames; the consumer owns disk I/O),
+# so it is NOT feature-gated. `default-features = false` + `builtins` keeps it lean and
+# wasm32-clean; `serde` lets the renderer take a `#[derive(Serialize)]` context;
+# deliberately NO `loader` feature (it does filesystem globbing).
+minijinja = { version = "2.19", default-features = false, features = ["builtins", "serde"] }
 
 [dev-dependencies]
 # Used by the golden-artifact tests to assert the rendered Envoy/compose output is

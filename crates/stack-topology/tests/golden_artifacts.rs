@@ -13,8 +13,6 @@
 //! `trestle new` for the default lakehouse selection (envoy + seaweedfs + postgres +
 //! unity-catalog + mlflow).
 
-#![cfg(feature = "render")]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use olai_stack_topology::{

@@ -16,8 +16,41 @@
 
 use std::fmt::Write as _;
 
+use serde::Serialize;
+
 use crate::plan_env::{EnvironmentPlan, GatewayConfig, HeadFile};
 use crate::render::InjectedEnv;
+
+/// The on-disk Envoy template, embedded at compile time. Lives in the crate-root
+/// `templates/` directory (a sibling of `src/`) so it is reviewable as a plain file
+/// rather than as inline string-building.
+const ENVOY_TEMPLATE: &str = include_str!("../templates/envoy.yaml.jinja");
+
+/// The flat, owned render context the Envoy template iterates. The ordering decisions
+/// (longest-prefix-first routes, app cluster first) stay in Rust; the template only
+/// renders what it is handed. The core plan types ([`GatewayConfig`] et al.) deliberately
+/// do not derive `Serialize`, so this is the serialization boundary.
+#[derive(Serialize)]
+struct EnvoyCtx<'a> {
+    internal_port: u16,
+    routes: Vec<RouteCtx<'a>>,
+    clusters: Vec<ClusterCtx<'a>>,
+    app: bool,
+}
+
+#[derive(Serialize)]
+struct RouteCtx<'a> {
+    prefix: &'a str,
+    cluster: &'a str,
+    rewrite: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ClusterCtx<'a> {
+    name: &'a str,
+    host: &'a str,
+    port: u16,
+}
 
 /// Options the Envoy renderer needs beyond the [`GatewayConfig`] — chiefly the
 /// optional default app upstream (the catch-all route + cluster) the gateway fronts.
@@ -50,141 +83,58 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
     let shared = gateway.listeners.first();
     let internal_port = shared.map(|l| l.internal_port).unwrap_or(10000);
 
-    let mut out = String::new();
-    out.push_str(ENVOY_HEADER);
-    push_lines(
-        &mut out,
-        &[
-            "static_resources:",
-            "  listeners:",
-            "    - name: gateway",
-            "      address:",
-            &format!("        socket_address: {{ address: 0.0.0.0, port_value: {internal_port} }}"),
-            "      filter_chains:",
-            "        - filters:",
-            "            - name: envoy.filters.network.http_connection_manager",
-            "              typed_config:",
-            "                \"@type\": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-            "                codec_type: AUTO",
-            "                stat_prefix: ingress_http",
-            "                use_remote_address: true",
-            "                upgrade_configs:",
-            "                  - upgrade_type: websocket",
-            "                route_config:",
-            "                  name: local_route",
-            "                  virtual_hosts:",
-            "                    - name: all",
-            "                      domains: [\"*\"]",
-            "                      routes:",
-        ],
-    );
+    let routes = shared
+        .map(|l| l.routes.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .map(|r| RouteCtx {
+            prefix: &r.prefix,
+            cluster: &r.cluster,
+            rewrite: r.rewrite.as_deref(),
+        })
+        .collect();
 
-    if let Some(listener) = shared {
-        for r in &listener.routes {
-            push_lines(
-                &mut out,
-                &[
-                    &format!(
-                        "                        - match: {{ prefix: \"{}\" }}",
-                        r.prefix
-                    ),
-                    "                          route:",
-                    &format!("                            cluster: {}", r.cluster),
-                ],
-            );
-            if let Some(rewrite) = &r.rewrite {
-                push_lines(
-                    &mut out,
-                    &[
-                        "                            regex_rewrite:",
-                        "                              pattern:",
-                        "                                google_re2: {}",
-                        &format!(
-                            "                                regex: \"^{}(.*)$\"",
-                            r.prefix
-                        ),
-                        &format!("                              substitution: \"{rewrite}\\\\1\""),
-                    ],
-                );
-            }
-        }
-    }
-
-    if opts.app.is_some() {
-        push_lines(
-            &mut out,
-            &[
-                "                        # Default route → the user's app (catch-all, must be last).",
-                "                        - match: { prefix: \"/\" }",
-                "                          route:",
-                "                            cluster: app",
-            ],
-        );
-    }
-
-    push_lines(
-        &mut out,
-        &[
-            "                http_filters:",
-            "                  - name: envoy.filters.http.router",
-            "                    typed_config:",
-            "                      \"@type\": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router",
-            "  clusters:",
-        ],
-    );
-
+    // The app cluster (when present) is emitted first, before the module clusters —
+    // matching the route table, where its `/` catch-all comes last.
+    let mut clusters = Vec::with_capacity(gateway.clusters.len() + 1);
     if let Some(app) = &opts.app {
-        push_cluster(&mut out, "app", &app.service, app.port);
+        clusters.push(ClusterCtx {
+            name: "app",
+            host: &app.service,
+            port: app.port,
+        });
     }
-    for c in &gateway.clusters {
-        push_cluster(&mut out, &c.name, &c.host, c.port);
-    }
+    clusters.extend(gateway.clusters.iter().map(|c| ClusterCtx {
+        name: &c.name,
+        host: &c.host,
+        port: c.port,
+    }));
 
-    push_lines(
-        &mut out,
-        &[
-            "",
-            "admin:",
-            "  address:",
-            "    socket_address: { address: 0.0.0.0, port_value: 9901 }",
-        ],
-    );
-    out
+    let ctx = EnvoyCtx {
+        internal_port,
+        routes,
+        clusters,
+        app: opts.app.is_some(),
+    };
+
+    let mut env = minijinja::Environment::new();
+    env.add_template("envoy", ENVOY_TEMPLATE)
+        .expect("the embedded Envoy template is valid");
+    env.get_template("envoy")
+        .expect("the Envoy template was just added")
+        .render(&ctx)
+        .expect("rendering the Envoy template with a valid context cannot fail")
 }
 
-/// Append each line followed by `\n`.
+/// Append each line followed by `\n`. Used by the hand-built (non-templated) artifact
+/// renderers below — the Postgres init script, the `.env` overlay, and the top-level
+/// compose file, whose shapes are small, line-oriented, and not worth a template.
 fn push_lines(out: &mut String, lines: &[&str]) {
     for line in lines {
         out.push_str(line);
         out.push('\n');
     }
 }
-
-/// Append one Envoy `STRICT_DNS` cluster block.
-fn push_cluster(out: &mut String, name: &str, host: &str, port: u16) {
-    push_lines(
-        out,
-        &[
-            &format!("    - name: {name}"),
-            "      type: STRICT_DNS",
-            "      connect_timeout: 2s",
-            "      load_assignment:",
-            &format!("        cluster_name: {name}"),
-            "        endpoints:",
-            "          - lb_endpoints:",
-            "              - endpoint:",
-            "                  address:",
-            "                    socket_address:",
-            &format!("                      address: {host}"),
-            &format!("                      port_value: {port}"),
-        ],
-    );
-}
-
-/// The leading comment block on the rendered Envoy config.
-const ENVOY_HEADER: &str = "# Envoy front-edge config, rendered from the planner's gateway config.\n\
-# Route ordering matters: more-specific prefixes come before less-specific ones,\n\
-# and the default app route (if any) is emitted last.\n\n";
 
 /// Render the Postgres `init-databases.sh` that creates each database the stack needs.
 pub fn render_postgres_init(databases: &[String]) -> String {
