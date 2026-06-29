@@ -67,7 +67,9 @@ pub use artifacts::{
     AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_env, render_envoy,
     render_postgres_init,
 };
-pub use catalog::{Catalog, baseline_catalog, baseline_selection};
+pub use catalog::{
+    Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
+};
 pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
 pub use module::{

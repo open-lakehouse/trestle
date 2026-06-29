@@ -10,7 +10,10 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - ./.data/postgres:/var/lib/postgresql/data
+      # Durable state under the stack's data root (`${DATA_ROOT}`, default ./.data), resolved at
+      # plan time from `PlanCtx.data_root` — relocating is one knob, not a per-fragment edit. The
+      # init script stays alongside the compose file.
+      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
       - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]

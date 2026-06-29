@@ -9,7 +9,9 @@ services:
       - "${SEAWEEDFS_MASTER_PORT:-9333}:9333"
       - "${SEAWEEDFS_S3_PORT:-9000}:8333"
     volumes:
-      - ./.data/seaweedfs:/data
+      # Durable object state under the stack's data root (`${DATA_ROOT}`, default ./.data),
+      # resolved at plan time from `PlanCtx.data_root` — one knob relocates the whole stack.
+      - ${DATA_ROOT}/seaweedfs:/data
     healthcheck:
       test:
         - "CMD-SHELL"

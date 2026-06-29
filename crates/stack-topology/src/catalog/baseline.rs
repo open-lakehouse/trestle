@@ -77,6 +77,25 @@ pub const DEP_GATE_EXTRA: &str = "dep_gate";
 /// `aws s3 mb` lines.
 pub const S3_BUCKET_MB_LINES_VAR: &str = "S3_BUCKET_MB_LINES";
 
+/// The render-env key carrying the stack's root data directory, injected into *every*
+/// module's render env (see [`PlanCtx::data_root`](crate::PlanCtx::data_root)).
+///
+/// A module that persists state across `compose down`/`up` mounts its data under
+/// `${DATA_ROOT}/<module>` (a Static fragment) or `{{ env.DATA_ROOT }}/<module>` (a Template
+/// fragment) by convention, rather than hard-coding a `./.data/...` path relative to the
+/// compose file. The value is resolved at *plan time* (baked into the rendered fragment, like
+/// [`BASE_PATH`]), so relocating the whole stack's persistence is a single
+/// [`PlanCtx::data_root`](crate::PlanCtx::data_root) knob — no per-fragment edit. A module with
+/// no durable state simply ignores it.
+///
+/// [`BASE_PATH`]: crate::InjectedEnv
+pub const DATA_ROOT_VAR: &str = "DATA_ROOT";
+
+/// The default value injected for [`DATA_ROOT_VAR`]: `./.data`, relative to the compose
+/// file's directory — matching where the fragments persisted data before the root was
+/// centralized.
+pub const DATA_ROOT_DEFAULT: &str = "./.data";
+
 /// The inlined baseline catalog: all common local-Lakehouse modules.
 ///
 /// The `object_store` role has two providers (SeaweedFS and Azurite); the catalog

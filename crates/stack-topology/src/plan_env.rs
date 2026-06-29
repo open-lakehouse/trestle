@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
-    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DEP_GATE_EXTRA, REWRITE_OVERRIDE_PREFIX,
-    S3_BUCKET_MB_LINES_VAR,
+    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA,
+    REWRITE_OVERRIDE_PREFIX, S3_BUCKET_MB_LINES_VAR,
 };
 use crate::connection::Connection;
 use crate::endpoint::{Endpoint, RouteIntent};
@@ -112,6 +112,13 @@ pub struct PlanCtx {
     /// the catalog; an empty/absent entry falls back to uniqueness then the catalog
     /// default. A demand's own `provider` pin still wins over this.
     pub provider_preference: BTreeMap<String, Vec<ModuleId>>,
+    /// The stack's root data directory, injected into every module's render env as
+    /// [`DATA_ROOT`](crate::DATA_ROOT_VAR) and resolved at plan time. A module that persists
+    /// state mounts it under `${DATA_ROOT}/<module>` by convention, so relocating all
+    /// persistence is this single knob (e.g. an absolute path) rather than an edit per
+    /// fragment. Defaults to [`DATA_ROOT_DEFAULT`](crate::DATA_ROOT_DEFAULT) (`./.data`,
+    /// relative to the compose file).
+    pub data_root: String,
 }
 
 impl Default for PlanCtx {
@@ -124,6 +131,7 @@ impl Default for PlanCtx {
             dedicated_listener_ports: Vec::new(),
             dedicated_listener_port_base: 9100,
             provider_preference: BTreeMap::new(),
+            data_root: DATA_ROOT_DEFAULT.into(),
         }
     }
 }
@@ -431,6 +439,12 @@ pub fn plan(
     // Walk modules in dependency order so emitted routes/clusters are deterministic.
     for module in &graph.nodes {
         let mut module_env = InjectedEnv::new();
+        // The stack's root data directory, available to every fragment as a render-only value
+        // (baked at plan time, like `BASE_PATH`). A module that persists state mounts it under
+        // `${DATA_ROOT}/<module>` (Static) or `{{ env.DATA_ROOT }}/<module>` (Template) rather
+        // than hard-coding a `./.data/...` path, so the whole stack's persistence relocates via
+        // the one `PlanCtx::data_root` knob.
+        module_env.set(DATA_ROOT_VAR, &ctx.data_root);
         // Seed each module's render env with its declared env vars. SeaweedFS also
         // needs the aggregated bucket list folded into its one-shot init block.
         for (k, v) in module.provides.env_vars.iter() {

@@ -9,7 +9,9 @@
 #   * `objects` — the container names the stack provisions on it; the one-shot init iterates
 #     them to create each, instead of the planner splicing pre-formatted shell lines.
 #
-# The blob port is the emulator's fixed 10000, written directly.
+# The blob port is the emulator's fixed 10000, written directly. Durable blob state is
+# persisted under the stack's data root (`env.DATA_ROOT`, default ./.data), resolved at plan
+# time — relocating the stack's data is a single `PlanCtx.data_root` knob, not a per-fragment edit.
 {%- set obj = connections.object_store.0 %}
 services:
   azurite:
@@ -20,7 +22,7 @@ services:
     ports:
       - "10000:10000"
     volumes:
-      - ./.data/azurite:/data
+      - {{ env.DATA_ROOT }}/azurite:/data
     healthcheck:
       test:
         - "CMD-SHELL"

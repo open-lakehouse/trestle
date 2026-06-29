@@ -297,7 +297,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // resolve at run time (the database URL itself carries `${POSTGRES_*}` defaults, so scope
     // the check to the lines that used to be `${VAR}` indirections).
     assert!(
-        s3.contains("image: unitycatalog/unitycatalog:v0.3.0"),
+        s3.contains("image: unitycatalog/unitycatalog:v0.4.1"),
         "image pinned inline, not via ${{UC_IMAGE}}: {s3}"
     );
     assert!(
@@ -499,7 +499,14 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
             .contains("az storage container create --name mlflow"),
         "init iterates provisioned container names: {frag}"
     );
-    // No compose substitution remains anywhere in the rendered fragment body.
+    // Durable blob state lives under the stack's data root, baked in at plan time from
+    // `{{ env.DATA_ROOT }}` (default ./.data) — not a hard-coded `./.data/azurite`.
+    assert!(
+        frag.contains("./.data/azurite:/data"),
+        "blob state persisted under the stack data root: {frag}"
+    );
+    // No compose substitution remains anywhere in the rendered fragment body — every value,
+    // including the data root, is resolved from the typed/render context at plan time.
     let body: String = frag
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))
@@ -615,4 +622,79 @@ fn empty_catalog_renders_a_valid_empty_envoy() {
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
     assert!(routes.is_empty());
     assert!(clusters.is_empty());
+}
+
+#[test]
+fn data_root_is_injected_and_relocatable() {
+    use olai_stack_topology::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, ModuleId};
+
+    let frag = |p: &olai_stack_topology::EnvironmentPlan, id: &str| {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| out.fragment.clone())
+            .unwrap()
+    };
+
+    // The data root is injected into *every* module's render env (not just data-bearing ones),
+    // defaulting to `./.data` — render-only, so it's resolved into the fragment at plan time.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .unwrap();
+    for module in ["postgres", "seaweedfs", "unity-catalog", "mlflow", "envoy"] {
+        assert_eq!(
+            p.injected
+                .get(&ModuleId::from(module))
+                .and_then(|e| e.get(DATA_ROOT_VAR)),
+            Some(DATA_ROOT_DEFAULT),
+            "{module} should see the default DATA_ROOT"
+        );
+    }
+
+    // Persisting fragments mount under it by convention, with the default root baked in: a
+    // Static fragment via `${DATA_ROOT}` substitution, a Template fragment via `{{ env.DATA_ROOT }}`.
+    assert!(frag(&p, "postgres").contains("./.data/postgres:/var/lib/postgresql/data"));
+    assert!(frag(&p, "seaweedfs").contains("./.data/seaweedfs:/data"));
+
+    // Azurite is a Template fragment: it bakes the same default root via `{{ env.DATA_ROOT }}`.
+    // Prefer it as the object_store so a consumer (mlflow) pulls it in and its fragment renders.
+    let p_az = plan(
+        &Selection::modules(["mlflow"]),
+        &baseline_catalog(),
+        &PlanCtx {
+            provider_preference: BTreeMap::from([(
+                "object_store".to_string(),
+                vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+            )]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        frag(&p_az, "azurite").contains("./.data/azurite:/data"),
+        "azurite (Template) bakes the default root: {}",
+        frag(&p_az, "azurite")
+    );
+
+    // A custom root relocates every mount through the single knob — no fragment edits, and the
+    // baked path follows. Render-only, so it does NOT leak into `.env`.
+    let relocated = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            data_root: "/var/lib/mystack".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(frag(&relocated, "postgres").contains("/var/lib/mystack/postgres:"));
+    assert!(frag(&relocated, "seaweedfs").contains("/var/lib/mystack/seaweedfs:"));
+    assert_eq!(
+        relocated.env.get(DATA_ROOT_VAR),
+        None,
+        "DATA_ROOT is render-only (baked at plan time), so it stays out of .env"
+    );
 }
