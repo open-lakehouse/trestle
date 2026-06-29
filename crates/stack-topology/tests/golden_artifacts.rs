@@ -698,6 +698,81 @@ fn adding_jaeger_aggregates_its_routes() {
 }
 
 #[test]
+fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
+    use olai_stack_topology::ModuleId;
+
+    // Headwaters serves its UI + read API + ingest under one base path, so it fronts as a
+    // single `UiPrefixable` route at `/lineage` — mounted on the shared listener and
+    // forwarded upstream unchanged (no rewrite), unlike MLflow's split tracking/UI routes.
+    // It demands only a relational_db (named `lineage`); selecting it must auto-provision
+    // Postgres and the `lineage` database.
+    let sel = Selection::modules(["envoy", "postgres", "headwaters"]);
+    let arts = render(&sel);
+    let (routes, _, clusters) = parse_envoy(&arts.envoy);
+
+    // One shared-listener route at /lineage, no rewrite, routed to the headwaters cluster.
+    let (cluster, rewrite) = routes
+        .get("/lineage")
+        .expect("missing /lineage route in the rendered Envoy config");
+    assert_eq!(cluster, "headwaters");
+    assert_eq!(*rewrite, None, "the prefix is forwarded upstream unchanged");
+    assert_eq!(
+        clusters.get("headwaters").map(String::as_str),
+        Some("headwaters:8091")
+    );
+
+    // The planner provisioned the demanded `lineage` database on Postgres.
+    let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
+    assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
+    assert!(p.postgres_databases.contains(&"lineage".to_string()));
+
+    // The chosen base path is injected back for the module's render.
+    assert_eq!(
+        p.injected
+            .get(&ModuleId::from("headwaters"))
+            .and_then(|e| e.get("BASE_PATH")),
+        Some("/lineage")
+    );
+
+    // The rendered fragment wires the DSN from the resolved connection, the base path from
+    // the planner, and gates on the Postgres healthcheck — with no leftover ${VAR}.
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("headwaters"))
+        .expect("headwaters is in the render set");
+    let doc: Value =
+        serde_yaml::from_str(&out.fragment).expect("headwaters fragment must be valid YAML");
+    let svc = &doc["services"]["headwaters"];
+    let env = &svc["environment"];
+    assert_eq!(env["HEADWATERS__UI__BASE_PATH"].as_str(), Some("/lineage"));
+    assert_eq!(env["HEADWATERS__PORT"].as_str(), Some("8091"));
+    assert!(
+        env["DATABASE_URL"]
+            .as_str()
+            .is_some_and(|u| u.contains("@db:5432/lineage")),
+        "DATABASE_URL comes from the resolved relational_db url: {}",
+        out.fragment
+    );
+    assert_eq!(
+        svc["depends_on"]["db"]["condition"].as_str(),
+        Some("service_healthy")
+    );
+    // Network-only backend (no host ports) and no leftover compose substitutions.
+    assert!(!out.fragment.contains("ports:"), "{}", out.fragment);
+    let body: String = out
+        .fragment
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    assert!(
+        !body.contains("${"),
+        "no leftover ${{VAR}}: {}",
+        out.fragment
+    );
+}
+
+#[test]
 fn empty_catalog_renders_a_valid_empty_envoy() {
     // No modules → a valid, route-less Envoy config (no panic, parses cleanly).
     let p = plan(&Selection::default(), &Catalog::new(), &PlanCtx::default()).unwrap();

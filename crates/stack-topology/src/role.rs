@@ -55,6 +55,8 @@ impl Role {
     pub const EXPERIMENT_TRACKING: &'static str = "experiment_tracking";
     /// `tracing` — an OTLP tracing backend.
     pub const TRACING: &'static str = "tracing";
+    /// `lineage` — a data-lineage service (e.g. an OpenLineage backend).
+    pub const LINEAGE: &'static str = "lineage";
     /// `app_runtime` — the application-runtime contract (env-only).
     pub const APP_RUNTIME: &'static str = "app_runtime";
 
@@ -86,6 +88,10 @@ impl Role {
     pub fn tracing() -> Role {
         Role::new(Self::TRACING)
     }
+    /// The `lineage` role.
+    pub fn lineage() -> Role {
+        Role::new(Self::LINEAGE)
+    }
     /// The `app_runtime` role.
     pub fn app_runtime() -> Role {
         Role::new(Self::APP_RUNTIME)
@@ -116,6 +122,8 @@ pub enum KnownRole {
     ExperimentTracking,
     /// [`Role::TRACING`].
     Tracing,
+    /// [`Role::LINEAGE`].
+    Lineage,
     /// [`Role::APP_RUNTIME`].
     AppRuntime,
 }
@@ -136,6 +144,7 @@ impl KnownRole {
             KnownRole::SqlEngine => Role::SQL_ENGINE,
             KnownRole::ExperimentTracking => Role::EXPERIMENT_TRACKING,
             KnownRole::Tracing => Role::TRACING,
+            KnownRole::Lineage => Role::LINEAGE,
             KnownRole::AppRuntime => Role::APP_RUNTIME,
         }
     }
@@ -151,6 +160,7 @@ impl KnownRole {
             Role::SQL_ENGINE => Some(KnownRole::SqlEngine),
             Role::EXPERIMENT_TRACKING => Some(KnownRole::ExperimentTracking),
             Role::TRACING => Some(KnownRole::Tracing),
+            Role::LINEAGE => Some(KnownRole::Lineage),
             Role::APP_RUNTIME => Some(KnownRole::AppRuntime),
             _ => None,
         }
