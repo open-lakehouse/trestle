@@ -41,6 +41,8 @@
 //! Catalog loading (embedding a baseline, merging on-disk overlays) is a separate,
 //! feature-gated concern so pure consumers stay free of those dependencies.
 
+#[cfg(feature = "render")]
+mod artifacts;
 mod catalog;
 mod endpoint;
 mod module;
@@ -53,7 +55,12 @@ mod resolve_graph;
 mod role;
 mod surface;
 
-pub use catalog::{Catalog, baseline_catalog};
+#[cfg(feature = "render")]
+pub use artifacts::{
+    AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_env, render_envoy,
+    render_postgres_init,
+};
+pub use catalog::{Catalog, baseline_catalog, baseline_selection};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
 pub use module::{Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec};
 pub use placement::{Placement, Vantage};

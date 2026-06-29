@@ -13,10 +13,13 @@ homepage.workspace = true
 keywords = ["lakehouse", "topology", "docker-compose", "service-discovery"]
 
 [features]
-# Off by default: keeps the pure core free of YAML parsing. Enables building a
-# catalog from on-disk `module.yaml` manifests (`Catalog::from_manifests`).
+# Off by default to keep the pure addressing core dependency-free.
 default = []
+# Build a catalog from on-disk `module.yaml` manifests (`Catalog::from_manifests`).
 catalog = ["dep:serde_yaml"]
+# Render the stack-aggregated text artifacts (Envoy config, Postgres init, `.env`,
+# top-level compose) from an `EnvironmentPlan`.
+render = []
 
 [dependencies]
 # workspace dependencies (in alphabetical order)
@@ -24,3 +27,8 @@ serde = { workspace = true }
 serde_yaml = { workspace = true, optional = true }
 thiserror = { workspace = true }
 url = { workspace = true }
+
+[dev-dependencies]
+# Used by the golden-artifact tests to assert the rendered Envoy/compose output is
+# valid YAML and to compare it semantically against the captured trestle fixtures.
+serde_yaml = { workspace = true }

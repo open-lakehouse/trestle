@@ -93,6 +93,12 @@ pub struct Provides {
     /// without forcing every one through [`Knob`]).
     #[serde(default)]
     pub ports: Vec<PortDecl>,
+    /// Environment variables this module contributes to the materialized stack
+    /// (compose-`${VAR}`-style values are preserved verbatim). The planner merges
+    /// these across modules in dependency order — a later module overrides an
+    /// earlier one for the same key — into the environment it renders to `.env`.
+    #[serde(default)]
+    pub env_vars: BTreeMap<String, String>,
     /// Free-form per-module data, for options that don't warrant a dedicated typed
     /// field. The planner namespaces each entry by the contributing module id when
     /// it surfaces them to a consumer.

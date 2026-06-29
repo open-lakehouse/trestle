@@ -1,0 +1,19 @@
+# Top-level compose entrypoint. Every backing service is pulled in via `include:`
+# from `docker/compose/`; that file list is owned by the active component set,
+# not edited by hand. See README.md.
+#
+# `project_directory: .` makes the include files resolve their relative paths
+# (volumes, configs, etc.) against this top-level directory instead of their own.
+name: 
+
+include:
+  - path: ./docker/compose/envoy.yaml
+    project_directory: .
+  - path: ./docker/compose/seaweedfs.yaml
+    project_directory: .
+  - path: ./docker/compose/postgres.yaml
+    project_directory: .
+  - path: ./docker/compose/unity-catalog.yaml
+    project_directory: .
+  - path: ./docker/compose/mlflow.yaml
+    project_directory: .

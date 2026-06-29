@@ -23,7 +23,7 @@ use crate::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
 
-pub use baseline::baseline_catalog;
+pub use baseline::{baseline_catalog, baseline_selection};
 
 /// A set of modules to plan against, with id and capability indexes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

@@ -39,7 +39,9 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::Catalog;
-use crate::catalog::baseline::{API_PREFIX_EXTRA, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX};
+use crate::catalog::baseline::{
+    API_PREFIX_EXTRA, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX, S3_BUCKET_MB_LINES_VAR,
+};
 use crate::endpoint::{Endpoint, RouteIntent};
 use crate::module::{Module, ModuleId};
 use crate::placement::Placement;
@@ -171,7 +173,8 @@ pub struct GatewayRoute {
     /// The upstream cluster name to forward to.
     pub cluster: String,
     /// The upstream rewrite, if the path is changed before forwarding. `None`
-    /// forwards unchanged; `Some("")` rewrites to root.
+    /// forwards the matched path unchanged (no rewrite emitted); `Some(path)`
+    /// rewrites the matched prefix to `path`.
     pub rewrite: Option<String>,
 }
 
@@ -235,6 +238,15 @@ pub struct EnvironmentPlan {
     pub head: HeadFile,
     /// The structured gateway config.
     pub gateway: GatewayConfig,
+    /// Postgres databases the selected modules need, deduplicated in dependency order
+    /// (drives the Postgres init artifact).
+    pub postgres_databases: Vec<String>,
+    /// Object-store buckets the selected modules need, deduplicated in dependency
+    /// order (drives the SeaweedFS bucket-init).
+    pub s3_buckets: Vec<String>,
+    /// The stack's aggregated environment variables (drives the `.env` artifact),
+    /// last-writer-wins in dependency order.
+    pub env: InjectedEnv,
 }
 
 /// Plan an environment from a selection against a catalog.
@@ -263,9 +275,34 @@ pub fn plan(
     // is keyed by its port; dedicated listeners never collide (own port).
     let mut claimed: BTreeMap<String, String> = BTreeMap::new();
 
+    // Aggregate set-like resources across modules in dependency order (dedup,
+    // order-preserving) for the artifacts the planner renders downstream.
+    let mut postgres_databases: Vec<String> = Vec::new();
+    let mut s3_buckets: Vec<String> = Vec::new();
+    for module in &graph.nodes {
+        for db in &module.provides.postgres_databases {
+            if !postgres_databases.contains(db) {
+                postgres_databases.push(db.clone());
+            }
+        }
+        for b in &module.provides.s3_buckets {
+            if !s3_buckets.contains(b) {
+                s3_buckets.push(b.clone());
+            }
+        }
+    }
+
     // Walk modules in dependency order so emitted routes/clusters are deterministic.
     for module in &graph.nodes {
         let mut module_env = InjectedEnv::new();
+        // Seed each module's render env with its declared env vars. SeaweedFS also
+        // needs the aggregated bucket list folded into its one-shot init block.
+        for (k, v) in module.provides.env_vars.iter() {
+            module_env.set(k, v);
+        }
+        if module.id.as_str() == "local-stack-seaweedfs" {
+            module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
+        }
         for service in &module.services {
             for endpoint in &service.endpoints {
                 match &endpoint.intent {
@@ -375,26 +412,36 @@ pub fn plan(
     gateway.listeners.extend(dedicated);
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Render every module from its decided env, in dependency order.
-    let mut renders = Vec::with_capacity(graph.nodes.len());
-    let mut includes = Vec::with_capacity(graph.nodes.len());
-    let mut head_env = InjectedEnv::new();
+    // Aggregate the stack's env vars for `.env` — only modules' *declared* env vars,
+    // last-writer-wins in dependency order. (Render-only injections like `BASE_PATH`
+    // and `S3_BUCKET_MB_LINES` stay out of `.env`; they belong to a module's fragment.)
+    let mut env = InjectedEnv::new();
     for module in &graph.nodes {
-        let env = injected.get(&module.id).cloned().unwrap_or_default();
-        let out = module.render.render(&env);
-        for (k, v) in env.iter() {
-            head_env.set(k, v);
+        for (k, v) in module.provides.env_vars.iter() {
+            env.set(k, v);
         }
-        includes.push(ComposeInclude {
-            module: module.id.clone(),
-            fragment: out.fragment.clone(),
-        });
+    }
+
+    // Render every module from its decided env, in dependency order. A module with an
+    // empty fragment (e.g. the env-only contract module) contributes no compose
+    // include.
+    let mut renders = Vec::with_capacity(graph.nodes.len());
+    let mut includes = Vec::new();
+    for module in &graph.nodes {
+        let module_env = injected.get(&module.id).cloned().unwrap_or_default();
+        let out = module.render.render(&module_env);
+        if !out.fragment.trim().is_empty() {
+            includes.push(ComposeInclude {
+                module: module.id.clone(),
+                fragment: out.fragment.clone(),
+            });
+        }
         renders.push((module.id.clone(), out));
     }
 
     let head = HeadFile {
         name: ctx.env_name.clone(),
-        env: head_env,
+        env: env.clone(),
         includes,
     };
 
@@ -405,6 +452,9 @@ pub fn plan(
         renders,
         head,
         gateway,
+        postgres_databases,
+        s3_buckets,
+        env,
     })
 }
 
@@ -501,6 +551,20 @@ fn ensure_cluster(
     Ok(())
 }
 
+/// The SeaweedFS one-shot bucket-init lines for the aggregated bucket list, one
+/// `aws s3 mb` per bucket, indented to sit inside the fragment's `entrypoint` block.
+/// Empty when there are no buckets.
+fn seaweedfs_bucket_lines(buckets: &[String]) -> String {
+    buckets
+        .iter()
+        .map(|b| {
+            format!(
+                "        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://{b} 2>&1 || true;\n"
+            )
+        })
+        .collect()
+}
+
 /// The base path a module's service serves itself under, from the `base_path` extra
 /// (empty string if unset → service serves at root).
 fn module_base_path(module: &Module) -> String {
@@ -526,16 +590,28 @@ fn api_mount_prefix(module: &Module, endpoint_id: &str) -> String {
 
 /// The gateway rewrite for an API route, for the structured [`GatewayConfig`].
 ///
+/// Tri-state: `None` means forward the path unchanged (no rewrite emitted);
+/// `Some(path)` means rewrite the matched prefix to `path`.
+///
 /// Resolution order: an explicit `rewrite:<prefix>` override on the module (the rare
-/// exception) wins; otherwise the rewrite is the service's `base_path` joined with the
-/// client `prefix`; a service serving at root (empty base path) needs no rewrite.
+/// exception) wins — an **empty** override value forces passthrough (`None`), a
+/// non-empty one rewrites to that value. With no override, the rewrite is the
+/// service's `base_path` joined with the client `prefix`; a service serving at root
+/// (empty base path) needs no rewrite.
 fn api_rewrite(module: &Module, prefix: &str) -> Option<String> {
     if let Some(over) = module
         .provides
         .extras
         .get(&format!("{REWRITE_OVERRIDE_PREFIX}{prefix}"))
     {
-        return Some(over.clone());
+        // Empty override == "this route passes through unchanged" (the gateway emits
+        // no rewrite block), matching how the trestle templates treat an empty
+        // rewrite. A non-empty override is the literal upstream path.
+        return if over.is_empty() {
+            None
+        } else {
+            Some(over.clone())
+        };
     }
     let base = module_base_path(module);
     if base.is_empty() {
@@ -691,9 +767,10 @@ mod tests {
         assert_eq!(mlflow.cluster, "mlflow");
         assert_eq!(mlflow.rewrite.as_deref(), Some("/mlflow/api/2.0/mlflow"));
 
-        // MLflow OTel route is the override exception: strips to root.
+        // MLflow OTel route is the override exception: it passes through unchanged
+        // (the empty override forces no rewrite), unlike the tracking API.
         let otel = route_for(&p, "/api/2.0/otel");
-        assert_eq!(otel.rewrite.as_deref(), Some(""));
+        assert_eq!(otel.rewrite, None);
 
         // MLflow UI fronts at its base path, no rewrite.
         let ui = route_for(&p, "/mlflow");
