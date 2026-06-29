@@ -27,13 +27,7 @@ const COMPOSE_FIXTURE: &str = include_str!("fixtures/default/compose.yaml");
 
 /// The default lakehouse selection used to capture the fixtures.
 fn default_selection() -> Selection {
-    Selection::modules([
-        "local-stack-envoy",
-        "local-stack-seaweedfs",
-        "local-stack-postgres",
-        "local-stack-unity-catalog",
-        "local-stack-mlflow",
-    ])
+    Selection::modules(["envoy", "seaweedfs", "postgres", "unity-catalog", "mlflow"])
 }
 
 fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
@@ -260,12 +254,12 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // Select UC + its hard `requires` only, letting the object_store demand resolve via the
     // catalog default / `ctx` preference (so the chosen provider is unambiguous).
     let uc_fragment = |ctx: PlanCtx| -> String {
-        let sel = Selection::modules(["local-stack-unity-catalog"]);
+        let sel = Selection::modules(["unity-catalog"]);
         let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
         let (_, out) = p
             .renders
             .iter()
-            .find(|(id, _)| id == &ModuleId::from("local-stack-unity-catalog"))
+            .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
             .expect("UC is in the render set");
         // Valid YAML in either branch.
         let _: Value =
@@ -292,10 +286,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![
-            ModuleId::from("local-stack-azurite"),
-            ModuleId::from("local-stack-seaweedfs"),
-        ],
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
     let azure = uc_fragment(PlanCtx {
         provider_preference: preference,
@@ -335,12 +326,12 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     // object-store credential flavour, and `depends_on` is driven by the chosen providers'
     // gates (db healthy + the object-store init completed) rather than hard-coded.
     let mlflow_fragment = |ctx: PlanCtx| -> String {
-        let sel = Selection::modules(["local-stack-mlflow"]);
+        let sel = Selection::modules(["mlflow"]);
         let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
         let (_, out) = p
             .renders
             .iter()
-            .find(|(id, _)| id == &ModuleId::from("local-stack-mlflow"))
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
             .expect("MLflow is in the render set");
         let _: Value = serde_yaml::from_str(&out.fragment)
             .expect("rendered MLflow fragment must be valid YAML");
@@ -393,10 +384,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![
-            ModuleId::from("local-stack-azurite"),
-            ModuleId::from("local-stack-seaweedfs"),
-        ],
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
     let azure = mlflow_fragment(PlanCtx {
         provider_preference: preference,
@@ -426,12 +414,12 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
 fn adding_trino_and_jaeger_aggregates_their_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
     let sel = Selection::modules([
-        "local-stack-envoy",
-        "local-stack-seaweedfs",
-        "local-stack-postgres",
-        "local-stack-mlflow",
-        "local-stack-trino",
-        "local-stack-jaeger",
+        "envoy",
+        "seaweedfs",
+        "postgres",
+        "mlflow",
+        "trino",
+        "jaeger",
     ]);
     let arts = render(&sel);
     let (routes, order, clusters) = parse_envoy(&arts.envoy);

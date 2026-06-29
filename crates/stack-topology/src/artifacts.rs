@@ -21,10 +21,11 @@ use serde::Serialize;
 use crate::plan_env::{EnvironmentPlan, GatewayConfig, HeadFile};
 use crate::render::InjectedEnv;
 
-/// The on-disk Envoy template, embedded at compile time. Lives in the crate-root
-/// `templates/` directory (a sibling of `src/`) so it is reviewable as a plain file
-/// rather than as inline string-building.
-const ENVOY_TEMPLATE: &str = include_str!("../templates/envoy.yaml.jinja");
+/// The on-disk Envoy bootstrap template, embedded at compile time. Lives at
+/// `templates/gateway/bootstrap.yaml.jinja` (a sibling of `src/`), alongside the envoy
+/// module's compose fragment (`templates/gateway/compose.yaml.jinja`), so the gateway's two
+/// template faces sit together and are reviewable as plain files rather than inline strings.
+const ENVOY_TEMPLATE: &str = include_str!("../templates/gateway/bootstrap.yaml.jinja");
 
 /// The flat, owned render context the Envoy template iterates. The ordering decisions
 /// (longest-prefix-first routes, app cluster first) stay in Rust; the template only
@@ -198,21 +199,14 @@ pub fn render_compose(head: &HeadFile) -> String {
         push_lines(
             &mut out,
             &[
-                &format!(
-                    "  - path: ./docker/compose/{}.yaml",
-                    compose_path_name(inc.module.as_str())
-                ),
+                // The fragment filename is the module id directly (e.g.
+                // `docker/compose/mlflow.yaml`), matching trestle's layout.
+                &format!("  - path: ./docker/compose/{}.yaml", inc.module.as_str()),
                 "    project_directory: .",
             ],
         );
     }
     out
-}
-
-/// The compose fragment filename a module's include points at (the module id with the
-/// `local-stack-` prefix stripped, matching trestle's `docker/compose/<name>.yaml`).
-fn compose_path_name(module_id: &str) -> &str {
-    module_id.strip_prefix("local-stack-").unwrap_or(module_id)
 }
 
 /// The four stack-aggregated artifacts for a plan, rendered together.

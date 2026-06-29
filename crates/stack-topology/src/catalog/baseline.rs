@@ -25,12 +25,20 @@
 //!
 //! # Compose fragments
 //!
-//! Each module's compose `services:` snippet lives as a `.yaml` file in the crate-root
-//! `templates/fragments/` directory (a sibling of `src/`), embedded via `include_str!`
-//! (relative paths reach out of `src/` as `../../templates/fragments/`) and carried on the module's
-//! [`RenderSpec::Static`]. Snippets use only `${VAR}` substitution; the one
-//! stack-dependent part — SeaweedFS's bucket-init lines — is a `${S3_BUCKET_MB_LINES}`
-//! placeholder the planner fills from the aggregated `s3_buckets`.
+//! Each module is a self-contained directory under the crate-root `templates/` tree (a
+//! sibling of `src/`): a selectable module's compose `services:` snippet lives at
+//! `templates/modules/<name>/compose.yaml.jinja`, and the always-on gateway's two template
+//! faces live together under `templates/gateway/` (`compose.yaml.jinja` for the envoy
+//! module fragment, `bootstrap.yaml.jinja` for the aggregated Envoy config rendered by
+//! [`crate::render_envoy`]). Each snippet is embedded via `include_str!` (relative paths
+//! reach out of `src/catalog/` as `../../templates/…`) and carried on the module's
+//! [`RenderSpec`]. The `.jinja` suffix is an editor hint that a file holds template holes
+//! rather than valid YAML — it does **not** pick the engine: a [`RenderSpec::Static`]
+//! snippet still does plain `${VAR}` substitution (no MiniJinja), and a
+//! [`RenderSpec::Template`] one is rendered with MiniJinja; the `fragment()` vs
+//! `template()` helper below is the authoritative signal. The one stack-dependent Static
+//! part — SeaweedFS's bucket-init lines — is a `${S3_BUCKET_MB_LINES}` placeholder the
+//! planner fills from the aggregated `s3_buckets`.
 
 use super::Catalog;
 use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
@@ -91,7 +99,7 @@ pub fn baseline_catalog() -> Catalog {
         notebooks(),
         databricks_emulator_env(),
     ])
-    .with_default_provider(Role::OBJECT_STORE, "local-stack-seaweedfs")
+    .with_default_provider(Role::OBJECT_STORE, "seaweedfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
     // check.
@@ -102,11 +110,7 @@ pub fn baseline_catalog() -> Catalog {
 /// `always: [envoy]` + default `storage`/`metadata_db` choices. Other modules
 /// (catalog, ml, query engine, observability, notebooks) are opt-in.
 pub fn baseline_selection() -> crate::plan_env::Selection {
-    crate::plan_env::Selection::modules([
-        "local-stack-envoy",
-        "local-stack-postgres",
-        "local-stack-seaweedfs",
-    ])
+    crate::plan_env::Selection::modules(["envoy", "postgres", "seaweedfs"])
 }
 
 /// Helper: a container-placed service.
@@ -134,7 +138,7 @@ fn template(text: &str) -> RenderSpec {
     }
 }
 
-/// `local-stack-envoy` — the single-port gateway. It has no surface endpoints of its
+/// `envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
 /// `TopologyCtx`, not as a routed endpoint. Its rendered Envoy bootstrap config is a
 /// planner-emitted artifact, not part of this fragment (which only declares the
@@ -143,7 +147,7 @@ fn envoy() -> Module {
     let mut provides = Provides::default();
     provides.env_vars.insert("ENVOY_PORT".into(), "9080".into());
     Module {
-        id: ModuleId::from("local-stack-envoy"),
+        id: ModuleId::from("envoy"),
         display_name: Some("Envoy gateway".into()),
         summary: Some("Single-port gateway, Databricks-shaped URL rewrites.".into()),
         category: Some("gateway".into()),
@@ -167,11 +171,11 @@ fn envoy() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/envoy.yaml")),
+        render: fragment(include_str!("../../templates/gateway/compose.yaml.jinja")),
     }
 }
 
-/// `local-stack-postgres` — the relational store. Internal-only (a database port is
+/// `postgres` — the relational store. Internal-only (a database port is
 /// never on the gateway surface).
 fn postgres() -> Module {
     let mut provides = Provides::default();
@@ -199,7 +203,7 @@ fn postgres() -> Module {
         .extras
         .insert(DEP_GATE_EXTRA.into(), "db:service_healthy".into());
     Module {
-        id: ModuleId::from("local-stack-postgres"),
+        id: ModuleId::from("postgres"),
         display_name: Some("Postgres".into()),
         summary: Some("Postgres 16; auto-creates DBs other modules declare.".into()),
         category: Some("metadata_db".into()),
@@ -223,11 +227,13 @@ fn postgres() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/postgres.yaml")),
+        render: fragment(include_str!(
+            "../../templates/modules/postgres/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-seaweedfs` — the S3-compatible object store. Reached directly by SDKs
+/// `seaweedfs` — the S3-compatible object store. Reached directly by SDKs
 /// at its host port (not multiplexed behind the gateway). Its compose fragment carries
 /// a `${S3_BUCKET_MB_LINES}` placeholder the planner fills from the aggregated bucket
 /// list.
@@ -266,7 +272,7 @@ fn seaweedfs() -> Module {
         "seaweedfs-init:service_completed_successfully".into(),
     );
     Module {
-        id: ModuleId::from("local-stack-seaweedfs"),
+        id: ModuleId::from("seaweedfs"),
         display_name: Some("SeaweedFS (local S3)".into()),
         summary: Some("Self-hosted S3-compatible object store.".into()),
         category: Some("storage".into()),
@@ -290,11 +296,13 @@ fn seaweedfs() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/seaweedfs.yaml")),
+        render: fragment(include_str!(
+            "../../templates/modules/seaweedfs/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-azurite` — the Azure Blob flavour of the `object_store` role, an
+/// `azurite` — the Azure Blob flavour of the `object_store` role, an
 /// alternative to SeaweedFS. Preferred in environments that need Azure-shaped storage
 /// (e.g. for local Unity Catalog credential vending). When chosen, it provisions the
 /// demanded containers and vends the Azure connection string as an object_store
@@ -331,7 +339,7 @@ fn azurite() -> Module {
     );
 
     Module {
-        id: ModuleId::from("local-stack-azurite"),
+        id: ModuleId::from("azurite"),
         display_name: Some("Azurite (local Azure Blob)".into()),
         summary: Some("Azure Blob emulator; object store with Azure-shaped wiring.".into()),
         category: Some("storage".into()),
@@ -358,11 +366,13 @@ fn azurite() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/azurite.yaml")),
+        render: fragment(include_str!(
+            "../../templates/modules/azurite/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-mlflow` — experiment tracking. Fronts three ways behind the gateway:
+/// `mlflow` — experiment tracking. Fronts three ways behind the gateway:
 /// the Databricks-shaped tracking API, the OTel ingest path, and the UI. It serves
 /// itself under `/mlflow`, so the tracking API rewrites under that base; the OTel path
 /// is the override exception (passes through unchanged).
@@ -397,14 +407,14 @@ fn mlflow() -> Module {
     }
 
     Module {
-        id: ModuleId::from("local-stack-mlflow"),
+        id: ModuleId::from("mlflow"),
         display_name: Some("MLflow tracking".into()),
         summary: Some("Experiment + model tracking; Databricks-shaped URLs.".into()),
         category: Some("ml".into()),
         provider_of: Some("experiment_tracking".into()),
         // Only the gateway is a hard module dependency; the relational store and
         // object store arrive via resource demands (auto-provisioned).
-        requires: vec![ModuleId::from("local-stack-envoy")],
+        requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         // The relational store and object store arrive as demands. The role-generic
         // coordinates (`url`, `uri`, `endpoint`) are injected so the fragment no longer
@@ -471,11 +481,13 @@ fn mlflow() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: template(include_str!("../../templates/fragments/mlflow.yaml")),
+        render: template(include_str!(
+            "../../templates/modules/mlflow/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-unity-catalog` — the data catalog. Its REST API serves the
+/// `unity-catalog` — the data catalog. Its REST API serves the
 /// Databricks-shaped path at root, so `/api/2.1/unity-catalog` fronts with no rewrite;
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Module {
@@ -498,13 +510,13 @@ fn unity_catalog() -> Module {
     // the relational-DB provider renders for UC's demanded `unitycatalog` database.
 
     Module {
-        id: ModuleId::from("local-stack-unity-catalog"),
+        id: ModuleId::from("unity-catalog"),
         display_name: Some("Unity Catalog".into()),
         summary: Some("Databricks UC server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
         provider_of: Some("data_catalog".into()),
         // Only the gateway is a hard module dependency; Postgres + S3 arrive as demands.
-        requires: vec![ModuleId::from("local-stack-envoy")],
+        requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         needs: vec![
             ResourceDemand {
@@ -558,11 +570,13 @@ fn unity_catalog() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: template(include_str!("../../templates/fragments/unity-catalog.yaml")),
+        render: template(include_str!(
+            "../../templates/modules/unity-catalog/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-trino` — distributed SQL engine, fronted at `/trino` (a prefixable UI).
+/// `trino` — distributed SQL engine, fronted at `/trino` (a prefixable UI).
 fn trino() -> Module {
     let mut provides = Provides::default();
     provides
@@ -570,12 +584,12 @@ fn trino() -> Module {
         .insert(BASE_PATH_EXTRA.into(), "/trino".into());
     provides.env_vars.insert("TRINO_PORT".into(), "8080".into());
     Module {
-        id: ModuleId::from("local-stack-trino"),
+        id: ModuleId::from("trino"),
         display_name: Some("Trino".into()),
         summary: Some("Distributed SQL engine (Iceberg, Delta, Hive, JDBC, S3).".into()),
         category: Some("query_engine".into()),
         provider_of: Some("sql_engine".into()),
-        requires: vec![ModuleId::from("local-stack-envoy")],
+        requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         needs: vec![],
         services: vec![ServiceSpec {
@@ -594,11 +608,13 @@ fn trino() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/trino.yaml")),
+        render: fragment(include_str!(
+            "../../templates/modules/trino/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-jaeger` — all-in-one OTLP tracing backend, UI fronted at `/jaeger`.
+/// `jaeger` — all-in-one OTLP tracing backend, UI fronted at `/jaeger`.
 fn jaeger() -> Module {
     let mut provides = Provides::default();
     provides
@@ -612,12 +628,12 @@ fn jaeger() -> Module {
         .env_vars
         .insert("JAEGER_UI_PORT".into(), "16686".into());
     Module {
-        id: ModuleId::from("local-stack-jaeger"),
+        id: ModuleId::from("jaeger"),
         display_name: Some("Jaeger tracing".into()),
         summary: Some("All-in-one OTLP tracing backend with the Jaeger UI.".into()),
         category: Some("observability".into()),
         provider_of: Some("tracing".into()),
-        requires: vec![ModuleId::from("local-stack-envoy")],
+        requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         needs: vec![],
         services: vec![ServiceSpec {
@@ -647,11 +663,13 @@ fn jaeger() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/jaeger.yaml")),
+        render: fragment(include_str!(
+            "../../templates/modules/jaeger/compose.yaml.jinja"
+        )),
     }
 }
 
-/// `local-stack-notebooks` — Marimo notebook server, fronted at `/notebooks`.
+/// `notebooks` — Marimo notebook server, fronted at `/notebooks`.
 fn notebooks() -> Module {
     let mut provides = Provides::default();
     provides
@@ -661,12 +679,12 @@ fn notebooks() -> Module {
         .env_vars
         .insert("NOTEBOOKS_PORT".into(), "8082".into());
     Module {
-        id: ModuleId::from("local-stack-notebooks"),
+        id: ModuleId::from("notebooks"),
         display_name: Some("Marimo notebooks".into()),
         summary: Some("Notebooks behind the gateway at /notebooks.".into()),
         category: Some("notebooks".into()),
         provider_of: Some("notebook_server".into()),
-        requires: vec![ModuleId::from("local-stack-envoy")],
+        requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         needs: vec![],
         services: vec![ServiceSpec {
@@ -685,7 +703,9 @@ fn notebooks() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/notebooks.yaml")),
+        render: fragment(include_str!(
+            "../../templates/modules/notebooks/compose.yaml.jinja"
+        )),
     }
 }
 

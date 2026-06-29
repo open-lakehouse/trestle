@@ -14,13 +14,7 @@ use olai_stack_topology::{
 
 /// The always-on + common lakehouse modules.
 fn default_selection() -> Selection {
-    Selection::modules([
-        "local-stack-envoy",
-        "local-stack-postgres",
-        "local-stack-seaweedfs",
-        "local-stack-mlflow",
-        "local-stack-unity-catalog",
-    ])
+    Selection::modules(["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"])
 }
 
 fn route<'a>(routes: &'a [GatewayRoute], prefix: &str) -> &'a GatewayRoute {
@@ -82,7 +76,7 @@ fn default_lakehouse_rederives_the_working_gateway_routes() {
     // The UI's chosen base path is injected back for the module's render.
     assert_eq!(
         p.injected
-            .get(&ModuleId::from("local-stack-mlflow"))
+            .get(&ModuleId::from("mlflow"))
             .and_then(|e| e.get("BASE_PATH")),
         Some("/mlflow")
     );
@@ -91,8 +85,8 @@ fn default_lakehouse_rederives_the_working_gateway_routes() {
     // dependents): postgres/seaweedfs/envoy precede mlflow and unitycatalog.
     let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
     let pos = |id: &str| order.iter().position(|x| *x == id).unwrap();
-    assert!(pos("local-stack-postgres") < pos("local-stack-mlflow"));
-    assert!(pos("local-stack-envoy") < pos("local-stack-unity-catalog"));
+    assert!(pos("postgres") < pos("mlflow"));
+    assert!(pos("envoy") < pos("unity-catalog"));
 }
 
 #[test]
@@ -170,7 +164,7 @@ fn planner_routes_round_trip_through_the_address_resolver() {
     };
     let mlflow = p
         .graph
-        .module(&ModuleId::from("local-stack-mlflow"))
+        .module(&ModuleId::from("mlflow"))
         .unwrap()
         .service("mlflow")
         .unwrap();
@@ -187,7 +181,7 @@ fn planner_routes_round_trip_through_the_address_resolver() {
     // Unity Catalog REST, container vantage — single, un-doubled path.
     let uc = p
         .graph
-        .module(&ModuleId::from("local-stack-unity-catalog"))
+        .module(&ModuleId::from("unity-catalog"))
         .unwrap()
         .service("unitycatalog")
         .unwrap();
@@ -200,13 +194,7 @@ fn plan_is_byte_identical_regardless_of_selection_order() {
     let cat = baseline_catalog();
     let forward = plan(&default_selection(), &cat, &PlanCtx::default()).unwrap();
     let reversed = plan(
-        &Selection::modules([
-            "local-stack-unity-catalog",
-            "local-stack-mlflow",
-            "local-stack-seaweedfs",
-            "local-stack-postgres",
-            "local-stack-envoy",
-        ]),
+        &Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]),
         &cat,
         &PlanCtx::default(),
     )

@@ -97,18 +97,13 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     // UC declares it needs a relational_db + object_store; selecting *only* UC must
     // pull in the relational store and object store (plus its envoy `requires`).
     let p = plan(
-        &Selection::modules(["local-stack-unity-catalog"]),
+        &Selection::modules(["unity-catalog"]),
         &baseline_catalog(),
         &PlanCtx::default(),
     )
     .expect("UC alone should plan, auto-provisioning its providers");
 
-    for id in [
-        "local-stack-unity-catalog",
-        "local-stack-postgres",
-        "local-stack-seaweedfs",
-        "local-stack-envoy",
-    ] {
+    for id in ["unity-catalog", "postgres", "seaweedfs", "envoy"] {
         assert!(
             p.graph.module(&ModuleId::from(id)).is_some(),
             "expected {id} in the auto-provisioned graph"
@@ -122,14 +117,14 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     // Providers are ordered before the consumer (compose startup order).
     let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
     let pos = |id: &str| order.iter().position(|x| *x == id);
-    assert!(pos("local-stack-postgres") < pos("local-stack-unity-catalog"));
-    assert!(pos("local-stack-seaweedfs") < pos("local-stack-unity-catalog"));
+    assert!(pos("postgres") < pos("unity-catalog"));
+    assert!(pos("seaweedfs") < pos("unity-catalog"));
 }
 
 #[test]
 fn provider_connection_is_bound_into_the_consumer() {
     let p = plan(
-        &Selection::modules(["local-stack-unity-catalog"]),
+        &Selection::modules(["unity-catalog"]),
         &baseline_catalog(),
         &PlanCtx::default(),
     )
@@ -137,10 +132,7 @@ fn provider_connection_is_bound_into_the_consumer() {
 
     // UC's demand binds the relational URL as UC_DATABASE_URL, with {name} resolved to the
     // demanded database name.
-    let uc_env = p
-        .injected
-        .get(&ModuleId::from("local-stack-unity-catalog"))
-        .unwrap();
+    let uc_env = p.injected.get(&ModuleId::from("unity-catalog")).unwrap();
     assert_eq!(
         uc_env.get("UC_DATABASE_URL"),
         Some(
@@ -159,7 +151,7 @@ fn provider_connection_is_bound_into_the_consumer() {
     // The typed connection is exposed on the plan for downstream consumers.
     let conn = p
         .connections
-        .get(&(ModuleId::from("local-stack-unity-catalog"), 0))
+        .get(&(ModuleId::from("unity-catalog"), 0))
         .expect("UC's first demand (relational_db) resolves a connection");
     assert!(matches!(conn, Connection::RelationalDb { .. }));
 }
@@ -186,11 +178,7 @@ fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
     )
     .unwrap();
 
-    assert!(
-        p.graph
-            .module(&ModuleId::from("local-stack-postgres"))
-            .is_some()
-    );
+    assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
     assert!(p.postgres_databases.contains(&"appdb".to_string()));
     let app_env = p.injected.get(&ModuleId::from("my-app")).unwrap();
     assert_eq!(
@@ -234,7 +222,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
         p.graph
             .nodes
             .iter()
-            .filter(|m| m.id.as_str() == "local-stack-postgres")
+            .filter(|m| m.id.as_str() == "postgres")
             .count(),
         1
     );
@@ -344,10 +332,7 @@ fn azurite_preferred() -> PlanCtx {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![
-            ModuleId::from("local-stack-azurite"),
-            ModuleId::from("local-stack-seaweedfs"),
-        ],
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
     PlanCtx {
         provider_preference: preference,
@@ -360,21 +345,13 @@ fn default_object_store_is_seaweedfs() {
     // No preference → the catalog default (SeaweedFS) satisfies MLflow's object_store
     // demand; Azurite is not deployed and no Azure vars appear.
     let p = plan(
-        &Selection::modules(["local-stack-mlflow"]),
+        &Selection::modules(["mlflow"]),
         &baseline_catalog(),
         &PlanCtx::default(),
     )
     .unwrap();
-    assert!(
-        p.graph
-            .module(&ModuleId::from("local-stack-seaweedfs"))
-            .is_some()
-    );
-    assert!(
-        p.graph
-            .module(&ModuleId::from("local-stack-azurite"))
-            .is_none()
-    );
+    assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_some());
+    assert!(p.graph.module(&ModuleId::from("azurite")).is_none());
     assert!(p.s3_buckets.contains(&"mlflow".to_string()));
     assert!(p.azure_containers.is_empty());
     assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), Some("seaweedfs"));
@@ -385,23 +362,15 @@ fn default_object_store_is_seaweedfs() {
 fn preference_selects_azurite_and_drops_aws() {
     // An Azurite-preferred environment: MLflow's object_store demand resolves to Azurite.
     let p = plan(
-        &Selection::modules(["local-stack-mlflow"]),
+        &Selection::modules(["mlflow"]),
         &baseline_catalog(),
         &azurite_preferred(),
     )
     .unwrap();
 
     // Azurite is deployed, SeaweedFS is not.
-    assert!(
-        p.graph
-            .module(&ModuleId::from("local-stack-azurite"))
-            .is_some()
-    );
-    assert!(
-        p.graph
-            .module(&ModuleId::from("local-stack-seaweedfs"))
-            .is_none()
-    );
+    assert!(p.graph.module(&ModuleId::from("azurite")).is_some());
+    assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_none());
     // The container (not an S3 bucket) is provisioned on Azurite.
     assert!(p.azure_containers.contains(&"mlflow".to_string()));
     assert!(p.s3_buckets.is_empty());
@@ -461,7 +430,7 @@ fn a_demand_pin_overrides_preference() {
         vec![ResourceDemand {
             resource: "object_store".into(),
             name: "artifacts".into(),
-            provider: Some(ModuleId::from("local-stack-seaweedfs")),
+            provider: Some(ModuleId::from("seaweedfs")),
             bind: bind1(ConnectionField::Uri, "STORE_URI"),
         }],
     );
@@ -472,11 +441,7 @@ fn a_demand_pin_overrides_preference() {
         &azurite_preferred(),
     )
     .unwrap();
-    assert!(
-        p.graph
-            .module(&ModuleId::from("local-stack-seaweedfs"))
-            .is_some()
-    );
+    assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_some());
     assert_eq!(
         p.injected
             .get(&ModuleId::from("pinned-app"))
@@ -578,7 +543,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
         p.graph
             .nodes
             .iter()
-            .filter(|m| m.id.as_str() == "local-stack-seaweedfs")
+            .filter(|m| m.id.as_str() == "seaweedfs")
             .count(),
         1
     );
@@ -595,13 +560,13 @@ fn same_role_demands_can_pin_different_providers() {
             ResourceDemand {
                 resource: "object_store".into(),
                 name: "uc-managed".into(),
-                provider: Some(ModuleId::from("local-stack-seaweedfs")),
+                provider: Some(ModuleId::from("seaweedfs")),
                 bind: bind1(ConnectionField::Uri, "UC_MANAGED_URI"),
             },
             ResourceDemand {
                 resource: "object_store".into(),
                 name: "uc-external".into(),
-                provider: Some(ModuleId::from("local-stack-azurite")),
+                provider: Some(ModuleId::from("azurite")),
                 bind: bind1(ConnectionField::Uri, "UC_EXTERNAL_URI"),
             },
         ],
@@ -665,9 +630,9 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
     // pair, is an unpinned same-role clash: the planner refuses to silently pick one.
     let err = plan(
         &Selection::modules([
-            "local-stack-seaweedfs",
-            "local-stack-azurite",
-            "local-stack-mlflow", // demands an object_store, but pins nothing
+            "seaweedfs",
+            "azurite",
+            "mlflow", // demands an object_store, but pins nothing
         ]),
         &baseline_catalog(),
         &PlanCtx::default(),
@@ -678,8 +643,8 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
             err,
             PlanError::ConflictingRoleProviders { ref role, ref providers }
                 if role == "object_store"
-                    && providers.contains(&ModuleId::from("local-stack-seaweedfs"))
-                    && providers.contains(&ModuleId::from("local-stack-azurite"))
+                    && providers.contains(&ModuleId::from("seaweedfs"))
+                    && providers.contains(&ModuleId::from("azurite"))
         ),
         "expected ConflictingRoleProviders for the unpinned object_store pair, got {err:?}"
     );

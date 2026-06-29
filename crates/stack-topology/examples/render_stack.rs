@@ -14,7 +14,7 @@
 //! cargo run -p olai-stack-topology --example render_stack -- --azurite
 //! ```
 //!
-//! Module ids may be given with or without the `local-stack-` prefix.
+//! Module ids are the short module names (`envoy`, `postgres`, `mlflow`, …).
 //!
 //! Output lands in `<repo-root>/scratch/render_stack/`, which is git-ignored.
 
@@ -29,23 +29,23 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let prefer_azurite = args.iter().any(|a| a == "--azurite");
 
-    // Module ids from the CLI (normalized to the `local-stack-` prefix), or the default
+    // Module ids from the CLI (the short module names, taken verbatim), or the default
     // lakehouse selection when none are given.
     let picks: Vec<String> = args
         .iter()
         .filter(|a| !a.starts_with("--"))
-        .map(|a| normalize_module_id(a))
+        .cloned()
         .collect();
     let selection = if picks.is_empty() {
         // The default lakehouse. Under `--azurite` the object store is left to MLflow/UC's
         // demands (resolved to Azurite via the preference below) instead of selecting
         // SeaweedFS directly — selecting both object_store providers without a pin is a
         // `ConflictingRoleProviders` error.
-        let mut mods = vec!["local-stack-envoy", "local-stack-postgres"];
+        let mut mods = vec!["envoy", "postgres"];
         if !prefer_azurite {
-            mods.push("local-stack-seaweedfs");
+            mods.push("seaweedfs");
         }
-        mods.extend(["local-stack-unity-catalog", "local-stack-mlflow"]);
+        mods.extend(["unity-catalog", "mlflow"]);
         Selection::modules(mods)
     } else {
         Selection::modules(picks)
@@ -56,10 +56,7 @@ fn main() {
         // Keyed by the `object_store` role string (see `Role::OBJECT_STORE`).
         provider_preference.insert(
             "object_store".to_string(),
-            vec![
-                ModuleId::from("local-stack-azurite"),
-                ModuleId::from("local-stack-seaweedfs"),
-            ],
+            vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
         );
     }
 
@@ -138,14 +135,4 @@ fn write_artifact(out_dir: &Path, rel_path: &str, body: &str) {
         std::process::exit(1);
     }
     println!("  {rel_path} ({} bytes)", body.len());
-}
-
-/// Accept a bare module name (`postgres`) or a full id (`local-stack-postgres`); the
-/// `databricks-emulator-env` module is the one id without the prefix.
-fn normalize_module_id(arg: &str) -> String {
-    if arg.starts_with("local-stack-") || arg == "databricks-emulator-env" {
-        arg.to_string()
-    } else {
-        format!("local-stack-{arg}")
-    }
 }

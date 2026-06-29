@@ -33,7 +33,7 @@ use crate::connection::{ConnectionField, ConnectionTemplate};
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
 use crate::role::ServiceSpec;
 
-/// A module's stable identifier within a catalog (e.g. `"local-stack-mlflow"`).
+/// A module's stable identifier within a catalog (e.g. `"mlflow"`).
 ///
 /// An **open set** — a string newtype, not an enum — exactly like
 /// [`Role`](crate::Role): a new module drops into a catalog as *data*, with no

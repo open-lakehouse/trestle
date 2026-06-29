@@ -99,7 +99,7 @@ pub struct PlanCtx {
     pub dedicated_listener_ports: Vec<u16>,
     /// Ordered provider preference per resource role — the environment's say in which
     /// implementation satisfies an abstract demand (e.g. `object_store` →
-    /// `["local-stack-azurite", "local-stack-seaweedfs"]` for a hydrofoil-style env
+    /// `["azurite", "seaweedfs"]` for a hydrofoil-style env
     /// that prefers Azurite). The planner picks the first preferred provider present in
     /// the catalog; an empty/absent entry falls back to uniqueness then the catalog
     /// default. A demand's own `provider` pin still wins over this.
@@ -368,9 +368,9 @@ pub fn plan(
             .unwrap_or_default()
     };
     // Convenience views for the artifact renderers (single-provider roles today).
-    let postgres_databases = provisioned_for("local-stack-postgres");
-    let s3_buckets = provisioned_for("local-stack-seaweedfs");
-    let azure_containers = provisioned_for("local-stack-azurite");
+    let postgres_databases = provisioned_for("postgres");
+    let s3_buckets = provisioned_for("seaweedfs");
+    let azure_containers = provisioned_for("azurite");
 
     let mut routes = RoutePlan::new();
     let mut gateway = GatewayConfig::default();
@@ -396,10 +396,10 @@ pub fn plan(
         }
         // Fold each object-store provider's provisioned names into its one-shot init
         // block (SeaweedFS creates buckets; Azurite creates containers).
-        if module.id.as_str() == "local-stack-seaweedfs" {
+        if module.id.as_str() == "seaweedfs" {
             module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
         }
-        if module.id.as_str() == "local-stack-azurite" {
+        if module.id.as_str() == "azurite" {
             module_env.set(
                 AZURE_CONTAINER_CREATE_LINES_VAR,
                 azurite_container_lines(&azure_containers),
@@ -1111,13 +1111,7 @@ mod tests {
     use crate::catalog::baseline_catalog;
 
     fn default_selection() -> Selection {
-        Selection::modules([
-            "local-stack-envoy",
-            "local-stack-postgres",
-            "local-stack-seaweedfs",
-            "local-stack-mlflow",
-            "local-stack-unity-catalog",
-        ])
+        Selection::modules(["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"])
     }
 
     fn shared_routes(plan: &EnvironmentPlan) -> &[GatewayRoute] {
@@ -1264,7 +1258,7 @@ mod tests {
 
         // Default (SeaweedFS): db healthy + seaweedfs-init completed.
         let s3 = plan(
-            &Selection::modules(["local-stack-mlflow"]),
+            &Selection::modules(["mlflow"]),
             &baseline_catalog(),
             &PlanCtx::default(),
         )
@@ -1272,7 +1266,7 @@ mod tests {
         let (_, mlflow) = s3
             .renders
             .iter()
-            .find(|(id, _)| id == &ModuleId::from("local-stack-mlflow"))
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
             .unwrap();
         assert!(
             mlflow
@@ -1290,13 +1284,10 @@ mod tests {
         let mut preference = BTreeMap::new();
         preference.insert(
             "object_store".to_string(),
-            vec![
-                ModuleId::from("local-stack-azurite"),
-                ModuleId::from("local-stack-seaweedfs"),
-            ],
+            vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
         );
         let az = plan(
-            &Selection::modules(["local-stack-mlflow"]),
+            &Selection::modules(["mlflow"]),
             &baseline_catalog(),
             &PlanCtx {
                 provider_preference: preference,
@@ -1307,7 +1298,7 @@ mod tests {
         let (_, mlflow_az) = az
             .renders
             .iter()
-            .find(|(id, _)| id == &ModuleId::from("local-stack-mlflow"))
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
             .unwrap();
         assert!(
             mlflow_az
@@ -1325,7 +1316,7 @@ mod tests {
             &PlanCtx::default(),
         )
         .unwrap();
-        let env = p.injected.get(&"local-stack-mlflow".into()).unwrap();
+        let env = p.injected.get(&"mlflow".into()).unwrap();
         assert_eq!(env.get("BASE_PATH"), Some("/mlflow"));
     }
 
@@ -1377,12 +1368,7 @@ mod tests {
         };
         let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
         // mlflow + its transitive requires (postgres, seaweedfs, envoy).
-        for id in [
-            "local-stack-mlflow",
-            "local-stack-postgres",
-            "local-stack-seaweedfs",
-            "local-stack-envoy",
-        ] {
+        for id in ["mlflow", "postgres", "seaweedfs", "envoy"] {
             assert!(p.graph.module(&id.into()).is_some(), "missing {id}");
         }
     }
@@ -1401,13 +1387,8 @@ mod tests {
     fn plan_is_deterministic_regardless_of_selection_order() {
         let cat = baseline_catalog();
         let a = plan(&default_selection(), &cat, &PlanCtx::default()).unwrap();
-        let reversed = Selection::modules([
-            "local-stack-unity-catalog",
-            "local-stack-mlflow",
-            "local-stack-seaweedfs",
-            "local-stack-postgres",
-            "local-stack-envoy",
-        ]);
+        let reversed =
+            Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]);
         let b = plan(&reversed, &cat, &PlanCtx::default()).unwrap();
         assert_eq!(a, b);
     }

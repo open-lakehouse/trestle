@@ -1,4 +1,4 @@
-# MLflow tracking server — contributed by the `local-stack-mlflow` component.
+# MLflow tracking server
 #
 # This fragment is a `RenderSpec::Template`, so it is rendered with MiniJinja against the
 # plan-time `RenderCtx`. It reads three kinds of value:
@@ -13,9 +13,6 @@
 #   * `${X}` — run-time compose substitutions resolved from `.env` (the bound connection
 #     coordinates: `MLFLOW_BACKEND_STORE_URI`, `MLFLOW_ARTIFACTS_DESTINATION`,
 #     `MLFLOW_S3_ENDPOINT_URL`).
-#
-# Iterating `dependencies` is what lets `depends_on` follow whichever backends the planner
-# picked — SeaweedFS-init or Azurite-init, plus the relational DB — without naming them here.
 {%- set obj = connections.object_store.0 %}
 services:
   mlflow:
@@ -43,14 +40,11 @@ services:
       - "{{ env.BASE_PATH }}"
     environment:
 {%- if obj.credential.flavour == "s3" %}
-      # S3 artifact store: the in-network endpoint (an injected object_store coordinate) plus
-      # the static S3 credentials straight from the typed credential the planner resolved.
       MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
       AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
       AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
       AWS_DEFAULT_REGION: {{ obj.credential.region }}
 {%- else %}
-      # Azure artifact store: a connection string from the typed credential; no AWS_* keys.
       AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
 {%- endif %}
     expose:
