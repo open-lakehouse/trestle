@@ -76,9 +76,6 @@ pub const DEP_GATE_EXTRA: &str = "dep_gate";
 /// The placeholder SeaweedFS's fragment uses for the planner-injected per-bucket
 /// `aws s3 mb` lines.
 pub const S3_BUCKET_MB_LINES_VAR: &str = "S3_BUCKET_MB_LINES";
-/// The placeholder Azurite's fragment uses for the planner-injected per-container
-/// `az storage container create` lines.
-pub const AZURE_CONTAINER_CREATE_LINES_VAR: &str = "AZURE_CONTAINER_CREATE_LINES";
 
 /// The inlined baseline catalog: all common local-Lakehouse modules.
 ///
@@ -309,13 +306,10 @@ fn seaweedfs() -> Module {
 fn azurite() -> Module {
     const CONN: &str = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;";
     let mut provides = Provides::default();
-    // Only the non-credential port is hand-listed. `AZURE_STORAGE_CONNECTION_STRING` is *not*
-    // listed here: the planner derives it from the typed Azure credential below (via
-    // `Connection::standard_env`), so it is stated once and enters `.env` only when Azurite
-    // is the chosen object_store.
-    provides
-        .env_vars
-        .insert("AZURITE_BLOB_PORT".into(), "10000".into());
+    // `AZURE_STORAGE_CONNECTION_STRING` is not hand-listed: the planner derives it from the
+    // typed Azure credential below (via `Connection::standard_env`), so it is stated once and
+    // enters `.env` only when Azurite is the chosen object_store. The blob port is the
+    // emulator's fixed 10000, rendered directly in the fragment — no env var.
 
     // The Azure flavour of `object_store`: the same role-generic addressing as SeaweedFS
     // (`uri`/`bucket`/`endpoint`), filled with the `wasbs://` shape, plus an Azure
@@ -365,7 +359,7 @@ fn azurite() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!(
+        render: template(include_str!(
             "../../templates/modules/azurite/compose.yaml.jinja"
         )),
     }

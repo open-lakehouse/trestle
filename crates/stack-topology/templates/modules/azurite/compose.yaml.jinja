@@ -1,6 +1,16 @@
 # Azurite (Azure Blob emulator) — object-store provider, an alternative to SeaweedFS.
-# A one-shot init creates the container(s) demanded by the stack; the list is rendered
-# from the aggregated object-store demands at plan time.
+#
+# This fragment is a `RenderSpec::Template`, rendered whole against the typed `RenderCtx` —
+# no compose `${VAR}` substitution layered on top. As a provider, Azurite renders against its
+# own role:
+#
+#   * `connections.object_store.0` — its own resolved connection; the fragment reads the
+#     credential's `connection_string` directly.
+#   * `objects` — the container names the stack provisions on it; the one-shot init iterates
+#     them to create each, instead of the planner splicing pre-formatted shell lines.
+#
+# The blob port is the emulator's fixed 10000, written directly.
+{%- set obj = connections.object_store.0 %}
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
@@ -9,7 +19,7 @@ services:
     command:
       ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
     ports:
-      - "${AZURITE_BLOB_PORT:-10000}:10000"
+      - "10000:10000"
     volumes:
       - ./.data/azurite:/data
     healthcheck:
@@ -29,10 +39,13 @@ services:
       azurite:
         condition: service_healthy
     environment:
-      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING}
+      AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
     entrypoint:
       - "sh"
       - "-c"
       - |
         echo "Creating Azurite containers...";
-${AZURE_CONTAINER_CREATE_LINES}        echo "Containers ready.";
+{%- for name in objects %}
+        az storage container create --name {{ name }} 2>&1 || true;
+{%- endfor %}
+        echo "Containers ready.";

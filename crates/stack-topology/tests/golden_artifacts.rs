@@ -411,6 +411,67 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
 }
 
 #[test]
+fn azurite_fragment_is_rendered_whole_from_typed_context() {
+    use olai_stack_topology::ModuleId;
+
+    // Azurite is a `RenderSpec::Template` rendered entirely from the typed `RenderCtx` — its
+    // own connection (the connection string) and the provisioned container names (`objects`)
+    // — with no compose `${VAR}` substitution. Prefer Azurite so it is the chosen object_store
+    // and its init provisions the demanded containers.
+    let mut preference = BTreeMap::new();
+    preference.insert(
+        "object_store".to_string(),
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+    );
+    let sel = Selection::modules(["mlflow"]);
+    let p = plan(
+        &sel,
+        &baseline_catalog(),
+        &PlanCtx {
+            provider_preference: preference,
+            ..Default::default()
+        },
+    )
+    .expect("plan succeeds");
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("azurite"))
+        .expect("azurite is the chosen object_store provider");
+    let frag = &out.fragment;
+
+    // Valid YAML, and the init service exists.
+    let doc: Value = serde_yaml::from_str(frag).expect("azurite fragment must be valid YAML");
+    let init = &doc["services"]["azurite-init"];
+
+    // The connection string came from the typed credential, not a `${VAR}` placeholder.
+    assert_eq!(
+        init["environment"]["AZURE_STORAGE_CONNECTION_STRING"]
+            .as_str()
+            .map(|s| s.starts_with("DefaultEndpointsProtocol=")),
+        Some(true),
+        "connection string rendered from typed credential: {frag}"
+    );
+    // The container-init iterates the provisioned `objects` (MLflow demands one).
+    assert!(
+        init["entrypoint"][2]
+            .as_str()
+            .unwrap()
+            .contains("az storage container create --name mlflow"),
+        "init iterates provisioned container names: {frag}"
+    );
+    // No compose substitution remains anywhere in the rendered fragment body.
+    let body: String = frag
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    assert!(
+        !body.contains("${"),
+        "no leftover ${{VAR}} substitution: {frag}"
+    );
+}
+
+#[test]
 fn adding_jaeger_aggregates_its_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
     let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "jaeger"]);

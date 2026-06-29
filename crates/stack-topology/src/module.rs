@@ -381,28 +381,40 @@ pub struct DepGate {
 /// `{role: [connection, …]}` map a template can branch on — e.g.
 /// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`), and
 /// `dependencies` (the `[{service, condition}, …]` list a template iterates to write its
-/// `depends_on` block — see [`DepGate`]).
+/// `depends_on` block — see [`DepGate`]); and `objects` (the resource *names* this module's
+/// own role provisions, for a provider's init block to iterate).
 #[derive(Clone, Debug, Serialize)]
 pub struct RenderCtx<'a> {
     /// The planner-decided environment-variable substitutions.
     pub env: &'a InjectedEnv,
     /// The typed connections resolved for the module's demands, keyed by resource role.
     /// More than one connection per role is possible (a module with two same-role demands).
+    /// For a *provider* module, this also carries its own role's connection (resolved for
+    /// each name it provisions) so its fragment can read e.g.
+    /// `connections.object_store.0.credential.connection_string` instead of a `${VAR}`.
     pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
     /// The resolved `depends_on` gates the module's render should emit, in dependency
     /// (demand) order. Empty for a module with no demands that gate startup.
     #[serde(default)]
     pub dependencies: Vec<DepGate>,
+    /// The resource *names* this module provisions for its own provided role (e.g. the
+    /// buckets/containers an object-store provider must create), deduplicated in dependency
+    /// order. A provider's init block iterates these (`{% for o in objects %}`) instead of
+    /// the planner splicing pre-formatted shell lines through a `${VAR}` placeholder. Empty
+    /// for a non-provider module.
+    #[serde(default)]
+    pub objects: Vec<String>,
 }
 
 impl<'a> RenderCtx<'a> {
-    /// A context carrying just an [`InjectedEnv`] and no connections or dependencies — the
-    /// shape a module with no resource demands renders against.
+    /// A context carrying just an [`InjectedEnv`] and no connections, dependencies, or
+    /// objects — the shape a module with no resource demands renders against.
     pub fn from_env(env: &'a InjectedEnv) -> Self {
         RenderCtx {
             env,
             connections: BTreeMap::new(),
             dependencies: Vec::new(),
+            objects: Vec::new(),
         }
     }
 }
@@ -640,6 +652,7 @@ mod tests {
                 env: &env,
                 connections,
                 dependencies: Vec::new(),
+                objects: Vec::new(),
             })
             .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
@@ -679,6 +692,7 @@ mod tests {
                     condition: DependsCondition::ServiceCompletedSuccessfully,
                 },
             ],
+            objects: Vec::new(),
         };
         let out = spec.render(&ctx).expect("template renders");
         // The serde value of each condition is the exact compose token.

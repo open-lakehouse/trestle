@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
-    API_PREFIX_EXTRA, AZURE_CONTAINER_CREATE_LINES_VAR, BASE_PATH_EXTRA, DEP_GATE_EXTRA,
-    REWRITE_OVERRIDE_PREFIX, S3_BUCKET_MB_LINES_VAR,
+    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DEP_GATE_EXTRA, REWRITE_OVERRIDE_PREFIX,
+    S3_BUCKET_MB_LINES_VAR,
 };
 use crate::connection::Connection;
 use crate::endpoint::{Endpoint, RouteIntent};
@@ -394,16 +394,11 @@ pub fn plan(
         for (k, v) in module.provides.env_vars.iter() {
             module_env.set(k, v);
         }
-        // Fold each object-store provider's provisioned names into its one-shot init
-        // block (SeaweedFS creates buckets; Azurite creates containers).
+        // SeaweedFS still folds the aggregated bucket list into its one-shot init block via a
+        // `${S3_BUCKET_MB_LINES}` placeholder. (Azurite renders its container-init by
+        // iterating the typed `objects` list in its template, so it needs no such injection.)
         if module.id.as_str() == "seaweedfs" {
             module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
-        }
-        if module.id.as_str() == "azurite" {
-            module_env.set(
-                AZURE_CONTAINER_CREATE_LINES_VAR,
-                azurite_container_lines(&azure_containers),
-            );
         }
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field. The connection was resolved once up front (in `chosen`).
@@ -570,10 +565,21 @@ pub fn plan(
                 dependencies.push(gate);
             }
         }
+        // A *provider* renders against its own role too: the names it provisions (`objects`,
+        // for an init block to iterate) plus its own connection resolved for each — so its
+        // fragment reads e.g. `connections.object_store.0.credential` rather than a `${VAR}`.
+        let objects = provisioned_by.get(&module.id).cloned().unwrap_or_default();
+        for (role, template) in module.provides.resource_kinds.iter() {
+            let role_conns = connections.entry(role.clone()).or_default();
+            for name in &objects {
+                role_conns.push(template.resolve(name));
+            }
+        }
         let render_ctx = crate::module::RenderCtx {
             env: &module_env,
             connections,
             dependencies,
+            objects,
         };
         let out = module
             .render
@@ -1001,16 +1007,6 @@ fn seaweedfs_bucket_lines(buckets: &[String]) -> String {
                 "        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://{b} 2>&1 || true;\n"
             )
         })
-        .collect()
-}
-
-/// The Azurite one-shot container-init lines for the aggregated container list, one
-/// `az storage container create` per name, indented to sit inside the fragment's
-/// `entrypoint` block. Empty when there are no containers.
-fn azurite_container_lines(containers: &[String]) -> String {
-    containers
-        .iter()
-        .map(|c| format!("        az storage container create --name {c} 2>&1 || true;\n"))
         .collect()
 }
 
