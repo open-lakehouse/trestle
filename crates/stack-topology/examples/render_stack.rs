@@ -1,8 +1,9 @@
 //! End-to-end render of a Lakehouse dev environment, for eyeballing the materialized
 //! artifacts a selection produces. This is the manual counterpart to the golden tests:
-//! it plans the baseline catalog and writes every artifact (the four stack-aggregated
-//! ones plus each module's compose fragment and mounted files) to a scratch folder at
-//! the repository root, printing a summary of what it wrote to stdout.
+//! it plans the baseline catalog and writes every artifact (the top-level `compose.yaml`
+//! and `.env`, the Envoy bootstrap, and each module's `modules/<id>/` directory holding its
+//! compose fragment and mounted config files) to a scratch folder at the repository root,
+//! printing a summary of what it wrote to stdout.
 //!
 //! Run it:
 //!
@@ -85,20 +86,20 @@ fn main() {
         std::process::exit(1);
     }
 
-    write_artifact(&out_dir, "docker/envoy/envoy.yaml", &artifacts.envoy);
+    // The Envoy bootstrap is a dedicated-renderer artifact; it lives in the gateway module's
+    // own directory and is mounted via the `envoy_config` config alias (see `render_all`).
+    write_artifact(&out_dir, "modules/envoy/envoy.yaml", &artifacts.envoy);
     write_artifact(&out_dir, "compose.yaml", &artifacts.compose);
     write_artifact(&out_dir, ".env", &artifacts.env);
-    write_artifact(
-        &out_dir,
-        "docker/postgres/init-databases.sh",
-        &artifacts.postgres_init,
-    );
 
+    // Each module owns a `modules/<id>/` directory: its compose fragment plus any config files
+    // it emits. The planner has already rooted every `RenderFile.path` under that directory, so
+    // it is written verbatim.
     for (module, out) in &plan.renders {
         if !out.fragment.trim().is_empty() {
             write_artifact(
                 &out_dir,
-                &format!("fragments/{module}.compose.yaml"),
+                &format!("modules/{module}/compose.yaml"),
                 &out.fragment,
             );
         }
