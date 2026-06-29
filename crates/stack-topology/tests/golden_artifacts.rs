@@ -380,7 +380,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // resolve at run time (the database URL itself carries `${POSTGRES_*}` defaults, so scope
     // the check to the lines that used to be `${VAR}` indirections).
     assert!(
-        s3.contains("image: unitycatalog/unitycatalog:v0.4.1"),
+        s3.contains("image: unitycatalog/unitycatalog:main-2f2e32d"),
         "image pinned inline, not via ${{UC_IMAGE}}: {s3}"
     );
     assert!(
