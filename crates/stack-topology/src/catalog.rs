@@ -29,6 +29,10 @@ pub use baseline::{baseline_catalog, baseline_selection};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
     modules: Vec<Module>,
+    /// Default provider per resource role, the deterministic tie-break the planner
+    /// uses when a role has more than one provider and neither a demand pin nor a
+    /// `PlanCtx` preference selects one. (Role → provider module id.)
+    default_provider: BTreeMap<String, ModuleId>,
 }
 
 impl Catalog {
@@ -61,6 +65,10 @@ impl Catalog {
     pub fn merge(mut self, other: Catalog) -> Self {
         for m in other.modules {
             self.insert(m);
+        }
+        // Overlay defaults too — a later catalog can override a role's default provider.
+        for (role, provider) in other.default_provider {
+            self.default_provider.insert(role, provider);
         }
         self
     }
@@ -109,6 +117,23 @@ impl Catalog {
             .filter(|m| m.provides.resource_kinds.contains_key(resource_kind))
             .map(|m| &m.id)
             .collect()
+    }
+
+    /// Declare the default provider for a resource role (builder-style; returns `self`).
+    /// The planner uses this as the final tie-break when a role has multiple providers
+    /// and no pin/preference selects one.
+    pub fn with_default_provider(
+        mut self,
+        role: impl Into<String>,
+        provider: impl Into<ModuleId>,
+    ) -> Self {
+        self.default_provider.insert(role.into(), provider.into());
+        self
+    }
+
+    /// The declared default provider for `role`, if any.
+    pub fn default_provider_for(&self, role: &str) -> Option<&ModuleId> {
+        self.default_provider.get(role)
     }
 
     /// The single provider for `resource_kind`, if exactly one module provisions it.

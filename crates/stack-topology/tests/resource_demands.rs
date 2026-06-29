@@ -2,6 +2,8 @@
 //! and the planner auto-deploys a provider, provisions the named resource, and injects
 //! the provider's coordinates back into the consumer.
 
+use std::collections::BTreeMap;
+
 use olai_stack_topology::{
     Catalog, Injection, Module, ModuleId, Placement, PlanCtx, PlanError, Provides, RenderSpec,
     ResourceDemand, ResourceProvider, Role, Selection, ServiceSpec, baseline_catalog, plan,
@@ -140,6 +142,7 @@ fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
         vec![ResourceDemand {
             resource: "postgres_database".into(),
             name: "appdb".into(),
+            provider: None,
             inject: vec![Injection {
                 key: "APP_DATABASE_URL".into(),
                 coordinate: "url".into(),
@@ -177,6 +180,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
         vec![ResourceDemand {
             resource: "postgres_database".into(),
             name: "a_db".into(),
+            provider: None,
             inject: vec![],
         }],
     );
@@ -185,6 +189,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
         vec![ResourceDemand {
             resource: "postgres_database".into(),
             name: "b_db".into(),
+            provider: None,
             inject: vec![],
         }],
     );
@@ -217,6 +222,7 @@ fn unsatisfied_demand_errors_when_no_provider_exists() {
         vec![ResourceDemand {
             resource: "message_queue".into(),
             name: "events".into(),
+            provider: None,
             inject: vec![],
         }],
     );
@@ -246,6 +252,7 @@ fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
         vec![ResourceDemand {
             resource: "postgres_database".into(),
             name: "db".into(),
+            provider: None,
             inject: vec![],
         }],
     );
@@ -279,6 +286,7 @@ fn demand_chain_resolves_to_a_fixed_point() {
     x_provider.needs = vec![ResourceDemand {
         resource: "y".into(),
         name: "y-res".into(),
+        provider: None,
         inject: vec![],
     }];
     let y_provider = provider("y-prov", "y", &[("v", "{name}")]);
@@ -287,6 +295,7 @@ fn demand_chain_resolves_to_a_fixed_point() {
         vec![ResourceDemand {
             resource: "x".into(),
             name: "x-res".into(),
+            provider: None,
             inject: vec![],
         }],
     );
@@ -298,4 +307,228 @@ fn demand_chain_resolves_to_a_fixed_point() {
             "fixed point should pull in {id}"
         );
     }
+}
+
+// ---- Abstract `object_store` role: planner picks the provider --------------------
+
+/// A `PlanCtx` that prefers Azurite over SeaweedFS for the object store.
+fn azurite_preferred() -> PlanCtx {
+    let mut preference = BTreeMap::new();
+    preference.insert(
+        "object_store".to_string(),
+        vec![
+            ModuleId::from("local-stack-azurite"),
+            ModuleId::from("local-stack-seaweedfs"),
+        ],
+    );
+    PlanCtx {
+        provider_preference: preference,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn default_object_store_is_seaweedfs() {
+    // No preference → the catalog default (SeaweedFS) satisfies MLflow's object_store
+    // demand; Azurite is not deployed and no Azure vars appear.
+    let p = plan(
+        &Selection::modules(["local-stack-mlflow"]),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .unwrap();
+    assert!(
+        p.graph
+            .module(&ModuleId::from("local-stack-seaweedfs"))
+            .is_some()
+    );
+    assert!(
+        p.graph
+            .module(&ModuleId::from("local-stack-azurite"))
+            .is_none()
+    );
+    assert!(p.s3_buckets.contains(&"mlflow".to_string()));
+    assert!(p.azure_containers.is_empty());
+    assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), Some("seaweedfs"));
+    assert_eq!(p.env.get("AZURE_STORAGE_CONNECTION_STRING"), None);
+}
+
+#[test]
+fn preference_selects_azurite_and_drops_aws() {
+    // An Azurite-preferred environment: MLflow's object_store demand resolves to Azurite.
+    let p = plan(
+        &Selection::modules(["local-stack-mlflow"]),
+        &baseline_catalog(),
+        &azurite_preferred(),
+    )
+    .unwrap();
+
+    // Azurite is deployed, SeaweedFS is not.
+    assert!(
+        p.graph
+            .module(&ModuleId::from("local-stack-azurite"))
+            .is_some()
+    );
+    assert!(
+        p.graph
+            .module(&ModuleId::from("local-stack-seaweedfs"))
+            .is_none()
+    );
+    // The container (not an S3 bucket) is provisioned on Azurite.
+    assert!(p.azure_containers.contains(&"mlflow".to_string()));
+    assert!(p.s3_buckets.is_empty());
+    // Azure creds present; no AWS_* leak (SeaweedFS isn't in the graph).
+    assert!(p.env.get("AZURE_STORAGE_CONNECTION_STRING").is_some());
+    assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), None);
+}
+
+#[test]
+fn consumer_artifacts_uri_follows_the_chosen_provider() {
+    // A consumer that injects the object_store `artifacts_uri` coordinate gets the
+    // S3-shaped value by default and the Azure-shaped value under an Azurite preference.
+    let app = consumer(
+        "store-app",
+        vec![ResourceDemand {
+            resource: "object_store".into(),
+            name: "artifacts".into(),
+            provider: None,
+            inject: vec![Injection {
+                key: "STORE_URI".into(),
+                coordinate: "artifacts_uri".into(),
+            }],
+        }],
+    );
+    let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
+
+    let s3 = plan(
+        &Selection::modules(["store-app"]),
+        &catalog,
+        &PlanCtx::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        s3.injected
+            .get(&ModuleId::from("store-app"))
+            .and_then(|e| e.get("STORE_URI")),
+        Some("s3://artifacts")
+    );
+
+    let azure = plan(
+        &Selection::modules(["store-app"]),
+        &catalog,
+        &azurite_preferred(),
+    )
+    .unwrap();
+    assert_eq!(
+        azure
+            .injected
+            .get(&ModuleId::from("store-app"))
+            .and_then(|e| e.get("STORE_URI")),
+        Some("wasbs://artifacts@devstoreaccount1.blob.core.windows.net")
+    );
+}
+
+#[test]
+fn a_demand_pin_overrides_preference() {
+    // Even under an Azurite-preferred ctx, a demand pinning SeaweedFS uses S3.
+    let app = consumer(
+        "pinned-app",
+        vec![ResourceDemand {
+            resource: "object_store".into(),
+            name: "artifacts".into(),
+            provider: Some(ModuleId::from("local-stack-seaweedfs")),
+            inject: vec![Injection {
+                key: "STORE_URI".into(),
+                coordinate: "artifacts_uri".into(),
+            }],
+        }],
+    );
+    let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
+    let p = plan(
+        &Selection::modules(["pinned-app"]),
+        &catalog,
+        &azurite_preferred(),
+    )
+    .unwrap();
+    assert!(
+        p.graph
+            .module(&ModuleId::from("local-stack-seaweedfs"))
+            .is_some()
+    );
+    assert_eq!(
+        p.injected
+            .get(&ModuleId::from("pinned-app"))
+            .and_then(|e| e.get("STORE_URI")),
+        Some("s3://artifacts")
+    );
+}
+
+#[test]
+fn ambiguous_object_store_without_default_or_preference_errors() {
+    // Two object_store providers, no catalog default, no preference, no pin → ambiguous.
+    // (Build a catalog without the baseline's default to exercise the error.)
+    let mut s3 = ResourceProvider {
+        provider_kind: Some("s3".into()),
+        ..Default::default()
+    };
+    s3.coordinates
+        .insert("artifacts_uri".into(), "s3://{name}".into());
+    let mut a = provider("prov-s3", "object_store", &[]);
+    a.provides
+        .resource_kinds
+        .insert("object_store".into(), s3.clone());
+    let mut b = provider("prov-azure", "object_store", &[]);
+    b.provides.resource_kinds.insert("object_store".into(), s3);
+    let c = consumer(
+        "needs-store",
+        vec![ResourceDemand {
+            resource: "object_store".into(),
+            name: "x".into(),
+            provider: None,
+            inject: vec![],
+        }],
+    );
+    let catalog = Catalog::from_modules([a, b, c]); // no with_default_provider
+    let err = plan(
+        &Selection::modules(["needs-store"]),
+        &catalog,
+        &PlanCtx::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, PlanError::AmbiguousProvider { ref resource, .. } if resource == "object_store"),
+        "expected AmbiguousProvider, got {err:?}"
+    );
+
+    // A catalog default resolves it.
+    let catalog = Catalog::from_modules([
+        {
+            let mut a = provider("prov-s3", "object_store", &[]);
+            a.provides.resource_kinds.insert(
+                "object_store".into(),
+                ResourceProvider {
+                    provider_kind: Some("s3".into()),
+                    ..Default::default()
+                },
+            );
+            a
+        },
+        provider("prov-azure", "object_store", &[]),
+        consumer(
+            "needs-store",
+            vec![ResourceDemand {
+                resource: "object_store".into(),
+                name: "x".into(),
+                provider: None,
+                inject: vec![],
+            }],
+        ),
+    ])
+    .with_default_provider("object_store", "prov-s3");
+    let ok = plan(
+        &Selection::modules(["needs-store"]),
+        &catalog,
+        &PlanCtx::default(),
+    );
+    assert!(ok.is_ok(), "catalog default should resolve the ambiguity");
 }

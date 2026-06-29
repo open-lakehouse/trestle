@@ -130,33 +130,62 @@ pub struct PortDecl {
 /// `"bucket"` coordinate `{name}`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceProvider {
+    /// A stable tag identifying this provider's *flavour* of the role (e.g. `"s3"`,
+    /// `"azure_blob"`). A consumer that genuinely must adapt its fragment to the chosen
+    /// backend branches on this; consumers that read only the role's standard
+    /// coordinates can ignore it. Surfaced as the reserved `provider_kind` coordinate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<String>,
     /// The named coordinate templates a consumer can request, keyed by coordinate
-    /// name (e.g. `"url"`, `"bucket"`, `"endpoint"`).
+    /// name (e.g. `"url"`, `"endpoint"`, `"artifacts_uri"`).
+    ///
+    /// A **resource role** defines a *coordinate contract* — the names every provider
+    /// for that role renders — so a consumer reads the same keys regardless of which
+    /// provider the planner chose. For example the `object_store` role's contract is
+    /// `artifacts_uri`, `endpoint`, and the `provider_kind` tag; SeaweedFS fills them
+    /// with the `s3://` shape, Azurite with the `wasbs://` shape.
     #[serde(default)]
     pub coordinates: BTreeMap<String, String>,
 }
 
 impl ResourceProvider {
-    /// The template for a named coordinate, if this provider offers it.
+    /// The reserved coordinate name carrying the
+    /// [`provider_kind`](ResourceProvider::provider_kind) tag.
+    pub const PROVIDER_KIND_COORDINATE: &'static str = "provider_kind";
+
+    /// The template for a named coordinate, if this provider offers it. The reserved
+    /// `provider_kind` coordinate resolves to the provider's
+    /// [`provider_kind`](ResourceProvider::provider_kind) tag.
     pub fn coordinate(&self, name: &str) -> Option<&str> {
+        if name == Self::PROVIDER_KIND_COORDINATE {
+            return self.provider_kind.as_deref();
+        }
         self.coordinates.get(name).map(String::as_str)
     }
 }
 
-/// A resource a module needs from a provider: a `(kind, name)` the planner must
-/// ensure exists, plus where to inject the resolved coordinates back.
+/// A resource a module needs: a `(role, name)` the planner must ensure exists, plus
+/// where to inject the resolved coordinates back.
 ///
-/// The planner resolves `resource` (the kind) to a provider module via the catalog's
-/// resource index, deploys that provider if it isn't already selected, provisions the
-/// named resource, and renders each [`Injection`]'s coordinate into this module's
-/// environment.
+/// [`resource`](ResourceDemand::resource) names an abstract *role* (e.g.
+/// `"object_store"`), not a specific implementation — the planner chooses which
+/// registered provider satisfies it (by [`provider`](ResourceDemand::provider) pin,
+/// `PlanCtx` preference, uniqueness, or catalog default), deploys it if absent,
+/// provisions the named resource, and renders each [`Injection`]'s coordinate into this
+/// module's environment. Naming the role (not the implementation) is what lets one
+/// consumer run on, say, SeaweedFS in one environment and Azurite in another.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceDemand {
-    /// The resource kind needed (e.g. `"postgres_database"`, `"s3_bucket"`) — matched
+    /// The resource *role* needed (e.g. `"object_store"`, `"relational_db"`) — matched
     /// against providers' [`Provides::resource_kinds`].
     pub resource: String,
     /// The concrete resource name to provision (e.g. `"unitycatalog"`, `"unity"`).
     pub name: String,
+    /// Pin a specific provider module for this demand, overriding preference/default.
+    /// The escape hatch for when a consumer truly needs one backend; normally `None`
+    /// and the planner chooses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ModuleId>,
     /// The coordinates to inject back into the demanding module's environment so it
     /// can discover the resource at run time.
     #[serde(default)]

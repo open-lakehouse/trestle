@@ -55,16 +55,25 @@ pub const REWRITE_OVERRIDE_PREFIX: &str = "rewrite:";
 /// its mount here and leaves `path` empty.
 pub const API_PREFIX_EXTRA: &str = "api_prefix:";
 
-/// The placeholder a module's fragment uses for planner-injected text the module
-/// can't know on its own — currently SeaweedFS's per-bucket `aws s3 mb` lines.
+/// The placeholder SeaweedFS's fragment uses for the planner-injected per-bucket
+/// `aws s3 mb` lines.
 pub const S3_BUCKET_MB_LINES_VAR: &str = "S3_BUCKET_MB_LINES";
+/// The placeholder Azurite's fragment uses for the planner-injected per-container
+/// `az storage container create` lines.
+pub const AZURE_CONTAINER_CREATE_LINES_VAR: &str = "AZURE_CONTAINER_CREATE_LINES";
 
 /// The inlined baseline catalog: all common local-Lakehouse modules.
+///
+/// The `object_store` role has two providers (SeaweedFS and Azurite); the catalog
+/// default is SeaweedFS, so the baseline plans the S3 wiring out of the box. An
+/// environment that prefers Azurite (e.g. for local UC credential vending) overrides
+/// via [`PlanCtx::provider_preference`](crate::PlanCtx::provider_preference).
 pub fn baseline_catalog() -> Catalog {
     Catalog::from_modules([
         envoy(),
         postgres(),
         seaweedfs(),
+        azurite(),
         mlflow(),
         unity_catalog(),
         trino(),
@@ -72,6 +81,7 @@ pub fn baseline_catalog() -> Catalog {
         notebooks(),
         databricks_emulator_env(),
     ])
+    .with_default_provider("object_store", "local-stack-seaweedfs")
 }
 
 /// The default lakehouse selection: the always-on gateway plus the default category
@@ -205,13 +215,24 @@ fn seaweedfs() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
-    // Provisions `s3_bucket` resources; vends the bucket name and the in-network S3
-    // endpoint as coordinates.
-    let mut s3 = ResourceProvider::default();
-    s3.coordinates.insert("bucket".into(), "{name}".into());
-    s3.coordinates
+    // The S3 flavour of the `object_store` role. Fills the role's coordinate contract:
+    // `artifacts_uri` (the `s3://` destination), `endpoint`, and the `provider_kind` tag.
+    let mut object_store = ResourceProvider {
+        provider_kind: Some("s3".into()),
+        ..Default::default()
+    };
+    object_store
+        .coordinates
+        .insert("artifacts_uri".into(), "s3://{name}".into());
+    object_store
+        .coordinates
+        .insert("bucket".into(), "{name}".into());
+    object_store
+        .coordinates
         .insert("endpoint".into(), "http://seaweedfs:8333".into());
-    provides.resource_kinds.insert("s3_bucket".into(), s3);
+    provides
+        .resource_kinds
+        .insert("object_store".into(), object_store);
     Module {
         id: ModuleId::from("local-stack-seaweedfs"),
         display_name: Some("SeaweedFS (local S3)".into()),
@@ -238,6 +259,72 @@ fn seaweedfs() -> Module {
         provides,
         knobs: vec![],
         render: fragment(include_str!("fragments/seaweedfs.yaml")),
+    }
+}
+
+/// `local-stack-azurite` — the Azure Blob flavour of the `object_store` role, an
+/// alternative to SeaweedFS. Preferred in environments that need Azure-shaped storage
+/// (e.g. for local Unity Catalog credential vending). When chosen, it provisions the
+/// demanded containers; its `provides.env_vars` carry the Azure connection string and
+/// SeaweedFS is not deployed, so no `AWS_*` keys enter the stack.
+fn azurite() -> Module {
+    const CONN: &str = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;";
+    let mut provides = Provides::default();
+    provides
+        .env_vars
+        .insert("AZURE_STORAGE_CONNECTION_STRING".into(), CONN.into());
+    provides
+        .env_vars
+        .insert("AZURITE_BLOB_PORT".into(), "10000".into());
+
+    // The Azure flavour of `object_store`: same contract coordinate names as SeaweedFS,
+    // filled with the `wasbs://` shape and an `azure_blob` provider_kind tag.
+    let mut object_store = ResourceProvider {
+        provider_kind: Some("azure_blob".into()),
+        ..Default::default()
+    };
+    object_store.coordinates.insert(
+        "artifacts_uri".into(),
+        "wasbs://{name}@devstoreaccount1.blob.core.windows.net".into(),
+    );
+    object_store
+        .coordinates
+        .insert("bucket".into(), "{name}".into());
+    object_store.coordinates.insert(
+        "endpoint".into(),
+        "http://azurite:10000/devstoreaccount1".into(),
+    );
+    provides
+        .resource_kinds
+        .insert("object_store".into(), object_store);
+
+    Module {
+        id: ModuleId::from("local-stack-azurite"),
+        display_name: Some("Azurite (local Azure Blob)".into()),
+        summary: Some("Azure Blob emulator; object store with Azure-shaped wiring.".into()),
+        category: Some("storage".into()),
+        provider_of: Some("object_store".into()),
+        requires: vec![],
+        // The two object-store providers are mutually exclusive in one environment.
+        conflicts_with: vec![ModuleId::from("local-stack-seaweedfs")],
+        needs: vec![],
+        services: vec![ServiceSpec {
+            name: "azurite".into(),
+            role: Role::new("object_store"),
+            placement: container("azurite"),
+            endpoints: vec![Endpoint {
+                id: "blob".into(),
+                scheme: Scheme::Http,
+                internal_port: 10000,
+                host_port: Some(10000),
+                intent: RouteIntent::Internal,
+                path: String::new(),
+            }],
+            depends_on: vec![],
+        }],
+        provides,
+        knobs: vec![],
+        render: fragment(include_str!("fragments/azurite.yaml")),
     }
 }
 
@@ -293,11 +380,13 @@ fn mlflow() -> Module {
             ResourceDemand {
                 resource: "postgres_database".into(),
                 name: "mlflow".into(),
+                provider: None,
                 inject: vec![],
             },
             ResourceDemand {
-                resource: "s3_bucket".into(),
+                resource: "object_store".into(),
                 name: "mlflow".into(),
+                provider: None,
                 inject: vec![],
             },
         ],
@@ -374,6 +463,7 @@ fn unity_catalog() -> Module {
             ResourceDemand {
                 resource: "postgres_database".into(),
                 name: "unitycatalog".into(),
+                provider: None,
                 // The provider's connection-string coordinate lands in UC's env as
                 // `UC_DATABASE_URL`, which its fragment reads.
                 inject: vec![Injection {
@@ -382,8 +472,9 @@ fn unity_catalog() -> Module {
                 }],
             },
             ResourceDemand {
-                resource: "s3_bucket".into(),
+                resource: "object_store".into(),
                 name: "unity".into(),
+                provider: None,
                 inject: vec![],
             },
         ],
