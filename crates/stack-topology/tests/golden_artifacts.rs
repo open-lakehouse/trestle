@@ -753,10 +753,16 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         "DATABASE_URL comes from the resolved relational_db url: {}",
         out.fragment
     );
+    // The container invokes the headwaters CLI directly, pointing it at the mounted config.
+    let command: Vec<&str> = svc["command"]
+        .as_sequence()
+        .expect("command is a sequence")
+        .iter()
+        .map(|v| v.as_str().expect("command entries are strings"))
+        .collect();
     assert_eq!(
-        env["HEADWATERS_CONFIG"].as_str(),
-        Some("/etc/headwaters/config.toml"),
-        "the container is pointed at the mounted config file"
+        command,
+        ["serve", "--config", "/etc/headwaters/config.toml"]
     );
     // The config file is mounted via the `headwaters_config` alias at the expected target.
     assert_eq!(
@@ -851,6 +857,11 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     assert!(
         config.contents.contains("serve = false"),
         "the override turns the UI off: {}",
+        config.contents
+    );
+    assert!(
+        !config.contents.contains("base_path"),
+        "no base_path line when the UI is off: {}",
         config.contents
     );
 

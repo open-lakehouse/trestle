@@ -8,7 +8,9 @@ port = 8091
 # runs the service API-only. The planner validates/coerces the Bool knob to a bare
 # `true`/`false` at plan time, so this interpolates straight in as valid TOML.
 serve = {{ env.HEADWATERS_SERVE_UI }}
+{%- if env.BASE_PATH %}
 # Planner-assigned base path for the shared-listener UI prefix. Envoy fronts this
 # prefix and forwards it upstream unchanged, so the service serves its whole surface
-# (UI + API) under it.
+# (UI + API) under it. Only set when the UI is served — API-only runs serve at root.
 base_path = "{{ env.BASE_PATH }}"
+{%- endif %}
