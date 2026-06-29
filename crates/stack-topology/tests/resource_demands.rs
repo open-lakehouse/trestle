@@ -532,3 +532,111 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
     );
     assert!(ok.is_ok(), "catalog default should resolve the ambiguity");
 }
+
+#[test]
+fn a_service_can_demand_two_object_stores_of_the_same_role() {
+    // A Unity-Catalog-shaped consumer: one object store for managed storage, a second
+    // for an external location. Same role, distinct names, distinct inject keys.
+    let uc = consumer(
+        "catalog",
+        vec![
+            ResourceDemand {
+                resource: "object_store".into(),
+                name: "uc-managed".into(),
+                provider: None,
+                inject: vec![Injection {
+                    key: "UC_MANAGED_URI".into(),
+                    coordinate: "artifacts_uri".into(),
+                }],
+            },
+            ResourceDemand {
+                resource: "object_store".into(),
+                name: "uc-external".into(),
+                provider: None,
+                inject: vec![Injection {
+                    key: "UC_EXTERNAL_URI".into(),
+                    coordinate: "artifacts_uri".into(),
+                }],
+            },
+        ],
+    );
+    let catalog = baseline_catalog().merge(Catalog::from_modules([uc]));
+    let p = plan(
+        &Selection::modules(["catalog"]),
+        &catalog,
+        &PlanCtx::default(),
+    )
+    .unwrap();
+
+    // Both stores are provisioned in the one chosen provider (SeaweedFS by default).
+    assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
+    assert!(p.s3_buckets.contains(&"uc-external".to_string()));
+
+    // Each demand injects its own coordinate under its own key — no collision.
+    let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
+    assert_eq!(env.get("UC_MANAGED_URI"), Some("s3://uc-managed"));
+    assert_eq!(env.get("UC_EXTERNAL_URI"), Some("s3://uc-external"));
+
+    // One object-store provider serves both demands.
+    assert_eq!(
+        p.graph
+            .nodes
+            .iter()
+            .filter(|m| m.id.as_str() == "local-stack-seaweedfs")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn same_role_demands_can_pin_different_providers() {
+    // The escape hatch: a service's two object-store demands can deliberately land on
+    // different providers (e.g. managed on SeaweedFS, external on Azurite for
+    // credential vending) by pinning each.
+    let uc = consumer(
+        "catalog",
+        vec![
+            ResourceDemand {
+                resource: "object_store".into(),
+                name: "uc-managed".into(),
+                provider: Some(ModuleId::from("local-stack-seaweedfs")),
+                inject: vec![Injection {
+                    key: "UC_MANAGED_URI".into(),
+                    coordinate: "artifacts_uri".into(),
+                }],
+            },
+            ResourceDemand {
+                resource: "object_store".into(),
+                name: "uc-external".into(),
+                provider: Some(ModuleId::from("local-stack-azurite")),
+                inject: vec![Injection {
+                    key: "UC_EXTERNAL_URI".into(),
+                    coordinate: "artifacts_uri".into(),
+                }],
+            },
+        ],
+    );
+    // Drop the seaweedfs↔azurite conflict for this test: pinning intentionally runs both.
+    let mut azurite = baseline_catalog()
+        .get(&ModuleId::from("local-stack-azurite"))
+        .cloned()
+        .unwrap();
+    azurite.conflicts_with.clear();
+    let catalog = baseline_catalog().merge(Catalog::from_modules([azurite, uc]));
+    let p = plan(
+        &Selection::modules(["catalog"]),
+        &catalog,
+        &PlanCtx::default(),
+    )
+    .unwrap();
+
+    // Managed went to SeaweedFS (s3://), external to Azurite (wasbs://).
+    assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
+    assert!(p.azure_containers.contains(&"uc-external".to_string()));
+    let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
+    assert_eq!(env.get("UC_MANAGED_URI"), Some("s3://uc-managed"));
+    assert_eq!(
+        env.get("UC_EXTERNAL_URI"),
+        Some("wasbs://uc-external@devstoreaccount1.blob.core.windows.net")
+    );
+}
