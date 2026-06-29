@@ -22,7 +22,6 @@ use serde_yaml::Value;
 
 const ENVOY_FIXTURE: &str = include_str!("fixtures/default/config/envoy.yaml");
 const PG_FIXTURE: &str = include_str!("fixtures/default/config/init-databases.sh");
-const ENV_FIXTURE: &str = include_str!("fixtures/default/.env.example");
 const COMPOSE_FIXTURE: &str = include_str!("fixtures/default/compose.yaml");
 
 /// The default lakehouse selection used to capture the fixtures.
@@ -138,7 +137,33 @@ fn envoy_routes_and_clusters_match_trestle_semantically() {
 
 #[test]
 fn postgres_init_creates_the_same_databases() {
-    let arts = render(&default_selection());
+    use olai_stack_topology::ModuleId;
+
+    // The Postgres init script is now a module-rendered config file: the postgres module
+    // emits it as a `RenderFile` (alias `postgres_init`), templated from the databases the
+    // planner hands the provider as `RenderCtx.objects`. Pull it from the render output.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            env_name: "lh-ref".into(),
+            ..Default::default()
+        },
+    )
+    .expect("plan should succeed");
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("postgres"))
+        .expect("postgres is in the render set");
+    let init = out
+        .files
+        .iter()
+        .find(|f| f.alias.as_deref() == Some("postgres_init"))
+        .expect("postgres declares a `postgres_init` config file");
+    // It is co-located under the module's directory.
+    assert_eq!(init.path, "modules/postgres/init-databases.sh");
+
     let dbs = |s: &str| -> BTreeSet<String> {
         s.lines()
             .filter_map(|l| l.trim().strip_prefix("CREATE DATABASE "))
@@ -146,17 +171,22 @@ fn postgres_init_creates_the_same_databases() {
             .collect()
     };
     assert_eq!(
-        dbs(&arts.postgres_init),
+        dbs(&init.contents),
         dbs(PG_FIXTURE),
         "rendered Postgres init creates a different set of databases than trestle"
     );
     // The script is a well-formed heredoc.
-    assert!(arts.postgres_init.contains("<<-SQL"));
-    assert!(arts.postgres_init.trim_end().ends_with("SQL"));
+    assert!(init.contents.contains("<<-SQL"));
+    assert!(init.contents.trim_end().ends_with("SQL"));
 }
 
 #[test]
-fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
+fn env_file_emits_only_keys_referenced_as_compose_substitutions() {
+    // The `.env` overlay is audited: it lists a key only when some rendered artifact (a module
+    // fragment or a mounted config file) still references it as a `${KEY}` compose
+    // substitution. Because the baseline modules render every coordinate *concrete* (the
+    // fragments read `{{ db.url }}`, `{{ obj.credential.* }}` directly), nothing defers a value
+    // to compose, so the audited `.env` for the default lakehouse is empty of keys.
     let arts = render(&default_selection());
     let kv = |s: &str| -> BTreeMap<String, String> {
         s.lines()
@@ -168,82 +198,56 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
             .collect()
     };
     let got = kv(&arts.env);
-    let want = kv(ENV_FIXTURE);
 
-    // Every var trestle shipped is still present and unchanged, with these deliberate
-    // exceptions:
-    //   * `MLFLOW_S3_ENDPOINT_URL` — trestle pointed it at the host
-    //     (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
-    //     gateway on its own dedicated listener, so the planner injects the gateway origin
-    //     (`http://envoy:9100`) instead — consumers reach the store through Envoy.
-    //   * `UC_DATABASE_URL` / `UC_IMAGE` — UC's fragment now reads its backend URL from the
-    //     resolved connection directly and pins its image inline, so neither is round-tripped
-    //     through `.env` any more.
-    //   * `POSTGRES_PORT` / `PGWEB_PORT` / `SEAWEEDFS_MASTER_PORT` / `SEAWEEDFS_S3_PORT` /
-    //     `JAEGER_UI_PORT` — ports are now written concretely in the fragments, so these
-    //     `*_PORT` vars are no longer referenced and no longer emitted.
-    //   All are asserted absent below.
-    let dropped = [
-        "UC_DATABASE_URL",
-        "UC_IMAGE",
-        "POSTGRES_PORT",
-        "PGWEB_PORT",
-        "SEAWEEDFS_MASTER_PORT",
-        "SEAWEEDFS_S3_PORT",
-        "JAEGER_UI_PORT",
-    ];
-    for (k, v) in &want {
-        if k == "MLFLOW_S3_ENDPOINT_URL" || dropped.contains(&k.as_str()) {
-            continue;
-        }
-        assert_eq!(
-            got.get(k),
-            Some(v),
-            "rendered .env dropped or changed trestle var `{k}`"
+    // Collect every `${KEY}` reference across the rendered corpus (fragments + mounted files +
+    // the Envoy bootstrap). Every emitted key must appear here; nothing else may.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            env_name: "lh-ref".into(),
+            ..Default::default()
+        },
+    )
+    .expect("plan should succeed");
+    let mut corpus = vec![arts.envoy.clone()];
+    for (_, out) in &p.renders {
+        corpus.push(out.fragment.clone());
+        corpus.extend(out.files.iter().map(|f| f.contents.clone()));
+    }
+    let referenced: BTreeSet<String> = corpus
+        .iter()
+        .flat_map(|t| {
+            t.match_indices("${").filter_map(|(i, _)| {
+                let rest = &t[i + 2..];
+                let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+                let name = &rest[..end];
+                (!name.is_empty() && !name.as_bytes()[0].is_ascii_digit()).then(|| name.to_string())
+            })
+        })
+        .collect();
+
+    for k in got.keys() {
+        assert!(
+            referenced.contains(k),
+            "`{k}` is emitted into .env but referenced by no rendered fragment/file"
         );
     }
-    for k in dropped {
+
+    // Concretely-consumed coordinates that used to round-trip through `.env` are now gone:
+    // they are read straight from the resolved connection in the fragments.
+    for k in [
+        "MLFLOW_ARTIFACTS_DESTINATION",
+        "MLFLOW_BACKEND_STORE_URI",
+        "S3_ENDPOINT",
+        "UC_DATABASE_URL",
+        "AWS_ACCESS_KEY_ID",
+    ] {
         assert!(
             !got.contains_key(k),
-            "`{k}` should no longer be emitted into .env (read from the connection or written concretely)"
+            "`{k}` should no longer be emitted into .env (consumed concretely at render time)"
         );
     }
-    assert_eq!(
-        got.get("MLFLOW_S3_ENDPOINT_URL").map(String::as_str),
-        Some("http://envoy:9100"),
-        "MLFLOW_S3_ENDPOINT_URL should be the object store's dedicated gateway listener"
-    );
-
-    // The coordinate-injection rework adds these role-generic coordinates, sourced from the
-    // chosen providers rather than hard-coded in fragments. Each consumer maps a role-generic
-    // coordinate to its own service-specific key.
-    assert_eq!(
-        got.get("MLFLOW_ARTIFACTS_DESTINATION").map(String::as_str),
-        Some("s3://mlflow"),
-        "MLflow's artifact destination is injected from the object_store `uri` coordinate"
-    );
-    assert_eq!(
-        got.get("MLFLOW_BACKEND_STORE_URI").map(String::as_str),
-        Some("postgresql://postgres:postgres@db:5432/mlflow"),
-        "MLflow's backend store is injected from the relational_db `url` coordinate"
-    );
-    // `S3_ENDPOINT` is no longer injected: UC's only consumer of it now reads
-    // `connections.object_store.0.endpoint` straight from the resolved connection in its
-    // fragment, so the coordinate never round-trips through `.env`.
-    assert!(
-        !got.contains_key("S3_ENDPOINT"),
-        "S3_ENDPOINT should no longer be injected (UC reads the endpoint from the connection)"
-    );
-    // The S3 credentials still come from the chosen provider's own env contribution (not
-    // injected per-consumer), so they remain present with the SeaweedFS values.
-    assert_eq!(
-        got.get("AWS_ACCESS_KEY_ID").map(String::as_str),
-        Some("seaweedfs")
-    );
-    assert_eq!(
-        got.get("AWS_DEFAULT_REGION").map(String::as_str),
-        Some("us-east-1")
-    );
 }
 
 #[test]
@@ -252,20 +256,89 @@ fn compose_includes_the_same_fragments() {
     // Valid YAML.
     let _: Value =
         serde_yaml::from_str(&arts.compose).expect("rendered compose must be valid YAML");
-    let includes = |s: &str| -> BTreeSet<String> {
+    // Compare the *set of modules* included, not raw paths: the layout moved from trestle's
+    // `./docker/compose/<id>.yaml` to a per-module `./modules/<id>/compose.yaml`, so derive the
+    // module id from each include path on both sides.
+    let module_ids = |s: &str| -> BTreeSet<String> {
         s.lines()
             .filter_map(|l| l.trim().strip_prefix("- path: "))
-            .map(str::to_string)
+            .filter_map(|p| {
+                let p = p.trim_start_matches("./");
+                if let Some(rest) = p.strip_prefix("modules/") {
+                    rest.strip_suffix("/compose.yaml").map(str::to_string)
+                } else if let Some(rest) = p.strip_prefix("docker/compose/") {
+                    rest.strip_suffix(".yaml").map(str::to_string)
+                } else {
+                    None
+                }
+            })
             .collect()
     };
     assert_eq!(
-        includes(&arts.compose),
-        includes(COMPOSE_FIXTURE),
-        "rendered compose includes a different set of fragments than trestle"
+        module_ids(&arts.compose),
+        module_ids(COMPOSE_FIXTURE),
+        "rendered compose includes a different set of modules than trestle"
     );
     // Unlike the captured fixture (generated without a name), the planner always
     // names the project.
     assert!(arts.compose.contains("name: lh-ref"));
+}
+
+#[test]
+fn compose_declares_config_aliases_for_mounted_files() {
+    let arts = render(&default_selection());
+    let doc: Value =
+        serde_yaml::from_str(&arts.compose).expect("rendered compose must be valid YAML");
+
+    // The gateway's Envoy bootstrap and the postgres init script are both declared as
+    // top-level `configs:` entries, each pointing at its per-module file.
+    let configs = &doc["configs"];
+    assert_eq!(
+        configs["envoy_config"]["file"].as_str(),
+        Some("./modules/envoy/envoy.yaml"),
+        "envoy_config must map to the gateway module's bootstrap: {}",
+        arts.compose
+    );
+    assert_eq!(
+        configs["postgres_init"]["file"].as_str(),
+        Some("./modules/postgres/init-databases.sh"),
+        "postgres_init must map to the postgres module's init script: {}",
+        arts.compose
+    );
+
+    // And the fragments mount them by alias rather than by a bind-mount path.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            env_name: "lh-ref".into(),
+            ..Default::default()
+        },
+    )
+    .expect("plan should succeed");
+    let fragment = |id: &str| -> String {
+        use olai_stack_topology::ModuleId;
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| out.fragment.clone())
+            .unwrap_or_default()
+    };
+    let envoy = fragment("envoy");
+    assert!(
+        envoy.contains("source: envoy_config"),
+        "envoy fragment mounts the config by alias: {envoy}"
+    );
+    let pg = fragment("postgres");
+    assert!(
+        pg.contains("source: postgres_init"),
+        "postgres fragment mounts the init script by alias: {pg}"
+    );
+    // No stale `docker/` bind-mount paths remain.
+    assert!(
+        !envoy.contains("docker/envoy") && !pg.contains("docker/postgres"),
+        "fragments should no longer reference the old docker/ layout"
+    );
 }
 
 #[test]

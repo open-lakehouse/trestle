@@ -270,6 +270,11 @@ impl RenderSpec {
                             Ok(RenderFile {
                                 path: render_template(&mut env, &f.path, ctx)?,
                                 contents: render_template(&mut env, &f.contents, ctx)?,
+                                alias: f
+                                    .alias
+                                    .as_deref()
+                                    .map(|a| render_template(&mut env, a, ctx))
+                                    .transpose()?,
                             })
                         })
                         .collect::<Result<_, RenderError>>()?,

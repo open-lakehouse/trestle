@@ -230,6 +230,21 @@ pub enum PlanError {
         /// The provider module ids present for the role (sorted).
         providers: Vec<ModuleId>,
     },
+    /// Two modules declared the same compose `configs:` alias. Aliases share one
+    /// top-level namespace, so the planner refuses to let one shadow the other; rename
+    /// one module's [`RenderFile`](crate::RenderFile) alias.
+    #[error(
+        "compose config alias `{alias}` is declared by both `{first}` and `{second}`; \
+         rename one"
+    )]
+    ConfigAliasCollision {
+        /// The colliding alias.
+        alias: String,
+        /// The module that declared it first.
+        first: ModuleId,
+        /// The module that collided with it.
+        second: ModuleId,
+    },
 }
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -286,6 +301,20 @@ pub struct ComposeInclude {
     pub fragment: String,
 }
 
+/// A top-level compose `configs:` declaration: an alias and the host file it maps to.
+///
+/// The generated compose emits `configs: <alias>: { file: <path> }`, and a service
+/// fragment mounts it by `configs: - source: <alias>`. Each entry comes from a module's
+/// [`RenderFile`](crate::RenderFile) that declared an `alias` (the host `path` is the
+/// per-module-rooted file path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigDecl {
+    /// The compose config alias (referenced by `configs: - source: <alias>`).
+    pub alias: String,
+    /// The host file path the alias maps to (e.g. `modules/envoy/envoy.yaml`).
+    pub path: String,
+}
+
 /// The consolidated top-level compose plan: customization at the head (injected env),
 /// then a plain list of module fragments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -296,6 +325,11 @@ pub struct HeadFile {
     pub env: InjectedEnv,
     /// The module fragments to include, in dependency order.
     pub includes: Vec<ComposeInclude>,
+    /// The top-level `configs:` declarations (alias → host file), sorted by alias for
+    /// deterministic output. Aggregated from every module's aliased
+    /// [`RenderFile`](crate::RenderFile)s plus any synthetic entry the planner adds for a
+    /// dedicated-renderer artifact (e.g. the gateway's envoy bootstrap).
+    pub configs: Vec<ConfigDecl>,
 }
 
 /// A fully-assigned environment: the resolved graph, the routing plan, the rendered
@@ -321,8 +355,9 @@ pub struct EnvironmentPlan {
     pub head: HeadFile,
     /// The structured gateway config.
     pub gateway: GatewayConfig,
-    /// Postgres databases the selected modules need, deduplicated in dependency order
-    /// (drives the Postgres init artifact).
+    /// Postgres databases the selected modules need, deduplicated in dependency order. These
+    /// also reach the postgres provider's render as `RenderCtx.objects`, which its init-script
+    /// `RenderFile` iterates; this field is the same list exposed for consumers.
     pub postgres_databases: Vec<String>,
     /// Object-store buckets provisioned on SeaweedFS (when it is the chosen object-store
     /// provider), deduplicated in dependency order.
@@ -601,6 +636,10 @@ pub fn plan(
     // contributes no compose include.
     let mut renders = Vec::with_capacity(graph.nodes.len());
     let mut includes = Vec::new();
+    // Aggregated `configs:` declarations and the module each alias was first seen on, so a
+    // second module reusing an alias is rejected rather than silently shadowing.
+    let mut configs: Vec<ConfigDecl> = Vec::new();
+    let mut alias_owner: BTreeMap<String, ModuleId> = BTreeMap::new();
     for module in &graph.nodes {
         let module_env = injected.get(&module.id).cloned().unwrap_or_default();
         // The typed connections resolved for this module's demands, grouped by role, so a
@@ -652,13 +691,34 @@ pub fn plan(
             objects,
             published_ports,
         };
-        let out = module
+        let mut out = module
             .render
             .render(&render_ctx)
             .map_err(|source| PlanError::Render {
                 module: module.id.0.clone(),
                 source,
             })?;
+        // Root each emitted file under the module's own directory (`modules/<id>/<path>`),
+        // so a module never hard-codes the global layout and its files sit beside its
+        // fragment. The rewritten path is the single source of truth the consumer writes to
+        // and the compose `configs: file:` references.
+        for f in &mut out.files {
+            f.path = format!("modules/{}/{}", module.id.as_str(), f.path);
+            if let Some(alias) = &f.alias {
+                if let Some(first) = alias_owner.get(alias) {
+                    return Err(PlanError::ConfigAliasCollision {
+                        alias: alias.clone(),
+                        first: first.clone(),
+                        second: module.id.clone(),
+                    });
+                }
+                alias_owner.insert(alias.clone(), module.id.clone());
+                configs.push(ConfigDecl {
+                    alias: alias.clone(),
+                    path: f.path.clone(),
+                });
+            }
+        }
         if !out.fragment.trim().is_empty() {
             includes.push(ComposeInclude {
                 module: module.id.clone(),
@@ -668,10 +728,14 @@ pub fn plan(
         renders.push((module.id.clone(), out));
     }
 
+    // Deterministic `configs:` order regardless of module/graph order.
+    configs.sort_by(|a, b| a.alias.cmp(&b.alias));
+
     let head = HeadFile {
         name: ctx.env_name.clone(),
         env: env.clone(),
         includes,
+        configs,
     };
 
     // The typed connections, exposed for downstream consumers (deterministic: built from
@@ -1319,6 +1383,80 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, PlanError::MissingPrefix("svc.ui".into()));
+    }
+
+    #[test]
+    fn duplicate_config_alias_across_modules_is_rejected() {
+        use crate::module::RenderSpec;
+        use crate::render::RenderFile;
+
+        // Two modules each declare a `RenderFile` under the same alias. Aliases share one
+        // top-level `configs:` namespace, so the planner must refuse rather than let one
+        // silently shadow the other.
+        let with_alias = |id: &str| -> Module {
+            let mut m = module_with(id, vec![], Default::default());
+            m.render = RenderSpec::Template {
+                fragment: format!("services:\n  {id}: {{}}\n"),
+                files: vec![RenderFile {
+                    path: "conf.yaml".into(),
+                    contents: "k: v\n".into(),
+                    alias: Some("shared_alias".into()),
+                }],
+            };
+            m
+        };
+        let err = plan(
+            &Selection::modules(["a", "b"]),
+            &Catalog::from_modules([with_alias("a"), with_alias("b")]),
+            &PlanCtx::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            PlanError::ConfigAliasCollision {
+                alias: "shared_alias".into(),
+                first: ModuleId::from("a"),
+                second: ModuleId::from("b"),
+            }
+        );
+    }
+
+    #[test]
+    fn config_alias_is_rooted_and_declared_in_the_head() {
+        use crate::module::RenderSpec;
+        use crate::render::RenderFile;
+
+        // A single aliased file is rooted under its module dir and surfaces as one `configs:`
+        // declaration on the head.
+        let mut m = module_with("svc", vec![], Default::default());
+        m.render = RenderSpec::Template {
+            fragment: "services:\n  svc: {}\n".into(),
+            files: vec![RenderFile {
+                path: "app.toml".into(),
+                contents: "x = 1\n".into(),
+                alias: Some("svc_config".into()),
+            }],
+        };
+        let p = plan(
+            &Selection::modules(["svc"]),
+            &Catalog::from_modules([m]),
+            &PlanCtx::default(),
+        )
+        .expect("plan succeeds");
+        assert_eq!(
+            p.head.configs,
+            vec![ConfigDecl {
+                alias: "svc_config".into(),
+                path: "modules/svc/app.toml".into(),
+            }]
+        );
+        // The render output's file path is rooted to match.
+        let (_, out) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id.as_str() == "svc")
+            .unwrap();
+        assert_eq!(out.files[0].path, "modules/svc/app.toml");
     }
 
     #[test]

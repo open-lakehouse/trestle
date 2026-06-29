@@ -44,6 +44,7 @@ use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectS
 use crate::endpoint::{Endpoint, RouteIntent, Scheme};
 use crate::module::{ConnectionBinding, Module, ModuleId, Provides, RenderSpec, ResourceDemand};
 use crate::placement::Placement;
+use crate::render::RenderFile;
 use crate::role::{Role, ServiceSpec};
 
 /// The well-known extras key naming where a service serves itself.
@@ -135,6 +136,16 @@ fn template(text: &str) -> RenderSpec {
     RenderSpec::Template {
         fragment: text.to_string(),
         files: vec![],
+    }
+}
+
+/// Helper: a [`RenderSpec::Template`] carrying a fragment plus mounted config files. Each
+/// file's `path` is module-relative (the planner roots it under `modules/<id>/`), and each
+/// file template is rendered against the same [`RenderCtx`](crate::RenderCtx) as the fragment.
+fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
+    RenderSpec::Template {
+        fragment: text.to_string(),
+        files,
     }
 }
 
@@ -234,9 +245,18 @@ fn postgres() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: template(include_str!(
-            "../../templates/modules/postgres/compose.yaml.jinja"
-        )),
+        render: template_with_files(
+            include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
+            vec![RenderFile {
+                // Rendered from the databases the planner hands the provider via
+                // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
+                // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
+                path: "init-databases.sh".into(),
+                contents: include_str!("../../templates/modules/postgres/init-databases.sh.jinja")
+                    .into(),
+                alias: Some("postgres_init".into()),
+            }],
+        ),
     }
 }
 

@@ -11,9 +11,13 @@ services:
       - "5432:5432"
     volumes:
       # Durable state under the stack's data root, resolved at plan time from
-      # `PlanCtx.data_root` (default ./.data). The init script stays alongside the compose file.
+      # `PlanCtx.data_root` (default ./.data).
       - {{ env.DATA_ROOT }}/postgres:/var/lib/postgresql/data
-      - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    configs:
+      # The init script is a rendered config file co-located with this fragment under
+      # `modules/postgres/`, declared in the top-level `configs:` block as `postgres_init`.
+      - source: postgres_init
+        target: /docker-entrypoint-initdb.d/init-databases.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
