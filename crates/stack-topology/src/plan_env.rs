@@ -332,6 +332,10 @@ pub fn plan(
     // Every provider chosen to satisfy a demand must honor its role's coordinate contract.
     validate_contracts(&graph, catalog, ctx)?;
 
+    // At most one provider per resource role may end up in an environment — unless a
+    // consumer explicitly pinned each (the sanctioned multi-store case).
+    check_role_exclusivity(&graph)?;
+
     // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
     // order). Grouping by provider — not by abstract role — is what lets one object-store
     // demand land on SeaweedFS and another on Azurite, each provisioning on its own init.
@@ -784,6 +788,76 @@ fn validate_contracts(
                     });
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Reject an environment that contains two or more providers of the same resource role,
+/// unless every extra provider was reached by an explicit per-demand
+/// [`provider`](crate::ResourceDemand::provider) pin.
+///
+/// `choose_provider` already selects exactly one provider per demand, so a same-role clash
+/// only arises when a *second* provider is in the graph for an unrelated reason — directly
+/// selected, or pulled in by `requires`. That is the case this rejects (with
+/// [`PlanError::ConflictingRoleProviders`]): selecting both SeaweedFS and Azurite with no
+/// pins is ambiguous, and the planner will not silently drop one. The exception is the
+/// deliberate multi-store shape — a consumer that pins each demand's provider — where every
+/// provider beyond the first is accounted for by a pin.
+fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
+    // The (role, provider) pairs a demand explicitly pinned — these are sanctioned.
+    let mut pinned: BTreeSet<(String, ModuleId)> = BTreeSet::new();
+    for module in &graph.nodes {
+        for demand in &module.needs {
+            if let Some(p) = &demand.provider {
+                pinned.insert((demand.resource.clone(), p.clone()));
+            }
+        }
+    }
+
+    // Providers of each role present in the resolved graph (a node provides a role if it
+    // declares it under `resource_kinds`, or its `provider_of` capability names it).
+    let mut by_role: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
+    for module in &graph.nodes {
+        let mut roles: BTreeSet<&str> = module
+            .provides
+            .resource_kinds
+            .keys()
+            .map(String::as_str)
+            .collect();
+        if let Some(cap) = &module.provider_of {
+            roles.insert(cap.as_str());
+        }
+        for role in roles {
+            by_role
+                .entry(role.to_string())
+                .or_default()
+                .push(module.id.clone());
+        }
+    }
+
+    for (role, mut providers) in by_role {
+        if providers.len() < 2 {
+            continue;
+        }
+        // Allow it only if at most one provider is unpinned: every other was a deliberate pin.
+        let unpinned = providers
+            .iter()
+            .filter(|id| !pinned.contains(&(role.clone(), (*id).clone())))
+            .count();
+        if unpinned > 1 {
+            // Ignore a role that no demand actually targets (e.g. a `provider_of` capability
+            // with no matching `resource_kinds` demand): it is not a provisioning clash.
+            let demanded = graph
+                .nodes
+                .iter()
+                .flat_map(|m| &m.needs)
+                .any(|d| d.resource == role);
+            if !demanded {
+                continue;
+            }
+            providers.sort();
+            return Err(PlanError::ConflictingRoleProviders { role, providers });
         }
     }
     Ok(())

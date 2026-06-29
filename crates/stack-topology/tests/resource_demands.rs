@@ -616,13 +616,10 @@ fn same_role_demands_can_pin_different_providers() {
             },
         ],
     );
-    // Drop the seaweedfs↔azurite conflict for this test: pinning intentionally runs both.
-    let mut azurite = baseline_catalog()
-        .get(&ModuleId::from("local-stack-azurite"))
-        .cloned()
-        .unwrap();
-    azurite.conflicts_with.clear();
-    let catalog = baseline_catalog().merge(Catalog::from_modules([azurite, uc]));
+    // Both object_store providers run in one environment, which is allowed *because* each
+    // demand pins its provider — role-exclusivity (`check_role_exclusivity`) only rejects
+    // unpinned same-role clashes, so no hand-listed `conflicts_with` is involved.
+    let catalog = baseline_catalog().merge(Catalog::from_modules([uc]));
     let p = plan(
         &Selection::modules(["catalog"]),
         &catalog,
@@ -697,5 +694,31 @@ fn baseline_object_store_providers_satisfy_their_contract() {
             &azurite_preferred(),
         )
         .is_ok()
+    );
+}
+
+#[test]
+fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
+    // Selecting both object_store providers directly, with no demand pin to sanction the
+    // pair, is an unpinned same-role clash: the planner refuses to silently pick one.
+    let err = plan(
+        &Selection::modules([
+            "local-stack-seaweedfs",
+            "local-stack-azurite",
+            "local-stack-mlflow", // demands an object_store, but pins nothing
+        ]),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PlanError::ConflictingRoleProviders { ref role, ref providers }
+                if role == "object_store"
+                    && providers.contains(&ModuleId::from("local-stack-seaweedfs"))
+                    && providers.contains(&ModuleId::from("local-stack-azurite"))
+        ),
+        "expected ConflictingRoleProviders for the unpinned object_store pair, got {err:?}"
     );
 }
