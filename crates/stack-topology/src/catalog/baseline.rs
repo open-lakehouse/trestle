@@ -504,11 +504,9 @@ fn unity_catalog() -> Module {
         format!("{API_PREFIX_EXTRA}rest_alias"),
         "/unity-catalog".into(),
     );
-    provides
-        .env_vars
-        .insert("UC_IMAGE".into(), "unitycatalog/unitycatalog:latest".into());
-    // `UC_DATABASE_URL` is no longer hard-coded: it's the connection-string coordinate
-    // the relational-DB provider renders for UC's demanded `unitycatalog` database.
+    // The image is pinned in the fragment; UC reads its backend URL and object-store endpoint
+    // straight from the typed connections (no `${VAR}` round-trip), so this module injects no
+    // env vars of its own.
 
     Module {
         id: ModuleId::from("unity-catalog"),
@@ -519,28 +517,22 @@ fn unity_catalog() -> Module {
         // Only the gateway is a hard module dependency; Postgres + S3 arrive as demands.
         requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
+        // The relational store and object store arrive as demands, but nothing is bound into
+        // UC's env: its fragment reads the resolved connections directly
+        // (`connections.relational_db.0.url`, `connections.object_store.0.endpoint`, and the
+        // typed credential), so no role-generic coordinate is round-tripped through `.env`.
         needs: vec![
             ResourceDemand {
                 resource: Role::RELATIONAL_DB.into(),
                 name: "unitycatalog".into(),
                 provider: None,
-                // The relational connection's URL lands in UC's env as `UC_DATABASE_URL`,
-                // which its fragment reads.
-                bind: ConnectionBinding {
-                    bind: vec![(ConnectionField::Url, "UC_DATABASE_URL".into())],
-                },
+                bind: ConnectionBinding::default(),
             },
             ResourceDemand {
                 resource: Role::OBJECT_STORE.into(),
                 name: "unity".into(),
                 provider: None,
-                // The in-network object_store `endpoint` is bound so UC follows the chosen
-                // provider rather than hard-coding `seaweedfs:8333`. The S3 credentials come
-                // from the chosen S3 provider's env contribution (read with `:-` fallbacks in
-                // the fragment), so they are not bound here.
-                bind: ConnectionBinding {
-                    bind: vec![(ConnectionField::Endpoint, "S3_ENDPOINT".into())],
-                },
+                bind: ConnectionBinding::default(),
             },
         ],
         services: vec![ServiceSpec {

@@ -122,7 +122,10 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
 }
 
 #[test]
-fn provider_connection_is_bound_into_the_consumer() {
+fn provider_connection_is_resolved_for_the_consumer_without_binding() {
+    // UC declares no `ConnectionBinding`: it reads its resolved connections straight from the
+    // render context rather than round-tripping coordinates through `.env`. The planner must
+    // still resolve the demand, expose the typed connection on the plan, and inject nothing.
     let p = plan(
         &Selection::modules(["unity-catalog"]),
         &baseline_catalog(),
@@ -130,30 +133,24 @@ fn provider_connection_is_bound_into_the_consumer() {
     )
     .unwrap();
 
-    // UC's demand binds the relational URL as UC_DATABASE_URL, with {name} resolved to the
-    // demanded database name.
+    // No coordinate is injected into UC's env — the old `UC_DATABASE_URL` round-trip is gone.
     let uc_env = p.injected.get(&ModuleId::from("unity-catalog")).unwrap();
-    assert_eq!(
-        uc_env.get("UC_DATABASE_URL"),
-        Some(
-            "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/unitycatalog"
-        )
-    );
+    assert_eq!(uc_env.get("UC_DATABASE_URL"), None);
+    assert_eq!(p.env.get("UC_DATABASE_URL"), None);
 
-    // It also reaches the stack `.env` so compose can resolve the fragment's
-    // ${UC_DATABASE_URL} at run time.
-    assert_eq!(
-        p.env.get("UC_DATABASE_URL"),
-        uc_env.get("UC_DATABASE_URL"),
-        "bound connection field must also land in the stack .env"
-    );
-
-    // The typed connection is exposed on the plan for downstream consumers.
+    // The typed connection is still exposed on the plan, with `{name}` resolved to UC's
+    // demanded database — this is what the fragment reads as `connections.relational_db.0.url`.
     let conn = p
         .connections
         .get(&(ModuleId::from("unity-catalog"), 0))
         .expect("UC's first demand (relational_db) resolves a connection");
-    assert!(matches!(conn, Connection::RelationalDb { .. }));
+    match conn {
+        Connection::RelationalDb { url } => assert!(
+            url.contains("@db:5432/unitycatalog"),
+            "URL resolves UC's database name: {url}"
+        ),
+        other => panic!("expected a relational_db connection, got {other:?}"),
+    }
 }
 
 #[test]

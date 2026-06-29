@@ -170,19 +170,30 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     let got = kv(&arts.env);
     let want = kv(ENV_FIXTURE);
 
-    // Every var trestle shipped is still present and unchanged, with one deliberate
-    // exception: `MLFLOW_S3_ENDPOINT_URL`. Trestle pointed it at the host
-    // (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
-    // gateway on its own dedicated listener, so the planner injects the gateway origin
-    // (`http://envoy:9100`) instead — consumers reach the store through Envoy, not directly.
+    // Every var trestle shipped is still present and unchanged, with these deliberate
+    // exceptions:
+    //   * `MLFLOW_S3_ENDPOINT_URL` — trestle pointed it at the host
+    //     (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
+    //     gateway on its own dedicated listener, so the planner injects the gateway origin
+    //     (`http://envoy:9100`) instead — consumers reach the store through Envoy.
+    //   * `UC_DATABASE_URL` / `UC_IMAGE` — UC's fragment now reads its backend URL from the
+    //     resolved connection directly and pins its image inline, so neither is round-tripped
+    //     through `.env` any more. They are asserted absent below.
+    let dropped = ["UC_DATABASE_URL", "UC_IMAGE"];
     for (k, v) in &want {
-        if k == "MLFLOW_S3_ENDPOINT_URL" {
+        if k == "MLFLOW_S3_ENDPOINT_URL" || dropped.contains(&k.as_str()) {
             continue;
         }
         assert_eq!(
             got.get(k),
             Some(v),
             "rendered .env dropped or changed trestle var `{k}`"
+        );
+    }
+    for k in dropped {
+        assert!(
+            !got.contains_key(k),
+            "`{k}` should no longer be injected into .env (UC reads it from the connection)"
         );
     }
     assert_eq!(
@@ -206,10 +217,12 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
         ),
         "MLflow's backend store is injected from the relational_db `url` coordinate"
     );
-    assert_eq!(
-        got.get("S3_ENDPOINT").map(String::as_str),
-        Some("http://envoy:9100"),
-        "UC's S3 endpoint follows the object store to its dedicated gateway listener"
+    // `S3_ENDPOINT` is no longer injected: UC's only consumer of it now reads
+    // `connections.object_store.0.endpoint` straight from the resolved connection in its
+    // fragment, so the coordinate never round-trips through `.env`.
+    assert!(
+        !got.contains_key("S3_ENDPOINT"),
+        "S3_ENDPOINT should no longer be injected (UC reads the endpoint from the connection)"
     );
     // The S3 credentials still come from the chosen provider's own env contribution (not
     // injected per-consumer), so they remain present with the SeaweedFS values.
@@ -279,6 +292,32 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     assert!(
         !s3.contains("AZURE_STORAGE_CONNECTION_STRING"),
         "no Azure leak: {s3}"
+    );
+    // The fragment is rendered whole from the render context — no compose `${VAR}` left to
+    // resolve at run time (the database URL itself carries `${POSTGRES_*}` defaults, so scope
+    // the check to the lines that used to be `${VAR}` indirections).
+    assert!(
+        s3.contains("image: unitycatalog/unitycatalog:v0.3.0"),
+        "image pinned inline, not via ${{UC_IMAGE}}: {s3}"
+    );
+    assert!(
+        !s3.contains("${UC_IMAGE")
+            && !s3.contains("${S3_ENDPOINT")
+            && !s3.contains("${UC_DATABASE_URL"),
+        "UC no longer round-trips coordinates through compose ${{VAR}} refs: {s3}"
+    );
+    let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
+    let s3_env = &s3_yaml["services"]["unitycatalog"]["environment"];
+    assert_eq!(
+        s3_env["S3_ENDPOINT"].as_str(),
+        Some("http://envoy:9100"),
+        "S3_ENDPOINT comes from the resolved object_store endpoint: {s3}"
+    );
+    assert!(
+        s3_env["DATABASE_URL"]
+            .as_str()
+            .is_some_and(|u| u.contains("@db:5432/unitycatalog")),
+        "DATABASE_URL comes from the resolved relational_db url: {s3}"
     );
 
     // Azurite-preferred → the Azure branch: a connection string, an `azurite-init`
