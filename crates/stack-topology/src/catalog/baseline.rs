@@ -76,10 +76,9 @@ pub const DEP_GATE_EXTRA: &str = "dep_gate";
 /// module's render env (see [`PlanCtx::data_root`](crate::PlanCtx::data_root)).
 ///
 /// A module that persists state across `compose down`/`up` mounts its data under
-/// `${DATA_ROOT}/<module>` (a Static fragment) or `{{ env.DATA_ROOT }}/<module>` (a Template
-/// fragment) by convention, rather than hard-coding a `./.data/...` path relative to the
-/// compose file. The value is resolved at *plan time* (baked into the rendered fragment, like
-/// [`BASE_PATH`]), so relocating the whole stack's persistence is a single
+/// `{{ env.DATA_ROOT }}/<module>` by convention, rather than hard-coding a `./.data/...` path
+/// relative to the compose file. The value is resolved at *plan time* (baked into the rendered
+/// fragment, like [`BASE_PATH`]), so relocating the whole stack's persistence is a single
 /// [`PlanCtx::data_root`](crate::PlanCtx::data_root) knob — no per-fragment edit. A module with
 /// no durable state simply ignores it.
 ///
@@ -182,6 +181,12 @@ fn postgres() -> Module {
     let mut provides = Provides::default();
     // The Postgres container reads these to initialize on first boot, so they stay in `.env`.
     // (Ports are written concretely in the fragment, so no `*_PORT` var is needed.)
+    //
+    // These are the *fixed* local-dev credentials, not an override surface: the connection URL
+    // below bakes `postgres:postgres` concretely, and consumers (MLflow, UC, pgweb) embed that
+    // resolved URL. Editing `POSTGRES_USER`/`POSTGRES_PASSWORD` in `.env` would re-credential the
+    // container but NOT repoint those consumers, so they must move together. (A typed, mutable
+    // relational credential on the connection is the future home for making this configurable.)
     for (k, v) in [
         ("POSTGRES_USER", "postgres"),
         ("POSTGRES_PASSWORD", "postgres"),

@@ -441,9 +441,8 @@ pub fn plan(
         let mut module_env = InjectedEnv::new();
         // The stack's root data directory, available to every fragment as a render-only value
         // (baked at plan time, like `BASE_PATH`). A module that persists state mounts it under
-        // `${DATA_ROOT}/<module>` (Static) or `{{ env.DATA_ROOT }}/<module>` (Template) rather
-        // than hard-coding a `./.data/...` path, so the whole stack's persistence relocates via
-        // the one `PlanCtx::data_root` knob.
+        // `{{ env.DATA_ROOT }}/<module>` rather than hard-coding a `./.data/...` path, so the
+        // whole stack's persistence relocates via the one `PlanCtx::data_root` knob.
         module_env.set(DATA_ROOT_VAR, &ctx.data_root);
         // Seed each module's render env with its declared env vars.
         for (k, v) in module.provides.env_vars.iter() {

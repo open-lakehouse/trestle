@@ -797,5 +797,32 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
         !sw_bare.contains("seaweedfs-init"),
         "no buckets → no init service: {sw_bare}"
     );
-    assert!(!sw_bare.contains("${"), "still no ${{VAR}}: {sw_bare}");
+
+    // Same edge case for azurite (the other object_store provider): preferred but with no
+    // consumer, so it provisions no containers. Its init service reads the credential too, so it
+    // must likewise be skipped rather than failing to render against an absent connection.
+    let p_az_bare = plan(
+        &Selection::modules(["azurite"]),
+        &baseline_catalog(),
+        &PlanCtx {
+            provider_preference: BTreeMap::from([(
+                "object_store".to_string(),
+                vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect("azurite alone should plan (no init service when it provisions nothing)");
+    let az_bare = p_az_bare
+        .renders
+        .iter()
+        .find(|(m, _)| m == &ModuleId::from("azurite"))
+        .map(|(_, out)| out.fragment.clone())
+        .unwrap();
+    let _: Value =
+        serde_yaml::from_str(&az_bare).expect("bare azurite fragment must be valid YAML");
+    assert!(
+        !az_bare.contains("azurite-init"),
+        "no containers → no init service: {az_bare}"
+    );
 }

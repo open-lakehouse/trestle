@@ -12,7 +12,6 @@
 # The blob port is the emulator's fixed 10000, written directly. Durable blob state is
 # persisted under the stack's data root (`env.DATA_ROOT`, default ./.data), resolved at plan
 # time — relocating the stack's data is a single `PlanCtx.data_root` knob, not a per-fragment edit.
-{%- set obj = connections.object_store.0 %}
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
@@ -31,6 +30,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 3s
+{%- if objects %}
+{%- set obj = connections.object_store.0 %}
 
   azurite-init:
     image: mcr.microsoft.com/azure-cli:2.87.0
@@ -50,3 +51,4 @@ services:
         az storage container create --name {{ name }} 2>&1 || true;
 {%- endfor %}
         echo "Containers ready.";
+{%- endif %}

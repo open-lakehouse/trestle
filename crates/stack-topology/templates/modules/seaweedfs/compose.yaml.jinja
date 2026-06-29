@@ -4,7 +4,6 @@
 # its own resolved connection (`connections.object_store.0`) for the S3 credential, and iterates
 # the buckets it provisions (`objects`) to build the one-shot init — no compose-var credential
 # fallbacks and no planner-spliced shell placeholder.
-{%- set obj = connections.object_store.0 %}
 services:
   seaweedfs:
     image: chrislusf/seaweedfs:latest
@@ -25,6 +24,7 @@ services:
       retries: 10
       start_period: 5s
 {%- if objects %}
+{%- set obj = connections.object_store.0 %}
 
   seaweedfs-init:
     image: amazon/aws-cli:latest
