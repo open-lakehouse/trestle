@@ -13,10 +13,17 @@
 //! [`conflicts_with`](crate::Module::conflicts_with) validation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::module::{Module, ModuleId};
+
+/// Extra dependency edges supplied alongside a catalog: `consumer → [providers]`, ordered
+/// like `requires` (each provider starts before the consumer). The planner passes the
+/// demand→provider edges here so a resource provider is pulled into the graph and ordered
+/// before its consumers, without mutating any module's own `requires`.
+pub type ExtraEdges = BTreeMap<ModuleId, Vec<ModuleId>>;
 
 /// What can go wrong resolving a selection.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -50,41 +57,76 @@ pub struct Edge {
 
 /// The resolved environment graph: the full set of modules to run (transitive
 /// closure of the selection), topologically ordered, plus the dependency edges.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `nodes` are `Arc<dyn Module>` (cloned cheaply from the catalog), so the graph is not
+/// serializable or comparable — its modules may be hand-written logic types, not data.
+#[derive(Clone)]
 pub struct ResolvedGraph {
     /// All modules to run, ordered dependencies-first (valid startup order).
-    pub nodes: Vec<Module>,
+    pub nodes: Vec<Arc<dyn Module>>,
     /// Dependency edges among `nodes`.
     pub edges: Vec<Edge>,
 }
 
+impl std::fmt::Debug for ResolvedGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedGraph")
+            .field(
+                "nodes",
+                &self.nodes.iter().map(|m| m.id()).collect::<Vec<_>>(),
+            )
+            .field("edges", &self.edges)
+            .finish()
+    }
+}
+
 impl ResolvedGraph {
     /// Look up a resolved module by id.
-    pub fn module(&self, id: &ModuleId) -> Option<&Module> {
-        self.nodes.iter().find(|m| &m.id == id)
+    pub fn module(&self, id: &ModuleId) -> Option<&Arc<dyn Module>> {
+        self.nodes.iter().find(|m| m.id() == id)
     }
 }
 
 /// Resolve a module selection into an ordered graph against the given catalog
-/// modules.
+/// modules, with no extra edges.
 ///
 /// Expands the transitive `requires` closure, then validates conflicts and
 /// topologically sorts. Working over sorted sets/maps keeps the output deterministic
 /// regardless of selection order.
-pub fn resolve(selected: &[ModuleId], catalog: &[Module]) -> Result<ResolvedGraph, ResolveError> {
-    resolve_with(selected, catalog)
+pub fn resolve(
+    selected: &[ModuleId],
+    catalog: &[Arc<dyn Module>],
+) -> Result<ResolvedGraph, ResolveError> {
+    resolve_with(selected, catalog, &ExtraEdges::new())
 }
 
-/// Resolve against an explicit module list (the same as [`resolve`]; the second name
-/// mirrors the hydrofoil API and reads well in tests).
+/// Resolve against an explicit module list plus `extra_edges` (`consumer → [providers]`)
+/// that are treated exactly like `requires`: each provider is pulled into the closure and
+/// ordered before its consumer. The planner uses this to thread demand→provider ordering
+/// without mutating any module.
 pub fn resolve_with(
     selected: &[ModuleId],
-    catalog: &[Module],
+    catalog: &[Arc<dyn Module>],
+    extra_edges: &ExtraEdges,
 ) -> Result<ResolvedGraph, ResolveError> {
-    let by_id: BTreeMap<&str, &Module> = catalog.iter().map(|m| (m.id.as_str(), m)).collect();
+    let by_id: BTreeMap<&str, &Arc<dyn Module>> =
+        catalog.iter().map(|m| (m.id().as_str(), m)).collect();
 
-    // Transitive closure of the selection over `requires` (BFS), erroring on any
-    // unknown id encountered along the way.
+    // The combined `requires` of a module: its own plus any `extra_edges` for it.
+    let deps_of = |id: &ModuleId, module: &Arc<dyn Module>| -> Vec<ModuleId> {
+        let mut deps: Vec<ModuleId> = module.requires().to_vec();
+        if let Some(extra) = extra_edges.get(id) {
+            for p in extra {
+                if !deps.contains(p) {
+                    deps.push(p.clone());
+                }
+            }
+        }
+        deps
+    };
+
+    // Transitive closure of the selection over `requires` + `extra_edges` (BFS), erroring
+    // on any unknown id encountered along the way.
     let mut included: BTreeSet<ModuleId> = BTreeSet::new();
     let mut queue: Vec<ModuleId> = selected.to_vec();
     while let Some(id) = queue.pop() {
@@ -92,18 +134,18 @@ pub fn resolve_with(
             .get(id.as_str())
             .ok_or_else(|| ResolveError::UnknownModule(id.clone()))?;
         if included.insert(id.clone()) {
-            for dep in &module.requires {
-                queue.push(dep.clone());
+            for dep in deps_of(&id, module) {
+                queue.push(dep);
             }
         }
     }
 
     check_conflicts(&included, &by_id)?;
 
-    let edges = collect_edges(&included, &by_id);
+    let edges = collect_edges(&included, &by_id, extra_edges);
     let nodes = topo_sort(&included, &edges)?
         .into_iter()
-        .map(|id| (*by_id.get(id.as_str()).unwrap()).clone())
+        .map(|id| Arc::clone(*by_id.get(id.as_str()).unwrap()))
         .collect();
 
     Ok(ResolvedGraph { nodes, edges })
@@ -114,11 +156,11 @@ pub fn resolve_with(
 /// is order-independent.
 fn check_conflicts(
     included: &BTreeSet<ModuleId>,
-    by_id: &BTreeMap<&str, &Module>,
+    by_id: &BTreeMap<&str, &Arc<dyn Module>>,
 ) -> Result<(), ResolveError> {
     for id in included {
         let module = by_id.get(id.as_str()).unwrap();
-        for other in &module.conflicts_with {
+        for other in module.conflicts_with() {
             if included.contains(other) {
                 let (a, b) = if id <= other {
                     (id.clone(), other.clone())
@@ -132,14 +174,26 @@ fn check_conflicts(
     Ok(())
 }
 
-/// Collect the dependency edges (`from` requires `to`) within the included set, in a
-/// deterministic order.
-fn collect_edges(included: &BTreeSet<ModuleId>, by_id: &BTreeMap<&str, &Module>) -> Vec<Edge> {
+/// Collect the dependency edges (`from` requires `to`) within the included set — each
+/// module's own `requires` plus any `extra_edges` for it — in a deterministic order.
+fn collect_edges(
+    included: &BTreeSet<ModuleId>,
+    by_id: &BTreeMap<&str, &Arc<dyn Module>>,
+    extra_edges: &ExtraEdges,
+) -> Vec<Edge> {
     let mut edges = Vec::new();
     for id in included {
         let module = by_id.get(id.as_str()).unwrap();
-        for dep in &module.requires {
-            if included.contains(dep) {
+        let mut deps: Vec<ModuleId> = module.requires().to_vec();
+        if let Some(extra) = extra_edges.get(id) {
+            for p in extra {
+                if !deps.contains(p) {
+                    deps.push(p.clone());
+                }
+            }
+        }
+        for dep in deps {
+            if included.contains(&dep) {
                 edges.push(Edge {
                     from: id.clone(),
                     to: dep.clone(),
@@ -204,28 +258,33 @@ fn topo_sort(included: &BTreeSet<ModuleId>, edges: &[Edge]) -> Result<Vec<Module
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module::Module;
+    use crate::module::DataModule;
 
     /// A bare module with just an id and `requires` — enough to exercise the graph.
-    fn m(id: &str, requires: &[&str]) -> Module {
-        Module {
+    fn m(id: &str, requires: &[&str]) -> Arc<dyn Module> {
+        m_conflicts(id, requires, &[])
+    }
+
+    /// A bare module with an id, `requires`, and `conflicts_with`.
+    fn m_conflicts(id: &str, requires: &[&str], conflicts: &[&str]) -> Arc<dyn Module> {
+        Arc::new(DataModule {
             id: id.into(),
             display_name: None,
             summary: None,
             category: None,
             provider_of: None,
             requires: requires.iter().map(|r| ModuleId::from(*r)).collect(),
-            conflicts_with: Vec::new(),
+            conflicts_with: conflicts.iter().map(|c| ModuleId::from(*c)).collect(),
             needs: Vec::new(),
-            services: Vec::new(),
+            service_specs: Vec::new(),
             provides: Default::default(),
             knobs: Vec::new(),
             render: Default::default(),
-        }
+        })
     }
 
     fn ids(g: &ResolvedGraph) -> Vec<String> {
-        g.nodes.iter().map(|n| n.id.0.clone()).collect()
+        g.nodes.iter().map(|n| n.id().0.clone()).collect()
     }
 
     #[test]
@@ -264,7 +323,10 @@ mod tests {
         ];
         let a = resolve(&["mlflow".into(), "envoy".into()], &catalog).unwrap();
         let b = resolve(&["envoy".into(), "mlflow".into()], &catalog).unwrap();
-        assert_eq!(a, b);
+        // The graph is no longer `Eq` (its nodes are trait objects); resolution order
+        // independence is what this asserts, so compare the ordered ids and edges.
+        assert_eq!(ids(&a), ids(&b));
+        assert_eq!(a.edges, b.edges);
     }
 
     #[test]
@@ -290,8 +352,7 @@ mod tests {
 
     #[test]
     fn conflict_is_rejected_with_sorted_pair() {
-        let mut azurite = m("azurite", &[]);
-        azurite.conflicts_with = vec!["seaweedfs".into()];
+        let azurite = m_conflicts("azurite", &[], &["seaweedfs"]);
         let catalog = vec![azurite, m("seaweedfs", &[])];
         let err = resolve(&["azurite".into(), "seaweedfs".into()], &catalog).unwrap_err();
         assert_eq!(

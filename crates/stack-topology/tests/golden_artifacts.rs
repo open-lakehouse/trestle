@@ -853,6 +853,41 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
         "the override turns the UI off: {}",
         config.contents
     );
+
+    // With the UI off, Headwaters' single endpoint fronts as a plain API at `/lineage`: the
+    // read API + ingest stay reachable through the gateway (still a shared-listener route, no
+    // rewrite), but the prefixable-UI handshake drops away — no `BASE_PATH` is injected, and
+    // the `AssignedRoute` carries no `base_path`.
+    let route = p
+        .routes
+        .get("headwaters", "ui")
+        .expect("headwaters ui endpoint is routed");
+    assert_eq!(route.prefix, "/lineage");
+    assert_eq!(route.rewrite, None, "API mount at /lineage passes through");
+    assert_eq!(
+        route.base_path, None,
+        "no prefixable-UI base path when the UI is off"
+    );
+    assert!(
+        matches!(route.listener, olai_stack_topology::Listener::Shared),
+        "the API stays on the shared listener"
+    );
+    assert_eq!(
+        p.injected
+            .get(&ModuleId::from("headwaters"))
+            .and_then(|e| e.get("BASE_PATH")),
+        None,
+        "BASE_PATH is not injected when the UI is off"
+    );
+
+    // The gateway route table still fronts `/lineage` to the headwaters cluster.
+    let arts = render_all(&p, &EnvoyOpts::default());
+    let (routes, _, _) = parse_envoy(&arts.envoy);
+    let (cluster, rewrite) = routes
+        .get("/lineage")
+        .expect("/lineage is still fronted with the UI off");
+    assert_eq!(cluster, "headwaters");
+    assert_eq!(*rewrite, None);
 }
 
 #[test]

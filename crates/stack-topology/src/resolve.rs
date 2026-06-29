@@ -285,8 +285,11 @@ mod tests {
                 host_port: Some(port),
                 intent: RouteIntent::Internal,
                 path: "/api/2.1/unity-catalog/".into(),
+                mount_prefix: None,
+                rewrite: crate::endpoint::Rewrite::Inherit,
             }],
             depends_on: vec![],
+            base_path: String::new(),
         }
     }
 
@@ -305,8 +308,11 @@ mod tests {
                 host_port: None,
                 intent: RouteIntent::Internal,
                 path: String::new(),
+                mount_prefix: None,
+                rewrite: crate::endpoint::Rewrite::Inherit,
             }],
             depends_on: vec![],
+            base_path: String::new(),
         }
     }
 
@@ -325,8 +331,11 @@ mod tests {
                 host_port: None,
                 intent: RouteIntent::Api,
                 path: String::new(),
+                mount_prefix: Some("/api/2.1/lineage".into()),
+                rewrite: crate::endpoint::Rewrite::Inherit,
             }],
             depends_on: vec![],
+            base_path: String::new(),
         }
     }
 
@@ -346,8 +355,11 @@ mod tests {
                 host_port: None,
                 intent: RouteIntent::UiPrefixable,
                 path: String::new(),
+                mount_prefix: None,
+                rewrite: crate::endpoint::Rewrite::Inherit,
             }],
             depends_on: vec![],
+            base_path: String::new(),
         }
     }
 

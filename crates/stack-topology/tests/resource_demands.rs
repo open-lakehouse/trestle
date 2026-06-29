@@ -3,19 +3,30 @@
 //! provider's typed [`Connection`] back into the consumer.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use olai_stack_topology::{
-    Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, Module, ModuleId,
-    ObjectStoreCredential, Placement, PlanCtx, PlanError, Provides, RenderSpec, ResourceDemand,
-    Role, Selection, ServiceSpec, baseline_catalog, plan,
+    Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, DataModule,
+    Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx, PlanError, Provides, RenderSpec,
+    ResourceDemand, Role, Selection, ServiceSpec, baseline_catalog, plan,
 };
 
 /// Build a minimal provider module that provisions `kind` and vends the given typed
 /// connection template.
-fn provider(id: &str, kind: &str, template: ConnectionTemplate) -> Module {
+fn provider(id: &str, kind: &str, template: ConnectionTemplate) -> Arc<dyn Module> {
+    provider_with_needs(id, kind, template, vec![])
+}
+
+/// A provider that itself demands `needs` (for the fixed-point chain test).
+fn provider_with_needs(
+    id: &str,
+    kind: &str,
+    template: ConnectionTemplate,
+    needs: Vec<ResourceDemand>,
+) -> Arc<dyn Module> {
     let mut provides = Provides::default();
     provides.resource_kinds.insert(kind.into(), template);
-    Module {
+    Arc::new(DataModule {
         id: ModuleId::from(id),
         display_name: None,
         summary: None,
@@ -23,8 +34,8 @@ fn provider(id: &str, kind: &str, template: ConnectionTemplate) -> Module {
         provider_of: None,
         requires: vec![],
         conflicts_with: vec![],
-        needs: vec![],
-        services: vec![ServiceSpec {
+        needs,
+        service_specs: vec![ServiceSpec {
             name: id.to_string(),
             role: Role::new("provider"),
             placement: Placement::Container {
@@ -32,11 +43,12 @@ fn provider(id: &str, kind: &str, template: ConnectionTemplate) -> Module {
             },
             endpoints: vec![],
             depends_on: vec![],
+            base_path: String::new(),
         }],
         provides,
         knobs: vec![],
         render: RenderSpec::default(),
-    }
+    })
 }
 
 /// A relational-db connection template at `url`-with-`{name}`.
@@ -67,8 +79,8 @@ fn bind1(field: ConnectionField, key: &str) -> ConnectionBinding {
 }
 
 /// Build a consumer module with the given demands.
-fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Module {
-    Module {
+fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Arc<dyn Module> {
+    Arc::new(DataModule {
         id: ModuleId::from(id),
         display_name: None,
         summary: None,
@@ -77,7 +89,7 @@ fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Module {
         requires: vec![],
         conflicts_with: vec![],
         needs,
-        services: vec![ServiceSpec {
+        service_specs: vec![ServiceSpec {
             name: id.to_string(),
             role: Role::new("consumer"),
             placement: Placement::Container {
@@ -85,11 +97,12 @@ fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Module {
             },
             endpoints: vec![],
             depends_on: vec![],
+            base_path: String::new(),
         }],
         provides: Provides::default(),
         knobs: vec![],
         render: RenderSpec::default(),
-    }
+    })
 }
 
 #[test]
@@ -217,7 +230,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
         p.graph
             .nodes
             .iter()
-            .filter(|m| m.id.as_str() == "postgres")
+            .filter(|m| m.id().as_str() == "postgres")
             .count(),
         1
     );
@@ -293,13 +306,17 @@ fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
 fn demand_chain_resolves_to_a_fixed_point() {
     // A consumer needs kind X; the X-provider itself needs kind Y. Both providers must
     // be auto-pulled in (the fixed point, not a single pass).
-    let mut x_provider = provider("x-prov", "x", relational("x://{name}"));
-    x_provider.needs = vec![ResourceDemand {
-        resource: "y".into(),
-        name: "y-res".into(),
-        provider: None,
-        bind: ConnectionBinding::default(),
-    }];
+    let x_provider = provider_with_needs(
+        "x-prov",
+        "x",
+        relational("x://{name}"),
+        vec![ResourceDemand {
+            resource: "y".into(),
+            name: "y-res".into(),
+            provider: None,
+            bind: ConnectionBinding::default(),
+        }],
+    );
     let y_provider = provider("y-prov", "y", relational("y://{name}"));
     let c = consumer(
         "top",
@@ -538,7 +555,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
         p.graph
             .nodes
             .iter()
-            .filter(|m| m.id.as_str() == "seaweedfs")
+            .filter(|m| m.id().as_str() == "seaweedfs")
             .count(),
         1
     );

@@ -318,11 +318,14 @@ pub fn render_all(plan: &EnvironmentPlan, opts: &EnvoyOpts) -> Artifacts {
     // here rather than from a module's `RenderFile`. Detect the gateway the same way the
     // planner does — by the `gateway` role on a resolved service, not a module-id string — so a
     // differently-named gateway module is still covered.
-    let gateway_present = plan
-        .graph
-        .nodes
-        .iter()
-        .any(|m| m.services.iter().any(|s| s.role == crate::Role::gateway()));
+    // A module's gateway role does not depend on its knobs (only its routing might), so
+    // resolving services against empty knobs is sufficient to detect a gateway here.
+    let no_knobs = crate::ResolvedKnobs::new();
+    let gateway_present = plan.graph.nodes.iter().any(|m| {
+        m.services(&no_knobs)
+            .iter()
+            .any(|s| s.role == crate::Role::gateway())
+    });
     let mut head = plan.head.clone();
     // Skip if a module already declared this alias (the planner would have surfaced any
     // cross-module collision); guarding here keeps the synthetic push from emitting a

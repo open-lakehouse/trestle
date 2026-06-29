@@ -206,6 +206,13 @@ pub struct ServiceSpec {
     /// Other services (by `name`) this one directly depends on.
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Where this service serves itself, as a root-relative path (e.g. `"/mlflow"`,
+    /// `"/lineage"`) — the typed replacement for the old `base_path` extra. Empty means it
+    /// serves at root. The planner uses this as a [`UiPrefixable`](crate::RouteIntent::UiPrefixable)
+    /// endpoint's chosen base path and as the base an [`Api`](crate::RouteIntent::Api)
+    /// endpoint's [`Rewrite::Inherit`](crate::Rewrite::Inherit) joins its mount prefix onto.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_path: String,
 }
 
 impl ServiceSpec {
