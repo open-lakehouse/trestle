@@ -1,14 +1,4 @@
 # MLflow tracking server
-#
-# This fragment is a `RenderSpec::Template`, rendered with MiniJinja against the plan-time
-# `RenderCtx`. Everything it needs is already in that context, so the fragment is rendered
-# whole — no compose `${VAR}` substitution layered on top. It reads:
-#
-#   * `connections.<role>.0` — the typed connections the planner resolved for MLflow's
-#     demands: `relational_db` (the backend-store URL) and `object_store` (the artifact
-#     store's `uri`/`endpoint`, plus the credential the fragment branches on by flavour).
-#   * `env.X` — plan-time, render-only values, e.g. `BASE_PATH` (the gateway base path
-#     chosen for MLflow's prefixable UI).
 {%- set db = connections.relational_db.0 %}
 {%- set obj = connections.object_store.0 %}
 services:

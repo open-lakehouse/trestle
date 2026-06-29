@@ -7,15 +7,11 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     volumes:
-      # Durable state under the stack's data root, resolved at plan time from
-      # `PlanCtx.data_root` (default ./.data).
       - {{ env.DATA_ROOT }}/postgres:/var/lib/postgresql/data
     configs:
-      # The init script is a rendered config file co-located with this fragment under
-      # `modules/postgres/`, declared in the top-level `configs:` block as `postgres_init`.
       - source: postgres_init
         target: /docker-entrypoint-initdb.d/init-databases.sh
     healthcheck:
@@ -33,5 +29,5 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/postgres?sslmode=disable
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"
