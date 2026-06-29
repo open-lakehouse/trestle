@@ -106,6 +106,7 @@ pub fn baseline_catalog() -> Catalog {
         mlflow(),
         unity_catalog(),
         jaeger(),
+        headwaters(),
         databricks_emulator_env(),
     ])
     .with_default_provider(Role::OBJECT_STORE, "seaweedfs")
@@ -643,6 +644,64 @@ fn jaeger() -> Module {
         knobs: vec![],
         render: template(include_str!(
             "../../templates/modules/jaeger/compose.yaml.jinja"
+        )),
+    }
+}
+
+/// `headwaters` — an OpenLineage lineage service. Unlike MLflow (which splits its
+/// tracking API, OTel path, and UI across three endpoints), Headwaters serves its whole
+/// surface — web UI, REST read API, and OpenLineage ingest — under a single base path.
+/// So it fronts as one [`UiPrefixable`](RouteIntent::UiPrefixable) endpoint at `/lineage`:
+/// the planner mounts it on the shared listener and forwards the prefix upstream
+/// unchanged (no rewrite), and the service is told that base path via
+/// `HEADWATERS__UI__BASE_PATH` (the `BASE_PATH` render handshake, like MLflow's
+/// `--static-prefix`). It demands only a `relational_db` (named `lineage`); Postgres
+/// provisions the database and the planner injects the `db:service_healthy` gate.
+fn headwaters() -> Module {
+    let mut provides = Provides::default();
+    provides
+        .extras
+        .insert(BASE_PATH_EXTRA.into(), "/lineage".into());
+
+    Module {
+        id: ModuleId::from("headwaters"),
+        display_name: Some("Headwaters lineage".into()),
+        summary: Some("OpenLineage lineage service; UI + read API under one prefix.".into()),
+        category: Some("observability".into()),
+        provider_of: Some("lineage".into()),
+        // Only the gateway is a hard module dependency; the relational store arrives as a
+        // demand (auto-provisioned), and its startup gate is injected by the planner.
+        requires: vec![ModuleId::from("envoy")],
+        conflicts_with: vec![],
+        // The DSN is read straight from the resolved connection in the fragment
+        // (`connections.relational_db.0.url`), like Unity Catalog — so nothing is bound
+        // into Headwaters' env here.
+        needs: vec![ResourceDemand {
+            resource: Role::RELATIONAL_DB.into(),
+            name: "lineage".into(),
+            provider: None,
+            bind: ConnectionBinding::default(),
+        }],
+        services: vec![ServiceSpec {
+            name: "headwaters".into(),
+            role: Role::lineage(),
+            placement: container("headwaters"),
+            endpoints: vec![Endpoint {
+                id: "ui".into(),
+                scheme: Scheme::Http,
+                internal_port: 8091,
+                host_port: None,
+                intent: RouteIntent::UiPrefixable,
+                path: String::new(),
+            }],
+            // Demand-driven, like MLflow: the planner injects the chosen relational-db
+            // provider's gate into the fragment's `depends_on`.
+            depends_on: vec![],
+        }],
+        provides,
+        knobs: vec![],
+        render: template(include_str!(
+            "../../templates/modules/headwaters/compose.yaml.jinja"
         )),
     }
 }
