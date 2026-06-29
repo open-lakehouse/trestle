@@ -2,7 +2,9 @@
 {%- set db = connections.relational_db.0 %}
 services:
   headwaters:
-    image: ghcr.io/open-lakehouse/headwaters:0.0.5
+    # `0.0.6` is the (not-yet-published) tag that ships the `config.toml` loader and the
+    # distroless `healthcheck` subcommand; the stack is runnable once that image lands.
+    image: ghcr.io/open-lakehouse/headwaters:0.0.6
     restart: unless-stopped
     depends_on:
 {%- for dep in dependencies %}
@@ -11,16 +13,23 @@ services:
 {%- endfor %}
     environment:
       # DSN read straight from the typed relational_db connection (no `.env` round-trip);
-      # `{name}` resolves to the demanded database name (`lineage`). Headwaters runs its
-      # own sqlx migrations against this at startup.
+      # `{name}` resolves to the demanded database name (`lineage`). Headwaters overlays
+      # this over `config.toml` at startup and runs its own sqlx migrations against it.
       DATABASE_URL: "{{ db.url }}"
-      HEADWATERS__PORT: "8091"
-      # Planner-assigned base path for the shared-listener UI prefix (the `--static-prefix`
-      # handshake). Envoy fronts `{{ env.BASE_PATH }}` and forwards it upstream unchanged,
-      # so the service must serve its whole surface under the same prefix.
-      HEADWATERS__UI__BASE_PATH: "{{ env.BASE_PATH }}"
+      # Point the service at the mounted config file; everything else (port, UI serve
+      # toggle, base path) is the effective config rendered into `config.toml`.
+      HEADWATERS_CONFIG: /etc/headwaters/config.toml
+    configs:
+      - source: headwaters_config
+        target: /etc/headwaters/config.toml
     expose:
       - "8091"
-    # No compose healthcheck: the published image is distroless (no shell/curl), so a
-    # `curl /health` healthcheck can't run in-container. We rely on `depends_on` ordering
-    # + Envoy fronting instead. A binary `--healthcheck` subcommand is the deferred fix.
+    # The published image is distroless (no shell/curl), so the service self-probes via
+    # its own `healthcheck` subcommand (hits `/health` with a blocking client). This gives
+    # consumers a real `service_healthy` gate to depend on instead of bare start ordering.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/app", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
