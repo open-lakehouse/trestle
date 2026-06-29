@@ -327,6 +327,102 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
 }
 
 #[test]
+fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
+    use olai_stack_topology::ModuleId;
+
+    // MLflow's fragment is a `RenderSpec::Template`: `--static-prefix` and the healthcheck
+    // path come from the planner's chosen `BASE_PATH`, the artifact-store env branches on the
+    // object-store credential flavour, and `depends_on` is driven by the chosen providers'
+    // gates (db healthy + the object-store init completed) rather than hard-coded.
+    let mlflow_fragment = |ctx: PlanCtx| -> String {
+        let sel = Selection::modules(["local-stack-mlflow"]);
+        let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
+        let (_, out) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("local-stack-mlflow"))
+            .expect("MLflow is in the render set");
+        let _: Value = serde_yaml::from_str(&out.fragment)
+            .expect("rendered MLflow fragment must be valid YAML");
+        out.fragment.clone()
+    };
+
+    // Default → SeaweedFS (S3).
+    let s3 = mlflow_fragment(PlanCtx::default());
+    let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
+    let svc = &s3_yaml["services"]["mlflow"];
+
+    // The base path drives both `--static-prefix` and the healthcheck URL — not a literal.
+    let command: Vec<String> = svc["command"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let prefix_idx = command.iter().position(|a| a == "--static-prefix").unwrap();
+    assert_eq!(
+        command[prefix_idx + 1],
+        "/mlflow",
+        "static-prefix is BASE_PATH"
+    );
+    let health = svc["healthcheck"]["test"][1].as_str().unwrap();
+    assert!(
+        health.contains("/mlflow/health"),
+        "healthcheck path: {health}"
+    );
+
+    // S3 branch: static AWS keys from the typed credential (no `:-` fallback), no Azure leak.
+    let env = &svc["environment"];
+    assert_eq!(env["AWS_ACCESS_KEY_ID"].as_str(), Some("seaweedfs"));
+    assert!(
+        !s3.contains("${AWS_ACCESS_KEY_ID:-"),
+        "no fallback hack: {s3}"
+    );
+    assert!(env["AZURE_STORAGE_CONNECTION_STRING"].is_null());
+
+    // depends_on follows the chosen providers: db healthy + seaweedfs-init completed.
+    let dep = &svc["depends_on"];
+    assert_eq!(dep["db"]["condition"].as_str(), Some("service_healthy"));
+    assert_eq!(
+        dep["seaweedfs-init"]["condition"].as_str(),
+        Some("service_completed_successfully")
+    );
+    assert!(dep["azurite-init"].is_null(), "no Azure init under S3");
+
+    // Azurite-preferred → the object-store gate and env switch to the Azure backend.
+    let mut preference = BTreeMap::new();
+    preference.insert(
+        "object_store".to_string(),
+        vec![
+            ModuleId::from("local-stack-azurite"),
+            ModuleId::from("local-stack-seaweedfs"),
+        ],
+    );
+    let azure = mlflow_fragment(PlanCtx {
+        provider_preference: preference,
+        ..Default::default()
+    });
+    let azure_yaml: Value = serde_yaml::from_str(&azure).unwrap();
+    let svc = &azure_yaml["services"]["mlflow"];
+    assert!(
+        !svc["environment"]["AZURE_STORAGE_CONNECTION_STRING"].is_null(),
+        "Azure connection string present: {azure}"
+    );
+    assert!(
+        svc["environment"]["AWS_ACCESS_KEY_ID"].is_null(),
+        "no AWS keys under Azure"
+    );
+    assert!(
+        !svc["depends_on"]["azurite-init"].is_null(),
+        "Azure init dependency: {azure}"
+    );
+    assert!(
+        svc["depends_on"]["seaweedfs-init"].is_null(),
+        "no S3 init under Azure"
+    );
+}
+
+#[test]
 fn adding_trino_and_jaeger_aggregates_their_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
     let sel = Selection::modules([

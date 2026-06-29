@@ -313,14 +313,75 @@ impl RenderSpec {
 #[error("rendering module template failed: {0}")]
 pub struct RenderError(pub String);
 
-/// The context a module's render reads: the planner-decided [`InjectedEnv`] plus the typed
-/// [`Connection`](crate::Connection)s resolved for the module's demands, grouped by role.
+/// A compose `depends_on` condition — *what* readiness state of a dependency a service
+/// waits for before it starts.
+///
+/// These are the three Compose-spec long-form conditions. The string each renders to (its
+/// serde value) is exactly the compose token, so a template emits
+/// `condition: {{ dep.condition }}` directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependsCondition {
+    /// `service_started` — the dependency's container has started (the weakest gate).
+    ServiceStarted,
+    /// `service_healthy` — the dependency reports healthy (its healthcheck passes).
+    ServiceHealthy,
+    /// `service_completed_successfully` — the dependency ran to a successful exit (a
+    /// one-shot init job).
+    ServiceCompletedSuccessfully,
+}
+
+impl DependsCondition {
+    /// The compose token for this condition (e.g. `"service_healthy"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DependsCondition::ServiceStarted => "service_started",
+            DependsCondition::ServiceHealthy => "service_healthy",
+            DependsCondition::ServiceCompletedSuccessfully => "service_completed_successfully",
+        }
+    }
+
+    /// Parse a compose condition token, returning `None` for an unrecognized value.
+    pub fn parse(s: &str) -> Option<DependsCondition> {
+        match s {
+            "service_started" => Some(DependsCondition::ServiceStarted),
+            "service_healthy" => Some(DependsCondition::ServiceHealthy),
+            "service_completed_successfully" => {
+                Some(DependsCondition::ServiceCompletedSuccessfully)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One resolved `depends_on` gate a module's render should emit: a compose service to wait
+/// for and the [`DependsCondition`] to wait for it to reach.
+///
+/// The planner produces these from a consumer's resource demands — for each demand it reads
+/// the *chosen* provider's [`DEP_GATE_EXTRA`](crate::catalog::baseline::DEP_GATE_EXTRA) and
+/// resolves it into a `DepGate` — and hands them to the render via
+/// [`RenderCtx::dependencies`]. A template renders its whole `depends_on` block by iterating
+/// them (`{% for dep in dependencies %}{{ dep.service }}: {condition: {{ dep.condition }}}`),
+/// so it never hard-codes which backend's service it waits on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DepGate {
+    /// The compose service name to depend on (e.g. `"db"`, `"seaweedfs-init"`).
+    pub service: String,
+    /// The condition to wait for.
+    pub condition: DependsCondition,
+}
+
+/// The context a module's render reads: the planner-decided [`InjectedEnv`], the typed
+/// [`Connection`](crate::Connection)s resolved for the module's demands (grouped by role),
+/// and the resolved [`DepGate`]s its `depends_on` block should wait on.
 ///
 /// A [`Static`](RenderSpec::Static) render uses only [`env`](RenderCtx::env). A
 /// [`Template`](RenderSpec::Template) render gets the whole context as MiniJinja globals:
-/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works) and `connections` (a
+/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works), `connections` (a
 /// `{role: [connection, …]}` map a template can branch on — e.g.
-/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`).
+/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`), and
+/// `dependencies` (the `[{service, condition}, …]` list a template iterates to write its
+/// `depends_on` block — see [`DepGate`]).
 #[derive(Clone, Debug, Serialize)]
 pub struct RenderCtx<'a> {
     /// The planner-decided environment-variable substitutions.
@@ -328,15 +389,20 @@ pub struct RenderCtx<'a> {
     /// The typed connections resolved for the module's demands, keyed by resource role.
     /// More than one connection per role is possible (a module with two same-role demands).
     pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
+    /// The resolved `depends_on` gates the module's render should emit, in dependency
+    /// (demand) order. Empty for a module with no demands that gate startup.
+    #[serde(default)]
+    pub dependencies: Vec<DepGate>,
 }
 
 impl<'a> RenderCtx<'a> {
-    /// A context carrying just an [`InjectedEnv`] and no connections — the shape a module
-    /// with no resource demands renders against.
+    /// A context carrying just an [`InjectedEnv`] and no connections or dependencies — the
+    /// shape a module with no resource demands renders against.
     pub fn from_env(env: &'a InjectedEnv) -> Self {
         RenderCtx {
             env,
             connections: BTreeMap::new(),
+            dependencies: Vec::new(),
         }
     }
 }
@@ -573,6 +639,7 @@ mod tests {
             .render(&RenderCtx {
                 env: &env,
                 connections,
+                dependencies: Vec::new(),
             })
             .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
@@ -583,6 +650,42 @@ mod tests {
         assert!(
             !out.fragment.contains("conn:"),
             "Azure branch skipped: {out:?}"
+        );
+    }
+
+    #[test]
+    fn template_iterates_typed_dependencies_into_depends_on() {
+        // A template renders its whole `depends_on` block by iterating the typed
+        // `dependencies` the planner resolved — service + condition, no env-var strings.
+        let spec = RenderSpec::Template {
+            fragment: "depends_on:\n\
+                       {%- for dep in dependencies %}\n\
+                       \x20 {{ dep.service }}:\n\
+                       \x20   condition: {{ dep.condition }}\n\
+                       {%- endfor %}\n"
+                .into(),
+            files: vec![],
+        };
+        let ctx = RenderCtx {
+            env: &InjectedEnv::new(),
+            connections: BTreeMap::new(),
+            dependencies: vec![
+                DepGate {
+                    service: "db".into(),
+                    condition: DependsCondition::ServiceHealthy,
+                },
+                DepGate {
+                    service: "seaweedfs-init".into(),
+                    condition: DependsCondition::ServiceCompletedSuccessfully,
+                },
+            ],
+        };
+        let out = spec.render(&ctx).expect("template renders");
+        // The serde value of each condition is the exact compose token.
+        assert!(out.fragment.contains("db:\n    condition: service_healthy"));
+        assert!(
+            out.fragment
+                .contains("seaweedfs-init:\n    condition: service_completed_successfully")
         );
     }
 

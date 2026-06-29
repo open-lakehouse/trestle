@@ -1,15 +1,32 @@
 # MLflow tracking server — contributed by the `local-stack-mlflow` component.
-# Always runs with --static-prefix /mlflow so it sits cleanly behind Envoy.
+#
+# This fragment is a `RenderSpec::Template`, so it is rendered with MiniJinja against the
+# plan-time `RenderCtx`. It reads three kinds of value:
+#
+#   * MiniJinja `env.X` refs — plan-time, render-only values the planner injected that never
+#     reach `.env`, e.g. `BASE_PATH` (the gateway base path chosen for MLflow's prefixable
+#     UI). These must be MiniJinja refs, not compose `${VAR}`, since compose could not
+#     resolve a var absent from `.env`.
+#   * MiniJinja typed objects — `dependencies` (the `depends_on` gates, each chosen
+#     provider's service + condition) and `connections.object_store.0` (the object-store
+#     connection the fragment branches on by credential flavour).
+#   * `${X}` — run-time compose substitutions resolved from `.env` (the bound connection
+#     coordinates: `MLFLOW_BACKEND_STORE_URI`, `MLFLOW_ARTIFACTS_DESTINATION`,
+#     `MLFLOW_S3_ENDPOINT_URL`).
+#
+# Iterating `dependencies` is what lets `depends_on` follow whichever backends the planner
+# picked — SeaweedFS-init or Azurite-init, plus the relational DB — without naming them here.
+{%- set obj = connections.object_store.0 %}
 services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.10.1-full
     restart: unless-stopped
     profiles: [svc, full]
     depends_on:
-      db:
-        condition: service_healthy
-      seaweedfs-init:
-        condition: service_completed_successfully
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: {{ dep.condition }}
+{%- endfor %}
     command:
       - "mlflow"
       - "server"
@@ -23,22 +40,25 @@ services:
       - "--port"
       - "5000"
       - "--static-prefix"
-      - "/mlflow"
+      - "{{ env.BASE_PATH }}"
     environment:
-      # MLFLOW_S3_ENDPOINT_URL is the object_store `endpoint` coordinate the planner injected
-      # (the in-network address of the chosen provider). The AWS_* credentials come from the
-      # chosen S3 provider's own env contribution, so they fall back when an S3 provider backs
-      # the bucket; with an Azure provider they are simply absent.
+{%- if obj.credential.flavour == "s3" %}
+      # S3 artifact store: the in-network endpoint (an injected object_store coordinate) plus
+      # the static S3 credentials straight from the typed credential the planner resolved.
       MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
+      AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
+      AWS_DEFAULT_REGION: {{ obj.credential.region }}
+{%- else %}
+      # Azure artifact store: a connection string from the typed credential; no AWS_* keys.
+      AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
+{%- endif %}
     expose:
       - "5000"
     healthcheck:
       test:
         - "CMD-SHELL"
-        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/mlflow/health')\""
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000{{ env.BASE_PATH }}/health')\""
       interval: 5s
       timeout: 5s
       retries: 10

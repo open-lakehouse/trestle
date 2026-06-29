@@ -55,6 +55,16 @@ pub const REWRITE_OVERRIDE_PREFIX: &str = "rewrite:";
 /// its mount here and leaves `path` empty.
 pub const API_PREFIX_EXTRA: &str = "api_prefix:";
 
+/// The well-known [`Provides::extras`](crate::Provides::extras) key by which a
+/// resource provider names the compose service a *consumer* should gate its startup
+/// on, and the condition to wait for — `"<service>:<condition>"`, e.g.
+/// `"db:service_healthy"` (Postgres) or `"seaweedfs-init:service_completed_successfully"`
+/// (SeaweedFS). For each demand, the planner reads the *chosen* provider's value and
+/// resolves it into a typed [`DepGate`](crate::DepGate) it hands the consumer's render via
+/// [`RenderCtx::dependencies`](crate::RenderCtx) — so a consumer never hard-codes which
+/// backend's init it waits for (it follows whichever provider the planner picked).
+pub const DEP_GATE_EXTRA: &str = "dep_gate";
+
 /// The placeholder SeaweedFS's fragment uses for the planner-injected per-bucket
 /// `aws s3 mb` lines.
 pub const S3_BUCKET_MB_LINES_VAR: &str = "S3_BUCKET_MB_LINES";
@@ -184,6 +194,10 @@ fn postgres() -> Module {
                 .into(),
         }),
     );
+    // A consumer that demands `relational_db` should wait for the `db` service to be healthy.
+    provides
+        .extras
+        .insert(DEP_GATE_EXTRA.into(), "db:service_healthy".into());
     Module {
         id: ModuleId::from("local-stack-postgres"),
         display_name: Some("Postgres".into()),
@@ -245,6 +259,12 @@ fn seaweedfs() -> Module {
             },
         }),
     );
+    // A consumer that demands `object_store` should wait for the one-shot bucket init to
+    // finish (the buckets it needs exist only after `seaweedfs-init` completes).
+    provides.extras.insert(
+        DEP_GATE_EXTRA.into(),
+        "seaweedfs-init:service_completed_successfully".into(),
+    );
     Module {
         id: ModuleId::from("local-stack-seaweedfs"),
         display_name: Some("SeaweedFS (local S3)".into()),
@@ -303,6 +323,11 @@ fn azurite() -> Module {
                 connection_string: CONN.into(),
             },
         }),
+    );
+    // A consumer that demands `object_store` waits for the one-shot container init to finish.
+    provides.extras.insert(
+        DEP_GATE_EXTRA.into(),
+        "azurite-init:service_completed_successfully".into(),
     );
 
     Module {
@@ -438,11 +463,15 @@ fn mlflow() -> Module {
                     path: String::new(),
                 },
             ],
-            depends_on: vec!["db".into(), "seaweedfs".into()],
+            // No hand-listed startup edges: MLflow's `depends_on` is demand-driven. The
+            // planner injects the chosen relational-db / object-store providers' gates
+            // (service + condition) into the fragment, so the wait follows whichever backend
+            // it picked rather than naming `db`/`seaweedfs` here.
+            depends_on: vec![],
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/fragments/mlflow.yaml")),
+        render: template(include_str!("../../templates/fragments/mlflow.yaml")),
     }
 }
 
@@ -523,7 +552,9 @@ fn unity_catalog() -> Module {
                     path: String::new(),
                 },
             ],
-            depends_on: vec!["db".into(), "seaweedfs".into()],
+            // Demand-driven, like MLflow: the planner injects the chosen providers' gates
+            // (see the fragment's `depends_on`), so nothing is hand-listed here.
+            depends_on: vec![],
         }],
         provides,
         knobs: vec![],

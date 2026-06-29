@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
-    API_PREFIX_EXTRA, AZURE_CONTAINER_CREATE_LINES_VAR, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX,
-    S3_BUCKET_MB_LINES_VAR,
+    API_PREFIX_EXTRA, AZURE_CONTAINER_CREATE_LINES_VAR, BASE_PATH_EXTRA, DEP_GATE_EXTRA,
+    REWRITE_OVERRIDE_PREFIX, S3_BUCKET_MB_LINES_VAR,
 };
 use crate::connection::Connection;
 use crate::endpoint::{Endpoint, RouteIntent};
@@ -554,17 +554,26 @@ pub fn plan(
     for module in &graph.nodes {
         let module_env = injected.get(&module.id).cloned().unwrap_or_default();
         // The typed connections resolved for this module's demands, grouped by role, so a
-        // `Template` fragment can branch on the chosen credential flavour.
+        // `Template` fragment can branch on the chosen credential flavour. Alongside them,
+        // the resolved `depends_on` gates — one per demand whose chosen provider advertises a
+        // startup gate — so a fragment iterates them instead of hard-coding which backend's
+        // service it waits on.
         let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
+        let mut dependencies: Vec<crate::module::DepGate> = Vec::new();
         for (idx, demand) in module.needs.iter().enumerate() {
+            let provider = &chosen[&(module.id.clone(), idx)].provider;
             connections
                 .entry(demand.resource.clone())
                 .or_default()
                 .push(chosen[&(module.id.clone(), idx)].connection.clone());
+            if let Some(gate) = provider_dep_gate(catalog, provider) {
+                dependencies.push(gate);
+            }
         }
         let render_ctx = crate::module::RenderCtx {
             env: &module_env,
             connections,
+            dependencies,
         };
         let out = module
             .render
@@ -1005,6 +1014,27 @@ fn azurite_container_lines(containers: &[String]) -> String {
         .collect()
 }
 
+/// The typed `depends_on` gate a chosen `provider` advertises for its consumers, or `None`
+/// if it declares no startup gate (nothing to wait for).
+///
+/// The provider declares the gate as a single `"<service>:<condition>"`
+/// [`DEP_GATE_EXTRA`] value (e.g. `"db:service_healthy"`,
+/// `"seaweedfs-init:service_completed_successfully"`); this parses it into a typed
+/// [`DepGate`](crate::module::DepGate) the planner hands the consumer's render. An
+/// unrecognized or missing condition defaults to
+/// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
+fn provider_dep_gate(catalog: &Catalog, provider: &ModuleId) -> Option<crate::module::DepGate> {
+    let gate = catalog.get(provider)?.provides.extras.get(DEP_GATE_EXTRA)?;
+    let (service, condition) = match gate.split_once(':') {
+        Some((s, c)) => (s, crate::module::DependsCondition::parse(c)),
+        None => (gate.as_str(), None),
+    };
+    Some(crate::module::DepGate {
+        service: service.to_string(),
+        condition: condition.unwrap_or(crate::module::DependsCondition::ServiceStarted),
+    })
+}
+
 /// The base path a module's service serves itself under, from the `base_path` extra
 /// (empty string if unset → service serves at root).
 fn module_base_path(module: &Module) -> String {
@@ -1224,6 +1254,67 @@ mod tests {
         assert_eq!(uc.cluster, "unitycatalog");
         assert_eq!(uc.rewrite, None);
         route_for(&p, "/unity-catalog");
+    }
+
+    #[test]
+    fn depends_on_gates_follow_the_chosen_provider() {
+        // MLflow demands relational_db + object_store; the planner resolves each demand's
+        // chosen provider's declared gate into the typed `dependencies` its fragment iterates.
+        // Asserting on the rendered fragment is the real contract.
+
+        // Default (SeaweedFS): db healthy + seaweedfs-init completed.
+        let s3 = plan(
+            &Selection::modules(["local-stack-mlflow"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        let (_, mlflow) = s3
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("local-stack-mlflow"))
+            .unwrap();
+        assert!(
+            mlflow
+                .fragment
+                .contains("db:\n        condition: service_healthy")
+        );
+        assert!(
+            mlflow
+                .fragment
+                .contains("seaweedfs-init:\n        condition: service_completed_successfully")
+        );
+        assert!(!mlflow.fragment.contains("azurite-init"));
+
+        // Azurite-preferred: the object-store gate switches to azurite-init.
+        let mut preference = BTreeMap::new();
+        preference.insert(
+            "object_store".to_string(),
+            vec![
+                ModuleId::from("local-stack-azurite"),
+                ModuleId::from("local-stack-seaweedfs"),
+            ],
+        );
+        let az = plan(
+            &Selection::modules(["local-stack-mlflow"]),
+            &baseline_catalog(),
+            &PlanCtx {
+                provider_preference: preference,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, mlflow_az) = az
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("local-stack-mlflow"))
+            .unwrap();
+        assert!(
+            mlflow_az
+                .fragment
+                .contains("azurite-init:\n        condition: service_completed_successfully")
+        );
+        assert!(!mlflow_az.fragment.contains("seaweedfs-init"));
     }
 
     #[test]

@@ -7,9 +7,11 @@
 #
 # This fragment is a `RenderSpec::Template`: it branches on the chosen object-store
 # credential flavour. `connections.object_store.0` is the typed connection the planner
-# resolved for UC's object_store demand — S3 vends static keys + a `seaweedfs-init`
-# dependency, Azure vends a connection string + an `azurite-init` dependency. The
-# role-generic `UC_DATABASE_URL`/`S3_ENDPOINT`/`UC_IMAGE` stay as compose `${VAR}` refs.
+# resolved for UC's object_store demand — S3 vends static keys, Azure a connection string.
+# The `depends_on` gates are demand-driven: the planner resolves each chosen provider's
+# service + condition into the typed `dependencies` list, iterated here, so UC waits on
+# whichever backend it picked without naming `seaweedfs-init`/`azurite-init`. The
+# role-generic `UC_DATABASE_URL`/`S3_ENDPOINT`/`UC_IMAGE` stay as run-time compose `${VAR}` refs.
 {%- set obj = connections.object_store.0 %}
 services:
   unitycatalog:
@@ -17,15 +19,10 @@ services:
     restart: unless-stopped
     profiles: [svc, full]
     depends_on:
-      db:
-        condition: service_healthy
-{%- if obj.credential.flavour == "s3" %}
-      seaweedfs-init:
-        condition: service_completed_successfully
-{%- else %}
-      azurite-init:
-        condition: service_completed_successfully
-{%- endif %}
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: {{ dep.condition }}
+{%- endfor %}
     environment:
       # DATABASE_URL and S3_ENDPOINT are injected coordinates (the chosen relational_db `url`
       # and object_store `endpoint`), so UC follows whichever providers were chosen.
