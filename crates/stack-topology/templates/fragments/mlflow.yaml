@@ -14,9 +14,9 @@ services:
       - "mlflow"
       - "server"
       - "--backend-store-uri"
-      - "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/mlflow"
+      - "${MLFLOW_BACKEND_STORE_URI}"
       - "--artifacts-destination"
-      - "s3://mlflow"
+      - "${MLFLOW_ARTIFACTS_DESTINATION}"
       - "--serve-artifacts"
       - "--host"
       - "0.0.0.0"
@@ -25,7 +25,11 @@ services:
       - "--static-prefix"
       - "/mlflow"
     environment:
-      MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
+      # MLFLOW_S3_ENDPOINT_URL is the object_store `endpoint` coordinate the planner injected
+      # (the in-network address of the chosen provider). The AWS_* credentials come from the
+      # chosen S3 provider's own env contribution, so they fall back when an S3 provider backs
+      # the bucket; with an Azure provider they are simply absent.
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}

@@ -15,8 +15,10 @@
 //!   [`conflicts_with`](Module::conflicts_with);
 //! - exposes optional config [`Knob`]s (which can drive a generated UI); and
 //! - carries a [`RenderSpec`] describing how it produces its
-//!   [`RenderOutput`](crate::RenderOutput) — either as static text this crate can
-//!   substitute into purely, or as opaque template source the consumer renders.
+//!   [`RenderOutput`](crate::RenderOutput) — either as static text this crate
+//!   substitutes `${VAR}` into purely, or as a MiniJinja template this crate renders
+//!   against the typed [`Connection`](crate::Connection)s so a fragment can branch on the
+//!   chosen credential flavour.
 //!
 //! The module declares *intent and ingredients*; the planner decides *routing and
 //! wiring*. Keeping routes out of the module is the whole point — only the planner,
@@ -27,6 +29,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::connection::{ConnectionField, ConnectionTemplate};
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
 use crate::role::ServiceSpec;
 
@@ -82,12 +85,13 @@ impl std::fmt::Display for ModuleId {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provides {
     /// Resource kinds this module *provisions* for other modules, keyed by kind
-    /// (e.g. `"postgres_database"`, `"s3_bucket"`). A consuming module declares a
+    /// (e.g. `"relational_db"`, `"object_store"`). A consuming module declares a
     /// [`ResourceDemand`] for a kind; the planner finds the provider here, ensures it
-    /// is deployed, provisions the named resource, and renders the provider's
-    /// coordinate templates back into the consumer (see [`ResourceProvider`]).
+    /// is deployed, provisions the named resource, and resolves the provider's
+    /// [`ConnectionTemplate`] into a typed [`Connection`](crate::Connection) the consumer
+    /// binds back (see [`ResourceDemand`] and [`ConnectionBinding`]).
     #[serde(default)]
-    pub resource_kinds: BTreeMap<String, ResourceProvider>,
+    pub resource_kinds: BTreeMap<String, ConnectionTemplate>,
     /// Named, defaulted ports this module exposes (a knob-like surface for ports
     /// without forcing every one through [`Knob`]).
     #[serde(default)]
@@ -118,62 +122,18 @@ pub struct PortDecl {
     pub internal_only: bool,
 }
 
-/// How a provider module renders the runtime *coordinates* of a resource it
-/// provisions, so a consumer can discover it.
-///
-/// A coordinate is a named, renderable fact about a provisioned resource — a
-/// connection URL, the bucket name, an endpoint. Each template may use the
-/// placeholder `{name}` for the concrete resource name (substituted by the planner at
-/// plan time) and `${VAR}` compose-style refs (left untouched, resolved at run time by
-/// compose). For example a relational-DB provider might offer a `"url"` coordinate
-/// `postgresql://${POSTGRES_USER:-postgres}@db:5432/{name}`, and an object store a
-/// `"bucket"` coordinate `{name}`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResourceProvider {
-    /// A stable tag identifying this provider's *flavour* of the role (e.g. `"s3"`,
-    /// `"azure_blob"`). A consumer that genuinely must adapt its fragment to the chosen
-    /// backend branches on this; consumers that read only the role's standard
-    /// coordinates can ignore it. Surfaced as the reserved `provider_kind` coordinate.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_kind: Option<String>,
-    /// The named coordinate templates a consumer can request, keyed by coordinate
-    /// name (e.g. `"url"`, `"endpoint"`, `"artifacts_uri"`).
-    ///
-    /// A **resource role** defines a *coordinate contract* — the names every provider
-    /// for that role renders — so a consumer reads the same keys regardless of which
-    /// provider the planner chose. For example the `object_store` role's contract is
-    /// `artifacts_uri`, `endpoint`, and the `provider_kind` tag; SeaweedFS fills them
-    /// with the `s3://` shape, Azurite with the `wasbs://` shape.
-    #[serde(default)]
-    pub coordinates: BTreeMap<String, String>,
-}
-
-impl ResourceProvider {
-    /// The reserved coordinate name carrying the
-    /// [`provider_kind`](ResourceProvider::provider_kind) tag.
-    pub const PROVIDER_KIND_COORDINATE: &'static str = "provider_kind";
-
-    /// The template for a named coordinate, if this provider offers it. The reserved
-    /// `provider_kind` coordinate resolves to the provider's
-    /// [`provider_kind`](ResourceProvider::provider_kind) tag.
-    pub fn coordinate(&self, name: &str) -> Option<&str> {
-        if name == Self::PROVIDER_KIND_COORDINATE {
-            return self.provider_kind.as_deref();
-        }
-        self.coordinates.get(name).map(String::as_str)
-    }
-}
-
-/// A resource a module needs: a `(role, name)` the planner must ensure exists, plus
-/// where to inject the resolved coordinates back.
+/// A resource a module needs: a `(role, name)` the planner must ensure exists, plus how
+/// to bind the resolved [`Connection`](crate::Connection) back into this module's env.
 ///
 /// [`resource`](ResourceDemand::resource) names an abstract *role* (e.g.
 /// `"object_store"`), not a specific implementation — the planner chooses which
 /// registered provider satisfies it (by [`provider`](ResourceDemand::provider) pin,
 /// `PlanCtx` preference, uniqueness, or catalog default), deploys it if absent,
-/// provisions the named resource, and renders each [`Injection`]'s coordinate into this
-/// module's environment. Naming the role (not the implementation) is what lets one
-/// consumer run on, say, SeaweedFS in one environment and Azurite in another.
+/// provisions the named resource, resolves the provider's
+/// [`ConnectionTemplate`](crate::ConnectionTemplate), and binds each
+/// [`ConnectionBinding`] field into this module's environment. Naming the role (not the
+/// implementation) is what lets one consumer run on, say, SeaweedFS in one environment and
+/// Azurite in another.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceDemand {
     /// The resource *role* needed (e.g. `"object_store"`, `"relational_db"`) — matched
@@ -186,22 +146,25 @@ pub struct ResourceDemand {
     /// and the planner chooses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ModuleId>,
-    /// The coordinates to inject back into the demanding module's environment so it
-    /// can discover the resource at run time.
+    /// How the resolved connection's typed fields map into the demanding module's env so
+    /// it can discover the resource at run time.
     #[serde(default)]
-    pub inject: Vec<Injection>,
+    pub bind: ConnectionBinding,
 }
 
-/// One coordinate value the planner injects back into the demanding module's
-/// [`InjectedEnv`] under [`key`](Injection::key), sourced from the provider's named
-/// [`coordinate`](ResourceProvider::coordinate).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Injection {
-    /// The env-var name the resolved value lands under in the consumer (e.g.
-    /// `"UC_DATABASE_URL"`); the consumer's fragment/files read it as `${KEY}`.
-    pub key: String,
-    /// Which of the provider's named coordinates to render (e.g. `"url"`, `"bucket"`).
-    pub coordinate: String,
+/// How a demand maps the resolved [`Connection`](crate::Connection)'s typed fields into
+/// the consuming module's [`InjectedEnv`].
+///
+/// Each `(field, key)` pair binds one [`ConnectionField`] to the env-var `key` the
+/// consumer's fragment/files read as `${KEY}` (e.g. `(ConnectionField::Url,
+/// "UC_DATABASE_URL")`). A field the chosen provider's connection variant does not carry
+/// is a [`PlanError::UnboundConnectionField`](crate::PlanError::UnboundConnectionField).
+/// The default (empty) binding injects nothing — the demand still provisions the resource.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConnectionBinding {
+    /// The `(typed field, env-var name)` pairs to bind, in declaration order.
+    pub bind: Vec<(ConnectionField, String)>,
 }
 
 /// The kind of value a [`Knob`] holds — the bridge to a generated config UI.
@@ -264,10 +227,13 @@ pub struct Knob {
 /// How a module produces its [`RenderOutput`].
 ///
 /// Both variants yield the same `RenderOutput` (a compose fragment plus mountable
-/// files); they differ only in *who* does the rendering. The crate stays pure: it
-/// performs simple `${VAR}` substitution for [`Static`](RenderSpec::Static), and for
-/// [`Template`](RenderSpec::Template) it only *carries* the source — a consumer that
-/// owns a templating engine (trestle's MiniJinja) renders it.
+/// files); they differ only in *how much* the fragment needs to know. The crate is pure
+/// in both: [`Static`](RenderSpec::Static) is flat `${VAR}` substitution; the richer
+/// [`Template`](RenderSpec::Template) is rendered in-crate with MiniJinja against the
+/// typed [`RenderCtx`] so a fragment can branch on a resolved
+/// [`Connection`](crate::Connection) — e.g. emit S3 keys vs an Azure connection string
+/// for whichever object-store backend the planner chose. Reach for `Template` only when a
+/// fragment genuinely must branch; `Static` is the default.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum RenderSpec {
@@ -280,43 +246,114 @@ pub enum RenderSpec {
         #[serde(default)]
         files: Vec<RenderFile>,
     },
-    /// Opaque template source the crate stores but never executes; the consumer
-    /// renders it with its own engine and produces the `RenderOutput`.
+    /// MiniJinja template source the crate renders against the [`RenderCtx`] (the injected
+    /// `env` plus the module's typed `connections`). `${VAR}` compose refs in the source
+    /// pass through untouched (MiniJinja interprets only `{{ }}`/`{% %}`), so a template
+    /// freely mixes plan-time branching with run-time compose substitution.
     Template {
-        /// The fragment's template source (engine-specific; not interpreted here).
+        /// The fragment's MiniJinja template source.
         fragment: String,
-        /// Template sources for files to write and mount.
+        /// MiniJinja template sources for files to write and mount.
         #[serde(default)]
         files: Vec<RenderFile>,
     },
 }
 
 impl RenderSpec {
-    /// Produce the [`RenderOutput`] for this spec given the planner's
-    /// [`InjectedEnv`].
+    /// Produce the [`RenderOutput`] for this spec given the planner's render context.
     ///
-    /// For [`Static`](RenderSpec::Static), `${VAR}` placeholders are substituted
-    /// here. For [`Template`](RenderSpec::Template), the source is returned verbatim
-    /// (placeholders, if any, are the consumer's engine to resolve) — this crate
-    /// never interprets template syntax.
-    pub fn render(&self, env: &InjectedEnv) -> RenderOutput {
+    /// For [`Static`](RenderSpec::Static), `${VAR}` placeholders are substituted from the
+    /// context's [`env`](RenderCtx::env) (no templating engine; cannot fail). For
+    /// [`Template`](RenderSpec::Template), the source is rendered with MiniJinja against the
+    /// full [`RenderCtx`] — so a fragment can branch on a demand's typed
+    /// [`Connection`](crate::Connection) (e.g. `{% if c.credential.flavour == "s3" %}`),
+    /// which flat `${VAR}` substitution cannot express.
+    ///
+    /// Returns [`RenderError`] when a `Template` fails to compile or render — e.g. a
+    /// malformed fragment, or a reference to a field absent from the context (a module
+    /// authored as an on-disk `module.yaml` is external input, so this is a recoverable
+    /// error the planner surfaces, not a panic).
+    pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, RenderError> {
         match self {
-            RenderSpec::Static { fragment, files } => RenderOutput {
-                fragment: substitute(fragment, env),
+            RenderSpec::Static { fragment, files } => Ok(RenderOutput {
+                fragment: substitute(fragment, ctx.env),
                 files: files
                     .iter()
                     .map(|f| RenderFile {
-                        path: substitute(&f.path, env),
-                        contents: substitute(&f.contents, env),
+                        path: substitute(&f.path, ctx.env),
+                        contents: substitute(&f.contents, ctx.env),
                     })
                     .collect(),
-            },
-            RenderSpec::Template { fragment, files } => RenderOutput {
-                fragment: fragment.clone(),
-                files: files.clone(),
-            },
+            }),
+            RenderSpec::Template { fragment, files } => {
+                let mut env = minijinja::Environment::new();
+                Ok(RenderOutput {
+                    fragment: render_template(&mut env, fragment, ctx)?,
+                    files: files
+                        .iter()
+                        .map(|f| {
+                            Ok(RenderFile {
+                                path: render_template(&mut env, &f.path, ctx)?,
+                                contents: render_template(&mut env, &f.contents, ctx)?,
+                            })
+                        })
+                        .collect::<Result<_, RenderError>>()?,
+                })
+            }
         }
     }
+}
+
+/// A [`Template`](RenderSpec::Template) fragment failed to compile or render.
+///
+/// Carries the templating engine's message. Surfaced (not panicked) because a module can
+/// be authored as an external on-disk `module.yaml`, so a bad template is recoverable
+/// input, not an internal invariant violation.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("rendering module template failed: {0}")]
+pub struct RenderError(pub String);
+
+/// The context a module's render reads: the planner-decided [`InjectedEnv`] plus the typed
+/// [`Connection`](crate::Connection)s resolved for the module's demands, grouped by role.
+///
+/// A [`Static`](RenderSpec::Static) render uses only [`env`](RenderCtx::env). A
+/// [`Template`](RenderSpec::Template) render gets the whole context as MiniJinja globals:
+/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works) and `connections` (a
+/// `{role: [connection, …]}` map a template can branch on — e.g.
+/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`).
+#[derive(Clone, Debug, Serialize)]
+pub struct RenderCtx<'a> {
+    /// The planner-decided environment-variable substitutions.
+    pub env: &'a InjectedEnv,
+    /// The typed connections resolved for the module's demands, keyed by resource role.
+    /// More than one connection per role is possible (a module with two same-role demands).
+    pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
+}
+
+impl<'a> RenderCtx<'a> {
+    /// A context carrying just an [`InjectedEnv`] and no connections — the shape a module
+    /// with no resource demands renders against.
+    pub fn from_env(env: &'a InjectedEnv) -> Self {
+        RenderCtx {
+            env,
+            connections: BTreeMap::new(),
+        }
+    }
+}
+
+/// Render one MiniJinja template string against the [`RenderCtx`], reusing `env`.
+///
+/// Pure and in-memory (no `loader`, no filesystem). A compile or render failure (malformed
+/// source, or a reference to a field absent from `ctx`) is returned as a [`RenderError`]
+/// rather than panicking — a `Template` can come from an external on-disk manifest.
+/// `render_named_str` compiles and renders in one call, so no template name is registered.
+fn render_template(
+    env: &mut minijinja::Environment<'_>,
+    source: &str,
+    ctx: &RenderCtx<'_>,
+) -> Result<String, RenderError> {
+    env.render_named_str("fragment", source, ctx)
+        .map_err(|e| RenderError(e.to_string()))
 }
 
 impl Default for RenderSpec {
@@ -451,6 +488,12 @@ mod tests {
         e
     }
 
+    /// Render `spec` against an env-only context (no connections). `Static` never errors.
+    fn render_env(spec: &RenderSpec, env: &InjectedEnv) -> RenderOutput {
+        spec.render(&RenderCtx::from_env(env))
+            .expect("static render")
+    }
+
     #[test]
     fn static_render_substitutes_known_vars_in_fragment_and_files() {
         let spec = RenderSpec::Static {
@@ -460,7 +503,7 @@ mod tests {
                 contents: "base_path: ${BASE_PATH}\n".into(),
             }],
         };
-        let out = spec.render(&env(&[("BASE_PATH", "/mlflow"), ("NAME", "mlflow")]));
+        let out = render_env(&spec, &env(&[("BASE_PATH", "/mlflow"), ("NAME", "mlflow")]));
         assert_eq!(out.fragment, "command: mlflow --static-prefix /mlflow\n");
         assert_eq!(out.files[0].path, "config/mlflow.yaml");
         assert_eq!(out.files[0].contents, "base_path: /mlflow\n");
@@ -473,7 +516,7 @@ mod tests {
             files: vec![],
         };
         // Not injected → placeholder preserved verbatim.
-        let out = spec.render(&InjectedEnv::new());
+        let out = render_env(&spec, &InjectedEnv::new());
         assert_eq!(out.fragment, "user: ${POSTGRES_USER}\n");
     }
 
@@ -484,26 +527,92 @@ mod tests {
             files: vec![],
         };
         assert_eq!(
-            spec.render(&InjectedEnv::new()).fragment,
+            render_env(&spec, &InjectedEnv::new()).fragment,
             "port: 9080\n",
             "default applies when unset"
         );
         assert_eq!(
-            spec.render(&env(&[("ENVOY_PORT", "8080")])).fragment,
+            render_env(&spec, &env(&[("ENVOY_PORT", "8080")])).fragment,
             "port: 8080\n",
             "injected value wins over default"
         );
     }
 
     #[test]
-    fn template_render_passes_source_through_untouched() {
+    fn template_render_reads_env_and_branches_on_connection_flavour() {
+        use crate::connection::{Connection, ObjectStoreCredential};
+
+        // A Template fragment reads `${...}`-free MiniJinja: `env.*` for injected values and
+        // `connections.*` to branch on the chosen credential flavour.
         let spec = RenderSpec::Template {
-            fragment: "name: {{ project }}\nbase: ${BASE_PATH}\n".into(),
+            fragment: "url: {{ env.DB_URL }}\n\
+                       {%- set o = connections.object_store.0 %}\n\
+                       {%- if o.credential.flavour == \"s3\" %}\n\
+                       key: {{ o.credential.access_key_id }}\n\
+                       {%- else %}\n\
+                       conn: {{ o.credential.connection_string }}\n\
+                       {%- endif %}\n"
+                .into(),
             files: vec![],
         };
-        // Neither MiniJinja `{{ }}` nor `${ }` is interpreted here.
-        let out = spec.render(&env(&[("BASE_PATH", "/mlflow")]));
-        assert_eq!(out.fragment, "name: {{ project }}\nbase: ${BASE_PATH}\n");
+
+        let s3 = Connection::ObjectStore {
+            uri: "s3://b".into(),
+            bucket: "b".into(),
+            endpoint: "http://store:1".into(),
+            credential: ObjectStoreCredential::S3 {
+                access_key_id: "AKIA".into(),
+                secret_access_key: "shh".into(),
+                region: "us-east-1".into(),
+            },
+        };
+        let mut connections = BTreeMap::new();
+        connections.insert("object_store".to_string(), vec![s3]);
+        let env = env(&[("DB_URL", "postgresql://db/x")]);
+        let out = spec
+            .render(&RenderCtx {
+                env: &env,
+                connections,
+            })
+            .expect("template renders");
+        assert!(out.fragment.contains("url: postgresql://db/x"));
+        assert!(
+            out.fragment.contains("key: AKIA"),
+            "S3 branch taken: {out:?}"
+        );
+        assert!(
+            !out.fragment.contains("conn:"),
+            "Azure branch skipped: {out:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_template_is_a_recoverable_error_not_a_panic() {
+        // A `Template` can come from an external on-disk manifest, so a bad fragment is a
+        // returned `RenderError`, never a panic.
+        let bad_syntax = RenderSpec::Template {
+            fragment: "{% if %}".into(), // unparsable
+            files: vec![],
+        };
+        assert!(
+            bad_syntax
+                .render(&RenderCtx::from_env(&InjectedEnv::new()))
+                .is_err(),
+            "malformed template syntax must return Err"
+        );
+
+        // Referencing a context field that isn't there (no object_store connection) also
+        // errors rather than panicking.
+        let missing_field = RenderSpec::Template {
+            fragment: "{{ connections.object_store.0.uri }}".into(),
+            files: vec![],
+        };
+        assert!(
+            missing_field
+                .render(&RenderCtx::from_env(&InjectedEnv::new()))
+                .is_err(),
+            "indexing an absent connection must return Err"
+        );
     }
 
     #[test]
@@ -512,6 +621,9 @@ mod tests {
             fragment: "# café ${X} ☕\n".into(),
             files: vec![],
         };
-        assert_eq!(spec.render(&env(&[("X", "ok")])).fragment, "# café ok ☕\n");
+        assert_eq!(
+            render_env(&spec, &env(&[("X", "ok")])).fragment,
+            "# café ok ☕\n"
+        );
     }
 }

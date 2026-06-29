@@ -33,17 +33,25 @@
 //! - [`SurfaceMode`] — the "one unified platform surface" Lakehouse invariant,
 //!   with the in-process desktop variant expressed in-model.
 //!
-//! # Purity
+//! # Purity: rendering is pure, only I/O lives in the consumer
 //!
-//! The model and the resolver are pure: no I/O, no process spawning, no
-//! templating. Runtime facts the resolver needs — a dynamically-allocated catalog
-//! port, the gateway's host-published port — are passed in via [`TopologyCtx`].
-//! Catalog loading (embedding a baseline, merging on-disk overlays) is a separate,
-//! feature-gated concern so pure consumers stay free of those dependencies.
+//! The whole crate is pure: no filesystem access, no process spawning. *Rendering*
+//! is part of that purity — [`render_all`] and a module's render produce **strings and
+//! relative filenames in memory** ([`Artifacts`], [`RenderOutput`], [`RenderFile`]);
+//! the crate never writes them. Persisting those strings to disk (or, in a browser,
+//! visualizing them without persisting) is the **consumer's** job. That is why
+//! rendering is always available and not feature-gated: the only WASM-incompatible
+//! step — disk I/O — is not in this crate at all, so the rendering path (MiniJinja
+//! included) compiles to `wasm32` cleanly.
+//!
+//! Runtime facts the resolver needs — a dynamically-allocated catalog port, the
+//! gateway's host-published port — are passed in via [`TopologyCtx`]. Catalog loading
+//! from on-disk `module.yaml` manifests is the one genuinely I/O-shaped concern and
+//! stays behind the `catalog` feature so pure consumers need not pull `serde_yaml`.
 
-#[cfg(feature = "render")]
 mod artifacts;
 mod catalog;
+mod connection;
 mod endpoint;
 mod module;
 mod placement;
@@ -55,16 +63,16 @@ mod resolve_graph;
 mod role;
 mod surface;
 
-#[cfg(feature = "render")]
 pub use artifacts::{
     AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_env, render_envoy,
     render_postgres_init,
 };
 pub use catalog::{Catalog, baseline_catalog, baseline_selection};
+pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
 pub use module::{
-    Injection, Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec, ResourceDemand,
-    ResourceProvider,
+    ConnectionBinding, Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderCtx,
+    RenderError, RenderSpec, ResourceDemand,
 };
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
@@ -75,5 +83,5 @@ pub use plan_env::{
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
 pub use resolve_graph::{Edge, ResolveError, ResolvedGraph, resolve, resolve_with};
-pub use role::{Role, ServiceSpec};
+pub use role::{KnownRole, Role, ServiceSpec};
 pub use surface::SurfaceMode;

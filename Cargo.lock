@@ -1568,6 +1568,7 @@ dependencies = [
 name = "olai-stack-topology"
 version = "0.0.1"
 dependencies = [
+ "minijinja",
  "serde",
  "serde_yaml",
  "thiserror 2.0.18",

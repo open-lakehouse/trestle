@@ -25,17 +25,17 @@
 //!
 //! # Compose fragments
 //!
-//! Each module's compose `services:` snippet lives as a sibling `.yaml` file in
-//! `fragments/`, embedded via `include_str!` and carried on the module's
+//! Each module's compose `services:` snippet lives as a `.yaml` file in the crate-root
+//! `templates/fragments/` directory (a sibling of `src/`), embedded via `include_str!`
+//! (relative paths reach out of `src/` as `../../templates/fragments/`) and carried on the module's
 //! [`RenderSpec::Static`]. Snippets use only `${VAR}` substitution; the one
 //! stack-dependent part — SeaweedFS's bucket-init lines — is a `${S3_BUCKET_MB_LINES}`
 //! placeholder the planner fills from the aggregated `s3_buckets`.
 
 use super::Catalog;
+use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 use crate::endpoint::{Endpoint, RouteIntent, Scheme};
-use crate::module::{
-    Injection, Module, ModuleId, Provides, RenderSpec, ResourceDemand, ResourceProvider,
-};
+use crate::module::{ConnectionBinding, Module, ModuleId, Provides, RenderSpec, ResourceDemand};
 use crate::placement::Placement;
 use crate::role::{Role, ServiceSpec};
 
@@ -81,7 +81,10 @@ pub fn baseline_catalog() -> Catalog {
         notebooks(),
         databricks_emulator_env(),
     ])
-    .with_default_provider("object_store", "local-stack-seaweedfs")
+    .with_default_provider(Role::OBJECT_STORE, "local-stack-seaweedfs")
+    // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
+    // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
+    // check.
 }
 
 /// The default lakehouse selection: the always-on gateway plus the default category
@@ -111,6 +114,16 @@ fn fragment(text: &str) -> RenderSpec {
     }
 }
 
+/// Helper: a `RenderSpec::Template` (MiniJinja) carrying just a compose fragment. Used by a
+/// module whose fragment must branch on a resolved [`Connection`](crate::Connection) — e.g.
+/// the chosen object-store credential flavour — which flat `${VAR}` substitution cannot do.
+fn template(text: &str) -> RenderSpec {
+    RenderSpec::Template {
+        fragment: text.to_string(),
+        files: vec![],
+    }
+}
+
 /// `local-stack-envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
 /// `TopologyCtx`, not as a routed endpoint. Its rendered Envoy bootstrap config is a
@@ -130,7 +143,7 @@ fn envoy() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "envoy".into(),
-            role: Role::new("gateway"),
+            role: Role::gateway(),
             placement: container("envoy"),
             endpoints: vec![Endpoint {
                 id: "http".into(),
@@ -144,7 +157,7 @@ fn envoy() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/envoy.yaml")),
+        render: fragment(include_str!("../../templates/fragments/envoy.yaml")),
     }
 }
 
@@ -161,16 +174,16 @@ fn postgres() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
-    // Provisions `postgres_database` resources; vends a connection-string coordinate.
-    let mut pg = ResourceProvider::default();
-    pg.coordinates.insert(
-        "url".into(),
-        "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
-            .into(),
+    // Provisions `relational_db` resources; vends a typed relational connection. The
+    // resource-kind key matches the service's role (`relational_db`) — one identity, so
+    // role-exclusivity keys off the same name. The credential is folded into the URL.
+    provides.resource_kinds.insert(
+        Role::RELATIONAL_DB.into(),
+        ConnectionTemplate(Connection::RelationalDb {
+            url: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
+                .into(),
+        }),
     );
-    provides
-        .resource_kinds
-        .insert("postgres_database".into(), pg);
     Module {
         id: ModuleId::from("local-stack-postgres"),
         display_name: Some("Postgres".into()),
@@ -182,7 +195,7 @@ fn postgres() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "db".into(),
-            role: Role::new("relational_db"),
+            role: Role::relational_db(),
             placement: container("db"),
             endpoints: vec![Endpoint {
                 id: "sql".into(),
@@ -196,7 +209,7 @@ fn postgres() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/postgres.yaml")),
+        render: fragment(include_str!("../../templates/fragments/postgres.yaml")),
     }
 }
 
@@ -206,33 +219,32 @@ fn postgres() -> Module {
 /// list.
 fn seaweedfs() -> Module {
     let mut provides = Provides::default();
+    // Only this flavour's non-credential ports are hand-listed. The S3 credentials
+    // (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are *not*
+    // listed here: the planner derives them from the typed S3 credential below (via
+    // `Connection::standard_env`), so they are stated once and enter `.env` only when
+    // SeaweedFS is the chosen object_store — no `AWS_*` leak under an Azure provider.
     for (k, v) in [
-        ("AWS_ACCESS_KEY_ID", "seaweedfs"),
-        ("AWS_SECRET_ACCESS_KEY", "seaweedfs"),
-        ("AWS_DEFAULT_REGION", "us-east-1"),
         ("SEAWEEDFS_S3_PORT", "9000"),
         ("SEAWEEDFS_MASTER_PORT", "9333"),
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
-    // The S3 flavour of the `object_store` role. Fills the role's coordinate contract:
-    // `artifacts_uri` (the `s3://` destination), `endpoint`, and the `provider_kind` tag.
-    let mut object_store = ResourceProvider {
-        provider_kind: Some("s3".into()),
-        ..Default::default()
-    };
-    object_store
-        .coordinates
-        .insert("artifacts_uri".into(), "s3://{name}".into());
-    object_store
-        .coordinates
-        .insert("bucket".into(), "{name}".into());
-    object_store
-        .coordinates
-        .insert("endpoint".into(), "http://seaweedfs:8333".into());
-    provides
-        .resource_kinds
-        .insert("object_store".into(), object_store);
+    // The S3 flavour of the `object_store` role: the role-generic addressing
+    // (`uri`/`bucket`/`endpoint`) plus an S3 credential a consumer may bind explicitly.
+    provides.resource_kinds.insert(
+        Role::OBJECT_STORE.into(),
+        ConnectionTemplate(Connection::ObjectStore {
+            uri: "s3://{name}".into(),
+            bucket: "{name}".into(),
+            endpoint: "http://seaweedfs:8333".into(),
+            credential: ObjectStoreCredential::S3 {
+                access_key_id: "seaweedfs".into(),
+                secret_access_key: "seaweedfs".into(),
+                region: "us-east-1".into(),
+            },
+        }),
+    );
     Module {
         id: ModuleId::from("local-stack-seaweedfs"),
         display_name: Some("SeaweedFS (local S3)".into()),
@@ -244,7 +256,7 @@ fn seaweedfs() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "seaweedfs".into(),
-            role: Role::new("object_store"),
+            role: Role::object_store(),
             placement: container("seaweedfs"),
             endpoints: vec![Endpoint {
                 id: "s3".into(),
@@ -258,45 +270,40 @@ fn seaweedfs() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/seaweedfs.yaml")),
+        render: fragment(include_str!("../../templates/fragments/seaweedfs.yaml")),
     }
 }
 
 /// `local-stack-azurite` — the Azure Blob flavour of the `object_store` role, an
 /// alternative to SeaweedFS. Preferred in environments that need Azure-shaped storage
 /// (e.g. for local Unity Catalog credential vending). When chosen, it provisions the
-/// demanded containers; its `provides.env_vars` carry the Azure connection string and
-/// SeaweedFS is not deployed, so no `AWS_*` keys enter the stack.
+/// demanded containers and vends the Azure connection string as an object_store
+/// coordinate; SeaweedFS is not deployed, so no `AWS_*` keys enter the stack.
 fn azurite() -> Module {
     const CONN: &str = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;";
     let mut provides = Provides::default();
-    provides
-        .env_vars
-        .insert("AZURE_STORAGE_CONNECTION_STRING".into(), CONN.into());
+    // Only the non-credential port is hand-listed. `AZURE_STORAGE_CONNECTION_STRING` is *not*
+    // listed here: the planner derives it from the typed Azure credential below (via
+    // `Connection::standard_env`), so it is stated once and enters `.env` only when Azurite
+    // is the chosen object_store.
     provides
         .env_vars
         .insert("AZURITE_BLOB_PORT".into(), "10000".into());
 
-    // The Azure flavour of `object_store`: same contract coordinate names as SeaweedFS,
-    // filled with the `wasbs://` shape and an `azure_blob` provider_kind tag.
-    let mut object_store = ResourceProvider {
-        provider_kind: Some("azure_blob".into()),
-        ..Default::default()
-    };
-    object_store.coordinates.insert(
-        "artifacts_uri".into(),
-        "wasbs://{name}@devstoreaccount1.blob.core.windows.net".into(),
+    // The Azure flavour of `object_store`: the same role-generic addressing as SeaweedFS
+    // (`uri`/`bucket`/`endpoint`), filled with the `wasbs://` shape, plus an Azure
+    // connection-string credential.
+    provides.resource_kinds.insert(
+        Role::OBJECT_STORE.into(),
+        ConnectionTemplate(Connection::ObjectStore {
+            uri: "wasbs://{name}@devstoreaccount1.blob.core.windows.net".into(),
+            bucket: "{name}".into(),
+            endpoint: "http://azurite:10000/devstoreaccount1".into(),
+            credential: ObjectStoreCredential::AzureBlob {
+                connection_string: CONN.into(),
+            },
+        }),
     );
-    object_store
-        .coordinates
-        .insert("bucket".into(), "{name}".into());
-    object_store.coordinates.insert(
-        "endpoint".into(),
-        "http://azurite:10000/devstoreaccount1".into(),
-    );
-    provides
-        .resource_kinds
-        .insert("object_store".into(), object_store);
 
     Module {
         id: ModuleId::from("local-stack-azurite"),
@@ -305,12 +312,14 @@ fn azurite() -> Module {
         category: Some("storage".into()),
         provider_of: Some("object_store".into()),
         requires: vec![],
-        // The two object-store providers are mutually exclusive in one environment.
-        conflicts_with: vec![ModuleId::from("local-stack-seaweedfs")],
+        // Same-role exclusivity is enforced by the planner (two unpinned object_store
+        // providers in one environment is a `ConflictingRoleProviders` error), so no
+        // hand-listed `conflicts_with` is needed here.
+        conflicts_with: vec![],
         needs: vec![],
         services: vec![ServiceSpec {
             name: "azurite".into(),
-            role: Role::new("object_store"),
+            role: Role::object_store(),
             placement: container("azurite"),
             endpoints: vec![Endpoint {
                 id: "blob".into(),
@@ -324,7 +333,7 @@ fn azurite() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/azurite.yaml")),
+        render: fragment(include_str!("../../templates/fragments/azurite.yaml")),
     }
 }
 
@@ -349,14 +358,13 @@ fn mlflow() -> Module {
         format!("{REWRITE_OVERRIDE_PREFIX}/api/2.0/otel"),
         String::new(),
     );
+    // `MLFLOW_S3_ENDPOINT_URL` and the AWS_* credentials are no longer declared here — they
+    // are injected from the object_store provider's coordinates (see `needs` below), so they
+    // follow whichever provider the planner chose and carry the in-network endpoint.
     for (k, v) in [
         (
             "MLFLOW_TRACKING_URI",
             "http://localhost:${ENVOY_PORT:-9080}",
-        ),
-        (
-            "MLFLOW_S3_ENDPOINT_URL",
-            "http://localhost:${SEAWEEDFS_S3_PORT:-9000}",
         ),
         ("MLFLOW_EXPERIMENT_NAME", "local-dev"),
     ] {
@@ -373,26 +381,36 @@ fn mlflow() -> Module {
         // object store arrive via resource demands (auto-provisioned).
         requires: vec![ModuleId::from("local-stack-envoy")],
         conflicts_with: vec![],
-        // MLflow's fragment hard-codes how it reaches Postgres/S3, so these demands
-        // exist to *provision* the `mlflow` database and bucket (no coordinate
-        // injection needed back).
+        // The relational store and object store arrive as demands. The role-generic
+        // coordinates (`url`, `uri`, `endpoint`) are injected so the fragment no longer
+        // hard-codes the backend URL, the `s3://` destination, or the endpoint. The S3
+        // credentials themselves are *not* injected here — they are the chosen S3 provider's
+        // own `env_vars` contribution (absent under an Azure provider), so MLflow's fragment
+        // reads them with `:-` fallbacks.
         needs: vec![
             ResourceDemand {
-                resource: "postgres_database".into(),
+                resource: Role::RELATIONAL_DB.into(),
                 name: "mlflow".into(),
                 provider: None,
-                inject: vec![],
+                bind: ConnectionBinding {
+                    bind: vec![(ConnectionField::Url, "MLFLOW_BACKEND_STORE_URI".into())],
+                },
             },
             ResourceDemand {
-                resource: "object_store".into(),
+                resource: Role::OBJECT_STORE.into(),
                 name: "mlflow".into(),
                 provider: None,
-                inject: vec![],
+                bind: ConnectionBinding {
+                    bind: vec![
+                        (ConnectionField::Uri, "MLFLOW_ARTIFACTS_DESTINATION".into()),
+                        (ConnectionField::Endpoint, "MLFLOW_S3_ENDPOINT_URL".into()),
+                    ],
+                },
             },
         ],
         services: vec![ServiceSpec {
             name: "mlflow".into(),
-            role: Role::new("experiment_tracking"),
+            role: Role::experiment_tracking(),
             placement: container("mlflow"),
             endpoints: vec![
                 Endpoint {
@@ -424,7 +442,7 @@ fn mlflow() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/mlflow.yaml")),
+        render: fragment(include_str!("../../templates/fragments/mlflow.yaml")),
     }
 }
 
@@ -461,26 +479,31 @@ fn unity_catalog() -> Module {
         conflicts_with: vec![],
         needs: vec![
             ResourceDemand {
-                resource: "postgres_database".into(),
+                resource: Role::RELATIONAL_DB.into(),
                 name: "unitycatalog".into(),
                 provider: None,
-                // The provider's connection-string coordinate lands in UC's env as
-                // `UC_DATABASE_URL`, which its fragment reads.
-                inject: vec![Injection {
-                    key: "UC_DATABASE_URL".into(),
-                    coordinate: "url".into(),
-                }],
+                // The relational connection's URL lands in UC's env as `UC_DATABASE_URL`,
+                // which its fragment reads.
+                bind: ConnectionBinding {
+                    bind: vec![(ConnectionField::Url, "UC_DATABASE_URL".into())],
+                },
             },
             ResourceDemand {
-                resource: "object_store".into(),
+                resource: Role::OBJECT_STORE.into(),
                 name: "unity".into(),
                 provider: None,
-                inject: vec![],
+                // The in-network object_store `endpoint` is bound so UC follows the chosen
+                // provider rather than hard-coding `seaweedfs:8333`. The S3 credentials come
+                // from the chosen S3 provider's env contribution (read with `:-` fallbacks in
+                // the fragment), so they are not bound here.
+                bind: ConnectionBinding {
+                    bind: vec![(ConnectionField::Endpoint, "S3_ENDPOINT".into())],
+                },
             },
         ],
         services: vec![ServiceSpec {
             name: "unitycatalog".into(),
-            role: Role::new("data_catalog"),
+            role: Role::data_catalog(),
             placement: container("unitycatalog"),
             endpoints: vec![
                 Endpoint {
@@ -504,7 +527,7 @@ fn unity_catalog() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/unity-catalog.yaml")),
+        render: template(include_str!("../../templates/fragments/unity-catalog.yaml")),
     }
 }
 
@@ -526,7 +549,7 @@ fn trino() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "trino".into(),
-            role: Role::new("sql_engine"),
+            role: Role::sql_engine(),
             placement: container("trino"),
             endpoints: vec![Endpoint {
                 id: "ui".into(),
@@ -540,7 +563,7 @@ fn trino() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/trino.yaml")),
+        render: fragment(include_str!("../../templates/fragments/trino.yaml")),
     }
 }
 
@@ -568,7 +591,7 @@ fn jaeger() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "jaeger".into(),
-            role: Role::new("tracing"),
+            role: Role::tracing(),
             placement: container("jaeger"),
             endpoints: vec![
                 Endpoint {
@@ -593,7 +616,7 @@ fn jaeger() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/jaeger.yaml")),
+        render: fragment(include_str!("../../templates/fragments/jaeger.yaml")),
     }
 }
 
@@ -617,7 +640,7 @@ fn notebooks() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "notebooks".into(),
-            role: Role::new("notebook_server"),
+            role: Role::notebook_server(),
             placement: container("notebooks"),
             endpoints: vec![Endpoint {
                 id: "ui".into(),
@@ -631,7 +654,7 @@ fn notebooks() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("fragments/notebooks.yaml")),
+        render: fragment(include_str!("../../templates/fragments/notebooks.yaml")),
     }
 }
 

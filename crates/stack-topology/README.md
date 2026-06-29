@@ -48,5 +48,19 @@ callers). This crate makes the topology a single, tested model:
 - **Surface mode** — the "one unified platform surface" Lakehouse invariant, with
   the in-process desktop variant expressed in-model rather than forked.
 
-The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O and no
-templating.
+The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O. Rendering is
+also pure — it produces artifact strings and relative filenames in memory; the consumer
+owns disk I/O — so it is always available and compiles to `wasm32`.
+
+## Seeing the rendered output
+
+To materialize and print every artifact a selection produces (the Envoy gateway config,
+`compose.yaml`, `.env`, the Postgres init script, and each module's compose fragment):
+
+```bash
+cargo run -p olai-stack-topology --example render_stack
+# choose modules (with or without the `local-stack-` prefix):
+cargo run -p olai-stack-topology --example render_stack -- envoy postgres seaweedfs trino jaeger
+# prefer Azurite over SeaweedFS for the object_store role:
+cargo run -p olai-stack-topology --example render_stack -- --azurite
+```

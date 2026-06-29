@@ -36,13 +36,14 @@
 //! [`PlanError::PrefixCollision`]: the planner fails, and the fix is an explicit
 //! prefix override on one of them — making the exception visible and local.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
     API_PREFIX_EXTRA, AZURE_CONTAINER_CREATE_LINES_VAR, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX,
     S3_BUCKET_MB_LINES_VAR,
 };
+use crate::connection::Connection;
 use crate::endpoint::{Endpoint, RouteIntent};
 use crate::module::{Module, ModuleId};
 use crate::placement::Placement;
@@ -180,15 +181,41 @@ pub enum PlanError {
         /// The candidate provider module ids (sorted).
         providers: Vec<ModuleId>,
     },
-    /// A demand requests a coordinate the chosen provider does not offer.
-    #[error("provider for `{resource}` offers no coordinate `{coordinate}` (needed by `{module}`)")]
-    UnknownCoordinate {
+    /// A demand binds a [`ConnectionField`](crate::ConnectionField) the chosen provider's
+    /// connection variant does not carry (e.g. binding `url` against an object store, or an
+    /// S3 credential field against an Azure-backed store).
+    #[error("connection for `{resource}` has no field `{field:?}` to bind (needed by `{module}`)")]
+    UnboundConnectionField {
         /// The demanding module.
         module: String,
-        /// The resource kind.
+        /// The resource role.
         resource: String,
-        /// The missing coordinate name.
-        coordinate: String,
+        /// The connection field the variant does not carry.
+        field: crate::connection::ConnectionField,
+    },
+    /// A module's [`Template`](crate::RenderSpec::Template) fragment failed to compile or
+    /// render — a malformed template or a reference to a field absent from the render
+    /// context. Recoverable because a module can be authored as an external on-disk manifest.
+    #[error("module `{module}` failed to render: {source}")]
+    Render {
+        /// The module whose template failed.
+        module: String,
+        /// The underlying templating error.
+        #[source]
+        source: crate::module::RenderError,
+    },
+    /// Two or more providers of the same resource role are in one environment without an
+    /// explicit per-demand pin selecting each. The fix is to pin each demand's provider or
+    /// drop one provider from the selection.
+    #[error(
+        "role `{role}` has multiple unpinned providers {providers:?} in one environment; \
+         pin each demand's provider or remove one"
+    )]
+    ConflictingRoleProviders {
+        /// The over-subscribed role.
+        role: String,
+        /// The provider module ids present for the role (sorted).
+        providers: Vec<ModuleId>,
     },
 }
 
@@ -270,6 +297,11 @@ pub struct EnvironmentPlan {
     pub routes: RoutePlan,
     /// Each module's injected env (the values the planner decided for it).
     pub injected: BTreeMap<ModuleId, InjectedEnv>,
+    /// The typed [`Connection`] resolved for each demand, keyed by `(demanding module id,
+    /// demand index)`. The same handshake the planner flattens into [`injected`](Self::injected)
+    /// today, exposed in typed form so a consumer can make explicit per-flavour rendering
+    /// decisions (e.g. branch on S3 vs Azure credentials) without re-parsing strings.
+    pub connections: BTreeMap<(ModuleId, usize), Connection>,
     /// Each module's rendered output (fragment + files).
     pub renders: Vec<(ModuleId, RenderOutput)>,
     /// The consolidated head/compose plan.
@@ -303,13 +335,26 @@ pub fn plan(
     // (a demanded relational store, object store, …) before anything else runs.
     let graph = resolve_with_demands(selection, catalog, ctx)?;
 
+    // Resolve each demand's provider and its typed connection exactly once, up front:
+    // `choose_provider` is a pure function of `(ctx, catalog, demand)`, so the downstream
+    // passes (role exclusivity, provisioning, binding) all read the same chosen provider and
+    // resolved connection from here instead of re-running the selection (and its per-call
+    // catalog scan) at each site. A connection variant's fields are mandatory, so provider
+    // completeness is a compile-time guarantee — no runtime contract check is needed.
+    let chosen = resolve_demand_providers(&graph, catalog, ctx)?;
+
+    // At most one provider per resource role may end up in an environment — unless a
+    // consumer explicitly pinned each (the sanctioned multi-store case).
+    check_role_exclusivity(&graph)?;
+
     // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
     // order). Grouping by provider — not by abstract role — is what lets one object-store
     // demand land on SeaweedFS and another on Azurite, each provisioning on its own init.
+    // Walk modules in graph (dependency) order so the grouped names stay deterministic.
     let mut provisioned_by: BTreeMap<ModuleId, Vec<String>> = BTreeMap::new();
     for module in &graph.nodes {
-        for demand in &module.needs {
-            let provider = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+        for (idx, demand) in module.needs.iter().enumerate() {
+            let provider = chosen[&(module.id.clone(), idx)].provider.clone();
             let names = provisioned_by.entry(provider).or_default();
             if !names.contains(&demand.name) {
                 names.push(demand.name.clone());
@@ -360,14 +405,11 @@ pub fn plan(
                 azurite_container_lines(&azure_containers),
             );
         }
-        // Inject each demand's requested coordinates back into the consuming module's
-        // env, rendered from the provider's coordinate template.
-        for demand in &module.needs {
-            for injection in &demand.inject {
-                let value =
-                    resolve_coordinate(ctx, catalog, &module.id, demand, &injection.coordinate)?;
-                module_env.set(&injection.key, value);
-            }
+        // Bind each demand's resolved connection back into the consuming module's env, by
+        // typed field. The connection was resolved once up front (in `chosen`).
+        for (idx, demand) in module.needs.iter().enumerate() {
+            let connection = &chosen[&(module.id.clone(), idx)].connection;
+            bind_connection(&mut module_env, &module.id, demand, connection)?;
         }
         for service in &module.services {
             for endpoint in &service.endpoints {
@@ -488,23 +530,49 @@ pub fn plan(
         for (k, v) in module.provides.env_vars.iter() {
             env.set(k, v);
         }
-        for demand in &module.needs {
-            for injection in &demand.inject {
-                let value =
-                    resolve_coordinate(ctx, catalog, &module.id, demand, &injection.coordinate)?;
-                env.set(&injection.key, value);
+        // A provider contributes its connections' conventional SDK env vars (an object
+        // store's `AWS_*` / `AZURE_STORAGE_CONNECTION_STRING`), derived from the typed
+        // credential so it is stated once. Only an in-graph (i.e. chosen) provider reaches
+        // here, so an unselected backend's credentials never leak into `.env`. The values
+        // are name-independent, so the template's credential is read directly.
+        for template in module.provides.resource_kinds.values() {
+            for (k, v) in template.0.standard_env() {
+                env.set(k, v);
             }
+        }
+        for (idx, demand) in module.needs.iter().enumerate() {
+            let connection = &chosen[&(module.id.clone(), idx)].connection;
+            bind_connection(&mut env, &module.id, demand, connection)?;
         }
     }
 
-    // Render every module from its decided env, in dependency order. A module with an
-    // empty fragment (e.g. the env-only contract module) contributes no compose
-    // include.
+    // Render every module from its decided env and resolved connections, in dependency
+    // order. A module with an empty fragment (e.g. the env-only contract module)
+    // contributes no compose include.
     let mut renders = Vec::with_capacity(graph.nodes.len());
     let mut includes = Vec::new();
     for module in &graph.nodes {
         let module_env = injected.get(&module.id).cloned().unwrap_or_default();
-        let out = module.render.render(&module_env);
+        // The typed connections resolved for this module's demands, grouped by role, so a
+        // `Template` fragment can branch on the chosen credential flavour.
+        let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
+        for (idx, demand) in module.needs.iter().enumerate() {
+            connections
+                .entry(demand.resource.clone())
+                .or_default()
+                .push(chosen[&(module.id.clone(), idx)].connection.clone());
+        }
+        let render_ctx = crate::module::RenderCtx {
+            env: &module_env,
+            connections,
+        };
+        let out = module
+            .render
+            .render(&render_ctx)
+            .map_err(|source| PlanError::Render {
+                module: module.id.0.clone(),
+                source,
+            })?;
         if !out.fragment.trim().is_empty() {
             includes.push(ComposeInclude {
                 module: module.id.clone(),
@@ -520,10 +588,18 @@ pub fn plan(
         includes,
     };
 
+    // The typed connections, exposed for downstream consumers (deterministic: built from
+    // `chosen`, which is populated walking the graph in dependency order).
+    let connections = chosen
+        .into_iter()
+        .map(|(key, c)| (key, c.connection))
+        .collect();
+
     Ok(EnvironmentPlan {
         graph,
         routes,
         injected,
+        connections,
         renders,
         head,
         gateway,
@@ -690,32 +766,150 @@ fn augment_requires(
         .collect()
 }
 
-/// Render the value of `coordinate` for `demand`, using the *chosen* provider (same
-/// choice the resolution used): take the provider's coordinate template for the role
-/// and substitute `{name}` with the demanded resource name (leaving `${VAR}` refs for
-/// compose).
-fn resolve_coordinate(
-    ctx: &PlanCtx,
-    catalog: &Catalog,
+/// Bind a demand's resolved [`Connection`] into `env` by typed field, per the demand's
+/// [`ConnectionBinding`](crate::ConnectionBinding).
+///
+/// Each `(field, key)` pair sets `key` to the connection's value for `field`. A field the
+/// connection variant does not carry is a [`PlanError::UnboundConnectionField`].
+fn bind_connection(
+    env: &mut InjectedEnv,
     consumer: &ModuleId,
     demand: &crate::module::ResourceDemand,
-    coordinate: &str,
-) -> Result<String, PlanError> {
-    let provider_id = choose_provider(ctx, catalog, demand, Some(consumer))?;
-    let provider = catalog
-        .get(&provider_id)
-        .expect("provider id is in catalog");
-    let template = provider
-        .provides
-        .resource_kinds
-        .get(&demand.resource)
-        .and_then(|rp| rp.coordinate(coordinate))
-        .ok_or_else(|| PlanError::UnknownCoordinate {
-            module: consumer.0.clone(),
-            resource: demand.resource.clone(),
-            coordinate: coordinate.to_string(),
-        })?;
-    Ok(template.replace("{name}", &demand.name))
+    connection: &Connection,
+) -> Result<(), PlanError> {
+    for (field, key) in &demand.bind.bind {
+        let value = connection
+            .field(*field)
+            .ok_or_else(|| PlanError::UnboundConnectionField {
+                module: consumer.0.clone(),
+                resource: demand.resource.clone(),
+                field: *field,
+            })?;
+        env.set(key, value);
+    }
+    Ok(())
+}
+
+/// The provider chosen for a demand and the typed connection it resolves to.
+#[derive(Clone)]
+struct ResolvedDemand {
+    /// The provider module chosen to satisfy the demand.
+    provider: ModuleId,
+    /// The provider's connection template, resolved for the demanded resource name.
+    connection: Connection,
+}
+
+/// The resolved provider + connection for each demand, keyed by `(demanding module id,
+/// demand index)`.
+///
+/// Computed once by [`resolve_demand_providers`] and shared by the planner's passes so each
+/// demand's provider is selected — and its connection resolved — a single time (rather than
+/// re-running [`choose_provider`] and re-substituting `{name}` at every consumer).
+type ChosenProviders = BTreeMap<(ModuleId, usize), ResolvedDemand>;
+
+/// Resolve the provider and typed connection for every demand in the graph, once.
+///
+/// A connection variant's fields are all mandatory, so a chosen provider cannot render an
+/// incomplete connection — completeness is a compile-time guarantee, replacing the old
+/// runtime role-contract validation.
+fn resolve_demand_providers(
+    graph: &ResolvedGraph,
+    catalog: &Catalog,
+    ctx: &PlanCtx,
+) -> Result<ChosenProviders, PlanError> {
+    let mut chosen = ChosenProviders::new();
+    for module in &graph.nodes {
+        for (idx, demand) in module.needs.iter().enumerate() {
+            let provider_id = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+            let provider = catalog
+                .get(&provider_id)
+                .expect("provider id is in catalog");
+            let template = provider
+                .provides
+                .resource_kinds
+                .get(&demand.resource)
+                .expect("chosen provider provisions the demanded role");
+            let connection = template.resolve(&demand.name);
+            chosen.insert(
+                (module.id.clone(), idx),
+                ResolvedDemand {
+                    provider: provider_id,
+                    connection,
+                },
+            );
+        }
+    }
+    Ok(chosen)
+}
+
+/// Reject an environment that contains two or more providers of the same resource role,
+/// unless every extra provider was reached by an explicit per-demand
+/// [`provider`](crate::ResourceDemand::provider) pin.
+///
+/// `choose_provider` already selects exactly one provider per demand, so a same-role clash
+/// only arises when a *second* provider is in the graph for an unrelated reason — directly
+/// selected, or pulled in by `requires`. That is the case this rejects (with
+/// [`PlanError::ConflictingRoleProviders`]): selecting both SeaweedFS and Azurite with no
+/// pins is ambiguous, and the planner will not silently drop one. The exception is the
+/// deliberate multi-store shape — a consumer that pins each demand's provider — where every
+/// provider beyond the first is accounted for by a pin.
+fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
+    // The (role, provider) pairs a demand explicitly pinned — these are sanctioned.
+    let mut pinned: BTreeSet<(String, ModuleId)> = BTreeSet::new();
+    for module in &graph.nodes {
+        for demand in &module.needs {
+            if let Some(p) = &demand.provider {
+                pinned.insert((demand.resource.clone(), p.clone()));
+            }
+        }
+    }
+
+    // Providers of each role present in the resolved graph (a node provides a role if it
+    // declares it under `resource_kinds`, or its `provider_of` capability names it).
+    let mut by_role: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
+    for module in &graph.nodes {
+        let mut roles: BTreeSet<&str> = module
+            .provides
+            .resource_kinds
+            .keys()
+            .map(String::as_str)
+            .collect();
+        if let Some(cap) = &module.provider_of {
+            roles.insert(cap.as_str());
+        }
+        for role in roles {
+            by_role
+                .entry(role.to_string())
+                .or_default()
+                .push(module.id.clone());
+        }
+    }
+
+    for (role, mut providers) in by_role {
+        if providers.len() < 2 {
+            continue;
+        }
+        // Allow it only if at most one provider is unpinned: every other was a deliberate pin.
+        let unpinned = providers
+            .iter()
+            .filter(|id| !pinned.contains(&(role.clone(), (*id).clone())))
+            .count();
+        if unpinned > 1 {
+            // Ignore a role that no demand actually targets (e.g. a `provider_of` capability
+            // with no matching `resource_kinds` demand): it is not a provisioning clash.
+            let demanded = graph
+                .nodes
+                .iter()
+                .flat_map(|m| &m.needs)
+                .any(|d| d.resource == role);
+            if !demanded {
+                continue;
+            }
+            providers.sort();
+            return Err(PlanError::ConflictingRoleProviders { role, providers });
+        }
+    }
+    Ok(())
 }
 
 /// Claim `prefix` for `service.endpoint`, erroring if another endpoint already did.
