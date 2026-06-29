@@ -70,11 +70,23 @@ impl InjectedEnv {
 /// as `${KEY}` for compose to substitute at run time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderFile {
-    /// Path the file should be written to, relative to the environment's render
-    /// root. The consumer turns this into the host side of a bind mount.
+    /// Path the file should be written to. Module-relative (a bare basename or a
+    /// short subpath); the consumer roots it under the module's own directory
+    /// (`modules/<module-id>/<path>`). The consumer turns this into the host side of
+    /// the file's mount.
     pub path: String,
     /// The file's contents (possibly containing `${KEY}` substitutions).
     pub contents: String,
+    /// The top-level compose `configs:` alias this file is mounted under, if any.
+    ///
+    /// When set, the generated root compose declares
+    /// `configs: <alias>: { file: <rooted-path> }` and the module's own fragment
+    /// references it via `configs: - source: <alias>`. `None` means a plain file the
+    /// consumer just writes (e.g. a bind-mounted file the fragment mounts by path).
+    /// Aliases share one top-level namespace, so they must be unique across modules;
+    /// the planner rejects a collision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 /// What a module's render produces: a compose fragment plus any files to mount.
@@ -112,14 +124,16 @@ mod tests {
         let out = RenderOutput {
             fragment: "services:\n  mlflow: {}\n".into(),
             files: vec![RenderFile {
-                path: "config/mlflow.yaml".into(),
+                path: "mlflow.yaml".into(),
                 // A mounted config file referencing an injected variable —
                 // compose substitutes ${BASE_PATH} at run time.
                 contents: "base_path: ${BASE_PATH}\n".into(),
+                alias: Some("mlflow_config".into()),
             }],
         };
         assert_eq!(out.files.len(), 1);
-        assert_eq!(out.files[0].path, "config/mlflow.yaml");
+        assert_eq!(out.files[0].path, "mlflow.yaml");
         assert!(out.files[0].contents.contains("${BASE_PATH}"));
+        assert_eq!(out.files[0].alias.as_deref(), Some("mlflow_config"));
     }
 }

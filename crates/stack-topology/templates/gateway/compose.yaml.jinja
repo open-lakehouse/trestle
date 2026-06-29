@@ -10,8 +10,9 @@ services:
     image: envoyproxy/envoy:v1.34-latest
     restart: unless-stopped
     profiles: [svc, full]
-    volumes:
-      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    configs:
+      - source: envoy_config
+        target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
     ports:
 {%- for p in published_ports %}

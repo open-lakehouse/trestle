@@ -63,10 +63,7 @@ mod resolve_graph;
 mod role;
 mod surface;
 
-pub use artifacts::{
-    AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_env, render_envoy,
-    render_postgres_init,
-};
+pub use artifacts::{AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_envoy};
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
 };
@@ -79,8 +76,8 @@ pub use module::{
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
 pub use plan_env::{
-    ClusterConfig, ComposeInclude, EnvironmentPlan, GatewayConfig, GatewayRoute, HeadFile,
-    ListenerConfig, PlanCtx, PlanError, Selection, plan,
+    ClusterConfig, ComposeInclude, ConfigDecl, EnvironmentPlan, GatewayConfig, GatewayRoute,
+    HeadFile, ListenerConfig, PlanCtx, PlanError, Selection, plan,
 };
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
