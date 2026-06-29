@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
-    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DEP_GATE_EXTRA, REWRITE_OVERRIDE_PREFIX,
-    S3_BUCKET_MB_LINES_VAR,
+    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA,
+    REWRITE_OVERRIDE_PREFIX,
 };
 use crate::connection::Connection;
 use crate::endpoint::{Endpoint, RouteIntent};
@@ -112,6 +112,13 @@ pub struct PlanCtx {
     /// the catalog; an empty/absent entry falls back to uniqueness then the catalog
     /// default. A demand's own `provider` pin still wins over this.
     pub provider_preference: BTreeMap<String, Vec<ModuleId>>,
+    /// The stack's root data directory, injected into every module's render env as
+    /// [`DATA_ROOT`](crate::DATA_ROOT_VAR) and resolved at plan time. A module that persists
+    /// state mounts it under `${DATA_ROOT}/<module>` by convention, so relocating all
+    /// persistence is this single knob (e.g. an absolute path) rather than an edit per
+    /// fragment. Defaults to [`DATA_ROOT_DEFAULT`](crate::DATA_ROOT_DEFAULT) (`./.data`,
+    /// relative to the compose file).
+    pub data_root: String,
 }
 
 impl Default for PlanCtx {
@@ -124,6 +131,7 @@ impl Default for PlanCtx {
             dedicated_listener_ports: Vec::new(),
             dedicated_listener_port_base: 9100,
             provider_preference: BTreeMap::new(),
+            data_root: DATA_ROOT_DEFAULT.into(),
         }
     }
 }
@@ -431,16 +439,14 @@ pub fn plan(
     // Walk modules in dependency order so emitted routes/clusters are deterministic.
     for module in &graph.nodes {
         let mut module_env = InjectedEnv::new();
-        // Seed each module's render env with its declared env vars. SeaweedFS also
-        // needs the aggregated bucket list folded into its one-shot init block.
+        // The stack's root data directory, available to every fragment as a render-only value
+        // (baked at plan time, like `BASE_PATH`). A module that persists state mounts it under
+        // `{{ env.DATA_ROOT }}/<module>` rather than hard-coding a `./.data/...` path, so the
+        // whole stack's persistence relocates via the one `PlanCtx::data_root` knob.
+        module_env.set(DATA_ROOT_VAR, &ctx.data_root);
+        // Seed each module's render env with its declared env vars.
         for (k, v) in module.provides.env_vars.iter() {
             module_env.set(k, v);
-        }
-        // SeaweedFS still folds the aggregated bucket list into its one-shot init block via a
-        // `${S3_BUCKET_MB_LINES}` placeholder. (Azurite renders its container-init by
-        // iterating the typed `objects` list in its template, so it needs no such injection.)
-        if module.id.as_str() == "seaweedfs" {
-            module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
         }
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field. The connection was resolved once up front (in `chosen`).
@@ -567,8 +573,8 @@ pub fn plan(
     // Aggregate the stack's env vars for `.env`, last-writer-wins in dependency order:
     // each module's *declared* env vars, plus the coordinates injected to satisfy its
     // demands (a fragment reads those as `${VAR}`, so compose must resolve them from
-    // `.env` at run time). Render-only injections (`BASE_PATH`, `S3_BUCKET_MB_LINES`)
-    // stay out of `.env` — they are substituted into the fragment at plan time.
+    // `.env` at run time). Render-only injections (`BASE_PATH`, `DATA_ROOT`) stay out of
+    // `.env` — they are rendered into the fragment at plan time.
     let mut env = InjectedEnv::new();
     for module in &graph.nodes {
         for (k, v) in module.provides.env_vars.iter() {
@@ -1144,20 +1150,6 @@ fn swap_origin(url: &str, new_origin: &str) -> String {
         }
         None => url.to_string(),
     }
-}
-
-/// The SeaweedFS one-shot bucket-init lines for the aggregated bucket list, one
-/// `aws s3 mb` per bucket, indented to sit inside the fragment's `entrypoint` block.
-/// Empty when there are no buckets.
-fn seaweedfs_bucket_lines(buckets: &[String]) -> String {
-    buckets
-        .iter()
-        .map(|b| {
-            format!(
-                "        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://{b} 2>&1 || true;\n"
-            )
-        })
-        .collect()
 }
 
 /// The typed `depends_on` gate a chosen `provider` advertises for its consumers, or `None`

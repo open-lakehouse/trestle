@@ -15,7 +15,6 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.10.1-full
     restart: unless-stopped
-    profiles: [svc, full]
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:

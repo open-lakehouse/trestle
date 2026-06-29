@@ -1,36 +1,19 @@
-# Unity Catalog server — contributed by the `unity-catalog` module.
-#
-# By default this uses the upstream Java implementation
-# (`unitycatalog/unitycatalog`). To swap in the Rust implementation while it
-# remains pre-release, set `UC_IMAGE=unitycatalog-rs:dev` in `.env.local` and
-# adjust the `command:` to `["server", "--rest", "--use-db"]`.
-#
-# This fragment is a `RenderSpec::Template`: it branches on the chosen object-store
-# credential flavour. `connections.object_store.0` is the typed connection the planner
-# resolved for UC's object_store demand — S3 vends static keys, Azure a connection string.
-# The `depends_on` gates are demand-driven: the planner resolves each chosen provider's
-# service + condition into the typed `dependencies` list, iterated here, so UC waits on
-# whichever backend it picked without naming `seaweedfs-init`/`azurite-init`. The
-# role-generic `UC_DATABASE_URL`/`S3_ENDPOINT`/`UC_IMAGE` stay as run-time compose `${VAR}` refs.
+# Unity Catalog
+{%- set db = connections.relational_db.0 %}
 {%- set obj = connections.object_store.0 %}
 services:
   unitycatalog:
-    image: ${UC_IMAGE:-unitycatalog/unitycatalog:latest}
+    image: unitycatalog/unitycatalog:v0.4.1
     restart: unless-stopped
-    profiles: [svc, full]
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: {{ dep.condition }}
 {%- endfor %}
     environment:
-      # DATABASE_URL and S3_ENDPOINT are injected coordinates (the chosen relational_db `url`
-      # and object_store `endpoint`), so UC follows whichever providers were chosen.
-      DATABASE_URL: ${UC_DATABASE_URL}
-      S3_ENDPOINT: ${S3_ENDPOINT}
+      DATABASE_URL: {{ db.url }}
 {%- if obj.credential.flavour == "s3" %}
-      # S3 credentials come straight from the typed S3 credential the planner resolved — no
-      # `${AWS_*:-}` fallback, and absent entirely under an Azure provider.
+      S3_ENDPOINT: {{ obj.endpoint }}
       AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
       AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
       AWS_REGION: {{ obj.credential.region }}

@@ -9,19 +9,19 @@
 #   * `objects` — the container names the stack provisions on it; the one-shot init iterates
 #     them to create each, instead of the planner splicing pre-formatted shell lines.
 #
-# The blob port is the emulator's fixed 10000, written directly.
-{%- set obj = connections.object_store.0 %}
+# The blob port is the emulator's fixed 10000, written directly. Durable blob state is
+# persisted under the stack's data root (`env.DATA_ROOT`, default ./.data), resolved at plan
+# time — relocating the stack's data is a single `PlanCtx.data_root` knob, not a per-fragment edit.
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
     restart: unless-stopped
-    profiles: [svc, full]
     command:
       ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
     ports:
       - "10000:10000"
     volumes:
-      - ./.data/azurite:/data
+      - {{ env.DATA_ROOT }}/azurite:/data
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -30,6 +30,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 3s
+{%- if objects %}
+{%- set obj = connections.object_store.0 %}
 
   azurite-init:
     image: mcr.microsoft.com/azure-cli:2.87.0
@@ -49,3 +51,4 @@ services:
         az storage container create --name {{ name }} 2>&1 || true;
 {%- endfor %}
         echo "Containers ready.";
+{%- endif %}

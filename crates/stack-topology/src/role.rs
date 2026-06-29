@@ -55,8 +55,6 @@ impl Role {
     pub const EXPERIMENT_TRACKING: &'static str = "experiment_tracking";
     /// `tracing` — an OTLP tracing backend.
     pub const TRACING: &'static str = "tracing";
-    /// `notebook_server` — an interactive notebook server.
-    pub const NOTEBOOK_SERVER: &'static str = "notebook_server";
     /// `app_runtime` — the application-runtime contract (env-only).
     pub const APP_RUNTIME: &'static str = "app_runtime";
 
@@ -88,10 +86,6 @@ impl Role {
     pub fn tracing() -> Role {
         Role::new(Self::TRACING)
     }
-    /// The `notebook_server` role.
-    pub fn notebook_server() -> Role {
-        Role::new(Self::NOTEBOOK_SERVER)
-    }
     /// The `app_runtime` role.
     pub fn app_runtime() -> Role {
         Role::new(Self::APP_RUNTIME)
@@ -122,8 +116,6 @@ pub enum KnownRole {
     ExperimentTracking,
     /// [`Role::TRACING`].
     Tracing,
-    /// [`Role::NOTEBOOK_SERVER`].
-    NotebookServer,
     /// [`Role::APP_RUNTIME`].
     AppRuntime,
 }
@@ -144,7 +136,6 @@ impl KnownRole {
             KnownRole::SqlEngine => Role::SQL_ENGINE,
             KnownRole::ExperimentTracking => Role::EXPERIMENT_TRACKING,
             KnownRole::Tracing => Role::TRACING,
-            KnownRole::NotebookServer => Role::NOTEBOOK_SERVER,
             KnownRole::AppRuntime => Role::APP_RUNTIME,
         }
     }
@@ -160,7 +151,6 @@ impl KnownRole {
             Role::SQL_ENGINE => Some(KnownRole::SqlEngine),
             Role::EXPERIMENT_TRACKING => Some(KnownRole::ExperimentTracking),
             Role::TRACING => Some(KnownRole::Tracing),
-            Role::NOTEBOOK_SERVER => Some(KnownRole::NotebookServer),
             Role::APP_RUNTIME => Some(KnownRole::AppRuntime),
             _ => None,
         }

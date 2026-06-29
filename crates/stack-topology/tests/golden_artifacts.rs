@@ -170,19 +170,42 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     let got = kv(&arts.env);
     let want = kv(ENV_FIXTURE);
 
-    // Every var trestle shipped is still present and unchanged, with one deliberate
-    // exception: `MLFLOW_S3_ENDPOINT_URL`. Trestle pointed it at the host
-    // (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
-    // gateway on its own dedicated listener, so the planner injects the gateway origin
-    // (`http://envoy:9100`) instead — consumers reach the store through Envoy, not directly.
+    // Every var trestle shipped is still present and unchanged, with these deliberate
+    // exceptions:
+    //   * `MLFLOW_S3_ENDPOINT_URL` — trestle pointed it at the host
+    //     (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
+    //     gateway on its own dedicated listener, so the planner injects the gateway origin
+    //     (`http://envoy:9100`) instead — consumers reach the store through Envoy.
+    //   * `UC_DATABASE_URL` / `UC_IMAGE` — UC's fragment now reads its backend URL from the
+    //     resolved connection directly and pins its image inline, so neither is round-tripped
+    //     through `.env` any more.
+    //   * `POSTGRES_PORT` / `PGWEB_PORT` / `SEAWEEDFS_MASTER_PORT` / `SEAWEEDFS_S3_PORT` /
+    //     `JAEGER_UI_PORT` — ports are now written concretely in the fragments, so these
+    //     `*_PORT` vars are no longer referenced and no longer emitted.
+    //   All are asserted absent below.
+    let dropped = [
+        "UC_DATABASE_URL",
+        "UC_IMAGE",
+        "POSTGRES_PORT",
+        "PGWEB_PORT",
+        "SEAWEEDFS_MASTER_PORT",
+        "SEAWEEDFS_S3_PORT",
+        "JAEGER_UI_PORT",
+    ];
     for (k, v) in &want {
-        if k == "MLFLOW_S3_ENDPOINT_URL" {
+        if k == "MLFLOW_S3_ENDPOINT_URL" || dropped.contains(&k.as_str()) {
             continue;
         }
         assert_eq!(
             got.get(k),
             Some(v),
             "rendered .env dropped or changed trestle var `{k}`"
+        );
+    }
+    for k in dropped {
+        assert!(
+            !got.contains_key(k),
+            "`{k}` should no longer be emitted into .env (read from the connection or written concretely)"
         );
     }
     assert_eq!(
@@ -201,15 +224,15 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     );
     assert_eq!(
         got.get("MLFLOW_BACKEND_STORE_URI").map(String::as_str),
-        Some(
-            "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/mlflow"
-        ),
+        Some("postgresql://postgres:postgres@db:5432/mlflow"),
         "MLflow's backend store is injected from the relational_db `url` coordinate"
     );
-    assert_eq!(
-        got.get("S3_ENDPOINT").map(String::as_str),
-        Some("http://envoy:9100"),
-        "UC's S3 endpoint follows the object store to its dedicated gateway listener"
+    // `S3_ENDPOINT` is no longer injected: UC's only consumer of it now reads
+    // `connections.object_store.0.endpoint` straight from the resolved connection in its
+    // fragment, so the coordinate never round-trips through `.env`.
+    assert!(
+        !got.contains_key("S3_ENDPOINT"),
+        "S3_ENDPOINT should no longer be injected (UC reads the endpoint from the connection)"
     );
     // The S3 credentials still come from the chosen provider's own env contribution (not
     // injected per-consumer), so they remain present with the SeaweedFS values.
@@ -279,6 +302,32 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     assert!(
         !s3.contains("AZURE_STORAGE_CONNECTION_STRING"),
         "no Azure leak: {s3}"
+    );
+    // The fragment is rendered whole from the render context — no compose `${VAR}` left to
+    // resolve at run time (the database URL itself carries `${POSTGRES_*}` defaults, so scope
+    // the check to the lines that used to be `${VAR}` indirections).
+    assert!(
+        s3.contains("image: unitycatalog/unitycatalog:v0.4.1"),
+        "image pinned inline, not via ${{UC_IMAGE}}: {s3}"
+    );
+    assert!(
+        !s3.contains("${UC_IMAGE")
+            && !s3.contains("${S3_ENDPOINT")
+            && !s3.contains("${UC_DATABASE_URL"),
+        "UC no longer round-trips coordinates through compose ${{VAR}} refs: {s3}"
+    );
+    let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
+    let s3_env = &s3_yaml["services"]["unitycatalog"]["environment"];
+    assert_eq!(
+        s3_env["S3_ENDPOINT"].as_str(),
+        Some("http://envoy:9100"),
+        "S3_ENDPOINT comes from the resolved object_store endpoint: {s3}"
+    );
+    assert!(
+        s3_env["DATABASE_URL"]
+            .as_str()
+            .is_some_and(|u| u.contains("@db:5432/unitycatalog")),
+        "DATABASE_URL comes from the resolved relational_db url: {s3}"
     );
 
     // Azurite-preferred → the Azure branch: a connection string, an `azurite-init`
@@ -460,7 +509,14 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
             .contains("az storage container create --name mlflow"),
         "init iterates provisioned container names: {frag}"
     );
-    // No compose substitution remains anywhere in the rendered fragment body.
+    // Durable blob state lives under the stack's data root, baked in at plan time from
+    // `{{ env.DATA_ROOT }}` (default ./.data) — not a hard-coded `./.data/azurite`.
+    assert!(
+        frag.contains("./.data/azurite:/data"),
+        "blob state persisted under the stack data root: {frag}"
+    );
+    // No compose substitution remains anywhere in the rendered fragment body — every value,
+    // including the data root, is resolved from the typed/render context at plan time.
     let body: String = frag
         .lines()
         .filter(|l| !l.trim_start().starts_with('#'))
@@ -576,4 +632,197 @@ fn empty_catalog_renders_a_valid_empty_envoy() {
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
     assert!(routes.is_empty());
     assert!(clusters.is_empty());
+}
+
+#[test]
+fn data_root_is_injected_and_relocatable() {
+    use olai_stack_topology::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, ModuleId};
+
+    let frag = |p: &olai_stack_topology::EnvironmentPlan, id: &str| {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| out.fragment.clone())
+            .unwrap()
+    };
+
+    // The data root is injected into *every* module's render env (not just data-bearing ones),
+    // defaulting to `./.data` — render-only, so it's resolved into the fragment at plan time.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .unwrap();
+    for module in ["postgres", "seaweedfs", "unity-catalog", "mlflow", "envoy"] {
+        assert_eq!(
+            p.injected
+                .get(&ModuleId::from(module))
+                .and_then(|e| e.get(DATA_ROOT_VAR)),
+            Some(DATA_ROOT_DEFAULT),
+            "{module} should see the default DATA_ROOT"
+        );
+    }
+
+    // Persisting fragments mount under it by convention, with the default root baked in: a
+    // Static fragment via `${DATA_ROOT}` substitution, a Template fragment via `{{ env.DATA_ROOT }}`.
+    assert!(frag(&p, "postgres").contains("./.data/postgres:/var/lib/postgresql/data"));
+    assert!(frag(&p, "seaweedfs").contains("./.data/seaweedfs:/data"));
+
+    // Azurite is a Template fragment: it bakes the same default root via `{{ env.DATA_ROOT }}`.
+    // Prefer it as the object_store so a consumer (mlflow) pulls it in and its fragment renders.
+    let p_az = plan(
+        &Selection::modules(["mlflow"]),
+        &baseline_catalog(),
+        &PlanCtx {
+            provider_preference: BTreeMap::from([(
+                "object_store".to_string(),
+                vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+            )]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        frag(&p_az, "azurite").contains("./.data/azurite:/data"),
+        "azurite (Template) bakes the default root: {}",
+        frag(&p_az, "azurite")
+    );
+
+    // A custom root relocates every mount through the single knob — no fragment edits, and the
+    // baked path follows. Render-only, so it does NOT leak into `.env`.
+    let relocated = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            data_root: "/var/lib/mystack".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(frag(&relocated, "postgres").contains("/var/lib/mystack/postgres:"));
+    assert!(frag(&relocated, "seaweedfs").contains("/var/lib/mystack/seaweedfs:"));
+    assert_eq!(
+        relocated.env.get(DATA_ROOT_VAR),
+        None,
+        "DATA_ROOT is render-only (baked at plan time), so it stays out of .env"
+    );
+}
+
+#[test]
+fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
+    use olai_stack_topology::ModuleId;
+
+    // Every fragment is rendered whole from the typed context: concrete ports, concrete
+    // credentials, and zero `${VAR}` compose fallbacks left for runtime resolution. Include
+    // jaeger explicitly (it is not in the default selection) so its fragment is rendered too.
+    let p = plan(
+        &Selection::modules([
+            "envoy",
+            "seaweedfs",
+            "postgres",
+            "unity-catalog",
+            "mlflow",
+            "jaeger",
+        ]),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .unwrap();
+    let frag = |id: &str| {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| out.fragment.clone())
+            .unwrap()
+    };
+
+    // No fragment carries a compose `${VAR}` in its rendered body — all values are wired in at
+    // plan time. (Header comments may *mention* `${VAR}` explanatorily, so check non-comment
+    // lines only.)
+    let body = |f: &str| -> String {
+        f.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect()
+    };
+    for id in ["postgres", "seaweedfs", "jaeger", "unity-catalog", "mlflow"] {
+        let f = frag(id);
+        assert!(
+            !body(&f).contains("${"),
+            "{id} fragment still has a ${{VAR}} in its body: {f}"
+        );
+        // Each is valid YAML.
+        let _: Value = serde_yaml::from_str(&f).expect("fragment must be valid YAML");
+    }
+
+    // Concrete service ports (no `${PORT:-default}` indirection).
+    assert!(frag("postgres").contains("\"5432:5432\""));
+    assert!(frag("postgres").contains("\"8081:8081\""));
+    assert!(frag("seaweedfs").contains("\"9333:9333\""));
+    assert!(frag("seaweedfs").contains("\"9000:8333\""));
+    assert!(frag("jaeger").contains("\"16686:16686\""));
+
+    // Postgres credentials are concrete, in both the container env and the pgweb URL.
+    let pg = frag("postgres");
+    assert!(pg.contains("POSTGRES_USER: postgres"));
+    assert!(pg.contains("postgres://postgres:postgres@db:5432/postgres"));
+
+    // seaweedfs-init reads its S3 credential from the typed connection (the resolved
+    // `seaweedfs`/`us-east-1` values), with no `${AWS_*:-…}` fallback, and iterates the
+    // provisioned buckets directly.
+    let sw = frag("seaweedfs");
+    assert!(sw.contains("AWS_ACCESS_KEY_ID: seaweedfs"));
+    assert!(sw.contains("AWS_DEFAULT_REGION: us-east-1"));
+    assert!(sw.contains("s3 mb s3://unity"));
+    assert!(sw.contains("s3 mb s3://mlflow"));
+
+    // Edge case: seaweedfs selected with no object_store consumer → it provisions no buckets,
+    // so its own connection isn't in the render context. The init service (which reads that
+    // credential) must be skipped rather than failing to render.
+    let p_bare = plan(
+        &Selection::modules(["seaweedfs"]),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .expect("seaweedfs alone should plan");
+    let sw_bare = p_bare
+        .renders
+        .iter()
+        .find(|(m, _)| m == &ModuleId::from("seaweedfs"))
+        .map(|(_, out)| out.fragment.clone())
+        .unwrap();
+    let _: Value =
+        serde_yaml::from_str(&sw_bare).expect("bare seaweedfs fragment must be valid YAML");
+    assert!(
+        !sw_bare.contains("seaweedfs-init"),
+        "no buckets → no init service: {sw_bare}"
+    );
+
+    // Same edge case for azurite (the other object_store provider): preferred but with no
+    // consumer, so it provisions no containers. Its init service reads the credential too, so it
+    // must likewise be skipped rather than failing to render against an absent connection.
+    let p_az_bare = plan(
+        &Selection::modules(["azurite"]),
+        &baseline_catalog(),
+        &PlanCtx {
+            provider_preference: BTreeMap::from([(
+                "object_store".to_string(),
+                vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+            )]),
+            ..Default::default()
+        },
+    )
+    .expect("azurite alone should plan (no init service when it provisions nothing)");
+    let az_bare = p_az_bare
+        .renders
+        .iter()
+        .find(|(m, _)| m == &ModuleId::from("azurite"))
+        .map(|(_, out)| out.fragment.clone())
+        .unwrap();
+    let _: Value =
+        serde_yaml::from_str(&az_bare).expect("bare azurite fragment must be valid YAML");
+    assert!(
+        !az_bare.contains("azurite-init"),
+        "no containers → no init service: {az_bare}"
+    );
 }

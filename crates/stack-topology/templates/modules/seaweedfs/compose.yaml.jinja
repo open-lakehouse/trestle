@@ -1,16 +1,20 @@
 # SeaweedFS + one-shot bucket init — contributed by the `seaweedfs` module.
-# Bucket list is rendered from the aggregated `stack.s3_buckets` list at scaffold time.
+#
+# Rendered whole against the typed `RenderCtx`. As the object_store provider, SeaweedFS reads
+# its own resolved connection (`connections.object_store.0`) for the S3 credential, and iterates
+# the buckets it provisions (`objects`) to build the one-shot init — no compose-var credential
+# fallbacks and no planner-spliced shell placeholder.
 services:
   seaweedfs:
     image: chrislusf/seaweedfs:latest
     restart: unless-stopped
-    profiles: [svc, full]
     command: mini -dir=/data
     ports:
-      - "${SEAWEEDFS_MASTER_PORT:-9333}:9333"
-      - "${SEAWEEDFS_S3_PORT:-9000}:8333"
+      - "9333:9333"
+      - "9000:8333"
     volumes:
-      - ./.data/seaweedfs:/data
+      # Durable object state under the stack's data root (default ./.data).
+      - {{ env.DATA_ROOT }}/seaweedfs:/data
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -19,6 +23,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+{%- if objects %}
+{%- set obj = connections.object_store.0 %}
 
   seaweedfs-init:
     image: amazon/aws-cli:latest
@@ -28,13 +34,17 @@ services:
       seaweedfs:
         condition: service_healthy
     environment:
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
+      AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
+      AWS_DEFAULT_REGION: {{ obj.credential.region }}
     entrypoint:
       - "sh"
       - "-c"
       - |
         echo "Waiting for SeaweedFS S3...";
         until aws --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; do sleep 2; done;
-${S3_BUCKET_MB_LINES}        echo "Buckets ready.";
+{%- for name in objects %}
+        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://{{ name }} 2>&1 || true;
+{%- endfor %}
+        echo "Buckets ready.";
+{%- endif %}
