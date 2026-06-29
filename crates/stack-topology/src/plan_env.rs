@@ -364,7 +364,8 @@ pub fn plan(
         // env, rendered from the provider's coordinate template.
         for demand in &module.needs {
             for injection in &demand.inject {
-                let value = resolve_coordinate(ctx, catalog, demand, &injection.coordinate)?;
+                let value =
+                    resolve_coordinate(ctx, catalog, &module.id, demand, &injection.coordinate)?;
                 module_env.set(&injection.key, value);
             }
         }
@@ -489,7 +490,8 @@ pub fn plan(
         }
         for demand in &module.needs {
             for injection in &demand.inject {
-                let value = resolve_coordinate(ctx, catalog, demand, &injection.coordinate)?;
+                let value =
+                    resolve_coordinate(ctx, catalog, &module.id, demand, &injection.coordinate)?;
                 env.set(&injection.key, value);
             }
         }
@@ -695,10 +697,11 @@ fn augment_requires(
 fn resolve_coordinate(
     ctx: &PlanCtx,
     catalog: &Catalog,
+    consumer: &ModuleId,
     demand: &crate::module::ResourceDemand,
     coordinate: &str,
 ) -> Result<String, PlanError> {
-    let provider_id = choose_provider(ctx, catalog, demand, None)?;
+    let provider_id = choose_provider(ctx, catalog, demand, Some(consumer))?;
     let provider = catalog
         .get(&provider_id)
         .expect("provider id is in catalog");
@@ -708,7 +711,7 @@ fn resolve_coordinate(
         .get(&demand.resource)
         .and_then(|rp| rp.coordinate(coordinate))
         .ok_or_else(|| PlanError::UnknownCoordinate {
-            module: String::new(),
+            module: consumer.0.clone(),
             resource: demand.resource.clone(),
             coordinate: coordinate.to_string(),
         })?;
