@@ -33,7 +33,7 @@ use crate::connection::{ConnectionField, ConnectionTemplate};
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
 use crate::role::ServiceSpec;
 
-/// A module's stable identifier within a catalog (e.g. `"local-stack-mlflow"`).
+/// A module's stable identifier within a catalog (e.g. `"mlflow"`).
 ///
 /// An **open set** — a string newtype, not an enum — exactly like
 /// [`Role`](crate::Role): a new module drops into a catalog as *data*, with no
@@ -313,30 +313,126 @@ impl RenderSpec {
 #[error("rendering module template failed: {0}")]
 pub struct RenderError(pub String);
 
-/// The context a module's render reads: the planner-decided [`InjectedEnv`] plus the typed
-/// [`Connection`](crate::Connection)s resolved for the module's demands, grouped by role.
+/// A compose `depends_on` condition — *what* readiness state of a dependency a service
+/// waits for before it starts.
+///
+/// These are the three Compose-spec long-form conditions. The string each renders to (its
+/// serde value) is exactly the compose token, so a template emits
+/// `condition: {{ dep.condition }}` directly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependsCondition {
+    /// `service_started` — the dependency's container has started (the weakest gate).
+    ServiceStarted,
+    /// `service_healthy` — the dependency reports healthy (its healthcheck passes).
+    ServiceHealthy,
+    /// `service_completed_successfully` — the dependency ran to a successful exit (a
+    /// one-shot init job).
+    ServiceCompletedSuccessfully,
+}
+
+impl DependsCondition {
+    /// The compose token for this condition (e.g. `"service_healthy"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DependsCondition::ServiceStarted => "service_started",
+            DependsCondition::ServiceHealthy => "service_healthy",
+            DependsCondition::ServiceCompletedSuccessfully => "service_completed_successfully",
+        }
+    }
+
+    /// Parse a compose condition token, returning `None` for an unrecognized value.
+    pub fn parse(s: &str) -> Option<DependsCondition> {
+        match s {
+            "service_started" => Some(DependsCondition::ServiceStarted),
+            "service_healthy" => Some(DependsCondition::ServiceHealthy),
+            "service_completed_successfully" => {
+                Some(DependsCondition::ServiceCompletedSuccessfully)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One resolved `depends_on` gate a module's render should emit: a compose service to wait
+/// for and the [`DependsCondition`] to wait for it to reach.
+///
+/// The planner produces these from a consumer's resource demands — for each demand it reads
+/// the *chosen* provider's [`DEP_GATE_EXTRA`](crate::catalog::baseline::DEP_GATE_EXTRA) and
+/// resolves it into a `DepGate` — and hands them to the render via
+/// [`RenderCtx::dependencies`]. A template renders its whole `depends_on` block by iterating
+/// them (`{% for dep in dependencies %}{{ dep.service }}: {condition: {{ dep.condition }}}`),
+/// so it never hard-codes which backend's service it waits on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DepGate {
+    /// The compose service name to depend on (e.g. `"db"`, `"seaweedfs-init"`).
+    pub service: String,
+    /// The condition to wait for.
+    pub condition: DependsCondition,
+}
+
+/// The context a module's render reads: the planner-decided [`InjectedEnv`], the typed
+/// [`Connection`](crate::Connection)s resolved for the module's demands (grouped by role),
+/// and the resolved [`DepGate`]s its `depends_on` block should wait on.
 ///
 /// A [`Static`](RenderSpec::Static) render uses only [`env`](RenderCtx::env). A
 /// [`Template`](RenderSpec::Template) render gets the whole context as MiniJinja globals:
-/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works) and `connections` (a
+/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works), `connections` (a
 /// `{role: [connection, …]}` map a template can branch on — e.g.
-/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`).
+/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`), and
+/// `dependencies` (the `[{service, condition}, …]` list a template iterates to write its
+/// `depends_on` block — see [`DepGate`]); and `objects` (the resource *names* this module's
+/// own role provisions, for a provider's init block to iterate).
 #[derive(Clone, Debug, Serialize)]
 pub struct RenderCtx<'a> {
     /// The planner-decided environment-variable substitutions.
     pub env: &'a InjectedEnv,
     /// The typed connections resolved for the module's demands, keyed by resource role.
     /// More than one connection per role is possible (a module with two same-role demands).
+    /// For a *provider* module, this also carries its own role's connection (resolved for
+    /// each name it provisions) so its fragment can read e.g.
+    /// `connections.object_store.0.credential.connection_string` instead of a `${VAR}`.
     pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
+    /// The resolved `depends_on` gates the module's render should emit, in dependency
+    /// (demand) order. Empty for a module with no demands that gate startup.
+    #[serde(default)]
+    pub dependencies: Vec<DepGate>,
+    /// The resource *names* this module provisions for its own provided role (e.g. the
+    /// buckets/containers an object-store provider must create), deduplicated in dependency
+    /// order. A provider's init block iterates these (`{% for o in objects %}`) instead of
+    /// the planner splicing pre-formatted shell lines through a `${VAR}` placeholder. Empty
+    /// for a non-provider module.
+    #[serde(default)]
+    pub objects: Vec<String>,
+    /// The gateway's `host:container` port mappings to publish, populated only for the
+    /// gateway module: the shared listener plus one entry per dedicated listener the planner
+    /// allocated (e.g. an object store's). The gateway fragment iterates these to render its
+    /// compose `ports:` — so dedicated listeners are reachable from the host without the
+    /// fragment hard-coding a port list. Empty for every non-gateway module.
+    #[serde(default)]
+    pub published_ports: Vec<PortMapping>,
+}
+
+/// A `host:container` port mapping a module publishes (currently only the gateway, for its
+/// listeners). Serialized as `{host, container}` so a template renders `"{{ p.host }}:{{ p.container }}"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortMapping {
+    /// The host-published port (compose `ports:` left side).
+    pub host: u16,
+    /// The in-container port the listener binds (compose `ports:` right side).
+    pub container: u16,
 }
 
 impl<'a> RenderCtx<'a> {
-    /// A context carrying just an [`InjectedEnv`] and no connections — the shape a module
-    /// with no resource demands renders against.
+    /// A context carrying just an [`InjectedEnv`] and no connections, dependencies, or
+    /// objects — the shape a module with no resource demands renders against.
     pub fn from_env(env: &'a InjectedEnv) -> Self {
         RenderCtx {
             env,
             connections: BTreeMap::new(),
+            dependencies: Vec::new(),
+            objects: Vec::new(),
+            published_ports: Vec::new(),
         }
     }
 }
@@ -443,13 +539,15 @@ fn substitute(text: &str, env: &InjectedEnv) -> String {
     let mut i = 0;
     while i < bytes.len() {
         // Look for the start of a `${...}` expression.
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(close) = text[i + 2..].find('}') {
-                let inner = &text[i + 2..i + 2 + close];
-                out.push_str(&expand(inner, env));
-                i = i + 2 + close + 1;
-                continue;
-            }
+        if bytes[i] == b'$'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'{'
+            && let Some(close) = text[i + 2..].find('}')
+        {
+            let inner = &text[i + 2..i + 2 + close];
+            out.push_str(&expand(inner, env));
+            i = i + 2 + close + 1;
+            continue;
         }
         // Not a substitution start — copy this char verbatim. Index by char to stay
         // UTF-8 correct (the `$`/`{`/`}` checks above are all ASCII).
@@ -573,6 +671,9 @@ mod tests {
             .render(&RenderCtx {
                 env: &env,
                 connections,
+                dependencies: Vec::new(),
+                objects: Vec::new(),
+                published_ports: Vec::new(),
             })
             .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
@@ -583,6 +684,44 @@ mod tests {
         assert!(
             !out.fragment.contains("conn:"),
             "Azure branch skipped: {out:?}"
+        );
+    }
+
+    #[test]
+    fn template_iterates_typed_dependencies_into_depends_on() {
+        // A template renders its whole `depends_on` block by iterating the typed
+        // `dependencies` the planner resolved — service + condition, no env-var strings.
+        let spec = RenderSpec::Template {
+            fragment: "depends_on:\n\
+                       {%- for dep in dependencies %}\n\
+                       \x20 {{ dep.service }}:\n\
+                       \x20   condition: {{ dep.condition }}\n\
+                       {%- endfor %}\n"
+                .into(),
+            files: vec![],
+        };
+        let ctx = RenderCtx {
+            env: &InjectedEnv::new(),
+            connections: BTreeMap::new(),
+            dependencies: vec![
+                DepGate {
+                    service: "db".into(),
+                    condition: DependsCondition::ServiceHealthy,
+                },
+                DepGate {
+                    service: "seaweedfs-init".into(),
+                    condition: DependsCondition::ServiceCompletedSuccessfully,
+                },
+            ],
+            objects: Vec::new(),
+            published_ports: Vec::new(),
+        };
+        let out = spec.render(&ctx).expect("template renders");
+        // The serde value of each condition is the exact compose token.
+        assert!(out.fragment.contains("db:\n    condition: service_healthy"));
+        assert!(
+            out.fragment
+                .contains("seaweedfs-init:\n    condition: service_completed_successfully")
         );
     }
 

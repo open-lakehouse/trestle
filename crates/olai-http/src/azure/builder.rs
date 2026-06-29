@@ -321,12 +321,11 @@ impl AzureBuilder {
     pub fn from_env() -> Self {
         let mut builder = Self::default();
         for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("AZURE_") {
-                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-                        builder = builder.with_config(config_key, value);
-                    }
-                }
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str())
+                && key.starts_with("AZURE_")
+                && let Ok(config_key) = key.to_ascii_lowercase().parse()
+            {
+                builder = builder.with_config(config_key, value);
             }
         }
 

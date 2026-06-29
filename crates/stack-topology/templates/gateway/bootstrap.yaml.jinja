@@ -4,9 +4,10 @@
 
 static_resources:
   listeners:
-    - name: gateway
+{%- for l in listeners %}
+    - name: {{ l.name }}
       address:
-        socket_address: { address: 0.0.0.0, port_value: {{ internal_port }} }
+        socket_address: { address: 0.0.0.0, port_value: {{ l.internal_port }} }
       filter_chains:
         - filters:
             - name: envoy.filters.network.http_connection_manager
@@ -18,12 +19,12 @@ static_resources:
                 upgrade_configs:
                   - upgrade_type: websocket
                 route_config:
-                  name: local_route
+                  name: {{ l.name }}_route
                   virtual_hosts:
                     - name: all
                       domains: ["*"]
                       routes:
-{%- for r in routes %}
+{%- for r in l.routes %}
                         - match: { prefix: "{{ r.prefix }}" }
                           route:
                             cluster: {{ r.cluster }}
@@ -35,7 +36,7 @@ static_resources:
                               substitution: "{{ r.rewrite }}\\1"
 {%- endif %}
 {%- endfor %}
-{%- if app %}
+{%- if l.app %}
                         # Default route → the user's app (catch-all, must be last).
                         - match: { prefix: "/" }
                           route:
@@ -45,6 +46,7 @@ static_resources:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+{%- endfor %}
   clusters:
 {%- for c in clusters %}
     - name: {{ c.name }}

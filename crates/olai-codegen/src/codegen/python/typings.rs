@@ -185,7 +185,7 @@ fn generate_method_parameters_for_typings_inner(
             let param_type = if param_type.starts_with("Optional[") {
                 param_type
             } else {
-                format!("Optional[{}]", param_type)
+                format!("Optional[{param_type}]")
             };
             parameters.push(format!("{}: {} = None", param.name(), param_type));
         }
@@ -248,7 +248,7 @@ fn format_method_docstring_with_params(method: &MethodHandler<'_>) -> String {
 }
 
 fn format_parameter_description(param_name: &str, description: &str) -> String {
-    let first_line_prefix = format!("    {}: ", param_name);
+    let first_line_prefix = format!("    {param_name}: ");
     let continuation_prefix = " ".repeat(first_line_prefix.len());
 
     let first_line_width = DOCS_TARGET_WIDTH - first_line_prefix.len();
@@ -282,11 +282,11 @@ fn format_parameter_description(param_name: &str, description: &str) -> String {
 
         let mut result = format!("{}{}", first_line_prefix, lines[0]);
         for line in &lines[1..] {
-            result.push_str(&format!("\n{}{}", continuation_prefix, line));
+            result.push_str(&format!("\n{continuation_prefix}{line}"));
         }
         result
     } else {
-        format!("{}{}", first_line_prefix, initial_wrapped)
+        format!("{first_line_prefix}{initial_wrapped}")
     }
 }
 
@@ -307,23 +307,23 @@ fn collect_parameter_documentation(method: &MethodHandler<'_>) -> Vec<(String, S
     let mut param_docs = Vec::new();
 
     for param in method.required_parameters() {
-        if !param.is_path_param() {
-            if let Some(doc) = param.documentation() {
-                let cleaned_doc = clean_and_format_description(doc);
-                if !cleaned_doc.is_empty() {
-                    param_docs.push((param.name().to_string(), cleaned_doc));
-                }
+        if !param.is_path_param()
+            && let Some(doc) = param.documentation()
+        {
+            let cleaned_doc = clean_and_format_description(doc);
+            if !cleaned_doc.is_empty() {
+                param_docs.push((param.name().to_string(), cleaned_doc));
             }
         }
     }
 
     for param in method.optional_parameters() {
-        if !(is_list_method(method) && param.name() == "page_token") {
-            if let Some(doc) = param.documentation() {
-                let cleaned_doc = clean_and_format_description(doc);
-                if !cleaned_doc.is_empty() {
-                    param_docs.push((param.name().to_string(), cleaned_doc));
-                }
+        if !(is_list_method(method) && param.name() == "page_token")
+            && let Some(doc) = param.documentation()
+        {
+            let cleaned_doc = clean_and_format_description(doc);
+            if !cleaned_doc.is_empty() {
+                param_docs.push((param.name().to_string(), cleaned_doc));
             }
         }
     }
@@ -341,7 +341,7 @@ fn get_return_type_documentation(method: &MethodHandler<'_>) -> String {
                     if cleaned_doc.is_empty() {
                         "List of items".to_string()
                     } else {
-                        format!("List of {}", cleaned_doc)
+                        format!("List of {cleaned_doc}")
                     }
                 } else {
                     "List of items".to_string()
@@ -406,7 +406,7 @@ fn generate_resource_accessor_methods_for_typings(
                 .clone()
                 .unwrap_or_default();
             let mut params = vec!["self".to_string()];
-            params.extend(accessor_params.iter().map(|p| format!("{}: str", p)));
+            params.extend(accessor_params.iter().map(|p| format!("{p}: str")));
             let return_type = format!("{}", other.client_type());
 
             methods.push(generate_method_template(
@@ -437,7 +437,7 @@ fn generate_resource_accessor_methods_for_typings(
             let method_name = &child_resource.descriptor.singular;
             let child_params = resource_pattern_params(child_pattern);
             let mut params = vec!["self".to_string()];
-            params.extend(child_params.iter().map(|p| format!("{}: str", p)));
+            params.extend(child_params.iter().map(|p| format!("{p}: str")));
             let return_type = format!("{}", other.client_type());
 
             methods.push(generate_method_template(
@@ -458,7 +458,7 @@ fn generate_service_class_typings(
     all_services: &[ServiceHandler<'_>],
 ) -> String {
     let rust_client_ident = service.client_type();
-    let client_ident = format!("{}", rust_client_ident);
+    let client_ident = format!("{rust_client_ident}");
 
     let mut method_signatures: Vec<_> = service
         .methods()
@@ -596,7 +596,7 @@ fn generate_main_client_class_typings(
                 .clone()
                 .unwrap_or_default();
             let mut params = vec!["self".to_string()];
-            params.extend(pattern_params.iter().map(|p| format!("{}: str", p)));
+            params.extend(pattern_params.iter().map(|p| format!("{p}: str")));
 
             Some((
                 method_name.clone(),
@@ -626,7 +626,7 @@ fn generate_main_client_class_typings(
 
     let main_client_all_methods =
         if main_client_methods.is_empty() && main_collection_methods.is_empty() {
-            format!("{}\n    ...", init_method)
+            format!("{init_method}\n    ...")
         } else {
             [init_method, main_collection_methods, main_client_methods]
                 .into_iter()
@@ -706,7 +706,7 @@ fn collect_field_types(ut: &UnifiedType, queue: &mut std::collections::VecDeque<
             let key = if n.starts_with('.') {
                 n.clone()
             } else {
-                format!(".{}", n)
+                format!(".{n}")
             };
             queue.push_back(key);
         }
@@ -835,11 +835,11 @@ fn generate_model_class_definition(message: &MessageInfo) -> String {
                 let safe_field_name = sanitize_python_field_name(&variant.field_name);
                 let python_type = unified_to_python_type(&variant.field_type);
 
-                let mut field_def = format!("    {}: Optional[{}]", safe_field_name, python_type);
+                let mut field_def = format!("    {safe_field_name}: Optional[{python_type}]");
                 if let Some(doc) = &variant.documentation {
                     let cleaned_doc = clean_and_format_description(doc);
                     if !cleaned_doc.is_empty() {
-                        field_def.push_str(&format!("\n    \"\"\"{}\"\"\"", cleaned_doc));
+                        field_def.push_str(&format!("\n    \"\"\"{cleaned_doc}\"\"\""));
                     }
                 }
                 oneof_field_definitions.push(field_def);
@@ -885,7 +885,7 @@ fn generate_enum_class_definition(fq_name: &str, enum_info: &EnumInfo) -> String
             if let Some(doc) = &value.documentation {
                 let cleaned_doc = clean_and_format_description(doc);
                 if !cleaned_doc.is_empty() {
-                    enum_values.push(format!("\"\"\"{}\"\"\"", cleaned_doc));
+                    enum_values.push(format!("\"\"\"{cleaned_doc}\"\"\""));
                 }
             }
         }
@@ -907,7 +907,7 @@ fn generate_field_definition(field: &MessageField) -> String {
         if type_annotation.starts_with("List[") && type_annotation.ends_with("]") {
             type_annotation = type_annotation[5..type_annotation.len() - 1].to_string();
         }
-        type_annotation = format!("List[{}]", type_annotation);
+        type_annotation = format!("List[{type_annotation}]");
     }
 
     // Singular (non-repeated) message fields carry proto presence semantics; the
@@ -920,11 +920,11 @@ fn generate_field_definition(field: &MessageField) -> String {
     if (field.unified_type.is_optional || singular_message)
         && !type_annotation.starts_with("Optional[")
     {
-        type_annotation = format!("Optional[{}]", type_annotation);
+        type_annotation = format!("Optional[{type_annotation}]");
     }
 
     let mut lines = Vec::new();
-    lines.push(format!("    {}: {}", safe_field_name, type_annotation));
+    lines.push(format!("    {safe_field_name}: {type_annotation}"));
 
     if let Some(doc) = &field.documentation {
         let cleaned_doc = clean_and_format_description(doc);
@@ -945,7 +945,7 @@ fn constructor_param_type(ty: &UnifiedType) -> String {
     if base.starts_with("Optional[") {
         base
     } else {
-        format!("Optional[{}]", base)
+        format!("Optional[{base}]")
     }
 }
 
@@ -967,7 +967,7 @@ fn generate_constructor_definition(message: &MessageInfo) -> String {
 
         let safe_field_name = sanitize_python_field_name(&field.name);
         let type_annotation = constructor_param_type(&field.unified_type);
-        params.push(format!("{}: {} = None", safe_field_name, type_annotation));
+        params.push(format!("{safe_field_name}: {type_annotation} = None"));
     }
 
     for &i in &field_indices {
@@ -979,10 +979,7 @@ fn generate_constructor_definition(message: &MessageInfo) -> String {
                 let variant = &variants[j];
                 let safe_field_name = sanitize_python_field_name(&variant.field_name);
                 let python_type = unified_to_python_type(&variant.field_type);
-                params.push(format!(
-                    "{}: Optional[{}] = None",
-                    safe_field_name, python_type
-                ));
+                params.push(format!("{safe_field_name}: Optional[{python_type}] = None"));
             }
         }
     }
@@ -1011,7 +1008,7 @@ fn generate_class_from_template(
             body_content
         )
     } else {
-        format!("class {}({}):\n{}", class_name, class_type, body_content)
+        format!("class {class_name}({class_type}):\n{body_content}")
     };
 
     clean_text(&template)
@@ -1029,21 +1026,18 @@ fn generate_method_template(
     let params_str = if params.len() <= 3 {
         params.join(", ")
     } else {
-        let param_indent = format!("{}    ", indent_str);
+        let param_indent = format!("{indent_str}    ");
         let formatted_params: Vec<String> = params
             .iter()
-            .map(|p| format!("{}{},", param_indent, p))
+            .map(|p| format!("{param_indent}{p},"))
             .collect();
         format!("\n{}", formatted_params.join("\n").trim_end_matches(','))
     };
 
     let signature = if params.len() <= 3 {
-        format!("def {}({}) -> {}:", method_name, params_str, return_type)
+        format!("def {method_name}({params_str}) -> {return_type}:")
     } else {
-        format!(
-            "def {}(\n{}\n{}) -> {}:",
-            method_name, params_str, indent_str, return_type
-        )
+        format!("def {method_name}(\n{params_str}\n{indent_str}) -> {return_type}:")
     };
 
     let mut result = indent(&signature, &indent_str);
@@ -1054,7 +1048,7 @@ fn generate_method_template(
         result.push_str(&formatted_doc);
     }
 
-    result.push_str(&format!("\n{}    ...", indent_str));
+    result.push_str(&format!("\n{indent_str}    ..."));
     result
 }
 
@@ -1091,7 +1085,7 @@ fn format_method_docstring_for_template(docstring: &str, indent_level: usize) ->
     let full_content = processed_sections.join("\n\n");
 
     let formatted_doc = if full_content.lines().count() == 1 {
-        format!("\"\"\"{}\"\"\"", full_content)
+        format!("\"\"\"{full_content}\"\"\"")
     } else {
         let mut lines = vec!["\"\"\"".to_string()];
         for line in full_content.lines() {
@@ -1119,14 +1113,14 @@ fn format_field_docstring(description: &str) -> String {
         return single_line_test;
     }
 
-    let mut result = format!("{}\"\"\"", base_indent);
+    let mut result = format!("{base_indent}\"\"\"");
     for line in optimally_filled.lines() {
         if line.trim().is_empty() {
             result.push('\n');
         } else {
-            result.push_str(&format!("\n{}{}", base_indent, line));
+            result.push_str(&format!("\n{base_indent}{line}"));
         }
     }
-    result.push_str(&format!("\n{}\"\"\"", base_indent));
+    result.push_str(&format!("\n{base_indent}\"\"\""));
     result
 }

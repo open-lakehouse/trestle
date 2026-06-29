@@ -30,11 +30,11 @@ impl GenerateConfig {
             .get_or_insert_with(|| format!("{snake}_common"));
 
         // path_template depends on the (now-derived) crate name.
-        if self.models.path_template.is_none() {
-            if let Some(crate_name) = &self.models.crate_name {
-                self.models.path_template =
-                    Some(format!("{crate_name}::models::{{service}}::{{version}}"));
-            }
+        if self.models.path_template.is_none()
+            && let Some(crate_name) = &self.models.crate_name
+        {
+            self.models.path_template =
+                Some(format!("{crate_name}::models::{{service}}::{{version}}"));
         }
         self.models
             .path_crate_template

@@ -428,10 +428,10 @@ fn merge_structured_values(
         map.get(serde_yaml::Value::String("apps".into()))
     {
         for v in seq {
-            if let Some(s) = v.as_str() {
-                if !apps.iter().any(|a| a == s) {
-                    apps.push(s.to_string());
-                }
+            if let Some(s) = v.as_str()
+                && !apps.iter().any(|a| a == s)
+            {
+                apps.push(s.to_string());
             }
         }
     }

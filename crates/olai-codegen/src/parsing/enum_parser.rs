@@ -13,9 +13,9 @@ pub(super) fn process_enum(
 ) -> Result<()> {
     let enum_name = enum_desc.name();
     let full_type_name = if type_prefix.is_empty() {
-        format!(".{}", enum_name)
+        format!(".{enum_name}")
     } else {
-        format!("{}.{}", type_prefix, enum_name)
+        format!("{type_prefix}.{enum_name}")
     };
 
     // Extract enum-level documentation

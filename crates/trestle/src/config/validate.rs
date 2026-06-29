@@ -24,10 +24,10 @@ impl TrestleConfig {
     /// is a hard error.
     pub fn validate(&mut self, interactive: bool) -> Result<()> {
         let needs_buffa = self.buffa_requirement();
-        if let Some(reason) = needs_buffa {
-            if self.generate.proto_lib != ProtoLib::Buffa {
-                self.resolve_buffa_requirement(reason, interactive)?;
-            }
+        if let Some(reason) = needs_buffa
+            && self.generate.proto_lib != ProtoLib::Buffa
+        {
+            self.resolve_buffa_requirement(reason, interactive)?;
         }
 
         // Identity / per-client required fields. The schema already makes these
@@ -35,21 +35,21 @@ impl TrestleConfig {
         // transport + node.ts/wasm share the `bindings` block, which is optional
         // at the type level — check it here.
         let g = &self.generate;
-        if let Some(node) = &g.clients.node {
-            if node.ts.is_some() || node.wasm.is_some() {
-                let b = g.bindings.as_ref();
-                let missing = b.is_none_or(|b| {
-                    b.aggregate_client_name.is_none()
-                        || b.client_crate_name.is_none()
-                        || b.error_base_class.is_none()
-                });
-                if missing {
-                    return Err(Error::other(
-                        "a JS/TS client (node.ts / node.wasm) requires `bindings` with \
+        if let Some(node) = &g.clients.node
+            && (node.ts.is_some() || node.wasm.is_some())
+        {
+            let b = g.bindings.as_ref();
+            let missing = b.is_none_or(|b| {
+                b.aggregate_client_name.is_none()
+                    || b.client_crate_name.is_none()
+                    || b.error_base_class.is_none()
+            });
+            if missing {
+                return Err(Error::other(
+                    "a JS/TS client (node.ts / node.wasm) requires `bindings` with \
                          aggregate_client_name, client_crate_name and error_base_class \
                          (these derive from project.name — call derive_defaults first)",
-                    ));
-                }
+                ));
             }
         }
         Ok(())
@@ -61,15 +61,15 @@ impl TrestleConfig {
         if g.servers.connect {
             return Some("Connect RPC");
         }
-        if let Some(rust) = &g.clients.rust {
-            if rust.transport == Transport::Wasm {
-                return Some("the WASM Rust client transport");
-            }
+        if let Some(rust) = &g.clients.rust
+            && rust.transport == Transport::Wasm
+        {
+            return Some("the WASM Rust client transport");
         }
-        if let Some(node) = &g.clients.node {
-            if node.wasm.is_some() {
-                return Some("the WASM browser client");
-            }
+        if let Some(node) = &g.clients.node
+            && node.wasm.is_some()
+        {
+            return Some("the WASM browser client");
         }
         None
     }

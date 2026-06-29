@@ -182,13 +182,7 @@ mod tests {
     #[test]
     fn baseline_has_the_default_lakehouse_modules() {
         let cat = baseline_catalog();
-        for id in [
-            "local-stack-envoy",
-            "local-stack-postgres",
-            "local-stack-seaweedfs",
-            "local-stack-mlflow",
-            "local-stack-unity-catalog",
-        ] {
+        for id in ["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"] {
             assert!(cat.get(&id.into()).is_some(), "baseline missing {id}");
         }
     }
@@ -198,33 +192,27 @@ mod tests {
         let cat = baseline_catalog();
         assert_eq!(
             cat.providers_of("experiment_tracking"),
-            vec![&ModuleId::from("local-stack-mlflow")]
+            vec![&ModuleId::from("mlflow")]
         );
         assert_eq!(
             cat.providers_of("data_catalog"),
-            vec![&ModuleId::from("local-stack-unity-catalog")]
+            vec![&ModuleId::from("unity-catalog")]
         );
     }
 
     #[test]
     fn merge_overlays_by_id_without_duplicating() {
-        let mut overlay = baseline_catalog()
-            .get(&"local-stack-envoy".into())
-            .cloned()
-            .unwrap();
+        let mut overlay = baseline_catalog().get(&"envoy".into()).cloned().unwrap();
         overlay.summary = Some("overridden".into());
         let cat = baseline_catalog().merge(Catalog::from_modules([overlay]));
         assert_eq!(
-            cat.get(&"local-stack-envoy".into())
-                .unwrap()
-                .summary
-                .as_deref(),
+            cat.get(&"envoy".into()).unwrap().summary.as_deref(),
             Some("overridden")
         );
         assert_eq!(
             cat.modules()
                 .iter()
-                .filter(|m| m.id.as_str() == "local-stack-envoy")
+                .filter(|m| m.id.as_str() == "envoy")
                 .count(),
             1
         );

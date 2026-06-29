@@ -26,10 +26,10 @@ pub fn run_post_init(
     non_interactive: bool,
 ) -> Result<()> {
     for hook in hooks {
-        if let Some(expr) = &hook.when {
-            if !renderer.eval_when(expr, ctx)? {
-                continue;
-            }
+        if let Some(expr) = &hook.when
+            && !renderer.eval_when(expr, ctx)?
+        {
+            continue;
         }
 
         let description = hook.description.clone().unwrap_or_else(|| hook.run.clone());

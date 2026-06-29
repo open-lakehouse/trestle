@@ -27,13 +27,7 @@ const COMPOSE_FIXTURE: &str = include_str!("fixtures/default/compose.yaml");
 
 /// The default lakehouse selection used to capture the fixtures.
 fn default_selection() -> Selection {
-    Selection::modules([
-        "local-stack-envoy",
-        "local-stack-seaweedfs",
-        "local-stack-postgres",
-        "local-stack-unity-catalog",
-        "local-stack-mlflow",
-    ])
+    Selection::modules(["envoy", "seaweedfs", "postgres", "unity-catalog", "mlflow"])
 }
 
 fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
@@ -178,9 +172,9 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
 
     // Every var trestle shipped is still present and unchanged, with one deliberate
     // exception: `MLFLOW_S3_ENDPOINT_URL`. Trestle pointed it at the host
-    // (`http://localhost:${SEAWEEDFS_S3_PORT}`), which is wrong from inside the compose
-    // network; the planner now injects the object_store provider's in-network `endpoint`
-    // coordinate (`http://seaweedfs:8333`) instead — a behavioral fix, not a regression.
+    // (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
+    // gateway on its own dedicated listener, so the planner injects the gateway origin
+    // (`http://envoy:9100`) instead — consumers reach the store through Envoy, not directly.
     for (k, v) in &want {
         if k == "MLFLOW_S3_ENDPOINT_URL" {
             continue;
@@ -193,8 +187,8 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     }
     assert_eq!(
         got.get("MLFLOW_S3_ENDPOINT_URL").map(String::as_str),
-        Some("http://seaweedfs:8333"),
-        "MLFLOW_S3_ENDPOINT_URL should be the in-network object_store endpoint"
+        Some("http://envoy:9100"),
+        "MLFLOW_S3_ENDPOINT_URL should be the object store's dedicated gateway listener"
     );
 
     // The coordinate-injection rework adds these role-generic coordinates, sourced from the
@@ -214,8 +208,8 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     );
     assert_eq!(
         got.get("S3_ENDPOINT").map(String::as_str),
-        Some("http://seaweedfs:8333"),
-        "UC's S3 endpoint is injected from the object_store `endpoint` coordinate"
+        Some("http://envoy:9100"),
+        "UC's S3 endpoint follows the object store to its dedicated gateway listener"
     );
     // The S3 credentials still come from the chosen provider's own env contribution (not
     // injected per-consumer), so they remain present with the SeaweedFS values.
@@ -260,12 +254,12 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // Select UC + its hard `requires` only, letting the object_store demand resolve via the
     // catalog default / `ctx` preference (so the chosen provider is unambiguous).
     let uc_fragment = |ctx: PlanCtx| -> String {
-        let sel = Selection::modules(["local-stack-unity-catalog"]);
+        let sel = Selection::modules(["unity-catalog"]);
         let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
         let (_, out) = p
             .renders
             .iter()
-            .find(|(id, _)| id == &ModuleId::from("local-stack-unity-catalog"))
+            .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
             .expect("UC is in the render set");
         // Valid YAML in either branch.
         let _: Value =
@@ -292,10 +286,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![
-            ModuleId::from("local-stack-azurite"),
-            ModuleId::from("local-stack-seaweedfs"),
-        ],
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
     let azure = uc_fragment(PlanCtx {
         provider_preference: preference,
@@ -327,26 +318,244 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
 }
 
 #[test]
-fn adding_trino_and_jaeger_aggregates_their_routes() {
+fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
+    use olai_stack_topology::ModuleId;
+
+    // MLflow's fragment is a `RenderSpec::Template`: `--static-prefix` and the healthcheck
+    // path come from the planner's chosen `BASE_PATH`, the artifact-store env branches on the
+    // object-store credential flavour, and `depends_on` is driven by the chosen providers'
+    // gates (db healthy + the object-store init completed) rather than hard-coded.
+    let mlflow_fragment = |ctx: PlanCtx| -> String {
+        let sel = Selection::modules(["mlflow"]);
+        let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
+        let (_, out) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
+            .expect("MLflow is in the render set");
+        let _: Value = serde_yaml::from_str(&out.fragment)
+            .expect("rendered MLflow fragment must be valid YAML");
+        out.fragment.clone()
+    };
+
+    // Default → SeaweedFS (S3).
+    let s3 = mlflow_fragment(PlanCtx::default());
+    let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
+    let svc = &s3_yaml["services"]["mlflow"];
+
+    // The base path drives both `--static-prefix` and the healthcheck URL — not a literal.
+    let command: Vec<String> = svc["command"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let prefix_idx = command.iter().position(|a| a == "--static-prefix").unwrap();
+    assert_eq!(
+        command[prefix_idx + 1],
+        "/mlflow",
+        "static-prefix is BASE_PATH"
+    );
+    let health = svc["healthcheck"]["test"][1].as_str().unwrap();
+    assert!(
+        health.contains("/mlflow/health"),
+        "healthcheck path: {health}"
+    );
+
+    // S3 branch: static AWS keys from the typed credential (no `:-` fallback), no Azure leak.
+    let env = &svc["environment"];
+    assert_eq!(env["AWS_ACCESS_KEY_ID"].as_str(), Some("seaweedfs"));
+    assert!(
+        !s3.contains("${AWS_ACCESS_KEY_ID:-"),
+        "no fallback hack: {s3}"
+    );
+    assert!(env["AZURE_STORAGE_CONNECTION_STRING"].is_null());
+
+    // depends_on follows the chosen providers: db healthy + seaweedfs-init completed.
+    let dep = &svc["depends_on"];
+    assert_eq!(dep["db"]["condition"].as_str(), Some("service_healthy"));
+    assert_eq!(
+        dep["seaweedfs-init"]["condition"].as_str(),
+        Some("service_completed_successfully")
+    );
+    assert!(dep["azurite-init"].is_null(), "no Azure init under S3");
+
+    // Azurite-preferred → the object-store gate and env switch to the Azure backend.
+    let mut preference = BTreeMap::new();
+    preference.insert(
+        "object_store".to_string(),
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+    );
+    let azure = mlflow_fragment(PlanCtx {
+        provider_preference: preference,
+        ..Default::default()
+    });
+    let azure_yaml: Value = serde_yaml::from_str(&azure).unwrap();
+    let svc = &azure_yaml["services"]["mlflow"];
+    assert!(
+        !svc["environment"]["AZURE_STORAGE_CONNECTION_STRING"].is_null(),
+        "Azure connection string present: {azure}"
+    );
+    assert!(
+        svc["environment"]["AWS_ACCESS_KEY_ID"].is_null(),
+        "no AWS keys under Azure"
+    );
+    assert!(
+        !svc["depends_on"]["azurite-init"].is_null(),
+        "Azure init dependency: {azure}"
+    );
+    assert!(
+        svc["depends_on"]["seaweedfs-init"].is_null(),
+        "no S3 init under Azure"
+    );
+}
+
+#[test]
+fn azurite_fragment_is_rendered_whole_from_typed_context() {
+    use olai_stack_topology::ModuleId;
+
+    // Azurite is a `RenderSpec::Template` rendered entirely from the typed `RenderCtx` — its
+    // own connection (the connection string) and the provisioned container names (`objects`)
+    // — with no compose `${VAR}` substitution. Prefer Azurite so it is the chosen object_store
+    // and its init provisions the demanded containers.
+    let mut preference = BTreeMap::new();
+    preference.insert(
+        "object_store".to_string(),
+        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+    );
+    let sel = Selection::modules(["mlflow"]);
+    let p = plan(
+        &sel,
+        &baseline_catalog(),
+        &PlanCtx {
+            provider_preference: preference,
+            ..Default::default()
+        },
+    )
+    .expect("plan succeeds");
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("azurite"))
+        .expect("azurite is the chosen object_store provider");
+    let frag = &out.fragment;
+
+    // Valid YAML, and the init service exists.
+    let doc: Value = serde_yaml::from_str(frag).expect("azurite fragment must be valid YAML");
+    let init = &doc["services"]["azurite-init"];
+
+    // The connection string came from the typed credential, not a `${VAR}` placeholder.
+    assert_eq!(
+        init["environment"]["AZURE_STORAGE_CONNECTION_STRING"]
+            .as_str()
+            .map(|s| s.starts_with("DefaultEndpointsProtocol=")),
+        Some(true),
+        "connection string rendered from typed credential: {frag}"
+    );
+    // The container-init iterates the provisioned `objects` (MLflow demands one).
+    assert!(
+        init["entrypoint"][2]
+            .as_str()
+            .unwrap()
+            .contains("az storage container create --name mlflow"),
+        "init iterates provisioned container names: {frag}"
+    );
+    // No compose substitution remains anywhere in the rendered fragment body.
+    let body: String = frag
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    assert!(
+        !body.contains("${"),
+        "no leftover ${{VAR}} substitution: {frag}"
+    );
+}
+
+#[test]
+fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
+    // An object store is `Gatewayed`: the planner gives it its own Envoy listener serving `/`
+    // (not a shared-listener path prefix, which would break S3/Blob URL construction), the
+    // gateway publishes that port, and the consumer endpoint points through it.
+    let arts = render(&default_selection());
+    let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
+    let listeners = doc["static_resources"]["listeners"].as_sequence().unwrap();
+
+    // Two listeners: the shared gateway (port 10000) and the object store's dedicated one.
+    let ports: BTreeSet<u64> = listeners
+        .iter()
+        .map(|l| {
+            l["address"]["socket_address"]["port_value"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    assert!(ports.contains(&10000), "shared listener present: {ports:?}");
+    assert!(
+        ports.contains(&9100),
+        "dedicated object-store listener present: {ports:?}"
+    );
+
+    // The dedicated listener fronts the seaweedfs cluster at `/` (origin, no prefix/rewrite).
+    let dedicated = listeners
+        .iter()
+        .find(|l| l["address"]["socket_address"]["port_value"].as_u64() == Some(9100))
+        .unwrap();
+    let route = &dedicated["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
+        [0]["routes"][0];
+    assert_eq!(route["match"]["prefix"].as_str(), Some("/"));
+    assert_eq!(route["route"]["cluster"].as_str(), Some("seaweedfs"));
+    assert!(
+        route["route"]["regex_rewrite"].is_null(),
+        "no rewrite — the store is served at its origin"
+    );
+
+    // The seaweedfs cluster still targets the upstream's real port (8333), not the listener.
+    let clusters = doc["static_resources"]["clusters"].as_sequence().unwrap();
+    let sw = clusters
+        .iter()
+        .find(|c| c["name"].as_str() == Some("seaweedfs"))
+        .unwrap();
+    let sock = &sw["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"];
+    assert_eq!(sock["address"].as_str(), Some("seaweedfs"));
+    assert_eq!(sock["port_value"].as_u64(), Some(8333));
+
+    // The gateway compose fragment publishes the dedicated port on the host.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            env_name: "lh-ref".into(),
+            ..Default::default()
+        },
+    )
+    .expect("plan succeeds");
+    let (_, envoy_frag) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &olai_stack_topology::ModuleId::from("envoy"))
+        .unwrap();
+    let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
+    let published: BTreeSet<String> = envoy_doc["services"]["envoy"]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        published.contains("9100:9100"),
+        "envoy publishes the dedicated port: {published:?}"
+    );
+}
+
+#[test]
+fn adding_jaeger_aggregates_its_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
-    let sel = Selection::modules([
-        "local-stack-envoy",
-        "local-stack-seaweedfs",
-        "local-stack-postgres",
-        "local-stack-mlflow",
-        "local-stack-trino",
-        "local-stack-jaeger",
-    ]);
+    let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "jaeger"]);
     let arts = render(&sel);
     let (routes, order, clusters) = parse_envoy(&arts.envoy);
 
-    // Trino and Jaeger UIs are fronted at their base paths.
-    assert!(routes.contains_key("/trino"), "missing /trino route");
+    // The Jaeger UI is fronted at its base path, with a derived cluster.
     assert!(routes.contains_key("/jaeger"), "missing /jaeger route");
-    assert_eq!(
-        clusters.get("trino").map(String::as_str),
-        Some("trino:8080")
-    );
     assert_eq!(
         clusters.get("jaeger").map(String::as_str),
         Some("jaeger:16686")

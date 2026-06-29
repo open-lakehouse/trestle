@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
-    API_PREFIX_EXTRA, AZURE_CONTAINER_CREATE_LINES_VAR, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX,
+    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DEP_GATE_EXTRA, REWRITE_OVERRIDE_PREFIX,
     S3_BUCKET_MB_LINES_VAR,
 };
 use crate::connection::Connection;
@@ -50,7 +50,7 @@ use crate::placement::Placement;
 use crate::plan::{AssignedRoute, Listener, RoutePlan};
 use crate::render::{InjectedEnv, RenderOutput};
 use crate::resolve_graph::{ResolveError, ResolvedGraph, resolve};
-use crate::role::ServiceSpec;
+use crate::role::{Role, ServiceSpec};
 
 /// What modules an environment should contain.
 ///
@@ -92,14 +92,22 @@ pub struct PlanCtx {
     pub gateway_internal_port: u16,
     /// The gateway's host-published port (e.g. `9080`).
     pub gateway_host_port: u16,
-    /// Host ports to hand out, in order, to each [`UiFixed`](RouteIntent::UiFixed)
-    /// endpoint that needs its own dedicated listener. The planner never allocates
-    /// ports itself.
+    /// Explicit host ports to hand out, in order, to endpoints that need their own
+    /// dedicated listener ([`UiFixed`](RouteIntent::UiFixed) /
+    /// [`Gatewayed`](RouteIntent::Gatewayed)). Consumed first; once exhausted the planner
+    /// auto-allocates from [`dedicated_listener_port_base`](Self::dedicated_listener_port_base),
+    /// so "every object store is exposed" works with no explicit list.
     #[allow(clippy::struct_field_names)]
     pub dedicated_listener_ports: Vec<u16>,
+    /// The base host port the planner auto-allocates dedicated listeners from when
+    /// [`dedicated_listener_ports`](Self::dedicated_listener_ports) is exhausted: the first
+    /// auto listener binds this port, the next `+1`, and so on. Defaults to `9100` (clear of
+    /// the gateway's `9080`).
+    #[allow(clippy::struct_field_names)]
+    pub dedicated_listener_port_base: u16,
     /// Ordered provider preference per resource role — the environment's say in which
     /// implementation satisfies an abstract demand (e.g. `object_store` →
-    /// `["local-stack-azurite", "local-stack-seaweedfs"]` for a hydrofoil-style env
+    /// `["azurite", "seaweedfs"]` for a hydrofoil-style env
     /// that prefers Azurite). The planner picks the first preferred provider present in
     /// the catalog; an empty/absent entry falls back to uniqueness then the catalog
     /// default. A demand's own `provider` pin still wins over this.
@@ -114,6 +122,7 @@ impl Default for PlanCtx {
             gateway_internal_port: 10000,
             gateway_host_port: 9080,
             dedicated_listener_ports: Vec::new(),
+            dedicated_listener_port_base: 9100,
             provider_preference: BTreeMap::new(),
         }
     }
@@ -142,10 +151,6 @@ pub enum PlanError {
         /// `service.endpoint` that collided with it.
         second: String,
     },
-    /// A [`UiFixed`](RouteIntent::UiFixed) endpoint needs a dedicated listener port,
-    /// but [`PlanCtx::dedicated_listener_ports`] ran out.
-    #[error("ran out of dedicated listener ports for fixed-path UI `{0}`")]
-    NoDedicatedPort(String),
     /// A surface endpoint derived an empty mount prefix, which would shadow every
     /// other route as a catch-all. An API needs an `api_prefix:<id>` extra; a
     /// prefixable UI needs a non-empty `base_path`.
@@ -341,7 +346,7 @@ pub fn plan(
     // resolved connection from here instead of re-running the selection (and its per-call
     // catalog scan) at each site. A connection variant's fields are mandatory, so provider
     // completeness is a compile-time guarantee — no runtime contract check is needed.
-    let chosen = resolve_demand_providers(&graph, catalog, ctx)?;
+    let mut chosen = resolve_demand_providers(&graph, catalog, ctx)?;
 
     // At most one provider per resource role may end up in an environment — unless a
     // consumer explicitly pinned each (the sanctioned multi-store case).
@@ -368,19 +373,56 @@ pub fn plan(
             .unwrap_or_default()
     };
     // Convenience views for the artifact renderers (single-provider roles today).
-    let postgres_databases = provisioned_for("local-stack-postgres");
-    let s3_buckets = provisioned_for("local-stack-seaweedfs");
-    let azure_containers = provisioned_for("local-stack-azurite");
+    let postgres_databases = provisioned_for("postgres");
+    let s3_buckets = provisioned_for("seaweedfs");
+    let azure_containers = provisioned_for("azurite");
+
+    // Allocate dedicated listener host ports up front, in graph order, for every endpoint
+    // that needs its own listener ([`UiFixed`] / [`Gatewayed`]). Doing this before the main
+    // routing loop lets us rewrite a gatewayed object store's connection `endpoint` to the
+    // gateway *before* consumers bind it (a provider is ordered before its consumers, but we
+    // bind a consumer's connection earlier in its own iteration than we'd reach the
+    // provider's route). Host ports come from the explicit `dedicated_listener_ports` first,
+    // then auto-allocated from `dedicated_listener_port_base`.
+    let mut dedicated_ports: BTreeMap<(String, String), u16> = BTreeMap::new();
+    {
+        let mut explicit = ctx.dedicated_listener_ports.iter().copied();
+        let mut next_auto = ctx.dedicated_listener_port_base;
+        let mut alloc = || {
+            explicit.next().unwrap_or_else(|| {
+                let p = next_auto;
+                next_auto = next_auto.saturating_add(1);
+                p
+            })
+        };
+        for module in &graph.nodes {
+            for service in &module.services {
+                for endpoint in &service.endpoints {
+                    if matches!(
+                        endpoint.intent,
+                        RouteIntent::UiFixed | RouteIntent::Gatewayed
+                    ) {
+                        dedicated_ports
+                            .insert((service.name.clone(), endpoint.id.clone()), alloc());
+                    }
+                }
+            }
+        }
+    }
+
+    // Rewrite each gatewayed object store's resolved `endpoint` (and the `BlobEndpoint=` inside
+    // an Azure connection string) to the gateway origin, so consumers reach the store through
+    // Envoy on its dedicated listener rather than the provider's in-network address. The
+    // provider's own self-connection (used to render its fragment) is rewritten in the same
+    // pass via `chosen`.
+    rewrite_gatewayed_object_store_endpoints(&mut chosen, &graph, ctx, &dedicated_ports);
 
     let mut routes = RoutePlan::new();
     let mut gateway = GatewayConfig::default();
     let mut injected: BTreeMap<ModuleId, InjectedEnv> = BTreeMap::new();
 
-    // The shared listener is always present; dedicated listeners are appended per
-    // fixed-path UI as we encounter them.
     let mut shared_routes: Vec<GatewayRoute> = Vec::new();
     let mut dedicated: Vec<ListenerConfig> = Vec::new();
-    let mut next_dedicated = ctx.dedicated_listener_ports.iter().copied();
 
     // Track claimed prefixes (per listener) to detect collisions. The shared listener
     // is keyed by its port; dedicated listeners never collide (own port).
@@ -394,16 +436,11 @@ pub fn plan(
         for (k, v) in module.provides.env_vars.iter() {
             module_env.set(k, v);
         }
-        // Fold each object-store provider's provisioned names into its one-shot init
-        // block (SeaweedFS creates buckets; Azurite creates containers).
-        if module.id.as_str() == "local-stack-seaweedfs" {
+        // SeaweedFS still folds the aggregated bucket list into its one-shot init block via a
+        // `${S3_BUCKET_MB_LINES}` placeholder. (Azurite renders its container-init by
+        // iterating the typed `objects` list in its template, so it needs no such injection.)
+        if module.id.as_str() == "seaweedfs" {
             module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
-        }
-        if module.id.as_str() == "local-stack-azurite" {
-            module_env.set(
-                AZURE_CONTAINER_CREATE_LINES_VAR,
-                azurite_container_lines(&azure_containers),
-            );
         }
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field. The connection was resolved once up front (in `chosen`).
@@ -469,14 +506,21 @@ pub fn plan(
                             },
                         );
                     }
-                    RouteIntent::UiFixed => {
-                        let port = next_dedicated
-                            .next()
-                            .ok_or_else(|| PlanError::NoDedicatedPort(service.name.clone()))?;
+                    // A fixed-path UI and a gatewayed backend (e.g. an object store) share the
+                    // same routing: their own dedicated listener serving `/`, no rewrite, so
+                    // the client reaches the service at the listener's origin and constructs
+                    // its own URLs unprefixed.
+                    RouteIntent::UiFixed | RouteIntent::Gatewayed => {
+                        let port = dedicated_ports[&(service.name.clone(), endpoint.id.clone())];
                         ensure_cluster(&mut gateway, service, endpoint)?;
+                        // The dedicated listener binds the allocated port on *both* sides:
+                        // Envoy listens on it inside the compose network (so an in-network
+                        // consumer reaches `envoy:<port>`) and compose publishes it 1:1 to the
+                        // host. It forwards to the service-named cluster, which already targets
+                        // the upstream's own port (`endpoint.internal_port`) via `ensure_cluster`.
                         dedicated.push(ListenerConfig {
                             host_port: port,
-                            internal_port: endpoint.internal_port,
+                            internal_port: port,
                             routes: vec![GatewayRoute {
                                 prefix: "/".into(),
                                 cluster: service.name.clone(),
@@ -554,17 +598,53 @@ pub fn plan(
     for module in &graph.nodes {
         let module_env = injected.get(&module.id).cloned().unwrap_or_default();
         // The typed connections resolved for this module's demands, grouped by role, so a
-        // `Template` fragment can branch on the chosen credential flavour.
+        // `Template` fragment can branch on the chosen credential flavour. Alongside them,
+        // the resolved `depends_on` gates — one per demand whose chosen provider advertises a
+        // startup gate — so a fragment iterates them instead of hard-coding which backend's
+        // service it waits on.
         let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
+        let mut dependencies: Vec<crate::module::DepGate> = Vec::new();
         for (idx, demand) in module.needs.iter().enumerate() {
+            let provider = &chosen[&(module.id.clone(), idx)].provider;
             connections
                 .entry(demand.resource.clone())
                 .or_default()
                 .push(chosen[&(module.id.clone(), idx)].connection.clone());
+            if let Some(gate) = provider_dep_gate(catalog, provider) {
+                dependencies.push(gate);
+            }
         }
+        // A *provider* renders against its own role too: the names it provisions (`objects`,
+        // for an init block to iterate) plus its own connection resolved for each — so its
+        // fragment reads e.g. `connections.object_store.0.credential` rather than a `${VAR}`.
+        let objects = provisioned_by.get(&module.id).cloned().unwrap_or_default();
+        for (role, template) in module.provides.resource_kinds.iter() {
+            let role_conns = connections.entry(role.clone()).or_default();
+            for name in &objects {
+                role_conns.push(template.resolve(name));
+            }
+        }
+        // The gateway module publishes every listener's host port: its fragment iterates
+        // `published_ports` to render compose `ports:`, so dedicated listeners (object stores)
+        // are reachable from the host without the fragment hard-coding a port list.
+        let published_ports = if module.services.iter().any(|s| s.role == Role::gateway()) {
+            gateway
+                .listeners
+                .iter()
+                .map(|l| crate::module::PortMapping {
+                    host: l.host_port,
+                    container: l.internal_port,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let render_ctx = crate::module::RenderCtx {
             env: &module_env,
             connections,
+            dependencies,
+            objects,
+            published_ports,
         };
         let out = module
             .render
@@ -720,20 +800,20 @@ fn choose_provider(
         });
     }
     // 2. Environment preference.
-    if let Some(order) = ctx.provider_preference.get(role) {
-        if let Some(pref) = order.iter().find(|id| provides_role(id)) {
-            return Ok(pref.clone());
-        }
+    if let Some(order) = ctx.provider_preference.get(role)
+        && let Some(pref) = order.iter().find(|id| provides_role(id))
+    {
+        return Ok(pref.clone());
     }
     // 3. Unique provider.
     if candidates.len() == 1 {
         return Ok(candidates[0].clone());
     }
     // 4. Catalog default.
-    if let Some(def) = catalog.default_provider_for(role) {
-        if provides_role(def) {
-            return Ok(def.clone());
-        }
+    if let Some(def) = catalog.default_provider_for(role)
+        && provides_role(def)
+    {
+        return Ok(def.clone());
     }
     // Otherwise genuinely ambiguous.
     let mut providers: Vec<ModuleId> = candidates.into_iter().cloned().collect();
@@ -981,6 +1061,91 @@ fn ensure_cluster(
     Ok(())
 }
 
+/// Rewrite every gatewayed object store's resolved connection so its `endpoint` (and the
+/// `BlobEndpoint=` inside an Azure connection string) points at the gateway's dedicated
+/// listener instead of the provider's in-network address.
+///
+/// An object-store provider advertises a [`Gatewayed`](RouteIntent::Gatewayed) endpoint;
+/// `dedicated_ports` carries the listener host port assigned to it. For each such provider we
+/// derive the in-network gateway origin `http://<gateway_service>:<port>` and swap it in for
+/// the original origin in every `chosen` connection vended by that provider — keeping any path
+/// the original endpoint carried (e.g. Azure's `/devstoreaccount1`). This is what makes
+/// consumers (and the provider's own fragment) reach the store through Envoy.
+fn rewrite_gatewayed_object_store_endpoints(
+    chosen: &mut ChosenProviders,
+    graph: &ResolvedGraph,
+    ctx: &PlanCtx,
+    dedicated_ports: &BTreeMap<(String, String), u16>,
+) {
+    // provider module id → the in-network gateway origin its store is now reached at.
+    let mut provider_origin: BTreeMap<ModuleId, String> = BTreeMap::new();
+    for module in &graph.nodes {
+        for service in &module.services {
+            for endpoint in &service.endpoints {
+                if endpoint.intent == RouteIntent::Gatewayed
+                    && let Some(port) =
+                        dedicated_ports.get(&(service.name.clone(), endpoint.id.clone()))
+                {
+                    provider_origin.insert(
+                        module.id.clone(),
+                        format!("http://{}:{}", ctx.gateway_service, port),
+                    );
+                }
+            }
+        }
+    }
+    if provider_origin.is_empty() {
+        return;
+    }
+    for resolved in chosen.values_mut() {
+        if let Some(new_origin) = provider_origin.get(&resolved.provider) {
+            rewrite_object_store_origin(&mut resolved.connection, new_origin);
+        }
+    }
+}
+
+/// Swap the origin (`scheme://host:port`) of an object-store connection's `endpoint` — and the
+/// `BlobEndpoint=` segment of an Azure connection string — to `new_origin`, preserving any
+/// path. A no-op for non-object-store connections.
+fn rewrite_object_store_origin(connection: &mut Connection, new_origin: &str) {
+    let Connection::ObjectStore {
+        endpoint,
+        credential,
+        ..
+    } = connection
+    else {
+        return;
+    };
+    *endpoint = swap_origin(endpoint, new_origin);
+    if let crate::connection::ObjectStoreCredential::AzureBlob { connection_string } = credential {
+        // The connection string embeds `BlobEndpoint=<url>;`; rewrite that URL's origin too.
+        *connection_string = connection_string
+            .split(';')
+            .map(|seg| match seg.strip_prefix("BlobEndpoint=") {
+                Some(url) => format!("BlobEndpoint={}", swap_origin(url, new_origin)),
+                None => seg.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+    }
+}
+
+/// Replace the `scheme://host[:port]` origin of `url` with `new_origin`, keeping the path.
+/// `new_origin` is itself an origin (no trailing path). If `url` has no `://`, it is returned
+/// unchanged.
+fn swap_origin(url: &str, new_origin: &str) -> String {
+    match url.split_once("://") {
+        Some((_scheme, rest)) => {
+            // The path is everything from the first '/' after the authority.
+            match rest.find('/') {
+                Some(slash) => format!("{}{}", new_origin, &rest[slash..]),
+                None => new_origin.to_string(),
+            }
+        }
+        None => url.to_string(),
+    }
+}
+
 /// The SeaweedFS one-shot bucket-init lines for the aggregated bucket list, one
 /// `aws s3 mb` per bucket, indented to sit inside the fragment's `entrypoint` block.
 /// Empty when there are no buckets.
@@ -995,14 +1160,25 @@ fn seaweedfs_bucket_lines(buckets: &[String]) -> String {
         .collect()
 }
 
-/// The Azurite one-shot container-init lines for the aggregated container list, one
-/// `az storage container create` per name, indented to sit inside the fragment's
-/// `entrypoint` block. Empty when there are no containers.
-fn azurite_container_lines(containers: &[String]) -> String {
-    containers
-        .iter()
-        .map(|c| format!("        az storage container create --name {c} 2>&1 || true;\n"))
-        .collect()
+/// The typed `depends_on` gate a chosen `provider` advertises for its consumers, or `None`
+/// if it declares no startup gate (nothing to wait for).
+///
+/// The provider declares the gate as a single `"<service>:<condition>"`
+/// [`DEP_GATE_EXTRA`] value (e.g. `"db:service_healthy"`,
+/// `"seaweedfs-init:service_completed_successfully"`); this parses it into a typed
+/// [`DepGate`](crate::module::DepGate) the planner hands the consumer's render. An
+/// unrecognized or missing condition defaults to
+/// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
+fn provider_dep_gate(catalog: &Catalog, provider: &ModuleId) -> Option<crate::module::DepGate> {
+    let gate = catalog.get(provider)?.provides.extras.get(DEP_GATE_EXTRA)?;
+    let (service, condition) = match gate.split_once(':') {
+        Some((s, c)) => (s, crate::module::DependsCondition::parse(c)),
+        None => (gate.as_str(), None),
+    };
+    Some(crate::module::DepGate {
+        service: service.to_string(),
+        condition: condition.unwrap_or(crate::module::DependsCondition::ServiceStarted),
+    })
 }
 
 /// The base path a module's service serves itself under, from the `base_path` extra
@@ -1081,13 +1257,7 @@ mod tests {
     use crate::catalog::baseline_catalog;
 
     fn default_selection() -> Selection {
-        Selection::modules([
-            "local-stack-envoy",
-            "local-stack-postgres",
-            "local-stack-seaweedfs",
-            "local-stack-mlflow",
-            "local-stack-unity-catalog",
-        ])
+        Selection::modules(["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"])
     }
 
     fn shared_routes(plan: &EnvironmentPlan) -> &[GatewayRoute] {
@@ -1227,6 +1397,64 @@ mod tests {
     }
 
     #[test]
+    fn depends_on_gates_follow_the_chosen_provider() {
+        // MLflow demands relational_db + object_store; the planner resolves each demand's
+        // chosen provider's declared gate into the typed `dependencies` its fragment iterates.
+        // Asserting on the rendered fragment is the real contract.
+
+        // Default (SeaweedFS): db healthy + seaweedfs-init completed.
+        let s3 = plan(
+            &Selection::modules(["mlflow"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        let (_, mlflow) = s3
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
+            .unwrap();
+        assert!(
+            mlflow
+                .fragment
+                .contains("db:\n        condition: service_healthy")
+        );
+        assert!(
+            mlflow
+                .fragment
+                .contains("seaweedfs-init:\n        condition: service_completed_successfully")
+        );
+        assert!(!mlflow.fragment.contains("azurite-init"));
+
+        // Azurite-preferred: the object-store gate switches to azurite-init.
+        let mut preference = BTreeMap::new();
+        preference.insert(
+            "object_store".to_string(),
+            vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+        );
+        let az = plan(
+            &Selection::modules(["mlflow"]),
+            &baseline_catalog(),
+            &PlanCtx {
+                provider_preference: preference,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, mlflow_az) = az
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
+            .unwrap();
+        assert!(
+            mlflow_az
+                .fragment
+                .contains("azurite-init:\n        condition: service_completed_successfully")
+        );
+        assert!(!mlflow_az.fragment.contains("seaweedfs-init"));
+    }
+
+    #[test]
     fn ui_base_path_is_injected_for_render() {
         let p = plan(
             &default_selection(),
@@ -1234,7 +1462,7 @@ mod tests {
             &PlanCtx::default(),
         )
         .unwrap();
-        let env = p.injected.get(&"local-stack-mlflow".into()).unwrap();
+        let env = p.injected.get(&"mlflow".into()).unwrap();
         assert_eq!(env.get("BASE_PATH"), Some("/mlflow"));
     }
 
@@ -1286,12 +1514,7 @@ mod tests {
         };
         let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
         // mlflow + its transitive requires (postgres, seaweedfs, envoy).
-        for id in [
-            "local-stack-mlflow",
-            "local-stack-postgres",
-            "local-stack-seaweedfs",
-            "local-stack-envoy",
-        ] {
+        for id in ["mlflow", "postgres", "seaweedfs", "envoy"] {
             assert!(p.graph.module(&id.into()).is_some(), "missing {id}");
         }
     }
@@ -1310,13 +1533,8 @@ mod tests {
     fn plan_is_deterministic_regardless_of_selection_order() {
         let cat = baseline_catalog();
         let a = plan(&default_selection(), &cat, &PlanCtx::default()).unwrap();
-        let reversed = Selection::modules([
-            "local-stack-unity-catalog",
-            "local-stack-mlflow",
-            "local-stack-seaweedfs",
-            "local-stack-postgres",
-            "local-stack-envoy",
-        ]);
+        let reversed =
+            Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]);
         let b = plan(&reversed, &cat, &PlanCtx::default()).unwrap();
         assert_eq!(a, b);
     }

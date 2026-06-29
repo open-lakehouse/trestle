@@ -328,15 +328,15 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
                 // Best-effort: undo the secret write so it does not orphan. Errors
                 // from the compensating delete are swallowed (logged) — we surface
                 // the original update error to the caller regardless.
-                if let Some(secret_name) = wrote_secret_name {
-                    if let Err(cleanup_err) = self.secrets.delete_secret(&secret_name).await {
-                        tracing::warn!(
-                            secret_name = %secret_name,
-                            error = %cleanup_err,
-                            "failed to compensate (delete) orphaned secret after inner store \
-                             update failed; secret may be orphaned"
-                        );
-                    }
+                if let Some(secret_name) = wrote_secret_name
+                    && let Err(cleanup_err) = self.secrets.delete_secret(&secret_name).await
+                {
+                    tracing::warn!(
+                        secret_name = %secret_name,
+                        error = %cleanup_err,
+                        "failed to compensate (delete) orphaned secret after inner store \
+                         update failed; secret may be orphaned"
+                    );
                 }
                 return Err(e);
             }
@@ -378,11 +378,10 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ManagedObjectStore<L, S, M> 
                     let sensitive: serde_json::Value = serde_json::from_slice(&secret_bytes)?;
                     if let (Some(props), serde_json::Value::Object(secret_map)) =
                         (object.properties.as_mut(), sensitive)
+                        && let Some(props_map) = props.as_object_mut()
                     {
-                        if let Some(props_map) = props.as_object_mut() {
-                            for (key, value) in secret_map {
-                                props_map.insert(key, value);
-                            }
+                        for (key, value) in secret_map {
+                            props_map.insert(key, value);
                         }
                     }
                 }

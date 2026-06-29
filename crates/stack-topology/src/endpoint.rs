@@ -84,6 +84,15 @@ pub enum RouteIntent {
     /// A UI that cannot take a base path. The planner must give it its own
     /// listener / external port rather than path-multiplex it.
     UiFixed,
+    /// A whole-service backend that must be fronted at the *origin* of its own
+    /// external port — not path-multiplexed under a shared-listener prefix. The
+    /// planner gives it a dedicated listener serving `/` (like
+    /// [`UiFixed`](RouteIntent::UiFixed)), but the intent is semantically distinct:
+    /// this is for services whose clients construct URLs from the endpoint origin and
+    /// would break under a path prefix — chiefly object stores (S3/Blob SDKs build
+    /// `<endpoint>/<bucket>/<key>` and sign against the host), which therefore cannot
+    /// sit behind a shared-listener prefix the way an [`Api`](RouteIntent::Api) can.
+    Gatewayed,
 }
 
 impl RouteIntent {

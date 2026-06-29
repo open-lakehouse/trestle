@@ -110,18 +110,18 @@ pub fn resolve_components(
     }
 
     // 4. profile (against the base's profiles block) — legacy back-compat
-    if let Some(profile) = input.profile {
-        if let Some(first) = input.roots.first() {
-            if let Some(list) = first.manifest.profiles.get(profile) {
-                for name in list {
-                    push(name, &mut requested, &mut seen);
-                }
-            } else if !profile.is_empty() {
-                return Err(Error::ProfileNotFound {
-                    template: first.manifest.name.clone(),
-                    name: profile.to_string(),
-                });
+    if let Some(profile) = input.profile
+        && let Some(first) = input.roots.first()
+    {
+        if let Some(list) = first.manifest.profiles.get(profile) {
+            for name in list {
+                push(name, &mut requested, &mut seen);
             }
+        } else if !profile.is_empty() {
+            return Err(Error::ProfileNotFound {
+                template: first.manifest.name.clone(),
+                name: profile.to_string(),
+            });
         }
     }
 
@@ -164,10 +164,10 @@ pub fn resolve_components(
     let mut out: Vec<ResolvedComponent> = Vec::with_capacity(order_hint.len());
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     for name in order_hint {
-        if let Some(rc) = loaded.remove(&name) {
-            if emitted.insert(name) {
-                out.push(rc);
-            }
+        if let Some(rc) = loaded.remove(&name)
+            && emitted.insert(name)
+        {
+            out.push(rc);
         }
     }
 

@@ -71,8 +71,8 @@ pub use catalog::{Catalog, baseline_catalog, baseline_selection};
 pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
 pub use module::{
-    ConnectionBinding, Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderCtx,
-    RenderError, RenderSpec, ResourceDemand,
+    ConnectionBinding, DepGate, DependsCondition, Knob, KnobKind, Module, ModuleId, PortDecl,
+    PortMapping, Provides, RenderCtx, RenderError, RenderSpec, ResourceDemand,
 };
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};

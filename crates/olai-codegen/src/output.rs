@@ -29,7 +29,7 @@ pub fn write_generated_code(generated_code: &GeneratedCode, output_dir: &Path) -
         let final_content = if content.starts_with(header) {
             content.clone()
         } else {
-            format!("{}{}", header, content)
+            format!("{header}{content}")
         };
 
         fs::write(&file_path, final_content)?;

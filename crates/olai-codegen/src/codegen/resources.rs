@@ -676,18 +676,18 @@ fn generate_resource_registry(
             if !resource_type.is_empty() {
                 for service in &plan.services {
                     for h in &service.hierarchy {
-                        if h.child_resource_type == resource_type {
-                            if let Some(ref parent_sing) = h.parent_singular {
-                                let found = resources.iter().find_map(|candidate| {
-                                    if candidate.singular == *parent_sing {
-                                        Some(candidate.variant_name.clone())
-                                    } else {
-                                        None
-                                    }
-                                });
-                                if found.is_some() {
-                                    return found;
+                        if h.child_resource_type == resource_type
+                            && let Some(ref parent_sing) = h.parent_singular
+                        {
+                            let found = resources.iter().find_map(|candidate| {
+                                if candidate.singular == *parent_sing {
+                                    Some(candidate.variant_name.clone())
+                                } else {
+                                    None
                                 }
+                            });
+                            if found.is_some() {
+                                return found;
                             }
                         }
                     }

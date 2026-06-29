@@ -10,5 +10,8 @@
 # Rust
 target/
 
+# Scratch output (e.g. render_stack example)
+scratch/
+
 # Environment
 .env

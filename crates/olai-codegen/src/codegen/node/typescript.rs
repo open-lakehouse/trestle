@@ -299,7 +299,7 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
                 .unwrap_or(&resource.type_name);
             if !type_names.contains(&type_name.to_string()) {
                 type_names.push(type_name.to_string());
-                schema_names.push(format!("{}Schema", type_name));
+                schema_names.push(format!("{type_name}Schema"));
             }
         }
 
@@ -316,23 +316,22 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
             // `decoded_type_name`): item type for standard list unwrapping, otherwise the full
             // output message. This keeps imports in lockstep with emitted `fromBinary` calls,
             // including resource-less (Flat) services that decode `*Response` messages directly.
-            if let Some(name) = decoded_type_name(service, &method) {
-                if !type_names.contains(&name) {
-                    type_names.push(name.clone());
-                    schema_names.push(format!("{}Schema", name));
-                }
+            if let Some(name) = decoded_type_name(service, &method)
+                && !type_names.contains(&name)
+            {
+                type_names.push(name.clone());
+                schema_names.push(format!("{name}Schema"));
             }
 
             // Required message bodies are encoded with `toBinary(<Type>Schema, value)` before
             // crossing to the native binding, so import each body's type and schema too.
             for param in method.required_parameters() {
-                if is_required_message_body(param) {
-                    if let Some(name) = message_type_name(param) {
-                        if !type_names.contains(&name) {
-                            type_names.push(name.clone());
-                            schema_names.push(format!("{}Schema", name));
-                        }
-                    }
+                if is_required_message_body(param)
+                    && let Some(name) = message_type_name(param)
+                    && !type_names.contains(&name)
+                {
+                    type_names.push(name.clone());
+                    schema_names.push(format!("{name}Schema"));
                 }
             }
         }
@@ -348,7 +347,7 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
         if service.resource().is_some() {
             let napi_name = format!("Napi{}", service.client_type());
             let native_alias = format!("Native{}", service.client_type());
-            native_classes.push(format!("{} as {}", napi_name, native_alias));
+            native_classes.push(format!("{napi_name} as {native_alias}"));
         }
     }
     // native_classes already stable since services slice is pre-sorted; sort for safety
@@ -362,13 +361,13 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
 
     let schema_imports = schema_names
         .iter()
-        .map(|s| format!("  {},", s))
+        .map(|s| format!("  {s},"))
         .collect::<Vec<_>>()
         .join("\n");
 
     let native_imports = native_classes
         .iter()
-        .map(|n| format!("  {},", n))
+        .map(|n| format!("  {n},"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -451,14 +450,13 @@ fn generate_options_interface(method: &MethodHandler<'_>) -> Option<String> {
         let ts_type = ts_type.strip_suffix(" | undefined").unwrap_or(&ts_type);
         if let Some(doc) = param.documentation() {
             let cleaned = doc.trim().replace('\n', "\n   * ");
-            fields.push_str(&format!("  /** {} */\n", cleaned));
+            fields.push_str(&format!("  /** {cleaned} */\n"));
         }
-        fields.push_str(&format!("  {}?: {};\n", ts_name, ts_type));
+        fields.push_str(&format!("  {ts_name}?: {ts_type};\n"));
     }
 
     Some(format!(
-        "export interface {} {{\n{}}}\n",
-        interface_name, fields
+        "export interface {interface_name} {{\n{fields}}}\n"
     ))
 }
 
@@ -471,7 +469,7 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
         .next_back()
         .unwrap_or(&resource.type_name);
     let client_type = service.client_type().to_string();
-    let native_type = format!("Native{}", client_type);
+    let native_type = format!("Native{client_type}");
 
     let mut methods = String::new();
 
@@ -629,7 +627,7 @@ fn generate_instance_returning_method(
     mode: BindingMode,
     verb: &str,
 ) -> String {
-    let schema_name = format!("{}Schema", type_name);
+    let schema_name = format!("{type_name}Schema");
     let type_ref = ts_type_ident(type_name);
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let (ts_name, native_name) = instance_method_names(method, mode, verb);
@@ -808,9 +806,9 @@ impl MethodCallSpec {
 
         let full_param_list = if has_options {
             if required_param_list.is_empty() {
-                format!("options?: {}", options_type)
+                format!("options?: {options_type}")
             } else {
-                format!("{}, options?: {}", required_param_list, options_type)
+                format!("{required_param_list}, options?: {options_type}")
             }
         } else {
             required_param_list.clone()
@@ -822,7 +820,7 @@ impl MethodCallSpec {
                 .map(|p| p.name().to_case(Case::Camel))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("    const {{ {} }} = options || {{}};\n", fields)
+            format!("    const {{ {fields} }} = options || {{}};\n")
         } else {
             String::new()
         };
@@ -866,7 +864,7 @@ fn generate_collection_list_method(
         None => return String::new(),
     };
     let item_type_name = items_field.unified_type.type_ident().to_string();
-    let schema_name = format!("{}Schema", item_type_name);
+    let schema_name = format!("{item_type_name}Schema");
     let item_type_ref = ts_type_ident(&item_type_name);
 
     let (required_params, optional_params) = ts_collection_param_split(method, drop_path, true);
@@ -903,14 +901,14 @@ fn generate_collection_list_stream_method(
 ) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let base_method_name = method.binding_method_name_str().to_case(Case::Camel);
-    let stream_method_name = format!("{}Stream", base_method_name);
+    let stream_method_name = format!("{base_method_name}Stream");
 
     let items_field = match method.list_output_field() {
         Some(field) => field,
         None => return String::new(),
     };
     let item_type_name = items_field.unified_type.type_ident().to_string();
-    let schema_name = format!("{}Schema", item_type_name);
+    let schema_name = format!("{item_type_name}Schema");
     let item_type_ref = ts_type_ident(&item_type_name);
 
     let (required_params, optional_params) = ts_collection_param_split(method, drop_path, true);
@@ -944,7 +942,7 @@ fn generate_collection_create_method(
         Some(t) => t.to_string(),
         None => return generate_void_create_method(method, drop_path),
     };
-    let schema_name = format!("{}Schema", output_type);
+    let schema_name = format!("{output_type}Schema");
     let output_type_ref = ts_type_ident(&output_type);
 
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");

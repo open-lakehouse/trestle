@@ -60,13 +60,12 @@ pub fn render_tree(
         }
 
         // Honour .trestle-ignore.
-        if let Some(set) = &ignored {
-            if set
+        if let Some(set) = &ignored
+            && set
                 .matched(entry.path(), entry.file_type().is_dir())
                 .is_ignore()
-            {
-                continue;
-            }
+        {
+            continue;
         }
 
         // Render the relative path.

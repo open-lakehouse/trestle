@@ -1,0 +1,56 @@
+# MLflow tracking server
+#
+# This fragment is a `RenderSpec::Template`, rendered with MiniJinja against the plan-time
+# `RenderCtx`. Everything it needs is already in that context, so the fragment is rendered
+# whole — no compose `${VAR}` substitution layered on top. It reads:
+#
+#   * `connections.<role>.0` — the typed connections the planner resolved for MLflow's
+#     demands: `relational_db` (the backend-store URL) and `object_store` (the artifact
+#     store's `uri`/`endpoint`, plus the credential the fragment branches on by flavour).
+#   * `env.X` — plan-time, render-only values, e.g. `BASE_PATH` (the gateway base path
+#     chosen for MLflow's prefixable UI).
+{%- set db = connections.relational_db.0 %}
+{%- set obj = connections.object_store.0 %}
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.10.1-full
+    restart: unless-stopped
+    profiles: [svc, full]
+    depends_on:
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: {{ dep.condition }}
+{%- endfor %}
+    command:
+      - "mlflow"
+      - "server"
+      - "--backend-store-uri"
+      - "{{ db.url }}"
+      - "--artifacts-destination"
+      - "{{ obj.uri }}"
+      - "--serve-artifacts"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "5000"
+      - "--static-prefix"
+      - "{{ env.BASE_PATH }}"
+    environment:
+{%- if obj.credential.flavour == "s3" %}
+      MLFLOW_S3_ENDPOINT_URL: {{ obj.endpoint }}
+      AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
+      AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
+      AWS_DEFAULT_REGION: {{ obj.credential.region }}
+{%- else %}
+      AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
+{%- endif %}
+    expose:
+      - "5000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000{{ env.BASE_PATH }}/health')\""
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s

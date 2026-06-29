@@ -245,14 +245,7 @@ pub(crate) fn build_storage_key_sas(
     // signature and the service rejects it (verified against Azurite: a
     // container-level SAS with a trailing empty `sdd` field 403s).
     let base_string_to_sign = format!(
-        "{permissions}\n{start}\n{expiry}\n{resource}\n\n\n{protocol}\n{version}\n{sr}\n\n\n\n\n\n\n",
-        permissions = permissions,
-        start = start_str,
-        expiry = expiry_str,
-        resource = canonicalized_resource,
-        protocol = protocol,
-        version = SAS_VERSION,
-        sr = SAS_SIGNED_RESOURCE,
+        "{permissions}\n{start_str}\n{expiry_str}\n{canonicalized_resource}\n\n\n{protocol}\n{SAS_VERSION}\n{SAS_SIGNED_RESOURCE}\n\n\n\n\n\n\n",
     );
     let string_to_sign = match depth {
         Some(d) => format!("{base_string_to_sign}\n{d}"),

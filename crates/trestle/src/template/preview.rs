@@ -63,7 +63,7 @@ pub fn render_text(
             continue;
         }
         let label = component_label(rc);
-        writeln!(out, "  - {}", label).ok();
+        writeln!(out, "  - {label}").ok();
     }
 
     if !apps.is_empty() {

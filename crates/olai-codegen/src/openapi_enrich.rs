@@ -35,13 +35,13 @@ pub fn run(
             ))
         })?;
         let fds = protobuf::descriptor::FileDescriptorSet::parse_from_bytes(&bytes)
-            .map_err(|e| crate::Error::Build(format!("Failed to parse descriptors: {}", e)))?;
+            .map_err(|e| crate::Error::Build(format!("Failed to parse descriptors: {e}")))?;
         let metadata = parse_file_descriptor_set(&fds)?;
         dedup_path_params(&mut doc, &metadata);
     }
 
     let out = serde_yaml::to_string(&doc)
-        .map_err(|e| crate::Error::Build(format!("Failed to serialize YAML: {}", e)))?;
+        .map_err(|e| crate::Error::Build(format!("Failed to serialize YAML: {e}")))?;
     fs::write(spec, out)
         .map_err(|e| crate::Error::Build(format!("Failed to write {}: {}", spec.display(), e)))?;
 
@@ -55,10 +55,10 @@ pub fn run(
 fn fix_gnostic_refs(doc: &mut YamlValue) {
     match doc {
         YamlValue::Mapping(map) => {
-            if let Some(YamlValue::String(s)) = map.get_mut("$ref") {
-                if let Some(fixed) = rewrite_gnostic_ref(s) {
-                    *s = fixed;
-                }
+            if let Some(YamlValue::String(s)) = map.get_mut("$ref")
+                && let Some(fixed) = rewrite_gnostic_ref(s)
+            {
+                *s = fixed;
             }
             for (_, v) in map.iter_mut() {
                 fix_gnostic_refs(v);
@@ -95,7 +95,7 @@ fn enrich_from_jsonschema(
         .into_owned();
 
     let mut files: Vec<std::path::PathBuf> = glob(&pattern)
-        .map_err(|e| crate::Error::Build(format!("Glob pattern error: {}", e)))?
+        .map_err(|e| crate::Error::Build(format!("Glob pattern error: {e}")))?
         .filter_map(|r: Result<std::path::PathBuf, _>| r.ok())
         .collect();
     files.sort();
@@ -363,23 +363,23 @@ fn enrich_schema(
 
     // Recurse into combiners
     for combiner in &["allOf", "oneOf", "anyOf"] {
-        if let Some(js_list) = json_schema.get(combiner).and_then(|v| v.as_array()) {
-            if let Some(oa_list) = openapi.get_mut(combiner).and_then(|v| v.as_sequence_mut()) {
-                for (i, js_entry) in js_list.iter().enumerate() {
-                    if i >= oa_list.len() {
-                        break;
-                    }
-                    let resolved: std::borrow::Cow<serde_json::Value> =
-                        if let Some(ref_str) = js_entry.get("$ref").and_then(|v| v.as_str()) {
-                            match resolve_ref(ref_str, defs) {
-                                Some(r) => std::borrow::Cow::Borrowed(r),
-                                None => std::borrow::Cow::Borrowed(js_entry),
-                            }
-                        } else {
-                            std::borrow::Cow::Borrowed(js_entry)
-                        };
-                    enrich_schema(&mut oa_list[i], &resolved, defs, camel_case);
+        if let Some(js_list) = json_schema.get(combiner).and_then(|v| v.as_array())
+            && let Some(oa_list) = openapi.get_mut(combiner).and_then(|v| v.as_sequence_mut())
+        {
+            for (i, js_entry) in js_list.iter().enumerate() {
+                if i >= oa_list.len() {
+                    break;
                 }
+                let resolved: std::borrow::Cow<serde_json::Value> =
+                    if let Some(ref_str) = js_entry.get("$ref").and_then(|v| v.as_str()) {
+                        match resolve_ref(ref_str, defs) {
+                            Some(r) => std::borrow::Cow::Borrowed(r),
+                            None => std::borrow::Cow::Borrowed(js_entry),
+                        }
+                    } else {
+                        std::borrow::Cow::Borrowed(js_entry)
+                    };
+                enrich_schema(&mut oa_list[i], &resolved, defs, camel_case);
             }
         }
     }

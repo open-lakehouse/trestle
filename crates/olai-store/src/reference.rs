@@ -41,7 +41,7 @@ impl std::fmt::Display for ResourceRef {
         match self {
             Self::Uuid(u) => write!(f, "{}", u.hyphenated()),
             Self::Name(name) => {
-                write!(f, "{}", name)
+                write!(f, "{name}")
             }
             Self::Undefined => write!(f, "*"),
         }

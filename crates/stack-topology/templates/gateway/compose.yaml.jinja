@@ -1,0 +1,20 @@
+# Envoy gateway — contributed by the `envoy` module.
+# `docker compose --profile svc up` brings up everything on the `svc` profile.
+#
+# This fragment is a `RenderSpec::Template`: the planner hands it `published_ports`, one
+# `host:container` mapping per gateway listener — the shared listener plus a dedicated one for
+# each gatewayed backend (e.g. an object store) — so the host can reach every listener without
+# this file hard-coding a port list. The admin port is fixed.
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.34-latest
+    restart: unless-stopped
+    profiles: [svc, full]
+    volumes:
+      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+      - "9901:9901"
