@@ -2,7 +2,7 @@
 //!
 //! These are the common local-Lakehouse modules — a gateway, a relational store, an
 //! object store, experiment tracking, a data catalog, a query engine, tracing,
-//! notebooks, and the Databricks app-runtime contract — transcribed from trestle's
+//! and the Databricks app-runtime contract — transcribed from trestle's
 //! `local-stack-*` components. They are the corpus the planner is validated against:
 //! planning the default selection must re-derive the routes and materialize the
 //! artifacts these components ship today (see the crate's golden tests).
@@ -92,7 +92,6 @@ pub fn baseline_catalog() -> Catalog {
         mlflow(),
         unity_catalog(),
         jaeger(),
-        notebooks(),
         databricks_emulator_env(),
     ])
     .with_default_provider(Role::OBJECT_STORE, "seaweedfs")
@@ -104,7 +103,7 @@ pub fn baseline_catalog() -> Catalog {
 /// The default lakehouse selection: the always-on gateway plus the default category
 /// picks (a relational store and an object store), mirroring trestle's base
 /// `always: [envoy]` + default `storage`/`metadata_db` choices. Other modules
-/// (catalog, ml, query engine, observability, notebooks) are opt-in.
+/// (catalog, ml, query engine, observability) are opt-in.
 pub fn baseline_selection() -> crate::plan_env::Selection {
     crate::plan_env::Selection::modules(["envoy", "postgres", "seaweedfs"])
 }
@@ -629,46 +628,6 @@ fn jaeger() -> Module {
         knobs: vec![],
         render: fragment(include_str!(
             "../../templates/modules/jaeger/compose.yaml.jinja"
-        )),
-    }
-}
-
-/// `notebooks` — Marimo notebook server, fronted at `/notebooks`.
-fn notebooks() -> Module {
-    let mut provides = Provides::default();
-    provides
-        .extras
-        .insert(BASE_PATH_EXTRA.into(), "/notebooks".into());
-    provides
-        .env_vars
-        .insert("NOTEBOOKS_PORT".into(), "8082".into());
-    Module {
-        id: ModuleId::from("notebooks"),
-        display_name: Some("Marimo notebooks".into()),
-        summary: Some("Notebooks behind the gateway at /notebooks.".into()),
-        category: Some("notebooks".into()),
-        provider_of: Some("notebook_server".into()),
-        requires: vec![ModuleId::from("envoy")],
-        conflicts_with: vec![],
-        needs: vec![],
-        services: vec![ServiceSpec {
-            name: "notebooks".into(),
-            role: Role::notebook_server(),
-            placement: container("notebooks"),
-            endpoints: vec![Endpoint {
-                id: "ui".into(),
-                scheme: Scheme::Http,
-                internal_port: 8080,
-                host_port: Some(8082),
-                intent: RouteIntent::UiPrefixable,
-                path: String::new(),
-            }],
-            depends_on: vec![],
-        }],
-        provides,
-        knobs: vec![],
-        render: fragment(include_str!(
-            "../../templates/modules/notebooks/compose.yaml.jinja"
         )),
     }
 }
