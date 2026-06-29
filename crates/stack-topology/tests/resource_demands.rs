@@ -70,7 +70,7 @@ fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Module {
 
 #[test]
 fn selecting_only_unity_catalog_auto_provisions_its_providers() {
-    // UC declares it needs a postgres_database + s3_bucket; selecting *only* UC must
+    // UC declares it needs a relational_db + object_store; selecting *only* UC must
     // pull in the relational store and object store (plus its envoy `requires`).
     let p = plan(
         &Selection::modules(["local-stack-unity-catalog"]),
@@ -140,7 +140,7 @@ fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
     let app = consumer(
         "my-app",
         vec![ResourceDemand {
-            resource: "postgres_database".into(),
+            resource: "relational_db".into(),
             name: "appdb".into(),
             provider: None,
             inject: vec![Injection {
@@ -178,7 +178,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
     let a = consumer(
         "svc-a",
         vec![ResourceDemand {
-            resource: "postgres_database".into(),
+            resource: "relational_db".into(),
             name: "a_db".into(),
             provider: None,
             inject: vec![],
@@ -187,7 +187,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
     let b = consumer(
         "svc-b",
         vec![ResourceDemand {
-            resource: "postgres_database".into(),
+            resource: "relational_db".into(),
             name: "b_db".into(),
             provider: None,
             inject: vec![],
@@ -245,12 +245,12 @@ fn unsatisfied_demand_errors_when_no_provider_exists() {
 #[test]
 fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
     // Two providers for the same kind, no tie-break → the planner refuses to guess.
-    let p1 = provider("pg-a", "postgres_database", &[("url", "a://{name}")]);
-    let p2 = provider("pg-b", "postgres_database", &[("url", "b://{name}")]);
+    let p1 = provider("pg-a", "relational_db", &[("url", "a://{name}")]);
+    let p2 = provider("pg-b", "relational_db", &[("url", "b://{name}")]);
     let c = consumer(
         "needs-db",
         vec![ResourceDemand {
-            resource: "postgres_database".into(),
+            resource: "relational_db".into(),
             name: "db".into(),
             provider: None,
             inject: vec![],
@@ -268,7 +268,7 @@ fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
             resource,
             providers,
         } => {
-            assert_eq!(resource, "postgres_database");
+            assert_eq!(resource, "relational_db");
             assert_eq!(
                 providers,
                 vec![ModuleId::from("pg-a"), ModuleId::from("pg-b")]

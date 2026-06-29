@@ -82,7 +82,7 @@ pub fn baseline_catalog() -> Catalog {
         notebooks(),
         databricks_emulator_env(),
     ])
-    .with_default_provider("object_store", "local-stack-seaweedfs")
+    .with_default_provider(Role::OBJECT_STORE, "local-stack-seaweedfs")
 }
 
 /// The default lakehouse selection: the always-on gateway plus the default category
@@ -131,7 +131,7 @@ fn envoy() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "envoy".into(),
-            role: Role::new("gateway"),
+            role: Role::gateway(),
             placement: container("envoy"),
             endpoints: vec![Endpoint {
                 id: "http".into(),
@@ -162,8 +162,13 @@ fn postgres() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
-    // Provisions `postgres_database` resources; vends a connection-string coordinate.
-    let mut pg = ResourceProvider::default();
+    // Provisions `relational_db` resources; vends a connection-string coordinate. The
+    // resource-kind key matches the service's role (`relational_db`) — one identity, so
+    // role-exclusivity and the coordinate contract key off the same name.
+    let mut pg = ResourceProvider {
+        provider_kind: Some(ResourceProvider::KIND_POSTGRES.into()),
+        ..Default::default()
+    };
     pg.coordinates.insert(
         "url".into(),
         "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
@@ -171,7 +176,7 @@ fn postgres() -> Module {
     );
     provides
         .resource_kinds
-        .insert("postgres_database".into(), pg);
+        .insert(Role::RELATIONAL_DB.into(), pg);
     Module {
         id: ModuleId::from("local-stack-postgres"),
         display_name: Some("Postgres".into()),
@@ -183,7 +188,7 @@ fn postgres() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "db".into(),
-            role: Role::new("relational_db"),
+            role: Role::relational_db(),
             placement: container("db"),
             endpoints: vec![Endpoint {
                 id: "sql".into(),
@@ -245,7 +250,7 @@ fn seaweedfs() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "seaweedfs".into(),
-            role: Role::new("object_store"),
+            role: Role::object_store(),
             placement: container("seaweedfs"),
             endpoints: vec![Endpoint {
                 id: "s3".into(),
@@ -311,7 +316,7 @@ fn azurite() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "azurite".into(),
-            role: Role::new("object_store"),
+            role: Role::object_store(),
             placement: container("azurite"),
             endpoints: vec![Endpoint {
                 id: "blob".into(),
@@ -379,13 +384,13 @@ fn mlflow() -> Module {
         // injection needed back).
         needs: vec![
             ResourceDemand {
-                resource: "postgres_database".into(),
+                resource: Role::RELATIONAL_DB.into(),
                 name: "mlflow".into(),
                 provider: None,
                 inject: vec![],
             },
             ResourceDemand {
-                resource: "object_store".into(),
+                resource: Role::OBJECT_STORE.into(),
                 name: "mlflow".into(),
                 provider: None,
                 inject: vec![],
@@ -393,7 +398,7 @@ fn mlflow() -> Module {
         ],
         services: vec![ServiceSpec {
             name: "mlflow".into(),
-            role: Role::new("experiment_tracking"),
+            role: Role::experiment_tracking(),
             placement: container("mlflow"),
             endpoints: vec![
                 Endpoint {
@@ -462,7 +467,7 @@ fn unity_catalog() -> Module {
         conflicts_with: vec![],
         needs: vec![
             ResourceDemand {
-                resource: "postgres_database".into(),
+                resource: Role::RELATIONAL_DB.into(),
                 name: "unitycatalog".into(),
                 provider: None,
                 // The provider's connection-string coordinate lands in UC's env as
@@ -473,7 +478,7 @@ fn unity_catalog() -> Module {
                 }],
             },
             ResourceDemand {
-                resource: "object_store".into(),
+                resource: Role::OBJECT_STORE.into(),
                 name: "unity".into(),
                 provider: None,
                 inject: vec![],
@@ -481,7 +486,7 @@ fn unity_catalog() -> Module {
         ],
         services: vec![ServiceSpec {
             name: "unitycatalog".into(),
-            role: Role::new("data_catalog"),
+            role: Role::data_catalog(),
             placement: container("unitycatalog"),
             endpoints: vec![
                 Endpoint {
@@ -527,7 +532,7 @@ fn trino() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "trino".into(),
-            role: Role::new("sql_engine"),
+            role: Role::sql_engine(),
             placement: container("trino"),
             endpoints: vec![Endpoint {
                 id: "ui".into(),
@@ -569,7 +574,7 @@ fn jaeger() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "jaeger".into(),
-            role: Role::new("tracing"),
+            role: Role::tracing(),
             placement: container("jaeger"),
             endpoints: vec![
                 Endpoint {
@@ -618,7 +623,7 @@ fn notebooks() -> Module {
         needs: vec![],
         services: vec![ServiceSpec {
             name: "notebooks".into(),
-            role: Role::new("notebook_server"),
+            role: Role::notebook_server(),
             placement: container("notebooks"),
             endpoints: vec![Endpoint {
                 id: "ui".into(),

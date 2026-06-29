@@ -82,7 +82,7 @@ impl std::fmt::Display for ModuleId {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provides {
     /// Resource kinds this module *provisions* for other modules, keyed by kind
-    /// (e.g. `"postgres_database"`, `"s3_bucket"`). A consuming module declares a
+    /// (e.g. `"relational_db"`, `"object_store"`). A consuming module declares a
     /// [`ResourceDemand`] for a kind; the planner finds the provider here, ensures it
     /// is deployed, provisions the named resource, and renders the provider's
     /// coordinate templates back into the consumer (see [`ResourceProvider`]).
@@ -152,6 +152,13 @@ impl ResourceProvider {
     /// The reserved coordinate name carrying the
     /// [`provider_kind`](ResourceProvider::provider_kind) tag.
     pub const PROVIDER_KIND_COORDINATE: &'static str = "provider_kind";
+
+    /// The S3 flavour of the `object_store` role.
+    pub const KIND_S3: &'static str = "s3";
+    /// The Azure Blob flavour of the `object_store` role.
+    pub const KIND_AZURE_BLOB: &'static str = "azure_blob";
+    /// The Postgres flavour of the `relational_db` role.
+    pub const KIND_POSTGRES: &'static str = "postgres";
 
     /// The template for a named coordinate, if this provider offers it. The reserved
     /// `provider_kind` coordinate resolves to the provider's
