@@ -162,7 +162,7 @@ fn postgres_init_creates_the_same_databases() {
 }
 
 #[test]
-fn env_file_has_the_same_variables() {
+fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     let arts = render(&default_selection());
     let kv = |s: &str| -> BTreeMap<String, String> {
         s.lines()
@@ -173,10 +173,59 @@ fn env_file_has_the_same_variables() {
             })
             .collect()
     };
+    let got = kv(&arts.env);
+    let want = kv(ENV_FIXTURE);
+
+    // Every var trestle shipped is still present and unchanged, with one deliberate
+    // exception: `MLFLOW_S3_ENDPOINT_URL`. Trestle pointed it at the host
+    // (`http://localhost:${SEAWEEDFS_S3_PORT}`), which is wrong from inside the compose
+    // network; the planner now injects the object_store provider's in-network `endpoint`
+    // coordinate (`http://seaweedfs:8333`) instead — a behavioral fix, not a regression.
+    for (k, v) in &want {
+        if k == "MLFLOW_S3_ENDPOINT_URL" {
+            continue;
+        }
+        assert_eq!(
+            got.get(k),
+            Some(v),
+            "rendered .env dropped or changed trestle var `{k}`"
+        );
+    }
     assert_eq!(
-        kv(&arts.env),
-        kv(ENV_FIXTURE),
-        "rendered .env has different variables than trestle"
+        got.get("MLFLOW_S3_ENDPOINT_URL").map(String::as_str),
+        Some("http://seaweedfs:8333"),
+        "MLFLOW_S3_ENDPOINT_URL should be the in-network object_store endpoint"
+    );
+
+    // The coordinate-injection rework adds these role-generic coordinates, sourced from the
+    // chosen providers rather than hard-coded in fragments. Each consumer maps a role-generic
+    // coordinate to its own service-specific key.
+    assert_eq!(
+        got.get("MLFLOW_ARTIFACTS_DESTINATION").map(String::as_str),
+        Some("s3://mlflow"),
+        "MLflow's artifact destination is injected from the object_store `uri` coordinate"
+    );
+    assert_eq!(
+        got.get("MLFLOW_BACKEND_STORE_URI").map(String::as_str),
+        Some(
+            "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/mlflow"
+        ),
+        "MLflow's backend store is injected from the relational_db `url` coordinate"
+    );
+    assert_eq!(
+        got.get("S3_ENDPOINT").map(String::as_str),
+        Some("http://seaweedfs:8333"),
+        "UC's S3 endpoint is injected from the object_store `endpoint` coordinate"
+    );
+    // The S3 credentials still come from the chosen provider's own env contribution (not
+    // injected per-consumer), so they remain present with the SeaweedFS values.
+    assert_eq!(
+        got.get("AWS_ACCESS_KEY_ID").map(String::as_str),
+        Some("seaweedfs")
+    );
+    assert_eq!(
+        got.get("AWS_DEFAULT_REGION").map(String::as_str),
+        Some("us-east-1")
     );
 }
 

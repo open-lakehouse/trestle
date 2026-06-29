@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use olai_stack_topology::{
     Catalog, Injection, Module, ModuleId, Placement, PlanCtx, PlanError, Provides, RenderSpec,
-    ResourceDemand, ResourceProvider, Role, Selection, ServiceSpec, baseline_catalog, plan,
+    ResourceDemand, ResourceProvider, Role, RoleContract, Selection, ServiceSpec, baseline_catalog,
+    plan,
 };
 
 /// Build a minimal provider module that provisions `kind` and vends the given
@@ -383,9 +384,9 @@ fn preference_selects_azurite_and_drops_aws() {
 }
 
 #[test]
-fn consumer_artifacts_uri_follows_the_chosen_provider() {
-    // A consumer that injects the object_store `artifacts_uri` coordinate gets the
-    // S3-shaped value by default and the Azure-shaped value under an Azurite preference.
+fn consumer_uri_follows_the_chosen_provider() {
+    // A consumer that injects the object_store `uri` coordinate gets the S3-shaped value
+    // by default and the Azure-shaped value under an Azurite preference.
     let app = consumer(
         "store-app",
         vec![ResourceDemand {
@@ -394,7 +395,7 @@ fn consumer_artifacts_uri_follows_the_chosen_provider() {
             provider: None,
             inject: vec![Injection {
                 key: "STORE_URI".into(),
-                coordinate: "artifacts_uri".into(),
+                coordinate: "uri".into(),
             }],
         }],
     );
@@ -439,7 +440,7 @@ fn a_demand_pin_overrides_preference() {
             provider: Some(ModuleId::from("local-stack-seaweedfs")),
             inject: vec![Injection {
                 key: "STORE_URI".into(),
-                coordinate: "artifacts_uri".into(),
+                coordinate: "uri".into(),
             }],
         }],
     );
@@ -471,8 +472,7 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
         provider_kind: Some("s3".into()),
         ..Default::default()
     };
-    s3.coordinates
-        .insert("artifacts_uri".into(), "s3://{name}".into());
+    s3.coordinates.insert("uri".into(), "s3://{name}".into());
     let mut a = provider("prov-s3", "object_store", &[]);
     a.provides
         .resource_kinds
@@ -546,7 +546,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
                 provider: None,
                 inject: vec![Injection {
                     key: "UC_MANAGED_URI".into(),
-                    coordinate: "artifacts_uri".into(),
+                    coordinate: "uri".into(),
                 }],
             },
             ResourceDemand {
@@ -555,7 +555,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
                 provider: None,
                 inject: vec![Injection {
                     key: "UC_EXTERNAL_URI".into(),
-                    coordinate: "artifacts_uri".into(),
+                    coordinate: "uri".into(),
                 }],
             },
         ],
@@ -602,7 +602,7 @@ fn same_role_demands_can_pin_different_providers() {
                 provider: Some(ModuleId::from("local-stack-seaweedfs")),
                 inject: vec![Injection {
                     key: "UC_MANAGED_URI".into(),
-                    coordinate: "artifacts_uri".into(),
+                    coordinate: "uri".into(),
                 }],
             },
             ResourceDemand {
@@ -611,7 +611,7 @@ fn same_role_demands_can_pin_different_providers() {
                 provider: Some(ModuleId::from("local-stack-azurite")),
                 inject: vec![Injection {
                     key: "UC_EXTERNAL_URI".into(),
-                    coordinate: "artifacts_uri".into(),
+                    coordinate: "uri".into(),
                 }],
             },
         ],
@@ -638,5 +638,64 @@ fn same_role_demands_can_pin_different_providers() {
     assert_eq!(
         env.get("UC_EXTERNAL_URI"),
         Some("wasbs://uc-external@devstoreaccount1.blob.core.windows.net")
+    );
+}
+
+#[test]
+fn provider_missing_a_required_coordinate_fails_the_contract() {
+    // A registered role contract requires `endpoint`, but this provider only renders
+    // `uri` — planning must fail at the contract check, naming the missing coordinate.
+    let store = provider("half-store", "object_store", &[("uri", "x://{name}")]);
+    let app = consumer(
+        "needs-store",
+        vec![ResourceDemand {
+            resource: "object_store".into(),
+            name: "data".into(),
+            provider: None,
+            inject: vec![],
+        }],
+    );
+    let catalog = Catalog::from_modules([store, app]).with_role_contract(RoleContract::new(
+        Role::object_store(),
+        [
+            ResourceProvider::URI_COORDINATE,
+            ResourceProvider::ENDPOINT_COORDINATE,
+        ],
+    ));
+    let err = plan(
+        &Selection::modules(["needs-store"]),
+        &catalog,
+        &PlanCtx::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            PlanError::IncompleteProviderContract { ref role, ref coordinate, .. }
+                if role == "object_store" && coordinate == "endpoint"
+        ),
+        "expected IncompleteProviderContract for the missing endpoint, got {err:?}"
+    );
+}
+
+#[test]
+fn baseline_object_store_providers_satisfy_their_contract() {
+    // Both default and Azurite-preferred plans pass the baseline's object_store and
+    // relational_db contracts (no IncompleteProviderContract).
+    assert!(
+        plan(
+            &Selection::modules(["local-stack-unity-catalog", "local-stack-mlflow"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .is_ok()
+    );
+    assert!(
+        plan(
+            &Selection::modules(["local-stack-unity-catalog", "local-stack-mlflow"]),
+            &baseline_catalog(),
+            &azurite_preferred(),
+        )
+        .is_ok()
     );
 }

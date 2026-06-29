@@ -15,11 +15,15 @@ services:
       seaweedfs-init:
         condition: service_completed_successfully
     environment:
+      # DATABASE_URL and S3_ENDPOINT are injected coordinates (the chosen relational_db `url`
+      # and object_store `endpoint`), so UC follows whichever providers were chosen. The AWS_*
+      # credentials come from the chosen S3 provider's env contribution, read with `:-`
+      # fallbacks.
       DATABASE_URL: ${UC_DATABASE_URL}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
       AWS_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
-      S3_ENDPOINT: http://seaweedfs:8333
+      S3_ENDPOINT: ${S3_ENDPOINT}
     expose:
       - "8080"
     healthcheck:

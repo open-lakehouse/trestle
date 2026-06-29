@@ -186,6 +186,40 @@ impl std::fmt::Display for Role {
     }
 }
 
+/// The coordinate contract for a resource role: the named coordinates every provider of
+/// the role must render.
+///
+/// A consumer reads a role's coordinates by stable name regardless of which provider the
+/// planner chose (SeaweedFS vs Azurite for `object_store`); the contract is what makes
+/// that promise checkable. The planner validates, at plan time, that each chosen provider
+/// renders every [`required`](RoleContract::required_coordinates) coordinate — surfacing a
+/// gap as `IncompleteProviderContract` instead of only later, when a consumer happens to
+/// inject the missing one. Flavour-specific credential coordinates (S3's `access_key_id`
+/// vs Azure's `connection_string`) are intentionally left out of `required_coordinates`:
+/// they are well-known but optional, and a consumer injects whichever its
+/// [`provider_kind`](crate::ResourceProvider::provider_kind) needs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleContract {
+    /// The role this contract governs.
+    pub role: Role,
+    /// The coordinate names every provider of [`role`](RoleContract::role) must render.
+    /// (`provider_kind` is always implicitly available and need not be listed.)
+    pub required_coordinates: Vec<String>,
+}
+
+impl RoleContract {
+    /// A contract for `role` requiring the given coordinate names.
+    pub fn new(
+        role: impl Into<Role>,
+        required: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        RoleContract {
+            role: role.into(),
+            required_coordinates: required.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// One service in an environment: a concrete implementation of a [`Role`], where
 /// it runs, what it offers, and what it depends on.
 ///

@@ -81,5 +81,5 @@ pub use plan_env::{
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
 pub use resolve_graph::{Edge, ResolveError, ResolvedGraph, resolve, resolve_with};
-pub use role::{Role, ServiceSpec};
+pub use role::{KnownRole, Role, RoleContract, ServiceSpec};
 pub use surface::SurfaceMode;

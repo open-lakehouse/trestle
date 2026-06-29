@@ -36,7 +36,7 @@
 //! [`PlanError::PrefixCollision`]: the planner fails, and the fix is an explicit
 //! prefix override on one of them — making the exception visible and local.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
@@ -190,6 +190,32 @@ pub enum PlanError {
         /// The missing coordinate name.
         coordinate: String,
     },
+    /// A chosen provider does not render a coordinate its role's contract requires. Caught
+    /// at plan time for every provider, before any consumer injects the missing coordinate.
+    #[error(
+        "provider `{provider}` for role `{role}` is missing required coordinate `{coordinate}`"
+    )]
+    IncompleteProviderContract {
+        /// The provider module that fails the contract.
+        provider: ModuleId,
+        /// The role whose contract is unmet.
+        role: String,
+        /// The required coordinate the provider does not render.
+        coordinate: String,
+    },
+    /// Two or more providers of the same resource role are in one environment without an
+    /// explicit per-demand pin selecting each. The fix is to pin each demand's provider or
+    /// drop one provider from the selection.
+    #[error(
+        "role `{role}` has multiple unpinned providers {providers:?} in one environment; \
+         pin each demand's provider or remove one"
+    )]
+    ConflictingRoleProviders {
+        /// The over-subscribed role.
+        role: String,
+        /// The provider module ids present for the role (sorted).
+        providers: Vec<ModuleId>,
+    },
 }
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -302,6 +328,9 @@ pub fn plan(
     // Resolve the selection, auto-provisioning a provider for every resource demand
     // (a demanded relational store, object store, …) before anything else runs.
     let graph = resolve_with_demands(selection, catalog, ctx)?;
+
+    // Every provider chosen to satisfy a demand must honor its role's coordinate contract.
+    validate_contracts(&graph, catalog, ctx)?;
 
     // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
     // order). Grouping by provider — not by abstract role — is what lets one object-store
@@ -716,6 +745,48 @@ fn resolve_coordinate(
             coordinate: coordinate.to_string(),
         })?;
     Ok(template.replace("{name}", &demand.name))
+}
+
+/// Validate that every provider chosen to satisfy a demand renders all the coordinates
+/// its role's [`RoleContract`](crate::RoleContract) requires.
+///
+/// Runs once per `(demand role, chosen provider)` pair. A contract gap surfaces here as
+/// [`PlanError::IncompleteProviderContract`] — at plan time, for the provider — rather
+/// than later as an [`PlanError::UnknownCoordinate`] only if some consumer happens to
+/// inject the missing coordinate. Roles without a registered contract are unconstrained.
+fn validate_contracts(
+    graph: &ResolvedGraph,
+    catalog: &Catalog,
+    ctx: &PlanCtx,
+) -> Result<(), PlanError> {
+    let mut checked: BTreeSet<(String, ModuleId)> = BTreeSet::new();
+    for module in &graph.nodes {
+        for demand in &module.needs {
+            let role = &demand.resource;
+            let Some(contract) = catalog.contract_for(role) else {
+                continue;
+            };
+            let provider_id = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+            if !checked.insert((role.clone(), provider_id.clone())) {
+                continue;
+            }
+            let provider = catalog
+                .get(&provider_id)
+                .expect("provider id is in catalog");
+            let rp = provider.provides.resource_kinds.get(role);
+            for coordinate in &contract.required_coordinates {
+                let present = rp.is_some_and(|rp| rp.coordinate(coordinate).is_some());
+                if !present {
+                    return Err(PlanError::IncompleteProviderContract {
+                        provider: provider_id.clone(),
+                        role: role.clone(),
+                        coordinate: coordinate.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Claim `prefix` for `service.endpoint`, erroring if another endpoint already did.

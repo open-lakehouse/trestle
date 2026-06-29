@@ -33,13 +33,16 @@ fn main() {
         .map(|a| normalize_module_id(a))
         .collect();
     let selection = if picks.is_empty() {
-        Selection::modules([
-            "local-stack-envoy",
-            "local-stack-seaweedfs",
-            "local-stack-postgres",
-            "local-stack-unity-catalog",
-            "local-stack-mlflow",
-        ])
+        // The default lakehouse. Under `--azurite` the object store is left to MLflow/UC's
+        // demands (resolved to Azurite via the preference below) instead of selecting
+        // SeaweedFS directly — selecting both object_store providers without a pin is a
+        // `ConflictingRoleProviders` error.
+        let mut mods = vec!["local-stack-envoy", "local-stack-postgres"];
+        if !prefer_azurite {
+            mods.push("local-stack-seaweedfs");
+        }
+        mods.extend(["local-stack-unity-catalog", "local-stack-mlflow"]);
+        Selection::modules(mods)
     } else {
         Selection::modules(picks)
     };

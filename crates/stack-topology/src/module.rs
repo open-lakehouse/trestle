@@ -137,13 +137,14 @@ pub struct ResourceProvider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_kind: Option<String>,
     /// The named coordinate templates a consumer can request, keyed by coordinate
-    /// name (e.g. `"url"`, `"endpoint"`, `"artifacts_uri"`).
+    /// name (e.g. `"url"`, `"endpoint"`, `"uri"`). The well-known names are the
+    /// `*_COORDINATE` constants on this type.
     ///
-    /// A **resource role** defines a *coordinate contract* — the names every provider
-    /// for that role renders — so a consumer reads the same keys regardless of which
-    /// provider the planner chose. For example the `object_store` role's contract is
-    /// `artifacts_uri`, `endpoint`, and the `provider_kind` tag; SeaweedFS fills them
-    /// with the `s3://` shape, Azurite with the `wasbs://` shape.
+    /// A **resource role** defines a *coordinate contract* (a [`RoleContract`](crate::RoleContract))
+    /// — the names every provider for that role renders — so a consumer reads the same keys
+    /// regardless of which provider the planner chose. For example the `object_store` role's
+    /// contract is `uri`, `bucket`, `endpoint`, and the `provider_kind` tag; SeaweedFS fills
+    /// them with the `s3://` shape, Azurite with the `wasbs://` shape.
     #[serde(default)]
     pub coordinates: BTreeMap<String, String>,
 }
@@ -159,6 +160,33 @@ impl ResourceProvider {
     pub const KIND_AZURE_BLOB: &'static str = "azure_blob";
     /// The Postgres flavour of the `relational_db` role.
     pub const KIND_POSTGRES: &'static str = "postgres";
+
+    // --- Well-known coordinate names ---
+    //
+    // The vocabulary a role's coordinate contract draws from. Like
+    // [`PROVIDER_KIND_COORDINATE`](ResourceProvider::PROVIDER_KIND_COORDINATE), these are
+    // *conventions* a consumer can rely on across providers of a role — not a closed set.
+    // A role declares which it requires via a `RoleContract`; flavour-specific credential
+    // coordinates are well-known but optional (a consumer injects whichever its
+    // `provider_kind` needs).
+
+    /// A role-generic, client-addressable URI for the resource at `{name}` (e.g.
+    /// `s3://{name}`, `wasbs://{name}@…`).
+    pub const URI_COORDINATE: &'static str = "uri";
+    /// The bucket/container name (typically just `{name}`).
+    pub const BUCKET_COORDINATE: &'static str = "bucket";
+    /// The service endpoint a client connects to (e.g. `http://seaweedfs:8333`).
+    pub const ENDPOINT_COORDINATE: &'static str = "endpoint";
+    /// An access key id (S3-style credentials).
+    pub const ACCESS_KEY_ID_COORDINATE: &'static str = "access_key_id";
+    /// A secret access key (S3-style credentials).
+    pub const SECRET_ACCESS_KEY_COORDINATE: &'static str = "secret_access_key";
+    /// A region (S3-style credentials).
+    pub const REGION_COORDINATE: &'static str = "region";
+    /// A connection string (Azure-style credentials).
+    pub const CONNECTION_STRING_COORDINATE: &'static str = "connection_string";
+    /// A connection URL (e.g. a `relational_db` provider's `postgresql://…/{name}`).
+    pub const URL_COORDINATE: &'static str = "url";
 
     /// The template for a named coordinate, if this provider offers it. The reserved
     /// `provider_kind` coordinate resolves to the provider's

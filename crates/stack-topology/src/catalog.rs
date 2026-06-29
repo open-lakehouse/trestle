@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 
 use crate::module::{Module, ModuleId};
+use crate::role::RoleContract;
 
 pub(crate) mod baseline;
 
@@ -33,6 +34,9 @@ pub struct Catalog {
     /// uses when a role has more than one provider and neither a demand pin nor a
     /// `PlanCtx` preference selects one. (Role → provider module id.)
     default_provider: BTreeMap<String, ModuleId>,
+    /// Coordinate contract per resource role: the coordinate names every provider of a
+    /// role must render, validated at plan time. (Role string → contract.)
+    contracts: BTreeMap<String, RoleContract>,
 }
 
 impl Catalog {
@@ -69,6 +73,10 @@ impl Catalog {
         // Overlay defaults too — a later catalog can override a role's default provider.
         for (role, provider) in other.default_provider {
             self.default_provider.insert(role, provider);
+        }
+        // Overlay role contracts likewise.
+        for (role, contract) in other.contracts {
+            self.contracts.insert(role, contract);
         }
         self
     }
@@ -134,6 +142,19 @@ impl Catalog {
     /// The declared default provider for `role`, if any.
     pub fn default_provider_for(&self, role: &str) -> Option<&ModuleId> {
         self.default_provider.get(role)
+    }
+
+    /// Register a role's coordinate contract (builder-style; returns `self`). The planner
+    /// validates each chosen provider against the contract for the role it satisfies.
+    pub fn with_role_contract(mut self, contract: RoleContract) -> Self {
+        self.contracts
+            .insert(contract.role.as_str().to_string(), contract);
+        self
+    }
+
+    /// The coordinate contract registered for `role`, if any.
+    pub fn contract_for(&self, role: &str) -> Option<&RoleContract> {
+        self.contracts.get(role)
     }
 
     /// The single provider for `resource_kind`, if exactly one module provisions it.
