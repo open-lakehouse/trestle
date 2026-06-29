@@ -32,13 +32,12 @@
 //! module fragment, `bootstrap.yaml.jinja` for the aggregated Envoy config rendered by
 //! [`crate::render_envoy`]). Each snippet is embedded via `include_str!` (relative paths
 //! reach out of `src/catalog/` as `../../templates/…`) and carried on the module's
-//! [`RenderSpec`]. The `.jinja` suffix is an editor hint that a file holds template holes
-//! rather than valid YAML — it does **not** pick the engine: a [`RenderSpec::Static`]
-//! snippet still does plain `${VAR}` substitution (no MiniJinja), and a
-//! [`RenderSpec::Template`] one is rendered with MiniJinja; the `fragment()` vs
-//! `template()` helper below is the authoritative signal. The one stack-dependent Static
-//! part — SeaweedFS's bucket-init lines — is a `${S3_BUCKET_MB_LINES}` placeholder the
-//! planner fills from the aggregated `s3_buckets`.
+//! [`RenderSpec`]. The `.jinja` suffix marks a MiniJinja template: every fragment is rendered
+//! against the typed [`RenderCtx`](crate::RenderCtx), so it reads plan-resolved values directly
+//! (`{{ env.DATA_ROOT }}`, `{{ connections.object_store.0.credential.access_key_id }}`) and
+//! branches on a resolved [`Connection`](crate::Connection) where it must. Plan-time values are
+//! rendered concrete; SeaweedFS's bucket-init lines, for instance, iterate the provisioned
+//! `objects` rather than splicing a planner-filled placeholder.
 
 use super::Catalog;
 use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
@@ -72,10 +71,6 @@ pub const API_PREFIX_EXTRA: &str = "api_prefix:";
 /// [`RenderCtx::dependencies`](crate::RenderCtx) — so a consumer never hard-codes which
 /// backend's init it waits for (it follows whichever provider the planner picked).
 pub const DEP_GATE_EXTRA: &str = "dep_gate";
-
-/// The placeholder SeaweedFS's fragment uses for the planner-injected per-bucket
-/// `aws s3 mb` lines.
-pub const S3_BUCKET_MB_LINES_VAR: &str = "S3_BUCKET_MB_LINES";
 
 /// The render-env key carrying the stack's root data directory, injected into *every*
 /// module's render env (see [`PlanCtx::data_root`](crate::PlanCtx::data_root)).
@@ -134,17 +129,9 @@ fn container(service: &str) -> Placement {
     }
 }
 
-/// Helper: a `RenderSpec::Static` carrying just a compose fragment (no extra files).
-fn fragment(text: &str) -> RenderSpec {
-    RenderSpec::Static {
-        fragment: text.to_string(),
-        files: vec![],
-    }
-}
-
-/// Helper: a `RenderSpec::Template` (MiniJinja) carrying just a compose fragment. Used by a
-/// module whose fragment must branch on a resolved [`Connection`](crate::Connection) — e.g.
-/// the chosen object-store credential flavour — which flat `${VAR}` substitution cannot do.
+/// Helper: a [`RenderSpec::Template`] (MiniJinja) carrying just a compose fragment (no extra
+/// files). Every module's fragment is rendered against the typed [`RenderCtx`](crate::RenderCtx),
+/// so it reads plan-resolved values (`{{ env.X }}`, `{{ connections.* }}`) directly.
 fn template(text: &str) -> RenderSpec {
     RenderSpec::Template {
         fragment: text.to_string(),
@@ -193,23 +180,24 @@ fn envoy() -> Module {
 /// never on the gateway surface).
 fn postgres() -> Module {
     let mut provides = Provides::default();
+    // The Postgres container reads these to initialize on first boot, so they stay in `.env`.
+    // (Ports are written concretely in the fragment, so no `*_PORT` var is needed.)
     for (k, v) in [
         ("POSTGRES_USER", "postgres"),
         ("POSTGRES_PASSWORD", "postgres"),
         ("POSTGRES_DB", "postgres"),
-        ("POSTGRES_PORT", "5432"),
-        ("PGWEB_PORT", "8081"),
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
     // Provisions `relational_db` resources; vends a typed relational connection. The
     // resource-kind key matches the service's role (`relational_db`) — one identity, so
-    // role-exclusivity keys off the same name. The credential is folded into the URL.
+    // role-exclusivity keys off the same name. The credential is folded into the URL,
+    // concretely (matching the container's configured `postgres`/`postgres`) — no compose
+    // `${VAR}` fallback for a consumer to resolve at run time.
     provides.resource_kinds.insert(
         Role::RELATIONAL_DB.into(),
         ConnectionTemplate(Connection::RelationalDb {
-            url: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
-                .into(),
+            url: "postgresql://postgres:postgres@db:5432/{name}".into(),
         }),
     );
     // A consumer that demands `relational_db` should wait for the `db` service to be healthy.
@@ -241,29 +229,23 @@ fn postgres() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!(
+        render: template(include_str!(
             "../../templates/modules/postgres/compose.yaml.jinja"
         )),
     }
 }
 
 /// `seaweedfs` — the S3-compatible object store. Reached directly by SDKs
-/// at its host port (not multiplexed behind the gateway). Its compose fragment carries
-/// a `${S3_BUCKET_MB_LINES}` placeholder the planner fills from the aggregated bucket
-/// list.
+/// at its host port (not multiplexed behind the gateway). Its compose fragment iterates the
+/// buckets it provisions (`objects`) to build the one-shot init.
 fn seaweedfs() -> Module {
     let mut provides = Provides::default();
-    // Only this flavour's non-credential ports are hand-listed. The S3 credentials
-    // (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are *not*
-    // listed here: the planner derives them from the typed S3 credential below (via
-    // `Connection::standard_env`), so they are stated once and enter `.env` only when
-    // SeaweedFS is the chosen object_store — no `AWS_*` leak under an Azure provider.
-    for (k, v) in [
-        ("SEAWEEDFS_S3_PORT", "9000"),
-        ("SEAWEEDFS_MASTER_PORT", "9333"),
-    ] {
-        provides.env_vars.insert(k.into(), v.into());
-    }
+    // No env vars are declared here: ports are written concretely in the fragment, and the S3
+    // credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are
+    // derived from the typed S3 credential below (via `Connection::standard_env`), so they are
+    // stated once and enter `.env` only when SeaweedFS is the chosen object_store — no `AWS_*`
+    // leak under an Azure provider.
+    //
     // The S3 flavour of the `object_store` role: the role-generic addressing
     // (`uri`/`bucket`/`endpoint`) plus an S3 credential a consumer may bind explicitly.
     provides.resource_kinds.insert(
@@ -315,7 +297,7 @@ fn seaweedfs() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!(
+        render: template(include_str!(
             "../../templates/modules/seaweedfs/compose.yaml.jinja"
         )),
     }
@@ -598,9 +580,6 @@ fn jaeger() -> Module {
         "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT".into(),
         "http://localhost:4317".into(),
     );
-    provides
-        .env_vars
-        .insert("JAEGER_UI_PORT".into(), "16686".into());
     Module {
         id: ModuleId::from("jaeger"),
         display_name: Some("Jaeger tracing".into()),
@@ -637,7 +616,7 @@ fn jaeger() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!(
+        render: template(include_str!(
             "../../templates/modules/jaeger/compose.yaml.jinja"
         )),
     }

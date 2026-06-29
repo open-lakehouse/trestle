@@ -4,19 +4,18 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-postgres}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
-      # Durable state under the stack's data root (`${DATA_ROOT}`, default ./.data), resolved at
-      # plan time from `PlanCtx.data_root` — relocating is one knob, not a per-fragment edit. The
-      # init script stays alongside the compose file.
-      - ${DATA_ROOT}/postgres:/var/lib/postgresql/data
+      # Durable state under the stack's data root, resolved at plan time from
+      # `PlanCtx.data_root` (default ./.data). The init script stays alongside the compose file.
+      - {{ env.DATA_ROOT }}/postgres:/var/lib/postgresql/data
       - ./docker/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -29,6 +28,6 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres?sslmode=disable
     ports:
-      - "${PGWEB_PORT:-8081}:8081"
+      - "8081:8081"

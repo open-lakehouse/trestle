@@ -180,9 +180,7 @@ fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
     let app_env = p.injected.get(&ModuleId::from("my-app")).unwrap();
     assert_eq!(
         app_env.get("APP_DATABASE_URL"),
-        Some(
-            "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/appdb"
-        )
+        Some("postgresql://postgres:postgres@db:5432/appdb")
     );
 }
 

@@ -178,8 +178,20 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     //     (`http://envoy:9100`) instead — consumers reach the store through Envoy.
     //   * `UC_DATABASE_URL` / `UC_IMAGE` — UC's fragment now reads its backend URL from the
     //     resolved connection directly and pins its image inline, so neither is round-tripped
-    //     through `.env` any more. They are asserted absent below.
-    let dropped = ["UC_DATABASE_URL", "UC_IMAGE"];
+    //     through `.env` any more.
+    //   * `POSTGRES_PORT` / `PGWEB_PORT` / `SEAWEEDFS_MASTER_PORT` / `SEAWEEDFS_S3_PORT` /
+    //     `JAEGER_UI_PORT` — ports are now written concretely in the fragments, so these
+    //     `*_PORT` vars are no longer referenced and no longer emitted.
+    //   All are asserted absent below.
+    let dropped = [
+        "UC_DATABASE_URL",
+        "UC_IMAGE",
+        "POSTGRES_PORT",
+        "PGWEB_PORT",
+        "SEAWEEDFS_MASTER_PORT",
+        "SEAWEEDFS_S3_PORT",
+        "JAEGER_UI_PORT",
+    ];
     for (k, v) in &want {
         if k == "MLFLOW_S3_ENDPOINT_URL" || dropped.contains(&k.as_str()) {
             continue;
@@ -193,7 +205,7 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     for k in dropped {
         assert!(
             !got.contains_key(k),
-            "`{k}` should no longer be injected into .env (UC reads it from the connection)"
+            "`{k}` should no longer be emitted into .env (read from the connection or written concretely)"
         );
     }
     assert_eq!(
@@ -212,9 +224,7 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     );
     assert_eq!(
         got.get("MLFLOW_BACKEND_STORE_URI").map(String::as_str),
-        Some(
-            "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/mlflow"
-        ),
+        Some("postgresql://postgres:postgres@db:5432/mlflow"),
         "MLflow's backend store is injected from the relational_db `url` coordinate"
     );
     // `S3_ENDPOINT` is no longer injected: UC's only consumer of it now reads
@@ -697,4 +707,95 @@ fn data_root_is_injected_and_relocatable() {
         None,
         "DATA_ROOT is render-only (baked at plan time), so it stays out of .env"
     );
+}
+
+#[test]
+fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
+    use olai_stack_topology::ModuleId;
+
+    // Every fragment is rendered whole from the typed context: concrete ports, concrete
+    // credentials, and zero `${VAR}` compose fallbacks left for runtime resolution. Include
+    // jaeger explicitly (it is not in the default selection) so its fragment is rendered too.
+    let p = plan(
+        &Selection::modules([
+            "envoy",
+            "seaweedfs",
+            "postgres",
+            "unity-catalog",
+            "mlflow",
+            "jaeger",
+        ]),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .unwrap();
+    let frag = |id: &str| {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| out.fragment.clone())
+            .unwrap()
+    };
+
+    // No fragment carries a compose `${VAR}` in its rendered body — all values are wired in at
+    // plan time. (Header comments may *mention* `${VAR}` explanatorily, so check non-comment
+    // lines only.)
+    let body = |f: &str| -> String {
+        f.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect()
+    };
+    for id in ["postgres", "seaweedfs", "jaeger", "unity-catalog", "mlflow"] {
+        let f = frag(id);
+        assert!(
+            !body(&f).contains("${"),
+            "{id} fragment still has a ${{VAR}} in its body: {f}"
+        );
+        // Each is valid YAML.
+        let _: Value = serde_yaml::from_str(&f).expect("fragment must be valid YAML");
+    }
+
+    // Concrete service ports (no `${PORT:-default}` indirection).
+    assert!(frag("postgres").contains("\"5432:5432\""));
+    assert!(frag("postgres").contains("\"8081:8081\""));
+    assert!(frag("seaweedfs").contains("\"9333:9333\""));
+    assert!(frag("seaweedfs").contains("\"9000:8333\""));
+    assert!(frag("jaeger").contains("\"16686:16686\""));
+
+    // Postgres credentials are concrete, in both the container env and the pgweb URL.
+    let pg = frag("postgres");
+    assert!(pg.contains("POSTGRES_USER: postgres"));
+    assert!(pg.contains("postgres://postgres:postgres@db:5432/postgres"));
+
+    // seaweedfs-init reads its S3 credential from the typed connection (the resolved
+    // `seaweedfs`/`us-east-1` values), with no `${AWS_*:-…}` fallback, and iterates the
+    // provisioned buckets directly.
+    let sw = frag("seaweedfs");
+    assert!(sw.contains("AWS_ACCESS_KEY_ID: seaweedfs"));
+    assert!(sw.contains("AWS_DEFAULT_REGION: us-east-1"));
+    assert!(sw.contains("s3 mb s3://unity"));
+    assert!(sw.contains("s3 mb s3://mlflow"));
+
+    // Edge case: seaweedfs selected with no object_store consumer → it provisions no buckets,
+    // so its own connection isn't in the render context. The init service (which reads that
+    // credential) must be skipped rather than failing to render.
+    let p_bare = plan(
+        &Selection::modules(["seaweedfs"]),
+        &baseline_catalog(),
+        &PlanCtx::default(),
+    )
+    .expect("seaweedfs alone should plan");
+    let sw_bare = p_bare
+        .renders
+        .iter()
+        .find(|(m, _)| m == &ModuleId::from("seaweedfs"))
+        .map(|(_, out)| out.fragment.clone())
+        .unwrap();
+    let _: Value =
+        serde_yaml::from_str(&sw_bare).expect("bare seaweedfs fragment must be valid YAML");
+    assert!(
+        !sw_bare.contains("seaweedfs-init"),
+        "no buckets → no init service: {sw_bare}"
+    );
+    assert!(!sw_bare.contains("${"), "still no ${{VAR}}: {sw_bare}");
 }

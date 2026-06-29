@@ -18,16 +18,17 @@
 //!
 //! A provider declares a [`ConnectionTemplate`]: a [`Connection`] whose string fields may
 //! contain the `{name}` placeholder. The planner [`resolve`](ConnectionTemplate::resolve)s
-//! it per demand, substituting `{name}` with the demanded resource name. Compose-style
-//! `${VAR}` refs are left untouched (compose resolves them at run time), exactly as before.
+//! it per demand, substituting `{name}` with the demanded resource name. The remaining values
+//! are concrete (e.g. a relational URL embeds the configured credential directly), so a
+//! consumer binds a fully-resolved coordinate rather than deferring it to a compose `${VAR}`.
 
 use serde::{Deserialize, Serialize};
 
 /// A fully-resolved, typed connection to a provisioned resource.
 ///
-/// One variant per resource *flavour*. Every field is a final string value — the planner
-/// has already substituted `{name}` — though values may still carry compose `${VAR}` refs
-/// that compose resolves at run time.
+/// One variant per resource *flavour*. Every field is a final, concrete string value — the
+/// planner has already substituted `{name}`, and credentials/coordinates are wired in directly
+/// rather than deferred to a compose `${VAR}`.
 ///
 /// `#[non_exhaustive]`: a future flavour (a message queue, GCS, …) can be added without
 /// breaking downstream `match`es.
@@ -115,7 +116,8 @@ pub struct ConnectionTemplate(pub Connection);
 
 impl ConnectionTemplate {
     /// Resolve this template to a concrete [`Connection`] for the resource named `name`,
-    /// substituting every `{name}` placeholder. `${VAR}` compose refs are left untouched.
+    /// substituting every `{name}` placeholder. Only `{name}` is a template hole; all other
+    /// values are already concrete.
     pub fn resolve(&self, name: &str) -> Connection {
         let sub = |s: &str| s.replace("{name}", name);
         match &self.0 {
@@ -281,15 +283,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn relational_template_substitutes_name_and_keeps_compose_refs() {
+    fn relational_template_substitutes_name_into_concrete_url() {
         let t = ConnectionTemplate(Connection::RelationalDb {
-            url: "postgresql://${POSTGRES_USER:-postgres}@db:5432/{name}".into(),
+            url: "postgresql://postgres:postgres@db:5432/{name}".into(),
         });
         let c = t.resolve("appdb");
         assert_eq!(
             c.field(ConnectionField::Url),
-            Some("postgresql://${POSTGRES_USER:-postgres}@db:5432/appdb"),
-            "{{name}} is substituted; ${{VAR}} is left for compose"
+            Some("postgresql://postgres:postgres@db:5432/appdb"),
+            "{{name}} is substituted into an otherwise-concrete URL"
         );
     }
 
