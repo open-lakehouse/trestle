@@ -51,6 +51,7 @@
 
 mod artifacts;
 mod catalog;
+mod connection;
 mod endpoint;
 mod module;
 mod placement;
@@ -67,10 +68,11 @@ pub use artifacts::{
     render_postgres_init,
 };
 pub use catalog::{Catalog, baseline_catalog, baseline_selection};
+pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
 pub use module::{
-    Injection, Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec, ResourceDemand,
-    ResourceProvider,
+    ConnectionBinding, Knob, KnobKind, Module, ModuleId, PortDecl, Provides, RenderSpec,
+    ResourceDemand,
 };
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
@@ -81,5 +83,5 @@ pub use plan_env::{
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
 pub use resolve_graph::{Edge, ResolveError, ResolvedGraph, resolve, resolve_with};
-pub use role::{KnownRole, Role, RoleContract, ServiceSpec};
+pub use role::{KnownRole, Role, ServiceSpec};
 pub use surface::SurfaceMode;

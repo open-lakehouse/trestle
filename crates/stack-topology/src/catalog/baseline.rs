@@ -33,12 +33,11 @@
 //! placeholder the planner fills from the aggregated `s3_buckets`.
 
 use super::Catalog;
+use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 use crate::endpoint::{Endpoint, RouteIntent, Scheme};
-use crate::module::{
-    Injection, Module, ModuleId, Provides, RenderSpec, ResourceDemand, ResourceProvider,
-};
+use crate::module::{ConnectionBinding, Module, ModuleId, Provides, RenderSpec, ResourceDemand};
 use crate::placement::Placement;
-use crate::role::{Role, RoleContract, ServiceSpec};
+use crate::role::{Role, ServiceSpec};
 
 /// The well-known extras key naming where a service serves itself.
 pub const BASE_PATH_EXTRA: &str = "base_path";
@@ -83,22 +82,9 @@ pub fn baseline_catalog() -> Catalog {
         databricks_emulator_env(),
     ])
     .with_default_provider(Role::OBJECT_STORE, "local-stack-seaweedfs")
-    // Coordinate contracts: the coordinates every provider of a role must render, so a
-    // consumer reads the same names regardless of the chosen provider. Flavour-specific
-    // credential coordinates (S3 keys vs an Azure connection string) are optional and so
-    // not required here.
-    .with_role_contract(RoleContract::new(
-        Role::OBJECT_STORE,
-        [
-            ResourceProvider::URI_COORDINATE,
-            ResourceProvider::BUCKET_COORDINATE,
-            ResourceProvider::ENDPOINT_COORDINATE,
-        ],
-    ))
-    .with_role_contract(RoleContract::new(
-        Role::RELATIONAL_DB,
-        [ResourceProvider::URL_COORDINATE],
-    ))
+    // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
+    // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
+    // check.
 }
 
 /// The default lakehouse selection: the always-on gateway plus the default category
@@ -178,21 +164,16 @@ fn postgres() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
-    // Provisions `relational_db` resources; vends a connection-string coordinate. The
+    // Provisions `relational_db` resources; vends a typed relational connection. The
     // resource-kind key matches the service's role (`relational_db`) — one identity, so
-    // role-exclusivity and the coordinate contract key off the same name.
-    let mut pg = ResourceProvider {
-        provider_kind: Some(ResourceProvider::KIND_POSTGRES.into()),
-        ..Default::default()
-    };
-    pg.coordinates.insert(
-        "url".into(),
-        "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
-            .into(),
+    // role-exclusivity keys off the same name. The credential is folded into the URL.
+    provides.resource_kinds.insert(
+        Role::RELATIONAL_DB.into(),
+        ConnectionTemplate(Connection::RelationalDb {
+            url: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/{name}"
+                .into(),
+        }),
     );
-    provides
-        .resource_kinds
-        .insert(Role::RELATIONAL_DB.into(), pg);
     Module {
         id: ModuleId::from("local-stack-postgres"),
         display_name: Some("Postgres".into()),
@@ -241,29 +222,21 @@ fn seaweedfs() -> Module {
     ] {
         provides.env_vars.insert(k.into(), v.into());
     }
-    // The S3 flavour of the `object_store` role. Fills the role's coordinate contract
-    // (`uri`, `bucket`, `endpoint`, `provider_kind`) plus the S3-style credential
-    // coordinates a consumer may inject explicitly.
-    let mut object_store = ResourceProvider {
-        provider_kind: Some(ResourceProvider::KIND_S3.into()),
-        ..Default::default()
-    };
-    for (coord, tmpl) in [
-        (ResourceProvider::URI_COORDINATE, "s3://{name}"),
-        (ResourceProvider::BUCKET_COORDINATE, "{name}"),
-        (
-            ResourceProvider::ENDPOINT_COORDINATE,
-            "http://seaweedfs:8333",
-        ),
-        (ResourceProvider::ACCESS_KEY_ID_COORDINATE, "seaweedfs"),
-        (ResourceProvider::SECRET_ACCESS_KEY_COORDINATE, "seaweedfs"),
-        (ResourceProvider::REGION_COORDINATE, "us-east-1"),
-    ] {
-        object_store.coordinates.insert(coord.into(), tmpl.into());
-    }
-    provides
-        .resource_kinds
-        .insert(Role::OBJECT_STORE.into(), object_store);
+    // The S3 flavour of the `object_store` role: the role-generic addressing
+    // (`uri`/`bucket`/`endpoint`) plus an S3 credential a consumer may bind explicitly.
+    provides.resource_kinds.insert(
+        Role::OBJECT_STORE.into(),
+        ConnectionTemplate(Connection::ObjectStore {
+            uri: "s3://{name}".into(),
+            bucket: "{name}".into(),
+            endpoint: "http://seaweedfs:8333".into(),
+            credential: ObjectStoreCredential::S3 {
+                access_key_id: "seaweedfs".into(),
+                secret_access_key: "seaweedfs".into(),
+                region: "us-east-1".into(),
+            },
+        }),
+    );
     Module {
         id: ModuleId::from("local-stack-seaweedfs"),
         display_name: Some("SeaweedFS (local S3)".into()),
@@ -311,31 +284,20 @@ fn azurite() -> Module {
         .env_vars
         .insert("AZURITE_BLOB_PORT".into(), "10000".into());
 
-    // The Azure flavour of `object_store`: the same contract coordinate names as SeaweedFS
-    // (`uri`/`bucket`/`endpoint`), filled with the `wasbs://` shape, plus the Azure-style
-    // `connection_string` credential coordinate and an `azure_blob` provider_kind tag.
-    let mut object_store = ResourceProvider {
-        provider_kind: Some(ResourceProvider::KIND_AZURE_BLOB.into()),
-        ..Default::default()
-    };
-    object_store.coordinates.insert(
-        ResourceProvider::URI_COORDINATE.into(),
-        "wasbs://{name}@devstoreaccount1.blob.core.windows.net".into(),
+    // The Azure flavour of `object_store`: the same role-generic addressing as SeaweedFS
+    // (`uri`/`bucket`/`endpoint`), filled with the `wasbs://` shape, plus an Azure
+    // connection-string credential.
+    provides.resource_kinds.insert(
+        Role::OBJECT_STORE.into(),
+        ConnectionTemplate(Connection::ObjectStore {
+            uri: "wasbs://{name}@devstoreaccount1.blob.core.windows.net".into(),
+            bucket: "{name}".into(),
+            endpoint: "http://azurite:10000/devstoreaccount1".into(),
+            credential: ObjectStoreCredential::AzureBlob {
+                connection_string: CONN.into(),
+            },
+        }),
     );
-    object_store
-        .coordinates
-        .insert(ResourceProvider::BUCKET_COORDINATE.into(), "{name}".into());
-    object_store.coordinates.insert(
-        ResourceProvider::ENDPOINT_COORDINATE.into(),
-        "http://azurite:10000/devstoreaccount1".into(),
-    );
-    object_store.coordinates.insert(
-        ResourceProvider::CONNECTION_STRING_COORDINATE.into(),
-        CONN.into(),
-    );
-    provides
-        .resource_kinds
-        .insert(Role::OBJECT_STORE.into(), object_store);
 
     Module {
         id: ModuleId::from("local-stack-azurite"),
@@ -424,25 +386,20 @@ fn mlflow() -> Module {
                 resource: Role::RELATIONAL_DB.into(),
                 name: "mlflow".into(),
                 provider: None,
-                inject: vec![Injection {
-                    key: "MLFLOW_BACKEND_STORE_URI".into(),
-                    coordinate: ResourceProvider::URL_COORDINATE.into(),
-                }],
+                bind: ConnectionBinding {
+                    bind: vec![(ConnectionField::Url, "MLFLOW_BACKEND_STORE_URI".into())],
+                },
             },
             ResourceDemand {
                 resource: Role::OBJECT_STORE.into(),
                 name: "mlflow".into(),
                 provider: None,
-                inject: vec![
-                    Injection {
-                        key: "MLFLOW_ARTIFACTS_DESTINATION".into(),
-                        coordinate: ResourceProvider::URI_COORDINATE.into(),
-                    },
-                    Injection {
-                        key: "MLFLOW_S3_ENDPOINT_URL".into(),
-                        coordinate: ResourceProvider::ENDPOINT_COORDINATE.into(),
-                    },
-                ],
+                bind: ConnectionBinding {
+                    bind: vec![
+                        (ConnectionField::Uri, "MLFLOW_ARTIFACTS_DESTINATION".into()),
+                        (ConnectionField::Endpoint, "MLFLOW_S3_ENDPOINT_URL".into()),
+                    ],
+                },
             },
         ],
         services: vec![ServiceSpec {
@@ -519,25 +476,23 @@ fn unity_catalog() -> Module {
                 resource: Role::RELATIONAL_DB.into(),
                 name: "unitycatalog".into(),
                 provider: None,
-                // The provider's connection-string coordinate lands in UC's env as
-                // `UC_DATABASE_URL`, which its fragment reads.
-                inject: vec![Injection {
-                    key: "UC_DATABASE_URL".into(),
-                    coordinate: ResourceProvider::URL_COORDINATE.into(),
-                }],
+                // The relational connection's URL lands in UC's env as `UC_DATABASE_URL`,
+                // which its fragment reads.
+                bind: ConnectionBinding {
+                    bind: vec![(ConnectionField::Url, "UC_DATABASE_URL".into())],
+                },
             },
             ResourceDemand {
                 resource: Role::OBJECT_STORE.into(),
                 name: "unity".into(),
                 provider: None,
-                // The in-network object_store `endpoint` is injected so UC follows the chosen
+                // The in-network object_store `endpoint` is bound so UC follows the chosen
                 // provider rather than hard-coding `seaweedfs:8333`. The S3 credentials come
                 // from the chosen S3 provider's env contribution (read with `:-` fallbacks in
-                // the fragment), so they are not injected here.
-                inject: vec![Injection {
-                    key: "S3_ENDPOINT".into(),
-                    coordinate: ResourceProvider::ENDPOINT_COORDINATE.into(),
-                }],
+                // the fragment), so they are not bound here.
+                bind: ConnectionBinding {
+                    bind: vec![(ConnectionField::Endpoint, "S3_ENDPOINT".into())],
+                },
             },
         ],
         services: vec![ServiceSpec {

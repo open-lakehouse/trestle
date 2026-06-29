@@ -1,24 +1,20 @@
 //! Tests for the resource-demand layer: a module declares a `(kind, name)` it needs,
-//! and the planner auto-deploys a provider, provisions the named resource, and injects
-//! the provider's coordinates back into the consumer.
+//! and the planner auto-deploys a provider, provisions the named resource, and binds the
+//! provider's typed [`Connection`] back into the consumer.
 
 use std::collections::BTreeMap;
 
 use olai_stack_topology::{
-    Catalog, Injection, Module, ModuleId, Placement, PlanCtx, PlanError, Provides, RenderSpec,
-    ResourceDemand, ResourceProvider, Role, RoleContract, Selection, ServiceSpec, baseline_catalog,
-    plan,
+    Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, Module, ModuleId,
+    ObjectStoreCredential, Placement, PlanCtx, PlanError, Provides, RenderSpec, ResourceDemand,
+    Role, Selection, ServiceSpec, baseline_catalog, plan,
 };
 
-/// Build a minimal provider module that provisions `kind` and vends the given
-/// coordinate templates.
-fn provider(id: &str, kind: &str, coordinates: &[(&str, &str)]) -> Module {
-    let mut rp = ResourceProvider::default();
-    for (name, tmpl) in coordinates {
-        rp.coordinates.insert((*name).into(), (*tmpl).into());
-    }
+/// Build a minimal provider module that provisions `kind` and vends the given typed
+/// connection template.
+fn provider(id: &str, kind: &str, template: ConnectionTemplate) -> Module {
     let mut provides = Provides::default();
-    provides.resource_kinds.insert(kind.into(), rp);
+    provides.resource_kinds.insert(kind.into(), template);
     Module {
         id: ModuleId::from(id),
         display_name: None,
@@ -40,6 +36,33 @@ fn provider(id: &str, kind: &str, coordinates: &[(&str, &str)]) -> Module {
         provides,
         knobs: vec![],
         render: RenderSpec::default(),
+    }
+}
+
+/// A relational-db connection template at `url`-with-`{name}`.
+fn relational(url: &str) -> ConnectionTemplate {
+    ConnectionTemplate(Connection::RelationalDb { url: url.into() })
+}
+
+/// A minimal S3 object-store connection template (only the addressing fields matter for
+/// these tests; credentials are filler).
+fn s3_store(uri: &str) -> ConnectionTemplate {
+    ConnectionTemplate(Connection::ObjectStore {
+        uri: uri.into(),
+        bucket: "{name}".into(),
+        endpoint: "http://store:1".into(),
+        credential: ObjectStoreCredential::S3 {
+            access_key_id: "k".into(),
+            secret_access_key: "s".into(),
+            region: "r".into(),
+        },
+    })
+}
+
+/// A binding of a single field to an env-var key.
+fn bind1(field: ConnectionField, key: &str) -> ConnectionBinding {
+    ConnectionBinding {
+        bind: vec![(field, key.into())],
     }
 }
 
@@ -104,7 +127,7 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
 }
 
 #[test]
-fn provider_coordinate_is_injected_into_the_consumer() {
+fn provider_connection_is_bound_into_the_consumer() {
     let p = plan(
         &Selection::modules(["local-stack-unity-catalog"]),
         &baseline_catalog(),
@@ -112,8 +135,8 @@ fn provider_coordinate_is_injected_into_the_consumer() {
     )
     .unwrap();
 
-    // UC's demand injects the connection-string coordinate as UC_DATABASE_URL, with
-    // {name} resolved to the demanded database name.
+    // UC's demand binds the relational URL as UC_DATABASE_URL, with {name} resolved to the
+    // demanded database name.
     let uc_env = p
         .injected
         .get(&ModuleId::from("local-stack-unity-catalog"))
@@ -130,24 +153,28 @@ fn provider_coordinate_is_injected_into_the_consumer() {
     assert_eq!(
         p.env.get("UC_DATABASE_URL"),
         uc_env.get("UC_DATABASE_URL"),
-        "injected coordinate must also land in the stack .env"
+        "bound connection field must also land in the stack .env"
     );
+
+    // The typed connection is exposed on the plan for downstream consumers.
+    let conn = p
+        .connections
+        .get(&(ModuleId::from("local-stack-unity-catalog"), 0))
+        .expect("UC's first demand (relational_db) resolves a connection");
+    assert!(matches!(conn, Connection::RelationalDb { .. }));
 }
 
 #[test]
 fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
     // A templated app declares it needs a Postgres database — same mechanism as the
-    // infra modules. The planner auto-provisions Postgres and injects the URL.
+    // infra modules. The planner auto-provisions Postgres and binds the URL.
     let app = consumer(
         "my-app",
         vec![ResourceDemand {
             resource: "relational_db".into(),
             name: "appdb".into(),
             provider: None,
-            inject: vec![Injection {
-                key: "APP_DATABASE_URL".into(),
-                coordinate: "url".into(),
-            }],
+            bind: bind1(ConnectionField::Url, "APP_DATABASE_URL"),
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
@@ -182,7 +209,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
             resource: "relational_db".into(),
             name: "a_db".into(),
             provider: None,
-            inject: vec![],
+            bind: ConnectionBinding::default(),
         }],
     );
     let b = consumer(
@@ -191,7 +218,7 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
             resource: "relational_db".into(),
             name: "b_db".into(),
             provider: None,
-            inject: vec![],
+            bind: ConnectionBinding::default(),
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([a, b]));
@@ -224,7 +251,7 @@ fn unsatisfied_demand_errors_when_no_provider_exists() {
             resource: "message_queue".into(),
             name: "events".into(),
             provider: None,
-            inject: vec![],
+            bind: ConnectionBinding::default(),
         }],
     );
     let catalog = Catalog::from_modules([lonely]);
@@ -246,15 +273,15 @@ fn unsatisfied_demand_errors_when_no_provider_exists() {
 #[test]
 fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
     // Two providers for the same kind, no tie-break → the planner refuses to guess.
-    let p1 = provider("pg-a", "relational_db", &[("url", "a://{name}")]);
-    let p2 = provider("pg-b", "relational_db", &[("url", "b://{name}")]);
+    let p1 = provider("pg-a", "relational_db", relational("a://{name}"));
+    let p2 = provider("pg-b", "relational_db", relational("b://{name}"));
     let c = consumer(
         "needs-db",
         vec![ResourceDemand {
             resource: "relational_db".into(),
             name: "db".into(),
             provider: None,
-            inject: vec![],
+            bind: ConnectionBinding::default(),
         }],
     );
     let catalog = Catalog::from_modules([p1, p2, c]);
@@ -283,21 +310,21 @@ fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
 fn demand_chain_resolves_to_a_fixed_point() {
     // A consumer needs kind X; the X-provider itself needs kind Y. Both providers must
     // be auto-pulled in (the fixed point, not a single pass).
-    let mut x_provider = provider("x-prov", "x", &[("v", "{name}")]);
+    let mut x_provider = provider("x-prov", "x", relational("x://{name}"));
     x_provider.needs = vec![ResourceDemand {
         resource: "y".into(),
         name: "y-res".into(),
         provider: None,
-        inject: vec![],
+        bind: ConnectionBinding::default(),
     }];
-    let y_provider = provider("y-prov", "y", &[("v", "{name}")]);
+    let y_provider = provider("y-prov", "y", relational("y://{name}"));
     let c = consumer(
         "top",
         vec![ResourceDemand {
             resource: "x".into(),
             name: "x-res".into(),
             provider: None,
-            inject: vec![],
+            bind: ConnectionBinding::default(),
         }],
     );
     let catalog = Catalog::from_modules([x_provider, y_provider, c]);
@@ -385,18 +412,15 @@ fn preference_selects_azurite_and_drops_aws() {
 
 #[test]
 fn consumer_uri_follows_the_chosen_provider() {
-    // A consumer that injects the object_store `uri` coordinate gets the S3-shaped value
-    // by default and the Azure-shaped value under an Azurite preference.
+    // A consumer that binds the object_store `uri` field gets the S3-shaped value by
+    // default and the Azure-shaped value under an Azurite preference.
     let app = consumer(
         "store-app",
         vec![ResourceDemand {
             resource: "object_store".into(),
             name: "artifacts".into(),
             provider: None,
-            inject: vec![Injection {
-                key: "STORE_URI".into(),
-                coordinate: "uri".into(),
-            }],
+            bind: bind1(ConnectionField::Uri, "STORE_URI"),
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
@@ -438,10 +462,7 @@ fn a_demand_pin_overrides_preference() {
             resource: "object_store".into(),
             name: "artifacts".into(),
             provider: Some(ModuleId::from("local-stack-seaweedfs")),
-            inject: vec![Injection {
-                key: "STORE_URI".into(),
-                coordinate: "uri".into(),
-            }],
+            bind: bind1(ConnectionField::Uri, "STORE_URI"),
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
@@ -468,24 +489,15 @@ fn a_demand_pin_overrides_preference() {
 fn ambiguous_object_store_without_default_or_preference_errors() {
     // Two object_store providers, no catalog default, no preference, no pin → ambiguous.
     // (Build a catalog without the baseline's default to exercise the error.)
-    let mut s3 = ResourceProvider {
-        provider_kind: Some("s3".into()),
-        ..Default::default()
-    };
-    s3.coordinates.insert("uri".into(), "s3://{name}".into());
-    let mut a = provider("prov-s3", "object_store", &[]);
-    a.provides
-        .resource_kinds
-        .insert("object_store".into(), s3.clone());
-    let mut b = provider("prov-azure", "object_store", &[]);
-    b.provides.resource_kinds.insert("object_store".into(), s3);
+    let a = provider("prov-s3", "object_store", s3_store("s3://{name}"));
+    let b = provider("prov-azure", "object_store", s3_store("s3://{name}"));
     let c = consumer(
         "needs-store",
         vec![ResourceDemand {
             resource: "object_store".into(),
             name: "x".into(),
             provider: None,
-            inject: vec![],
+            bind: ConnectionBinding::default(),
         }],
     );
     let catalog = Catalog::from_modules([a, b, c]); // no with_default_provider
@@ -502,25 +514,15 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
 
     // A catalog default resolves it.
     let catalog = Catalog::from_modules([
-        {
-            let mut a = provider("prov-s3", "object_store", &[]);
-            a.provides.resource_kinds.insert(
-                "object_store".into(),
-                ResourceProvider {
-                    provider_kind: Some("s3".into()),
-                    ..Default::default()
-                },
-            );
-            a
-        },
-        provider("prov-azure", "object_store", &[]),
+        provider("prov-s3", "object_store", s3_store("s3://{name}")),
+        provider("prov-azure", "object_store", s3_store("s3://{name}")),
         consumer(
             "needs-store",
             vec![ResourceDemand {
                 resource: "object_store".into(),
                 name: "x".into(),
                 provider: None,
-                inject: vec![],
+                bind: ConnectionBinding::default(),
             }],
         ),
     ])
@@ -536,7 +538,7 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
 #[test]
 fn a_service_can_demand_two_object_stores_of_the_same_role() {
     // A Unity-Catalog-shaped consumer: one object store for managed storage, a second
-    // for an external location. Same role, distinct names, distinct inject keys.
+    // for an external location. Same role, distinct names, distinct bind keys.
     let uc = consumer(
         "catalog",
         vec![
@@ -544,19 +546,13 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
                 resource: "object_store".into(),
                 name: "uc-managed".into(),
                 provider: None,
-                inject: vec![Injection {
-                    key: "UC_MANAGED_URI".into(),
-                    coordinate: "uri".into(),
-                }],
+                bind: bind1(ConnectionField::Uri, "UC_MANAGED_URI"),
             },
             ResourceDemand {
                 resource: "object_store".into(),
                 name: "uc-external".into(),
                 provider: None,
-                inject: vec![Injection {
-                    key: "UC_EXTERNAL_URI".into(),
-                    coordinate: "uri".into(),
-                }],
+                bind: bind1(ConnectionField::Uri, "UC_EXTERNAL_URI"),
             },
         ],
     );
@@ -572,7 +568,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
     assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
     assert!(p.s3_buckets.contains(&"uc-external".to_string()));
 
-    // Each demand injects its own coordinate under its own key — no collision.
+    // Each demand binds its own field under its own key — no collision.
     let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
     assert_eq!(env.get("UC_MANAGED_URI"), Some("s3://uc-managed"));
     assert_eq!(env.get("UC_EXTERNAL_URI"), Some("s3://uc-external"));
@@ -600,19 +596,13 @@ fn same_role_demands_can_pin_different_providers() {
                 resource: "object_store".into(),
                 name: "uc-managed".into(),
                 provider: Some(ModuleId::from("local-stack-seaweedfs")),
-                inject: vec![Injection {
-                    key: "UC_MANAGED_URI".into(),
-                    coordinate: "uri".into(),
-                }],
+                bind: bind1(ConnectionField::Uri, "UC_MANAGED_URI"),
             },
             ResourceDemand {
                 resource: "object_store".into(),
                 name: "uc-external".into(),
                 provider: Some(ModuleId::from("local-stack-azurite")),
-                inject: vec![Injection {
-                    key: "UC_EXTERNAL_URI".into(),
-                    coordinate: "uri".into(),
-                }],
+                bind: bind1(ConnectionField::Uri, "UC_EXTERNAL_URI"),
             },
         ],
     );
@@ -639,26 +629,20 @@ fn same_role_demands_can_pin_different_providers() {
 }
 
 #[test]
-fn provider_missing_a_required_coordinate_fails_the_contract() {
-    // A registered role contract requires `endpoint`, but this provider only renders
-    // `uri` — planning must fail at the contract check, naming the missing coordinate.
-    let store = provider("half-store", "object_store", &[("uri", "x://{name}")]);
+fn binding_a_field_the_connection_lacks_errors() {
+    // An object_store connection has no `url` field; binding it must fail at plan time,
+    // naming the unbound field — the typed replacement for the old contract/coordinate
+    // errors.
     let app = consumer(
         "needs-store",
         vec![ResourceDemand {
             resource: "object_store".into(),
             name: "data".into(),
             provider: None,
-            inject: vec![],
+            bind: bind1(ConnectionField::Url, "BOGUS_URL"),
         }],
     );
-    let catalog = Catalog::from_modules([store, app]).with_role_contract(RoleContract::new(
-        Role::object_store(),
-        [
-            ResourceProvider::URI_COORDINATE,
-            ResourceProvider::ENDPOINT_COORDINATE,
-        ],
-    ));
+    let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
     let err = plan(
         &Selection::modules(["needs-store"]),
         &catalog,
@@ -668,32 +652,10 @@ fn provider_missing_a_required_coordinate_fails_the_contract() {
     assert!(
         matches!(
             err,
-            PlanError::IncompleteProviderContract { ref role, ref coordinate, .. }
-                if role == "object_store" && coordinate == "endpoint"
+            PlanError::UnboundConnectionField { ref resource, field, .. }
+                if resource == "object_store" && field == ConnectionField::Url
         ),
-        "expected IncompleteProviderContract for the missing endpoint, got {err:?}"
-    );
-}
-
-#[test]
-fn baseline_object_store_providers_satisfy_their_contract() {
-    // Both default and Azurite-preferred plans pass the baseline's object_store and
-    // relational_db contracts (no IncompleteProviderContract).
-    assert!(
-        plan(
-            &Selection::modules(["local-stack-unity-catalog", "local-stack-mlflow"]),
-            &baseline_catalog(),
-            &PlanCtx::default(),
-        )
-        .is_ok()
-    );
-    assert!(
-        plan(
-            &Selection::modules(["local-stack-unity-catalog", "local-stack-mlflow"]),
-            &baseline_catalog(),
-            &azurite_preferred(),
-        )
-        .is_ok()
+        "expected UnboundConnectionField for url on an object store, got {err:?}"
     );
 }
 
