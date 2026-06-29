@@ -411,26 +411,14 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
 }
 
 #[test]
-fn adding_trino_and_jaeger_aggregates_their_routes() {
+fn adding_jaeger_aggregates_its_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
-    let sel = Selection::modules([
-        "envoy",
-        "seaweedfs",
-        "postgres",
-        "mlflow",
-        "trino",
-        "jaeger",
-    ]);
+    let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "jaeger"]);
     let arts = render(&sel);
     let (routes, order, clusters) = parse_envoy(&arts.envoy);
 
-    // Trino and Jaeger UIs are fronted at their base paths.
-    assert!(routes.contains_key("/trino"), "missing /trino route");
+    // The Jaeger UI is fronted at its base path, with a derived cluster.
     assert!(routes.contains_key("/jaeger"), "missing /jaeger route");
-    assert_eq!(
-        clusters.get("trino").map(String::as_str),
-        Some("trino:8080")
-    );
     assert_eq!(
         clusters.get("jaeger").map(String::as_str),
         Some("jaeger:16686")

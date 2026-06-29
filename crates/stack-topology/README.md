@@ -60,7 +60,7 @@ To materialize and print every artifact a selection produces (the Envoy gateway 
 ```bash
 cargo run -p olai-stack-topology --example render_stack
 # choose modules (by their short ids):
-cargo run -p olai-stack-topology --example render_stack -- envoy postgres seaweedfs trino jaeger
+cargo run -p olai-stack-topology --example render_stack -- envoy postgres seaweedfs jaeger
 # prefer Azurite over SeaweedFS for the object_store role:
 cargo run -p olai-stack-topology --example render_stack -- --azurite
 ```

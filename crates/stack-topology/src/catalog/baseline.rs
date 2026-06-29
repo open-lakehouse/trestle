@@ -94,7 +94,6 @@ pub fn baseline_catalog() -> Catalog {
         azurite(),
         mlflow(),
         unity_catalog(),
-        trino(),
         jaeger(),
         notebooks(),
         databricks_emulator_env(),
@@ -572,44 +571,6 @@ fn unity_catalog() -> Module {
         knobs: vec![],
         render: template(include_str!(
             "../../templates/modules/unity-catalog/compose.yaml.jinja"
-        )),
-    }
-}
-
-/// `trino` — distributed SQL engine, fronted at `/trino` (a prefixable UI).
-fn trino() -> Module {
-    let mut provides = Provides::default();
-    provides
-        .extras
-        .insert(BASE_PATH_EXTRA.into(), "/trino".into());
-    provides.env_vars.insert("TRINO_PORT".into(), "8080".into());
-    Module {
-        id: ModuleId::from("trino"),
-        display_name: Some("Trino".into()),
-        summary: Some("Distributed SQL engine (Iceberg, Delta, Hive, JDBC, S3).".into()),
-        category: Some("query_engine".into()),
-        provider_of: Some("sql_engine".into()),
-        requires: vec![ModuleId::from("envoy")],
-        conflicts_with: vec![],
-        needs: vec![],
-        services: vec![ServiceSpec {
-            name: "trino".into(),
-            role: Role::sql_engine(),
-            placement: container("trino"),
-            endpoints: vec![Endpoint {
-                id: "ui".into(),
-                scheme: Scheme::Http,
-                internal_port: 8080,
-                host_port: Some(8080),
-                intent: RouteIntent::UiPrefixable,
-                path: String::new(),
-            }],
-            depends_on: vec![],
-        }],
-        provides,
-        knobs: vec![],
-        render: fragment(include_str!(
-            "../../templates/modules/trino/compose.yaml.jinja"
         )),
     }
 }

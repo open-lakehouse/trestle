@@ -9,7 +9,7 @@
 //! ```text
 //! cargo run -p olai-stack-topology --example render_stack
 //! # pick your own modules:
-//! cargo run -p olai-stack-topology --example render_stack -- envoy postgres seaweedfs trino jaeger
+//! cargo run -p olai-stack-topology --example render_stack -- envoy postgres seaweedfs jaeger
 //! # prefer Azurite over SeaweedFS for the object_store role:
 //! cargo run -p olai-stack-topology --example render_stack -- --azurite
 //! ```
