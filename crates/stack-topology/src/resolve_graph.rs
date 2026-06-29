@@ -216,6 +216,7 @@ mod tests {
             provider_of: None,
             requires: requires.iter().map(|r| ModuleId::from(*r)).collect(),
             conflicts_with: Vec::new(),
+            needs: Vec::new(),
             services: Vec::new(),
             provides: Default::default(),
             knobs: Vec::new(),

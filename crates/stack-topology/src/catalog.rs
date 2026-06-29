@@ -23,12 +23,16 @@ use crate::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
 
-pub use baseline::baseline_catalog;
+pub use baseline::{baseline_catalog, baseline_selection};
 
 /// A set of modules to plan against, with id and capability indexes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Catalog {
     modules: Vec<Module>,
+    /// Default provider per resource role, the deterministic tie-break the planner
+    /// uses when a role has more than one provider and neither a demand pin nor a
+    /// `PlanCtx` preference selects one. (Role → provider module id.)
+    default_provider: BTreeMap<String, ModuleId>,
 }
 
 impl Catalog {
@@ -61,6 +65,10 @@ impl Catalog {
     pub fn merge(mut self, other: Catalog) -> Self {
         for m in other.modules {
             self.insert(m);
+        }
+        // Overlay defaults too — a later catalog can override a role's default provider.
+        for (role, provider) in other.default_provider {
+            self.default_provider.insert(role, provider);
         }
         self
     }
@@ -97,6 +105,56 @@ impl Catalog {
             }
         }
         index
+    }
+
+    /// The ids of modules that provision `resource_kind` (declare it under
+    /// [`Provides::resource_kinds`](crate::Provides::resource_kinds)), in catalog
+    /// order. This is the resource index the planner uses to auto-provision a provider
+    /// for a [`ResourceDemand`](crate::ResourceDemand).
+    pub fn providers_for(&self, resource_kind: &str) -> Vec<&ModuleId> {
+        self.modules
+            .iter()
+            .filter(|m| m.provides.resource_kinds.contains_key(resource_kind))
+            .map(|m| &m.id)
+            .collect()
+    }
+
+    /// Declare the default provider for a resource role (builder-style; returns `self`).
+    /// The planner uses this as the final tie-break when a role has multiple providers
+    /// and no pin/preference selects one.
+    pub fn with_default_provider(
+        mut self,
+        role: impl Into<String>,
+        provider: impl Into<ModuleId>,
+    ) -> Self {
+        self.default_provider.insert(role.into(), provider.into());
+        self
+    }
+
+    /// The declared default provider for `role`, if any.
+    pub fn default_provider_for(&self, role: &str) -> Option<&ModuleId> {
+        self.default_provider.get(role)
+    }
+
+    /// The single provider for `resource_kind`, if exactly one module provisions it.
+    ///
+    /// Returns `Ok(None)` when no module provides the kind, `Ok(Some(id))` for exactly
+    /// one, and `Err(ids)` (all candidates, sorted) when more than one does — the
+    /// planner turns these into `UnsatisfiedDemand` / `AmbiguousProvider`.
+    pub fn unique_provider_for(
+        &self,
+        resource_kind: &str,
+    ) -> Result<Option<&ModuleId>, Vec<ModuleId>> {
+        let providers = self.providers_for(resource_kind);
+        match providers.len() {
+            0 => Ok(None),
+            1 => Ok(Some(providers[0])),
+            _ => {
+                let mut ids: Vec<ModuleId> = providers.into_iter().cloned().collect();
+                ids.sort();
+                Err(ids)
+            }
+        }
     }
 
     /// Parse and assemble a catalog from a sequence of module-manifest YAML strings.

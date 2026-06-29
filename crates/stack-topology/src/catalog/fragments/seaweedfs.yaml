@@ -1,0 +1,40 @@
+# SeaweedFS + one-shot bucket init — contributed by the `local-stack-seaweedfs` component.
+# Bucket list is rendered from the aggregated `stack.s3_buckets` list at scaffold time.
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    profiles: [svc, full]
+    command: mini -dir=/data
+    ports:
+      - "${SEAWEEDFS_MASTER_PORT:-9333}:9333"
+      - "${SEAWEEDFS_S3_PORT:-9000}:8333"
+    volumes:
+      - ./.data/seaweedfs:/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q --spider http://127.0.0.1:9333/ && echo ok || exit 1"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  seaweedfs-init:
+    image: amazon/aws-cli:latest
+    restart: on-failure
+    profiles: [svc, full]
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-seaweedfs}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-seaweedfs}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        echo "Waiting for SeaweedFS S3...";
+        until aws --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; do sleep 2; done;
+${S3_BUCKET_MB_LINES}        echo "Buckets ready.";

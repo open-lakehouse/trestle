@@ -39,7 +39,10 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::Catalog;
-use crate::catalog::baseline::{API_PREFIX_EXTRA, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX};
+use crate::catalog::baseline::{
+    API_PREFIX_EXTRA, AZURE_CONTAINER_CREATE_LINES_VAR, BASE_PATH_EXTRA, REWRITE_OVERRIDE_PREFIX,
+    S3_BUCKET_MB_LINES_VAR,
+};
 use crate::endpoint::{Endpoint, RouteIntent};
 use crate::module::{Module, ModuleId};
 use crate::placement::Placement;
@@ -93,6 +96,13 @@ pub struct PlanCtx {
     /// ports itself.
     #[allow(clippy::struct_field_names)]
     pub dedicated_listener_ports: Vec<u16>,
+    /// Ordered provider preference per resource role — the environment's say in which
+    /// implementation satisfies an abstract demand (e.g. `object_store` →
+    /// `["local-stack-azurite", "local-stack-seaweedfs"]` for a hydrofoil-style env
+    /// that prefers Azurite). The planner picks the first preferred provider present in
+    /// the catalog; an empty/absent entry falls back to uniqueness then the catalog
+    /// default. A demand's own `provider` pin still wins over this.
+    pub provider_preference: BTreeMap<String, Vec<ModuleId>>,
 }
 
 impl Default for PlanCtx {
@@ -103,6 +113,7 @@ impl Default for PlanCtx {
             gateway_internal_port: 10000,
             gateway_host_port: 9080,
             dedicated_listener_ports: Vec::new(),
+            provider_preference: BTreeMap::new(),
         }
     }
 }
@@ -150,6 +161,35 @@ pub enum PlanError {
         /// The conflicting port a later endpoint declared.
         second: u16,
     },
+    /// A module demands a resource kind no catalog module provisions.
+    #[error("no module provides resource kind `{resource}` demanded by `{module}`")]
+    UnsatisfiedDemand {
+        /// The demanding module.
+        module: String,
+        /// The unmet resource kind.
+        resource: String,
+    },
+    /// More than one catalog module provisions a demanded resource kind and there is
+    /// no tie-break, so the planner will not guess which to deploy.
+    #[error(
+        "resource kind `{resource}` has multiple providers {providers:?}; selection is ambiguous"
+    )]
+    AmbiguousProvider {
+        /// The demanded resource kind.
+        resource: String,
+        /// The candidate provider module ids (sorted).
+        providers: Vec<ModuleId>,
+    },
+    /// A demand requests a coordinate the chosen provider does not offer.
+    #[error("provider for `{resource}` offers no coordinate `{coordinate}` (needed by `{module}`)")]
+    UnknownCoordinate {
+        /// The demanding module.
+        module: String,
+        /// The resource kind.
+        resource: String,
+        /// The missing coordinate name.
+        coordinate: String,
+    },
 }
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -171,7 +211,8 @@ pub struct GatewayRoute {
     /// The upstream cluster name to forward to.
     pub cluster: String,
     /// The upstream rewrite, if the path is changed before forwarding. `None`
-    /// forwards unchanged; `Some("")` rewrites to root.
+    /// forwards the matched path unchanged (no rewrite emitted); `Some(path)`
+    /// rewrites the matched prefix to `path`.
     pub rewrite: Option<String>,
 }
 
@@ -235,6 +276,18 @@ pub struct EnvironmentPlan {
     pub head: HeadFile,
     /// The structured gateway config.
     pub gateway: GatewayConfig,
+    /// Postgres databases the selected modules need, deduplicated in dependency order
+    /// (drives the Postgres init artifact).
+    pub postgres_databases: Vec<String>,
+    /// Object-store buckets provisioned on SeaweedFS (when it is the chosen object-store
+    /// provider), deduplicated in dependency order.
+    pub s3_buckets: Vec<String>,
+    /// Object-store containers provisioned on Azurite (when it is the chosen object-store
+    /// provider), deduplicated in dependency order.
+    pub azure_containers: Vec<String>,
+    /// The stack's aggregated environment variables (drives the `.env` artifact),
+    /// last-writer-wins in dependency order.
+    pub env: InjectedEnv,
 }
 
 /// Plan an environment from a selection against a catalog.
@@ -246,8 +299,33 @@ pub fn plan(
     catalog: &Catalog,
     ctx: &PlanCtx,
 ) -> Result<EnvironmentPlan, PlanError> {
-    let selected = resolve_selection(selection, catalog)?;
-    let graph = resolve(&selected, catalog.modules())?;
+    // Resolve the selection, auto-provisioning a provider for every resource demand
+    // (a demanded relational store, object store, …) before anything else runs.
+    let graph = resolve_with_demands(selection, catalog, ctx)?;
+
+    // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
+    // order). Grouping by provider — not by abstract role — is what lets one object-store
+    // demand land on SeaweedFS and another on Azurite, each provisioning on its own init.
+    let mut provisioned_by: BTreeMap<ModuleId, Vec<String>> = BTreeMap::new();
+    for module in &graph.nodes {
+        for demand in &module.needs {
+            let provider = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+            let names = provisioned_by.entry(provider).or_default();
+            if !names.contains(&demand.name) {
+                names.push(demand.name.clone());
+            }
+        }
+    }
+    let provisioned_for = |id: &str| -> Vec<String> {
+        provisioned_by
+            .get(&ModuleId::from(id))
+            .cloned()
+            .unwrap_or_default()
+    };
+    // Convenience views for the artifact renderers (single-provider roles today).
+    let postgres_databases = provisioned_for("local-stack-postgres");
+    let s3_buckets = provisioned_for("local-stack-seaweedfs");
+    let azure_containers = provisioned_for("local-stack-azurite");
 
     let mut routes = RoutePlan::new();
     let mut gateway = GatewayConfig::default();
@@ -266,6 +344,31 @@ pub fn plan(
     // Walk modules in dependency order so emitted routes/clusters are deterministic.
     for module in &graph.nodes {
         let mut module_env = InjectedEnv::new();
+        // Seed each module's render env with its declared env vars. SeaweedFS also
+        // needs the aggregated bucket list folded into its one-shot init block.
+        for (k, v) in module.provides.env_vars.iter() {
+            module_env.set(k, v);
+        }
+        // Fold each object-store provider's provisioned names into its one-shot init
+        // block (SeaweedFS creates buckets; Azurite creates containers).
+        if module.id.as_str() == "local-stack-seaweedfs" {
+            module_env.set(S3_BUCKET_MB_LINES_VAR, seaweedfs_bucket_lines(&s3_buckets));
+        }
+        if module.id.as_str() == "local-stack-azurite" {
+            module_env.set(
+                AZURE_CONTAINER_CREATE_LINES_VAR,
+                azurite_container_lines(&azure_containers),
+            );
+        }
+        // Inject each demand's requested coordinates back into the consuming module's
+        // env, rendered from the provider's coordinate template.
+        for demand in &module.needs {
+            for injection in &demand.inject {
+                let value =
+                    resolve_coordinate(ctx, catalog, &module.id, demand, &injection.coordinate)?;
+                module_env.set(&injection.key, value);
+            }
+        }
         for service in &module.services {
             for endpoint in &service.endpoints {
                 match &endpoint.intent {
@@ -375,26 +478,45 @@ pub fn plan(
     gateway.listeners.extend(dedicated);
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Render every module from its decided env, in dependency order.
-    let mut renders = Vec::with_capacity(graph.nodes.len());
-    let mut includes = Vec::with_capacity(graph.nodes.len());
-    let mut head_env = InjectedEnv::new();
+    // Aggregate the stack's env vars for `.env`, last-writer-wins in dependency order:
+    // each module's *declared* env vars, plus the coordinates injected to satisfy its
+    // demands (a fragment reads those as `${VAR}`, so compose must resolve them from
+    // `.env` at run time). Render-only injections (`BASE_PATH`, `S3_BUCKET_MB_LINES`)
+    // stay out of `.env` — they are substituted into the fragment at plan time.
+    let mut env = InjectedEnv::new();
     for module in &graph.nodes {
-        let env = injected.get(&module.id).cloned().unwrap_or_default();
-        let out = module.render.render(&env);
-        for (k, v) in env.iter() {
-            head_env.set(k, v);
+        for (k, v) in module.provides.env_vars.iter() {
+            env.set(k, v);
         }
-        includes.push(ComposeInclude {
-            module: module.id.clone(),
-            fragment: out.fragment.clone(),
-        });
+        for demand in &module.needs {
+            for injection in &demand.inject {
+                let value =
+                    resolve_coordinate(ctx, catalog, &module.id, demand, &injection.coordinate)?;
+                env.set(&injection.key, value);
+            }
+        }
+    }
+
+    // Render every module from its decided env, in dependency order. A module with an
+    // empty fragment (e.g. the env-only contract module) contributes no compose
+    // include.
+    let mut renders = Vec::with_capacity(graph.nodes.len());
+    let mut includes = Vec::new();
+    for module in &graph.nodes {
+        let module_env = injected.get(&module.id).cloned().unwrap_or_default();
+        let out = module.render.render(&module_env);
+        if !out.fragment.trim().is_empty() {
+            includes.push(ComposeInclude {
+                module: module.id.clone(),
+                fragment: out.fragment.clone(),
+            });
+        }
         renders.push((module.id.clone(), out));
     }
 
     let head = HeadFile {
         name: ctx.env_name.clone(),
-        env: head_env,
+        env: env.clone(),
         includes,
     };
 
@@ -405,6 +527,10 @@ pub fn plan(
         renders,
         head,
         gateway,
+        postgres_databases,
+        s3_buckets,
+        azure_containers,
+        env,
     })
 }
 
@@ -430,6 +556,166 @@ fn resolve_selection(selection: &Selection, catalog: &Catalog) -> Result<Vec<Mod
         }
     }
     Ok(out)
+}
+
+/// Resolve a selection, growing it until every resource demand is satisfied.
+///
+/// A module's [`ResourceDemand`] names a resource *kind*; the planner finds the catalog
+/// module that provisions it and adds it to the selection if absent. Because a
+/// just-added provider may itself `require` or `need` more, this is a fixed point:
+/// resolve → scan demands → add missing providers → re-resolve, until a pass adds
+/// nothing. The `requires` closure / topo-sort / cycle detection all live in
+/// [`resolve`]; this only decides *which* modules to feed it.
+fn resolve_with_demands(
+    selection: &Selection,
+    catalog: &Catalog,
+    ctx: &PlanCtx,
+) -> Result<ResolvedGraph, PlanError> {
+    // Each consuming module's demanded providers, recorded as it is discovered, so the
+    // final resolve can treat "needs a resource from X" as a dependency edge on X
+    // (provider ordered before consumer, like a `requires`).
+    let mut demand_edges: BTreeMap<ModuleId, Vec<ModuleId>> = BTreeMap::new();
+    let mut selected = resolve_selection(selection, catalog)?;
+
+    // Fixed point: resolve → scan demands → add missing providers → repeat. Bounded by
+    // the catalog size (each iteration adds ≥1 module).
+    for _ in 0..=catalog.modules().len() {
+        let graph = resolve(&selected, catalog.modules())?;
+        let mut added = false;
+        for module in &graph.nodes {
+            for demand in &module.needs {
+                let provider = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+                let edges = demand_edges.entry(module.id.clone()).or_default();
+                if !edges.contains(&provider) {
+                    edges.push(provider.clone());
+                }
+                if !selected.contains(&provider) {
+                    selected.push(provider);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            // Final resolve against an augmented catalog where each consumer also
+            // `requires` its demanded providers, so providers start before consumers.
+            let augmented = augment_requires(catalog.modules(), &demand_edges);
+            return resolve(&selected, &augmented).map_err(Into::into);
+        }
+    }
+    // Unreachable in practice (the loop bound exceeds the max modules addable).
+    let augmented = augment_requires(catalog.modules(), &demand_edges);
+    resolve(&selected, &augmented).map_err(Into::into)
+}
+
+/// Choose the provider module that satisfies a demand, in priority order:
+/// 1. the demand's explicit [`provider`](crate::ResourceDemand::provider) pin;
+/// 2. the first [`PlanCtx::provider_preference`] entry for the role present in the catalog;
+/// 3. the sole provider, if the role has exactly one;
+/// 4. the catalog's declared default provider for the role.
+///
+/// Errors with [`PlanError::UnsatisfiedDemand`] if no module provides the role, or
+/// [`PlanError::AmbiguousProvider`] if several do and none of the above selects one.
+/// `consumer` (when known) labels an `UnsatisfiedDemand`.
+fn choose_provider(
+    ctx: &PlanCtx,
+    catalog: &Catalog,
+    demand: &crate::module::ResourceDemand,
+    consumer: Option<&ModuleId>,
+) -> Result<ModuleId, PlanError> {
+    let role = &demand.resource;
+    let candidates = catalog.providers_for(role);
+    if candidates.is_empty() {
+        return Err(PlanError::UnsatisfiedDemand {
+            module: consumer.map(|m| m.0.clone()).unwrap_or_default(),
+            resource: role.clone(),
+        });
+    }
+    let provides_role = |id: &ModuleId| candidates.contains(&id);
+
+    // 1. Explicit pin.
+    if let Some(pin) = &demand.provider {
+        if provides_role(pin) {
+            return Ok(pin.clone());
+        }
+        // A pin that doesn't provide the role is unsatisfiable for this demand.
+        return Err(PlanError::UnsatisfiedDemand {
+            module: consumer.map(|m| m.0.clone()).unwrap_or_default(),
+            resource: role.clone(),
+        });
+    }
+    // 2. Environment preference.
+    if let Some(order) = ctx.provider_preference.get(role) {
+        if let Some(pref) = order.iter().find(|id| provides_role(id)) {
+            return Ok(pref.clone());
+        }
+    }
+    // 3. Unique provider.
+    if candidates.len() == 1 {
+        return Ok(candidates[0].clone());
+    }
+    // 4. Catalog default.
+    if let Some(def) = catalog.default_provider_for(role) {
+        if provides_role(def) {
+            return Ok(def.clone());
+        }
+    }
+    // Otherwise genuinely ambiguous.
+    let mut providers: Vec<ModuleId> = candidates.into_iter().cloned().collect();
+    providers.sort();
+    Err(PlanError::AmbiguousProvider {
+        resource: role.clone(),
+        providers,
+    })
+}
+
+/// Clone the catalog modules, extending each module's `requires` with the providers it
+/// demands, so the resolver orders a provider before the module that needs its resource.
+fn augment_requires(
+    modules: &[Module],
+    demand_edges: &BTreeMap<ModuleId, Vec<ModuleId>>,
+) -> Vec<Module> {
+    modules
+        .iter()
+        .map(|m| {
+            let mut m = m.clone();
+            if let Some(providers) = demand_edges.get(&m.id) {
+                for p in providers {
+                    if !m.requires.contains(p) {
+                        m.requires.push(p.clone());
+                    }
+                }
+            }
+            m
+        })
+        .collect()
+}
+
+/// Render the value of `coordinate` for `demand`, using the *chosen* provider (same
+/// choice the resolution used): take the provider's coordinate template for the role
+/// and substitute `{name}` with the demanded resource name (leaving `${VAR}` refs for
+/// compose).
+fn resolve_coordinate(
+    ctx: &PlanCtx,
+    catalog: &Catalog,
+    consumer: &ModuleId,
+    demand: &crate::module::ResourceDemand,
+    coordinate: &str,
+) -> Result<String, PlanError> {
+    let provider_id = choose_provider(ctx, catalog, demand, Some(consumer))?;
+    let provider = catalog
+        .get(&provider_id)
+        .expect("provider id is in catalog");
+    let template = provider
+        .provides
+        .resource_kinds
+        .get(&demand.resource)
+        .and_then(|rp| rp.coordinate(coordinate))
+        .ok_or_else(|| PlanError::UnknownCoordinate {
+            module: consumer.0.clone(),
+            resource: demand.resource.clone(),
+            coordinate: coordinate.to_string(),
+        })?;
+    Ok(template.replace("{name}", &demand.name))
 }
 
 /// Claim `prefix` for `service.endpoint`, erroring if another endpoint already did.
@@ -501,6 +787,30 @@ fn ensure_cluster(
     Ok(())
 }
 
+/// The SeaweedFS one-shot bucket-init lines for the aggregated bucket list, one
+/// `aws s3 mb` per bucket, indented to sit inside the fragment's `entrypoint` block.
+/// Empty when there are no buckets.
+fn seaweedfs_bucket_lines(buckets: &[String]) -> String {
+    buckets
+        .iter()
+        .map(|b| {
+            format!(
+                "        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://{b} 2>&1 || true;\n"
+            )
+        })
+        .collect()
+}
+
+/// The Azurite one-shot container-init lines for the aggregated container list, one
+/// `az storage container create` per name, indented to sit inside the fragment's
+/// `entrypoint` block. Empty when there are no containers.
+fn azurite_container_lines(containers: &[String]) -> String {
+    containers
+        .iter()
+        .map(|c| format!("        az storage container create --name {c} 2>&1 || true;\n"))
+        .collect()
+}
+
 /// The base path a module's service serves itself under, from the `base_path` extra
 /// (empty string if unset → service serves at root).
 fn module_base_path(module: &Module) -> String {
@@ -526,16 +836,28 @@ fn api_mount_prefix(module: &Module, endpoint_id: &str) -> String {
 
 /// The gateway rewrite for an API route, for the structured [`GatewayConfig`].
 ///
+/// Tri-state: `None` means forward the path unchanged (no rewrite emitted);
+/// `Some(path)` means rewrite the matched prefix to `path`.
+///
 /// Resolution order: an explicit `rewrite:<prefix>` override on the module (the rare
-/// exception) wins; otherwise the rewrite is the service's `base_path` joined with the
-/// client `prefix`; a service serving at root (empty base path) needs no rewrite.
+/// exception) wins — an **empty** override value forces passthrough (`None`), a
+/// non-empty one rewrites to that value. With no override, the rewrite is the
+/// service's `base_path` joined with the client `prefix`; a service serving at root
+/// (empty base path) needs no rewrite.
 fn api_rewrite(module: &Module, prefix: &str) -> Option<String> {
     if let Some(over) = module
         .provides
         .extras
         .get(&format!("{REWRITE_OVERRIDE_PREFIX}{prefix}"))
     {
-        return Some(over.clone());
+        // Empty override == "this route passes through unchanged" (the gateway emits
+        // no rewrite block), matching how the trestle templates treat an empty
+        // rewrite. A non-empty override is the literal upstream path.
+        return if over.is_empty() {
+            None
+        } else {
+            Some(over.clone())
+        };
     }
     let base = module_base_path(module);
     if base.is_empty() {
@@ -599,6 +921,7 @@ mod tests {
             provider_of: None,
             requires: vec![],
             conflicts_with: vec![],
+            needs: vec![],
             services: vec![ServiceSpec {
                 name: id.to_string(),
                 role: crate::role::Role::new("svc"),
@@ -691,9 +1014,10 @@ mod tests {
         assert_eq!(mlflow.cluster, "mlflow");
         assert_eq!(mlflow.rewrite.as_deref(), Some("/mlflow/api/2.0/mlflow"));
 
-        // MLflow OTel route is the override exception: strips to root.
+        // MLflow OTel route is the override exception: it passes through unchanged
+        // (the empty override forces no rewrite), unlike the tracking API.
         let otel = route_for(&p, "/api/2.0/otel");
-        assert_eq!(otel.rewrite.as_deref(), Some(""));
+        assert_eq!(otel.rewrite, None);
 
         // MLflow UI fronts at its base path, no rewrite.
         let ui = route_for(&p, "/mlflow");

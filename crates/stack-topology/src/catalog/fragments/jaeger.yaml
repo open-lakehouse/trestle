@@ -1,0 +1,10 @@
+# Jaeger tracing — contributed by the `local-stack-jaeger` component.
+services:
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.14.1
+    restart: unless-stopped
+    profiles: [svc, full]
+    command: ["--set=extensions.jaeger_query.base_path=/jaeger"]
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "4317:4317"

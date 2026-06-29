@@ -50,8 +50,8 @@ fn default_lakehouse_rederives_the_working_gateway_routes() {
     assert_eq!(tracking.cluster, "mlflow");
     assert_eq!(tracking.rewrite.as_deref(), Some("/mlflow/api/2.0/mlflow"));
 
-    // MLflow OTel: the override exception — rewrites to root.
-    assert_eq!(route(routes, "/api/2.0/otel").rewrite.as_deref(), Some(""));
+    // MLflow OTel: the override exception — passes through unchanged (no rewrite).
+    assert_eq!(route(routes, "/api/2.0/otel").rewrite, None);
 
     // MLflow UI: served at its base path, no rewrite.
     let ui = route(routes, "/mlflow");
@@ -114,6 +114,7 @@ fn real_prefix_collision_fails_loudly() {
             provider_of: None,
             requires: vec![],
             conflicts_with: vec![],
+            needs: vec![],
             services: vec![ServiceSpec {
                 name: id.to_string(),
                 role: Role::new("svc"),
