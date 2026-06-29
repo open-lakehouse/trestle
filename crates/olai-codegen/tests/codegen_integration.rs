@@ -60,10 +60,10 @@ fn make_test_config(
 fn collect_generated_files(dir: &std::path::Path) -> Vec<String> {
     let mut contents = Vec::new();
     for entry in walkdir(dir) {
-        if entry.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&entry) {
-                contents.push(text);
-            }
+        if entry.is_file()
+            && let Ok(text) = std::fs::read_to_string(&entry)
+        {
+            contents.push(text);
         }
     }
     contents

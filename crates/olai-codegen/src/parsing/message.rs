@@ -43,52 +43,53 @@ pub(super) fn process_message(
 
         // Check if this field belongs to a oneof group.
         // Skip proto3_optional fields - they're not true oneofs
-        if field.has_oneof_index() && !field.proto3_optional() {
-            if let Some(oneof_desc) = message.oneof_decl.get(field.oneof_index() as usize) {
-                let field_name = field.name().to_string();
+        if field.has_oneof_index()
+            && !field.proto3_optional()
+            && let Some(oneof_desc) = message.oneof_decl.get(field.oneof_index() as usize)
+        {
+            let field_name = field.name().to_string();
 
-                // Build a UnifiedType for the variant's inner value.
-                let field_type = if field.has_type_name() {
-                    let clean_type = field.type_name().trim_start_matches('.');
-                    let base = if field.type_() == Type::TYPE_ENUM {
-                        BaseType::Enum(clean_type.to_string())
-                    } else {
-                        BaseType::Message(clean_type.to_string())
-                    };
-                    UnifiedType {
-                        base_type: base,
-                        is_optional: false,
-                        is_repeated: false,
-                    }
+            // Build a UnifiedType for the variant's inner value.
+            let field_type = if field.has_type_name() {
+                let clean_type = field.type_name().trim_start_matches('.');
+                let base = if field.type_() == Type::TYPE_ENUM {
+                    BaseType::Enum(clean_type.to_string())
                 } else {
-                    let base = match field.type_() {
-                        Type::TYPE_STRING => BaseType::String,
-                        Type::TYPE_INT32 => BaseType::Int32,
-                        Type::TYPE_INT64 => BaseType::Int64,
-                        Type::TYPE_BOOL => BaseType::Bool,
-                        Type::TYPE_DOUBLE => BaseType::Float64,
-                        Type::TYPE_FLOAT => BaseType::Float32,
-                        Type::TYPE_BYTES => BaseType::Bytes,
-                        _ => BaseType::String,
-                    };
-                    UnifiedType {
-                        base_type: base,
-                        is_optional: false,
-                        is_repeated: false,
-                    }
+                    BaseType::Message(clean_type.to_string())
                 };
-
-                let variant = OneofVariant {
-                    variant_name: field_name.to_case(Case::Pascal),
-                    field_name,
-                    field_type,
-                    documentation,
+                UnifiedType {
+                    base_type: base,
+                    is_optional: false,
+                    is_repeated: false,
+                }
+            } else {
+                let base = match field.type_() {
+                    Type::TYPE_STRING => BaseType::String,
+                    Type::TYPE_INT32 => BaseType::Int32,
+                    Type::TYPE_INT64 => BaseType::Int64,
+                    Type::TYPE_BOOL => BaseType::Bool,
+                    Type::TYPE_DOUBLE => BaseType::Float64,
+                    Type::TYPE_FLOAT => BaseType::Float32,
+                    Type::TYPE_BYTES => BaseType::Bytes,
+                    _ => BaseType::String,
                 };
+                UnifiedType {
+                    base_type: base,
+                    is_optional: false,
+                    is_repeated: false,
+                }
+            };
 
-                let oneof_name = format!("{}.{}", full_type_name, oneof_desc.name());
-                oneof_fields.entry(oneof_name).or_default().push(variant);
-                continue;
-            }
+            let variant = OneofVariant {
+                variant_name: field_name.to_case(Case::Pascal),
+                field_name,
+                field_type,
+                documentation,
+            };
+
+            let oneof_name = format!("{}.{}", full_type_name, oneof_desc.name());
+            oneof_fields.entry(oneof_name).or_default().push(variant);
+            continue;
         }
 
         // Add regular field (including proto3_optional fields)
@@ -285,10 +286,10 @@ fn extract_debug_redact(field: &FieldDescriptorProto) -> bool {
         return false;
     };
     for (field_number, field_value) in options.unknown_fields().iter() {
-        if field_number == DEBUG_REDACT_FIELD_NUMBER {
-            if let protobuf::UnknownValueRef::Varint(v) = field_value {
-                return v != 0;
-            }
+        if field_number == DEBUG_REDACT_FIELD_NUMBER
+            && let protobuf::UnknownValueRef::Varint(v) = field_value
+        {
+            return v != 0;
         }
     }
     false

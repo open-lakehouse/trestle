@@ -316,23 +316,22 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
             // `decoded_type_name`): item type for standard list unwrapping, otherwise the full
             // output message. This keeps imports in lockstep with emitted `fromBinary` calls,
             // including resource-less (Flat) services that decode `*Response` messages directly.
-            if let Some(name) = decoded_type_name(service, &method) {
-                if !type_names.contains(&name) {
-                    type_names.push(name.clone());
-                    schema_names.push(format!("{}Schema", name));
-                }
+            if let Some(name) = decoded_type_name(service, &method)
+                && !type_names.contains(&name)
+            {
+                type_names.push(name.clone());
+                schema_names.push(format!("{}Schema", name));
             }
 
             // Required message bodies are encoded with `toBinary(<Type>Schema, value)` before
             // crossing to the native binding, so import each body's type and schema too.
             for param in method.required_parameters() {
-                if is_required_message_body(param) {
-                    if let Some(name) = message_type_name(param) {
-                        if !type_names.contains(&name) {
-                            type_names.push(name.clone());
-                            schema_names.push(format!("{}Schema", name));
-                        }
-                    }
+                if is_required_message_body(param)
+                    && let Some(name) = message_type_name(param)
+                    && !type_names.contains(&name)
+                {
+                    type_names.push(name.clone());
+                    schema_names.push(format!("{}Schema", name));
                 }
             }
         }

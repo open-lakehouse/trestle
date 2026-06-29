@@ -102,11 +102,11 @@ pub fn collect_variables(
             continue;
         }
         if non_interactive {
-            if let Some(d) = &var.default {
-                if let Some(v) = VariableValue::from_yaml(d) {
-                    out.insert(var.name.clone(), v);
-                    continue;
-                }
+            if let Some(d) = &var.default
+                && let Some(v) = VariableValue::from_yaml(d)
+            {
+                out.insert(var.name.clone(), v);
+                continue;
             }
             return Err(Error::MissingVariable {
                 name: var.name.clone(),
@@ -116,13 +116,12 @@ pub fn collect_variables(
         // it as a silent default (we follow the "opinionated defaults instead
         // of low-level prompts" principle). Variables without a `prompt:`
         // field never block the user with a question.
-        if var.prompt.is_none() {
-            if let Some(d) = &var.default {
-                if let Some(v) = VariableValue::from_yaml(d) {
-                    out.insert(var.name.clone(), v);
-                    continue;
-                }
-            }
+        if var.prompt.is_none()
+            && let Some(d) = &var.default
+            && let Some(v) = VariableValue::from_yaml(d)
+        {
+            out.insert(var.name.clone(), v);
+            continue;
         }
         out.insert(var.name.clone(), prompt_for(var)?);
     }
@@ -177,10 +176,10 @@ fn prompt_for(var: &Variable) -> Result<VariableValue> {
     match var.kind {
         VarKind::Bool => {
             let mut c = cliclack::confirm(prompt_text);
-            if let Some(d) = &var.default {
-                if let Some(b) = d.as_bool() {
-                    c = c.initial_value(b);
-                }
+            if let Some(d) = &var.default
+                && let Some(b) = d.as_bool()
+            {
+                c = c.initial_value(b);
             }
             let b = c.interact().map_err(|e| io_err("confirm", e))?;
             Ok(VariableValue::Bool(b))
@@ -198,10 +197,10 @@ fn prompt_for(var: &Variable) -> Result<VariableValue> {
                 .map(|o| (o.clone(), o.clone(), String::new()))
                 .collect();
             let mut s = cliclack::select(prompt_text).items(&items);
-            if let Some(d) = &var.default {
-                if let Some(v) = d.as_str() {
-                    s = s.initial_value(v.to_string());
-                }
+            if let Some(d) = &var.default
+                && let Some(v) = d.as_str()
+            {
+                s = s.initial_value(v.to_string());
             }
             let picked = s.interact().map_err(|e| io_err("select", e))?;
             Ok(VariableValue::String(picked))

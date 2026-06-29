@@ -307,23 +307,23 @@ fn collect_parameter_documentation(method: &MethodHandler<'_>) -> Vec<(String, S
     let mut param_docs = Vec::new();
 
     for param in method.required_parameters() {
-        if !param.is_path_param() {
-            if let Some(doc) = param.documentation() {
-                let cleaned_doc = clean_and_format_description(doc);
-                if !cleaned_doc.is_empty() {
-                    param_docs.push((param.name().to_string(), cleaned_doc));
-                }
+        if !param.is_path_param()
+            && let Some(doc) = param.documentation()
+        {
+            let cleaned_doc = clean_and_format_description(doc);
+            if !cleaned_doc.is_empty() {
+                param_docs.push((param.name().to_string(), cleaned_doc));
             }
         }
     }
 
     for param in method.optional_parameters() {
-        if !(is_list_method(method) && param.name() == "page_token") {
-            if let Some(doc) = param.documentation() {
-                let cleaned_doc = clean_and_format_description(doc);
-                if !cleaned_doc.is_empty() {
-                    param_docs.push((param.name().to_string(), cleaned_doc));
-                }
+        if !(is_list_method(method) && param.name() == "page_token")
+            && let Some(doc) = param.documentation()
+        {
+            let cleaned_doc = clean_and_format_description(doc);
+            if !cleaned_doc.is_empty() {
+                param_docs.push((param.name().to_string(), cleaned_doc));
             }
         }
     }
