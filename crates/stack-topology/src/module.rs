@@ -15,8 +15,10 @@
 //!   [`conflicts_with`](Module::conflicts_with);
 //! - exposes optional config [`Knob`]s (which can drive a generated UI); and
 //! - carries a [`RenderSpec`] describing how it produces its
-//!   [`RenderOutput`](crate::RenderOutput) — either as static text this crate can
-//!   substitute into purely, or as opaque template source the consumer renders.
+//!   [`RenderOutput`](crate::RenderOutput) — either as static text this crate
+//!   substitutes `${VAR}` into purely, or as a MiniJinja template this crate renders
+//!   against the typed [`Connection`](crate::Connection)s so a fragment can branch on the
+//!   chosen credential flavour.
 //!
 //! The module declares *intent and ingredients*; the planner decides *routing and
 //! wiring*. Keeping routes out of the module is the whole point — only the planner,
@@ -225,10 +227,13 @@ pub struct Knob {
 /// How a module produces its [`RenderOutput`].
 ///
 /// Both variants yield the same `RenderOutput` (a compose fragment plus mountable
-/// files); they differ only in *who* does the rendering. The crate stays pure: it
-/// performs simple `${VAR}` substitution for [`Static`](RenderSpec::Static), and for
-/// [`Template`](RenderSpec::Template) it only *carries* the source — a consumer that
-/// owns a templating engine (trestle's MiniJinja) renders it.
+/// files); they differ only in *how much* the fragment needs to know. The crate is pure
+/// in both: [`Static`](RenderSpec::Static) is flat `${VAR}` substitution; the richer
+/// [`Template`](RenderSpec::Template) is rendered in-crate with MiniJinja against the
+/// typed [`RenderCtx`] so a fragment can branch on a resolved
+/// [`Connection`](crate::Connection) — e.g. emit S3 keys vs an Azure connection string
+/// for whichever object-store backend the planner chose. Reach for `Template` only when a
+/// fragment genuinely must branch; `Static` is the default.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum RenderSpec {
@@ -241,43 +246,95 @@ pub enum RenderSpec {
         #[serde(default)]
         files: Vec<RenderFile>,
     },
-    /// Opaque template source the crate stores but never executes; the consumer
-    /// renders it with its own engine and produces the `RenderOutput`.
+    /// MiniJinja template source the crate renders against the [`RenderCtx`] (the injected
+    /// `env` plus the module's typed `connections`). `${VAR}` compose refs in the source
+    /// pass through untouched (MiniJinja interprets only `{{ }}`/`{% %}`), so a template
+    /// freely mixes plan-time branching with run-time compose substitution.
     Template {
-        /// The fragment's template source (engine-specific; not interpreted here).
+        /// The fragment's MiniJinja template source.
         fragment: String,
-        /// Template sources for files to write and mount.
+        /// MiniJinja template sources for files to write and mount.
         #[serde(default)]
         files: Vec<RenderFile>,
     },
 }
 
 impl RenderSpec {
-    /// Produce the [`RenderOutput`] for this spec given the planner's
-    /// [`InjectedEnv`].
+    /// Produce the [`RenderOutput`] for this spec given the planner's render context.
     ///
-    /// For [`Static`](RenderSpec::Static), `${VAR}` placeholders are substituted
-    /// here. For [`Template`](RenderSpec::Template), the source is returned verbatim
-    /// (placeholders, if any, are the consumer's engine to resolve) — this crate
-    /// never interprets template syntax.
-    pub fn render(&self, env: &InjectedEnv) -> RenderOutput {
+    /// For [`Static`](RenderSpec::Static), `${VAR}` placeholders are substituted from the
+    /// context's [`env`](RenderCtx::env) (no templating engine). For
+    /// [`Template`](RenderSpec::Template), the source is rendered with MiniJinja against the
+    /// full [`RenderCtx`] — so a fragment can branch on a demand's typed
+    /// [`Connection`](crate::Connection) (e.g. `{% if c.credential.flavour == "s3" %}`),
+    /// which flat `${VAR}` substitution cannot express.
+    pub fn render(&self, ctx: &RenderCtx<'_>) -> RenderOutput {
         match self {
             RenderSpec::Static { fragment, files } => RenderOutput {
-                fragment: substitute(fragment, env),
+                fragment: substitute(fragment, ctx.env),
                 files: files
                     .iter()
                     .map(|f| RenderFile {
-                        path: substitute(&f.path, env),
-                        contents: substitute(&f.contents, env),
+                        path: substitute(&f.path, ctx.env),
+                        contents: substitute(&f.contents, ctx.env),
                     })
                     .collect(),
             },
             RenderSpec::Template { fragment, files } => RenderOutput {
-                fragment: fragment.clone(),
-                files: files.clone(),
+                fragment: render_template(fragment, ctx),
+                files: files
+                    .iter()
+                    .map(|f| RenderFile {
+                        path: render_template(&f.path, ctx),
+                        contents: render_template(&f.contents, ctx),
+                    })
+                    .collect(),
             },
         }
     }
+}
+
+/// The context a module's render reads: the planner-decided [`InjectedEnv`] plus the typed
+/// [`Connection`](crate::Connection)s resolved for the module's demands, grouped by role.
+///
+/// A [`Static`](RenderSpec::Static) render uses only [`env`](RenderCtx::env). A
+/// [`Template`](RenderSpec::Template) render gets the whole context as MiniJinja globals:
+/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works) and `connections` (a
+/// `{role: [connection, …]}` map a template can branch on — e.g.
+/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`).
+#[derive(Clone, Debug, Serialize)]
+pub struct RenderCtx<'a> {
+    /// The planner-decided environment-variable substitutions.
+    pub env: &'a InjectedEnv,
+    /// The typed connections resolved for the module's demands, keyed by resource role.
+    /// More than one connection per role is possible (a module with two same-role demands).
+    pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
+}
+
+impl<'a> RenderCtx<'a> {
+    /// A context carrying just an [`InjectedEnv`] and no connections — the shape a module
+    /// with no resource demands renders against.
+    pub fn from_env(env: &'a InjectedEnv) -> Self {
+        RenderCtx {
+            env,
+            connections: BTreeMap::new(),
+        }
+    }
+}
+
+/// Render one MiniJinja template string against the [`RenderCtx`].
+///
+/// Pure and in-memory (no `loader`, no filesystem). A malformed template or a reference to
+/// a missing field is a module-authoring bug, surfaced as a panic with the engine's message
+/// — the same posture as the embedded Envoy template renderer.
+fn render_template(source: &str, ctx: &RenderCtx<'_>) -> String {
+    let mut env = minijinja::Environment::new();
+    env.add_template("fragment", source)
+        .expect("module template source is valid MiniJinja");
+    env.get_template("fragment")
+        .expect("the template was just added")
+        .render(ctx)
+        .expect("rendering a module template with a valid context cannot fail")
 }
 
 impl Default for RenderSpec {
@@ -412,6 +469,11 @@ mod tests {
         e
     }
 
+    /// Render `spec` against an env-only context (no connections).
+    fn render_env(spec: &RenderSpec, env: &InjectedEnv) -> RenderOutput {
+        spec.render(&RenderCtx::from_env(env))
+    }
+
     #[test]
     fn static_render_substitutes_known_vars_in_fragment_and_files() {
         let spec = RenderSpec::Static {
@@ -421,7 +483,7 @@ mod tests {
                 contents: "base_path: ${BASE_PATH}\n".into(),
             }],
         };
-        let out = spec.render(&env(&[("BASE_PATH", "/mlflow"), ("NAME", "mlflow")]));
+        let out = render_env(&spec, &env(&[("BASE_PATH", "/mlflow"), ("NAME", "mlflow")]));
         assert_eq!(out.fragment, "command: mlflow --static-prefix /mlflow\n");
         assert_eq!(out.files[0].path, "config/mlflow.yaml");
         assert_eq!(out.files[0].contents, "base_path: /mlflow\n");
@@ -434,7 +496,7 @@ mod tests {
             files: vec![],
         };
         // Not injected → placeholder preserved verbatim.
-        let out = spec.render(&InjectedEnv::new());
+        let out = render_env(&spec, &InjectedEnv::new());
         assert_eq!(out.fragment, "user: ${POSTGRES_USER}\n");
     }
 
@@ -445,26 +507,61 @@ mod tests {
             files: vec![],
         };
         assert_eq!(
-            spec.render(&InjectedEnv::new()).fragment,
+            render_env(&spec, &InjectedEnv::new()).fragment,
             "port: 9080\n",
             "default applies when unset"
         );
         assert_eq!(
-            spec.render(&env(&[("ENVOY_PORT", "8080")])).fragment,
+            render_env(&spec, &env(&[("ENVOY_PORT", "8080")])).fragment,
             "port: 8080\n",
             "injected value wins over default"
         );
     }
 
     #[test]
-    fn template_render_passes_source_through_untouched() {
+    fn template_render_reads_env_and_branches_on_connection_flavour() {
+        use crate::connection::{Connection, ObjectStoreCredential};
+
+        // A Template fragment reads `${...}`-free MiniJinja: `env.*` for injected values and
+        // `connections.*` to branch on the chosen credential flavour.
         let spec = RenderSpec::Template {
-            fragment: "name: {{ project }}\nbase: ${BASE_PATH}\n".into(),
+            fragment: "url: {{ env.DB_URL }}\n\
+                       {%- set o = connections.object_store.0 %}\n\
+                       {%- if o.credential.flavour == \"s3\" %}\n\
+                       key: {{ o.credential.access_key_id }}\n\
+                       {%- else %}\n\
+                       conn: {{ o.credential.connection_string }}\n\
+                       {%- endif %}\n"
+                .into(),
             files: vec![],
         };
-        // Neither MiniJinja `{{ }}` nor `${ }` is interpreted here.
-        let out = spec.render(&env(&[("BASE_PATH", "/mlflow")]));
-        assert_eq!(out.fragment, "name: {{ project }}\nbase: ${BASE_PATH}\n");
+
+        let s3 = Connection::ObjectStore {
+            uri: "s3://b".into(),
+            bucket: "b".into(),
+            endpoint: "http://store:1".into(),
+            credential: ObjectStoreCredential::S3 {
+                access_key_id: "AKIA".into(),
+                secret_access_key: "shh".into(),
+                region: "us-east-1".into(),
+            },
+        };
+        let mut connections = BTreeMap::new();
+        connections.insert("object_store".to_string(), vec![s3]);
+        let env = env(&[("DB_URL", "postgresql://db/x")]);
+        let out = spec.render(&RenderCtx {
+            env: &env,
+            connections,
+        });
+        assert!(out.fragment.contains("url: postgresql://db/x"));
+        assert!(
+            out.fragment.contains("key: AKIA"),
+            "S3 branch taken: {out:?}"
+        );
+        assert!(
+            !out.fragment.contains("conn:"),
+            "Azure branch skipped: {out:?}"
+        );
     }
 
     #[test]
@@ -473,6 +570,9 @@ mod tests {
             fragment: "# café ${X} ☕\n".into(),
             files: vec![],
         };
-        assert_eq!(spec.render(&env(&[("X", "ok")])).fragment, "# café ok ☕\n");
+        assert_eq!(
+            render_env(&spec, &env(&[("X", "ok")])).fragment,
+            "# café ok ☕\n"
+        );
     }
 }

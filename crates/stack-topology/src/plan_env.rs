@@ -525,14 +525,27 @@ pub fn plan(
         }
     }
 
-    // Render every module from its decided env, in dependency order. A module with an
-    // empty fragment (e.g. the env-only contract module) contributes no compose
-    // include.
+    // Render every module from its decided env and resolved connections, in dependency
+    // order. A module with an empty fragment (e.g. the env-only contract module)
+    // contributes no compose include.
     let mut renders = Vec::with_capacity(graph.nodes.len());
     let mut includes = Vec::new();
     for module in &graph.nodes {
         let module_env = injected.get(&module.id).cloned().unwrap_or_default();
-        let out = module.render.render(&module_env);
+        // The typed connections resolved for this module's demands, grouped by role, so a
+        // `Template` fragment can branch on the chosen credential flavour.
+        let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
+        for (idx, demand) in module.needs.iter().enumerate() {
+            connections
+                .entry(demand.resource.clone())
+                .or_default()
+                .push(chosen[&(module.id.clone(), idx)].connection.clone());
+        }
+        let render_ctx = crate::module::RenderCtx {
+            env: &module_env,
+            connections,
+        };
+        let out = module.render.render(&render_ctx);
         if !out.fragment.trim().is_empty() {
             includes.push(ComposeInclude {
                 module: module.id.clone(),
