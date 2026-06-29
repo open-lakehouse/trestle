@@ -617,20 +617,30 @@ fn jaeger() -> Arc<dyn Module> {
 /// The knob key gating Headwaters' bundled lineage UI.
 const HEADWATERS_SERVE_UI: &str = "HEADWATERS_SERVE_UI";
 
-/// `headwaters` — an OpenLineage lineage service, and the baseline's one *logic* module:
-/// its single endpoint's routing varies with a knob, so it implements [`Module`] by hand
+/// Headwaters' baked-in, Databricks-style OpenLineage REST API path — a server constant the
+/// planner must know to match the API route at the gateway (analogous to Unity Catalog's
+/// `/api/2.1/unity-catalog`). The API is always served here; when the UI relocates the whole
+/// surface under a base path, the gateway rewrites this prefix to carry the base path.
+const HEADWATERS_API_PREFIX: &str = "/api/v1/lineage";
+
+/// `headwaters` — an OpenLineage lineage service, and the baseline's one *logic* module: the
+/// set of services and routes it emits varies with a knob, so it implements [`Module`] by hand
 /// rather than being a [`DataModule`].
 ///
-/// Headwaters serves its whole surface — web UI, REST read API, and OpenLineage ingest —
-/// under a single base path `/lineage`. With the UI on (the default), it fronts as one
-/// [`UiPrefixable`](RouteIntent::UiPrefixable) endpoint at `/lineage`: the planner mounts it
-/// on the shared listener, forwards the prefix upstream unchanged, and tells the service
-/// that base path through the `BASE_PATH` render handshake (the generated `config.toml`'s
-/// `ui.base_path`). With the UI **off** (`HEADWATERS_SERVE_UI=false`), there is no UI to
-/// base, so the same endpoint fronts as a plain [`Api`](RouteIntent::Api) at `/lineage`
-/// (passthrough, no base-path handshake) — the API stays reachable through the gateway while
-/// the UI-specific wiring drops away. This per-knob switch is exactly the logic a
-/// `DataModule` cannot express, which is why Headwaters is a hand-written module.
+/// Its REST API is served at a fixed, Databricks-style path baked into the server
+/// ([`HEADWATERS_API_PREFIX`], `/api/v1/lineage`) — like Unity Catalog's `/api/2.1/unity-catalog`.
+/// The web UI is optional, gated on the `HEADWATERS_SERVE_UI` knob:
+///
+/// - **UI off** (API-only): one [`Api`](RouteIntent::Api) endpoint at the static API path,
+///   served at root (no base path), so the gateway matches the prefix and forwards it unchanged.
+/// - **UI on** (default): the server relocates its whole surface under the planner-assigned base
+///   path `/lineage` (told via the generated `config.toml`'s `[ui].base_path`, fed by the
+///   `BASE_PATH` render handshake). So it emits two endpoints on the one service — the UI as
+///   [`UiPrefixable`](RouteIntent::UiPrefixable) at `/lineage`, and the API still matched at its
+///   static path but rewritten to carry the base path (`/api/v1/lineage` →
+///   `/lineage/api/v1/lineage`). A UI cannot be reached through a Databricks-style API route, so
+///   it *needs* its own base path — which is the whole reason this is a knob-driven logic module
+///   a `DataModule` cannot express.
 ///
 /// It demands only a `relational_db` (named `lineage`); Postgres provisions the database and
 /// the planner injects the `db:service_healthy` gate.
@@ -702,7 +712,7 @@ impl Module for Headwaters {
         Some("Headwaters lineage")
     }
     fn summary(&self) -> Option<&str> {
-        Some("OpenLineage lineage service; UI + read API under one prefix.")
+        Some("OpenLineage lineage service; Databricks-style API + optional UI.")
     }
     fn category(&self) -> Option<&str> {
         Some("observability")
@@ -726,17 +736,35 @@ impl Module for Headwaters {
         &self.render
     }
     fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
-        // The single endpoint serves the whole surface under `/lineage`. With the UI on it is
-        // a prefixable UI based at `/lineage`; with it off it is a plain API mounted at
-        // `/lineage` (passthrough), so the read API + ingest stay reachable through the
-        // gateway without the UI base-path handshake.
+        // Headwaters serves its OpenLineage REST API at a fixed, Databricks-style path baked
+        // into the server (`/api/v1/lineage`) — like Unity Catalog's `/api/2.1/unity-catalog`.
+        //
+        // - UI off (API-only): one `Api` endpoint at that static path, served at root (no
+        //   base path), so the gateway matches the prefix and forwards it unchanged.
+        // - UI on: the server relocates its whole surface under the planner-assigned base
+        //   path `/lineage` (told via `config.toml`'s `[ui].base_path`). So we emit two
+        //   endpoints on the one service: the UI as `UiPrefixable` at `/lineage`, and the API
+        //   still matched at its static `/api/v1/lineage` but rewritten to carry the base path
+        //   (`Rewrite::Inherit` joins `base_path` + the mount prefix →
+        //   `/lineage/api/v1/lineage`), since that is where the relocated server now serves it.
         let serve_ui = knobs.bool(HEADWATERS_SERVE_UI, true);
-        let (endpoint, base_path) = if serve_ui {
-            (ui_prefixable_endpoint("ui", 8091, None), "/lineage".into())
+        let (base_path, endpoints) = if serve_ui {
+            (
+                "/lineage".to_string(),
+                vec![
+                    ui_prefixable_endpoint("ui", 8091, None),
+                    api_endpoint("api", 8091, HEADWATERS_API_PREFIX, Rewrite::Inherit),
+                ],
+            )
         } else {
             (
-                api_endpoint("ui", 8091, "/lineage", Rewrite::Passthrough),
                 String::new(),
+                vec![api_endpoint(
+                    "api",
+                    8091,
+                    HEADWATERS_API_PREFIX,
+                    Rewrite::Inherit,
+                )],
             )
         };
         vec![ServiceSpec {
@@ -744,7 +772,7 @@ impl Module for Headwaters {
             role: Role::lineage(),
             placement: container("headwaters"),
             base_path,
-            endpoints: vec![endpoint],
+            endpoints,
             // Demand-driven, like MLflow: the planner injects the chosen relational-db
             // provider's gate into the fragment's `depends_on`.
             depends_on: vec![],
@@ -795,33 +823,43 @@ mod tests {
     use crate::endpoint::RouteIntent;
 
     #[test]
-    fn headwaters_endpoint_switches_intent_on_the_ui_knob() {
+    fn headwaters_emits_api_and_optional_ui_per_knob() {
         let m = headwaters();
+        fn ep<'a>(s: &'a ServiceSpec, id: &str) -> &'a Endpoint {
+            s.endpoints
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap_or_else(|| panic!("no endpoint {id}"))
+        }
 
-        // UI on (the default): one prefixable-UI endpoint based at `/lineage`.
+        // UI on (the default): two endpoints on one service — the UI prefixable at `/lineage`,
+        // and the API matched at its static path but rewritten to carry the base path.
         let mut on = ResolvedKnobs::new();
         on.set(HEADWATERS_SERVE_UI, "true");
         let svcs = m.services(&on);
         assert_eq!(svcs.len(), 1);
         assert_eq!(svcs[0].base_path, "/lineage");
-        assert_eq!(svcs[0].endpoints[0].intent, RouteIntent::UiPrefixable);
-        assert_eq!(svcs[0].endpoints[0].mount_prefix, None);
+        assert_eq!(ep(&svcs[0], "ui").intent, RouteIntent::UiPrefixable);
+        assert_eq!(ep(&svcs[0], "ui").mount_prefix, None);
+        let api = ep(&svcs[0], "api");
+        assert_eq!(api.intent, RouteIntent::Api);
+        assert_eq!(api.mount_prefix.as_deref(), Some(HEADWATERS_API_PREFIX));
+        // `Inherit` against base_path `/lineage` joins to the relocated upstream path.
+        assert_eq!(api.rewrite, Rewrite::Inherit);
 
-        // UI off: the same endpoint becomes a plain API mounted at `/lineage`, passthrough,
-        // and the service no longer claims a base path.
+        // UI off: a single API endpoint at the static path, served at root (no base path), so
+        // the gateway forwards `/api/v1/lineage` unchanged.
         let mut off = ResolvedKnobs::new();
         off.set(HEADWATERS_SERVE_UI, "false");
         let svcs = m.services(&off);
         assert_eq!(svcs[0].base_path, "");
-        assert_eq!(svcs[0].endpoints[0].intent, RouteIntent::Api);
-        assert_eq!(
-            svcs[0].endpoints[0].mount_prefix.as_deref(),
-            Some("/lineage")
-        );
-        assert_eq!(svcs[0].endpoints[0].rewrite, Rewrite::Passthrough);
+        assert_eq!(svcs[0].endpoints.len(), 1);
+        let api = ep(&svcs[0], "api");
+        assert_eq!(api.intent, RouteIntent::Api);
+        assert_eq!(api.mount_prefix.as_deref(), Some(HEADWATERS_API_PREFIX));
 
         // The default (no knob value resolved) keeps the UI on.
         let svcs = m.services(&ResolvedKnobs::new());
-        assert_eq!(svcs[0].endpoints[0].intent, RouteIntent::UiPrefixable);
+        assert!(svcs[0].endpoints.iter().any(|e| e.id == "ui"));
     }
 }
