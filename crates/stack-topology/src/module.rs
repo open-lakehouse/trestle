@@ -591,7 +591,7 @@ mod tests {
         // A `Template` can come from an external on-disk manifest, so a bad fragment is a
         // returned `RenderError`, never a panic.
         let bad_syntax = RenderSpec::Template {
-            fragment: "{% if %}".into(), // unparseable
+            fragment: "{% if %}".into(), // unparsable
             files: vec![],
         };
         assert!(
