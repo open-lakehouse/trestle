@@ -72,7 +72,7 @@ pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStor
 pub use endpoint::{Endpoint, RouteIntent, Scheme};
 pub use module::{
     ConnectionBinding, DepGate, DependsCondition, Knob, KnobKind, Module, ModuleId, PortDecl,
-    Provides, RenderCtx, RenderError, RenderSpec, ResourceDemand,
+    PortMapping, Provides, RenderCtx, RenderError, RenderSpec, ResourceDemand,
 };
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};

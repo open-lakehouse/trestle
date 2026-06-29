@@ -19,7 +19,7 @@ exclude = [
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/open-lakehouse/trestle"
-rust-version = "1.87"
+rust-version = "1.88"
 homepage = "https://github.com/open-lakehouse/trestle"
 keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store"]
 

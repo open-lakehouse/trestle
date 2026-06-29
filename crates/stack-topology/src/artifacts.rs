@@ -33,9 +33,21 @@ const ENVOY_TEMPLATE: &str = include_str!("../templates/gateway/bootstrap.yaml.j
 /// do not derive `Serialize`, so this is the serialization boundary.
 #[derive(Serialize)]
 struct EnvoyCtx<'a> {
+    /// Every listener to emit: the shared, path-multiplexed one first, then any dedicated
+    /// listeners (one per fixed-path UI / gatewayed backend) on their own ports.
+    listeners: Vec<ListenerCtx<'a>>,
+    clusters: Vec<ClusterCtx<'a>>,
+}
+
+/// One Envoy listener: the port it binds and its route table. Only the shared listener
+/// (the first one) carries the app catch-all, flagged by its own `app` field.
+#[derive(Serialize)]
+struct ListenerCtx<'a> {
+    name: String,
     internal_port: u16,
     routes: Vec<RouteCtx<'a>>,
-    clusters: Vec<ClusterCtx<'a>>,
+    /// Whether the app `/` catch-all should be appended to this listener's routes (the
+    /// shared listener only).
     app: bool,
 }
 
@@ -73,27 +85,49 @@ pub struct AppUpstream {
 
 /// Render the Envoy bootstrap config for the plan's gateway.
 ///
-/// Reproduces the Databricks-edge shape: one listener on the shared gateway's internal
-/// port, an HTTP connection manager (`use_remote_address`, websocket upgrade), the
-/// route table (each [`GatewayRoute`](crate::GatewayRoute) in order, with a
-/// `regex_rewrite` block only when the route has a rewrite), an optional `/` app
-/// catch-all last, the upstream clusters, and the admin endpoint.
+/// Reproduces the Databricks-edge shape: the shared, path-multiplexed listener on the
+/// gateway's internal port (each [`GatewayRoute`](crate::GatewayRoute) in order, with a
+/// `regex_rewrite` block only when the route has a rewrite, and an optional `/` app catch-all
+/// last), then one dedicated listener per fixed-path UI / gatewayed backend (serving `/` to
+/// its own cluster on its own port), the upstream clusters, and the admin endpoint.
 pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
-    // The shared listener (first) carries the multiplexed route table; dedicated
-    // listeners (for fixed-path UIs) are not emitted here yet — the baseline has none.
-    let shared = gateway.listeners.first();
-    let internal_port = shared.map(|l| l.internal_port).unwrap_or(10000);
-
-    let routes = shared
-        .map(|l| l.routes.as_slice())
-        .unwrap_or_default()
+    // Each planner listener becomes an Envoy listener. The shared listener is first and
+    // carries the app catch-all; dedicated listeners (their own port, a single `/` route)
+    // follow. An empty gateway still emits a valid, route-less shared listener.
+    let mut listeners: Vec<ListenerCtx> = gateway
+        .listeners
         .iter()
-        .map(|r| RouteCtx {
-            prefix: &r.prefix,
-            cluster: &r.cluster,
-            rewrite: r.rewrite.as_deref(),
+        .enumerate()
+        .map(|(i, l)| ListenerCtx {
+            name: if i == 0 {
+                "gateway".to_string()
+            } else {
+                format!("dedicated_{}", l.host_port)
+            },
+            internal_port: l.internal_port,
+            routes: l
+                .routes
+                .iter()
+                .map(|r| RouteCtx {
+                    prefix: &r.prefix,
+                    cluster: &r.cluster,
+                    rewrite: r.rewrite.as_deref(),
+                })
+                .collect(),
+            // Only the shared listener (first) carries the app catch-all.
+            app: i == 0 && opts.app.is_some(),
         })
         .collect();
+    if listeners.is_empty() {
+        // No listeners at all (empty plan) — emit a bare shared listener so the config is
+        // still valid Envoy.
+        listeners.push(ListenerCtx {
+            name: "gateway".to_string(),
+            internal_port: 10000,
+            routes: Vec::new(),
+            app: opts.app.is_some(),
+        });
+    }
 
     // The app cluster (when present) is emitted first, before the module clusters —
     // matching the route table, where its `/` catch-all comes last.
@@ -112,10 +146,8 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
     }));
 
     let ctx = EnvoyCtx {
-        internal_port,
-        routes,
+        listeners,
         clusters,
-        app: opts.app.is_some(),
     };
 
     let mut env = minijinja::Environment::new();

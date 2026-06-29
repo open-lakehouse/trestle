@@ -404,6 +404,23 @@ pub struct RenderCtx<'a> {
     /// for a non-provider module.
     #[serde(default)]
     pub objects: Vec<String>,
+    /// The gateway's `host:container` port mappings to publish, populated only for the
+    /// gateway module: the shared listener plus one entry per dedicated listener the planner
+    /// allocated (e.g. an object store's). The gateway fragment iterates these to render its
+    /// compose `ports:` — so dedicated listeners are reachable from the host without the
+    /// fragment hard-coding a port list. Empty for every non-gateway module.
+    #[serde(default)]
+    pub published_ports: Vec<PortMapping>,
+}
+
+/// A `host:container` port mapping a module publishes (currently only the gateway, for its
+/// listeners). Serialized as `{host, container}` so a template renders `"{{ p.host }}:{{ p.container }}"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortMapping {
+    /// The host-published port (compose `ports:` left side).
+    pub host: u16,
+    /// The in-container port the listener binds (compose `ports:` right side).
+    pub container: u16,
 }
 
 impl<'a> RenderCtx<'a> {
@@ -415,6 +432,7 @@ impl<'a> RenderCtx<'a> {
             connections: BTreeMap::new(),
             dependencies: Vec::new(),
             objects: Vec::new(),
+            published_ports: Vec::new(),
         }
     }
 }
@@ -521,13 +539,15 @@ fn substitute(text: &str, env: &InjectedEnv) -> String {
     let mut i = 0;
     while i < bytes.len() {
         // Look for the start of a `${...}` expression.
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            if let Some(close) = text[i + 2..].find('}') {
-                let inner = &text[i + 2..i + 2 + close];
-                out.push_str(&expand(inner, env));
-                i = i + 2 + close + 1;
-                continue;
-            }
+        if bytes[i] == b'$'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'{'
+            && let Some(close) = text[i + 2..].find('}')
+        {
+            let inner = &text[i + 2..i + 2 + close];
+            out.push_str(&expand(inner, env));
+            i = i + 2 + close + 1;
+            continue;
         }
         // Not a substitution start — copy this char verbatim. Index by char to stay
         // UTF-8 correct (the `$`/`{`/`}` checks above are all ASCII).
@@ -653,6 +673,7 @@ mod tests {
                 connections,
                 dependencies: Vec::new(),
                 objects: Vec::new(),
+                published_ports: Vec::new(),
             })
             .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
@@ -693,6 +714,7 @@ mod tests {
                 },
             ],
             objects: Vec::new(),
+            published_ports: Vec::new(),
         };
         let out = spec.render(&ctx).expect("template renders");
         // The serde value of each condition is the exact compose token.

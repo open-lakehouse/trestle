@@ -78,11 +78,11 @@ fn main() {
 
     // Write everything into a fresh scratch folder at the repo root.
     let out_dir = scratch_dir();
-    if out_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&out_dir) {
-            eprintln!("failed to clear {}: {e}", out_dir.display());
-            std::process::exit(1);
-        }
+    if out_dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&out_dir)
+    {
+        eprintln!("failed to clear {}: {e}", out_dir.display());
+        std::process::exit(1);
     }
 
     write_artifact(&out_dir, "docker/envoy/envoy.yaml", &artifacts.envoy);
@@ -124,11 +124,11 @@ fn scratch_dir() -> PathBuf {
 /// Write `body` to `out_dir/rel_path`, creating parent directories, and log it.
 fn write_artifact(out_dir: &Path, rel_path: &str, body: &str) {
     let path = out_dir.join(rel_path);
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("failed to create {}: {e}", parent.display());
-            std::process::exit(1);
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("failed to create {}: {e}", parent.display());
+        std::process::exit(1);
     }
     if let Err(e) = std::fs::write(&path, body) {
         eprintln!("failed to write {}: {e}", path.display());

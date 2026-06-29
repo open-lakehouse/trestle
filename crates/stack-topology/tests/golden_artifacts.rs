@@ -172,9 +172,9 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
 
     // Every var trestle shipped is still present and unchanged, with one deliberate
     // exception: `MLFLOW_S3_ENDPOINT_URL`. Trestle pointed it at the host
-    // (`http://localhost:${SEAWEEDFS_S3_PORT}`), which is wrong from inside the compose
-    // network; the planner now injects the object_store provider's in-network `endpoint`
-    // coordinate (`http://seaweedfs:8333`) instead — a behavioral fix, not a regression.
+    // (`http://localhost:${SEAWEEDFS_S3_PORT}`); the object store is now fronted by the
+    // gateway on its own dedicated listener, so the planner injects the gateway origin
+    // (`http://envoy:9100`) instead — consumers reach the store through Envoy, not directly.
     for (k, v) in &want {
         if k == "MLFLOW_S3_ENDPOINT_URL" {
             continue;
@@ -187,8 +187,8 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     }
     assert_eq!(
         got.get("MLFLOW_S3_ENDPOINT_URL").map(String::as_str),
-        Some("http://seaweedfs:8333"),
-        "MLFLOW_S3_ENDPOINT_URL should be the in-network object_store endpoint"
+        Some("http://envoy:9100"),
+        "MLFLOW_S3_ENDPOINT_URL should be the object store's dedicated gateway listener"
     );
 
     // The coordinate-injection rework adds these role-generic coordinates, sourced from the
@@ -208,8 +208,8 @@ fn env_file_preserves_trestle_vars_and_adds_injected_coordinates() {
     );
     assert_eq!(
         got.get("S3_ENDPOINT").map(String::as_str),
-        Some("http://seaweedfs:8333"),
-        "UC's S3 endpoint is injected from the object_store `endpoint` coordinate"
+        Some("http://envoy:9100"),
+        "UC's S3 endpoint follows the object store to its dedicated gateway listener"
     );
     // The S3 credentials still come from the chosen provider's own env contribution (not
     // injected per-consumer), so they remain present with the SeaweedFS values.
@@ -468,6 +468,82 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
     assert!(
         !body.contains("${"),
         "no leftover ${{VAR}} substitution: {frag}"
+    );
+}
+
+#[test]
+fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
+    // An object store is `Gatewayed`: the planner gives it its own Envoy listener serving `/`
+    // (not a shared-listener path prefix, which would break S3/Blob URL construction), the
+    // gateway publishes that port, and the consumer endpoint points through it.
+    let arts = render(&default_selection());
+    let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
+    let listeners = doc["static_resources"]["listeners"].as_sequence().unwrap();
+
+    // Two listeners: the shared gateway (port 10000) and the object store's dedicated one.
+    let ports: BTreeSet<u64> = listeners
+        .iter()
+        .map(|l| {
+            l["address"]["socket_address"]["port_value"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect();
+    assert!(ports.contains(&10000), "shared listener present: {ports:?}");
+    assert!(
+        ports.contains(&9100),
+        "dedicated object-store listener present: {ports:?}"
+    );
+
+    // The dedicated listener fronts the seaweedfs cluster at `/` (origin, no prefix/rewrite).
+    let dedicated = listeners
+        .iter()
+        .find(|l| l["address"]["socket_address"]["port_value"].as_u64() == Some(9100))
+        .unwrap();
+    let route = &dedicated["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
+        [0]["routes"][0];
+    assert_eq!(route["match"]["prefix"].as_str(), Some("/"));
+    assert_eq!(route["route"]["cluster"].as_str(), Some("seaweedfs"));
+    assert!(
+        route["route"]["regex_rewrite"].is_null(),
+        "no rewrite — the store is served at its origin"
+    );
+
+    // The seaweedfs cluster still targets the upstream's real port (8333), not the listener.
+    let clusters = doc["static_resources"]["clusters"].as_sequence().unwrap();
+    let sw = clusters
+        .iter()
+        .find(|c| c["name"].as_str() == Some("seaweedfs"))
+        .unwrap();
+    let sock = &sw["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"];
+    assert_eq!(sock["address"].as_str(), Some("seaweedfs"));
+    assert_eq!(sock["port_value"].as_u64(), Some(8333));
+
+    // The gateway compose fragment publishes the dedicated port on the host.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            env_name: "lh-ref".into(),
+            ..Default::default()
+        },
+    )
+    .expect("plan succeeds");
+    let (_, envoy_frag) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &olai_stack_topology::ModuleId::from("envoy"))
+        .unwrap();
+    let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
+    let published: BTreeSet<String> = envoy_doc["services"]["envoy"]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        published.contains("9100:9100"),
+        "envoy publishes the dedicated port: {published:?}"
     );
 }
 

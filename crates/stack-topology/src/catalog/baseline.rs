@@ -167,7 +167,7 @@ fn envoy() -> Module {
         }],
         provides,
         knobs: vec![],
-        render: fragment(include_str!("../../templates/gateway/compose.yaml.jinja")),
+        render: template(include_str!("../../templates/gateway/compose.yaml.jinja")),
     }
 }
 
@@ -253,6 +253,9 @@ fn seaweedfs() -> Module {
         ConnectionTemplate(Connection::ObjectStore {
             uri: "s3://{name}".into(),
             bucket: "{name}".into(),
+            // The in-network direct address. Because the `s3` endpoint is `Gatewayed`, the
+            // planner rewrites this to the gateway origin (`http://<gateway>:<port>`) after
+            // it allocates the store's dedicated listener, so consumers reach it via Envoy.
             endpoint: "http://seaweedfs:8333".into(),
             credential: ObjectStoreCredential::S3 {
                 access_key_id: "seaweedfs".into(),
@@ -284,8 +287,10 @@ fn seaweedfs() -> Module {
                 id: "s3".into(),
                 scheme: Scheme::Http,
                 internal_port: 8333,
-                host_port: Some(9000),
-                intent: RouteIntent::Internal,
+                // No raw host port: the store is reached through the gateway on its own
+                // dedicated listener (Gatewayed), not a direct compose `ports:` publish.
+                host_port: None,
+                intent: RouteIntent::Gatewayed,
                 path: String::new(),
             }],
             depends_on: vec![],
@@ -319,6 +324,9 @@ fn azurite() -> Module {
         ConnectionTemplate(Connection::ObjectStore {
             uri: "wasbs://{name}@devstoreaccount1.blob.core.windows.net".into(),
             bucket: "{name}".into(),
+            // In-network direct address; the planner rewrites the origin to the gateway's
+            // dedicated listener (keeping the `/devstoreaccount1` path) since `blob` is
+            // `Gatewayed`. The `BlobEndpoint=` inside the connection string is rewritten too.
             endpoint: "http://azurite:10000/devstoreaccount1".into(),
             credential: ObjectStoreCredential::AzureBlob {
                 connection_string: CONN.into(),
@@ -351,8 +359,9 @@ fn azurite() -> Module {
                 id: "blob".into(),
                 scheme: Scheme::Http,
                 internal_port: 10000,
-                host_port: Some(10000),
-                intent: RouteIntent::Internal,
+                // No raw host port: reached through the gateway's dedicated listener.
+                host_port: None,
+                intent: RouteIntent::Gatewayed,
                 path: String::new(),
             }],
             depends_on: vec![],
