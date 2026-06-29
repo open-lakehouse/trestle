@@ -329,8 +329,14 @@ pub fn plan(
     // (a demanded relational store, object store, …) before anything else runs.
     let graph = resolve_with_demands(selection, catalog, ctx)?;
 
+    // Resolve each demand's provider exactly once, up front: `choose_provider` is a pure
+    // function of `(ctx, catalog, demand)`, so the downstream passes (contract validation,
+    // role exclusivity, provisioning) all read the same chosen provider from here instead of
+    // re-running the selection (and its per-call catalog scan) at each site.
+    let chosen = resolve_demand_providers(&graph, catalog, ctx)?;
+
     // Every provider chosen to satisfy a demand must honor its role's coordinate contract.
-    validate_contracts(&graph, catalog, ctx)?;
+    validate_contracts(&graph, catalog, &chosen)?;
 
     // At most one provider per resource role may end up in an environment — unless a
     // consumer explicitly pinned each (the sanctioned multi-store case).
@@ -339,10 +345,11 @@ pub fn plan(
     // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
     // order). Grouping by provider — not by abstract role — is what lets one object-store
     // demand land on SeaweedFS and another on Azurite, each provisioning on its own init.
+    // Walk modules in graph (dependency) order so the grouped names stay deterministic.
     let mut provisioned_by: BTreeMap<ModuleId, Vec<String>> = BTreeMap::new();
     for module in &graph.nodes {
-        for demand in &module.needs {
-            let provider = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+        for (idx, demand) in module.needs.iter().enumerate() {
+            let provider = chosen[&(module.id.clone(), idx)].clone();
             let names = provisioned_by.entry(provider).or_default();
             if !names.contains(&demand.name) {
                 names.push(demand.name.clone());
@@ -751,32 +758,53 @@ fn resolve_coordinate(
     Ok(template.replace("{name}", &demand.name))
 }
 
-/// Validate that every provider chosen to satisfy a demand renders all the coordinates
-/// its role's [`RoleContract`](crate::RoleContract) requires.
+/// The provider chosen for each demand, keyed by `(demanding module id, demand index)`.
 ///
-/// Runs once per `(demand role, chosen provider)` pair. A contract gap surfaces here as
-/// [`PlanError::IncompleteProviderContract`] — at plan time, for the provider — rather
-/// than later as an [`PlanError::UnknownCoordinate`] only if some consumer happens to
-/// inject the missing coordinate. Roles without a registered contract are unconstrained.
-fn validate_contracts(
+/// Computed once by [`resolve_demand_providers`] and shared by the planner's passes so
+/// each demand's provider is selected a single time (rather than re-running
+/// [`choose_provider`] — and its catalog scan — at every consumer).
+type ChosenProviders = BTreeMap<(ModuleId, usize), ModuleId>;
+
+/// Resolve the provider for every demand in the graph, once.
+fn resolve_demand_providers(
     graph: &ResolvedGraph,
     catalog: &Catalog,
     ctx: &PlanCtx,
-) -> Result<(), PlanError> {
-    let mut checked: BTreeSet<(String, ModuleId)> = BTreeSet::new();
+) -> Result<ChosenProviders, PlanError> {
+    let mut chosen = ChosenProviders::new();
     for module in &graph.nodes {
-        for demand in &module.needs {
+        for (idx, demand) in module.needs.iter().enumerate() {
+            let provider = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+            chosen.insert((module.id.clone(), idx), provider);
+        }
+    }
+    Ok(chosen)
+}
+
+/// Validate that every provider chosen to satisfy a demand renders all the coordinates
+/// its role's [`RoleContract`](crate::RoleContract) requires.
+///
+/// A contract gap surfaces here as [`PlanError::IncompleteProviderContract`] — at plan
+/// time, for the provider — rather than later as an [`PlanError::UnknownCoordinate`] only
+/// if some consumer happens to inject the missing coordinate. Roles without a registered
+/// contract are unconstrained. Each `(role, provider)` pair is checked once.
+fn validate_contracts(
+    graph: &ResolvedGraph,
+    catalog: &Catalog,
+    chosen: &ChosenProviders,
+) -> Result<(), PlanError> {
+    let mut checked: BTreeSet<(&str, &ModuleId)> = BTreeSet::new();
+    for module in &graph.nodes {
+        for (idx, demand) in module.needs.iter().enumerate() {
             let role = &demand.resource;
             let Some(contract) = catalog.contract_for(role) else {
                 continue;
             };
-            let provider_id = choose_provider(ctx, catalog, demand, Some(&module.id))?;
-            if !checked.insert((role.clone(), provider_id.clone())) {
+            let provider_id = &chosen[&(module.id.clone(), idx)];
+            if !checked.insert((role.as_str(), provider_id)) {
                 continue;
             }
-            let provider = catalog
-                .get(&provider_id)
-                .expect("provider id is in catalog");
+            let provider = catalog.get(provider_id).expect("provider id is in catalog");
             let rp = provider.provides.resource_kinds.get(role);
             for coordinate in &contract.required_coordinates {
                 let present = rp.is_some_and(|rp| rp.coordinate(coordinate).is_some());
