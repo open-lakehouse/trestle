@@ -42,7 +42,9 @@
 use super::Catalog;
 use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
 use crate::endpoint::{Endpoint, RouteIntent, Scheme};
-use crate::module::{ConnectionBinding, Module, ModuleId, Provides, RenderSpec, ResourceDemand};
+use crate::module::{
+    ConnectionBinding, Knob, KnobKind, Module, ModuleId, Provides, RenderSpec, ResourceDemand,
+};
 use crate::placement::Placement;
 use crate::render::RenderFile;
 use crate::role::{Role, ServiceSpec};
@@ -653,10 +655,11 @@ fn jaeger() -> Module {
 /// surface — web UI, REST read API, and OpenLineage ingest — under a single base path.
 /// So it fronts as one [`UiPrefixable`](RouteIntent::UiPrefixable) endpoint at `/lineage`:
 /// the planner mounts it on the shared listener and forwards the prefix upstream
-/// unchanged (no rewrite), and the service is told that base path via
-/// `HEADWATERS__UI__BASE_PATH` (the `BASE_PATH` render handshake, like MLflow's
-/// `--static-prefix`). It demands only a `relational_db` (named `lineage`); Postgres
-/// provisions the database and the planner injects the `db:service_healthy` gate.
+/// unchanged (no rewrite), and the service is told that base path through its
+/// generated `config.toml` (`ui.base_path`, fed by the `BASE_PATH` render handshake,
+/// like MLflow's `--static-prefix`). It demands only a `relational_db` (named
+/// `lineage`); Postgres provisions the database and the planner injects the
+/// `db:service_healthy` gate.
 fn headwaters() -> Module {
     let mut provides = Provides::default();
     provides
@@ -699,10 +702,35 @@ fn headwaters() -> Module {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![],
-        render: template(include_str!(
-            "../../templates/modules/headwaters/compose.yaml.jinja"
-        )),
+        // The one user-tunable surface Headwaters exposes today: whether to serve the
+        // bundled lineage UI. The value lands in the module's `InjectedEnv` under
+        // `HEADWATERS_SERVE_UI` and the generated `config.toml` reads it as
+        // `ui.serve = {{ env.HEADWATERS_SERVE_UI }}`; off runs the service API-only.
+        knobs: vec![Knob {
+            key: "HEADWATERS_SERVE_UI".into(),
+            title: Some("Serve the lineage UI".into()),
+            kind: KnobKind::Bool,
+            default: Some("true".into()),
+            required: false,
+            help: Some(
+                "Serve the bundled lineage web UI. Turn off to run the service API-only \
+                 (e.g. when embedding a custom UI built on the shipped components)."
+                    .into(),
+            ),
+        }],
+        // The service config is rendered to a mounted `config.toml` (so an environment's
+        // effective Headwaters config is inspectable on disk) rather than threaded as
+        // individual env vars; the DSN stays in `DATABASE_URL`, which Headwaters overlays
+        // over the file so the secret never lands in the checked-in config.
+        render: template_with_files(
+            include_str!("../../templates/modules/headwaters/compose.yaml.jinja"),
+            vec![RenderFile {
+                path: "config.toml".into(),
+                contents: include_str!("../../templates/modules/headwaters/config.toml.jinja")
+                    .into(),
+                alias: Some("headwaters_config".into()),
+            }],
+        ),
     }
 }
 

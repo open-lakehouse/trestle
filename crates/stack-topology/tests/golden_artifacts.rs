@@ -734,8 +734,9 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         Some("/lineage")
     );
 
-    // The rendered fragment wires the DSN from the resolved connection, the base path from
-    // the planner, and gates on the Postgres healthcheck — with no leftover ${VAR}.
+    // The rendered fragment keeps the DSN as an env (the secret stays out of the config
+    // file), points the container at the mounted `config.toml`, gates on the Postgres
+    // healthcheck, and declares its own distroless self-healthcheck — with no leftover ${VAR}.
     let (_, out) = p
         .renders
         .iter()
@@ -745,8 +746,6 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         serde_yaml::from_str(&out.fragment).expect("headwaters fragment must be valid YAML");
     let svc = &doc["services"]["headwaters"];
     let env = &svc["environment"];
-    assert_eq!(env["HEADWATERS__UI__BASE_PATH"].as_str(), Some("/lineage"));
-    assert_eq!(env["HEADWATERS__PORT"].as_str(), Some("8091"));
     assert!(
         env["DATABASE_URL"]
             .as_str()
@@ -755,9 +754,55 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         out.fragment
     );
     assert_eq!(
+        env["HEADWATERS_CONFIG"].as_str(),
+        Some("/etc/headwaters/config.toml"),
+        "the container is pointed at the mounted config file"
+    );
+    // The config file is mounted via the `headwaters_config` alias at the expected target.
+    assert_eq!(
+        svc["configs"][0]["source"].as_str(),
+        Some("headwaters_config")
+    );
+    assert_eq!(
+        svc["configs"][0]["target"].as_str(),
+        Some("/etc/headwaters/config.toml")
+    );
+    assert_eq!(
         svc["depends_on"]["db"]["condition"].as_str(),
         Some("service_healthy")
     );
+    // The distroless self-healthcheck: the binary's own `healthcheck` subcommand.
+    let healthcheck_test: Vec<&str> = svc["healthcheck"]["test"]
+        .as_sequence()
+        .expect("healthcheck.test is a sequence")
+        .iter()
+        .map(|v| v.as_str().expect("healthcheck.test entries are strings"))
+        .collect();
+    assert_eq!(
+        healthcheck_test,
+        ["CMD", "/usr/local/bin/app", "healthcheck"]
+    );
+
+    // The generated `config.toml` carries the effective config: the UI knob defaults to
+    // `true`, and the planner-assigned base path is threaded through.
+    let config = out
+        .files
+        .iter()
+        .find(|f| f.alias.as_deref() == Some("headwaters_config"))
+        .expect("headwaters renders a config.toml");
+    // It is co-located under the module's directory.
+    assert_eq!(config.path, "modules/headwaters/config.toml");
+    assert!(
+        config.contents.contains("serve = true"),
+        "UI serve defaults to true: {}",
+        config.contents
+    );
+    assert!(
+        config.contents.contains(r#"base_path = "/lineage""#),
+        "base_path is the planner-assigned prefix: {}",
+        config.contents
+    );
+
     // Network-only backend (no host ports) and no leftover compose substitutions.
     assert!(!out.fragment.contains("ports:"), "{}", out.fragment);
     let body: String = out
@@ -769,6 +814,44 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         !body.contains("${"),
         "no leftover ${{VAR}}: {}",
         out.fragment
+    );
+}
+
+#[test]
+fn headwaters_ui_knob_override_turns_off_the_ui() {
+    use std::collections::BTreeMap;
+
+    use olai_stack_topology::ModuleId;
+
+    // The `HEADWATERS_SERVE_UI` knob is overridable through the selection: a config UI
+    // (hydrofoil / Transler) surfaces it, and the chosen value is fed back here and lands
+    // in the generated `config.toml` as `ui.serve`.
+    let mut knob_overrides = BTreeMap::new();
+    knob_overrides.insert(
+        ModuleId::from("headwaters"),
+        BTreeMap::from([("HEADWATERS_SERVE_UI".to_string(), "false".to_string())]),
+    );
+    let sel = Selection {
+        modules: vec!["envoy".into(), "postgres".into(), "headwaters".into()],
+        capabilities: vec![],
+        knob_overrides,
+    };
+
+    let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("headwaters"))
+        .expect("headwaters is in the render set");
+    let config = out
+        .files
+        .iter()
+        .find(|f| f.alias.as_deref() == Some("headwaters_config"))
+        .expect("headwaters renders a config.toml");
+    assert!(
+        config.contents.contains("serve = false"),
+        "the override turns the UI off: {}",
+        config.contents
     );
 }
 

@@ -63,6 +63,16 @@ pub struct Selection {
     pub modules: Vec<ModuleId>,
     /// Capabilities selected; each is mapped to its provider module(s) in the catalog.
     pub capabilities: Vec<String>,
+    /// Per-module knob overrides: module id → (knob `key` → value). A value present
+    /// here wins over the knob's declared [`default`](crate::Knob::default); a knob
+    /// absent from this map falls back to its default. The value lands in the module's
+    /// [`InjectedEnv`] under the knob's `key`, exactly like any other planner-injected
+    /// variable, so the module's template reads it as `{{ env.KEY }}`.
+    ///
+    /// This is the channel a config UI (hydrofoil / Transler) feeds: it surfaces a
+    /// module's knobs from the catalog, lets the user tune them, and hands the chosen
+    /// values back here.
+    pub knob_overrides: BTreeMap<ModuleId, BTreeMap<String, String>>,
 }
 
 impl Selection {
@@ -75,6 +85,7 @@ impl Selection {
         Selection {
             modules: ids.into_iter().map(Into::into).collect(),
             capabilities: Vec::new(),
+            knob_overrides: BTreeMap::new(),
         }
     }
 }
@@ -249,6 +260,34 @@ pub enum PlanError {
         first: ModuleId,
         /// The module that collided with it.
         second: ModuleId,
+    },
+    /// A module declares a [`required`](crate::Knob::required) knob with no
+    /// [`default`](crate::Knob::default), and the [`Selection`] supplied no override for
+    /// it. The fix is to set the knob in
+    /// [`Selection::knob_overrides`](Selection::knob_overrides) (or give the knob a
+    /// default in the catalog).
+    #[error("module `{module}` requires a value for knob `{key}` (no default, none supplied)")]
+    MissingRequiredKnob {
+        /// The module that owns the knob.
+        module: ModuleId,
+        /// The knob's `key`.
+        key: String,
+    },
+    /// A knob value (an override or the declared default) is not a valid member of the
+    /// knob's [`KnobKind`](crate::KnobKind) — e.g. a non-boolean for a `Bool`, an
+    /// off-list choice for an `Enum`, or an out-of-range/non-numeric `Integer`/`Port`.
+    /// Caught at plan time so a malformed knob can never reach a rendered config and
+    /// surface only as a container startup failure.
+    #[error("knob `{key}` on module `{module}` rejected value `{value}` for kind {kind:?}")]
+    InvalidKnobValue {
+        /// The module that owns the knob.
+        module: ModuleId,
+        /// The knob's `key`.
+        key: String,
+        /// The offending value.
+        value: String,
+        /// The kind the value failed to satisfy.
+        kind: crate::module::KnobKind,
     },
 }
 
@@ -494,6 +533,16 @@ pub fn plan(
         // Seed each module's render env with its declared env vars.
         for (k, v) in module.provides.env_vars.iter() {
             module_env.set(k, v);
+        }
+        // Inject the module's user-tunable knob values: an override from the selection,
+        // else the knob's default. Each lands under the knob's `key`, so a fragment or a
+        // mounted config file reads it as `{{ env.KEY }}` — the same injection point as
+        // `DATA_ROOT` and `BASE_PATH`.
+        let module_overrides = selection.knob_overrides.get(&module.id);
+        for knob in &module.knobs {
+            if let Some(value) = resolve_knob(&module.id, knob, module_overrides)? {
+                module_env.set(&knob.key, value);
+            }
         }
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field. The connection was resolved once up front (in `chosen`).
@@ -956,6 +1005,77 @@ fn bind_connection(
         env.set(key, value);
     }
     Ok(())
+}
+
+/// Resolve a knob to the value the planner should inject, **validated and coerced against
+/// its [`KnobKind`]**: an override (from [`Selection::knob_overrides`]) wins, then the
+/// knob's declared [`default`](crate::Knob::default); a [`required`](crate::Knob::required)
+/// knob with neither is a [`PlanError::MissingRequiredKnob`]. A non-required knob with no
+/// value resolves to `None` (nothing injected — the module's template supplies its own).
+///
+/// The chosen value is checked against the knob's `kind` and canonicalized so what lands in
+/// the [`InjectedEnv`] is always a valid literal for the template's target format (e.g. a
+/// `Bool` renders as the bare TOML/JSON `true`/`false`, never `"True"` or `"yes"`). A value
+/// the kind cannot accept is a plan-time [`PlanError::InvalidKnobValue`] rather than a
+/// malformed config that fails only when the container starts.
+fn resolve_knob(
+    module: &ModuleId,
+    knob: &crate::module::Knob,
+    overrides: Option<&BTreeMap<String, String>>,
+) -> Result<Option<String>, PlanError> {
+    let raw = overrides
+        .and_then(|o| o.get(&knob.key))
+        .map(String::as_str)
+        .or(knob.default.as_deref());
+    let Some(raw) = raw else {
+        if knob.required {
+            return Err(PlanError::MissingRequiredKnob {
+                module: module.clone(),
+                key: knob.key.clone(),
+            });
+        }
+        return Ok(None);
+    };
+    coerce_knob(raw, &knob.kind)
+        .map(Some)
+        .ok_or_else(|| PlanError::InvalidKnobValue {
+            module: module.clone(),
+            key: knob.key.clone(),
+            value: raw.to_string(),
+            kind: knob.kind.clone(),
+        })
+}
+
+/// Validate `raw` against `kind` and return its canonical injected form, or `None` if the
+/// value is not a valid member of the kind (the caller turns that into a
+/// [`PlanError::InvalidKnobValue`]).
+///
+/// Coercions are deliberately liberal on input, strict on output: a `Bool` accepts the usual
+/// truthy/falsey spellings but always emits the bare `true`/`false`; an `Integer`/`Port`
+/// parses and range-checks but re-emits the canonical decimal; a `String` passes through; an
+/// `Enum` must match one of its options exactly.
+fn coerce_knob(raw: &str, kind: &crate::module::KnobKind) -> Option<String> {
+    use crate::module::KnobKind;
+    match kind {
+        KnobKind::String => Some(raw.to_string()),
+        KnobKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some("true".to_string()),
+            "false" | "0" | "no" | "off" => Some("false".to_string()),
+            _ => None,
+        },
+        KnobKind::Enum { options } => options.iter().find(|o| *o == raw).cloned(),
+        KnobKind::Integer { min, max } => {
+            let n: i64 = raw.trim().parse().ok()?;
+            if min.is_some_and(|lo| n < lo) || max.is_some_and(|hi| n > hi) {
+                return None;
+            }
+            Some(n.to_string())
+        }
+        KnobKind::Port => {
+            let n: u16 = raw.trim().parse().ok()?;
+            (n != 0).then(|| n.to_string())
+        }
+    }
 }
 
 /// The provider chosen for a demand and the typed connection it resolves to.
@@ -1659,6 +1779,7 @@ mod tests {
         let sel = Selection {
             modules: vec![],
             capabilities: vec!["experiment_tracking".into()],
+            ..Default::default()
         };
         let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
         // mlflow + its transitive requires (postgres, seaweedfs, envoy).
@@ -1672,6 +1793,7 @@ mod tests {
         let sel = Selection {
             modules: vec![],
             capabilities: vec!["telepathy".into()],
+            ..Default::default()
         };
         let err = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap_err();
         assert_eq!(err, PlanError::UnknownCapability("telepathy".into()));
@@ -1685,5 +1807,159 @@ mod tests {
             Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]);
         let b = plan(&reversed, &cat, &PlanCtx::default()).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn resolve_knob_prefers_override_then_default() {
+        use crate::module::{Knob, KnobKind};
+
+        let module = ModuleId::from("m");
+        let knob = Knob {
+            key: "SERVE_UI".into(),
+            title: None,
+            kind: KnobKind::Bool,
+            default: Some("true".into()),
+            required: false,
+            help: None,
+        };
+
+        // No override → the declared default.
+        assert_eq!(
+            resolve_knob(&module, &knob, None).unwrap().as_deref(),
+            Some("true")
+        );
+
+        // An override wins over the default.
+        let overrides = BTreeMap::from([("SERVE_UI".to_string(), "false".to_string())]);
+        assert_eq!(
+            resolve_knob(&module, &knob, Some(&overrides))
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn resolve_knob_coerces_to_canonical_form_per_kind() {
+        use crate::module::{Knob, KnobKind};
+
+        let module = ModuleId::from("m");
+        let knob = |kind: KnobKind, default: &str| Knob {
+            key: "K".into(),
+            title: None,
+            kind,
+            default: Some(default.into()),
+            required: false,
+            help: None,
+        };
+        let resolved = |k: &Knob| resolve_knob(&module, k, None).unwrap().unwrap();
+
+        // Bool: liberal input ("True", "yes", "1", "on", whitespace) → bare true/false.
+        for truthy in ["true", "True", "YES", " 1 ", "on"] {
+            assert_eq!(resolved(&knob(KnobKind::Bool, truthy)), "true", "{truthy}");
+        }
+        for falsey in ["false", "No", "0", "OFF"] {
+            assert_eq!(resolved(&knob(KnobKind::Bool, falsey)), "false", "{falsey}");
+        }
+
+        // Integer/Port: parsed and re-emitted canonically (trimmed).
+        assert_eq!(
+            resolved(&knob(
+                KnobKind::Integer {
+                    min: Some(1),
+                    max: Some(10)
+                },
+                " 7 "
+            )),
+            "7"
+        );
+        assert_eq!(resolved(&knob(KnobKind::Port, "8091")), "8091");
+
+        // Enum: an exact member passes through.
+        assert_eq!(
+            resolved(&knob(
+                KnobKind::Enum {
+                    options: vec!["a".into(), "b".into()]
+                },
+                "b"
+            )),
+            "b"
+        );
+    }
+
+    #[test]
+    fn resolve_knob_rejects_values_outside_their_kind() {
+        use crate::module::{Knob, KnobKind};
+
+        let module = ModuleId::from("m");
+        let reject = |kind: KnobKind, value: &str| {
+            let k = Knob {
+                key: "K".into(),
+                title: None,
+                kind: kind.clone(),
+                default: Some(value.into()),
+                required: false,
+                help: None,
+            };
+            assert_eq!(
+                resolve_knob(&module, &k, None).unwrap_err(),
+                PlanError::InvalidKnobValue {
+                    module: module.clone(),
+                    key: "K".into(),
+                    value: value.into(),
+                    kind,
+                },
+                "expected {value:?} to be rejected"
+            );
+        };
+
+        reject(KnobKind::Bool, "maybe");
+        reject(KnobKind::Bool, "");
+        reject(KnobKind::Port, "0"); // 0 is not a usable TCP port
+        reject(KnobKind::Port, "99999"); // out of u16 range
+        reject(
+            KnobKind::Integer {
+                min: Some(1),
+                max: Some(10),
+            },
+            "11",
+        );
+        reject(
+            KnobKind::Enum {
+                options: vec!["a".into()],
+            },
+            "z",
+        );
+    }
+
+    #[test]
+    fn resolve_knob_errors_only_when_required_and_unset() {
+        use crate::module::{Knob, KnobKind};
+
+        let module = ModuleId::from("m");
+        let base = Knob {
+            key: "TOKEN".into(),
+            title: None,
+            kind: KnobKind::String,
+            default: None,
+            required: false,
+            help: None,
+        };
+
+        // No value + not required → nothing injected (the template owns its own fallback).
+        assert_eq!(resolve_knob(&module, &base, None).unwrap(), None);
+
+        // No value + required → a loud error naming the module and key.
+        let required = Knob {
+            required: true,
+            ..base
+        };
+        assert_eq!(
+            resolve_knob(&module, &required, None).unwrap_err(),
+            PlanError::MissingRequiredKnob {
+                module,
+                key: "TOKEN".into(),
+            }
+        );
     }
 }
