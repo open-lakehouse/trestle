@@ -828,12 +828,22 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
         let _: Value = serde_yaml::from_str(&f).expect("fragment must be valid YAML");
     }
 
-    // Concrete service ports (no `${PORT:-default}` indirection).
-    assert!(frag("postgres").contains("\"5432:5432\""));
-    assert!(frag("postgres").contains("\"8081:8081\""));
-    assert!(frag("seaweedfs").contains("\"9333:9333\""));
-    assert!(frag("seaweedfs").contains("\"9000:8333\""));
-    assert!(frag("jaeger").contains("\"16686:16686\""));
+    // Backends are network-only: they `expose:` their ports to the compose network (and the
+    // gateway) but never `ports:`-publish to the host, so two stacks rendered on one host don't
+    // collide. The Envoy gateway is the sole host-facing surface.
+    for id in ["postgres", "seaweedfs", "jaeger"] {
+        assert!(
+            !frag(id).contains("ports:"),
+            "{id} must not publish host ports (network-only): {}",
+            frag(id)
+        );
+    }
+    assert!(frag("postgres").contains("expose:"));
+    assert!(frag("postgres").contains("\"5432\""));
+    assert!(frag("postgres").contains("\"8081\""));
+    assert!(frag("seaweedfs").contains("\"9333\""));
+    assert!(frag("seaweedfs").contains("\"8333\""));
+    assert!(frag("jaeger").contains("\"16686\""));
 
     // Postgres credentials are concrete, in both the container env and the pgweb URL.
     let pg = frag("postgres");
