@@ -1137,3 +1137,276 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
         "no containers → no init service: {az_bare}"
     );
 }
+
+/// Helpers for the forward-auth (ENVOY_AUTH knob) golden tests.
+mod auth {
+    use super::*;
+    use olai_stack_topology::ModuleId;
+    use std::collections::BTreeMap;
+
+    /// A selection mixing a gatewayed object store (seaweedfs → dedicated listener), an API
+    /// surface (mlflow), and a UI surface (headwaters), with the gateway's `ENVOY_AUTH` knob
+    /// set to `on`. Exercises the protect/exempt boundary: API/UI on the shared listener get
+    /// gated, the object store on its dedicated listener does not.
+    fn auth_on_selection() -> Selection {
+        let mut knob_overrides = BTreeMap::new();
+        knob_overrides.insert(
+            ModuleId::from("envoy"),
+            BTreeMap::from([("ENVOY_AUTH".to_string(), "true".to_string())]),
+        );
+        Selection {
+            modules: vec![
+                "envoy".into(),
+                "seaweedfs".into(),
+                "postgres".into(),
+                "mlflow".into(),
+                "headwaters".into(),
+            ],
+            capabilities: vec![],
+            knob_overrides,
+        }
+    }
+
+    /// The shared listener (port 10000) from a rendered Envoy doc.
+    fn shared_listener(doc: &Value) -> &Value {
+        doc["static_resources"]["listeners"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|l| l["address"]["socket_address"]["port_value"].as_u64() == Some(10000))
+            .expect("shared listener present")
+    }
+
+    fn http_filter_names(listener: &Value) -> Vec<String> {
+        listener["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn auth_on_gates_only_the_shared_listener() {
+        let p = plan(
+            &auth_on_selection(),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        let arts = render_all(&p, &EnvoyOpts::default());
+        let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
+
+        // The shared listener runs ext_authz before the router.
+        let shared = shared_listener(&doc);
+        let filters = http_filter_names(shared);
+        assert_eq!(
+            filters,
+            vec![
+                "envoy.filters.http.ext_authz".to_string(),
+                "envoy.filters.http.router".to_string(),
+            ],
+            "ext_authz precedes the router on the shared listener: {filters:?}"
+        );
+
+        // Every dedicated listener (the gatewayed object store) is left open — router only.
+        for l in doc["static_resources"]["listeners"].as_sequence().unwrap() {
+            if l["address"]["socket_address"]["port_value"].as_u64() != Some(10000) {
+                let filters = http_filter_names(l);
+                assert_eq!(
+                    filters,
+                    vec!["envoy.filters.http.router".to_string()],
+                    "dedicated listener is not gated: {filters:?}"
+                );
+            }
+        }
+
+        // The ext_authz filter targets the authelia cluster at its documented path.
+        let ext_authz = &shared["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"]
+            [0]["typed_config"];
+        let http_service = &ext_authz["http_service"];
+        assert_eq!(
+            http_service["server_uri"]["cluster"].as_str(),
+            Some("authelia")
+        );
+        assert_eq!(
+            http_service["server_uri"]["uri"].as_str(),
+            Some("authelia:9091")
+        );
+        assert_eq!(
+            http_service["path_prefix"].as_str(),
+            Some("/api/authz/ext-authz/")
+        );
+
+        // The authelia cluster exists, targeting the service on 9091.
+        let clusters = doc["static_resources"]["clusters"].as_sequence().unwrap();
+        let authelia = clusters
+            .iter()
+            .find(|c| c["name"].as_str() == Some("authelia"))
+            .expect("authelia cluster present");
+        let sock = &authelia["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
+            ["socket_address"];
+        assert_eq!(sock["address"].as_str(), Some("authelia"));
+        assert_eq!(sock["port_value"].as_u64(), Some(9091));
+    }
+
+    #[test]
+    fn auth_on_strips_client_identity_headers_and_allows_them_from_authelia() {
+        let p = plan(
+            &auth_on_selection(),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        let arts = render_all(&p, &EnvoyOpts::default());
+        let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
+        let shared = shared_listener(&doc);
+
+        // Ingress: the shared virtual host strips client-supplied identity headers (anti-spoof).
+        let vh = &shared["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
+            [0];
+        let stripped: BTreeSet<String> = vh["request_headers_to_remove"]
+            .as_sequence()
+            .expect("identity headers are stripped on ingress")
+            .iter()
+            .map(|h| h.as_str().unwrap().to_string())
+            .collect();
+        for h in [
+            "Remote-User",
+            "Remote-Email",
+            "Remote-Name",
+            "Remote-Groups",
+        ] {
+            assert!(
+                stripped.contains(h),
+                "{h} is stripped on ingress: {stripped:?}"
+            );
+        }
+
+        // Response: the same headers are allowed upstream (now sourced from Authelia). The
+        // request/response policy lives under `http_service` on the ext_authz typed config.
+        let http_service = &shared["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"]
+            [0]["typed_config"]["http_service"];
+        let allowed: BTreeSet<String> =
+            http_service["authorization_response"]["allowed_upstream_headers"]["patterns"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|p| p["exact"].as_str().unwrap().to_string())
+                .collect();
+        for h in [
+            "Remote-User",
+            "Remote-Email",
+            "Remote-Name",
+            "Remote-Groups",
+        ] {
+            assert!(allowed.contains(h), "{h} is allowed upstream: {allowed:?}");
+        }
+
+        // Both session (cookie) and API (authorization) auth are forwarded to Authelia.
+        let req_allowed: BTreeSet<String> =
+            http_service["authorization_request"]["allowed_headers"]["patterns"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|p| p["exact"].as_str().unwrap().to_string())
+                .collect();
+        assert!(req_allowed.contains("cookie"), "session auth forwarded");
+        assert!(
+            req_allowed.contains("authorization"),
+            "header (API) auth forwarded"
+        );
+    }
+
+    #[test]
+    fn auth_on_pulls_in_the_authelia_module() {
+        let p = plan(
+            &auth_on_selection(),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+
+        // The knob pulls authelia into the graph: it renders a fragment and its two config files.
+        let (_, out) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("authelia"))
+            .expect("authelia is pulled into the render set by the knob");
+        let _: Value =
+            serde_yaml::from_str(&out.fragment).expect("authelia fragment is valid YAML");
+        for alias in ["authelia_config", "authelia_users"] {
+            assert!(
+                out.files.iter().any(|f| f.alias.as_deref() == Some(alias)),
+                "authelia mounts {alias}"
+            );
+        }
+
+        // The top-level compose includes the authelia fragment.
+        let arts = render_all(&p, &EnvoyOpts::default());
+        assert!(
+            arts.compose.contains("./modules/authelia/compose.yaml"),
+            "compose includes the authelia fragment:\n{}",
+            arts.compose
+        );
+
+        // The gateway waits for authelia to be healthy before serving.
+        let (_, envoy_frag) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("envoy"))
+            .unwrap();
+        let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
+        assert_eq!(
+            envoy_doc["services"]["envoy"]["depends_on"]["authelia"]["condition"].as_str(),
+            Some("service_healthy"),
+            "envoy gates on authelia health when auth is on:\n{}",
+            envoy_frag.fragment
+        );
+    }
+
+    #[test]
+    fn auth_off_by_default_emits_no_filter_no_cluster_no_module() {
+        // Same selection, knob left at its default (off).
+        let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "headwaters"]);
+        let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
+        let arts = render_all(&p, &EnvoyOpts::default());
+        let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
+
+        // No listener is gated, and no identity headers are stripped anywhere.
+        for l in doc["static_resources"]["listeners"].as_sequence().unwrap() {
+            let filters = http_filter_names(l);
+            assert_eq!(
+                filters,
+                vec!["envoy.filters.http.router".to_string()],
+                "no ext_authz when auth is off: {filters:?}"
+            );
+            let vh = &l["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
+                [0];
+            assert!(
+                vh["request_headers_to_remove"].is_null(),
+                "no header strip when auth is off"
+            );
+        }
+
+        // No authelia cluster, and the module is absent from the graph entirely.
+        let clusters = doc["static_resources"]["clusters"].as_sequence().unwrap();
+        assert!(
+            !clusters
+                .iter()
+                .any(|c| c["name"].as_str() == Some("authelia")),
+            "no authelia cluster when auth is off"
+        );
+        assert!(
+            !p.renders
+                .iter()
+                .any(|(id, _)| id == &ModuleId::from("authelia")),
+            "authelia is not pulled in when auth is off"
+        );
+        assert!(
+            !arts.compose.contains("authelia"),
+            "compose has no authelia reference when auth is off:\n{}",
+            arts.compose
+        );
+    }
+}
