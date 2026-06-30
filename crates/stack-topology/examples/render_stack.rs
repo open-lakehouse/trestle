@@ -30,9 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use olai_stack_topology::{
-    EnvoyOpts, ModuleId, PlanCtx, Selection, baseline_catalog, plan, render_all,
-};
+use olai_stack_topology::{ModuleId, PlanCtx, Selection, baseline_catalog, plan, render_all};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -118,7 +116,7 @@ fn main() {
         }
     };
 
-    let artifacts = render_all(&plan, &EnvoyOpts::default());
+    let artifacts = render_all(&plan);
 
     // Write everything into a fresh scratch folder at the repo root. A non-default `--name`
     // gets its own subfolder so two stacks coexist on disk as well as on the host ports.

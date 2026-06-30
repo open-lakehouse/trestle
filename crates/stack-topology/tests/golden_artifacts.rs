@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use olai_stack_topology::{
-    Catalog, EnvoyOpts, PlanCtx, Selection, baseline_catalog, plan, render_all,
+    AppUpstream, Catalog, PlanCtx, Selection, baseline_catalog, plan, render_all,
 };
 use serde_yaml::Value;
 
@@ -39,7 +39,7 @@ fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
         },
     )
     .expect("plan should succeed");
-    render_all(&p, &EnvoyOpts::default())
+    render_all(&p)
 }
 
 /// One parsed Envoy route: prefix → (cluster, optional rewrite substitution).
@@ -912,7 +912,7 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     );
 
     // The gateway route table fronts the static API path (and no `/lineage` route).
-    let arts = render_all(&p, &EnvoyOpts::default());
+    let arts = render_all(&p);
     let (routes, _, _) = parse_envoy(&arts.envoy);
     let (cluster, rewrite) = routes
         .get("/api/v1/lineage")
@@ -929,10 +929,47 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
 fn empty_catalog_renders_a_valid_empty_envoy() {
     // No modules → a valid, route-less Envoy config (no panic, parses cleanly).
     let p = plan(&Selection::default(), &Catalog::new(), &PlanCtx::default()).unwrap();
-    let arts = render_all(&p, &EnvoyOpts::default());
+    let arts = render_all(&p);
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
     assert!(routes.is_empty());
     assert!(clusters.is_empty());
+}
+
+#[test]
+fn app_upstream_becomes_the_gateway_catch_all() {
+    // The app upstream is a plan input: setting it on the `PlanCtx` makes the planner emit an
+    // `app` cluster and a `/` catch-all route on the shared listener — rendered straight from
+    // the gateway config, with no render-time option.
+    let p = plan(
+        &default_selection(),
+        &baseline_catalog(),
+        &PlanCtx {
+            env_name: "lh-ref".into(),
+            app: Some(AppUpstream {
+                service: "my-app".into(),
+                port: 8000,
+            }),
+            ..Default::default()
+        },
+    )
+    .expect("plan should succeed");
+
+    let arts = render_all(&p);
+    let (routes, order, clusters) = parse_envoy(&arts.envoy);
+
+    let (cluster, rewrite) = routes.get("/").expect("the app catch-all is fronted");
+    assert_eq!(cluster, "app");
+    assert_eq!(*rewrite, None);
+    assert_eq!(
+        order.last().map(String::as_str),
+        Some("/"),
+        "the catch-all is the least-specific route, so it must be emitted last"
+    );
+    assert_eq!(
+        clusters.get("app").map(String::as_str),
+        Some("my-app:8000"),
+        "the app cluster points at the configured service:port"
+    );
 }
 
 #[test]
@@ -1194,7 +1231,7 @@ mod auth {
             &PlanCtx::default(),
         )
         .unwrap();
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
         // The shared listener runs ext_authz before the router.
@@ -1275,7 +1312,7 @@ mod auth {
             &PlanCtx::default(),
         )
         .unwrap();
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
         let shared = shared_listener(&doc);
 
@@ -1360,7 +1397,7 @@ mod auth {
         }
 
         // The top-level compose includes the authelia fragment.
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let arts = render_all(&p);
         assert!(
             arts.compose.contains("./modules/authelia/compose.yaml"),
             "compose includes the authelia fragment:\n{}",
@@ -1387,7 +1424,7 @@ mod auth {
         // Same selection, knob left at its default (off).
         let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "headwaters"]);
         let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
         // No listener is gated, and no identity headers are stripped anywhere.

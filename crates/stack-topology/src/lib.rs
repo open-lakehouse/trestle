@@ -88,15 +88,13 @@ pub use catalog::{
 pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
-    AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB, EXT_AUTHZ_PATH_EXTRA,
-    EnvironmentPlan, GatewayConfig, GatewayRoute, HeadFile, ListenerConfig, PlanCtx, PlanError,
-    Selection, plan,
+    AppUpstream, AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB,
+    EXT_AUTHZ_PATH_EXTRA, EnvironmentPlan, GatewayConfig, GatewayRoute, HeadFile, ListenerConfig,
+    PlanCtx, PlanError, Selection, plan,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---
-pub use render::artifacts::{
-    AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_envoy,
-};
+pub use render::artifacts::{Artifacts, render_all, render_compose, render_envoy};
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 
 // --- address: the addressing resolver ---

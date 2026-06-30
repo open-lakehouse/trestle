@@ -90,6 +90,18 @@ impl Selection {
     }
 }
 
+/// The user's own application, which the gateway fronts with a `/` catch-all so any
+/// request not matched by a module route reaches the app. Supplied via
+/// [`PlanCtx::app`]; the planner emits its cluster and the trailing catch-all route into
+/// the [`GatewayConfig`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppUpstream {
+    /// The app's compose service / DNS name (the gateway cluster's upstream host).
+    pub service: String,
+    /// The app's port.
+    pub port: u16,
+}
+
 /// Runtime facts the planner needs but cannot derive from the model — the same
 /// posture as [`TopologyCtx`](crate::TopologyCtx). The consumer supplies these once
 /// per environment.
@@ -134,6 +146,11 @@ pub struct PlanCtx {
     /// fragment. Defaults to [`DATA_ROOT_DEFAULT`](crate::DATA_ROOT_DEFAULT) (`./.data`,
     /// relative to the compose file).
     pub data_root: String,
+    /// The user's app, if any: when set, the gateway gets an `app` cluster and a `/`
+    /// catch-all route (emitted last, after every module route) forwarding unmatched
+    /// requests to it. Defaults to `None`. Part of the plan because the catch-all is a
+    /// structural fact about the gateway, not a render-time decoration.
+    pub app: Option<AppUpstream>,
 }
 
 impl Default for PlanCtx {
@@ -148,6 +165,7 @@ impl Default for PlanCtx {
             dedicated_listener_port_base: 9100,
             provider_preference: BTreeMap::new(),
             data_root: DATA_ROOT_DEFAULT.into(),
+            app: None,
         }
     }
 }
@@ -802,6 +820,26 @@ pub fn plan(
         // Routes/env are decided here; rendering happens in a second pass below, once
         // every module's injected env is settled, so renders stay in dependency order.
         injected.insert(module.id().clone(), module_env);
+    }
+
+    // The user's app, when present, becomes the gateway's catch-all: an `app` cluster
+    // (emitted first, before the module clusters) and a `/` route on the shared listener.
+    // The `/` route is the shortest prefix, so the most-specific-first sort below settles
+    // it last — exactly where a catch-all belongs.
+    if let Some(app) = &ctx.app {
+        gateway.clusters.insert(
+            0,
+            ClusterConfig {
+                name: "app".into(),
+                host: app.service.clone(),
+                port: app.port,
+            },
+        );
+        shared_routes.push(GatewayRoute {
+            prefix: "/".into(),
+            cluster: "app".into(),
+            rewrite: None,
+        });
     }
 
     // Order shared-listener routes most-specific-first (longer prefix wins), stable
