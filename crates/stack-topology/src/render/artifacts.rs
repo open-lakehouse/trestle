@@ -20,14 +20,14 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::plan_env::{EnvironmentPlan, GatewayConfig, HeadFile};
+use crate::plan::{EnvironmentPlan, GatewayConfig, HeadFile};
 use crate::render::InjectedEnv;
 
 /// The on-disk Envoy bootstrap template, embedded at compile time. Lives at
 /// `templates/gateway/bootstrap.yaml.jinja` (a sibling of `src/`), alongside the envoy
 /// module's compose fragment (`templates/gateway/compose.yaml.jinja`), so the gateway's two
 /// template faces sit together and are reviewable as plain files rather than inline strings.
-const ENVOY_TEMPLATE: &str = include_str!("../templates/gateway/bootstrap.yaml.jinja");
+const ENVOY_TEMPLATE: &str = include_str!("../../templates/gateway/bootstrap.yaml.jinja");
 
 /// The flat, owned render context the Envoy template iterates. The ordering decisions
 /// (longest-prefix-first routes, app cluster first) stay in Rust; the template only
@@ -361,7 +361,7 @@ pub fn render_all(plan: &EnvironmentPlan, opts: &EnvoyOpts) -> Artifacts {
     // duplicate top-level key.
     let already_declared = head.configs.iter().any(|c| c.alias == ENVOY_CONFIG_ALIAS);
     if gateway_present && !already_declared {
-        head.configs.push(crate::plan_env::ConfigDecl {
+        head.configs.push(crate::plan::ConfigDecl {
             alias: ENVOY_CONFIG_ALIAS.into(),
             path: ENVOY_CONFIG_PATH.into(),
         });

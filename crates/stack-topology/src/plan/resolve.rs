@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::module::{Module, ModuleId};
+use crate::catalog::module::{Module, ModuleId};
 
 /// Extra dependency edges supplied alongside a catalog: `consumer → [providers]`, ordered
 /// like `requires` (each provider starts before the consumer). The planner passes the
@@ -71,7 +71,7 @@ pub struct ResolvedGraph {
 impl std::fmt::Debug for ResolvedGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedGraph")
-            .field("nodes", &crate::module::module_ids(&self.nodes))
+            .field("nodes", &crate::catalog::module::module_ids(&self.nodes))
             .field("edges", &self.edges)
             .finish()
     }
@@ -255,7 +255,7 @@ fn topo_sort(included: &BTreeSet<ModuleId>, edges: &[Edge]) -> Result<Vec<Module
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module::DataModule;
+    use crate::catalog::module::DataModule;
 
     /// A bare module with just an id and `requires` — enough to exercise the graph.
     fn m(id: &str, requires: &[&str]) -> Arc<dyn Module> {

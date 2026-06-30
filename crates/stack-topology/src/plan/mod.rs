@@ -38,16 +38,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod resolve;
+pub mod routing;
+
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA};
-use crate::connection::Connection;
-use crate::endpoint::{Endpoint, Rewrite, RouteIntent};
-use crate::module::{ModuleId, ResolvedKnobs};
-use crate::placement::Placement;
-use crate::plan::{AssignedRoute, Listener, RoutePlan};
+use crate::catalog::module::{ModuleId, ResolvedKnobs};
+use crate::model::connection::Connection;
+use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent};
+use crate::model::placement::Placement;
+use crate::model::role::{Role, ServiceSpec};
+use crate::plan::resolve::{ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
+use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 use crate::render::{InjectedEnv, RenderOutput};
-use crate::resolve_graph::{ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
-use crate::role::{Role, ServiceSpec};
 
 /// What modules an environment should contain.
 ///
@@ -217,7 +220,7 @@ pub enum PlanError {
         /// The resource role.
         resource: String,
         /// The connection field the variant does not carry.
-        field: crate::connection::ConnectionField,
+        field: crate::model::connection::ConnectionField,
     },
     /// A module's [`RenderSpec`](crate::RenderSpec) fragment failed to compile or
     /// render — a malformed template or a reference to a field absent from the render
@@ -228,7 +231,7 @@ pub enum PlanError {
         module: String,
         /// The underlying templating error.
         #[source]
-        source: crate::module::RenderError,
+        source: crate::catalog::module::RenderError,
     },
     /// Two or more providers of the same resource role are in one environment without an
     /// explicit per-demand pin selecting each. The fix is to pin each demand's provider or
@@ -284,7 +287,7 @@ pub enum PlanError {
         /// The offending value.
         value: String,
         /// The kind the value failed to satisfy.
-        kind: crate::module::KnobKind,
+        kind: crate::catalog::module::KnobKind,
     },
     /// The gateway's `ENVOY_AUTH` knob is on and an `auth`-role provider was selected, but that
     /// provider does not declare what the gateway needs to wire `ext_authz`: a service with an
@@ -912,7 +915,7 @@ pub fn plan(
         // startup gate — so a fragment iterates them instead of hard-coding which backend's
         // service it waits on.
         let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
-        let mut dependencies: Vec<crate::module::DepGate> = Vec::new();
+        let mut dependencies: Vec<crate::catalog::module::DepGate> = Vec::new();
         for (idx, demand) in module.needs().iter().enumerate() {
             let provider = &chosen[&(module.id().clone(), idx)].provider;
             connections
@@ -943,13 +946,13 @@ pub fn plan(
             gateway
                 .listeners
                 .iter()
-                .map(|l| crate::module::PortMapping {
+                .map(|l| crate::catalog::module::PortMapping {
                     host: l.host_port,
                     container: l.internal_port,
                 })
                 // The Envoy admin endpoint is not a routing listener, so it isn't in
                 // `gateway.listeners`; publish it explicitly (1:1) alongside them.
-                .chain(std::iter::once(crate::module::PortMapping {
+                .chain(std::iter::once(crate::catalog::module::PortMapping {
                     host: ctx.gateway_admin_port,
                     container: ctx.gateway_admin_port,
                 }))
@@ -957,7 +960,7 @@ pub fn plan(
         } else {
             Vec::new()
         };
-        let render_ctx = crate::module::RenderCtx {
+        let render_ctx = crate::catalog::module::RenderCtx {
             env: &module_env,
             connections,
             dependencies,
@@ -1118,7 +1121,7 @@ fn resolve_with_demands(
 fn choose_provider(
     ctx: &PlanCtx,
     catalog: &Catalog,
-    demand: &crate::module::ResourceDemand,
+    demand: &crate::catalog::module::ResourceDemand,
     consumer: Option<&ModuleId>,
 ) -> Result<ModuleId, PlanError> {
     let role = &demand.resource;
@@ -1175,7 +1178,7 @@ fn choose_provider(
 fn bind_connection(
     env: &mut InjectedEnv,
     consumer: &ModuleId,
-    demand: &crate::module::ResourceDemand,
+    demand: &crate::catalog::module::ResourceDemand,
     connection: &Connection,
 ) -> Result<(), PlanError> {
     for (field, key) in &demand.bind.bind {
@@ -1204,7 +1207,7 @@ fn bind_connection(
 /// malformed config that fails only when the container starts.
 fn resolve_knob(
     module: &ModuleId,
-    knob: &crate::module::Knob,
+    knob: &crate::catalog::module::Knob,
     overrides: Option<&BTreeMap<String, String>>,
 ) -> Result<Option<String>, PlanError> {
     let raw = overrides
@@ -1238,8 +1241,8 @@ fn resolve_knob(
 /// truthy/falsey spellings but always emits the bare `true`/`false`; an `Integer`/`Port`
 /// parses and range-checks but re-emits the canonical decimal; a `String` passes through; an
 /// `Enum` must match one of its options exactly.
-fn coerce_knob(raw: &str, kind: &crate::module::KnobKind) -> Option<String> {
-    use crate::module::KnobKind;
+fn coerce_knob(raw: &str, kind: &crate::catalog::module::KnobKind) -> Option<String> {
+    use crate::catalog::module::KnobKind;
     match kind {
         KnobKind::String => Some(raw.to_string()),
         KnobKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
@@ -1510,7 +1513,9 @@ fn rewrite_object_store_origin(connection: &mut Connection, new_origin: &str) {
         return;
     };
     *endpoint = swap_origin(endpoint, new_origin);
-    if let crate::connection::ObjectStoreCredential::AzureBlob { connection_string } = credential {
+    if let crate::model::connection::ObjectStoreCredential::AzureBlob { connection_string } =
+        credential
+    {
         // The connection string embeds `BlobEndpoint=<url>;`; rewrite that URL's origin too.
         *connection_string = connection_string
             .split(';')
@@ -1545,19 +1550,22 @@ fn swap_origin(url: &str, new_origin: &str) -> String {
 /// The provider declares the gate as a single `"<service>:<condition>"`
 /// [`DEP_GATE_EXTRA`] value (e.g. `"db:service_healthy"`,
 /// `"seaweedfs-init:service_completed_successfully"`); this parses it into a typed
-/// [`DepGate`](crate::module::DepGate) the planner hands the consumer's render. An
+/// [`DepGate`](crate::catalog::module::DepGate) the planner hands the consumer's render. An
 /// unrecognized or missing condition defaults to
 /// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
-fn provider_dep_gate(catalog: &Catalog, provider: &ModuleId) -> Option<crate::module::DepGate> {
+fn provider_dep_gate(
+    catalog: &Catalog,
+    provider: &ModuleId,
+) -> Option<crate::catalog::module::DepGate> {
     let module = catalog.get(provider)?;
     let gate = module.provides().extras.get(DEP_GATE_EXTRA)?;
     let (service, condition) = match gate.split_once(':') {
-        Some((s, c)) => (s, crate::module::DependsCondition::parse(c)),
+        Some((s, c)) => (s, crate::catalog::module::DependsCondition::parse(c)),
         None => (gate.as_str(), None),
     };
-    Some(crate::module::DepGate {
+    Some(crate::catalog::module::DepGate {
         service: service.to_string(),
-        condition: condition.unwrap_or(crate::module::DependsCondition::ServiceStarted),
+        condition: condition.unwrap_or(crate::catalog::module::DependsCondition::ServiceStarted),
     })
 }
 
@@ -1625,9 +1633,9 @@ mod tests {
     fn module_with(
         id: &str,
         endpoints: Vec<Endpoint>,
-        provides: crate::module::Provides,
-    ) -> crate::module::DataModule {
-        crate::module::DataModule {
+        provides: crate::catalog::module::Provides,
+    ) -> crate::catalog::module::DataModule {
+        crate::catalog::module::DataModule {
             id: id.into(),
             display_name: None,
             summary: None,
@@ -1638,7 +1646,7 @@ mod tests {
             needs: vec![],
             service_specs: vec![ServiceSpec {
                 name: id.to_string(),
-                role: crate::role::Role::new("svc"),
+                role: crate::model::role::Role::new("svc"),
                 placement: Placement::Container {
                     service: id.to_string(),
                 },
@@ -1658,7 +1666,7 @@ mod tests {
         let mount_prefix = matches!(intent, RouteIntent::Api).then(|| format!("/{id}"));
         Endpoint {
             id: id.into(),
-            scheme: crate::endpoint::Scheme::Http,
+            scheme: crate::model::endpoint::Scheme::Http,
             internal_port: port,
             host_port: None,
             intent,
@@ -1669,24 +1677,26 @@ mod tests {
     }
 
     /// Wrap a [`DataModule`] as an `Arc<dyn Module>` for the catalog.
-    fn arc(m: crate::module::DataModule) -> std::sync::Arc<dyn crate::module::Module> {
+    fn arc(
+        m: crate::catalog::module::DataModule,
+    ) -> std::sync::Arc<dyn crate::catalog::module::Module> {
         std::sync::Arc::new(m)
     }
 
     /// A minimal gateway module (role `gateway`) carrying the `ENVOY_AUTH` knob, under a
     /// deliberately NON-`envoy` id — so the by-role lookups are exercised, not an id match.
-    fn gateway_module(auth_default_on: bool) -> crate::module::DataModule {
+    fn gateway_module(auth_default_on: bool) -> crate::catalog::module::DataModule {
         let mut m = module_with(
             "edge",
             vec![ep("http", 10000, RouteIntent::Internal)],
-            crate::module::Provides::default(),
+            crate::catalog::module::Provides::default(),
         );
         m.provider_of = Some("gateway".into());
         m.service_specs[0].role = Role::gateway();
-        m.knobs = vec![crate::module::Knob {
+        m.knobs = vec![crate::catalog::module::Knob {
             key: ENVOY_AUTH_KNOB.into(),
             title: None,
-            kind: crate::module::KnobKind::Bool,
+            kind: crate::catalog::module::KnobKind::Bool,
             default: Some(if auth_default_on { "true" } else { "false" }.into()),
             required: false,
             help: None,
@@ -1696,8 +1706,8 @@ mod tests {
 
     /// An auth-role provider deliberately NOT named `authelia` and NOT on 9091, with its own
     /// ext_authz path — so the planner must read the provider's real coordinates, not constants.
-    fn auth_provider_module() -> crate::module::DataModule {
-        let mut provides = crate::module::Provides::default();
+    fn auth_provider_module() -> crate::catalog::module::DataModule {
+        let mut provides = crate::catalog::module::Provides::default();
         provides
             .extras
             .insert(EXT_AUTHZ_PATH_EXTRA.into(), "/verify".into());
@@ -1760,7 +1770,7 @@ mod tests {
         let mut provider = module_with(
             "gatekeeper",
             vec![ep("http", 4180, RouteIntent::Internal)],
-            crate::module::Provides::default(),
+            crate::catalog::module::Provides::default(),
         );
         provider.provider_of = Some("auth".into());
         provider.service_specs[0].role = Role::auth();
@@ -1795,7 +1805,7 @@ mod tests {
 
     #[test]
     fn duplicate_config_alias_across_modules_is_rejected() {
-        use crate::module::RenderSpec;
+        use crate::catalog::module::RenderSpec;
         use crate::render::RenderFile;
 
         // Two modules each declare a `RenderFile` under the same alias. Aliases share one
@@ -1831,7 +1841,7 @@ mod tests {
 
     #[test]
     fn config_alias_is_rooted_and_declared_in_the_head() {
-        use crate::module::RenderSpec;
+        use crate::catalog::module::RenderSpec;
         use crate::render::RenderFile;
 
         // A single aliased file is rooted under its module dir and surfaces as one `configs:`
@@ -2079,7 +2089,7 @@ mod tests {
 
     #[test]
     fn resolve_knob_prefers_override_then_default() {
-        use crate::module::{Knob, KnobKind};
+        use crate::catalog::module::{Knob, KnobKind};
 
         let module = ModuleId::from("m");
         let knob = Knob {
@@ -2109,7 +2119,7 @@ mod tests {
 
     #[test]
     fn resolve_knob_coerces_to_canonical_form_per_kind() {
-        use crate::module::{Knob, KnobKind};
+        use crate::catalog::module::{Knob, KnobKind};
 
         let module = ModuleId::from("m");
         let knob = |kind: KnobKind, default: &str| Knob {
@@ -2157,7 +2167,7 @@ mod tests {
 
     #[test]
     fn resolve_knob_rejects_values_outside_their_kind() {
-        use crate::module::{Knob, KnobKind};
+        use crate::catalog::module::{Knob, KnobKind};
 
         let module = ModuleId::from("m");
         let reject = |kind: KnobKind, value: &str| {
@@ -2202,7 +2212,7 @@ mod tests {
 
     #[test]
     fn resolve_knob_errors_only_when_required_and_unset() {
-        use crate::module::{Knob, KnobKind};
+        use crate::catalog::module::{Knob, KnobKind};
 
         let module = ModuleId::from("m");
         let base = Knob {

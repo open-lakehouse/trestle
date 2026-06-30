@@ -26,6 +26,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub mod artifacts;
+
 /// The environment-variable substitutions the planner injects into a module's
 /// render — the values the module could not decide for itself.
 ///

@@ -10,8 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::endpoint::Endpoint;
-use crate::placement::Placement;
+use crate::model::endpoint::Endpoint;
+use crate::model::placement::Placement;
 
 /// The role a service fills in the architecture.
 ///

@@ -31,54 +31,73 @@
 //!   plan, ctx)` tuple into one concrete [`url::Url`], routing through the gateway
 //!   when the plan assigns a route; [`address_direct`] is the explicit escape hatch.
 //!
+//! # The crate's shape: five phases, five module groups
+//!
+//! The public surface mirrors the phases an environment goes through, and the
+//! source is grouped to match:
+//!
+//! - [`mod@model`] — the vocabulary the rest is described in ([`Role`], [`Endpoint`],
+//!   [`Placement`], [`Connection`], …): pure data, no logic.
+//! - [`mod@catalog`] — the [`Catalog`] of selectable [`Module`]s.
+//! - [`mod@plan`] — the producer: a [`Selection`] against a [`Catalog`] resolves to a
+//!   fully-assigned environment.
+//! - [`mod@render`] — pure string rendering of the compose / Envoy / `.env` artifacts.
+//! - [`mod@address`] — resolving the URL to reach a service from a given [`Vantage`].
+//!
 //! # Purity: rendering is pure, only I/O lives in the consumer
 //!
 //! The whole crate is pure: no filesystem access, no process spawning. *Rendering*
-//! is part of that purity — [`render_all`] and a module's render produce **strings and
-//! relative filenames in memory** ([`Artifacts`], [`RenderOutput`], [`RenderFile`]);
-//! the crate never writes them. Persisting those strings to disk (or, in a browser,
+//! is part of that purity — the render phase produces **strings and relative
+//! filenames in memory** ([`Artifacts`], [`RenderOutput`], [`RenderFile`]); the crate
+//! never writes them. Persisting those strings to disk (or, in a browser,
 //! visualizing them without persisting) is the **consumer's** job. That is why
 //! rendering is always available and not feature-gated: the only WASM-incompatible
 //! step — disk I/O — is not in this crate at all, so the rendering path (MiniJinja
 //! included) compiles to `wasm32` cleanly.
 //!
 //! Runtime facts the resolver needs — a dynamically-allocated catalog port, the
-//! gateway's host-published port — are passed in via [`TopologyCtx`]. Catalog loading
-//! from on-disk `module.yaml` manifests is the one genuinely I/O-shaped concern and
-//! stays behind the `catalog` feature so pure consumers need not pull `serde_yaml`.
+//! gateway's host-published port — are supplied at plan time. Catalog loading from
+//! on-disk `module.yaml` manifests is the one genuinely I/O-shaped concern and stays
+//! behind the `catalog` feature so pure consumers need not pull `serde_yaml`.
 
-mod artifacts;
-mod catalog;
-mod connection;
-mod endpoint;
-mod module;
-mod placement;
-mod plan;
-mod plan_env;
-mod render;
-mod resolve;
-mod resolve_graph;
-mod role;
+pub mod address;
+pub mod catalog;
+pub mod model;
+pub mod plan;
+pub mod render;
 
-pub use artifacts::{AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_envoy};
-pub use catalog::{
-    Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
+// --- model: the vocabulary types ---
+pub use model::connection::{
+    Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
 };
-pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
-pub use endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
-pub use module::{
+pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
+pub use model::placement::{Placement, Vantage};
+pub use model::role::{Role, ServiceSpec};
+
+// --- catalog: the module set + how a module is defined ---
+pub use catalog::module::{
     ConnectionBinding, DataModule, DepGate, DependsCondition, Knob, KnobKind, Module, ModuleId,
     PortDecl, PortMapping, Provides, RenderCtx, RenderError, RenderSpec, ResolvedKnobs,
     ResourceDemand,
 };
-pub use placement::{Placement, Vantage};
-pub use plan::{AssignedRoute, Listener, RoutePlan};
-pub use plan_env::{
+pub use catalog::{
+    Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
+};
+
+// --- plan: the producer + the resolved environment ---
+pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
+pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
+pub use plan::{
     AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB, EXT_AUTHZ_PATH_EXTRA,
     EnvironmentPlan, GatewayConfig, GatewayRoute, HeadFile, ListenerConfig, PlanCtx, PlanError,
     Selection, plan,
 };
+
+// --- render: the planner↔template handshake + the stack artifacts ---
+pub use render::artifacts::{
+    AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_envoy,
+};
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
-pub use resolve::{AddressError, TopologyCtx, address, address_direct};
-pub use resolve_graph::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
-pub use role::{Role, ServiceSpec};
+
+// --- address: the addressing resolver ---
+pub use address::{AddressError, TopologyCtx, address, address_direct};

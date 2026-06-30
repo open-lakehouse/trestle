@@ -29,10 +29,10 @@
 
 use url::Url;
 
-use crate::endpoint::{Endpoint, Scheme};
-use crate::placement::{Placement, Vantage};
-use crate::plan::{AssignedRoute, Listener, RoutePlan};
-use crate::role::ServiceSpec;
+use crate::model::endpoint::{Endpoint, Scheme};
+use crate::model::placement::{Placement, Vantage};
+use crate::model::role::ServiceSpec;
+use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 
 /// The conventional DNS hostname a container uses to reach the host machine.
 const HOST_GATEWAY_DNS: &str = "host.docker.internal";
@@ -246,10 +246,10 @@ fn build_url(scheme: Scheme, host: &str, port: u16, path: &str) -> Option<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::{RouteIntent, Scheme};
-    use crate::placement::Placement;
-    use crate::plan::{AssignedRoute, Listener, RoutePlan};
-    use crate::role::Role;
+    use crate::model::endpoint::{RouteIntent, Scheme};
+    use crate::model::placement::Placement;
+    use crate::model::role::Role;
+    use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 
     fn ctx() -> TopologyCtx {
         TopologyCtx {
@@ -286,7 +286,7 @@ mod tests {
                 intent: RouteIntent::Internal,
                 path: "/api/2.1/unity-catalog/".into(),
                 mount_prefix: None,
-                rewrite: crate::endpoint::Rewrite::Inherit,
+                rewrite: crate::model::endpoint::Rewrite::Inherit,
             }],
             depends_on: vec![],
             base_path: String::new(),
@@ -319,7 +319,7 @@ mod tests {
                 "lineage",
                 5000,
                 "/api/2.1/lineage",
-                crate::endpoint::Rewrite::Inherit,
+                crate::model::endpoint::Rewrite::Inherit,
             )],
             depends_on: vec![],
             base_path: String::new(),

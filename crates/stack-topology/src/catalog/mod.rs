@@ -23,10 +23,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[cfg(any(feature = "catalog", test))]
-use crate::module::DataModule;
-use crate::module::{Module, ModuleId};
+use crate::catalog::module::DataModule;
+use crate::catalog::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
+pub mod module;
 
 pub use baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection};
 
@@ -47,7 +48,10 @@ pub struct Catalog {
 impl std::fmt::Debug for Catalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Catalog")
-            .field("modules", &crate::module::module_ids(&self.modules))
+            .field(
+                "modules",
+                &crate::catalog::module::module_ids(&self.modules),
+            )
             .field("default_provider", &self.default_provider)
             .finish()
     }

@@ -28,9 +28,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::connection::{ConnectionField, ConnectionTemplate};
+use crate::model::connection::{ConnectionField, ConnectionTemplate};
+use crate::model::role::ServiceSpec;
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
-use crate::role::ServiceSpec;
 
 /// A module's stable identifier within a catalog (e.g. `"mlflow"`).
 ///
@@ -356,7 +356,7 @@ pub struct RenderCtx<'a> {
     /// For a *provider* module, this also carries its own role's connection (resolved for
     /// each name it provisions) so its fragment can read e.g.
     /// `connections.object_store.0.credential.connection_string` instead of a `${VAR}`.
-    pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
+    pub connections: BTreeMap<String, Vec<crate::model::connection::Connection>>,
     /// The resolved `depends_on` gates the module's render should emit, in dependency
     /// (demand) order. Empty for a module with no demands that gate startup.
     #[serde(default)]
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn template_render_reads_env_and_branches_on_connection_flavour() {
-        use crate::connection::{Connection, ObjectStoreCredential};
+        use crate::model::connection::{Connection, ObjectStoreCredential};
 
         // A Template fragment reads `${...}`-free MiniJinja: `env.*` for injected values and
         // `connections.*` to branch on the chosen credential flavour.
@@ -800,8 +800,8 @@ mod tests {
         // verbatim regardless of the knobs passed.
         let svc = ServiceSpec {
             name: "svc".into(),
-            role: crate::role::Role::new("svc"),
-            placement: crate::placement::Placement::Container {
+            role: crate::model::role::Role::new("svc"),
+            placement: crate::model::placement::Placement::Container {
                 service: "svc".into(),
             },
             endpoints: vec![],
