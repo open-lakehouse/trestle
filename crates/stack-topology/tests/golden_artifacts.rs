@@ -850,8 +850,8 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     );
     let sel = Selection {
         modules: vec!["envoy".into(), "postgres".into(), "headwaters".into()],
-        capabilities: vec![],
         knob_overrides,
+        ..Default::default()
     };
 
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
@@ -920,6 +920,117 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     assert!(
         !routes.contains_key("/lineage"),
         "no UI route when the UI is off"
+    );
+}
+
+#[test]
+fn headwaters_runs_migrations_in_an_init_job_before_serve() {
+    use olai_stack_topology::ModuleId;
+
+    // Headwaters' `serve` refuses to start against a schema that is behind, so the fragment
+    // emits a one-shot `headwaters-migrate` service (runs `migrate`, then exits) and gates the
+    // long-running `headwaters` service on it completing successfully.
+    let sel = Selection::modules(["envoy", "postgres", "headwaters"]);
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("headwaters"))
+        .expect("headwaters is in the render set");
+
+    let frag: Value =
+        serde_yaml::from_str(&out.fragment).expect("the headwaters fragment is valid YAML");
+    let services = &frag["services"];
+
+    // The one-shot migrate job: runs `migrate`, does not restart, waits for the DB to be
+    // healthy (the planner-injected gate).
+    let migrate = &services["headwaters-migrate"];
+    assert_eq!(
+        migrate["command"],
+        serde_yaml::from_str::<Value>(r#"["migrate", "--config", "/etc/headwaters/config.toml"]"#)
+            .unwrap(),
+        "the init job runs the migrate subcommand"
+    );
+    assert_eq!(migrate["restart"], Value::from("no"));
+    assert_eq!(
+        migrate["depends_on"]["db"]["condition"],
+        Value::from("service_healthy"),
+        "migrations wait for the database to be healthy"
+    );
+
+    // The serve service gates on the migrate job completing successfully.
+    let serve = &services["headwaters"];
+    assert_eq!(
+        serve["depends_on"]["headwaters-migrate"]["condition"],
+        Value::from("service_completed_successfully"),
+        "serve only starts once migrations have applied"
+    );
+    assert_eq!(
+        serve["command"],
+        serde_yaml::from_str::<Value>(r#"["serve", "--config", "/etc/headwaters/config.toml"]"#)
+            .unwrap(),
+    );
+}
+
+#[test]
+fn extra_resources_are_created_by_the_provider_init_jobs() {
+    use olai_stack_topology::{ExtraResource, ModuleId};
+
+    // An operator declares an extra database and an extra bucket no module consumes — for a
+    // host process to query (the bucket through the gateway, the DB directly). They land on the
+    // existing providers' init jobs and surface in the plan's resource lists.
+    let mut sel = default_selection();
+    sel.extra_resources = vec![
+        ExtraResource {
+            resource: "relational_db".into(),
+            name: "analytics".into(),
+            provider: None,
+        },
+        ExtraResource {
+            resource: "object_store".into(),
+            name: "exports".into(),
+            provider: None,
+        },
+    ];
+
+    let p = baseline_catalog()
+        .plan(&sel, &PlanCtx::default())
+        .expect("plan should succeed");
+
+    // The extra names join the provider-provisioned sets the plan exposes.
+    assert!(
+        p.postgres_databases.contains(&"analytics".to_string()),
+        "extra database is provisioned on postgres: {:?}",
+        p.postgres_databases
+    );
+    assert!(
+        p.s3_buckets.contains(&"exports".to_string()),
+        "extra bucket is provisioned on seaweedfs: {:?}",
+        p.s3_buckets
+    );
+
+    // ...and reach each provider's existing init job (which iterates `RenderCtx.objects`).
+    let render_of = |id: &str| -> &str {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| {
+                // Postgres init lives in a mounted file; seaweedfs init is in the fragment.
+                out.files
+                    .iter()
+                    .find(|f| f.alias.as_deref() == Some("postgres_init"))
+                    .map(|f| f.contents.as_str())
+                    .unwrap_or(out.fragment.as_str())
+            })
+            .expect("provider is in the render set")
+    };
+    assert!(
+        render_of("postgres").contains("analytics"),
+        "the extra database is created in the postgres init script"
+    );
+    assert!(
+        render_of("seaweedfs").contains("exports"),
+        "the extra bucket is created in the seaweedfs init job"
     );
 }
 
@@ -1239,8 +1350,8 @@ mod auth {
                 "mlflow".into(),
                 "headwaters".into(),
             ],
-            capabilities: vec![],
             knob_overrides,
+            ..Default::default()
         }
     }
 

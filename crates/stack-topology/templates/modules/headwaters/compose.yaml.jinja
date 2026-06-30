@@ -1,11 +1,32 @@
 # Headwaters lineage service
 {%- set db = connections.relational_db.0 %}
 services:
+  # One-shot: apply database migrations, then exit. The `serve` service refuses to start
+  # against a schema that is behind, so migrations run here first and `serve` gates on this
+  # job completing successfully. The DB-readiness gate(s) are planner-injected (the same
+  # `dependencies` the serve service waits on).
+  headwaters-migrate:
+    image: ghcr.io/open-lakehouse/headwaters:0.0.7
+    restart: "no"
+    command: ["migrate", "--config", "/etc/headwaters/config.toml"]
+    depends_on:
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: {{ dep.condition }}
+{%- endfor %}
+    environment:
+      DATABASE_URL: "{{ db.url }}"
+    configs:
+      - source: headwaters_config
+        target: /etc/headwaters/config.toml
+
   headwaters:
-    image: ghcr.io/open-lakehouse/headwaters:0.0.6
+    image: ghcr.io/open-lakehouse/headwaters:0.0.7
     restart: unless-stopped
     command: ["serve", "--config", "/etc/headwaters/config.toml"]
     depends_on:
+      headwaters-migrate:
+        condition: service_completed_successfully
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: {{ dep.condition }}

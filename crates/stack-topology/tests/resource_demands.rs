@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use olai_stack_topology::{
     Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, DataModule,
-    Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx, PlanError, Provides, RenderSpec,
-    ResourceDemand, Role, Selection, ServiceSpec, baseline_catalog,
+    ExtraResource, Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx, PlanError,
+    Provides, RenderSpec, ResourceDemand, Role, Selection, ServiceSpec, baseline_catalog,
 };
 
 /// Build a minimal provider module that provisions `kind` and vends the given typed
@@ -612,5 +612,85 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
                     && providers.contains(&ModuleId::from("azurite"))
         ),
         "expected ConflictingRoleProviders for the unpinned object_store pair, got {err:?}"
+    );
+}
+
+// --- environment-level extra resources (provisioned, never bound) ---
+
+/// An extra bucket with no object_store-demanding module still pulls in a provider and is
+/// provisioned: nothing in the selection needs an object store, yet seaweedfs joins the graph
+/// and the bucket lands in `s3_buckets`.
+#[test]
+fn extra_resource_pulls_in_a_provider_with_no_consumer() {
+    let mut sel = Selection::modules(["envoy"]);
+    sel.extra_resources = vec![ExtraResource {
+        resource: Role::OBJECT_STORE.into(),
+        name: "exports".into(),
+        provider: None,
+    }];
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
+    assert!(
+        p.services.contains_key(&ModuleId::from("seaweedfs")),
+        "the object_store provider is pulled into the graph"
+    );
+    assert_eq!(p.s3_buckets, vec!["exports".to_string()]);
+}
+
+/// An extra database is provisioned on postgres and surfaces in `postgres_databases`.
+#[test]
+fn extra_database_is_provisioned_on_postgres() {
+    let mut sel = Selection::modules(["envoy", "postgres"]);
+    sel.extra_resources = vec![ExtraResource {
+        resource: Role::RELATIONAL_DB.into(),
+        name: "analytics".into(),
+        provider: None,
+    }];
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
+    assert!(p.postgres_databases.contains(&"analytics".to_string()));
+}
+
+/// An extra naming a resource a module already demands is deduped — the name appears once.
+#[test]
+fn extra_resource_dedups_against_a_module_demand() {
+    // mlflow demands the `mlflow` database on postgres; an extra naming the same is a no-op.
+    let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "seaweedfs"]);
+    sel.extra_resources = vec![ExtraResource {
+        resource: Role::RELATIONAL_DB.into(),
+        name: "mlflow".into(),
+        provider: None,
+    }];
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
+    let count = p
+        .postgres_databases
+        .iter()
+        .filter(|n| *n == "mlflow")
+        .count();
+    assert_eq!(count, 1, "deduped: {:?}", p.postgres_databases);
+}
+
+/// A pinned extra resource lands on the pinned provider, and a pin introducing a *second*
+/// same-role provider is sanctioned (not a ConflictingRoleProviders clash) — mirroring a
+/// demand pin.
+#[test]
+fn pinned_extra_resource_sanctions_a_second_provider() {
+    // mlflow demands an object_store → seaweedfs (the default). An extra bucket pins azurite,
+    // a deliberate second object_store provider.
+    let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "seaweedfs"]);
+    sel.extra_resources = vec![ExtraResource {
+        resource: Role::OBJECT_STORE.into(),
+        name: "exports".into(),
+        provider: Some(ModuleId::from("azurite")),
+    }];
+    let p = baseline_catalog()
+        .plan(&sel, &PlanCtx::default())
+        .expect("a pinned extra sanctions the second provider");
+    assert!(
+        p.services.contains_key(&ModuleId::from("azurite")),
+        "the pinned provider is deployed"
+    );
+    assert!(
+        p.azure_containers.contains(&"exports".to_string()),
+        "the extra bucket is provisioned on the pinned azurite: {:?}",
+        p.azure_containers
     );
 }
