@@ -29,7 +29,7 @@ not valid Rust.
 
 ## Coding Style
 
-- Rust Edition 2024, MSRV 1.87 (the workspace `rust-version`; read it, don't assume)
+- Rust Edition 2024, MSRV 1.88 (the workspace `rust-version`; read it, don't assume)
 - Standard Rust conventions, 4-space indentation
 - `cargo fmt` + `cargo clippy` for formatting and linting
 

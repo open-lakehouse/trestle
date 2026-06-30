@@ -40,6 +40,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::{Deserialize, Serialize};
+
 pub mod resolve;
 pub mod routing;
 
@@ -60,11 +62,13 @@ use crate::render::{InjectedEnv, RenderOutput};
 /// Modules can be picked directly (combine technologies) or by capability ("I want
 /// experiment tracking"); the planner unions both. Capability names are matched
 /// against the catalog's [`provider_of`](crate::Module::provider_of) index.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
     /// Module ids selected directly.
+    #[serde(default)]
     pub modules: Vec<ModuleId>,
     /// Capabilities selected; each is mapped to its provider module(s) in the catalog.
+    #[serde(default)]
     pub capabilities: Vec<String>,
     /// Per-module knob overrides: module id → (knob `key` → value). A value present
     /// here wins over the knob's declared [`default`](crate::Knob::default); a knob
@@ -74,6 +78,7 @@ pub struct Selection {
     ///
     /// This is the channel a config UI feeds: it surfaces a module's knobs from the
     /// catalog, lets the user tune them, and hands the chosen values back here.
+    #[serde(default)]
     pub knob_overrides: BTreeMap<ModuleId, BTreeMap<String, String>>,
 }
 
@@ -96,7 +101,7 @@ impl Selection {
 /// request not matched by a module route reaches the app. Supplied via
 /// [`PlanCtx::app`]; the planner emits its cluster and the trailing catch-all route into
 /// the [`GatewayConfig`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppUpstream {
     /// The app's compose service / DNS name (the gateway cluster's upstream host).
     pub service: String,
@@ -108,19 +113,28 @@ pub struct AppUpstream {
 /// service name and ports, the project name, port allocations, provider preferences, the
 /// data root, and the optional app upstream. The consumer supplies these once per
 /// environment; the plan captures the gateway facts for the address resolver.
-#[derive(Clone, Debug)]
+///
+/// Every field is `#[serde(default)]` so a persisted manifest can omit any it does not
+/// override; the missing fields fall back to this type's [`Default`] (the same values the
+/// code uses), keeping a hand-edited TOML terse.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanCtx {
     /// The compose project / environment name (used as the head file's `name:`).
+    #[serde(default = "PlanCtx::default_env_name")]
     pub env_name: String,
     /// The gateway's compose service / DNS name (e.g. `"envoy"`).
+    #[serde(default = "PlanCtx::default_gateway_service")]
     pub gateway_service: String,
     /// The gateway's listening port inside the compose network (e.g. `10000`).
+    #[serde(default = "PlanCtx::default_gateway_internal_port")]
     pub gateway_internal_port: u16,
     /// The gateway's host-published port (e.g. `9080`).
+    #[serde(default = "PlanCtx::default_gateway_host_port")]
     pub gateway_host_port: u16,
     /// The gateway's Envoy admin port, on both sides (`address:0.0.0.0:<port>` in the
     /// bootstrap and the `<port>:<port>` host publish). Configurable so two stacks rendered
     /// on the same host don't collide on the admin endpoint. Defaults to `9901`.
+    #[serde(default = "PlanCtx::default_gateway_admin_port")]
     pub gateway_admin_port: u16,
     /// Explicit host ports to hand out, in order, to endpoints that need their own
     /// dedicated listener ([`UiFixed`](RouteIntent::UiFixed) /
@@ -128,18 +142,21 @@ pub struct PlanCtx {
     /// auto-allocates from [`dedicated_listener_port_base`](Self::dedicated_listener_port_base),
     /// so "every object store is exposed" works with no explicit list.
     #[allow(clippy::struct_field_names)]
+    #[serde(default)]
     pub dedicated_listener_ports: Vec<u16>,
     /// The base host port the planner auto-allocates dedicated listeners from when
     /// [`dedicated_listener_ports`](Self::dedicated_listener_ports) is exhausted: the first
     /// auto listener binds this port, the next `+1`, and so on. Defaults to `9100` (clear of
     /// the gateway's `9080`).
     #[allow(clippy::struct_field_names)]
+    #[serde(default = "PlanCtx::default_dedicated_listener_port_base")]
     pub dedicated_listener_port_base: u16,
     /// Ordered provider preference per resource role — the environment's say in which
     /// implementation satisfies an abstract demand (e.g. `object_store` →
     /// `["azurite", "seaweedfs"]` for an env that prefers Azurite). The planner picks the first
     /// preferred provider present in the catalog; an empty/absent entry falls back to
     /// uniqueness then the catalog default. A demand's own `provider` pin still wins over this.
+    #[serde(default)]
     pub provider_preference: BTreeMap<String, Vec<ModuleId>>,
     /// The stack's root data directory, injected into every module's render env as
     /// [`DATA_ROOT`](crate::DATA_ROOT_VAR) and resolved at plan time. A module that persists
@@ -147,26 +164,52 @@ pub struct PlanCtx {
     /// persistence is this single knob (e.g. an absolute path) rather than an edit per
     /// fragment. Defaults to [`DATA_ROOT_DEFAULT`] (`./.data`,
     /// relative to the compose file).
+    #[serde(default = "PlanCtx::default_data_root")]
     pub data_root: String,
     /// The user's app, if any: when set, the gateway gets an `app` cluster and a `/`
     /// catch-all route (emitted last, after every module route) forwarding unmatched
     /// requests to it. Defaults to `None`. Part of the plan because the catch-all is a
     /// structural fact about the gateway, not a render-time decoration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<AppUpstream>,
+}
+
+impl PlanCtx {
+    fn default_env_name() -> String {
+        "lakehouse".into()
+    }
+    fn default_gateway_service() -> String {
+        "envoy".into()
+    }
+    fn default_gateway_internal_port() -> u16 {
+        10000
+    }
+    fn default_gateway_host_port() -> u16 {
+        9080
+    }
+    fn default_gateway_admin_port() -> u16 {
+        9901
+    }
+    fn default_dedicated_listener_port_base() -> u16 {
+        9100
+    }
+    fn default_data_root() -> String {
+        DATA_ROOT_DEFAULT.into()
+    }
 }
 
 impl Default for PlanCtx {
     fn default() -> Self {
         PlanCtx {
-            env_name: "lakehouse".into(),
-            gateway_service: "envoy".into(),
-            gateway_internal_port: 10000,
-            gateway_host_port: 9080,
-            gateway_admin_port: 9901,
+            env_name: PlanCtx::default_env_name(),
+            gateway_service: PlanCtx::default_gateway_service(),
+            gateway_internal_port: PlanCtx::default_gateway_internal_port(),
+            gateway_host_port: PlanCtx::default_gateway_host_port(),
+            gateway_admin_port: PlanCtx::default_gateway_admin_port(),
             dedicated_listener_ports: Vec::new(),
-            dedicated_listener_port_base: 9100,
+            dedicated_listener_port_base: PlanCtx::default_dedicated_listener_port_base(),
             provider_preference: BTreeMap::new(),
-            data_root: DATA_ROOT_DEFAULT.into(),
+            data_root: PlanCtx::default_data_root(),
             app: None,
         }
     }

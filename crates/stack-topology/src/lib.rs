@@ -61,12 +61,24 @@
 //! gateway's host-published port — are supplied at plan time. Catalog loading from
 //! on-disk `module.yaml` manifests is the one genuinely I/O-shaped concern and stays
 //! behind the `catalog` feature so pure consumers need not pull `serde_yaml`.
+//!
+//! # Persisting choices and re-planning
+//!
+//! [`EnvManifest`] persists a user's environment choices (the [`Selection`] plus the
+//! environment-level [`PlanCtx`]) as TOML and re-creates the same [`Plan`] from them — so the
+//! **gateway host port and each service's route stay stable when the selection is edited** (the
+//! shared listener is stable by construction; see [`mod@manifest`]). [`layout_report`] renders a
+//! plan's gateway layout as a terse Markdown summary. Both are pure and WASM-clean — TOML
+//! (de)serialization and the report produce / consume strings; only the manifest's
+//! `read_from`/`write_to` (behind `std-io`) touch disk, exactly like the materialized output.
 
 pub mod address;
 pub mod catalog;
+pub mod manifest;
 pub mod model;
 pub mod plan;
 pub mod render;
+pub mod report;
 
 // --- model: the vocabulary types ---
 pub use model::connection::{
@@ -102,3 +114,9 @@ pub use render::{InjectedEnv, RenderFile, RenderOutput};
 
 // --- address: the addressing resolver ---
 pub use address::{AddressError, ServiceRef};
+
+// --- manifest: persist a user's choices, re-plan deterministically ---
+pub use manifest::{EnvManifest, ManifestError, pin_dedicated_ports};
+
+// --- report: a human-readable layout summary ---
+pub use report::layout_report;

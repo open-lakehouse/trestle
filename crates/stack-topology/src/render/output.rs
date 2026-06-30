@@ -28,7 +28,8 @@ pub struct OutputFile {
 }
 
 /// Every file a [`Plan`] produces, flattened to write-ready `(path, contents)` pairs in a
-/// fixed layout: the top-level `compose.yaml` and `.env`, the Envoy bootstrap at
+/// fixed layout: the top-level `compose.yaml`, `.env`, and a human-readable `LAYOUT.md` summary
+/// (see [`layout_report`](crate::layout_report)), the Envoy bootstrap at
 /// `modules/envoy/envoy.yaml`, and each module's `modules/<id>/compose.yaml` fragment plus its
 /// mounted config files (already rooted under `modules/<id>/`).
 ///
@@ -36,9 +37,9 @@ pub struct OutputFile {
 /// [`write_to`](Self::write_to) (behind the `std-io` feature) is the only step that does I/O.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MaterializedOutput {
-    /// The files to write, in a deterministic order: the top-level `compose.yaml` and `.env`
-    /// first, then the Envoy bootstrap, then each module's fragment and config files in plan
-    /// (dependency) order.
+    /// The files to write, in a deterministic order: the top-level `compose.yaml`, `.env`, and
+    /// `LAYOUT.md` first, then the Envoy bootstrap, then each module's fragment and config files
+    /// in plan (dependency) order.
     pub files: Vec<OutputFile>,
 }
 
@@ -53,6 +54,12 @@ pub(crate) fn materialize(plan: &Plan) -> MaterializedOutput {
         OutputFile {
             path: ".env".into(),
             contents: artifacts.env,
+        },
+        // A human-readable, at-a-glance summary of the gateway layout (routes → services).
+        // Pure to build (see `report::layout_report`), so it keeps `materialize` pure.
+        OutputFile {
+            path: "LAYOUT.md".into(),
+            contents: crate::report::layout_report(plan),
         },
     ];
 

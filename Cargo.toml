@@ -45,6 +45,10 @@ serde_yaml = "0.9"
 sqlx = "0.8"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
+# Pure-Rust TOML (de)serialization for the persisted environment manifest. Kept lean and
+# wasm32-clean: no `default-features` (drops the indexmap-backed preserve-order machinery
+# the manifest does not need; its types use BTreeMaps for deterministic order already).
+toml = { version = "0.9", default-features = false, features = ["parse", "display", "serde"] }
 tracing = { version = "0.1", features = ["log"] }
 url = { version = "2.5", features = ["serde", "std"], default-features = false }
 uuid = { version = "1", features = ["serde"] }
