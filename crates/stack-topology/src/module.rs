@@ -234,17 +234,14 @@ pub struct Knob {
 /// are rendered *concrete*; any literal compose `${VAR}` left in the source passes through
 /// untouched (MiniJinja interprets only `{{ }}`/`{% %}`), so a fragment can still defer a value
 /// to a container's own runtime env where that is genuinely a container contract.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum RenderSpec {
-    /// MiniJinja template source the crate renders against the [`RenderCtx`].
-    Template {
-        /// The fragment's MiniJinja template source.
-        fragment: String,
-        /// MiniJinja template sources for files to write and mount.
-        #[serde(default)]
-        files: Vec<RenderFile>,
-    },
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderSpec {
+    /// The fragment's MiniJinja template source.
+    #[serde(default)]
+    pub fragment: String,
+    /// MiniJinja template sources for files to write and mount.
+    #[serde(default)]
+    pub files: Vec<RenderFile>,
 }
 
 impl RenderSpec {
@@ -259,32 +256,29 @@ impl RenderSpec {
     /// authored as an on-disk `module.yaml` is external input, so this is a recoverable
     /// error the planner surfaces, not a panic).
     pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, RenderError> {
-        match self {
-            RenderSpec::Template { fragment, files } => {
-                let mut env = minijinja::Environment::new();
-                Ok(RenderOutput {
-                    fragment: render_template(&mut env, fragment, ctx)?,
-                    files: files
-                        .iter()
-                        .map(|f| {
-                            Ok(RenderFile {
-                                path: render_template(&mut env, &f.path, ctx)?,
-                                contents: render_template(&mut env, &f.contents, ctx)?,
-                                alias: f
-                                    .alias
-                                    .as_deref()
-                                    .map(|a| render_template(&mut env, a, ctx))
-                                    .transpose()?,
-                            })
-                        })
-                        .collect::<Result<_, RenderError>>()?,
+        let RenderSpec { fragment, files } = self;
+        let mut env = minijinja::Environment::new();
+        Ok(RenderOutput {
+            fragment: render_template(&mut env, fragment, ctx)?,
+            files: files
+                .iter()
+                .map(|f| {
+                    Ok(RenderFile {
+                        path: render_template(&mut env, &f.path, ctx)?,
+                        contents: render_template(&mut env, &f.contents, ctx)?,
+                        alias: f
+                            .alias
+                            .as_deref()
+                            .map(|a| render_template(&mut env, a, ctx))
+                            .transpose()?,
+                    })
                 })
-            }
-        }
+                .collect::<Result<_, RenderError>>()?,
+        })
     }
 }
 
-/// A [`Template`](RenderSpec::Template) fragment failed to compile or render.
+/// A [`RenderSpec`] fragment failed to compile or render.
 ///
 /// Carries the templating engine's message. Surfaced (not panicked) because a module can
 /// be authored as an external on-disk `module.yaml`, so a bad template is recoverable
@@ -346,7 +340,7 @@ pub struct DepGate {
 /// [`Connection`](crate::Connection)s resolved for the module's demands (grouped by role),
 /// and the resolved [`DepGate`]s its `depends_on` block should wait on.
 ///
-/// A [`Template`](RenderSpec::Template) render gets the whole context as MiniJinja globals:
+/// A [`RenderSpec`] render gets the whole context as MiniJinja globals:
 /// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works), `connections` (a
 /// `{role: [connection, …]}` map a template can branch on — e.g.
 /// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`), and
@@ -420,15 +414,6 @@ fn render_template(
 ) -> Result<String, RenderError> {
     env.render_named_str("fragment", source, ctx)
         .map_err(|e| RenderError(e.to_string()))
-}
-
-impl Default for RenderSpec {
-    fn default() -> Self {
-        RenderSpec::Template {
-            fragment: String::new(),
-            files: Vec::new(),
-        }
-    }
 }
 
 /// A module's knobs resolved to their canonical, coerced values — the input a module's
@@ -679,7 +664,7 @@ mod tests {
 
         // A Template fragment reads `${...}`-free MiniJinja: `env.*` for injected values and
         // `connections.*` to branch on the chosen credential flavour.
-        let spec = RenderSpec::Template {
+        let spec = RenderSpec {
             fragment: "url: {{ env.DB_URL }}\n\
                        {%- set o = connections.object_store.0 %}\n\
                        {%- if o.credential.flavour == \"s3\" %}\n\
@@ -728,7 +713,7 @@ mod tests {
     fn template_iterates_typed_dependencies_into_depends_on() {
         // A template renders its whole `depends_on` block by iterating the typed
         // `dependencies` the planner resolved — service + condition, no env-var strings.
-        let spec = RenderSpec::Template {
+        let spec = RenderSpec {
             fragment: "depends_on:\n\
                        {%- for dep in dependencies %}\n\
                        \x20 {{ dep.service }}:\n\
@@ -766,7 +751,7 @@ mod tests {
     fn malformed_template_is_a_recoverable_error_not_a_panic() {
         // A `Template` can come from an external on-disk manifest, so a bad fragment is a
         // returned `RenderError`, never a panic.
-        let bad_syntax = RenderSpec::Template {
+        let bad_syntax = RenderSpec {
             fragment: "{% if %}".into(), // unparsable
             files: vec![],
         };
@@ -779,7 +764,7 @@ mod tests {
 
         // Referencing a context field that isn't there (no object_store connection) also
         // errors rather than panicking.
-        let missing_field = RenderSpec::Template {
+        let missing_field = RenderSpec {
             fragment: "{{ connections.object_store.0.uri }}".into(),
             files: vec![],
         };
@@ -871,5 +856,29 @@ services:
         let reser = serde_yaml::to_string(&m).expect("serializes");
         let m2: DataModule = serde_yaml::from_str(&reser).expect("re-deserializes");
         assert_eq!(m, m2);
+    }
+
+    #[cfg(feature = "catalog")]
+    #[test]
+    fn render_spec_serializes_without_a_kind_discriminator() {
+        // `RenderSpec` is a plain struct, not a tagged enum — its serialized form carries the
+        // bare `fragment`/`files` fields with no `kind: template` discriminator, and round-trips
+        // losslessly from that flat shape.
+        let spec = RenderSpec {
+            fragment: "services:\n  demo: {}\n".into(),
+            files: vec![],
+        };
+        let yaml = serde_yaml::to_string(&spec).expect("serializes");
+        assert!(
+            !yaml.contains("kind:"),
+            "RenderSpec must not emit a discriminator: {yaml}"
+        );
+        let back: RenderSpec = serde_yaml::from_str(&yaml).expect("re-deserializes");
+        assert_eq!(spec, back);
+        // The flat, discriminator-free shape also deserializes directly.
+        let direct: RenderSpec =
+            serde_yaml::from_str("fragment: \"x\"\n").expect("flat shape deserializes");
+        assert_eq!(direct.fragment, "x");
+        assert!(direct.files.is_empty());
     }
 }

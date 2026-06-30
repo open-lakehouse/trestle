@@ -152,10 +152,10 @@ impl ObjectStoreCredential {
     /// `AZURE_STORAGE_CONNECTION_STRING` for [`AzureBlob`](ObjectStoreCredential::AzureBlob).
     ///
     /// The planner folds these into `.env` for the chosen object-store provider, so the
-    /// typed credential is the single source for both the values a [`Template`] fragment
+    /// typed credential is the single source for both the values a [`RenderSpec`] fragment
     /// reads and the conventional SDK env vars — no hand-listing, no drift.
     ///
-    /// [`Template`]: crate::RenderSpec::Template
+    /// [`RenderSpec`]: crate::RenderSpec
     pub fn standard_env(&self) -> Vec<(&'static str, String)> {
         match self {
             ObjectStoreCredential::S3 {
