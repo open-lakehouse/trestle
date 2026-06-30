@@ -125,21 +125,21 @@ fn container(service: &str) -> Placement {
     }
 }
 
-/// Helper: a [`RenderSpec::Template`] (MiniJinja) carrying just a compose fragment (no extra
+/// Helper: a [`RenderSpec`] (MiniJinja) carrying just a compose fragment (no extra
 /// files). Every module's fragment is rendered against the typed [`RenderCtx`](crate::RenderCtx),
 /// so it reads plan-resolved values (`{{ env.X }}`, `{{ connections.* }}`) directly.
 fn template(text: &str) -> RenderSpec {
-    RenderSpec::Template {
+    RenderSpec {
         fragment: text.to_string(),
         files: vec![],
     }
 }
 
-/// Helper: a [`RenderSpec::Template`] carrying a fragment plus mounted config files. Each
+/// Helper: a [`RenderSpec`] carrying a fragment plus mounted config files. Each
 /// file's `path` is module-relative (the planner roots it under `modules/<id>/`), and each
 /// file template is rendered against the same [`RenderCtx`](crate::RenderCtx) as the fragment.
 fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
-    RenderSpec::Template {
+    RenderSpec {
         fragment: text.to_string(),
         files,
     }

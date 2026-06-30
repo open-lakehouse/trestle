@@ -219,7 +219,7 @@ pub enum PlanError {
         /// The connection field the variant does not carry.
         field: crate::connection::ConnectionField,
     },
-    /// A module's [`Template`](crate::RenderSpec::Template) fragment failed to compile or
+    /// A module's [`RenderSpec`](crate::RenderSpec) fragment failed to compile or
     /// render — a malformed template or a reference to a field absent from the render
     /// context. Recoverable because a module can be authored as an external on-disk manifest.
     #[error("module `{module}` failed to render: {source}")]
@@ -1803,7 +1803,7 @@ mod tests {
         // silently shadow the other.
         let with_alias = |id: &str| {
             let mut m = module_with(id, vec![], Default::default());
-            m.render = RenderSpec::Template {
+            m.render = RenderSpec {
                 fragment: format!("services:\n  {id}: {{}}\n"),
                 files: vec![RenderFile {
                     path: "conf.yaml".into(),
@@ -1837,7 +1837,7 @@ mod tests {
         // A single aliased file is rooted under its module dir and surfaces as one `configs:`
         // declaration on the head.
         let mut m = module_with("svc", vec![], Default::default());
-        m.render = RenderSpec::Template {
+        m.render = RenderSpec {
             fragment: "services:\n  svc: {}\n".into(),
             files: vec![RenderFile {
                 path: "app.toml".into(),

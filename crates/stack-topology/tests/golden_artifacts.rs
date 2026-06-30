@@ -345,7 +345,7 @@ fn compose_declares_config_aliases_for_mounted_files() {
 fn unity_catalog_template_branches_on_the_object_store_credential() {
     use olai_stack_topology::ModuleId;
 
-    // UC's fragment is a `RenderSpec::Template`: it branches on the chosen object-store
+    // UC's fragment is a `RenderSpec`: it branches on the chosen object-store
     // credential flavour, so the rendered compose differs between an S3 and an Azure backend.
     // Select UC + its hard `requires` only, letting the object_store demand resolve via the
     // catalog default / `ctx` preference (so the chosen provider is unambiguous).
@@ -443,7 +443,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
 fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     use olai_stack_topology::ModuleId;
 
-    // MLflow's fragment is a `RenderSpec::Template`: `--static-prefix` and the healthcheck
+    // MLflow's fragment is a `RenderSpec`: `--static-prefix` and the healthcheck
     // path come from the planner's chosen `BASE_PATH`, the artifact-store env branches on the
     // object-store credential flavour, and `depends_on` is driven by the chosen providers'
     // gates (db healthy + the object-store init completed) rather than hard-coded.
@@ -536,7 +536,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
 fn azurite_fragment_is_rendered_whole_from_typed_context() {
     use olai_stack_topology::ModuleId;
 
-    // Azurite is a `RenderSpec::Template` rendered entirely from the typed `RenderCtx` — its
+    // Azurite is a `RenderSpec` rendered entirely from the typed `RenderCtx` — its
     // own connection (the connection string) and the provisioned container names (`objects`)
     // — with no compose `${VAR}` substitution. Prefer Azurite so it is the chosen object_store
     // and its init provisions the demanded containers.
