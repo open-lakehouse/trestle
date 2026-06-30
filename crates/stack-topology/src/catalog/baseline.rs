@@ -31,10 +31,11 @@
 //!
 //! Each module is a self-contained directory under the crate-root `templates/` tree (a
 //! sibling of `src/`): a selectable module's compose `services:` snippet lives at
-//! `templates/modules/<name>/compose.yaml.jinja`, and the always-on gateway's two template
-//! faces live together under `templates/gateway/` (`compose.yaml.jinja` for the envoy
-//! module fragment, `bootstrap.yaml.jinja` for the aggregated Envoy config rendered by
-//! [`crate::render_envoy`]). Each snippet is embedded via `include_str!` (relative paths
+//! `templates/modules/<name>/compose.yaml.jinja`, and the gateway's templates live together
+//! under `templates/gateway/` — `compose.yaml.jinja` for the envoy module fragment,
+//! `bootstrap.yaml.jinja` for the aggregated Envoy config rendered by [`crate::render_envoy`],
+//! and the `authelia.*.jinja` faces of the bundled forward-auth provider the gateway's
+//! `ENVOY_AUTH` knob pulls in. Each snippet is embedded via `include_str!` (relative paths
 //! reach out of `src/catalog/` as `../../templates/…`) and carried on the module's
 //! [`RenderSpec`]. The `.jinja` suffix marks a MiniJinja template: every fragment is rendered
 //! against the typed [`RenderCtx`](crate::RenderCtx), so it reads plan-resolved values directly
@@ -93,6 +94,7 @@ pub const DATA_ROOT_DEFAULT: &str = "./.data";
 pub fn baseline_catalog() -> Catalog {
     Catalog::from_modules([
         envoy(),
+        authelia(),
         postgres(),
         seaweedfs(),
         azurite(),
@@ -101,7 +103,7 @@ pub fn baseline_catalog() -> Catalog {
         jaeger(),
         headwaters(),
         databricks_emulator_env(),
-    ] as [Arc<dyn Module>; 9])
+    ] as [Arc<dyn Module>; 10])
     .with_default_provider(Role::OBJECT_STORE, "seaweedfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
@@ -143,11 +145,26 @@ fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
     }
 }
 
+/// The gateway knob that fronts API/UI routes with Authelia single-sign-on. When `true` the
+/// planner pulls in the bundled [`authelia`] module, emits its upstream cluster, and wires an
+/// `ext_authz` HTTP filter onto the shared listener (see [`crate::render_envoy`]). Resource
+/// backends (object stores on dedicated listeners, databases with no route) are never gated.
+///
+/// Aliases the planner's [`ENVOY_AUTH_KNOB`](crate::plan_env::ENVOY_AUTH_KNOB) — the planner
+/// owns the wiring contract, so the key is defined once there.
+pub const ENVOY_AUTH: &str = crate::plan_env::ENVOY_AUTH_KNOB;
+
 /// `envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
 /// `TopologyCtx`, not as a routed endpoint. Its rendered Envoy bootstrap config is a
 /// planner-emitted artifact, not part of this fragment (which only declares the
 /// container that mounts it).
+///
+/// Exposes one knob, [`ENVOY_AUTH`]: turning it on fronts every API and UI route with
+/// Authelia forward-auth. The knob's effect is realized in the planner and the Envoy
+/// renderer (it pulls in the `authelia` module and emits the `ext_authz` filter), not in
+/// this module's own static services — the gateway's listeners are computed from *other*
+/// modules' endpoints, so there is nothing knob-dependent in its `ServiceSpec`.
 fn envoy() -> Arc<dyn Module> {
     let mut provides = Provides::default();
     provides.env_vars.insert("ENVOY_PORT".into(), "9080".into());
@@ -169,8 +186,74 @@ fn envoy() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![],
+        knobs: vec![Knob {
+            key: ENVOY_AUTH.into(),
+            title: Some("Require authentication".into()),
+            kind: KnobKind::Bool,
+            default: Some("false".into()),
+            required: false,
+            help: Some(
+                "Front API and UI routes with Authelia single-sign-on (forward-auth). \
+                 Resource backends (object stores, databases) are never gated."
+                    .into(),
+            ),
+        }],
         render: template(include_str!("../../templates/gateway/compose.yaml.jinja")),
+    })
+}
+
+/// `authelia` — the bundled forward-auth provider, pulled in by the gateway's [`ENVOY_AUTH`]
+/// knob (it is not part of the default selection and rides in only when auth is on; see the
+/// planner's `resolve_with_demands`). Self-contained for the showcase: a file-based user
+/// database and local, on-disk storage — no external database.
+///
+/// Its single endpoint is [`Internal`](crate::endpoint::RouteIntent::Internal): Envoy reaches
+/// it in-network via the `authelia` cluster on port 9091 (the `ext_authz` target), and the
+/// browser reaches its login portal through the gateway's redirect flow — so it needs no
+/// host-published port. Two mounted files carry its config (`configuration.yml`) and the demo
+/// user database (`users.yml`); both render against the typed [`RenderCtx`](crate::RenderCtx)
+/// like every other fragment.
+fn authelia() -> Arc<dyn Module> {
+    Arc::new(DataModule {
+        id: ModuleId::from("authelia"),
+        display_name: Some("Authelia".into()),
+        summary: Some("Forward-auth single-sign-on for the gateway (file-based).".into()),
+        category: Some("gateway".into()),
+        provider_of: Some("auth".into()),
+        requires: vec![ModuleId::from("envoy")],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "authelia".into(),
+            role: Role::auth(),
+            placement: container("authelia"),
+            // Internal: Envoy talks to it via the `authelia` cluster (ext_authz); the portal
+            // UI is reached through the gateway's redirect, so no host port is published.
+            endpoints: vec![Endpoint::internal("http", Scheme::Http, 9091, None)],
+            depends_on: vec![],
+            base_path: String::new(),
+        }],
+        provides: Provides::default(),
+        knobs: vec![],
+        render: template_with_files(
+            include_str!("../../templates/gateway/authelia.compose.yaml.jinja"),
+            vec![
+                RenderFile {
+                    path: "configuration.yml".into(),
+                    contents: include_str!(
+                        "../../templates/gateway/authelia.configuration.yml.jinja"
+                    )
+                    .into(),
+                    alias: Some("authelia_config".into()),
+                },
+                RenderFile {
+                    path: "users.yml".into(),
+                    contents: include_str!("../../templates/gateway/authelia.users.yml.jinja")
+                        .into(),
+                    alias: Some("authelia_users".into()),
+                },
+            ],
+        ),
     })
 }
 

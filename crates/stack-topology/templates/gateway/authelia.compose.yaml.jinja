@@ -1,0 +1,34 @@
+# Authelia forward-auth provider — contributed by the `authelia` module (pulled in by the
+# gateway's ENVOY_AUTH knob). Self-contained for the showcase: a file-based user database and
+# local on-disk storage, so it needs no external database.
+services:
+  authelia:
+    image: ghcr.io/authelia/authelia:4.39
+    restart: unless-stopped
+    # Reached only inside the compose network: Envoy calls it via the `authelia` cluster
+    # (ext_authz), and the browser hits its portal through the gateway's redirect. No host
+    # port is published.
+    expose:
+      - "9091"
+    configs:
+      - source: authelia_config
+        target: /config/configuration.yml
+      - source: authelia_users
+        target: /config/users.yml
+    volumes:
+      # Local storage (SQLite + session/regulation state) persists across `compose down`/`up`
+      # under the stack's data root, like every other stateful module.
+      - "{{ env.DATA_ROOT }}/authelia:/data"
+    environment:
+      # Dev secrets — fine for a local showcase, NOT for production. Each is the value Authelia
+      # signs/encrypts with; override them (e.g. via `.env`) for anything shared.
+      AUTHELIA_SESSION_SECRET: "insecure_session_secret_change_me"
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: "insecure_storage_encryption_key_change_me"
+      AUTHELIA_JWT_SECRET: "insecure_jwt_secret_change_me"
+    healthcheck:
+      # Authelia ships its own healthcheck script (hits /api/health on the configured port).
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

@@ -323,6 +323,73 @@ pub struct ListenerConfig {
     pub routes: Vec<GatewayRoute>,
 }
 
+/// The gateway knob key that turns on forward-auth. A bool knob with this key, declared on
+/// the module filling the `gateway` role and resolving truthy, makes the planner pull in the
+/// `auth`-role provider and gate the shared listener (see [`AuthConfig`]). The contract lives
+/// here (the planner owns the wiring); the baseline catalog's `envoy` module declares the knob
+/// under this same key.
+pub const ENVOY_AUTH_KNOB: &str = "ENVOY_AUTH";
+
+/// The upstream cluster name the `ext_authz` filter targets, and the compose service the
+/// bundled auth provider runs as.
+const AUTH_CLUSTER: &str = "authelia";
+
+/// The auth provider's listening port (the `ext_authz` upstream target).
+const AUTH_PORT: u16 = 9091;
+
+/// Authelia's HTTP `ext_authz` endpoint path prefix (the filter posts the request to it).
+const AUTH_PATH_PREFIX: &str = "/api/authz/ext-authz/";
+
+/// The trusted identity headers the gateway strips on ingress and re-adds from the auth
+/// response — so the upstream always reads an auth-provider-asserted value, never a forged one.
+const AUTH_IDENTITY_HEADERS: [&str; 4] = [
+    "Remote-User",
+    "Remote-Email",
+    "Remote-Name",
+    "Remote-Groups",
+];
+
+/// Whether the gateway's forward-auth knob ([`ENVOY_AUTH_KNOB`]) resolves on for this
+/// selection. Reads the bool knob off whichever catalog module fills the `gateway` role,
+/// honouring a [`Selection::knob_overrides`] value over the knob's default. Returns `Ok(false)`
+/// when there is no gateway module or it declares no such knob.
+fn gateway_auth_enabled(selection: &Selection, catalog: &Catalog) -> Result<bool, PlanError> {
+    for gateway_id in catalog.providers_of(Role::GATEWAY) {
+        let Some(module) = catalog.get(gateway_id) else {
+            continue;
+        };
+        let Some(knob) = module.knobs().iter().find(|k| k.key == ENVOY_AUTH_KNOB) else {
+            continue;
+        };
+        let overrides = selection.knob_overrides.get(gateway_id);
+        if let Some(value) = resolve_knob(gateway_id, knob, overrides)? {
+            return Ok(value == "true");
+        }
+    }
+    Ok(false)
+}
+
+/// Forward-auth (single-sign-on) configuration for the gateway: present only when the
+/// gateway's `ENVOY_AUTH` knob is on. It tells the Envoy renderer to gate the shared
+/// listener (API + UI routes) behind an `ext_authz` HTTP filter pointed at the auth
+/// provider, and which identity headers to treat as trusted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthConfig {
+    /// The upstream cluster the `ext_authz` filter calls (an entry in
+    /// [`GatewayConfig::clusters`]). The bundled provider is `authelia`.
+    pub cluster: String,
+    /// The auth provider's port (the `server_uri` authority for the `ext_authz` filter).
+    pub port: u16,
+    /// The auth endpoint path prefix the filter posts to (Authelia's
+    /// `/api/authz/ext-authz/`).
+    pub path_prefix: String,
+    /// The trusted identity headers the gateway both **strips on ingress** (so a client
+    /// cannot forge them) and **allows upstream** from the auth response (so the app reads
+    /// an auth-provider-asserted value). E.g. `Remote-User` / `Remote-Email` / `Remote-Name`
+    /// / `Remote-Groups`.
+    pub identity_headers: Vec<String>,
+}
+
 /// The structured gateway configuration the planner emits — what a consumer turns
 /// into an Envoy (or other) config, replacing hand-authored route/cluster lists.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -335,6 +402,9 @@ pub struct GatewayConfig {
     /// [`PlanCtx::gateway_admin_port`]; the `Default` of `0` is only ever a transient
     /// accumulator value the planner overwrites.
     pub admin_port: u16,
+    /// Forward-auth configuration, present only when the gateway's `ENVOY_AUTH` knob is on.
+    /// When set, the Envoy renderer gates the shared listener behind `ext_authz`.
+    pub auth: Option<AuthConfig>,
 }
 
 /// A compose `include:` entry contributed by a module.
@@ -430,6 +500,25 @@ pub fn plan(
     catalog: &Catalog,
     ctx: &PlanCtx,
 ) -> Result<EnvironmentPlan, PlanError> {
+    // Forward-auth is a gateway knob (`ENVOY_AUTH`), not a separately-selected module: when
+    // it resolves on, pull the auth provider into the selection so it joins the graph like any
+    // other module (and the routing pass below wires the `ext_authz` filter + cluster). The
+    // knob lives on whichever module fills the `gateway` role, and the provider is whichever
+    // fills the `auth` role — both looked up by role, so a differently-named gateway/provider
+    // still works. Done here, before resolution, because adding a module changes the graph.
+    let auth_on = gateway_auth_enabled(selection, catalog)?;
+    let augmented;
+    let selection = if auth_on && let Some(provider) = catalog.providers_of(Role::AUTH).first() {
+        let mut s = selection.clone();
+        if !s.modules.contains(provider) {
+            s.modules.push((*provider).clone());
+        }
+        augmented = s;
+        &augmented
+    } else {
+        selection
+    };
+
     // Resolve the selection, auto-provisioning a provider for every resource demand
     // (a demanded relational store, object store, …) before anything else runs.
     let graph = resolve_with_demands(selection, catalog, ctx)?;
@@ -696,6 +785,29 @@ pub fn plan(
         routes: shared_routes,
     });
     gateway.listeners.extend(dedicated);
+
+    // Forward-auth: when the gateway knob is on, add the auth provider's upstream cluster and
+    // record the `AuthConfig` so the Envoy renderer gates the shared listener behind
+    // `ext_authz`. The provider joined the graph above (it was pushed into the selection), so
+    // it is a real service; we still emit its cluster explicitly here because the auth endpoint
+    // is `Internal` (no route), and the routing loop only emits clusters for routed endpoints.
+    if auth_on {
+        gateway.clusters.push(ClusterConfig {
+            name: AUTH_CLUSTER.into(),
+            host: AUTH_CLUSTER.into(),
+            port: AUTH_PORT,
+        });
+        gateway.auth = Some(AuthConfig {
+            cluster: AUTH_CLUSTER.into(),
+            port: AUTH_PORT,
+            path_prefix: AUTH_PATH_PREFIX.into(),
+            identity_headers: AUTH_IDENTITY_HEADERS
+                .iter()
+                .map(|h| (*h).to_string())
+                .collect(),
+        });
+    }
+
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Aggregate the stack's env vars for `.env`, last-writer-wins in dependency order:
