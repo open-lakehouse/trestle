@@ -34,7 +34,7 @@ use olai_stack_topology::{ExtraResource, ModuleId, PlanCtx, Selection, baseline_
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let prefer_azurite = args.iter().any(|a| a == "--azurite");
+    let prefer_azurite = true; // args.iter().any(|a| a == "--azurite");
 
     // `--name <env>` sets the compose project name and the output subfolder, so two stacks
     // land in distinct directories. `--port-base <N>` shifts the gateway's host surface (the
@@ -79,11 +79,11 @@ fn main() {
         // demands (resolved to Azurite via the preference below) instead of selecting
         // SeaweedFS directly — selecting both object_store providers without a pin is a
         // `ConflictingRoleProviders` error.
-        let mut mods = vec!["envoy", "postgres"];
-        if !prefer_azurite {
-            mods.push("seaweedfs");
-        }
-        mods.extend(["unity-catalog", "mlflow", "headwaters"]);
+        let mut mods = vec!["envoy", "postgres", "mlflow", "headwaters", "azurite"];
+        // if !prefer_azurite {
+        //     mods.push("seaweedfs");
+        // }
+        // mods.extend(["unity-catalog", "mlflow", "headwaters"]);
         Selection::modules(mods)
     } else {
         Selection::modules(picks)

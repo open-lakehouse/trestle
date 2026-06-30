@@ -63,7 +63,7 @@ olai-codegen = "0.0"
 
 ## Prerequisites
 
-- **Rust 1.87+** (Edition 2024)
+- **Rust 1.88+** (Edition 2024)
 - **[buf](https://buf.build/)** — to compile `.proto` into a descriptor (codegen only)
 - **Docker + Docker Compose** *(optional)* — for the local platform stack that
   scaffolded labs/apps bring up

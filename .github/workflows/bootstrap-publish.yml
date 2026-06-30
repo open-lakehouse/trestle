@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.87"
+          toolchain: "1.88"
       # The crate name is passed through `env` and referenced as a shell
       # variable (never expanded into the `run:` template) to avoid script
       # injection via the workflow input.
