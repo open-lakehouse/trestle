@@ -34,6 +34,18 @@ static_resources:
 {%- endfor %}
 {%- endif %}
                       routes:
+{%- if l.ext_authz and auth is not none %}
+                        # The auth provider's own login portal: routed to its cluster with
+                        # ext_authz DISABLED on this route, so the deny-redirect a logged-out
+                        # browser follows can actually reach the login page (gating it would loop).
+                        - match: { prefix: "{{ auth.portal_prefix }}" }
+                          route:
+                            cluster: {{ auth.cluster }}
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+{%- endif %}
 {%- for r in l.routes %}
                         - match: { prefix: "{{ r.prefix }}" }
                           route:

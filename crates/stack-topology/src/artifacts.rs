@@ -53,6 +53,8 @@ struct AuthCtx<'a> {
     cluster: &'a str,
     port: u16,
     path_prefix: &'a str,
+    /// The gateway path the provider's login portal is routed at (ext_authz disabled on it).
+    portal_prefix: &'a str,
     identity_headers: &'a [String],
 }
 
@@ -179,6 +181,7 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
             cluster: &a.cluster,
             port: a.port,
             path_prefix: &a.path_prefix,
+            portal_prefix: &a.portal_prefix,
             identity_headers: &a.identity_headers,
         }),
     };

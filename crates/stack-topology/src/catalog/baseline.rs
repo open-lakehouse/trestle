@@ -214,13 +214,26 @@ fn envoy() -> Arc<dyn Module> {
 /// user database (`users.yml`); both render against the typed [`RenderCtx`](crate::RenderCtx)
 /// like every other fragment.
 fn authelia() -> Arc<dyn Module> {
+    // Authelia's HTTP `ext_authz` endpoint path. Declared here (catalog data), not in the
+    // planner, so the planner stays free of implementation names: the planner reads it back via
+    // [`EXT_AUTHZ_PATH_EXTRA`](crate::plan_env::EXT_AUTHZ_PATH_EXTRA) off the resolved provider.
+    let mut provides = Provides::default();
+    // Authelia serves its whole surface under `/authelia` (see configuration.yml), so the
+    // ext_authz endpoint the gateway posts to is path-prefixed too.
+    provides.extras.insert(
+        crate::plan_env::EXT_AUTHZ_PATH_EXTRA.into(),
+        "/authelia/api/authz/ext-authz/".into(),
+    );
     Arc::new(DataModule {
         id: ModuleId::from("authelia"),
         display_name: Some("Authelia".into()),
         summary: Some("Forward-auth single-sign-on for the gateway (file-based).".into()),
         category: Some("gateway".into()),
         provider_of: Some("auth".into()),
-        requires: vec![ModuleId::from("envoy")],
+        // No `requires`: the gateway is located by role, not id, so an id edge would break a
+        // catalog with a differently-named gateway. Runtime ordering is the gateway fragment's
+        // `depends_on: authelia` (Envoy waits on auth), which is the real dependency direction.
+        requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
         service_specs: vec![ServiceSpec {
@@ -228,12 +241,13 @@ fn authelia() -> Arc<dyn Module> {
             role: Role::auth(),
             placement: container("authelia"),
             // Internal: Envoy talks to it via the `authelia` cluster (ext_authz); the portal
-            // UI is reached through the gateway's redirect, so no host port is published.
+            // UI is reached through the gateway's redirect, so no host port is published. The
+            // planner derives the ext_authz cluster's host/port from this endpoint.
             endpoints: vec![Endpoint::internal("http", Scheme::Http, 9091, None)],
             depends_on: vec![],
             base_path: String::new(),
         }],
-        provides: Provides::default(),
+        provides,
         knobs: vec![],
         render: template_with_files(
             include_str!("../../templates/gateway/authelia.compose.yaml.jinja"),

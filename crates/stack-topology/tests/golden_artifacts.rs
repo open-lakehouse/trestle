@@ -1235,7 +1235,7 @@ mod auth {
         );
         assert_eq!(
             http_service["path_prefix"].as_str(),
-            Some("/api/authz/ext-authz/")
+            Some("/authelia/api/authz/ext-authz/")
         );
 
         // The authelia cluster exists, targeting the service on 9091.
@@ -1248,6 +1248,23 @@ mod auth {
             ["socket_address"];
         assert_eq!(sock["address"].as_str(), Some("authelia"));
         assert_eq!(sock["port_value"].as_u64(), Some(9091));
+
+        // The login portal is routed through the gateway at /authelia with ext_authz DISABLED
+        // on that route, so a logged-out browser's deny-redirect can reach the login page.
+        let vh = &shared["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
+            [0];
+        let portal = vh["routes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|r| r["match"]["prefix"].as_str() == Some("/authelia"))
+            .expect("portal route present");
+        assert_eq!(portal["route"]["cluster"].as_str(), Some("authelia"));
+        assert_eq!(
+            portal["typed_per_filter_config"]["envoy.filters.http.ext_authz"]["disabled"].as_bool(),
+            Some(true),
+            "ext_authz is disabled on the portal route"
+        );
     }
 
     #[test]
