@@ -93,5 +93,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|olai-stack-topology)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology)\)', replace = "" },
 ]
