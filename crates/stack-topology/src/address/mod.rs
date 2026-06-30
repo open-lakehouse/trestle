@@ -28,7 +28,7 @@
 //! (or the dedicated listener's port for a [`Listener::Dedicated`] route).
 //!
 //! Resolution is pure. The runtime facts it needs — the gateway's service name and ports —
-//! are the [`GatewayFacts`] the [`Plan`](crate::Plan) captured at plan time.
+//! are the ones the [`Plan`](crate::Plan) captured at plan time.
 
 use url::Url;
 
@@ -294,10 +294,10 @@ mod tests {
         }
     }
 
-    /// A host-bound catalog sidecar (hydrofoil's Unity Catalog): bound to a
-    /// dynamic host port, reached over REST. Reached directly by the desktop, so
-    /// its endpoint is [`RouteIntent::Internal`]. `host_port == internal_port`
-    /// because it is a single host process.
+    /// A host-bound catalog sidecar: bound to a dynamic host port, reached over REST.
+    /// Reached directly (not through the gateway), so its endpoint is
+    /// [`RouteIntent::Internal`]. `host_port == internal_port` because it is a single host
+    /// process.
     fn host_catalog(port: u16) -> ServiceSpec {
         ServiceSpec {
             name: "unity-catalog".into(),
@@ -385,13 +385,12 @@ mod tests {
             .to_string()
     }
 
-    // --- Direct addresses: the cross-vantage matrix, asserting the exact strings
-    // the sibling tools use today. With an empty plan nothing is gatewayed, so the
-    // default `address` resolves direct. ---
+    // --- Direct addresses: the cross-vantage matrix. With an empty plan nothing is
+    // gatewayed, so the default resolution is direct. ---
 
     #[test]
     fn container_to_host_catalog_uses_host_docker_internal() {
-        // hydrofoil's UC_HOST_URL: mlflow/marquez (containers) → UC (host).
+        // A container reaching a host-bound service crosses the boundary via host.docker.internal.
         let uc = host_catalog(54321);
         assert_eq!(
             addr(Vantage::Container, &uc, "rest", &RoutePlan::new()),
@@ -401,7 +400,7 @@ mod tests {
 
     #[test]
     fn in_process_to_host_catalog_uses_loopback() {
-        // hydrofoil's HostConfig.unity_endpoint: the embedded engine → UC sidecar.
+        // An in-process caller reaches a host-bound sidecar on loopback.
         let uc = host_catalog(54321);
         assert_eq!(
             addr(Vantage::InProcess, &uc, "rest", &RoutePlan::new()),
@@ -411,7 +410,7 @@ mod tests {
 
     #[test]
     fn host_to_host_catalog_uses_loopback() {
-        // hydrofoil's proxy_request: the UI (host) → UC sidecar.
+        // A host-side caller reaches a host-bound sidecar on loopback.
         let uc = host_catalog(54321);
         assert_eq!(
             addr(Vantage::Host, &uc, "rest", &RoutePlan::new()),
@@ -446,8 +445,8 @@ mod tests {
 
     #[test]
     fn in_process_to_marquez_defaults_through_gateway() {
-        // hydrofoil's lineage sink: the embedded engine emits to Marquez through
-        // the Envoy gateway on the host-published port.
+        // An in-process caller reaches a gatewayed service through the gateway on its
+        // host-published port.
         let marquez = container_marquez();
         let mut plan = RoutePlan::new();
         plan.assign("marquez", "lineage", api_route("/api/v1/lineage"));
@@ -459,8 +458,8 @@ mod tests {
 
     #[test]
     fn container_to_gatewayed_service_uses_envoy_internal() {
-        // The address trestle's in-container app/notebooks NEED — envoy:10000,
-        // not localhost:9080. The bug-class fix, now the DEFAULT behavior.
+        // An in-container caller reaches a gatewayed service at the gateway's internal
+        // listener (envoy:10000), not its host-published port (localhost:9080).
         let marquez = container_marquez();
         let mut plan = RoutePlan::new();
         plan.assign("marquez", "lineage", api_route("/api/v1/lineage"));

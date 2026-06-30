@@ -1,8 +1,9 @@
 //! The plan's complete rendered output, flattened to write-ready `(path, contents)` pairs
 //! in one documented layout — [`MaterializedOutput`].
 //!
-//! [`render_all`](crate::render_all) returns only the stack-aggregated [`Artifacts`] (the
-//! Envoy bootstrap, `.env`, and top-level compose); the per-module fragments and their
+//! [`render_all`] returns only the stack-aggregated
+//! [`Artifacts`](crate::Artifacts) (the Envoy bootstrap, `.env`, and top-level compose); the
+//! per-module fragments and their
 //! mounted config files live separately on [`Plan::renders`](crate::Plan::renders). Every
 //! consumer that writes a project therefore has to know the same on-disk layout — which
 //! string goes to which path. [`Plan::materialize`](crate::Plan::materialize) encodes that

@@ -6,11 +6,11 @@
 //! topologically ordered — dependencies before dependents, i.e. a valid Compose
 //! `depends_on` / startup order. The graph is the resolver's natural working
 //! representation; returning it (rather than a flat list) leaves the data shaped for
-//! the planner and for a future node-diagram visualization at near-zero extra cost.
+//! the planner and for a node-diagram visualization at near-zero extra cost.
 //!
-//! This is the topology crate's port of hydrofoil's `env-modules` resolver, adapted
-//! to this crate's [`Module`]/[`ModuleId`] and extended with
-//! [`conflicts_with`](crate::Module::conflicts_with) validation.
+//! [`conflicts_with`](crate::Module::conflicts_with) is validated here, alongside the
+//! dependency edges, so a selection that pulls in two mutually-exclusive modules fails at
+//! resolution rather than surfacing later at render or launch.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

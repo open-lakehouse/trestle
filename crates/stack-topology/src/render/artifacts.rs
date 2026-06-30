@@ -1,19 +1,17 @@
-//! Pure renderers that turn an [`Plan`](crate::Plan) into the
-//! concrete text artifacts a Lakehouse dev environment is made of: the Envoy gateway
-//! bootstrap, the `.env` overlay, and the top-level compose file.
+//! Pure renderers that turn a [`Plan`] into the concrete text artifacts a
+//! Lakehouse dev environment is made of: the Envoy gateway bootstrap, the `.env` overlay, and
+//! the top-level compose file.
 //!
-//! These are the **stack-aggregated** outputs — the ones that, in trestle today, are
-//! MiniJinja `{% for %}` loops over the aggregated `stack.*` lists. Here they are plain
-//! functions over exactly what [`plan`](crate::plan) already computes ([`GatewayConfig`],
-//! the aggregated env, and the [`HeadFile`]), so the crate is the single source of truth
-//! and the consuming tool only writes the returned strings to disk. (Per-module config
-//! files — including the Postgres init script — are now module
-//! [`RenderFile`](crate::RenderFile)s on the plan's
-//! [`renders`](crate::Plan::renders), not aggregated here.)
+//! These are the **stack-aggregated** outputs — plain functions over exactly what the planner
+//! already computed ([`GatewayConfig`], the aggregated env, and the [`HeadFile`]), so the
+//! crate is the single source of truth and the consuming tool only writes the returned strings
+//! to disk. Per-module config files — including the Postgres init script — are module
+//! [`RenderFile`](crate::RenderFile)s on the plan's [`renders`](crate::Plan::renders), not
+//! aggregated here; [`MaterializedOutput`](crate::MaterializedOutput) flattens both into one
+//! write-ready set.
 //!
 //! Everything here is pure and string-only — no I/O. The output shape is fixed and
 //! hand-written (not serialized via a YAML library) to stay reviewable and stable.
-//! Gated behind the `render` feature so the pure addressing core need not pull it in.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

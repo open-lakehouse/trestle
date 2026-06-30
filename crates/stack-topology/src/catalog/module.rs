@@ -1,10 +1,11 @@
 //! What a *module* is ([`Module`]): the unit of selection and composition that a
 //! catalog is made of, and that the planner resolves into an environment.
 //!
-//! A module is the reusable building block both consumers already have under
-//! different names — trestle's *components* (a `template.yaml` plus a compose
-//! fragment) and hydrofoil's `env-modules` registry entries. This type is their
-//! common denominator. A module:
+//! A module is the reusable building block an environment is composed from: a unit a
+//! [`Selection`](crate::Selection) can pick (directly or by capability), authored either as
+//! data (a [`DataModule`], the [`Catalog::from_manifests`](crate::Catalog::from_manifests)
+//! shape) or as a hand-written [`Module`] impl when it varies its topology with a knob. A
+//! module:
 //!
 //! - declares the [`ServiceSpec`]s it contributes to the topology (often more than
 //!   one — Postgres plus its init job, an object store plus its bucket-init);
@@ -15,7 +16,7 @@
 //!   [`conflicts_with`](Module::conflicts_with);
 //! - exposes optional config [`Knob`]s (which can drive a generated UI); and
 //! - carries a [`RenderSpec`] describing how it produces its
-//!   [`RenderOutput`](crate::RenderOutput) — a MiniJinja template this crate renders
+//!   [`RenderOutput`] — a MiniJinja template this crate renders
 //!   against the typed [`Connection`](crate::Connection)s so a fragment can read plan-resolved
 //!   values and branch on the chosen credential flavour.
 //!
@@ -129,7 +130,7 @@ pub struct PortDecl {
 /// registered provider satisfies it (by [`provider`](ResourceDemand::provider) pin,
 /// `PlanCtx` preference, uniqueness, or catalog default), deploys it if absent,
 /// provisions the named resource, resolves the provider's
-/// [`ConnectionTemplate`](crate::ConnectionTemplate), and binds each
+/// [`ConnectionTemplate`], and binds each
 /// [`ConnectionBinding`] field into this module's environment. Naming the role (not the
 /// implementation) is what lets one consumer run on, say, SeaweedFS in one environment and
 /// Azurite in another.
@@ -323,8 +324,8 @@ impl DependsCondition {
 /// for and the [`DependsCondition`] to wait for it to reach.
 ///
 /// The planner produces these from a consumer's resource demands — for each demand it reads
-/// the *chosen* provider's [`DEP_GATE_EXTRA`](crate::catalog::baseline::DEP_GATE_EXTRA) and
-/// resolves it into a `DepGate` — and hands them to the render via
+/// the *chosen* provider's dependency-gate extra and resolves it into a `DepGate` — and hands
+/// them to the render via
 /// [`RenderCtx::dependencies`]. A template renders its whole `depends_on` block by iterating
 /// them (`{% for dep in dependencies %}{{ dep.service }}: {condition: {{ dep.condition }}}`),
 /// so it never hard-codes which backend's service it waits on.

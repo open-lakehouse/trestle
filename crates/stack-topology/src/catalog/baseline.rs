@@ -158,8 +158,8 @@ pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
 
 /// `envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
-/// `TopologyCtx`, not as a routed endpoint. Its rendered Envoy bootstrap config is a
-/// planner-emitted artifact, not part of this fragment (which only declares the
+/// [`PlanCtx`](crate::PlanCtx), not as a routed endpoint. Its rendered Envoy bootstrap config
+/// is a planner-emitted artifact, not part of this fragment (which only declares the
 /// container that mounts it).
 ///
 /// Exposes one knob, [`ENVOY_AUTH`]: turning it on fronts every API and UI route with

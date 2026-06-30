@@ -27,9 +27,11 @@
 //! - [`RenderOutput`] / [`RenderFile`] — the planner↔template handshake: what a
 //!   module's render produces (a compose fragment plus zero or more mountable
 //!   files), with planner-decided values injected via compose env-var substitution.
-//! - [`address`] — the single pure function that turns a `(from, to, endpoint,
-//!   plan, ctx)` tuple into one concrete [`url::Url`], routing through the gateway
-//!   when the plan assigns a route; [`address_direct`] is the explicit escape hatch.
+//! - [`ServiceRef`] — a service handle from a [`Plan`] ([`Plan::service`] /
+//!   [`Plan::service_by_role`]); its [`address`](ServiceRef::address) turns a
+//!   `(vantage, endpoint)` pair into one concrete [`url::Url`], routing through the gateway
+//!   when the plan assigns a route ([`address_direct`](ServiceRef::address_direct) is the
+//!   explicit escape hatch).
 //!
 //! # The crate's shape: five phases, five module groups
 //!

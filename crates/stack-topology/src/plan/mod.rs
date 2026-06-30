@@ -1,13 +1,15 @@
-//! The **planner** ([`plan`]): a module selection → a fully-assigned environment.
+//! The **planner** ([`Catalog::plan`](crate::Catalog::plan)): a module selection → a
+//! fully-assigned environment.
 //!
 //! This is the producer the rest of the crate was built to feed. A module declares
-//! only intent ([`RouteIntent`] on its endpoints) and ingredients ([`Provides`]); the
-//! planner is the one vantage that sees *every* selected module at once, so it is the
-//! only place gateway prefixes can be assigned without colliding. Given a
+//! only intent ([`RouteIntent`] on its endpoints) and ingredients
+//! ([`Provides`](crate::Provides)); the planner is the one vantage that sees *every* selected
+//! module at once, so it is the only place gateway prefixes can be assigned without
+//! colliding. Given a
 //! [`Selection`] and a [`Catalog`], it:
 //!
-//! 1. resolves the dependency graph ([`resolve`]) — transitive `requires`, conflicts,
-//!    topological order;
+//! 1. resolves the dependency graph ([`resolve`](fn@resolve)) — transitive `requires`,
+//!    conflicts, topological order;
 //! 2. derives a non-colliding gateway route for every surface endpoint, **erroring
 //!    loudly on a real collision** rather than silently shadowing one route with
 //!    another (the failure mode hand-authored routes invite);
@@ -70,9 +72,8 @@ pub struct Selection {
     /// [`InjectedEnv`] under the knob's `key`, exactly like any other planner-injected
     /// variable, so the module's template reads it as `{{ env.KEY }}`.
     ///
-    /// This is the channel a config UI (hydrofoil / Transler) feeds: it surfaces a
-    /// module's knobs from the catalog, lets the user tune them, and hands the chosen
-    /// values back here.
+    /// This is the channel a config UI feeds: it surfaces a module's knobs from the
+    /// catalog, lets the user tune them, and hands the chosen values back here.
     pub knob_overrides: BTreeMap<ModuleId, BTreeMap<String, String>>,
 }
 
@@ -103,9 +104,10 @@ pub struct AppUpstream {
     pub port: u16,
 }
 
-/// Runtime facts the planner needs but cannot derive from the model — the same
-/// posture as [`TopologyCtx`](crate::TopologyCtx). The consumer supplies these once
-/// per environment.
+/// Runtime facts the planner needs but cannot derive from the model — the gateway's
+/// service name and ports, the project name, port allocations, provider preferences, the
+/// data root, and the optional app upstream. The consumer supplies these once per
+/// environment; the plan captures the gateway facts for the address resolver.
 #[derive(Clone, Debug)]
 pub struct PlanCtx {
     /// The compose project / environment name (used as the head file's `name:`).
@@ -135,16 +137,15 @@ pub struct PlanCtx {
     pub dedicated_listener_port_base: u16,
     /// Ordered provider preference per resource role — the environment's say in which
     /// implementation satisfies an abstract demand (e.g. `object_store` →
-    /// `["azurite", "seaweedfs"]` for a hydrofoil-style env
-    /// that prefers Azurite). The planner picks the first preferred provider present in
-    /// the catalog; an empty/absent entry falls back to uniqueness then the catalog
-    /// default. A demand's own `provider` pin still wins over this.
+    /// `["azurite", "seaweedfs"]` for an env that prefers Azurite). The planner picks the first
+    /// preferred provider present in the catalog; an empty/absent entry falls back to
+    /// uniqueness then the catalog default. A demand's own `provider` pin still wins over this.
     pub provider_preference: BTreeMap<String, Vec<ModuleId>>,
     /// The stack's root data directory, injected into every module's render env as
     /// [`DATA_ROOT`](crate::DATA_ROOT_VAR) and resolved at plan time. A module that persists
     /// state mounts it under `${DATA_ROOT}/<module>` by convention, so relocating all
     /// persistence is this single knob (e.g. an absolute path) rather than an edit per
-    /// fragment. Defaults to [`DATA_ROOT_DEFAULT`](crate::DATA_ROOT_DEFAULT) (`./.data`,
+    /// fragment. Defaults to [`DATA_ROOT_DEFAULT`] (`./.data`,
     /// relative to the compose file).
     pub data_root: String,
     /// The user's app, if any: when set, the gateway gets an `app` cluster and a `/`
@@ -368,7 +369,7 @@ pub struct ListenerConfig {
 /// under this same key.
 pub const ENVOY_AUTH_KNOB: &str = "ENVOY_AUTH";
 
-/// The [`Provides::extras`] key by which the `auth`-role provider declares the HTTP `ext_authz`
+/// The [`Provides::extras`](crate::Provides::extras) key by which the `auth`-role provider declares the HTTP `ext_authz`
 /// endpoint path prefix the gateway posts authorization checks to. Provider-specific (Authelia
 /// uses `/api/authz/ext-authz/`, other forward-auth proxies differ), so it lives in catalog data
 /// rather than as a planner constant — keeping implementation names out of the planner.
@@ -508,7 +509,8 @@ pub(crate) struct GatewayFacts {
 ///
 /// Build one with [`Catalog::plan`](crate::Catalog::plan). Render its artifacts with
 /// [`render_all`](crate::render_all), and resolve a service's address from a given
-/// [`Vantage`] with [`Plan::service`] / [`Plan::service_by_role`] → [`ServiceRef::address`].
+/// [`Vantage`](crate::Vantage) with [`Plan::service`] / [`Plan::service_by_role`] →
+/// [`ServiceRef::address`].
 ///
 /// Not `PartialEq`/`Eq`: it embeds the [`ResolvedGraph`], whose modules are trait objects.
 #[derive(Clone, Debug)]
