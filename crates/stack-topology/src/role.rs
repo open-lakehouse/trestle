@@ -104,79 +104,6 @@ impl Role {
     }
 }
 
-/// The recognized well-known roles, as a typed enum that round-trips to the open
-/// [`Role`] string.
-///
-/// This is the discoverable surface a wizard/UI can enumerate without closing the open
-/// set: [`from_role`](KnownRole::from_role) returns `None` for any custom role, which
-/// still flows through the rest of the model unchanged. `#[non_exhaustive]` so adding a
-/// known role later is not a breaking change.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum KnownRole {
-    /// [`Role::OBJECT_STORE`].
-    ObjectStore,
-    /// [`Role::RELATIONAL_DB`].
-    RelationalDb,
-    /// [`Role::DATA_CATALOG`].
-    DataCatalog,
-    /// [`Role::GATEWAY`].
-    Gateway,
-    /// [`Role::SQL_ENGINE`].
-    SqlEngine,
-    /// [`Role::EXPERIMENT_TRACKING`].
-    ExperimentTracking,
-    /// [`Role::TRACING`].
-    Tracing,
-    /// [`Role::LINEAGE`].
-    Lineage,
-    /// [`Role::APP_RUNTIME`].
-    AppRuntime,
-    /// [`Role::AUTH`].
-    Auth,
-}
-
-impl KnownRole {
-    /// The open-set [`Role`] this known role corresponds to.
-    pub fn as_role(self) -> Role {
-        Role::new(self.as_str())
-    }
-
-    /// The canonical role string for this known role.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            KnownRole::ObjectStore => Role::OBJECT_STORE,
-            KnownRole::RelationalDb => Role::RELATIONAL_DB,
-            KnownRole::DataCatalog => Role::DATA_CATALOG,
-            KnownRole::Gateway => Role::GATEWAY,
-            KnownRole::SqlEngine => Role::SQL_ENGINE,
-            KnownRole::ExperimentTracking => Role::EXPERIMENT_TRACKING,
-            KnownRole::Tracing => Role::TRACING,
-            KnownRole::Lineage => Role::LINEAGE,
-            KnownRole::AppRuntime => Role::APP_RUNTIME,
-            KnownRole::Auth => Role::AUTH,
-        }
-    }
-
-    /// Recognize a [`Role`] as one of the well-known roles, or `None` if it is a custom
-    /// role outside the known set.
-    pub fn from_role(role: &Role) -> Option<KnownRole> {
-        match role.as_str() {
-            Role::OBJECT_STORE => Some(KnownRole::ObjectStore),
-            Role::RELATIONAL_DB => Some(KnownRole::RelationalDb),
-            Role::DATA_CATALOG => Some(KnownRole::DataCatalog),
-            Role::GATEWAY => Some(KnownRole::Gateway),
-            Role::SQL_ENGINE => Some(KnownRole::SqlEngine),
-            Role::EXPERIMENT_TRACKING => Some(KnownRole::ExperimentTracking),
-            Role::TRACING => Some(KnownRole::Tracing),
-            Role::LINEAGE => Some(KnownRole::Lineage),
-            Role::APP_RUNTIME => Some(KnownRole::AppRuntime),
-            Role::AUTH => Some(KnownRole::Auth),
-            _ => None,
-        }
-    }
-}
-
 impl From<&str> for Role {
     fn from(s: &str) -> Self {
         Role(s.to_string())
@@ -237,16 +164,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_role_round_trips_through_the_open_role() {
-        // A well-known role recognizes and round-trips.
-        assert_eq!(
-            KnownRole::from_role(&Role::object_store()),
-            Some(KnownRole::ObjectStore)
-        );
-        assert_eq!(KnownRole::ObjectStore.as_role(), Role::object_store());
-        // The ctor and the const agree.
+    fn role_ctor_and_const_agree() {
+        // The ctor and the const name the same open-set role string.
         assert_eq!(Role::object_store().as_str(), Role::OBJECT_STORE);
-        // A custom role is not in the known set, but is still a perfectly valid Role.
-        assert_eq!(KnownRole::from_role(&Role::new("quantum_db")), None);
+        // A custom role is a perfectly valid Role outside the well-known set.
+        assert_eq!(Role::new("quantum_db").as_str(), "quantum_db");
     }
 }

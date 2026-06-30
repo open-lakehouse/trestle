@@ -58,11 +58,6 @@ impl InjectedEnv {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
-
-    /// Whether nothing is injected.
-    pub fn is_empty(&self) -> bool {
-        self.vars.is_empty()
-    }
 }
 
 /// One file a module's render emits to be written to disk and mounted into the

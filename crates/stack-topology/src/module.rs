@@ -312,15 +312,6 @@ pub enum DependsCondition {
 }
 
 impl DependsCondition {
-    /// The compose token for this condition (e.g. `"service_healthy"`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DependsCondition::ServiceStarted => "service_started",
-            DependsCondition::ServiceHealthy => "service_healthy",
-            DependsCondition::ServiceCompletedSuccessfully => "service_completed_successfully",
-        }
-    }
-
     /// Parse a compose condition token, returning `None` for an unrecognized value.
     pub fn parse(s: &str) -> Option<DependsCondition> {
         match s {
@@ -498,11 +489,6 @@ impl ResolvedKnobs {
     /// planner to flatten the knob values into a module's [`InjectedEnv`].
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.values.iter().map(|(k, v)| (k.as_str(), v.as_str()))
-    }
-
-    /// Whether no knobs resolved.
-    pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
     }
 }
 

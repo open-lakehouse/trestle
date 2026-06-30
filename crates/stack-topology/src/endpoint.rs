@@ -95,19 +95,6 @@ pub enum RouteIntent {
     Gatewayed,
 }
 
-impl RouteIntent {
-    /// Whether the gateway can front this endpoint (everything except
-    /// [`Internal`](RouteIntent::Internal)).
-    pub fn is_surface(&self) -> bool {
-        !matches!(self, RouteIntent::Internal)
-    }
-
-    /// Whether this endpoint serves a UI (prefixable or fixed-path).
-    pub fn is_ui(&self) -> bool {
-        matches!(self, RouteIntent::UiPrefixable | RouteIntent::UiFixed)
-    }
-}
-
 /// How the gateway rewrites the matched prefix before forwarding to an
 /// [`Api`](RouteIntent::Api) endpoint's upstream.
 ///
@@ -182,12 +169,6 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    /// Whether the gateway can front this endpoint (its [`RouteIntent`] is not
-    /// [`Internal`](RouteIntent::Internal)).
-    pub fn is_surface(&self) -> bool {
-        self.intent.is_surface()
-    }
-
     /// An [`Internal`](RouteIntent::Internal) endpoint (a database/inter-service port the
     /// gateway never fronts), with the given scheme and ports. No mount prefix or rewrite.
     pub(crate) fn internal(

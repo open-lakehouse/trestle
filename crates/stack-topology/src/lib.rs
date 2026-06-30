@@ -30,8 +30,6 @@
 //! - [`address`] — the single pure function that turns a `(from, to, endpoint,
 //!   plan, ctx)` tuple into one concrete [`url::Url`], routing through the gateway
 //!   when the plan assigns a route; [`address_direct`] is the explicit escape hatch.
-//! - [`SurfaceMode`] — the "one unified platform surface" Lakehouse invariant,
-//!   with the in-process desktop variant expressed in-model.
 //!
 //! # Purity: rendering is pure, only I/O lives in the consumer
 //!
@@ -61,7 +59,6 @@ mod render;
 mod resolve;
 mod resolve_graph;
 mod role;
-mod surface;
 
 pub use artifacts::{AppUpstream, Artifacts, EnvoyOpts, render_all, render_compose, render_envoy};
 pub use catalog::{
@@ -84,5 +81,4 @@ pub use plan_env::{
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
 pub use resolve_graph::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
-pub use role::{KnownRole, Role, ServiceSpec};
-pub use surface::SurfaceMode;
+pub use role::{Role, ServiceSpec};
