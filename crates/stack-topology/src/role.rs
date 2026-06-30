@@ -59,6 +59,8 @@ impl Role {
     pub const LINEAGE: &'static str = "lineage";
     /// `app_runtime` — the application-runtime contract (env-only).
     pub const APP_RUNTIME: &'static str = "app_runtime";
+    /// `auth` — a forward-auth / single-sign-on provider for the gateway.
+    pub const AUTH: &'static str = "auth";
 
     /// The `object_store` role.
     pub fn object_store() -> Role {
@@ -96,6 +98,10 @@ impl Role {
     pub fn app_runtime() -> Role {
         Role::new(Self::APP_RUNTIME)
     }
+    /// The `auth` role.
+    pub fn auth() -> Role {
+        Role::new(Self::AUTH)
+    }
 }
 
 /// The recognized well-known roles, as a typed enum that round-trips to the open
@@ -126,6 +132,8 @@ pub enum KnownRole {
     Lineage,
     /// [`Role::APP_RUNTIME`].
     AppRuntime,
+    /// [`Role::AUTH`].
+    Auth,
 }
 
 impl KnownRole {
@@ -146,6 +154,7 @@ impl KnownRole {
             KnownRole::Tracing => Role::TRACING,
             KnownRole::Lineage => Role::LINEAGE,
             KnownRole::AppRuntime => Role::APP_RUNTIME,
+            KnownRole::Auth => Role::AUTH,
         }
     }
 
@@ -162,6 +171,7 @@ impl KnownRole {
             Role::TRACING => Some(KnownRole::Tracing),
             Role::LINEAGE => Some(KnownRole::Lineage),
             Role::APP_RUNTIME => Some(KnownRole::AppRuntime),
+            Role::AUTH => Some(KnownRole::Auth),
             _ => None,
         }
     }

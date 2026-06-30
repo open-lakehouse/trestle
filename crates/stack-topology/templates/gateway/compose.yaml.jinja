@@ -14,6 +14,13 @@ services:
       - source: envoy_config
         target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+{%- if env.ENVOY_AUTH == "true" %}
+    # Forward-auth on: the bootstrap's ext_authz filter calls Authelia, so wait for it to be
+    # healthy before accepting traffic (the `authelia` module is pulled in by the ENVOY_AUTH knob).
+    depends_on:
+      authelia:
+        condition: service_healthy
+{%- endif %}
     ports:
 {%- for p in published_ports %}
       - "{{ p.host }}:{{ p.container }}"

@@ -41,6 +41,21 @@ struct EnvoyCtx<'a> {
     clusters: Vec<ClusterCtx<'a>>,
     /// The Envoy admin port (bound on both sides).
     admin_port: u16,
+    /// Forward-auth config, present only when the gateway's `ENVOY_AUTH` knob is on. When set,
+    /// the listener(s) flagged `ext_authz` (the shared one only) gate every route behind it.
+    auth: Option<AuthCtx<'a>>,
+}
+
+/// The forward-auth template context: the `ext_authz` upstream and the trusted identity
+/// headers (stripped on ingress, re-added from the auth response).
+#[derive(Serialize)]
+struct AuthCtx<'a> {
+    cluster: &'a str,
+    port: u16,
+    path_prefix: &'a str,
+    /// The gateway path the provider's login portal is routed at (ext_authz disabled on it).
+    portal_prefix: &'a str,
+    identity_headers: &'a [String],
 }
 
 /// One Envoy listener: the port it binds and its route table. Only the shared listener
@@ -53,6 +68,11 @@ struct ListenerCtx<'a> {
     /// Whether the app `/` catch-all should be appended to this listener's routes (the
     /// shared listener only).
     app: bool,
+    /// Whether this listener gates its routes behind the `ext_authz` filter (and strips the
+    /// trusted identity headers on ingress). Only the shared listener — the one carrying the
+    /// API/UI routes — is gated; dedicated listeners (gatewayed object stores, fixed-path UIs)
+    /// are deliberately left open, so resource backends are never behind auth.
+    ext_authz: bool,
 }
 
 #[derive(Serialize)]
@@ -120,6 +140,9 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
                 .collect(),
             // Only the shared listener (first) carries the app catch-all.
             app: i == 0 && opts.app.is_some(),
+            // Only the shared listener is gated: it carries the API/UI routes. Dedicated
+            // listeners front resource backends (gatewayed object stores) and stay open.
+            ext_authz: i == 0 && gateway.auth.is_some(),
         })
         .collect();
     if listeners.is_empty() {
@@ -130,6 +153,7 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
             internal_port: 10000,
             routes: Vec::new(),
             app: opts.app.is_some(),
+            ext_authz: gateway.auth.is_some(),
         });
     }
 
@@ -153,6 +177,13 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
         listeners,
         clusters,
         admin_port: gateway.admin_port,
+        auth: gateway.auth.as_ref().map(|a| AuthCtx {
+            cluster: &a.cluster,
+            port: a.port,
+            path_prefix: &a.path_prefix,
+            portal_prefix: &a.portal_prefix,
+            identity_headers: &a.identity_headers,
+        }),
     };
 
     let mut env = minijinja::Environment::new();

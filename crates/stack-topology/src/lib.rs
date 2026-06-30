@@ -77,8 +77,9 @@ pub use module::{
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
 pub use plan_env::{
-    ClusterConfig, ComposeInclude, ConfigDecl, EnvironmentPlan, GatewayConfig, GatewayRoute,
-    HeadFile, ListenerConfig, PlanCtx, PlanError, Selection, plan,
+    AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB, EXT_AUTHZ_PATH_EXTRA,
+    EnvironmentPlan, GatewayConfig, GatewayRoute, HeadFile, ListenerConfig, PlanCtx, PlanError,
+    Selection, plan,
 };
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};

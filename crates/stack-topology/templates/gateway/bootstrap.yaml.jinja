@@ -23,7 +23,29 @@ static_resources:
                   virtual_hosts:
                     - name: all
                       domains: ["*"]
+{%- if l.ext_authz and auth is not none %}
+                      # Anti-spoofing: strip any client-supplied identity headers on ingress so
+                      # they can only ever come from the auth provider. The ext_authz filter
+                      # below re-adds them from the authorization response, so the upstream's
+                      # Remote-* values are always auth-asserted, never forged by a caller.
+                      request_headers_to_remove:
+{%- for h in auth.identity_headers %}
+                        - "{{ h }}"
+{%- endfor %}
+{%- endif %}
                       routes:
+{%- if l.ext_authz and auth is not none %}
+                        # The auth provider's own login portal: routed to its cluster with
+                        # ext_authz DISABLED on this route, so the deny-redirect a logged-out
+                        # browser follows can actually reach the login page (gating it would loop).
+                        - match: { prefix: "{{ auth.portal_prefix }}" }
+                          route:
+                            cluster: {{ auth.cluster }}
+                          typed_per_filter_config:
+                            envoy.filters.http.ext_authz:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+{%- endif %}
 {%- for r in l.routes %}
                         - match: { prefix: "{{ r.prefix }}" }
                           route:
@@ -43,6 +65,45 @@ static_resources:
                             cluster: app
 {%- endif %}
                 http_filters:
+{%- if l.ext_authz and auth is not none %}
+                  # Forward-auth: every request on this (shared) listener is checked with the
+                  # auth provider first. Both browser sessions (cookie) and API clients
+                  # (Authorization / Proxy-Authorization header) are supported — the provider
+                  # decides which applies. On allow it returns the trusted Remote-* identity
+                  # headers, which are forwarded upstream; on deny it returns a redirect
+                  # (browser → login) or 401 (API).
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      http_service:
+                        server_uri:
+                          uri: {{ auth.cluster }}:{{ auth.port }}
+                          cluster: {{ auth.cluster }}
+                          timeout: 0.25s
+                        path_prefix: "{{ auth.path_prefix }}"
+                        authorization_request:
+                          allowed_headers:
+                            patterns:
+                              - exact: authorization
+                              - exact: proxy-authorization
+                              - exact: cookie
+                              - exact: accept
+                          headers_to_add:
+                            - { key: X-Forwarded-Proto, value: "%REQ(:SCHEME)%" }
+                            - { key: X-Forwarded-Host, value: "%REQ(:AUTHORITY)%" }
+                        authorization_response:
+                          allowed_upstream_headers:
+                            patterns:
+{%- for h in auth.identity_headers %}
+                              - exact: "{{ h }}"
+{%- endfor %}
+                          allowed_client_headers:
+                            patterns:
+                              - exact: set-cookie
+                              - exact: location
+                      failure_mode_allow: false
+{%- endif %}
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

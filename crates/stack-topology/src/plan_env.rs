@@ -286,6 +286,22 @@ pub enum PlanError {
         /// The kind the value failed to satisfy.
         kind: crate::module::KnobKind,
     },
+    /// The gateway's `ENVOY_AUTH` knob is on and an `auth`-role provider was selected, but that
+    /// provider does not declare what the gateway needs to wire `ext_authz`: a service with an
+    /// [`Internal`](RouteIntent::Internal) endpoint (the upstream the filter calls) and the
+    /// [`EXT_AUTHZ_PATH_EXTRA`] extra (the endpoint path). The fix is on the auth provider
+    /// module, not the selection.
+    #[error(
+        "auth provider `{module}` is misconfigured for forward-auth: {reason} \
+         (needs an Internal endpoint and the `{}` extra)",
+        EXT_AUTHZ_PATH_EXTRA
+    )]
+    AuthProviderMisconfigured {
+        /// The auth-role provider module.
+        module: ModuleId,
+        /// What specifically is missing.
+        reason: String,
+    },
 }
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -323,6 +339,76 @@ pub struct ListenerConfig {
     pub routes: Vec<GatewayRoute>,
 }
 
+/// The gateway knob key that turns on forward-auth. A bool knob with this key, declared on
+/// the module filling the `gateway` role and resolving truthy, makes the planner pull in the
+/// `auth`-role provider and gate the shared listener (see [`AuthConfig`]). The contract lives
+/// here (the planner owns the wiring); the baseline catalog's `envoy` module declares the knob
+/// under this same key.
+pub const ENVOY_AUTH_KNOB: &str = "ENVOY_AUTH";
+
+/// The [`Provides::extras`] key by which the `auth`-role provider declares the HTTP `ext_authz`
+/// endpoint path prefix the gateway posts authorization checks to. Provider-specific (Authelia
+/// uses `/api/authz/ext-authz/`, other forward-auth proxies differ), so it lives in catalog data
+/// rather than as a planner constant — keeping implementation names out of the planner.
+pub const EXT_AUTHZ_PATH_EXTRA: &str = "ext_authz_path";
+
+/// The trusted identity headers the gateway strips on ingress and re-adds from the auth
+/// response — so the upstream always reads an auth-provider-asserted value, never a forged one.
+/// These are the forward-auth convention (shared across providers, not implementation-specific),
+/// so the planner supplies them as the default for any `auth`-role provider.
+const AUTH_IDENTITY_HEADERS: [&str; 4] = [
+    "Remote-User",
+    "Remote-Email",
+    "Remote-Name",
+    "Remote-Groups",
+];
+
+/// Whether the gateway's forward-auth knob ([`ENVOY_AUTH_KNOB`]) resolves on for this
+/// selection. Reads the bool knob off whichever catalog module fills the `gateway` role,
+/// honouring a [`Selection::knob_overrides`] value over the knob's default. Returns `Ok(false)`
+/// when there is no gateway module or it declares no such knob.
+fn gateway_auth_enabled(selection: &Selection, catalog: &Catalog) -> Result<bool, PlanError> {
+    for gateway_id in catalog.providers_of(Role::GATEWAY) {
+        let Some(module) = catalog.get(gateway_id) else {
+            continue;
+        };
+        let Some(knob) = module.knobs().iter().find(|k| k.key == ENVOY_AUTH_KNOB) else {
+            continue;
+        };
+        let overrides = selection.knob_overrides.get(gateway_id);
+        if let Some(value) = resolve_knob(gateway_id, knob, overrides)? {
+            return Ok(value == "true");
+        }
+    }
+    Ok(false)
+}
+
+/// Forward-auth (single-sign-on) configuration for the gateway: present only when the
+/// gateway's `ENVOY_AUTH` knob is on. It tells the Envoy renderer to gate the shared
+/// listener (API + UI routes) behind an `ext_authz` HTTP filter pointed at the auth
+/// provider, and which identity headers to treat as trusted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthConfig {
+    /// The upstream cluster the `ext_authz` filter calls (an entry in
+    /// [`GatewayConfig::clusters`]). The bundled provider is `authelia`.
+    pub cluster: String,
+    /// The auth provider's port (the `server_uri` authority for the `ext_authz` filter).
+    pub port: u16,
+    /// The auth endpoint path prefix the filter posts to (Authelia's
+    /// `/api/authz/ext-authz/`).
+    pub path_prefix: String,
+    /// The client-facing path prefix the auth provider's **login portal** is served at, routed
+    /// through the gateway to the provider's cluster with `ext_authz` disabled on that route (so
+    /// a logged-out user can actually reach the login page the deny-redirect sends them to). The
+    /// provider's `authelia_url` / session config must point here. Defaults to `/authelia`.
+    pub portal_prefix: String,
+    /// The trusted identity headers the gateway both **strips on ingress** (so a client
+    /// cannot forge them) and **allows upstream** from the auth response (so the app reads
+    /// an auth-provider-asserted value). E.g. `Remote-User` / `Remote-Email` / `Remote-Name`
+    /// / `Remote-Groups`.
+    pub identity_headers: Vec<String>,
+}
+
 /// The structured gateway configuration the planner emits — what a consumer turns
 /// into an Envoy (or other) config, replacing hand-authored route/cluster lists.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -335,6 +421,9 @@ pub struct GatewayConfig {
     /// [`PlanCtx::gateway_admin_port`]; the `Default` of `0` is only ever a transient
     /// accumulator value the planner overwrites.
     pub admin_port: u16,
+    /// Forward-auth configuration, present only when the gateway's `ENVOY_AUTH` knob is on.
+    /// When set, the Envoy renderer gates the shared listener behind `ext_authz`.
+    pub auth: Option<AuthConfig>,
 }
 
 /// A compose `include:` entry contributed by a module.
@@ -430,6 +519,37 @@ pub fn plan(
     catalog: &Catalog,
     ctx: &PlanCtx,
 ) -> Result<EnvironmentPlan, PlanError> {
+    // Forward-auth is a gateway knob (`ENVOY_AUTH`), not a separately-selected module: when
+    // it resolves on, pull the auth provider into the selection so it joins the graph like any
+    // other module (and the routing pass below wires the `ext_authz` filter + cluster). The
+    // knob lives on whichever module fills the `gateway` role, and the provider is whichever
+    // fills the `auth` role — both looked up by role, so a differently-named gateway/provider
+    // still works. Done here, before resolution, because adding a module changes the graph.
+    // The single auth-role provider to wire, resolved once by role and reused for both the
+    // selection augmentation and the cluster/`AuthConfig` emission below — so the two never
+    // diverge (emitting an ext_authz filter pointed at a provider that isn't in the graph).
+    // `None` when the knob is off or the catalog has no `auth`-role provider; in the latter case
+    // auth stays off entirely rather than gating the gateway behind a phantom upstream.
+    let auth_provider: Option<ModuleId> = if gateway_auth_enabled(selection, catalog)? {
+        catalog
+            .providers_of(Role::AUTH)
+            .first()
+            .map(|p| (*p).clone())
+    } else {
+        None
+    };
+    let augmented;
+    let selection = if let Some(provider) = &auth_provider {
+        let mut s = selection.clone();
+        if !s.modules.contains(provider) {
+            s.modules.push(provider.clone());
+        }
+        augmented = s;
+        &augmented
+    } else {
+        selection
+    };
+
     // Resolve the selection, auto-provisioning a provider for every resource demand
     // (a demanded relational store, object store, …) before anything else runs.
     let graph = resolve_with_demands(selection, catalog, ctx)?;
@@ -696,6 +816,57 @@ pub fn plan(
         routes: shared_routes,
     });
     gateway.listeners.extend(dedicated);
+
+    // Forward-auth: when an auth provider was resolved (knob on + a provider exists), add its
+    // upstream cluster and record the `AuthConfig` so the Envoy renderer gates the shared
+    // listener behind `ext_authz`. The provider joined the graph above (same `auth_provider`), so
+    // it is a real service; we derive the cluster name/host/port from its resolved service and
+    // `Internal` endpoint — not from hardcoded constants — so a differently-named or -ported
+    // provider is wired correctly. The cluster is emitted via `ensure_cluster` (the same helper
+    // the routing loop uses) for dedup + port-conflict detection; the routing loop itself skips
+    // it because the auth endpoint is `Internal` (no route).
+    if let Some(provider) = &auth_provider {
+        let service =
+            services_of[provider]
+                .first()
+                .ok_or_else(|| PlanError::AuthProviderMisconfigured {
+                    module: provider.clone(),
+                    reason: "declares no service".into(),
+                })?;
+        let endpoint = service
+            .endpoints
+            .iter()
+            .find(|e| e.intent == RouteIntent::Internal)
+            .ok_or_else(|| PlanError::AuthProviderMisconfigured {
+                module: provider.clone(),
+                reason: "service has no Internal endpoint".into(),
+            })?;
+        let path_prefix = catalog
+            .get(provider)
+            .and_then(|m| m.provides().extras.get(EXT_AUTHZ_PATH_EXTRA))
+            .ok_or_else(|| PlanError::AuthProviderMisconfigured {
+                module: provider.clone(),
+                reason: format!("does not declare the `{EXT_AUTHZ_PATH_EXTRA}` extra"),
+            })?
+            .clone();
+        ensure_cluster(&mut gateway, service, endpoint)?;
+        // The login portal is routed through the gateway at `/<service>` (a generic, provider-
+        // agnostic path — `/authelia` for the bundled provider), so the deny-redirect a
+        // logged-out browser follows actually resolves. The provider's session config must point
+        // its `authelia_url` here.
+        let portal_prefix = format!("/{}", service.name);
+        gateway.auth = Some(AuthConfig {
+            cluster: service.name.clone(),
+            port: endpoint.internal_port,
+            path_prefix,
+            portal_prefix,
+            identity_headers: AUTH_IDENTITY_HEADERS
+                .iter()
+                .map(|h| (*h).to_string())
+                .collect(),
+        });
+    }
+
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Aggregate the stack's env vars for `.env`, last-writer-wins in dependency order:
@@ -1500,6 +1671,109 @@ mod tests {
     /// Wrap a [`DataModule`] as an `Arc<dyn Module>` for the catalog.
     fn arc(m: crate::module::DataModule) -> std::sync::Arc<dyn crate::module::Module> {
         std::sync::Arc::new(m)
+    }
+
+    /// A minimal gateway module (role `gateway`) carrying the `ENVOY_AUTH` knob, under a
+    /// deliberately NON-`envoy` id — so the by-role lookups are exercised, not an id match.
+    fn gateway_module(auth_default_on: bool) -> crate::module::DataModule {
+        let mut m = module_with(
+            "edge",
+            vec![ep("http", 10000, RouteIntent::Internal)],
+            crate::module::Provides::default(),
+        );
+        m.provider_of = Some("gateway".into());
+        m.service_specs[0].role = Role::gateway();
+        m.knobs = vec![crate::module::Knob {
+            key: ENVOY_AUTH_KNOB.into(),
+            title: None,
+            kind: crate::module::KnobKind::Bool,
+            default: Some(if auth_default_on { "true" } else { "false" }.into()),
+            required: false,
+            help: None,
+        }];
+        m
+    }
+
+    /// An auth-role provider deliberately NOT named `authelia` and NOT on 9091, with its own
+    /// ext_authz path — so the planner must read the provider's real coordinates, not constants.
+    fn auth_provider_module() -> crate::module::DataModule {
+        let mut provides = crate::module::Provides::default();
+        provides
+            .extras
+            .insert(EXT_AUTHZ_PATH_EXTRA.into(), "/verify".into());
+        let mut m = module_with(
+            "gatekeeper",
+            vec![ep("http", 4180, RouteIntent::Internal)],
+            provides,
+        );
+        m.provider_of = Some("auth".into());
+        m.service_specs[0].role = Role::auth();
+        m
+    }
+
+    #[test]
+    fn ext_authz_wiring_follows_a_renamed_reported_auth_provider() {
+        // Knob on, provider `gatekeeper` on :4180 with path /verify: the emitted cluster and the
+        // AuthConfig must follow the resolved provider, never the bundled authelia/9091.
+        let p = plan(
+            &Selection::modules(["edge"]),
+            &Catalog::from_modules([arc(gateway_module(true)), arc(auth_provider_module())]),
+            &PlanCtx::default(),
+        )
+        .expect("plan succeeds");
+        let auth = p.gateway.auth.expect("auth wired when a provider exists");
+        assert_eq!(auth.cluster, "gatekeeper");
+        assert_eq!(auth.port, 4180);
+        assert_eq!(auth.path_prefix, "/verify");
+        assert_eq!(auth.portal_prefix, "/gatekeeper");
+        // The provider's cluster is emitted under its real name/port; no phantom authelia.
+        let c = p
+            .gateway
+            .clusters
+            .iter()
+            .find(|c| c.name == "gatekeeper")
+            .expect("provider cluster emitted");
+        assert_eq!((c.host.as_str(), c.port), ("gatekeeper", 4180));
+        assert!(!p.gateway.clusters.iter().any(|c| c.name == "authelia"));
+    }
+
+    #[test]
+    fn knob_on_but_no_auth_provider_leaves_the_gateway_open() {
+        // Divergent-guard fix: the knob defaults on but the catalog has no `auth`-role provider.
+        // Auth must stay off entirely rather than gate the gateway behind a phantom upstream.
+        let p = plan(
+            &Selection::modules(["edge"]),
+            &Catalog::from_modules([arc(gateway_module(true))]),
+            &PlanCtx::default(),
+        )
+        .expect("plan succeeds");
+        assert!(
+            p.gateway.auth.is_none(),
+            "no auth provider → no AuthConfig, gateway left open"
+        );
+    }
+
+    #[test]
+    fn auth_provider_without_ext_authz_path_extra_is_rejected() {
+        // A misconfigured auth provider (Internal endpoint but no ext_authz path extra) is a
+        // plan-time error, not a silently malformed gateway config.
+        let mut provider = module_with(
+            "gatekeeper",
+            vec![ep("http", 4180, RouteIntent::Internal)],
+            crate::module::Provides::default(),
+        );
+        provider.provider_of = Some("auth".into());
+        provider.service_specs[0].role = Role::auth();
+        let err = plan(
+            &Selection::modules(["edge"]),
+            &Catalog::from_modules([arc(gateway_module(true)), arc(provider)]),
+            &PlanCtx::default(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, PlanError::AuthProviderMisconfigured { .. }),
+            "expected AuthProviderMisconfigured, got {err:?}"
+        );
     }
 
     #[test]

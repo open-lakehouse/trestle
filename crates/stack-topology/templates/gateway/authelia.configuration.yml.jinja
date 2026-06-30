@@ -1,0 +1,51 @@
+# Authelia configuration — rendered by the `authelia` module. A minimal, self-contained
+# showcase setup: file-based users, local SQLite storage, single-factor (password) auth.
+# Authelia's authz endpoints return the authenticated identity as Remote-User / Remote-Email /
+# Remote-Name / Remote-Groups headers, which Envoy injects onto the upstream request (see the
+# gateway's ext_authz filter). Not hardened for production.
+
+theme: light
+
+server:
+  # Bind on 9091 (the port Envoy's `authelia` cluster targets) and serve the whole surface —
+  # login portal, API, and the ext_authz endpoint — under the `/authelia` path. The gateway
+  # routes `/authelia` here (ext_authz disabled on that route) so a logged-out browser can reach
+  # the login page, and posts authorization checks to `/authelia/api/authz/ext-authz/`. Path-
+  # based (rather than the docs' subdomain) keeps the showcase on a single localhost origin.
+  address: tcp://:9091/authelia
+
+log:
+  level: info
+
+# Password (single-factor) auth against the mounted users file. The browser is redirected here
+# to log in; API clients pass an `Authorization` / `Proxy-Authorization` header instead.
+authentication_backend:
+  file:
+    path: /config/users.yml
+
+# One factor (a valid session cookie or Authorization header) is enough for every route Envoy
+# forwards here. The gateway only sends API/UI routes to ext_authz; resource backends are never
+# gated, so a coarse default policy is the whole access-control surface for the showcase.
+access_control:
+  default_policy: one_factor
+
+session:
+  name: authelia_session
+  # The portal URL Authelia redirects logged-out browsers to, and the cookie domain it issues
+  # sessions for. Points at the gateway origin + the `/authelia` portal route. This assumes the
+  # default local gateway host:port (localhost:9080); change both if the gateway is published
+  # elsewhere (e.g. a non-default ENVOY_PORT or a real hostname).
+  cookies:
+    - domain: localhost
+      authelia_url: http://localhost:9080/authelia
+
+# Local, on-disk storage (no external database) — persisted via the `/data` volume mount.
+storage:
+  local:
+    path: /data/db.sqlite3
+
+# No mailer: a local showcase doesn't send password-reset / 2FA mail. The filesystem notifier
+# writes any such message to a file under the data volume instead of mailing it.
+notifier:
+  filesystem:
+    filename: /data/notification.txt
