@@ -58,12 +58,6 @@ static_resources:
                               substitution: "{{ r.rewrite }}\\1"
 {%- endif %}
 {%- endfor %}
-{%- if l.app %}
-                        # Default route → the user's app (catch-all, must be last).
-                        - match: { prefix: "/" }
-                          route:
-                            cluster: app
-{%- endif %}
                 http_filters:
 {%- if l.ext_authz and auth is not none %}
                   # Forward-auth: every request on this (shared) listener is checked with the

@@ -10,30 +10,30 @@
 //!
 //! - [`baseline_catalog`] — an inlined, pure baseline built in Rust (the common
 //!   local-Lakehouse modules), always available with no I/O and no YAML dependency.
-//!   This mirrors hydrofoil's static `registry()`.
 //! - [`Catalog::from_manifests`] / [`Catalog::merge`] — assemble from
-//!   [`DataModule`](crate::DataModule) values authored as YAML (a `module.yaml` per module
+//!   [`DataModule`] values authored as YAML (a `module.yaml` per module
 //!   directory) and overlay them onto the baseline. Parsing YAML is the feature-gated
 //!   `catalog` concern, kept out of the pure core; on-disk *discovery* (walking a directory
 //!   tree) is left to the consumer, which already owns embedding/IO. A YAML manifest is
 //!   always a passive `DataModule`; a logic module (one with a hand-written
-//!   [`Module`](crate::Module) impl) lives in code, not a manifest.
+//!   [`Module`] impl) lives in code, not a manifest.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[cfg(any(feature = "catalog", test))]
-use crate::module::DataModule;
-use crate::module::{Module, ModuleId};
+use crate::catalog::module::DataModule;
+use crate::catalog::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
+pub mod module;
 
 pub use baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection};
 
 /// A set of modules to plan against, with id and capability indexes.
 ///
 /// Modules are held as `Arc<dyn Module>` so the catalog is cheap to clone and a module can be
-/// either a data-authored [`DataModule`](crate::DataModule) or a hand-written logic type — the
+/// either a data-authored [`DataModule`] or a hand-written logic type — the
 /// catalog treats them uniformly through the [`Module`] trait.
 #[derive(Clone, Default)]
 pub struct Catalog {
@@ -47,7 +47,10 @@ pub struct Catalog {
 impl std::fmt::Debug for Catalog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Catalog")
-            .field("modules", &crate::module::module_ids(&self.modules))
+            .field(
+                "modules",
+                &crate::catalog::module::module_ids(&self.modules),
+            )
             .field("default_provider", &self.default_provider)
             .finish()
     }

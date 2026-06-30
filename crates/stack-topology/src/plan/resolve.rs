@@ -6,18 +6,18 @@
 //! topologically ordered — dependencies before dependents, i.e. a valid Compose
 //! `depends_on` / startup order. The graph is the resolver's natural working
 //! representation; returning it (rather than a flat list) leaves the data shaped for
-//! the planner and for a future node-diagram visualization at near-zero extra cost.
+//! the planner and for a node-diagram visualization at near-zero extra cost.
 //!
-//! This is the topology crate's port of hydrofoil's `env-modules` resolver, adapted
-//! to this crate's [`Module`]/[`ModuleId`] and extended with
-//! [`conflicts_with`](crate::Module::conflicts_with) validation.
+//! [`conflicts_with`](crate::Module::conflicts_with) is validated here, alongside the
+//! dependency edges, so a selection that pulls in two mutually-exclusive modules fails at
+//! resolution rather than surfacing later at render or launch.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::module::{Module, ModuleId};
+use crate::catalog::module::{Module, ModuleId};
 
 /// Extra dependency edges supplied alongside a catalog: `consumer → [providers]`, ordered
 /// like `requires` (each provider starts before the consumer). The planner passes the
@@ -71,7 +71,7 @@ pub struct ResolvedGraph {
 impl std::fmt::Debug for ResolvedGraph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedGraph")
-            .field("nodes", &crate::module::module_ids(&self.nodes))
+            .field("nodes", &crate::catalog::module::module_ids(&self.nodes))
             .field("edges", &self.edges)
             .finish()
     }
@@ -255,7 +255,7 @@ fn topo_sort(included: &BTreeSet<ModuleId>, edges: &[Edge]) -> Result<Vec<Module
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::module::DataModule;
+    use crate::catalog::module::DataModule;
 
     /// A bare module with just an id and `requires` — enough to exercise the graph.
     fn m(id: &str, requires: &[&str]) -> Arc<dyn Module> {

@@ -1,33 +1,31 @@
-//! Pure renderers that turn an [`EnvironmentPlan`](crate::EnvironmentPlan) into the
-//! concrete text artifacts a Lakehouse dev environment is made of: the Envoy gateway
-//! bootstrap, the `.env` overlay, and the top-level compose file.
+//! Pure renderers that turn a [`Plan`] into the concrete text artifacts a
+//! Lakehouse dev environment is made of: the Envoy gateway bootstrap, the `.env` overlay, and
+//! the top-level compose file.
 //!
-//! These are the **stack-aggregated** outputs — the ones that, in trestle today, are
-//! MiniJinja `{% for %}` loops over the aggregated `stack.*` lists. Here they are plain
-//! functions over exactly what [`plan`](crate::plan) already computes ([`GatewayConfig`],
-//! the aggregated env, and the [`HeadFile`]), so the crate is the single source of truth
-//! and the consuming tool only writes the returned strings to disk. (Per-module config
-//! files — including the Postgres init script — are now module
-//! [`RenderFile`](crate::RenderFile)s on the plan's
-//! [`renders`](crate::EnvironmentPlan::renders), not aggregated here.)
+//! These are the **stack-aggregated** outputs — plain functions over exactly what the planner
+//! already computed ([`GatewayConfig`], the aggregated env, and the [`HeadFile`]), so the
+//! crate is the single source of truth and the consuming tool only writes the returned strings
+//! to disk. Per-module config files — including the Postgres init script — are module
+//! [`RenderFile`](crate::RenderFile)s on the plan's [`renders`](crate::Plan::renders), not
+//! aggregated here; [`MaterializedOutput`](crate::MaterializedOutput) flattens both into one
+//! write-ready set.
 //!
 //! Everything here is pure and string-only — no I/O. The output shape is fixed and
 //! hand-written (not serialized via a YAML library) to stay reviewable and stable.
-//! Gated behind the `render` feature so the pure addressing core need not pull it in.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::plan_env::{EnvironmentPlan, GatewayConfig, HeadFile};
+use crate::plan::{GatewayConfig, HeadFile, Plan};
 use crate::render::InjectedEnv;
 
 /// The on-disk Envoy bootstrap template, embedded at compile time. Lives at
 /// `templates/gateway/bootstrap.yaml.jinja` (a sibling of `src/`), alongside the envoy
 /// module's compose fragment (`templates/gateway/compose.yaml.jinja`), so the gateway's two
 /// template faces sit together and are reviewable as plain files rather than inline strings.
-const ENVOY_TEMPLATE: &str = include_str!("../templates/gateway/bootstrap.yaml.jinja");
+const ENVOY_TEMPLATE: &str = include_str!("../../templates/gateway/bootstrap.yaml.jinja");
 
 /// The flat, owned render context the Envoy template iterates. The ordering decisions
 /// (longest-prefix-first routes, app cluster first) stay in Rust; the template only
@@ -58,16 +56,12 @@ struct AuthCtx<'a> {
     identity_headers: &'a [String],
 }
 
-/// One Envoy listener: the port it binds and its route table. Only the shared listener
-/// (the first one) carries the app catch-all, flagged by its own `app` field.
+/// One Envoy listener: the port it binds and its route table.
 #[derive(Serialize)]
 struct ListenerCtx<'a> {
     name: String,
     internal_port: u16,
     routes: Vec<RouteCtx<'a>>,
-    /// Whether the app `/` catch-all should be appended to this listener's routes (the
-    /// shared listener only).
-    app: bool,
     /// Whether this listener gates its routes behind the `ext_authz` filter (and strips the
     /// trusted identity headers on ingress). Only the shared listener — the one carrying the
     /// API/UI routes — is gated; dedicated listeners (gatewayed object stores, fixed-path UIs)
@@ -89,35 +83,20 @@ struct ClusterCtx<'a> {
     port: u16,
 }
 
-/// Options the Envoy renderer needs beyond the [`GatewayConfig`] — chiefly the
-/// optional default app upstream (the catch-all route + cluster) the gateway fronts.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct EnvoyOpts {
-    /// The user's app upstream, if any: when set, a `/` catch-all route to an `app`
-    /// cluster is emitted last, after all module routes.
-    pub app: Option<AppUpstream>,
-}
-
-/// The default app upstream the gateway forwards unmatched requests to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AppUpstream {
-    /// The app's compose service / DNS name.
-    pub service: String,
-    /// The app's port.
-    pub port: u16,
-}
-
 /// Render the Envoy bootstrap config for the plan's gateway.
 ///
 /// Reproduces the Databricks-edge shape: the shared, path-multiplexed listener on the
 /// gateway's internal port (each [`GatewayRoute`](crate::GatewayRoute) in order, with a
-/// `regex_rewrite` block only when the route has a rewrite, and an optional `/` app catch-all
-/// last), then one dedicated listener per fixed-path UI / gatewayed backend (serving `/` to
-/// its own cluster on its own port), the upstream clusters, and the admin endpoint.
-pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
-    // Each planner listener becomes an Envoy listener. The shared listener is first and
-    // carries the app catch-all; dedicated listeners (their own port, a single `/` route)
-    // follow. An empty gateway still emits a valid, route-less shared listener.
+/// `regex_rewrite` block only when the route has a rewrite), then one dedicated listener per
+/// fixed-path UI / gatewayed backend (serving `/` to its own cluster on its own port), the
+/// upstream clusters, and the admin endpoint. The [`GatewayConfig`] is the single source of
+/// truth — the app catch-all route and cluster, when present, are already in it (the planner
+/// puts them there from [`PlanCtx::app`](crate::PlanCtx::app)).
+pub fn render_envoy(gateway: &GatewayConfig) -> String {
+    // Each planner listener becomes an Envoy listener. The shared listener is first (it carries
+    // the API/UI routes and, when present, the app catch-all the planner already appended);
+    // dedicated listeners (their own port, a single `/` route) follow. An empty gateway still
+    // emits a valid, route-less shared listener.
     let mut listeners: Vec<ListenerCtx> = gateway
         .listeners
         .iter()
@@ -138,8 +117,6 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
                     rewrite: r.rewrite.as_deref(),
                 })
                 .collect(),
-            // Only the shared listener (first) carries the app catch-all.
-            app: i == 0 && opts.app.is_some(),
             // Only the shared listener is gated: it carries the API/UI routes. Dedicated
             // listeners front resource backends (gatewayed object stores) and stay open.
             ext_authz: i == 0 && gateway.auth.is_some(),
@@ -152,26 +129,19 @@ pub fn render_envoy(gateway: &GatewayConfig, opts: &EnvoyOpts) -> String {
             name: "gateway".to_string(),
             internal_port: 10000,
             routes: Vec::new(),
-            app: opts.app.is_some(),
             ext_authz: gateway.auth.is_some(),
         });
     }
 
-    // The app cluster (when present) is emitted first, before the module clusters —
-    // matching the route table, where its `/` catch-all comes last.
-    let mut clusters = Vec::with_capacity(gateway.clusters.len() + 1);
-    if let Some(app) = &opts.app {
-        clusters.push(ClusterCtx {
-            name: "app",
-            host: &app.service,
-            port: app.port,
-        });
-    }
-    clusters.extend(gateway.clusters.iter().map(|c| ClusterCtx {
-        name: &c.name,
-        host: &c.host,
-        port: c.port,
-    }));
+    let clusters: Vec<ClusterCtx> = gateway
+        .clusters
+        .iter()
+        .map(|c| ClusterCtx {
+            name: &c.name,
+            host: &c.host,
+            port: c.port,
+        })
+        .collect();
 
     let ctx = EnvoyCtx {
         listeners,
@@ -313,7 +283,7 @@ pub fn render_compose(head: &HeadFile) -> String {
 const ENVOY_CONFIG_ALIAS: &str = "envoy_config";
 
 /// The per-module-rooted host path the Envoy bootstrap is written to.
-const ENVOY_CONFIG_PATH: &str = "modules/envoy/envoy.yaml";
+pub(crate) const ENVOY_CONFIG_PATH: &str = "modules/envoy/envoy.yaml";
 
 /// The stack-aggregated artifacts for a plan, rendered together.
 pub struct Artifacts {
@@ -327,11 +297,11 @@ pub struct Artifacts {
 }
 
 /// Render the stack-aggregated artifacts for `plan`. Per-module compose fragments and their
-/// mounted config files live on the plan's [`renders`](crate::EnvironmentPlan::renders); this
+/// mounted config files live on the plan's [`renders`](crate::Plan::renders); this
 /// adds the Envoy bootstrap (a dedicated renderer), the audited `.env`, and the top-level
 /// `compose.yaml`.
-pub fn render_all(plan: &EnvironmentPlan, opts: &EnvoyOpts) -> Artifacts {
-    let envoy = render_envoy(&plan.gateway, opts);
+pub fn render_all(plan: &Plan) -> Artifacts {
+    let envoy = render_envoy(&plan.gateway);
 
     // The `.env` carries only keys some rendered artifact still references as `${KEY}`. Scan
     // every module fragment, every mounted file's contents, and the Envoy bootstrap.
@@ -361,7 +331,7 @@ pub fn render_all(plan: &EnvironmentPlan, opts: &EnvoyOpts) -> Artifacts {
     // duplicate top-level key.
     let already_declared = head.configs.iter().any(|c| c.alias == ENVOY_CONFIG_ALIAS);
     if gateway_present && !already_declared {
-        head.configs.push(crate::plan_env::ConfigDecl {
+        head.configs.push(crate::plan::ConfigDecl {
             alias: ENVOY_CONFIG_ALIAS.into(),
             path: ENVOY_CONFIG_PATH.into(),
         });

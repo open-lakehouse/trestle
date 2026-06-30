@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use olai_stack_topology::{
     Catalog, DataModule, Endpoint, GatewayRoute, Module, ModuleId, Placement, PlanCtx, PlanError,
-    Provides, RenderSpec, ResolvedKnobs, Rewrite, Role, RouteIntent, Scheme, Selection,
-    ServiceSpec, TopologyCtx, Vantage, address, baseline_catalog, plan,
+    Provides, RenderSpec, Rewrite, Role, RouteIntent, Scheme, Selection, ServiceSpec, Vantage,
+    baseline_catalog,
 };
 
 /// The always-on + common lakehouse modules.
@@ -28,12 +28,9 @@ fn route<'a>(routes: &'a [GatewayRoute], prefix: &str) -> &'a GatewayRoute {
 
 #[test]
 fn default_lakehouse_rederives_the_working_gateway_routes() {
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .expect("default lakehouse should plan cleanly");
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .expect("default lakehouse should plan cleanly");
 
     // The shared listener is the gateway's host-published port.
     let shared = &p.gateway.listeners[0];
@@ -133,16 +130,100 @@ fn real_prefix_collision_fails_loudly() {
     }
 
     let catalog = Catalog::from_modules([api_module("svc-a"), api_module("svc-b")]);
-    let err = plan(
-        &Selection::modules(["svc-a", "svc-b"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .expect_err("two endpoints claiming /api must collide");
+    let err = catalog
+        .plan(&Selection::modules(["svc-a", "svc-b"]), &PlanCtx::default())
+        .expect_err("two endpoints claiming /api must collide");
 
     match err {
         PlanError::PrefixCollision { prefix, .. } => assert_eq!(prefix, "/api"),
         other => panic!("expected PrefixCollision, got {other:?}"),
+    }
+}
+
+/// Build a single-service container module with one Api endpoint, parameterized by the
+/// service name and its mount prefix — enough to provoke app-upstream collisions.
+fn svc_module(id: &str, service_name: &str, mount_prefix: &str) -> Arc<dyn Module> {
+    Arc::new(DataModule {
+        id: ModuleId::from(id),
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: service_name.to_string(),
+            role: Role::new("svc"),
+            placement: Placement::Container {
+                service: service_name.to_string(),
+            },
+            base_path: String::new(),
+            endpoints: vec![Endpoint {
+                id: "rest".into(),
+                scheme: Scheme::Http,
+                internal_port: 8080,
+                host_port: None,
+                intent: RouteIntent::Api,
+                path: String::new(),
+                mount_prefix: Some(mount_prefix.into()),
+                rewrite: Rewrite::Inherit,
+            }],
+            depends_on: vec![],
+        }],
+        provides: Provides::default(),
+        knobs: vec![],
+        render: RenderSpec::default(),
+    })
+}
+
+#[test]
+fn app_upstream_collides_with_a_module_claiming_root() {
+    use olai_stack_topology::AppUpstream;
+
+    // A module whose Api endpoint mounts at `/` claims the same route the app catch-all needs.
+    // The planner must reject this loudly rather than silently shadow one of the two `/` routes.
+    let catalog = Catalog::from_modules([svc_module("root", "root", "/")]);
+    let err = catalog
+        .plan(
+            &Selection::modules(["root"]),
+            &PlanCtx {
+                app: Some(AppUpstream {
+                    service: "my-app".into(),
+                    port: 8000,
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("a module claiming `/` must collide with the app catch-all");
+    match err {
+        PlanError::AppUpstreamCollision { conflict, .. } => assert_eq!(conflict, "root.rest"),
+        other => panic!("expected AppUpstreamCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn app_upstream_collides_with_a_module_service_named_app() {
+    use olai_stack_topology::AppUpstream;
+
+    // A module contributing a service literally named `app` reserves the cluster name the app
+    // upstream uses; injecting a second `app` cluster would be a duplicate Envoy cluster.
+    let catalog = Catalog::from_modules([svc_module("appmod", "app", "/appmod")]);
+    let err = catalog
+        .plan(
+            &Selection::modules(["appmod"]),
+            &PlanCtx {
+                app: Some(AppUpstream {
+                    service: "my-app".into(),
+                    port: 8000,
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("a module service named `app` must collide with the app cluster name");
+    match err {
+        PlanError::AppUpstreamCollision { conflict, .. } => assert_eq!(conflict, "app"),
+        other => panic!("expected AppUpstreamCollision, got {other:?}"),
     }
 }
 
@@ -152,63 +233,65 @@ fn planner_routes_round_trip_through_the_address_resolver() {
     // without doubling the path: the resolver composes `join(prefix, endpoint.path)`,
     // so an API endpoint's `path` must stay empty while the mount lives in the route
     // prefix. This is the round-trip the GatewayConfig-only golden test does not cover.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap();
-    let ctx = TopologyCtx {
-        gateway_service: "envoy".into(),
-        gateway_internal_port: 10000,
-        gateway_host_port: 9080,
-    };
-    // These modules declare no knobs, so their services resolve against empty knobs.
-    let no_knobs = ResolvedKnobs::new();
-    let mlflow = p
-        .graph
-        .module(&ModuleId::from("mlflow"))
-        .unwrap()
-        .service("mlflow", &no_knobs)
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
         .unwrap();
+    // The plan carries the gateway facts, so addressing needs no separate context: a
+    // `ServiceRef` from the plan resolves a URL from just a vantage + endpoint id.
+    let mlflow = p.service(&ModuleId::from("mlflow")).unwrap();
 
     // From a container, the gateway is `envoy:10000`; the tracking API resolves to the
     // single mount prefix — not `/api/2.0/mlflow/api/2.0/mlflow`.
-    let tracking = address(Vantage::Container, &mlflow, "tracking", &p.routes, &ctx).unwrap();
+    let tracking = mlflow.address(Vantage::Container, "tracking").unwrap();
     assert_eq!(tracking.as_str(), "http://envoy:10000/api/2.0/mlflow");
 
     // From the host, the UI resolves at the gateway's host port under its base path.
-    let ui = address(Vantage::Host, &mlflow, "ui", &p.routes, &ctx).unwrap();
+    let ui = mlflow.address(Vantage::Host, "ui").unwrap();
     assert_eq!(ui.as_str(), "http://localhost:9080/mlflow");
 
-    // Unity Catalog REST, container vantage — single, un-doubled path.
-    let uc = p
-        .graph
-        .module(&ModuleId::from("unity-catalog"))
-        .unwrap()
-        .service("unitycatalog", &no_knobs)
-        .unwrap();
-    let rest = address(Vantage::Container, &uc, "rest", &p.routes, &ctx).unwrap();
+    // Unity Catalog REST, container vantage — single, un-doubled path. Addressed by role
+    // here, to exercise that path too ("the data catalog", whichever module fills it).
+    let uc = p.service_by_role(&Role::data_catalog()).unwrap();
+    let rest = uc.address(Vantage::Container, "rest").unwrap();
     assert_eq!(rest.as_str(), "http://envoy:10000/api/2.1/unity-catalog");
+}
+
+#[test]
+fn service_by_role_resolves_uniquely_and_reports_misses() {
+    use olai_stack_topology::AddressError;
+
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .unwrap();
+
+    // A role filled by exactly one service resolves to it.
+    let catalog = p.service_by_role(&Role::data_catalog()).unwrap();
+    assert_eq!(catalog.spec().name, "unitycatalog");
+
+    // A role no service fills is a clean `NoSuchRole`, not a panic.
+    let err = p
+        .service_by_role(&Role::new("nonexistent_role"))
+        .unwrap_err();
+    assert!(matches!(err, AddressError::NoSuchRole(r) if r == "nonexistent_role"));
 }
 
 #[test]
 fn plan_is_byte_identical_regardless_of_selection_order() {
     let cat = baseline_catalog();
-    let forward = plan(&default_selection(), &cat, &PlanCtx::default()).unwrap();
-    let reversed = plan(
-        &Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]),
-        &cat,
-        &PlanCtx::default(),
-    )
-    .unwrap();
-    // `EnvironmentPlan` is no longer `Eq` (its graph holds trait objects), so compare the
+    let forward = cat.plan(&default_selection(), &PlanCtx::default()).unwrap();
+    let reversed = cat
+        .plan(
+            &Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+    // `Plan` is no longer `Eq` (its graph holds trait objects), so compare the
     // observable artifacts the planner is contracted to produce deterministically: the
     // gateway config, the routing plan, the head file, and the include order.
     assert_eq!(forward.gateway, reversed.gateway);
     assert_eq!(forward.head, reversed.head);
     assert_eq!(forward.routes, reversed.routes);
-    let order = |p: &olai_stack_topology::EnvironmentPlan| {
+    let order = |p: &olai_stack_topology::Plan| {
         p.head
             .includes
             .iter()

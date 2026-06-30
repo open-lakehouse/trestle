@@ -47,15 +47,17 @@
 use std::sync::Arc;
 
 use super::Catalog;
-use crate::connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
-use crate::endpoint::{Endpoint, Rewrite, Scheme};
-use crate::module::{
+use crate::catalog::module::{
     ConnectionBinding, DataModule, Knob, KnobKind, Module, ModuleId, Provides, RenderSpec,
     ResolvedKnobs, ResourceDemand,
 };
-use crate::placement::Placement;
+use crate::model::connection::{
+    Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
+};
+use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
+use crate::model::placement::Placement;
+use crate::model::role::{Role, ServiceSpec};
 use crate::render::RenderFile;
-use crate::role::{Role, ServiceSpec};
 
 /// The well-known [`Provides::extras`](crate::Provides::extras) key by which a
 /// resource provider names the compose service a *consumer* should gate its startup
@@ -114,8 +116,8 @@ pub fn baseline_catalog() -> Catalog {
 /// picks (a relational store and an object store), mirroring trestle's base
 /// `always: [envoy]` + default `storage`/`metadata_db` choices. Other modules
 /// (catalog, ml, query engine, observability) are opt-in.
-pub fn baseline_selection() -> crate::plan_env::Selection {
-    crate::plan_env::Selection::modules(["envoy", "postgres", "seaweedfs"])
+pub fn baseline_selection() -> crate::plan::Selection {
+    crate::plan::Selection::modules(["envoy", "postgres", "seaweedfs"])
 }
 
 /// Helper: a container-placed service.
@@ -150,14 +152,14 @@ fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
 /// `ext_authz` HTTP filter onto the shared listener (see [`crate::render_envoy`]). Resource
 /// backends (object stores on dedicated listeners, databases with no route) are never gated.
 ///
-/// Aliases the planner's [`ENVOY_AUTH_KNOB`](crate::plan_env::ENVOY_AUTH_KNOB) — the planner
+/// Aliases the planner's [`ENVOY_AUTH_KNOB`](crate::plan::ENVOY_AUTH_KNOB) — the planner
 /// owns the wiring contract, so the key is defined once there.
-pub const ENVOY_AUTH: &str = crate::plan_env::ENVOY_AUTH_KNOB;
+pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
 
 /// `envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
-/// `TopologyCtx`, not as a routed endpoint. Its rendered Envoy bootstrap config is a
-/// planner-emitted artifact, not part of this fragment (which only declares the
+/// [`PlanCtx`](crate::PlanCtx), not as a routed endpoint. Its rendered Envoy bootstrap config
+/// is a planner-emitted artifact, not part of this fragment (which only declares the
 /// container that mounts it).
 ///
 /// Exposes one knob, [`ENVOY_AUTH`]: turning it on fronts every API and UI route with
@@ -207,7 +209,7 @@ fn envoy() -> Arc<dyn Module> {
 /// planner's `resolve_with_demands`). Self-contained for the showcase: a file-based user
 /// database and local, on-disk storage — no external database.
 ///
-/// Its single endpoint is [`Internal`](crate::endpoint::RouteIntent::Internal): Envoy reaches
+/// Its single endpoint is [`Internal`](crate::model::endpoint::RouteIntent::Internal): Envoy reaches
 /// it in-network via the `authelia` cluster on port 9091 (the `ext_authz` target), and the
 /// browser reaches its login portal through the gateway's redirect flow — so it needs no
 /// host-published port. Two mounted files carry its config (`configuration.yml`) and the demo
@@ -216,12 +218,12 @@ fn envoy() -> Arc<dyn Module> {
 fn authelia() -> Arc<dyn Module> {
     // Authelia's HTTP `ext_authz` endpoint path. Declared here (catalog data), not in the
     // planner, so the planner stays free of implementation names: the planner reads it back via
-    // [`EXT_AUTHZ_PATH_EXTRA`](crate::plan_env::EXT_AUTHZ_PATH_EXTRA) off the resolved provider.
+    // [`EXT_AUTHZ_PATH_EXTRA`](crate::plan::EXT_AUTHZ_PATH_EXTRA) off the resolved provider.
     let mut provides = Provides::default();
     // Authelia serves its whole surface under `/authelia` (see configuration.yml), so the
     // ext_authz endpoint the gateway posts to is path-prefixed too.
     provides.extras.insert(
-        crate::plan_env::EXT_AUTHZ_PATH_EXTRA.into(),
+        crate::plan::EXT_AUTHZ_PATH_EXTRA.into(),
         "/authelia/api/authz/ext-authz/".into(),
     );
     Arc::new(DataModule {
@@ -851,7 +853,7 @@ fn databricks_emulator_env() -> Arc<dyn Module> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::RouteIntent;
+    use crate::model::endpoint::RouteIntent;
 
     #[test]
     fn headwaters_emits_api_and_optional_ui_per_knob() {

@@ -1,9 +1,9 @@
-//! The planner↔template render handshake ([`RenderOutput`], [`InjectedEnv`]).
+//! The render phase: the planner↔template handshake ([`RenderOutput`], [`InjectedEnv`]) plus
+//! the pure [`artifacts`] and [`output`] renderers.
 //!
-//! This crate is pure: it does not render anything (no MiniJinja, no I/O). What it
-//! defines is the **data contract** on both sides of a module's render step, so the
-//! consuming tool (trestle's scaffolder, hydrofoil's runtime generator) and the
-//! modules agree on shape:
+//! Rendering is pure — it produces strings and relative filenames in memory; persisting them
+//! is the consumer's job (see [`output`]). This module itself defines the **data contract** on
+//! both sides of a module's render step, so a module and its template agree on shape:
 //!
 //! - The planner hands a module's render an [`InjectedEnv`] — the values it decided
 //!   that the module could not know on its own (a UI's chosen base path, assigned
@@ -25,6 +25,9 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+
+pub mod artifacts;
+pub mod output;
 
 /// The environment-variable substitutions the planner injects into a module's
 /// render — the values the module could not decide for itself.

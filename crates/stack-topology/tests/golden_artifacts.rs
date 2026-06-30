@@ -15,9 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use olai_stack_topology::{
-    Catalog, EnvoyOpts, PlanCtx, Selection, baseline_catalog, plan, render_all,
-};
+use olai_stack_topology::{AppUpstream, Catalog, PlanCtx, Selection, baseline_catalog, render_all};
 use serde_yaml::Value;
 
 const ENVOY_FIXTURE: &str = include_str!("fixtures/default/config/envoy.yaml");
@@ -30,16 +28,16 @@ fn default_selection() -> Selection {
 }
 
 fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
-    let p = plan(
-        selection,
-        &baseline_catalog(),
-        &PlanCtx {
-            env_name: "lh-ref".into(),
-            ..Default::default()
-        },
-    )
-    .expect("plan should succeed");
-    render_all(&p, &EnvoyOpts::default())
+    let p = baseline_catalog()
+        .plan(
+            selection,
+            &PlanCtx {
+                env_name: "lh-ref".into(),
+                ..Default::default()
+            },
+        )
+        .expect("plan should succeed");
+    render_all(&p)
 }
 
 /// One parsed Envoy route: prefix → (cluster, optional rewrite substitution).
@@ -142,15 +140,15 @@ fn postgres_init_creates_the_same_databases() {
     // The Postgres init script is now a module-rendered config file: the postgres module
     // emits it as a `RenderFile` (alias `postgres_init`), templated from the databases the
     // planner hands the provider as `RenderCtx.objects`. Pull it from the render output.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx {
-            env_name: "lh-ref".into(),
-            ..Default::default()
-        },
-    )
-    .expect("plan should succeed");
+    let p = baseline_catalog()
+        .plan(
+            &default_selection(),
+            &PlanCtx {
+                env_name: "lh-ref".into(),
+                ..Default::default()
+            },
+        )
+        .expect("plan should succeed");
     let (_, out) = p
         .renders
         .iter()
@@ -201,15 +199,15 @@ fn env_file_emits_only_keys_referenced_as_compose_substitutions() {
 
     // Collect every `${KEY}` reference across the rendered corpus (fragments + mounted files +
     // the Envoy bootstrap). Every emitted key must appear here; nothing else may.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx {
-            env_name: "lh-ref".into(),
-            ..Default::default()
-        },
-    )
-    .expect("plan should succeed");
+    let p = baseline_catalog()
+        .plan(
+            &default_selection(),
+            &PlanCtx {
+                env_name: "lh-ref".into(),
+                ..Default::default()
+            },
+        )
+        .expect("plan should succeed");
     let mut corpus = vec![arts.envoy.clone()];
     for (_, out) in &p.renders {
         corpus.push(out.fragment.clone());
@@ -307,15 +305,15 @@ fn compose_declares_config_aliases_for_mounted_files() {
     );
 
     // And the fragments mount them by alias rather than by a bind-mount path.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx {
-            env_name: "lh-ref".into(),
-            ..Default::default()
-        },
-    )
-    .expect("plan should succeed");
+    let p = baseline_catalog()
+        .plan(
+            &default_selection(),
+            &PlanCtx {
+                env_name: "lh-ref".into(),
+                ..Default::default()
+            },
+        )
+        .expect("plan should succeed");
     let fragment = |id: &str| -> String {
         use olai_stack_topology::ModuleId;
         p.renders
@@ -351,7 +349,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // catalog default / `ctx` preference (so the chosen provider is unambiguous).
     let uc_fragment = |ctx: PlanCtx| -> String {
         let sel = Selection::modules(["unity-catalog"]);
-        let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
+        let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
         let (_, out) = p
             .renders
             .iter()
@@ -449,7 +447,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     // gates (db healthy + the object-store init completed) rather than hard-coded.
     let mlflow_fragment = |ctx: PlanCtx| -> String {
         let sel = Selection::modules(["mlflow"]);
-        let p = plan(&sel, &baseline_catalog(), &ctx).expect("plan succeeds");
+        let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
         let (_, out) = p
             .renders
             .iter()
@@ -546,15 +544,15 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
         vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
     let sel = Selection::modules(["mlflow"]);
-    let p = plan(
-        &sel,
-        &baseline_catalog(),
-        &PlanCtx {
-            provider_preference: preference,
-            ..Default::default()
-        },
-    )
-    .expect("plan succeeds");
+    let p = baseline_catalog()
+        .plan(
+            &sel,
+            &PlanCtx {
+                provider_preference: preference,
+                ..Default::default()
+            },
+        )
+        .expect("plan succeeds");
     let (_, out) = p
         .renders
         .iter()
@@ -649,15 +647,15 @@ fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
     assert_eq!(sock["port_value"].as_u64(), Some(8333));
 
     // The gateway compose fragment publishes the dedicated port on the host.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx {
-            env_name: "lh-ref".into(),
-            ..Default::default()
-        },
-    )
-    .expect("plan succeeds");
+    let p = baseline_catalog()
+        .plan(
+            &default_selection(),
+            &PlanCtx {
+                env_name: "lh-ref".into(),
+                ..Default::default()
+            },
+        )
+        .expect("plan succeeds");
     let (_, envoy_frag) = p
         .renders
         .iter()
@@ -735,7 +733,7 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
     );
 
     // The planner provisioned the demanded `lineage` database on Postgres.
-    let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
     assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
     assert!(p.postgres_databases.contains(&"lineage".to_string()));
 
@@ -856,7 +854,7 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
         knob_overrides,
     };
 
-    let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
     let (_, out) = p
         .renders
         .iter()
@@ -912,7 +910,7 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     );
 
     // The gateway route table fronts the static API path (and no `/lineage` route).
-    let arts = render_all(&p, &EnvoyOpts::default());
+    let arts = render_all(&p);
     let (routes, _, _) = parse_envoy(&arts.envoy);
     let (cluster, rewrite) = routes
         .get("/api/v1/lineage")
@@ -928,18 +926,103 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
 #[test]
 fn empty_catalog_renders_a_valid_empty_envoy() {
     // No modules → a valid, route-less Envoy config (no panic, parses cleanly).
-    let p = plan(&Selection::default(), &Catalog::new(), &PlanCtx::default()).unwrap();
-    let arts = render_all(&p, &EnvoyOpts::default());
+    let p = Catalog::new()
+        .plan(&Selection::default(), &PlanCtx::default())
+        .unwrap();
+    let arts = render_all(&p);
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
     assert!(routes.is_empty());
     assert!(clusters.is_empty());
+
+    // A gateway-less plan must not materialize an orphan `modules/envoy/envoy.yaml` — nothing
+    // mounts it (no `envoy_config` config is declared without a gateway).
+    let materialized = p.materialize();
+    assert!(
+        !materialized
+            .files
+            .iter()
+            .any(|f| f.path == "modules/envoy/envoy.yaml"),
+        "gateway-less plan should not write an unreferenced envoy bootstrap"
+    );
+}
+
+#[test]
+fn materialize_flattens_the_full_layout() {
+    // `materialize()` is pure and encodes the on-disk layout once: the top-level files, the
+    // Envoy bootstrap, and every module's fragment + config files.
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .expect("plan should succeed");
+    let out = p.materialize();
+    let paths: BTreeSet<&str> = out.files.iter().map(|f| f.path.as_str()).collect();
+
+    // The stack-level files and the Envoy bootstrap are always present.
+    for expected in ["compose.yaml", ".env", "modules/envoy/envoy.yaml"] {
+        assert!(paths.contains(expected), "missing {expected}");
+    }
+    // Each module's fragment is rooted under its own directory.
+    assert!(paths.contains("modules/postgres/compose.yaml"));
+    assert!(paths.contains("modules/mlflow/compose.yaml"));
+    // A module config file (the Postgres init script) is carried with its module-rooted path.
+    assert!(paths.contains("modules/postgres/init-databases.sh"));
+
+    // The flattened contents match what `render_all` produces for the stack files.
+    let arts = render_all(&p);
+    let by_path = |name: &str| {
+        out.files
+            .iter()
+            .find(|f| f.path == name)
+            .map(|f| f.contents.as_str())
+    };
+    assert_eq!(by_path("compose.yaml"), Some(arts.compose.as_str()));
+    assert_eq!(
+        by_path("modules/envoy/envoy.yaml"),
+        Some(arts.envoy.as_str())
+    );
+}
+
+#[test]
+fn app_upstream_becomes_the_gateway_catch_all() {
+    // The app upstream is a plan input: setting it on the `PlanCtx` makes the planner emit an
+    // `app` cluster and a `/` catch-all route on the shared listener — rendered straight from
+    // the gateway config, with no render-time option.
+    let p = baseline_catalog()
+        .plan(
+            &default_selection(),
+            &PlanCtx {
+                env_name: "lh-ref".into(),
+                app: Some(AppUpstream {
+                    service: "my-app".into(),
+                    port: 8000,
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("plan should succeed");
+
+    let arts = render_all(&p);
+    let (routes, order, clusters) = parse_envoy(&arts.envoy);
+
+    let (cluster, rewrite) = routes.get("/").expect("the app catch-all is fronted");
+    assert_eq!(cluster, "app");
+    assert_eq!(*rewrite, None);
+    assert_eq!(
+        order.last().map(String::as_str),
+        Some("/"),
+        "the catch-all is the least-specific route, so it must be emitted last"
+    );
+    assert_eq!(
+        clusters.get("app").map(String::as_str),
+        Some("my-app:8000"),
+        "the app cluster points at the configured service:port"
+    );
 }
 
 #[test]
 fn data_root_is_injected_and_relocatable() {
     use olai_stack_topology::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, ModuleId};
 
-    let frag = |p: &olai_stack_topology::EnvironmentPlan, id: &str| {
+    let frag = |p: &olai_stack_topology::Plan, id: &str| {
         p.renders
             .iter()
             .find(|(m, _)| m == &ModuleId::from(id))
@@ -949,12 +1032,9 @@ fn data_root_is_injected_and_relocatable() {
 
     // The data root is injected into *every* module's render env (not just data-bearing ones),
     // defaulting to `./.data` — render-only, so it's resolved into the fragment at plan time.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .unwrap();
     for module in ["postgres", "seaweedfs", "unity-catalog", "mlflow", "envoy"] {
         assert_eq!(
             p.injected
@@ -972,18 +1052,18 @@ fn data_root_is_injected_and_relocatable() {
 
     // Azurite is a Template fragment: it bakes the same default root via `{{ env.DATA_ROOT }}`.
     // Prefer it as the object_store so a consumer (mlflow) pulls it in and its fragment renders.
-    let p_az = plan(
-        &Selection::modules(["mlflow"]),
-        &baseline_catalog(),
-        &PlanCtx {
-            provider_preference: BTreeMap::from([(
-                "object_store".to_string(),
-                vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
-            )]),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let p_az = baseline_catalog()
+        .plan(
+            &Selection::modules(["mlflow"]),
+            &PlanCtx {
+                provider_preference: BTreeMap::from([(
+                    "object_store".to_string(),
+                    vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert!(
         frag(&p_az, "azurite").contains("./.data/azurite:/data"),
         "azurite (Template) bakes the default root: {}",
@@ -992,15 +1072,15 @@ fn data_root_is_injected_and_relocatable() {
 
     // A custom root relocates every mount through the single knob — no fragment edits, and the
     // baked path follows. Render-only, so it does NOT leak into `.env`.
-    let relocated = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx {
-            data_root: "/var/lib/mystack".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    let relocated = baseline_catalog()
+        .plan(
+            &default_selection(),
+            &PlanCtx {
+                data_root: "/var/lib/mystack".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert!(frag(&relocated, "postgres").contains("/var/lib/mystack/postgres:"));
     assert!(frag(&relocated, "seaweedfs").contains("/var/lib/mystack/seaweedfs:"));
     assert_eq!(
@@ -1017,19 +1097,19 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     // Every fragment is rendered whole from the typed context: concrete ports, concrete
     // credentials, and zero `${VAR}` compose fallbacks left for runtime resolution. Include
     // jaeger explicitly (it is not in the default selection) so its fragment is rendered too.
-    let p = plan(
-        &Selection::modules([
-            "envoy",
-            "seaweedfs",
-            "postgres",
-            "unity-catalog",
-            "mlflow",
-            "jaeger",
-        ]),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = baseline_catalog()
+        .plan(
+            &Selection::modules([
+                "envoy",
+                "seaweedfs",
+                "postgres",
+                "unity-catalog",
+                "mlflow",
+                "jaeger",
+            ]),
+            &PlanCtx::default(),
+        )
+        .unwrap();
     let frag = |id: &str| {
         p.renders
             .iter()
@@ -1090,12 +1170,9 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     // Edge case: seaweedfs selected with no object_store consumer → it provisions no buckets,
     // so its own connection isn't in the render context. The init service (which reads that
     // credential) must be skipped rather than failing to render.
-    let p_bare = plan(
-        &Selection::modules(["seaweedfs"]),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .expect("seaweedfs alone should plan");
+    let p_bare = baseline_catalog()
+        .plan(&Selection::modules(["seaweedfs"]), &PlanCtx::default())
+        .expect("seaweedfs alone should plan");
     let sw_bare = p_bare
         .renders
         .iter()
@@ -1112,18 +1189,18 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     // Same edge case for azurite (the other object_store provider): preferred but with no
     // consumer, so it provisions no containers. Its init service reads the credential too, so it
     // must likewise be skipped rather than failing to render against an absent connection.
-    let p_az_bare = plan(
-        &Selection::modules(["azurite"]),
-        &baseline_catalog(),
-        &PlanCtx {
-            provider_preference: BTreeMap::from([(
-                "object_store".to_string(),
-                vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
-            )]),
-            ..Default::default()
-        },
-    )
-    .expect("azurite alone should plan (no init service when it provisions nothing)");
+    let p_az_bare = baseline_catalog()
+        .plan(
+            &Selection::modules(["azurite"]),
+            &PlanCtx {
+                provider_preference: BTreeMap::from([(
+                    "object_store".to_string(),
+                    vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+                )]),
+                ..Default::default()
+            },
+        )
+        .expect("azurite alone should plan (no init service when it provisions nothing)");
     let az_bare = p_az_bare
         .renders
         .iter()
@@ -1188,13 +1265,10 @@ mod auth {
 
     #[test]
     fn auth_on_gates_only_the_shared_listener() {
-        let p = plan(
-            &auth_on_selection(),
-            &baseline_catalog(),
-            &PlanCtx::default(),
-        )
-        .unwrap();
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let p = baseline_catalog()
+            .plan(&auth_on_selection(), &PlanCtx::default())
+            .unwrap();
+        let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
         // The shared listener runs ext_authz before the router.
@@ -1269,13 +1343,10 @@ mod auth {
 
     #[test]
     fn auth_on_strips_client_identity_headers_and_allows_them_from_authelia() {
-        let p = plan(
-            &auth_on_selection(),
-            &baseline_catalog(),
-            &PlanCtx::default(),
-        )
-        .unwrap();
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let p = baseline_catalog()
+            .plan(&auth_on_selection(), &PlanCtx::default())
+            .unwrap();
+        let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
         let shared = shared_listener(&doc);
 
@@ -1337,12 +1408,9 @@ mod auth {
 
     #[test]
     fn auth_on_pulls_in_the_authelia_module() {
-        let p = plan(
-            &auth_on_selection(),
-            &baseline_catalog(),
-            &PlanCtx::default(),
-        )
-        .unwrap();
+        let p = baseline_catalog()
+            .plan(&auth_on_selection(), &PlanCtx::default())
+            .unwrap();
 
         // The knob pulls authelia into the graph: it renders a fragment and its two config files.
         let (_, out) = p
@@ -1360,7 +1428,7 @@ mod auth {
         }
 
         // The top-level compose includes the authelia fragment.
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let arts = render_all(&p);
         assert!(
             arts.compose.contains("./modules/authelia/compose.yaml"),
             "compose includes the authelia fragment:\n{}",
@@ -1386,8 +1454,8 @@ mod auth {
     fn auth_off_by_default_emits_no_filter_no_cluster_no_module() {
         // Same selection, knob left at its default (off).
         let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "headwaters"]);
-        let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
-        let arts = render_all(&p, &EnvoyOpts::default());
+        let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
+        let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
         // No listener is gated, and no identity headers are stripped anywhere.

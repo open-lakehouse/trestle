@@ -1,10 +1,11 @@
 //! What a *module* is ([`Module`]): the unit of selection and composition that a
 //! catalog is made of, and that the planner resolves into an environment.
 //!
-//! A module is the reusable building block both consumers already have under
-//! different names — trestle's *components* (a `template.yaml` plus a compose
-//! fragment) and hydrofoil's `env-modules` registry entries. This type is their
-//! common denominator. A module:
+//! A module is the reusable building block an environment is composed from: a unit a
+//! [`Selection`](crate::Selection) can pick (directly or by capability), authored either as
+//! data (a [`DataModule`], the [`Catalog::from_manifests`](crate::Catalog::from_manifests)
+//! shape) or as a hand-written [`Module`] impl when it varies its topology with a knob. A
+//! module:
 //!
 //! - declares the [`ServiceSpec`]s it contributes to the topology (often more than
 //!   one — Postgres plus its init job, an object store plus its bucket-init);
@@ -15,7 +16,7 @@
 //!   [`conflicts_with`](Module::conflicts_with);
 //! - exposes optional config [`Knob`]s (which can drive a generated UI); and
 //! - carries a [`RenderSpec`] describing how it produces its
-//!   [`RenderOutput`](crate::RenderOutput) — a MiniJinja template this crate renders
+//!   [`RenderOutput`] — a MiniJinja template this crate renders
 //!   against the typed [`Connection`](crate::Connection)s so a fragment can read plan-resolved
 //!   values and branch on the chosen credential flavour.
 //!
@@ -28,9 +29,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::connection::{ConnectionField, ConnectionTemplate};
+use crate::model::connection::{ConnectionField, ConnectionTemplate};
+use crate::model::role::ServiceSpec;
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
-use crate::role::ServiceSpec;
 
 /// A module's stable identifier within a catalog (e.g. `"mlflow"`).
 ///
@@ -129,7 +130,7 @@ pub struct PortDecl {
 /// registered provider satisfies it (by [`provider`](ResourceDemand::provider) pin,
 /// `PlanCtx` preference, uniqueness, or catalog default), deploys it if absent,
 /// provisions the named resource, resolves the provider's
-/// [`ConnectionTemplate`](crate::ConnectionTemplate), and binds each
+/// [`ConnectionTemplate`], and binds each
 /// [`ConnectionBinding`] field into this module's environment. Naming the role (not the
 /// implementation) is what lets one consumer run on, say, SeaweedFS in one environment and
 /// Azurite in another.
@@ -323,8 +324,8 @@ impl DependsCondition {
 /// for and the [`DependsCondition`] to wait for it to reach.
 ///
 /// The planner produces these from a consumer's resource demands — for each demand it reads
-/// the *chosen* provider's [`DEP_GATE_EXTRA`](crate::catalog::baseline::DEP_GATE_EXTRA) and
-/// resolves it into a `DepGate` — and hands them to the render via
+/// the *chosen* provider's dependency-gate extra and resolves it into a `DepGate` — and hands
+/// them to the render via
 /// [`RenderCtx::dependencies`]. A template renders its whole `depends_on` block by iterating
 /// them (`{% for dep in dependencies %}{{ dep.service }}: {condition: {{ dep.condition }}}`),
 /// so it never hard-codes which backend's service it waits on.
@@ -356,7 +357,7 @@ pub struct RenderCtx<'a> {
     /// For a *provider* module, this also carries its own role's connection (resolved for
     /// each name it provisions) so its fragment can read e.g.
     /// `connections.object_store.0.credential.connection_string` instead of a `${VAR}`.
-    pub connections: BTreeMap<String, Vec<crate::connection::Connection>>,
+    pub connections: BTreeMap<String, Vec<crate::model::connection::Connection>>,
     /// The resolved `depends_on` gates the module's render should emit, in dependency
     /// (demand) order. Empty for a module with no demands that gate startup.
     #[serde(default)]
@@ -660,7 +661,7 @@ mod tests {
 
     #[test]
     fn template_render_reads_env_and_branches_on_connection_flavour() {
-        use crate::connection::{Connection, ObjectStoreCredential};
+        use crate::model::connection::{Connection, ObjectStoreCredential};
 
         // A Template fragment reads `${...}`-free MiniJinja: `env.*` for injected values and
         // `connections.*` to branch on the chosen credential flavour.
@@ -800,8 +801,8 @@ mod tests {
         // verbatim regardless of the knobs passed.
         let svc = ServiceSpec {
             name: "svc".into(),
-            role: crate::role::Role::new("svc"),
-            placement: crate::placement::Placement::Container {
+            role: crate::model::role::Role::new("svc"),
+            placement: crate::model::placement::Placement::Container {
                 service: "svc".into(),
             },
             endpoints: vec![],

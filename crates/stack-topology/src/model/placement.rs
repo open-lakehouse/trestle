@@ -1,10 +1,9 @@
 //! Where a service runs ([`Placement`]) and where a caller sits ([`Vantage`]).
 //!
-//! These two, together with the callee's [`Endpoint`](crate::Endpoint), are all
-//! the [`address`](crate::address) resolver needs to pick the right host and port.
-//! They are the distinction neither sibling tool names today: hydrofoil encodes it
-//! by hand across several call sites, and trestle omits it entirely (assuming every
-//! caller is on the host, which silently breaks in-container callers).
+//! These two, together with the callee's [`Endpoint`](crate::Endpoint), are all the
+//! address resolver needs to pick the right host and port. The caller's vantage and the
+//! callee's placement together determine the host part of every address; centralizing them
+//! here keeps that rule in one tested place instead of re-derived at each call site.
 
 use serde::{Deserialize, Serialize};
 
