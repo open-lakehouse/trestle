@@ -8,7 +8,7 @@ use std::sync::Arc;
 use olai_stack_topology::{
     Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, DataModule,
     Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx, PlanError, Provides, RenderSpec,
-    ResourceDemand, Role, Selection, ServiceSpec, baseline_catalog, plan,
+    ResourceDemand, Role, Selection, ServiceSpec, baseline_catalog,
 };
 
 /// Build a minimal provider module that provisions `kind` and vends the given typed
@@ -109,12 +109,9 @@ fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Arc<dyn Module> {
 fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     // UC declares it needs a relational_db + object_store; selecting *only* UC must
     // pull in the relational store and object store (plus its envoy `requires`).
-    let p = plan(
-        &Selection::modules(["unity-catalog"]),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .expect("UC alone should plan, auto-provisioning its providers");
+    let p = baseline_catalog()
+        .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
+        .expect("UC alone should plan, auto-provisioning its providers");
 
     for id in ["unity-catalog", "postgres", "seaweedfs", "envoy"] {
         assert!(
@@ -139,12 +136,9 @@ fn provider_connection_is_resolved_for_the_consumer_without_binding() {
     // UC declares no `ConnectionBinding`: it reads its resolved connections straight from the
     // render context rather than round-tripping coordinates through `.env`. The planner must
     // still resolve the demand, expose the typed connection on the plan, and inject nothing.
-    let p = plan(
-        &Selection::modules(["unity-catalog"]),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = baseline_catalog()
+        .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
+        .unwrap();
 
     // No coordinate is injected into UC's env — the old `UC_DATABASE_URL` round-trip is gone.
     let uc_env = p.injected.get(&ModuleId::from("unity-catalog")).unwrap();
@@ -181,12 +175,9 @@ fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
 
-    let p = plan(
-        &Selection::modules(["my-app"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = catalog
+        .plan(&Selection::modules(["my-app"]), &PlanCtx::default())
+        .unwrap();
 
     assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
     assert!(p.postgres_databases.contains(&"appdb".to_string()));
@@ -218,12 +209,9 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([a, b]));
-    let p = plan(
-        &Selection::modules(["svc-a", "svc-b"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = catalog
+        .plan(&Selection::modules(["svc-a", "svc-b"]), &PlanCtx::default())
+        .unwrap();
 
     // One Postgres provider, both databases provisioned.
     assert_eq!(
@@ -251,12 +239,9 @@ fn unsatisfied_demand_errors_when_no_provider_exists() {
         }],
     );
     let catalog = Catalog::from_modules([lonely]);
-    let err = plan(
-        &Selection::modules(["lonely"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap_err();
+    let err = catalog
+        .plan(&Selection::modules(["lonely"]), &PlanCtx::default())
+        .unwrap_err();
     assert_eq!(
         err,
         PlanError::UnsatisfiedDemand {
@@ -281,12 +266,9 @@ fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
         }],
     );
     let catalog = Catalog::from_modules([p1, p2, c]);
-    let err = plan(
-        &Selection::modules(["needs-db"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap_err();
+    let err = catalog
+        .plan(&Selection::modules(["needs-db"]), &PlanCtx::default())
+        .unwrap_err();
     match err {
         PlanError::AmbiguousProvider {
             resource,
@@ -328,7 +310,9 @@ fn demand_chain_resolves_to_a_fixed_point() {
         }],
     );
     let catalog = Catalog::from_modules([x_provider, y_provider, c]);
-    let p = plan(&Selection::modules(["top"]), &catalog, &PlanCtx::default()).unwrap();
+    let p = catalog
+        .plan(&Selection::modules(["top"]), &PlanCtx::default())
+        .unwrap();
     for id in ["top", "x-prov", "y-prov"] {
         assert!(
             p.graph.module(&ModuleId::from(id)).is_some(),
@@ -356,12 +340,9 @@ fn azurite_preferred() -> PlanCtx {
 fn default_object_store_is_seaweedfs() {
     // No preference → the catalog default (SeaweedFS) satisfies MLflow's object_store
     // demand; Azurite is not deployed and no Azure vars appear.
-    let p = plan(
-        &Selection::modules(["mlflow"]),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = baseline_catalog()
+        .plan(&Selection::modules(["mlflow"]), &PlanCtx::default())
+        .unwrap();
     assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_some());
     assert!(p.graph.module(&ModuleId::from("azurite")).is_none());
     assert!(p.s3_buckets.contains(&"mlflow".to_string()));
@@ -373,12 +354,9 @@ fn default_object_store_is_seaweedfs() {
 #[test]
 fn preference_selects_azurite_and_drops_aws() {
     // An Azurite-preferred environment: MLflow's object_store demand resolves to Azurite.
-    let p = plan(
-        &Selection::modules(["mlflow"]),
-        &baseline_catalog(),
-        &azurite_preferred(),
-    )
-    .unwrap();
+    let p = baseline_catalog()
+        .plan(&Selection::modules(["mlflow"]), &azurite_preferred())
+        .unwrap();
 
     // Azurite is deployed, SeaweedFS is not.
     assert!(p.graph.module(&ModuleId::from("azurite")).is_some());
@@ -406,12 +384,9 @@ fn consumer_uri_follows_the_chosen_provider() {
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
 
-    let s3 = plan(
-        &Selection::modules(["store-app"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let s3 = catalog
+        .plan(&Selection::modules(["store-app"]), &PlanCtx::default())
+        .unwrap();
     assert_eq!(
         s3.injected
             .get(&ModuleId::from("store-app"))
@@ -419,12 +394,9 @@ fn consumer_uri_follows_the_chosen_provider() {
         Some("s3://artifacts")
     );
 
-    let azure = plan(
-        &Selection::modules(["store-app"]),
-        &catalog,
-        &azurite_preferred(),
-    )
-    .unwrap();
+    let azure = catalog
+        .plan(&Selection::modules(["store-app"]), &azurite_preferred())
+        .unwrap();
     assert_eq!(
         azure
             .injected
@@ -447,12 +419,9 @@ fn a_demand_pin_overrides_preference() {
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
-    let p = plan(
-        &Selection::modules(["pinned-app"]),
-        &catalog,
-        &azurite_preferred(),
-    )
-    .unwrap();
+    let p = catalog
+        .plan(&Selection::modules(["pinned-app"]), &azurite_preferred())
+        .unwrap();
     assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_some());
     assert_eq!(
         p.injected
@@ -478,12 +447,9 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
         }],
     );
     let catalog = Catalog::from_modules([a, b, c]); // no with_default_provider
-    let err = plan(
-        &Selection::modules(["needs-store"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap_err();
+    let err = catalog
+        .plan(&Selection::modules(["needs-store"]), &PlanCtx::default())
+        .unwrap_err();
     assert!(
         matches!(err, PlanError::AmbiguousProvider { ref resource, .. } if resource == "object_store"),
         "expected AmbiguousProvider, got {err:?}"
@@ -504,11 +470,7 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
         ),
     ])
     .with_default_provider("object_store", "prov-s3");
-    let ok = plan(
-        &Selection::modules(["needs-store"]),
-        &catalog,
-        &PlanCtx::default(),
-    );
+    let ok = catalog.plan(&Selection::modules(["needs-store"]), &PlanCtx::default());
     assert!(ok.is_ok(), "catalog default should resolve the ambiguity");
 }
 
@@ -534,12 +496,9 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
         ],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([uc]));
-    let p = plan(
-        &Selection::modules(["catalog"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = catalog
+        .plan(&Selection::modules(["catalog"]), &PlanCtx::default())
+        .unwrap();
 
     // Both stores are provisioned in the one chosen provider (SeaweedFS by default).
     assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
@@ -587,12 +546,9 @@ fn same_role_demands_can_pin_different_providers() {
     // demand pins its provider — role-exclusivity (`check_role_exclusivity`) only rejects
     // unpinned same-role clashes, so no hand-listed `conflicts_with` is involved.
     let catalog = baseline_catalog().merge(Catalog::from_modules([uc]));
-    let p = plan(
-        &Selection::modules(["catalog"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap();
+    let p = catalog
+        .plan(&Selection::modules(["catalog"]), &PlanCtx::default())
+        .unwrap();
 
     // Managed went to SeaweedFS (s3://), external to Azurite (wasbs://).
     assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
@@ -620,12 +576,9 @@ fn binding_a_field_the_connection_lacks_errors() {
         }],
     );
     let catalog = baseline_catalog().merge(Catalog::from_modules([app]));
-    let err = plan(
-        &Selection::modules(["needs-store"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .unwrap_err();
+    let err = catalog
+        .plan(&Selection::modules(["needs-store"]), &PlanCtx::default())
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -640,16 +593,16 @@ fn binding_a_field_the_connection_lacks_errors() {
 fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
     // Selecting both object_store providers directly, with no demand pin to sanction the
     // pair, is an unpinned same-role clash: the planner refuses to silently pick one.
-    let err = plan(
-        &Selection::modules([
-            "seaweedfs",
-            "azurite",
-            "mlflow", // demands an object_store, but pins nothing
-        ]),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap_err();
+    let err = baseline_catalog()
+        .plan(
+            &Selection::modules([
+                "seaweedfs",
+                "azurite",
+                "mlflow", // demands an object_store, but pins nothing
+            ]),
+            &PlanCtx::default(),
+        )
+        .unwrap_err();
     assert!(
         matches!(
             err,

@@ -41,6 +41,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod resolve;
 pub mod routing;
 
+use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA};
 use crate::catalog::module::{ModuleId, ResolvedKnobs};
@@ -487,13 +488,31 @@ pub struct HeadFile {
     pub configs: Vec<ConfigDecl>,
 }
 
+/// The gateway facts the address resolver needs but cannot derive from the model: the
+/// gateway's compose service name and its internal / host-published ports. Captured from
+/// [`PlanCtx`] at plan time and held on the [`Plan`], so addressing a service
+/// ([`Plan::service`] → [`ServiceRef::address`]) needs no separately-constructed context.
+#[derive(Clone, Debug)]
+pub(crate) struct GatewayFacts {
+    /// The gateway's compose service / DNS name (e.g. `"envoy"`).
+    pub service: String,
+    /// The gateway's listening port inside the compose network (e.g. `10000`).
+    pub internal_port: u16,
+    /// The gateway's host-published port (e.g. `9080`).
+    pub host_port: u16,
+}
+
 /// A fully-assigned environment: the resolved graph, the routing plan, the rendered
 /// modules, and the consolidated head + gateway config. Everything is data; the
 /// consumer does the I/O (serialize, write, mount, launch).
 ///
+/// Build one with [`Catalog::plan`](crate::Catalog::plan). Render its artifacts with
+/// [`render_all`](crate::render_all), and resolve a service's address from a given
+/// [`Vantage`] with [`Plan::service`] / [`Plan::service_by_role`] → [`ServiceRef::address`].
+///
 /// Not `PartialEq`/`Eq`: it embeds the [`ResolvedGraph`], whose modules are trait objects.
 #[derive(Clone, Debug)]
-pub struct EnvironmentPlan {
+pub struct Plan {
     /// The resolved, ordered module graph.
     pub graph: ResolvedGraph,
     /// The per-endpoint route assignments the [`address`](crate::address) resolver
@@ -529,17 +548,76 @@ pub struct EnvironmentPlan {
     /// The stack's aggregated environment variables (drives the `.env` artifact),
     /// last-writer-wins in dependency order.
     pub env: InjectedEnv,
+    /// The gateway facts the address resolver reads (captured from [`PlanCtx`]). Private:
+    /// callers reach addressing through [`Plan::service`] → [`ServiceRef::address`], never
+    /// by reconstructing this.
+    pub(crate) gateway_facts: GatewayFacts,
 }
 
-/// Plan an environment from a selection against a catalog.
-///
-/// See the module docs for the prefix-derivation rules. Returns a fully-materialized
-/// [`EnvironmentPlan`], or a [`PlanError`] (notably [`PlanError::PrefixCollision`]).
-pub fn plan(
-    selection: &Selection,
-    catalog: &Catalog,
-    ctx: &PlanCtx,
-) -> Result<EnvironmentPlan, PlanError> {
+impl Plan {
+    /// A handle to address the module `module`'s first service. Most modules contribute a
+    /// single service; use [`service_named`](Self::service_named) to pick among several.
+    pub fn service(&self, module: &ModuleId) -> Option<ServiceRef<'_>> {
+        let spec = self.services.get(module)?.first()?;
+        Some(ServiceRef::new(spec, &self.routes, &self.gateway_facts))
+    }
+
+    /// A handle to address the module `module`'s service named `name`.
+    pub fn service_named(&self, module: &ModuleId, name: &str) -> Option<ServiceRef<'_>> {
+        let spec = self.services.get(module)?.iter().find(|s| s.name == name)?;
+        Some(ServiceRef::new(spec, &self.routes, &self.gateway_facts))
+    }
+
+    /// A handle to address the single service filling `role`.
+    ///
+    /// A caller usually knows a role ("the catalog", "the object store") rather than a module
+    /// id. Errors with [`AddressError::NoSuchRole`] if nothing fills it, or
+    /// [`AddressError::AmbiguousRole`] if more than one service does (address one by id then).
+    pub fn service_by_role(&self, role: &Role) -> Result<ServiceRef<'_>, AddressError> {
+        let mut matches = self.services.values().flatten().filter(|s| &s.role == role);
+        let first = matches
+            .next()
+            .ok_or_else(|| AddressError::NoSuchRole(role.as_str().to_string()))?;
+        if matches.next().is_some() {
+            let mut services: Vec<String> = self
+                .services
+                .values()
+                .flatten()
+                .filter(|s| &s.role == role)
+                .map(|s| s.name.clone())
+                .collect();
+            services.sort();
+            return Err(AddressError::AmbiguousRole {
+                role: role.as_str().to_string(),
+                services,
+            });
+        }
+        Ok(ServiceRef::new(first, &self.routes, &self.gateway_facts))
+    }
+
+    /// The gateway's host-published port — what a host-side caller reaches the shared listener
+    /// at (e.g. for printing `http://localhost:<port>`). The full URL to a specific service is
+    /// [`service`](Self::service) → [`ServiceRef::address`].
+    pub fn gateway_host_port(&self) -> u16 {
+        self.gateway_facts.host_port
+    }
+}
+
+impl Catalog {
+    /// Resolve `selection` against this catalog under `ctx` into a fully-materialized [`Plan`].
+    ///
+    /// This is the producer the rest of the crate feeds: it resolves the dependency graph,
+    /// assigns non-colliding gateway routes, resolves knobs and connections, and renders every
+    /// module. See the [module docs](crate::plan) for the prefix-derivation rules. Returns a
+    /// [`Plan`], or a [`PlanError`] (notably [`PlanError::PrefixCollision`]).
+    pub fn plan(&self, selection: &Selection, ctx: &PlanCtx) -> Result<Plan, PlanError> {
+        plan_env(selection, self, ctx)
+    }
+}
+
+/// The planner implementation behind [`Catalog::plan`]. Kept as a free function (rather than
+/// inlined into the method) because it is long and recursion-free over `catalog`/`selection`.
+fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<Plan, PlanError> {
     // Forward-auth is a gateway knob (`ENVOY_AUTH`), not a separately-selected module: when
     // it resolves on, pull the auth provider into the selection so it joins the graph like any
     // other module (and the routing pass below wires the `ext_authz` filter + cluster). The
@@ -1059,7 +1137,7 @@ pub fn plan(
         .map(|(key, c)| (key, c.connection))
         .collect();
 
-    Ok(EnvironmentPlan {
+    Ok(Plan {
         graph,
         routes,
         injected,
@@ -1072,6 +1150,11 @@ pub fn plan(
         s3_buckets,
         azure_containers,
         env,
+        gateway_facts: GatewayFacts {
+            service: ctx.gateway_service.clone(),
+            internal_port: ctx.gateway_internal_port,
+            host_port: ctx.gateway_host_port,
+        },
     })
 }
 
@@ -1654,11 +1737,11 @@ mod tests {
         Selection::modules(["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"])
     }
 
-    fn shared_routes(plan: &EnvironmentPlan) -> &[GatewayRoute] {
+    fn shared_routes(plan: &Plan) -> &[GatewayRoute] {
         &plan.gateway.listeners[0].routes
     }
 
-    fn route_for<'a>(plan: &'a EnvironmentPlan, prefix: &str) -> &'a GatewayRoute {
+    fn route_for<'a>(plan: &'a Plan, prefix: &str) -> &'a GatewayRoute {
         shared_routes(plan)
             .iter()
             .find(|r| r.prefix == prefix)
@@ -1763,7 +1846,7 @@ mod tests {
     fn ext_authz_wiring_follows_a_renamed_reported_auth_provider() {
         // Knob on, provider `gatekeeper` on :4180 with path /verify: the emitted cluster and the
         // AuthConfig must follow the resolved provider, never the bundled authelia/9091.
-        let p = plan(
+        let p = plan_env(
             &Selection::modules(["edge"]),
             &Catalog::from_modules([arc(gateway_module(true)), arc(auth_provider_module())]),
             &PlanCtx::default(),
@@ -1789,7 +1872,7 @@ mod tests {
     fn knob_on_but_no_auth_provider_leaves_the_gateway_open() {
         // Divergent-guard fix: the knob defaults on but the catalog has no `auth`-role provider.
         // Auth must stay off entirely rather than gate the gateway behind a phantom upstream.
-        let p = plan(
+        let p = plan_env(
             &Selection::modules(["edge"]),
             &Catalog::from_modules([arc(gateway_module(true))]),
             &PlanCtx::default(),
@@ -1812,7 +1895,7 @@ mod tests {
         );
         provider.provider_of = Some("auth".into());
         provider.service_specs[0].role = Role::auth();
-        let err = plan(
+        let err = plan_env(
             &Selection::modules(["edge"]),
             &Catalog::from_modules([arc(gateway_module(true)), arc(provider)]),
             &PlanCtx::default(),
@@ -1832,7 +1915,7 @@ mod tests {
             vec![ep("ui", 8080, RouteIntent::UiPrefixable)],
             Default::default(),
         );
-        let err = plan(
+        let err = plan_env(
             &Selection::modules(["svc"]),
             &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
@@ -1861,7 +1944,7 @@ mod tests {
             };
             arc(m)
         };
-        let err = plan(
+        let err = plan_env(
             &Selection::modules(["a", "b"]),
             &Catalog::from_modules([with_alias("a"), with_alias("b")]),
             &PlanCtx::default(),
@@ -1893,7 +1976,7 @@ mod tests {
                 alias: Some("svc_config".into()),
             }],
         };
-        let p = plan(
+        let p = plan_env(
             &Selection::modules(["svc"]),
             &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
@@ -1928,7 +2011,7 @@ mod tests {
             ],
             Default::default(),
         );
-        let err = plan(
+        let err = plan_env(
             &Selection::modules(["svc"]),
             &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
@@ -1946,7 +2029,7 @@ mod tests {
 
     #[test]
     fn default_lakehouse_rederives_working_routes() {
-        let p = plan(
+        let p = plan_env(
             &default_selection(),
             &baseline_catalog(),
             &PlanCtx::default(),
@@ -1983,7 +2066,7 @@ mod tests {
         // Asserting on the rendered fragment is the real contract.
 
         // Default (SeaweedFS): db healthy + seaweedfs-init completed.
-        let s3 = plan(
+        let s3 = plan_env(
             &Selection::modules(["mlflow"]),
             &baseline_catalog(),
             &PlanCtx::default(),
@@ -2012,7 +2095,7 @@ mod tests {
             "object_store".to_string(),
             vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
         );
-        let az = plan(
+        let az = plan_env(
             &Selection::modules(["mlflow"]),
             &baseline_catalog(),
             &PlanCtx {
@@ -2036,7 +2119,7 @@ mod tests {
 
     #[test]
     fn ui_base_path_is_injected_for_render() {
-        let p = plan(
+        let p = plan_env(
             &default_selection(),
             &baseline_catalog(),
             &PlanCtx::default(),
@@ -2048,7 +2131,7 @@ mod tests {
 
     #[test]
     fn routes_are_most_specific_first() {
-        let p = plan(
+        let p = plan_env(
             &default_selection(),
             &baseline_catalog(),
             &PlanCtx::default(),
@@ -2062,7 +2145,7 @@ mod tests {
 
     #[test]
     fn clusters_are_derived_from_placement() {
-        let p = plan(
+        let p = plan_env(
             &default_selection(),
             &baseline_catalog(),
             &PlanCtx::default(),
@@ -2093,7 +2176,7 @@ mod tests {
             capabilities: vec!["experiment_tracking".into()],
             ..Default::default()
         };
-        let p = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
+        let p = plan_env(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
         // mlflow + its transitive requires (postgres, seaweedfs, envoy).
         for id in ["mlflow", "postgres", "seaweedfs", "envoy"] {
             assert!(p.graph.module(&id.into()).is_some(), "missing {id}");
@@ -2107,18 +2190,18 @@ mod tests {
             capabilities: vec!["telepathy".into()],
             ..Default::default()
         };
-        let err = plan(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap_err();
+        let err = plan_env(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap_err();
         assert_eq!(err, PlanError::UnknownCapability("telepathy".into()));
     }
 
     #[test]
     fn plan_is_deterministic_regardless_of_selection_order() {
         let cat = baseline_catalog();
-        let a = plan(&default_selection(), &cat, &PlanCtx::default()).unwrap();
+        let a = plan_env(&default_selection(), &cat, &PlanCtx::default()).unwrap();
         let reversed =
             Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]);
-        let b = plan(&reversed, &cat, &PlanCtx::default()).unwrap();
-        // `EnvironmentPlan` is not `Eq` (its graph holds trait objects); compare the
+        let b = plan_env(&reversed, &cat, &PlanCtx::default()).unwrap();
+        // `Plan` is not `Eq` (its graph holds trait objects); compare the
         // observable, contracted-deterministic artifacts instead.
         assert_eq!(a.gateway, b.gateway);
         assert_eq!(a.head, b.head);

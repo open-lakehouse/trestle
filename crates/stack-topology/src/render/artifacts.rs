@@ -1,4 +1,4 @@
-//! Pure renderers that turn an [`EnvironmentPlan`](crate::EnvironmentPlan) into the
+//! Pure renderers that turn an [`Plan`](crate::Plan) into the
 //! concrete text artifacts a Lakehouse dev environment is made of: the Envoy gateway
 //! bootstrap, the `.env` overlay, and the top-level compose file.
 //!
@@ -9,7 +9,7 @@
 //! and the consuming tool only writes the returned strings to disk. (Per-module config
 //! files — including the Postgres init script — are now module
 //! [`RenderFile`](crate::RenderFile)s on the plan's
-//! [`renders`](crate::EnvironmentPlan::renders), not aggregated here.)
+//! [`renders`](crate::Plan::renders), not aggregated here.)
 //!
 //! Everything here is pure and string-only — no I/O. The output shape is fixed and
 //! hand-written (not serialized via a YAML library) to stay reviewable and stable.
@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::plan::{EnvironmentPlan, GatewayConfig, HeadFile};
+use crate::plan::{GatewayConfig, HeadFile, Plan};
 use crate::render::InjectedEnv;
 
 /// The on-disk Envoy bootstrap template, embedded at compile time. Lives at
@@ -299,10 +299,10 @@ pub struct Artifacts {
 }
 
 /// Render the stack-aggregated artifacts for `plan`. Per-module compose fragments and their
-/// mounted config files live on the plan's [`renders`](crate::EnvironmentPlan::renders); this
+/// mounted config files live on the plan's [`renders`](crate::Plan::renders); this
 /// adds the Envoy bootstrap (a dedicated renderer), the audited `.env`, and the top-level
 /// `compose.yaml`.
-pub fn render_all(plan: &EnvironmentPlan) -> Artifacts {
+pub fn render_all(plan: &Plan) -> Artifacts {
     let envoy = render_envoy(&plan.gateway);
 
     // The `.env` carries only keys some rendered artifact still references as `${KEY}`. Scan

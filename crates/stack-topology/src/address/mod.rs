@@ -1,15 +1,20 @@
-//! The single source of addressing truth: [`address`] and [`address_direct`].
+//! The single source of addressing truth: [`ServiceRef`] and its
+//! [`address`](ServiceRef::address) / [`address_direct`](ServiceRef::address_direct).
 //!
-//! The platform's posture is *everything goes through the gateway* — so the
-//! default, [`address`], routes through the gateway whenever the coordinator's
-//! [`RoutePlan`] assigns the endpoint a route, and only falls back to a direct
-//! address when it doesn't (a database port, an in-process service, anything the
-//! planner left off the surface). [`address_direct`] is the explicit escape hatch
-//! for the rare case a gatewayed endpoint must be reached straight.
+//! A [`ServiceRef`] is obtained from a [`Plan`](crate::Plan) — by id with
+//! [`Plan::service`](crate::Plan::service) or by role with
+//! [`Plan::service_by_role`](crate::Plan::service_by_role) — and bundles the resolved
+//! service with the plan's routing and gateway facts, so resolving a URL needs only the
+//! caller's [`Vantage`] and the endpoint id.
 //!
-//! A **direct** address depends on the caller's [`Vantage`] and the callee's
-//! [`Placement`] — the rules both sibling tools otherwise hand-author at each call
-//! site:
+//! The platform's posture is *everything goes through the gateway* — so the default,
+//! [`address`](ServiceRef::address), routes through the gateway whenever the plan assigned
+//! the endpoint a route, and only falls back to a direct address when it doesn't (a database
+//! port, an in-process service, anything the planner left off the surface).
+//! [`address_direct`](ServiceRef::address_direct) is the explicit escape hatch for the rare
+//! case a gatewayed endpoint must be reached straight.
+//!
+//! A **direct** address depends on the caller's [`Vantage`] and the callee's [`Placement`]:
 //!
 //! | from \ to        | `Container`                 | `Host` / `InProcess`          |
 //! |------------------|-----------------------------|-------------------------------|
@@ -17,39 +22,24 @@
 //! | `Host`           | `localhost:<host>`          | `127.0.0.1:<host‖internal>`   |
 //! | `InProcess`      | `localhost:<host>`          | `127.0.0.1:<host‖internal>`   |
 //!
-//! A **gateway** address ignores the callee's own placement — it is *the gateway's*
-//! address (for the route's [`Listener`]), plus the route prefix: the gateway is
-//! reached at `envoy:10000` from a container and at `localhost:<gateway_host_port>`
-//! from the host / in-process (or the dedicated listener's port for a
-//! [`Listener::Dedicated`] route).
+//! A **gateway** address ignores the callee's own placement — it is *the gateway's* address
+//! (for the route's [`Listener`]), plus the route prefix: the gateway is reached at
+//! `envoy:10000` from a container and at `localhost:<host_port>` from the host / in-process
+//! (or the dedicated listener's port for a [`Listener::Dedicated`] route).
 //!
-//! The functions are pure. Runtime facts — the gateway's host-published port, a
-//! dynamically-allocated host port — arrive via [`TopologyCtx`]; this crate never
-//! discovers them.
+//! Resolution is pure. The runtime facts it needs — the gateway's service name and ports —
+//! are the [`GatewayFacts`] the [`Plan`](crate::Plan) captured at plan time.
 
 use url::Url;
 
 use crate::model::endpoint::{Endpoint, Scheme};
 use crate::model::placement::{Placement, Vantage};
 use crate::model::role::ServiceSpec;
+use crate::plan::GatewayFacts;
 use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 
 /// The conventional DNS hostname a container uses to reach the host machine.
 const HOST_GATEWAY_DNS: &str = "host.docker.internal";
-
-/// Resolved, environment-wide facts the resolver needs but cannot derive from the
-/// model alone. The consuming tool fills this in once per environment.
-#[derive(Clone, Debug)]
-pub struct TopologyCtx {
-    /// The gateway's compose service / DNS name, as reached from inside the
-    /// compose network (e.g. `"envoy"`).
-    pub gateway_service: String,
-    /// The gateway's listening port inside the compose network (e.g. `10000`).
-    pub gateway_internal_port: u16,
-    /// The gateway's host-published port — what a host-side or in-process caller
-    /// reaches it at (e.g. `9080`).
-    pub gateway_host_port: u16,
-}
 
 /// What can go wrong resolving an address.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -66,43 +56,80 @@ pub enum AddressError {
     /// The resolved components did not form a valid URL.
     #[error("could not build a URL from the resolved address `{0}`")]
     InvalidUrl(String),
+    /// [`Plan::service_by_role`](crate::Plan::service_by_role) found no service filling the role.
+    #[error("no service fills role `{0}` in this plan")]
+    NoSuchRole(String),
+    /// [`Plan::service_by_role`](crate::Plan::service_by_role) found more than one service
+    /// filling the role, so the lookup is ambiguous — address by id instead.
+    #[error("role `{role}` is filled by multiple services {services:?}; address one by id")]
+    AmbiguousRole {
+        /// The over-subscribed role.
+        role: String,
+        /// The service names filling it (sorted).
+        services: Vec<String>,
+    },
 }
 
-/// Resolve the URL a caller at `from` should use to reach `endpoint_id` on `to`,
-/// **through the gateway when the coordinator assigned it a route**.
+/// A resolved service together with the routing context needed to address it.
 ///
-/// This is the default: when `plan` has an [`AssignedRoute`] for this endpoint, the
-/// address is the gateway listener's plus the assigned prefix; otherwise it
-/// resolves directly (e.g. a database port, an in-process service, or anything the
-/// planner did not front). To force a direct address for a gatewayed endpoint — the
-/// rare exception — use [`address_direct`].
-pub fn address(
-    from: Vantage,
-    to: &ServiceSpec,
-    endpoint_id: &str,
-    plan: &RoutePlan,
-    ctx: &TopologyCtx,
-) -> Result<Url, AddressError> {
-    let endpoint = lookup(to, endpoint_id)?;
-    let target = match plan.get(&to.name, endpoint_id) {
-        Some(route) => gateway_target(from, route, endpoint, ctx),
-        None => direct_target(from, to, endpoint)?,
-    };
-    finish(endpoint.scheme, target)
+/// Borrowed from a [`Plan`](crate::Plan); obtain one with
+/// [`Plan::service`](crate::Plan::service), [`Plan::service_named`](crate::Plan::service_named),
+/// or [`Plan::service_by_role`](crate::Plan::service_by_role). It carries the plan's
+/// [`RoutePlan`] and gateway facts, so [`address`](Self::address) needs only the caller's
+/// [`Vantage`] and the endpoint id.
+#[derive(Clone, Copy, Debug)]
+pub struct ServiceRef<'a> {
+    spec: &'a ServiceSpec,
+    routes: &'a RoutePlan,
+    facts: &'a GatewayFacts,
 }
 
-/// Resolve the **direct** URL a caller at `from` should use to reach `endpoint_id`
-/// on `to`, bypassing the gateway even if the endpoint is gatewayed.
-///
-/// The explicit escape hatch from the gateway-by-default posture of [`address`].
-pub fn address_direct(
-    from: Vantage,
-    to: &ServiceSpec,
-    endpoint_id: &str,
-) -> Result<Url, AddressError> {
-    let endpoint = lookup(to, endpoint_id)?;
-    let target = direct_target(from, to, endpoint)?;
-    finish(endpoint.scheme, target)
+impl<'a> ServiceRef<'a> {
+    /// Build a service reference from its parts. Crate-internal; consumers obtain one from a
+    /// [`Plan`](crate::Plan).
+    pub(crate) fn new(
+        spec: &'a ServiceSpec,
+        routes: &'a RoutePlan,
+        facts: &'a GatewayFacts,
+    ) -> Self {
+        ServiceRef {
+            spec,
+            routes,
+            facts,
+        }
+    }
+
+    /// The underlying resolved [`ServiceSpec`] (placement, endpoints, role, …) — for
+    /// inspection or visualization.
+    pub fn spec(&self) -> &'a ServiceSpec {
+        self.spec
+    }
+
+    /// Resolve the URL a caller at `from` should use to reach `endpoint_id`, **through the
+    /// gateway when the plan assigned this endpoint a route**.
+    ///
+    /// When the plan has an [`AssignedRoute`] for this endpoint, the address is the gateway
+    /// listener's plus the assigned prefix; otherwise it resolves directly (a database port,
+    /// an in-process service, or anything the planner did not front). To force a direct
+    /// address for a gatewayed endpoint — the rare exception — use
+    /// [`address_direct`](Self::address_direct).
+    pub fn address(&self, from: Vantage, endpoint_id: &str) -> Result<Url, AddressError> {
+        let endpoint = lookup(self.spec, endpoint_id)?;
+        let target = match self.routes.get(&self.spec.name, endpoint_id) {
+            Some(route) => gateway_target(from, route, endpoint, self.facts),
+            None => direct_target(from, self.spec, endpoint)?,
+        };
+        finish(endpoint.scheme, target)
+    }
+
+    /// Resolve the **direct** URL a caller at `from` should use to reach `endpoint_id`,
+    /// bypassing the gateway even if the endpoint is gatewayed. The explicit escape hatch from
+    /// the gateway-by-default posture of [`address`](Self::address).
+    pub fn address_direct(&self, from: Vantage, endpoint_id: &str) -> Result<Url, AddressError> {
+        let endpoint = lookup(self.spec, endpoint_id)?;
+        let target = direct_target(from, self.spec, endpoint)?;
+        finish(endpoint.scheme, target)
+    }
 }
 
 /// A resolved (host, port, path) triple before it is rendered to a [`Url`].
@@ -179,20 +206,18 @@ fn gateway_target(
     from: Vantage,
     route: &AssignedRoute,
     endpoint: &Endpoint,
-    ctx: &TopologyCtx,
+    facts: &GatewayFacts,
 ) -> Target {
     let (host, port) = match (from, &route.listener) {
         // From inside the compose network, the gateway is just another container.
         // The shared listener is on its internal port; a dedicated listener listens
         // on its declared port (we control both ends, so no remap).
-        (Vantage::Container, Listener::Shared) => {
-            (ctx.gateway_service.clone(), ctx.gateway_internal_port)
-        }
-        (Vantage::Container, Listener::Dedicated { port }) => (ctx.gateway_service.clone(), *port),
+        (Vantage::Container, Listener::Shared) => (facts.service.clone(), facts.internal_port),
+        (Vantage::Container, Listener::Dedicated { port }) => (facts.service.clone(), *port),
         // From the host or in-process, the gateway is reached on localhost: the
         // shared listener at its host-published port, a dedicated one at its port.
         (Vantage::Host | Vantage::InProcess, Listener::Shared) => {
-            ("localhost".to_string(), ctx.gateway_host_port)
+            ("localhost".to_string(), facts.host_port)
         }
         (Vantage::Host | Vantage::InProcess, Listener::Dedicated { port }) => {
             ("localhost".to_string(), *port)
@@ -251,11 +276,11 @@ mod tests {
     use crate::model::role::Role;
     use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 
-    fn ctx() -> TopologyCtx {
-        TopologyCtx {
-            gateway_service: "envoy".into(),
-            gateway_internal_port: 10000,
-            gateway_host_port: 9080,
+    fn facts() -> GatewayFacts {
+        GatewayFacts {
+            service: "envoy".into(),
+            internal_port: 10000,
+            host_port: 9080,
         }
     }
 
@@ -341,14 +366,23 @@ mod tests {
         }
     }
 
-    /// `address` (gateway-when-the-plan-assigns-it) as a string.
+    /// [`ServiceRef::address`] (gateway-when-the-plan-assigns-it) as a string.
     fn addr(from: Vantage, to: &ServiceSpec, ep: &str, plan: &RoutePlan) -> String {
-        address(from, to, ep, plan, &ctx()).unwrap().to_string()
+        let facts = facts();
+        ServiceRef::new(to, plan, &facts)
+            .address(from, ep)
+            .unwrap()
+            .to_string()
     }
 
-    /// `address_direct` as a string.
+    /// [`ServiceRef::address_direct`] as a string (an empty plan gateways nothing).
     fn direct(from: Vantage, to: &ServiceSpec, ep: &str) -> String {
-        address_direct(from, to, ep).unwrap().to_string()
+        let facts = facts();
+        let empty = RoutePlan::new();
+        ServiceRef::new(to, &empty, &facts)
+            .address_direct(from, ep)
+            .unwrap()
+            .to_string()
     }
 
     // --- Direct addresses: the cross-vantage matrix, asserting the exact strings
@@ -399,7 +433,11 @@ mod tests {
     fn host_to_container_without_host_port_errors() {
         // Postgres is not host-published; a host caller cannot reach it directly.
         let pg = container_postgres();
-        let err = address(Vantage::Host, &pg, "sql", &RoutePlan::new(), &ctx()).unwrap_err();
+        let facts = facts();
+        let empty = RoutePlan::new();
+        let err = ServiceRef::new(&pg, &empty, &facts)
+            .address(Vantage::Host, "sql")
+            .unwrap_err();
         assert!(matches!(err, AddressError::NoHostPort { .. }));
     }
 
@@ -506,9 +544,12 @@ mod tests {
     #[test]
     fn unknown_endpoint_errors() {
         let uc = host_catalog(54321);
-        let err = address(Vantage::Host, &uc, "nope", &RoutePlan::new(), &ctx()).unwrap_err();
+        let facts = facts();
+        let empty = RoutePlan::new();
+        let svc = ServiceRef::new(&uc, &empty, &facts);
+        let err = svc.address(Vantage::Host, "nope").unwrap_err();
         assert!(matches!(err, AddressError::UnknownEndpoint { .. }));
-        let err = address_direct(Vantage::Host, &uc, "nope").unwrap_err();
+        let err = svc.address_direct(Vantage::Host, "nope").unwrap_err();
         assert!(matches!(err, AddressError::UnknownEndpoint { .. }));
     }
 

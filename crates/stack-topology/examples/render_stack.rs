@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use olai_stack_topology::{ModuleId, PlanCtx, Selection, baseline_catalog, plan, render_all};
+use olai_stack_topology::{ModuleId, PlanCtx, Selection, baseline_catalog, render_all};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -108,7 +108,7 @@ fn main() {
         ..defaults
     };
 
-    let plan = match plan(&selection, &baseline_catalog(), &ctx) {
+    let plan = match baseline_catalog().plan(&selection, &ctx) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("planning failed: {e}");

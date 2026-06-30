@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use olai_stack_topology::{
     Catalog, DataModule, Endpoint, GatewayRoute, Module, ModuleId, Placement, PlanCtx, PlanError,
-    Provides, RenderSpec, ResolvedKnobs, Rewrite, Role, RouteIntent, Scheme, Selection,
-    ServiceSpec, TopologyCtx, Vantage, address, baseline_catalog, plan,
+    Provides, RenderSpec, Rewrite, Role, RouteIntent, Scheme, Selection, ServiceSpec, Vantage,
+    baseline_catalog,
 };
 
 /// The always-on + common lakehouse modules.
@@ -28,12 +28,9 @@ fn route<'a>(routes: &'a [GatewayRoute], prefix: &str) -> &'a GatewayRoute {
 
 #[test]
 fn default_lakehouse_rederives_the_working_gateway_routes() {
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .expect("default lakehouse should plan cleanly");
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .expect("default lakehouse should plan cleanly");
 
     // The shared listener is the gateway's host-published port.
     let shared = &p.gateway.listeners[0];
@@ -133,12 +130,9 @@ fn real_prefix_collision_fails_loudly() {
     }
 
     let catalog = Catalog::from_modules([api_module("svc-a"), api_module("svc-b")]);
-    let err = plan(
-        &Selection::modules(["svc-a", "svc-b"]),
-        &catalog,
-        &PlanCtx::default(),
-    )
-    .expect_err("two endpoints claiming /api must collide");
+    let err = catalog
+        .plan(&Selection::modules(["svc-a", "svc-b"]), &PlanCtx::default())
+        .expect_err("two endpoints claiming /api must collide");
 
     match err {
         PlanError::PrefixCollision { prefix, .. } => assert_eq!(prefix, "/api"),
@@ -152,63 +146,65 @@ fn planner_routes_round_trip_through_the_address_resolver() {
     // without doubling the path: the resolver composes `join(prefix, endpoint.path)`,
     // so an API endpoint's `path` must stay empty while the mount lives in the route
     // prefix. This is the round-trip the GatewayConfig-only golden test does not cover.
-    let p = plan(
-        &default_selection(),
-        &baseline_catalog(),
-        &PlanCtx::default(),
-    )
-    .unwrap();
-    let ctx = TopologyCtx {
-        gateway_service: "envoy".into(),
-        gateway_internal_port: 10000,
-        gateway_host_port: 9080,
-    };
-    // These modules declare no knobs, so their services resolve against empty knobs.
-    let no_knobs = ResolvedKnobs::new();
-    let mlflow = p
-        .graph
-        .module(&ModuleId::from("mlflow"))
-        .unwrap()
-        .service("mlflow", &no_knobs)
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
         .unwrap();
+    // The plan carries the gateway facts, so addressing needs no separate context: a
+    // `ServiceRef` from the plan resolves a URL from just a vantage + endpoint id.
+    let mlflow = p.service(&ModuleId::from("mlflow")).unwrap();
 
     // From a container, the gateway is `envoy:10000`; the tracking API resolves to the
     // single mount prefix — not `/api/2.0/mlflow/api/2.0/mlflow`.
-    let tracking = address(Vantage::Container, &mlflow, "tracking", &p.routes, &ctx).unwrap();
+    let tracking = mlflow.address(Vantage::Container, "tracking").unwrap();
     assert_eq!(tracking.as_str(), "http://envoy:10000/api/2.0/mlflow");
 
     // From the host, the UI resolves at the gateway's host port under its base path.
-    let ui = address(Vantage::Host, &mlflow, "ui", &p.routes, &ctx).unwrap();
+    let ui = mlflow.address(Vantage::Host, "ui").unwrap();
     assert_eq!(ui.as_str(), "http://localhost:9080/mlflow");
 
-    // Unity Catalog REST, container vantage — single, un-doubled path.
-    let uc = p
-        .graph
-        .module(&ModuleId::from("unity-catalog"))
-        .unwrap()
-        .service("unitycatalog", &no_knobs)
-        .unwrap();
-    let rest = address(Vantage::Container, &uc, "rest", &p.routes, &ctx).unwrap();
+    // Unity Catalog REST, container vantage — single, un-doubled path. Addressed by role
+    // here, to exercise that path too ("the data catalog", whichever module fills it).
+    let uc = p.service_by_role(&Role::data_catalog()).unwrap();
+    let rest = uc.address(Vantage::Container, "rest").unwrap();
     assert_eq!(rest.as_str(), "http://envoy:10000/api/2.1/unity-catalog");
+}
+
+#[test]
+fn service_by_role_resolves_uniquely_and_reports_misses() {
+    use olai_stack_topology::AddressError;
+
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .unwrap();
+
+    // A role filled by exactly one service resolves to it.
+    let catalog = p.service_by_role(&Role::data_catalog()).unwrap();
+    assert_eq!(catalog.spec().name, "unitycatalog");
+
+    // A role no service fills is a clean `NoSuchRole`, not a panic.
+    let err = p
+        .service_by_role(&Role::new("nonexistent_role"))
+        .unwrap_err();
+    assert!(matches!(err, AddressError::NoSuchRole(r) if r == "nonexistent_role"));
 }
 
 #[test]
 fn plan_is_byte_identical_regardless_of_selection_order() {
     let cat = baseline_catalog();
-    let forward = plan(&default_selection(), &cat, &PlanCtx::default()).unwrap();
-    let reversed = plan(
-        &Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]),
-        &cat,
-        &PlanCtx::default(),
-    )
-    .unwrap();
-    // `EnvironmentPlan` is no longer `Eq` (its graph holds trait objects), so compare the
+    let forward = cat.plan(&default_selection(), &PlanCtx::default()).unwrap();
+    let reversed = cat
+        .plan(
+            &Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+    // `Plan` is no longer `Eq` (its graph holds trait objects), so compare the
     // observable artifacts the planner is contracted to produce deterministically: the
     // gateway config, the routing plan, the head file, and the include order.
     assert_eq!(forward.gateway, reversed.gateway);
     assert_eq!(forward.head, reversed.head);
     assert_eq!(forward.routes, reversed.routes);
-    let order = |p: &olai_stack_topology::EnvironmentPlan| {
+    let order = |p: &olai_stack_topology::Plan| {
         p.head
             .includes
             .iter()
