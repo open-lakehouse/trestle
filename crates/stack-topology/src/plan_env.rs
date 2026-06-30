@@ -39,17 +39,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::Catalog;
-use crate::catalog::baseline::{
-    API_PREFIX_EXTRA, BASE_PATH_EXTRA, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA,
-    REWRITE_OVERRIDE_PREFIX,
-};
+use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA};
 use crate::connection::Connection;
-use crate::endpoint::{Endpoint, RouteIntent};
-use crate::module::{Module, ModuleId};
+use crate::endpoint::{Endpoint, Rewrite, RouteIntent};
+use crate::module::{ModuleId, ResolvedKnobs};
 use crate::placement::Placement;
 use crate::plan::{AssignedRoute, Listener, RoutePlan};
 use crate::render::{InjectedEnv, RenderOutput};
-use crate::resolve_graph::{ResolveError, ResolvedGraph, resolve};
+use crate::resolve_graph::{ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
 use crate::role::{Role, ServiceSpec};
 
 /// What modules an environment should contain.
@@ -383,7 +380,9 @@ pub struct HeadFile {
 /// A fully-assigned environment: the resolved graph, the routing plan, the rendered
 /// modules, and the consolidated head + gateway config. Everything is data; the
 /// consumer does the I/O (serialize, write, mount, launch).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Not `PartialEq`/`Eq`: it embeds the [`ResolvedGraph`], whose modules are trait objects.
+#[derive(Clone, Debug)]
 pub struct EnvironmentPlan {
     /// The resolved, ordered module graph.
     pub graph: ResolvedGraph,
@@ -392,6 +391,10 @@ pub struct EnvironmentPlan {
     pub routes: RoutePlan,
     /// Each module's injected env (the values the planner decided for it).
     pub injected: BTreeMap<ModuleId, InjectedEnv>,
+    /// Each module's services, resolved against its knobs (the same values the planner routed
+    /// over). Exposed so consumers — and the artifact renderers — read the settled services
+    /// instead of recomputing `module.services(...)`.
+    pub services: BTreeMap<ModuleId, Vec<ServiceSpec>>,
     /// The typed [`Connection`] resolved for each demand, keyed by `(demanding module id,
     /// demand index)`. The same handshake the planner flattens into [`injected`](Self::injected)
     /// today, exposed in typed form so a consumer can make explicit per-flavour rendering
@@ -443,14 +446,41 @@ pub fn plan(
     // consumer explicitly pinned each (the sanctioned multi-store case).
     check_role_exclusivity(&graph)?;
 
+    // Resolve each module's knobs to their canonical values once, up front, and compute each
+    // module's services from them. Knob resolution depends only on the knob defaults and the
+    // selection overrides (never on services), so there is no circularity: the services a
+    // module emits may *vary* with its knobs, but the knobs are settled first. Every later
+    // pass reads these caches instead of re-resolving or re-deriving.
+    let mut resolved_knobs: BTreeMap<ModuleId, ResolvedKnobs> = BTreeMap::new();
+    for module in &graph.nodes {
+        let overrides = selection.knob_overrides.get(module.id());
+        let mut knobs = ResolvedKnobs::new();
+        for knob in module.knobs() {
+            if let Some(value) = resolve_knob(module.id(), knob, overrides)? {
+                knobs.set(&knob.key, value);
+            }
+        }
+        resolved_knobs.insert(module.id().clone(), knobs);
+    }
+    let services_of: BTreeMap<ModuleId, Vec<ServiceSpec>> = graph
+        .nodes
+        .iter()
+        .map(|module| {
+            (
+                module.id().clone(),
+                module.services(&resolved_knobs[module.id()]),
+            )
+        })
+        .collect();
+
     // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
     // order). Grouping by provider — not by abstract role — is what lets one object-store
     // demand land on SeaweedFS and another on Azurite, each provisioning on its own init.
     // Walk modules in graph (dependency) order so the grouped names stay deterministic.
     let mut provisioned_by: BTreeMap<ModuleId, Vec<String>> = BTreeMap::new();
     for module in &graph.nodes {
-        for (idx, demand) in module.needs.iter().enumerate() {
-            let provider = chosen[&(module.id.clone(), idx)].provider.clone();
+        for (idx, demand) in module.needs().iter().enumerate() {
+            let provider = chosen[&(module.id().clone(), idx)].provider.clone();
             let names = provisioned_by.entry(provider).or_default();
             if !names.contains(&demand.name) {
                 names.push(demand.name.clone());
@@ -487,7 +517,7 @@ pub fn plan(
             })
         };
         for module in &graph.nodes {
-            for service in &module.services {
+            for service in &services_of[module.id()] {
                 for endpoint in &service.endpoints {
                     if matches!(
                         endpoint.intent,
@@ -506,7 +536,13 @@ pub fn plan(
     // Envoy on its dedicated listener rather than the provider's in-network address. The
     // provider's own self-connection (used to render its fragment) is rewritten in the same
     // pass via `chosen`.
-    rewrite_gatewayed_object_store_endpoints(&mut chosen, &graph, ctx, &dedicated_ports);
+    rewrite_gatewayed_object_store_endpoints(
+        &mut chosen,
+        &services_of,
+        &graph,
+        ctx,
+        &dedicated_ports,
+    );
 
     let mut routes = RoutePlan::new();
     let mut gateway = GatewayConfig {
@@ -531,37 +567,33 @@ pub fn plan(
         // whole stack's persistence relocates via the one `PlanCtx::data_root` knob.
         module_env.set(DATA_ROOT_VAR, &ctx.data_root);
         // Seed each module's render env with its declared env vars.
-        for (k, v) in module.provides.env_vars.iter() {
+        for (k, v) in module.provides().env_vars.iter() {
             module_env.set(k, v);
         }
-        // Inject the module's user-tunable knob values: an override from the selection,
-        // else the knob's default. Each lands under the knob's `key`, so a fragment or a
-        // mounted config file reads it as `{{ env.KEY }}` — the same injection point as
-        // `DATA_ROOT` and `BASE_PATH`.
-        let module_overrides = selection.knob_overrides.get(&module.id);
-        for knob in &module.knobs {
-            if let Some(value) = resolve_knob(&module.id, knob, module_overrides)? {
-                module_env.set(&knob.key, value);
-            }
+        // Inject the module's resolved knob values (computed once up front): each lands under
+        // the knob's `key`, so a fragment or a mounted config file reads it as `{{ env.KEY }}`
+        // — the same injection point as `DATA_ROOT` and `BASE_PATH`.
+        for (k, v) in resolved_knobs[module.id()].iter() {
+            module_env.set(k, v);
         }
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field. The connection was resolved once up front (in `chosen`).
-        for (idx, demand) in module.needs.iter().enumerate() {
-            let connection = &chosen[&(module.id.clone(), idx)].connection;
-            bind_connection(&mut module_env, &module.id, demand, connection)?;
+        for (idx, demand) in module.needs().iter().enumerate() {
+            let connection = &chosen[&(module.id().clone(), idx)].connection;
+            bind_connection(&mut module_env, module.id(), demand, connection)?;
         }
-        for service in &module.services {
+        for service in &services_of[module.id()] {
             for endpoint in &service.endpoints {
                 match &endpoint.intent {
                     RouteIntent::Internal => {} // no route
                     RouteIntent::Api => {
-                        // The mount prefix is declared in extras, not on the
-                        // endpoint's `path` (which stays empty so the resolver's
-                        // `join(prefix, path)` round-trips to exactly the prefix).
-                        let prefix = api_mount_prefix(module, &endpoint.id);
+                        // The mount prefix is the endpoint's typed `mount_prefix` (its `path`
+                        // stays empty so the resolver's `join(prefix, path)` round-trips to
+                        // exactly the prefix).
+                        let prefix = endpoint.mount_prefix.clone().unwrap_or_default();
                         require_prefix(&prefix, service, &endpoint.id)?;
                         claim(&mut claimed, &prefix, service, &endpoint.id)?;
-                        let rewrite = api_rewrite(module, &prefix);
+                        let rewrite = api_rewrite(&endpoint.rewrite, &service.base_path, &prefix);
                         ensure_cluster(&mut gateway, service, endpoint)?;
                         shared_routes.push(GatewayRoute {
                             prefix: prefix.clone(),
@@ -582,7 +614,7 @@ pub fn plan(
                         );
                     }
                     RouteIntent::UiPrefixable => {
-                        let base = module_base_path(module);
+                        let base = service.base_path.clone();
                         // An empty base path would mount the UI at `/` — a catch-all
                         // that shadows every other route. A prefixable UI must declare
                         // a non-empty base path; if it truly serves at root it is a
@@ -646,7 +678,7 @@ pub fn plan(
 
         // Routes/env are decided here; rendering happens in a second pass below, once
         // every module's injected env is settled, so renders stay in dependency order.
-        injected.insert(module.id.clone(), module_env);
+        injected.insert(module.id().clone(), module_env);
     }
 
     // Order shared-listener routes most-specific-first (longer prefix wins), stable
@@ -673,7 +705,7 @@ pub fn plan(
     // `.env` — they are rendered into the fragment at plan time.
     let mut env = InjectedEnv::new();
     for module in &graph.nodes {
-        for (k, v) in module.provides.env_vars.iter() {
+        for (k, v) in module.provides().env_vars.iter() {
             env.set(k, v);
         }
         // A provider contributes its connections' conventional SDK env vars (an object
@@ -681,14 +713,14 @@ pub fn plan(
         // credential so it is stated once. Only an in-graph (i.e. chosen) provider reaches
         // here, so an unselected backend's credentials never leak into `.env`. The values
         // are name-independent, so the template's credential is read directly.
-        for template in module.provides.resource_kinds.values() {
+        for template in module.provides().resource_kinds.values() {
             for (k, v) in template.0.standard_env() {
                 env.set(k, v);
             }
         }
-        for (idx, demand) in module.needs.iter().enumerate() {
-            let connection = &chosen[&(module.id.clone(), idx)].connection;
-            bind_connection(&mut env, &module.id, demand, connection)?;
+        for (idx, demand) in module.needs().iter().enumerate() {
+            let connection = &chosen[&(module.id().clone(), idx)].connection;
+            bind_connection(&mut env, module.id(), demand, connection)?;
         }
     }
 
@@ -702,7 +734,7 @@ pub fn plan(
     let mut configs: Vec<ConfigDecl> = Vec::new();
     let mut alias_owner: BTreeMap<String, ModuleId> = BTreeMap::new();
     for module in &graph.nodes {
-        let module_env = injected.get(&module.id).cloned().unwrap_or_default();
+        let module_env = injected.get(module.id()).cloned().unwrap_or_default();
         // The typed connections resolved for this module's demands, grouped by role, so a
         // `Template` fragment can branch on the chosen credential flavour. Alongside them,
         // the resolved `depends_on` gates — one per demand whose chosen provider advertises a
@@ -710,12 +742,12 @@ pub fn plan(
         // service it waits on.
         let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
         let mut dependencies: Vec<crate::module::DepGate> = Vec::new();
-        for (idx, demand) in module.needs.iter().enumerate() {
-            let provider = &chosen[&(module.id.clone(), idx)].provider;
+        for (idx, demand) in module.needs().iter().enumerate() {
+            let provider = &chosen[&(module.id().clone(), idx)].provider;
             connections
                 .entry(demand.resource.clone())
                 .or_default()
-                .push(chosen[&(module.id.clone(), idx)].connection.clone());
+                .push(chosen[&(module.id().clone(), idx)].connection.clone());
             if let Some(gate) = provider_dep_gate(catalog, provider) {
                 dependencies.push(gate);
             }
@@ -723,8 +755,8 @@ pub fn plan(
         // A *provider* renders against its own role too: the names it provisions (`objects`,
         // for an init block to iterate) plus its own connection resolved for each — so its
         // fragment reads e.g. `connections.object_store.0.credential` rather than a `${VAR}`.
-        let objects = provisioned_by.get(&module.id).cloned().unwrap_or_default();
-        for (role, template) in module.provides.resource_kinds.iter() {
+        let objects = provisioned_by.get(module.id()).cloned().unwrap_or_default();
+        for (role, template) in module.provides().resource_kinds.iter() {
             let role_conns = connections.entry(role.clone()).or_default();
             for name in &objects {
                 role_conns.push(template.resolve(name));
@@ -733,7 +765,10 @@ pub fn plan(
         // The gateway module publishes every listener's host port: its fragment iterates
         // `published_ports` to render compose `ports:`, so dedicated listeners (object stores)
         // are reachable from the host without the fragment hard-coding a port list.
-        let published_ports = if module.services.iter().any(|s| s.role == Role::gateway()) {
+        let published_ports = if services_of[module.id()]
+            .iter()
+            .any(|s| s.role == Role::gateway())
+        {
             gateway
                 .listeners
                 .iter()
@@ -759,10 +794,10 @@ pub fn plan(
             published_ports,
         };
         let mut out = module
-            .render
+            .render()
             .render(&render_ctx)
             .map_err(|source| PlanError::Render {
-                module: module.id.0.clone(),
+                module: module.id().0.clone(),
                 source,
             })?;
         // Root each emitted file under the module's own directory (`modules/<id>/<path>`),
@@ -770,16 +805,16 @@ pub fn plan(
         // fragment. The rewritten path is the single source of truth the consumer writes to
         // and the compose `configs: file:` references.
         for f in &mut out.files {
-            f.path = format!("modules/{}/{}", module.id.as_str(), f.path);
+            f.path = format!("modules/{}/{}", module.id().as_str(), f.path);
             if let Some(alias) = &f.alias {
                 if let Some(first) = alias_owner.get(alias) {
                     return Err(PlanError::ConfigAliasCollision {
                         alias: alias.clone(),
                         first: first.clone(),
-                        second: module.id.clone(),
+                        second: module.id().clone(),
                     });
                 }
-                alias_owner.insert(alias.clone(), module.id.clone());
+                alias_owner.insert(alias.clone(), module.id().clone());
                 configs.push(ConfigDecl {
                     alias: alias.clone(),
                     path: f.path.clone(),
@@ -788,11 +823,11 @@ pub fn plan(
         }
         if !out.fragment.trim().is_empty() {
             includes.push(ComposeInclude {
-                module: module.id.clone(),
+                module: module.id().clone(),
                 fragment: out.fragment.clone(),
             });
         }
-        renders.push((module.id.clone(), out));
+        renders.push((module.id().clone(), out));
     }
 
     // Deterministic `configs:` order regardless of module/graph order.
@@ -816,6 +851,7 @@ pub fn plan(
         graph,
         routes,
         injected,
+        services: services_of,
         connections,
         renders,
         head,
@@ -866,8 +902,9 @@ fn resolve_with_demands(
 ) -> Result<ResolvedGraph, PlanError> {
     // Each consuming module's demanded providers, recorded as it is discovered, so the
     // final resolve can treat "needs a resource from X" as a dependency edge on X
-    // (provider ordered before consumer, like a `requires`).
-    let mut demand_edges: BTreeMap<ModuleId, Vec<ModuleId>> = BTreeMap::new();
+    // (provider ordered before consumer, like a `requires`). These are passed to `resolve`
+    // as `extra_edges` rather than folded into any module — a module is never mutated.
+    let mut demand_edges: ExtraEdges = ExtraEdges::new();
     let mut selected = resolve_selection(selection, catalog)?;
 
     // Fixed point: resolve → scan demands → add missing providers → repeat. Bounded by
@@ -876,9 +913,9 @@ fn resolve_with_demands(
         let graph = resolve(&selected, catalog.modules())?;
         let mut added = false;
         for module in &graph.nodes {
-            for demand in &module.needs {
-                let provider = choose_provider(ctx, catalog, demand, Some(&module.id))?;
-                let edges = demand_edges.entry(module.id.clone()).or_default();
+            for demand in module.needs() {
+                let provider = choose_provider(ctx, catalog, demand, Some(module.id()))?;
+                let edges = demand_edges.entry(module.id().clone()).or_default();
                 if !edges.contains(&provider) {
                     edges.push(provider.clone());
                 }
@@ -889,15 +926,13 @@ fn resolve_with_demands(
             }
         }
         if !added {
-            // Final resolve against an augmented catalog where each consumer also
-            // `requires` its demanded providers, so providers start before consumers.
-            let augmented = augment_requires(catalog.modules(), &demand_edges);
-            return resolve(&selected, &augmented).map_err(Into::into);
+            // Final resolve with the demand edges threaded in, so providers start before
+            // the consumers that demand their resources.
+            return resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into);
         }
     }
     // Unreachable in practice (the loop bound exceeds the max modules addable).
-    let augmented = augment_requires(catalog.modules(), &demand_edges);
-    resolve(&selected, &augmented).map_err(Into::into)
+    resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into)
 }
 
 /// Choose the provider module that satisfies a demand, in priority order:
@@ -959,28 +994,6 @@ fn choose_provider(
         resource: role.clone(),
         providers,
     })
-}
-
-/// Clone the catalog modules, extending each module's `requires` with the providers it
-/// demands, so the resolver orders a provider before the module that needs its resource.
-fn augment_requires(
-    modules: &[Module],
-    demand_edges: &BTreeMap<ModuleId, Vec<ModuleId>>,
-) -> Vec<Module> {
-    modules
-        .iter()
-        .map(|m| {
-            let mut m = m.clone();
-            if let Some(providers) = demand_edges.get(&m.id) {
-                for p in providers {
-                    if !m.requires.contains(p) {
-                        m.requires.push(p.clone());
-                    }
-                }
-            }
-            m
-        })
-        .collect()
 }
 
 /// Bind a demand's resolved [`Connection`] into `env` by typed field, per the demand's
@@ -1107,19 +1120,19 @@ fn resolve_demand_providers(
 ) -> Result<ChosenProviders, PlanError> {
     let mut chosen = ChosenProviders::new();
     for module in &graph.nodes {
-        for (idx, demand) in module.needs.iter().enumerate() {
-            let provider_id = choose_provider(ctx, catalog, demand, Some(&module.id))?;
+        for (idx, demand) in module.needs().iter().enumerate() {
+            let provider_id = choose_provider(ctx, catalog, demand, Some(module.id()))?;
             let provider = catalog
                 .get(&provider_id)
                 .expect("provider id is in catalog");
             let template = provider
-                .provides
+                .provides()
                 .resource_kinds
                 .get(&demand.resource)
                 .expect("chosen provider provisions the demanded role");
             let connection = template.resolve(&demand.name);
             chosen.insert(
-                (module.id.clone(), idx),
+                (module.id().clone(), idx),
                 ResolvedDemand {
                     provider: provider_id,
                     connection,
@@ -1145,7 +1158,7 @@ fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
     // The (role, provider) pairs a demand explicitly pinned — these are sanctioned.
     let mut pinned: BTreeSet<(String, ModuleId)> = BTreeSet::new();
     for module in &graph.nodes {
-        for demand in &module.needs {
+        for demand in module.needs() {
             if let Some(p) = &demand.provider {
                 pinned.insert((demand.resource.clone(), p.clone()));
             }
@@ -1157,19 +1170,19 @@ fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
     let mut by_role: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
     for module in &graph.nodes {
         let mut roles: BTreeSet<&str> = module
-            .provides
+            .provides()
             .resource_kinds
             .keys()
             .map(String::as_str)
             .collect();
-        if let Some(cap) = &module.provider_of {
-            roles.insert(cap.as_str());
+        if let Some(cap) = module.provider_of() {
+            roles.insert(cap);
         }
         for role in roles {
             by_role
                 .entry(role.to_string())
                 .or_default()
-                .push(module.id.clone());
+                .push(module.id().clone());
         }
     }
 
@@ -1188,7 +1201,7 @@ fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
             let demanded = graph
                 .nodes
                 .iter()
-                .flat_map(|m| &m.needs)
+                .flat_map(|m| m.needs())
                 .any(|d| d.resource == role);
             if !demanded {
                 continue;
@@ -1281,6 +1294,7 @@ fn ensure_cluster(
 /// consumers (and the provider's own fragment) reach the store through Envoy.
 fn rewrite_gatewayed_object_store_endpoints(
     chosen: &mut ChosenProviders,
+    services_of: &BTreeMap<ModuleId, Vec<ServiceSpec>>,
     graph: &ResolvedGraph,
     ctx: &PlanCtx,
     dedicated_ports: &BTreeMap<(String, String), u16>,
@@ -1288,14 +1302,14 @@ fn rewrite_gatewayed_object_store_endpoints(
     // provider module id → the in-network gateway origin its store is now reached at.
     let mut provider_origin: BTreeMap<ModuleId, String> = BTreeMap::new();
     for module in &graph.nodes {
-        for service in &module.services {
+        for service in &services_of[module.id()] {
             for endpoint in &service.endpoints {
                 if endpoint.intent == RouteIntent::Gatewayed
                     && let Some(port) =
                         dedicated_ports.get(&(service.name.clone(), endpoint.id.clone()))
                 {
                     provider_origin.insert(
-                        module.id.clone(),
+                        module.id().clone(),
                         format!("http://{}:{}", ctx.gateway_service, port),
                     );
                 }
@@ -1364,7 +1378,8 @@ fn swap_origin(url: &str, new_origin: &str) -> String {
 /// unrecognized or missing condition defaults to
 /// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
 fn provider_dep_gate(catalog: &Catalog, provider: &ModuleId) -> Option<crate::module::DepGate> {
-    let gate = catalog.get(provider)?.provides.extras.get(DEP_GATE_EXTRA)?;
+    let module = catalog.get(provider)?;
+    let gate = module.provides().extras.get(DEP_GATE_EXTRA)?;
     let (service, condition) = match gate.split_once(':') {
         Some((s, c)) => (s, crate::module::DependsCondition::parse(c)),
         None => (gate.as_str(), None),
@@ -1375,59 +1390,27 @@ fn provider_dep_gate(catalog: &Catalog, provider: &ModuleId) -> Option<crate::mo
     })
 }
 
-/// The base path a module's service serves itself under, from the `base_path` extra
-/// (empty string if unset → service serves at root).
-fn module_base_path(module: &Module) -> String {
-    module
-        .provides
-        .extras
-        .get(BASE_PATH_EXTRA)
-        .cloned()
-        .unwrap_or_default()
-}
-
-/// The client-facing mount prefix declared for an API endpoint, read from the
-/// `api_prefix:<endpoint_id>` extra. The endpoint's own `path` stays empty so the
-/// resolver's `join(prefix, path)` round-trips to exactly this prefix.
-fn api_mount_prefix(module: &Module, endpoint_id: &str) -> String {
-    module
-        .provides
-        .extras
-        .get(&format!("{API_PREFIX_EXTRA}{endpoint_id}"))
-        .cloned()
-        .unwrap_or_default()
-}
-
-/// The gateway rewrite for an API route, for the structured [`GatewayConfig`].
+/// The gateway rewrite for an API route, for the structured [`GatewayConfig`], from the
+/// endpoint's typed [`Rewrite`] and its service's `base_path`.
 ///
-/// Tri-state: `None` means forward the path unchanged (no rewrite emitted);
+/// Tri-state result: `None` means forward the path unchanged (no rewrite emitted);
 /// `Some(path)` means rewrite the matched prefix to `path`.
 ///
-/// Resolution order: an explicit `rewrite:<prefix>` override on the module (the rare
-/// exception) wins — an **empty** override value forces passthrough (`None`), a
-/// non-empty one rewrites to that value. With no override, the rewrite is the
-/// service's `base_path` joined with the client `prefix`; a service serving at root
-/// (empty base path) needs no rewrite.
-fn api_rewrite(module: &Module, prefix: &str) -> Option<String> {
-    if let Some(over) = module
-        .provides
-        .extras
-        .get(&format!("{REWRITE_OVERRIDE_PREFIX}{prefix}"))
-    {
-        // Empty override == "this route passes through unchanged" (the gateway emits
-        // no rewrite block), matching how the trestle templates treat an empty
-        // rewrite. A non-empty override is the literal upstream path.
-        return if over.is_empty() {
-            None
-        } else {
-            Some(over.clone())
-        };
-    }
-    let base = module_base_path(module);
-    if base.is_empty() {
-        None
-    } else {
-        Some(join_path(&base, prefix))
+/// - [`Rewrite::Passthrough`] forwards unchanged (`None`).
+/// - [`Rewrite::To`] rewrites to the literal path.
+/// - [`Rewrite::Inherit`] joins the service's `base_path` with the client `prefix`; a
+///   service serving at root (empty base path) needs no rewrite (`None`).
+fn api_rewrite(rewrite: &Rewrite, base_path: &str, prefix: &str) -> Option<String> {
+    match rewrite {
+        Rewrite::Passthrough => None,
+        Rewrite::To(path) => Some(path.clone()),
+        Rewrite::Inherit => {
+            if base_path.is_empty() {
+                None
+            } else {
+                Some(join_path(base_path, prefix))
+            }
+        }
     }
 }
 
@@ -1465,13 +1448,15 @@ mod tests {
             .unwrap_or_else(|| panic!("no route for {prefix}"))
     }
 
-    /// A one-service module with `endpoints`, for exercising planner guards.
+    /// A one-service module with `endpoints`, for exercising planner guards. Returns a
+    /// concrete [`DataModule`] so a test can still tweak fields (e.g. `render`) before
+    /// wrapping it as an `Arc<dyn Module>` for the catalog.
     fn module_with(
         id: &str,
         endpoints: Vec<Endpoint>,
         provides: crate::module::Provides,
-    ) -> Module {
-        Module {
+    ) -> crate::module::DataModule {
+        crate::module::DataModule {
             id: id.into(),
             display_name: None,
             summary: None,
@@ -1480,7 +1465,7 @@ mod tests {
             requires: vec![],
             conflicts_with: vec![],
             needs: vec![],
-            services: vec![ServiceSpec {
+            service_specs: vec![ServiceSpec {
                 name: id.to_string(),
                 role: crate::role::Role::new("svc"),
                 placement: Placement::Container {
@@ -1488,6 +1473,7 @@ mod tests {
                 },
                 endpoints,
                 depends_on: vec![],
+                base_path: String::new(),
             }],
             provides,
             knobs: vec![],
@@ -1496,6 +1482,9 @@ mod tests {
     }
 
     fn ep(id: &str, port: u16, intent: RouteIntent) -> Endpoint {
+        // An `Api` endpoint needs a mount prefix; default it to `/<id>` so the guard tests
+        // (which exercise `Api`) have a non-empty prefix. Non-`Api` intents ignore it.
+        let mount_prefix = matches!(intent, RouteIntent::Api).then(|| format!("/{id}"));
         Endpoint {
             id: id.into(),
             scheme: crate::endpoint::Scheme::Http,
@@ -1503,7 +1492,14 @@ mod tests {
             host_port: None,
             intent,
             path: String::new(),
+            mount_prefix,
+            rewrite: Rewrite::Inherit,
         }
+    }
+
+    /// Wrap a [`DataModule`] as an `Arc<dyn Module>` for the catalog.
+    fn arc(m: crate::module::DataModule) -> std::sync::Arc<dyn crate::module::Module> {
+        std::sync::Arc::new(m)
     }
 
     #[test]
@@ -1516,7 +1512,7 @@ mod tests {
         );
         let err = plan(
             &Selection::modules(["svc"]),
-            &Catalog::from_modules([m]),
+            &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
         )
         .unwrap_err();
@@ -1531,7 +1527,7 @@ mod tests {
         // Two modules each declare a `RenderFile` under the same alias. Aliases share one
         // top-level `configs:` namespace, so the planner must refuse rather than let one
         // silently shadow the other.
-        let with_alias = |id: &str| -> Module {
+        let with_alias = |id: &str| {
             let mut m = module_with(id, vec![], Default::default());
             m.render = RenderSpec::Template {
                 fragment: format!("services:\n  {id}: {{}}\n"),
@@ -1541,7 +1537,7 @@ mod tests {
                     alias: Some("shared_alias".into()),
                 }],
             };
-            m
+            arc(m)
         };
         let err = plan(
             &Selection::modules(["a", "b"]),
@@ -1577,7 +1573,7 @@ mod tests {
         };
         let p = plan(
             &Selection::modules(["svc"]),
-            &Catalog::from_modules([m]),
+            &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
         )
         .expect("plan succeeds");
@@ -1600,25 +1596,19 @@ mod tests {
     #[test]
     fn conflicting_endpoint_ports_on_one_service_error() {
         // Two API endpoints on the same service but different ports can't share one
-        // service-named cluster.
-        let mut provides = crate::module::Provides::default();
-        provides
-            .extras
-            .insert(format!("{API_PREFIX_EXTRA}a"), "/a".into());
-        provides
-            .extras
-            .insert(format!("{API_PREFIX_EXTRA}b"), "/b".into());
+        // service-named cluster. Each `Api` endpoint carries its own `mount_prefix`
+        // (`/a`, `/b`) via the `ep` helper, so they don't collide on prefix — only on port.
         let m = module_with(
             "svc",
             vec![
                 ep("a", 8080, RouteIntent::Api),
                 ep("b", 9090, RouteIntent::Api),
             ],
-            provides,
+            Default::default(),
         );
         let err = plan(
             &Selection::modules(["svc"]),
-            &Catalog::from_modules([m]),
+            &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
         )
         .unwrap_err();
@@ -1806,7 +1796,11 @@ mod tests {
         let reversed =
             Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]);
         let b = plan(&reversed, &cat, &PlanCtx::default()).unwrap();
-        assert_eq!(a, b);
+        // `EnvironmentPlan` is not `Eq` (its graph holds trait objects); compare the
+        // observable, contracted-deterministic artifacts instead.
+        assert_eq!(a.gateway, b.gateway);
+        assert_eq!(a.head, b.head);
+        assert_eq!(a.routes, b.routes);
     }
 
     #[test]

@@ -440,13 +440,164 @@ impl Default for RenderSpec {
     }
 }
 
-/// A reusable building block in a catalog: the services it contributes, what it
-/// needs, its dependencies, its config knobs, and how it renders.
+/// A module's knobs resolved to their canonical, coerced values — the input a module's
+/// [`services`](Module::services) reads to decide its knob-driven topology.
 ///
-/// Selection picks a set of modules (directly or via capabilities); the planner
-/// resolves their dependency graph and assigns routing. See [`plan`](crate::plan).
+/// Distinct from [`InjectedEnv`]: this carries *only* the module's knob values (validated
+/// and canonicalized per [`KnobKind`] at plan time), never the planner's later injections
+/// (`BASE_PATH`, `DATA_ROOT`, bound connection coordinates). The planner builds one per
+/// module up front — before it needs the module's services — so there is no circularity.
+///
+/// Accessors are typed: a `Bool` knob reads back through [`bool`](ResolvedKnobs::bool), an
+/// `Integer`/`Port` through [`int`](ResolvedKnobs::int), a `String`/`Enum` through
+/// [`str`](ResolvedKnobs::str). The stored values are already canonical (a `Bool` is the bare
+/// `"true"`/`"false"`, an `Integer` a decimal), so these never re-validate.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedKnobs {
+    values: BTreeMap<String, String>,
+}
+
+impl ResolvedKnobs {
+    /// An empty set (no knobs resolved).
+    pub fn new() -> Self {
+        ResolvedKnobs::default()
+    }
+
+    /// Set `key` to its canonical resolved `value`. The planner populates these from a
+    /// knob's selection override or declared default, coerced per its [`KnobKind`].
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.values.insert(key.into(), value.into());
+    }
+
+    /// The raw canonical value for `key`, if the knob resolved to one.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.values.get(key).map(String::as_str)
+    }
+
+    /// A `Bool` knob's value, or `default` if the knob is unset (or, defensively, not a
+    /// canonical bool). Canonical `Bool` values are the bare `"true"`/`"false"`.
+    pub fn bool(&self, key: &str, default: bool) -> bool {
+        match self.get(key) {
+            Some("true") => true,
+            Some("false") => false,
+            _ => default,
+        }
+    }
+
+    /// An `Integer`/`Port` knob's value parsed back to `i64`, or `None` if unset/unparsable.
+    pub fn int(&self, key: &str) -> Option<i64> {
+        self.get(key).and_then(|v| v.parse().ok())
+    }
+
+    /// A `String`/`Enum` knob's value, or `None` if unset.
+    pub fn str(&self, key: &str) -> Option<&str> {
+        self.get(key)
+    }
+
+    /// Iterate the resolved `(key, value)` pairs in deterministic (key) order — used by the
+    /// planner to flatten the knob values into a module's [`InjectedEnv`].
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.values.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// Whether no knobs resolved.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+/// A reusable building block in a catalog: the services it contributes (possibly varying
+/// with its resolved knobs), what it needs, its dependencies, its config knobs, and how it
+/// renders.
+///
+/// A module is a *trait*, not a data struct, so a module can **internalize logic keyed off
+/// the planner's chosen knob values**: [`services`](Module::services) takes the module's
+/// [`ResolvedKnobs`] and returns the [`ServiceSpec`]s — letting a module emit a different
+/// [`RouteIntent`](crate::RouteIntent), port, or even set of services depending on how it was
+/// configured. The planner stays generic: it resolves knobs, calls `services`, and assigns
+/// routing over whatever the module emits, without understanding any knob's *meaning*.
+///
+/// Most modules need no logic and are authored as data — see [`DataModule`], a passive
+/// implementation that returns its static services verbatim (its knob effects, if any, happen
+/// in its template via the injected env). A module that genuinely varies its topology with a
+/// knob (e.g. a lineage service that drops its UI route when the UI is disabled) is a
+/// hand-written type implementing this trait.
+///
+/// Selection picks a set of modules (directly or via capabilities); the planner resolves their
+/// dependency graph and assigns routing. See [`plan`](crate::plan).
+pub trait Module: Send + Sync {
+    /// The module's stable id within its catalog.
+    fn id(&self) -> &ModuleId;
+    /// A human-readable name for a wizard/UI.
+    fn display_name(&self) -> Option<&str> {
+        None
+    }
+    /// A one-line summary for a wizard/UI.
+    fn summary(&self) -> Option<&str> {
+        None
+    }
+    /// The wizard category this module slots into (e.g. `"ml"`, `"storage"`), if any.
+    fn category(&self) -> Option<&str> {
+        None
+    }
+    /// The capability this module provides, if any (e.g. `"experiment_tracking"`). Used to
+    /// build the capability → module index for capability-based selection.
+    fn provider_of(&self) -> Option<&str> {
+        None
+    }
+    /// Other modules (by id) this one requires; pulled in transitively and ordered before
+    /// this module by the resolver.
+    fn requires(&self) -> &[ModuleId] {
+        &[]
+    }
+    /// Modules (by id) this one cannot coexist with; the planner rejects a selection
+    /// containing both.
+    fn conflicts_with(&self) -> &[ModuleId] {
+        &[]
+    }
+    /// Resources this module needs a provider to vend (databases, buckets, …). Unlike
+    /// [`requires`](Module::requires) — a dependency on a *specific* module — a
+    /// [`ResourceDemand`] names a resource *kind*; the planner finds (and auto-deploys) a
+    /// provider for it, provisions the named resource, and injects its coordinates back in.
+    fn needs(&self) -> &[ResourceDemand] {
+        &[]
+    }
+    /// User-tunable config knobs this module exposes.
+    fn knobs(&self) -> &[Knob] {
+        &[]
+    }
+    /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
+    /// extras).
+    fn provides(&self) -> &Provides;
+    /// How this module produces its compose fragment and mountable files.
+    fn render(&self) -> &RenderSpec;
+    /// The topology services this module contributes, with their routing facts resolved
+    /// against the module's chosen `knobs`. Pure and deterministic. A data module returns its
+    /// static services verbatim; a logic module may branch on `knobs`.
+    fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec>;
+    /// Look up one of this module's services by `name`, given the resolved knobs.
+    fn service(&self, name: &str, knobs: &ResolvedKnobs) -> Option<ServiceSpec> {
+        self.services(knobs).into_iter().find(|s| s.name == name)
+    }
+}
+
+/// The ids of a slice of modules, for the hand-written `Debug` impls on the trait-object
+/// collections (`Catalog`, `ResolvedGraph`) — an `Arc<dyn Module>` is not itself `Debug`, so
+/// they render the module list by id. Shared so the projection lives in one place.
+pub(crate) fn module_ids(modules: &[std::sync::Arc<dyn Module>]) -> Vec<&ModuleId> {
+    modules.iter().map(|m| m.id()).collect()
+}
+
+/// A passive, data-authored [`Module`]: it holds its services and metadata as plain fields and
+/// performs no knob-driven logic. [`services`](Module::services) returns its static
+/// [`service_specs`](DataModule::service_specs) verbatim — any knob effects for such a module
+/// happen in its template (via the planner-injected env), not in Rust.
+///
+/// This is the shape an on-disk `module.yaml` deserializes into (it derives serde), and the
+/// shape every module that needs no programmatic logic takes. A module that *does* vary its
+/// topology with a knob is a hand-written type implementing [`Module`] directly.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Module {
+pub struct DataModule {
     /// The module's stable id within its catalog.
     pub id: ModuleId,
     /// A human-readable name for a wizard/UI.
@@ -455,34 +606,26 @@ pub struct Module {
     /// A one-line summary for a wizard/UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    /// The wizard category this module slots into (e.g. `"ml"`, `"storage"`,
-    /// `"catalog"`), if any.
+    /// The wizard category this module slots into, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    /// The capability this module provides, if any (e.g. `"experiment_tracking"`).
-    /// Used to build the capability → module index for capability-based selection.
+    /// The capability this module provides, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_of: Option<String>,
-    /// Other modules (by id) this one requires; pulled in transitively and ordered
-    /// before this module by the resolver.
+    /// Other modules (by id) this one requires.
     #[serde(default)]
     pub requires: Vec<ModuleId>,
-    /// Modules (by id) this one cannot coexist with; the planner rejects a
-    /// selection containing both.
+    /// Modules (by id) this one cannot coexist with.
     #[serde(default)]
     pub conflicts_with: Vec<ModuleId>,
-    /// Resources this module needs a provider to vend (databases, buckets, …). Unlike
-    /// [`requires`](Module::requires) — a dependency on a *specific* module — a
-    /// [`ResourceDemand`] names a resource *kind*; the planner finds (and auto-deploys)
-    /// a provider for it, provisions the named resource, and injects its coordinates
-    /// back into this module.
+    /// Resources this module needs a provider to vend.
     #[serde(default)]
     pub needs: Vec<ResourceDemand>,
-    /// The topology services this module contributes (often more than one).
-    #[serde(default)]
-    pub services: Vec<ServiceSpec>,
-    /// Non-routing declarative contributions (resource kinds it provisions, ports,
-    /// env vars, extras).
+    /// The static topology services this module contributes (often more than one). Returned
+    /// verbatim by [`services`](Module::services) — a data module does no knob branching.
+    #[serde(default, rename = "services")]
+    pub service_specs: Vec<ServiceSpec>,
+    /// Non-routing declarative contributions.
     #[serde(default)]
     pub provides: Provides,
     /// User-tunable config knobs this module exposes.
@@ -493,10 +636,42 @@ pub struct Module {
     pub render: RenderSpec,
 }
 
-impl Module {
-    /// Look up one of this module's services by `name`.
-    pub fn service(&self, name: &str) -> Option<&ServiceSpec> {
-        self.services.iter().find(|s| s.name == name)
+impl Module for DataModule {
+    fn id(&self) -> &ModuleId {
+        &self.id
+    }
+    fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+    fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+    fn category(&self) -> Option<&str> {
+        self.category.as_deref()
+    }
+    fn provider_of(&self) -> Option<&str> {
+        self.provider_of.as_deref()
+    }
+    fn requires(&self) -> &[ModuleId] {
+        &self.requires
+    }
+    fn conflicts_with(&self) -> &[ModuleId] {
+        &self.conflicts_with
+    }
+    fn needs(&self) -> &[ResourceDemand] {
+        &self.needs
+    }
+    fn knobs(&self) -> &[Knob] {
+        &self.knobs
+    }
+    fn provides(&self) -> &Provides {
+        &self.provides
+    }
+    fn render(&self) -> &RenderSpec {
+        &self.render
+    }
+    fn services(&self, _knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
+        self.service_specs.clone()
     }
 }
 
@@ -628,5 +803,87 @@ mod tests {
                 .is_err(),
             "indexing an absent connection must return Err"
         );
+    }
+
+    #[test]
+    fn resolved_knobs_typed_accessors() {
+        let mut k = ResolvedKnobs::new();
+        k.set("SERVE_UI", "false");
+        k.set("WORKERS", "8");
+        k.set("BACKEND", "s3");
+
+        // Bool reads the canonical "true"/"false"; an unset key falls back to the default.
+        assert!(!k.bool("SERVE_UI", true));
+        assert!(k.bool("MISSING", true));
+        // Int parses the canonical decimal.
+        assert_eq!(k.int("WORKERS"), Some(8));
+        assert_eq!(k.int("MISSING"), None);
+        // String/Enum read through.
+        assert_eq!(k.str("BACKEND"), Some("s3"));
+        assert_eq!(k.get("SERVE_UI"), Some("false"));
+    }
+
+    #[test]
+    fn data_module_services_ignores_knobs_and_returns_static_specs() {
+        // A `DataModule` performs no knob logic: `services` returns its `service_specs`
+        // verbatim regardless of the knobs passed.
+        let svc = ServiceSpec {
+            name: "svc".into(),
+            role: crate::role::Role::new("svc"),
+            placement: crate::placement::Placement::Container {
+                service: "svc".into(),
+            },
+            endpoints: vec![],
+            depends_on: vec![],
+            base_path: "/x".into(),
+        };
+        let m = DataModule {
+            id: "svc".into(),
+            display_name: None,
+            summary: None,
+            category: None,
+            provider_of: None,
+            requires: vec![],
+            conflicts_with: vec![],
+            needs: vec![],
+            service_specs: vec![svc.clone()],
+            provides: Provides::default(),
+            knobs: vec![],
+            render: RenderSpec::default(),
+        };
+        let mut knobs = ResolvedKnobs::new();
+        knobs.set("ANYTHING", "true");
+        assert_eq!(Module::services(&m, &knobs), vec![svc.clone()]);
+        assert_eq!(Module::services(&m, &ResolvedKnobs::new()), vec![svc]);
+    }
+
+    #[cfg(feature = "catalog")]
+    #[test]
+    fn data_module_round_trips_through_yaml() {
+        // A `module.yaml`-shaped `DataModule` deserializes and re-serializes losslessly — the
+        // on-disk authoring path the trait split preserves.
+        let yaml = "\
+id: demo
+display_name: Demo
+services:
+  - name: demo
+    role: experiment_tracking
+    placement: { kind: container, service: demo }
+    base_path: /demo
+    endpoints:
+      - id: ui
+        scheme: http
+        internal_port: 5000
+        intent: { kind: ui_prefixable }
+";
+        let m: DataModule = serde_yaml::from_str(yaml).expect("DataModule deserializes");
+        assert_eq!(m.id, ModuleId::from("demo"));
+        let services = Module::services(&m, &ResolvedKnobs::new());
+        assert_eq!(services[0].base_path, "/demo");
+        assert_eq!(services[0].endpoints[0].id, "ui");
+        // Round-trips back to a value-equal module.
+        let reser = serde_yaml::to_string(&m).expect("serializes");
+        let m2: DataModule = serde_yaml::from_str(&reser).expect("re-deserializes");
+        assert_eq!(m, m2);
     }
 }

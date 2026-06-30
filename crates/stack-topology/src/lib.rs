@@ -68,10 +68,11 @@ pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
 };
 pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
-pub use endpoint::{Endpoint, RouteIntent, Scheme};
+pub use endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
 pub use module::{
-    ConnectionBinding, DepGate, DependsCondition, Knob, KnobKind, Module, ModuleId, PortDecl,
-    PortMapping, Provides, RenderCtx, RenderError, RenderSpec, ResourceDemand,
+    ConnectionBinding, DataModule, DepGate, DependsCondition, Knob, KnobKind, Module, ModuleId,
+    PortDecl, PortMapping, Provides, RenderCtx, RenderError, RenderSpec, ResolvedKnobs,
+    ResourceDemand,
 };
 pub use placement::{Placement, Vantage};
 pub use plan::{AssignedRoute, Listener, RoutePlan};
@@ -81,6 +82,6 @@ pub use plan_env::{
 };
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 pub use resolve::{AddressError, TopologyCtx, address, address_direct};
-pub use resolve_graph::{Edge, ResolveError, ResolvedGraph, resolve, resolve_with};
+pub use resolve_graph::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
 pub use role::{KnownRole, Role, ServiceSpec};
 pub use surface::SurfaceMode;

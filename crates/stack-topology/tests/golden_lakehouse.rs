@@ -6,10 +6,12 @@
 //! behaviours the planner exists to guarantee: a real prefix collision fails loudly,
 //! and the plan is deterministic regardless of selection order.
 
+use std::sync::Arc;
+
 use olai_stack_topology::{
-    Catalog, Endpoint, GatewayRoute, Module, ModuleId, Placement, PlanCtx, PlanError, Provides,
-    RenderSpec, Role, RouteIntent, Scheme, Selection, ServiceSpec, TopologyCtx, Vantage, address,
-    baseline_catalog, plan,
+    Catalog, DataModule, Endpoint, GatewayRoute, Module, ModuleId, Placement, PlanCtx, PlanError,
+    Provides, RenderSpec, ResolvedKnobs, Rewrite, Role, RouteIntent, Scheme, Selection,
+    ServiceSpec, TopologyCtx, Vantage, address, baseline_catalog, plan,
 };
 
 /// The always-on + common lakehouse modules.
@@ -93,14 +95,10 @@ fn default_lakehouse_rederives_the_working_gateway_routes() {
 fn real_prefix_collision_fails_loudly() {
     // Two modules whose Api endpoints both claim `/api` with nothing to distinguish
     // them — exactly the silent-shadowing the planner refuses.
-    fn api_module(id: &str) -> Module {
-        // The API mount prefix is declared in extras (`api_prefix:<endpoint_id>`),
-        // the same convention the baseline modules use; both modules claim `/api`.
-        let mut provides = Provides::default();
-        provides
-            .extras
-            .insert("api_prefix:rest".into(), "/api".into());
-        Module {
+    fn api_module(id: &str) -> Arc<dyn Module> {
+        // Both modules' `rest` endpoints claim the `/api` mount prefix (a typed
+        // `Endpoint.mount_prefix`), so the planner must reject the collision.
+        Arc::new(DataModule {
             id: ModuleId::from(id),
             display_name: None,
             summary: None,
@@ -109,12 +107,13 @@ fn real_prefix_collision_fails_loudly() {
             requires: vec![],
             conflicts_with: vec![],
             needs: vec![],
-            services: vec![ServiceSpec {
+            service_specs: vec![ServiceSpec {
                 name: id.to_string(),
                 role: Role::new("svc"),
                 placement: Placement::Container {
                     service: id.to_string(),
                 },
+                base_path: String::new(),
                 endpoints: vec![Endpoint {
                     id: "rest".into(),
                     scheme: Scheme::Http,
@@ -122,13 +121,15 @@ fn real_prefix_collision_fails_loudly() {
                     host_port: None,
                     intent: RouteIntent::Api,
                     path: String::new(),
+                    mount_prefix: Some("/api".into()),
+                    rewrite: Rewrite::Inherit,
                 }],
                 depends_on: vec![],
             }],
-            provides,
+            provides: Provides::default(),
             knobs: vec![],
             render: RenderSpec::default(),
-        }
+        })
     }
 
     let catalog = Catalog::from_modules([api_module("svc-a"), api_module("svc-b")]);
@@ -162,20 +163,22 @@ fn planner_routes_round_trip_through_the_address_resolver() {
         gateway_internal_port: 10000,
         gateway_host_port: 9080,
     };
+    // These modules declare no knobs, so their services resolve against empty knobs.
+    let no_knobs = ResolvedKnobs::new();
     let mlflow = p
         .graph
         .module(&ModuleId::from("mlflow"))
         .unwrap()
-        .service("mlflow")
+        .service("mlflow", &no_knobs)
         .unwrap();
 
     // From a container, the gateway is `envoy:10000`; the tracking API resolves to the
     // single mount prefix — not `/api/2.0/mlflow/api/2.0/mlflow`.
-    let tracking = address(Vantage::Container, mlflow, "tracking", &p.routes, &ctx).unwrap();
+    let tracking = address(Vantage::Container, &mlflow, "tracking", &p.routes, &ctx).unwrap();
     assert_eq!(tracking.as_str(), "http://envoy:10000/api/2.0/mlflow");
 
     // From the host, the UI resolves at the gateway's host port under its base path.
-    let ui = address(Vantage::Host, mlflow, "ui", &p.routes, &ctx).unwrap();
+    let ui = address(Vantage::Host, &mlflow, "ui", &p.routes, &ctx).unwrap();
     assert_eq!(ui.as_str(), "http://localhost:9080/mlflow");
 
     // Unity Catalog REST, container vantage — single, un-doubled path.
@@ -183,9 +186,9 @@ fn planner_routes_round_trip_through_the_address_resolver() {
         .graph
         .module(&ModuleId::from("unity-catalog"))
         .unwrap()
-        .service("unitycatalog")
+        .service("unitycatalog", &no_knobs)
         .unwrap();
-    let rest = address(Vantage::Container, uc, "rest", &p.routes, &ctx).unwrap();
+    let rest = address(Vantage::Container, &uc, "rest", &p.routes, &ctx).unwrap();
     assert_eq!(rest.as_str(), "http://envoy:10000/api/2.1/unity-catalog");
 }
 
@@ -199,5 +202,18 @@ fn plan_is_byte_identical_regardless_of_selection_order() {
         &PlanCtx::default(),
     )
     .unwrap();
-    assert_eq!(forward, reversed);
+    // `EnvironmentPlan` is no longer `Eq` (its graph holds trait objects), so compare the
+    // observable artifacts the planner is contracted to produce deterministically: the
+    // gateway config, the routing plan, the head file, and the include order.
+    assert_eq!(forward.gateway, reversed.gateway);
+    assert_eq!(forward.head, reversed.head);
+    assert_eq!(forward.routes, reversed.routes);
+    let order = |p: &olai_stack_topology::EnvironmentPlan| {
+        p.head
+            .includes
+            .iter()
+            .map(|i| i.module.0.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(&forward), order(&reversed));
 }

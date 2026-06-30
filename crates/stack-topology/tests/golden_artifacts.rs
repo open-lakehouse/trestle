@@ -701,21 +701,34 @@ fn adding_jaeger_aggregates_its_routes() {
 fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
     use olai_stack_topology::ModuleId;
 
-    // Headwaters serves its UI + read API + ingest under one base path, so it fronts as a
-    // single `UiPrefixable` route at `/lineage` — mounted on the shared listener and
-    // forwarded upstream unchanged (no rewrite), unlike MLflow's split tracking/UI routes.
-    // It demands only a relational_db (named `lineage`); selecting it must auto-provision
-    // Postgres and the `lineage` database.
+    // With the UI on (the default), Headwaters relocates its whole surface under `/lineage`:
+    // the UI is fronted there (prefixable, forwarded unchanged), and its static Databricks-style
+    // API path `/api/v1/lineage` is rewritten to carry the base path
+    // (`/lineage/api/v1/lineage`), since that is where the relocated server serves it. Both
+    // routes target the one headwaters cluster. It demands only a relational_db (named
+    // `lineage`); selecting it must auto-provision Postgres and the `lineage` database.
     let sel = Selection::modules(["envoy", "postgres", "headwaters"]);
     let arts = render(&sel);
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
 
-    // One shared-listener route at /lineage, no rewrite, routed to the headwaters cluster.
-    let (cluster, rewrite) = routes
+    // The UI route at /lineage, forwarded unchanged, to the headwaters cluster.
+    let (ui_cluster, ui_rewrite) = routes
         .get("/lineage")
-        .expect("missing /lineage route in the rendered Envoy config");
-    assert_eq!(cluster, "headwaters");
-    assert_eq!(*rewrite, None, "the prefix is forwarded upstream unchanged");
+        .expect("missing /lineage UI route in the rendered Envoy config");
+    assert_eq!(ui_cluster, "headwaters");
+    assert_eq!(*ui_rewrite, None, "the UI prefix is forwarded unchanged");
+    // The API route at the static path, rewritten to carry the base path.
+    let (api_cluster, api_rewrite) = routes
+        .get("/api/v1/lineage")
+        .expect("missing /api/v1/lineage API route in the rendered Envoy config");
+    assert_eq!(api_cluster, "headwaters");
+    // The rendered Envoy substitution carries the `\1` capture suffix (the matched remainder
+    // of the path), so the base-path-prefixed upstream is `/lineage/api/v1/lineage\1`.
+    assert_eq!(
+        api_rewrite.as_deref(),
+        Some(r"/lineage/api/v1/lineage\1"),
+        "the API path carries the base path when the UI is on"
+    );
     assert_eq!(
         clusters.get("headwaters").map(String::as_str),
         Some("headwaters:8091")
@@ -753,10 +766,16 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         "DATABASE_URL comes from the resolved relational_db url: {}",
         out.fragment
     );
+    // The container invokes the headwaters CLI directly, pointing it at the mounted config.
+    let command: Vec<&str> = svc["command"]
+        .as_sequence()
+        .expect("command is a sequence")
+        .iter()
+        .map(|v| v.as_str().expect("command entries are strings"))
+        .collect();
     assert_eq!(
-        env["HEADWATERS_CONFIG"].as_str(),
-        Some("/etc/headwaters/config.toml"),
-        "the container is pointed at the mounted config file"
+        command,
+        ["serve", "--config", "/etc/headwaters/config.toml"]
     );
     // The config file is mounted via the `headwaters_config` alias at the expected target.
     assert_eq!(
@@ -852,6 +871,57 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
         config.contents.contains("serve = false"),
         "the override turns the UI off: {}",
         config.contents
+    );
+    assert!(
+        !config.contents.contains("base_path"),
+        "no base_path line when the UI is off: {}",
+        config.contents
+    );
+
+    // With the UI off, there is no UI to relocate: Headwaters serves only its static
+    // Databricks-style API path at root, so the gateway matches `/api/v1/lineage` and forwards
+    // it unchanged. The prefixable-UI handshake drops away — no `BASE_PATH` is injected, the
+    // `AssignedRoute` carries no `base_path`, and there is no `/lineage` route at all.
+    let route = p
+        .routes
+        .get("headwaters", "api")
+        .expect("headwaters api endpoint is routed");
+    assert_eq!(route.prefix, "/api/v1/lineage");
+    assert_eq!(
+        route.rewrite, None,
+        "API served at its static path, forwarded unchanged"
+    );
+    assert_eq!(
+        route.base_path, None,
+        "no prefixable-UI base path when the UI is off"
+    );
+    assert!(
+        matches!(route.listener, olai_stack_topology::Listener::Shared),
+        "the API stays on the shared listener"
+    );
+    assert!(
+        p.routes.get("headwaters", "ui").is_none(),
+        "no UI endpoint is emitted when the UI is off"
+    );
+    assert_eq!(
+        p.injected
+            .get(&ModuleId::from("headwaters"))
+            .and_then(|e| e.get("BASE_PATH")),
+        None,
+        "BASE_PATH is not injected when the UI is off"
+    );
+
+    // The gateway route table fronts the static API path (and no `/lineage` route).
+    let arts = render_all(&p, &EnvoyOpts::default());
+    let (routes, _, _) = parse_envoy(&arts.envoy);
+    let (cluster, rewrite) = routes
+        .get("/api/v1/lineage")
+        .expect("the API path is fronted with the UI off");
+    assert_eq!(cluster, "headwaters");
+    assert_eq!(*rewrite, None);
+    assert!(
+        !routes.contains_key("/lineage"),
+        "no UI route when the UI is off"
     );
 }
 

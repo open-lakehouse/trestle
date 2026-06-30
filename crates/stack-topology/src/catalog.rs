@@ -11,14 +11,19 @@
 //! - [`baseline_catalog`] — an inlined, pure baseline built in Rust (the common
 //!   local-Lakehouse modules), always available with no I/O and no YAML dependency.
 //!   This mirrors hydrofoil's static `registry()`.
-//! - [`Catalog::from_manifests`] / [`Catalog::merge`] — assemble from [`Module`]
-//!   values authored as YAML (a `module.yaml` per module directory) and overlay them
-//!   onto the baseline. Parsing YAML is the feature-gated `catalog` concern, kept out
-//!   of the pure core; on-disk *discovery* (walking a directory tree) is left to the
-//!   consumer, which already owns embedding/IO.
+//! - [`Catalog::from_manifests`] / [`Catalog::merge`] — assemble from
+//!   [`DataModule`](crate::DataModule) values authored as YAML (a `module.yaml` per module
+//!   directory) and overlay them onto the baseline. Parsing YAML is the feature-gated
+//!   `catalog` concern, kept out of the pure core; on-disk *discovery* (walking a directory
+//!   tree) is left to the consumer, which already owns embedding/IO. A YAML manifest is
+//!   always a passive `DataModule`; a logic module (one with a hand-written
+//!   [`Module`](crate::Module) impl) lives in code, not a manifest.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
+#[cfg(any(feature = "catalog", test))]
+use crate::module::DataModule;
 use crate::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
@@ -26,13 +31,26 @@ pub(crate) mod baseline;
 pub use baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection};
 
 /// A set of modules to plan against, with id and capability indexes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Modules are held as `Arc<dyn Module>` so the catalog is cheap to clone and a module can be
+/// either a data-authored [`DataModule`](crate::DataModule) or a hand-written logic type — the
+/// catalog treats them uniformly through the [`Module`] trait.
+#[derive(Clone, Default)]
 pub struct Catalog {
-    modules: Vec<Module>,
+    modules: Vec<Arc<dyn Module>>,
     /// Default provider per resource role, the deterministic tie-break the planner
     /// uses when a role has more than one provider and neither a demand pin nor a
     /// `PlanCtx` preference selects one. (Role → provider module id.)
     default_provider: BTreeMap<String, ModuleId>,
+}
+
+impl std::fmt::Debug for Catalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Catalog")
+            .field("modules", &crate::module::module_ids(&self.modules))
+            .field("default_provider", &self.default_provider)
+            .finish()
+    }
 }
 
 impl Catalog {
@@ -42,7 +60,7 @@ impl Catalog {
     }
 
     /// Build a catalog from an explicit list of modules (last id wins on duplicate).
-    pub fn from_modules(modules: impl IntoIterator<Item = Module>) -> Self {
+    pub fn from_modules(modules: impl IntoIterator<Item = Arc<dyn Module>>) -> Self {
         let mut cat = Catalog::new();
         for m in modules {
             cat.insert(m);
@@ -51,8 +69,8 @@ impl Catalog {
     }
 
     /// Insert (or replace, by id) a single module.
-    pub fn insert(&mut self, module: Module) {
-        if let Some(slot) = self.modules.iter_mut().find(|m| m.id == module.id) {
+    pub fn insert(&mut self, module: Arc<dyn Module>) {
+        if let Some(slot) = self.modules.iter_mut().find(|m| m.id() == module.id()) {
             *slot = module;
         } else {
             self.modules.push(module);
@@ -74,13 +92,13 @@ impl Catalog {
     }
 
     /// All modules in the catalog, in insertion order.
-    pub fn modules(&self) -> &[Module] {
+    pub fn modules(&self) -> &[Arc<dyn Module>] {
         &self.modules
     }
 
     /// Look up a module by id.
-    pub fn get(&self, id: &ModuleId) -> Option<&Module> {
-        self.modules.iter().find(|m| &m.id == id)
+    pub fn get(&self, id: &ModuleId) -> Option<&Arc<dyn Module>> {
+        self.modules.iter().find(|m| m.id() == id)
     }
 
     /// The ids of modules that declare they provide `capability` (via
@@ -91,8 +109,8 @@ impl Catalog {
     pub fn providers_of(&self, capability: &str) -> Vec<&ModuleId> {
         self.modules
             .iter()
-            .filter(|m| m.provider_of.as_deref() == Some(capability))
-            .map(|m| &m.id)
+            .filter(|m| m.provider_of() == Some(capability))
+            .map(|m| m.id())
             .collect()
     }
 
@@ -100,8 +118,11 @@ impl Catalog {
     pub fn capability_index(&self) -> BTreeMap<String, Vec<ModuleId>> {
         let mut index: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
         for m in &self.modules {
-            if let Some(cap) = &m.provider_of {
-                index.entry(cap.clone()).or_default().push(m.id.clone());
+            if let Some(cap) = m.provider_of() {
+                index
+                    .entry(cap.to_string())
+                    .or_default()
+                    .push(m.id().clone());
             }
         }
         index
@@ -114,8 +135,8 @@ impl Catalog {
     pub fn providers_for(&self, resource_kind: &str) -> Vec<&ModuleId> {
         self.modules
             .iter()
-            .filter(|m| m.provides.resource_kinds.contains_key(resource_kind))
-            .map(|m| &m.id)
+            .filter(|m| m.provides().resource_kinds.contains_key(resource_kind))
+            .map(|m| m.id())
             .collect()
     }
 
@@ -160,16 +181,18 @@ impl Catalog {
     /// Parse and assemble a catalog from a sequence of module-manifest YAML strings.
     ///
     /// Each element is the text of one module manifest (a `module.yaml`), a single
-    /// [`Module`] document. The pure core can construct [`baseline_catalog`] without
-    /// this; YAML parsing is gated behind the `catalog` feature so the core stays
-    /// free of `serde_yaml`.
+    /// [`DataModule`] document — the passive, data-authored module shape (a `module.yaml`
+    /// cannot express a logic module's Rust). The pure core can construct
+    /// [`baseline_catalog`] without this; YAML parsing is gated behind the `catalog`
+    /// feature so the core stays free of `serde_yaml`.
     #[cfg(feature = "catalog")]
     pub fn from_manifests<'a>(
         manifests: impl IntoIterator<Item = &'a str>,
     ) -> Result<Catalog, serde_yaml::Error> {
         let mut cat = Catalog::new();
         for text in manifests {
-            cat.insert(serde_yaml::from_str(text)?);
+            let module: DataModule = serde_yaml::from_str(text)?;
+            cat.insert(Arc::new(module));
         }
         Ok(cat)
     }
@@ -202,17 +225,33 @@ mod tests {
 
     #[test]
     fn merge_overlays_by_id_without_duplicating() {
-        let mut overlay = baseline_catalog().get(&"envoy".into()).cloned().unwrap();
-        overlay.summary = Some("overridden".into());
-        let cat = baseline_catalog().merge(Catalog::from_modules([overlay]));
+        // Overlay a same-id module (a data module carrying a new summary) onto the baseline.
+        let overlay = DataModule {
+            id: "envoy".into(),
+            display_name: None,
+            summary: Some("overridden".into()),
+            category: None,
+            provider_of: None,
+            requires: vec![],
+            conflicts_with: vec![],
+            needs: vec![],
+            service_specs: vec![],
+            provides: Default::default(),
+            knobs: vec![],
+            render: Default::default(),
+        };
+        let cat =
+            baseline_catalog().merge(Catalog::from_modules(
+                [Arc::new(overlay) as Arc<dyn Module>],
+            ));
         assert_eq!(
-            cat.get(&"envoy".into()).unwrap().summary.as_deref(),
+            cat.get(&"envoy".into()).unwrap().summary(),
             Some("overridden")
         );
         assert_eq!(
             cat.modules()
                 .iter()
-                .filter(|m| m.id.as_str() == "envoy")
+                .filter(|m| m.id().as_str() == "envoy")
                 .count(),
             1
         );
