@@ -555,6 +555,15 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Flatten this plan's full rendered output — the stack artifacts plus every module
+    /// fragment and config file — into one write-ready
+    /// [`MaterializedOutput`](crate::MaterializedOutput) in the project's on-disk layout. Pure
+    /// (no I/O); with the `std-io` feature,
+    /// [`MaterializedOutput::write_to`](crate::MaterializedOutput::write_to) writes it to disk.
+    pub fn materialize(&self) -> crate::render::output::MaterializedOutput {
+        crate::render::output::materialize(self)
+    }
+
     /// A handle to address the module `module`'s first service. Most modules contribute a
     /// single service; use [`service_named`](Self::service_named) to pick among several.
     pub fn service(&self, module: &ModuleId) -> Option<ServiceRef<'_>> {

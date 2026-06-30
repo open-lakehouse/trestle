@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use olai_stack_topology::{ModuleId, PlanCtx, Selection, baseline_catalog, render_all};
+use olai_stack_topology::{ModuleId, PlanCtx, Selection, baseline_catalog};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -116,7 +116,10 @@ fn main() {
         }
     };
 
-    let artifacts = render_all(&plan);
+    // Flatten the whole plan — stack artifacts plus every module fragment and config file —
+    // into the project's on-disk layout, then write it. `materialize()` is pure; `write_to`
+    // (behind the `std-io` feature this example requires) is the single I/O step.
+    let output = plan.materialize();
 
     // Write everything into a fresh scratch folder at the repo root. A non-default `--name`
     // gets its own subfolder so two stacks coexist on disk as well as on the host ports.
@@ -127,27 +130,12 @@ fn main() {
         eprintln!("failed to clear {}: {e}", out_dir.display());
         std::process::exit(1);
     }
-
-    // The Envoy bootstrap is a dedicated-renderer artifact; it lives in the gateway module's
-    // own directory and is mounted via the `envoy_config` config alias (see `render_all`).
-    write_artifact(&out_dir, "modules/envoy/envoy.yaml", &artifacts.envoy);
-    write_artifact(&out_dir, "compose.yaml", &artifacts.compose);
-    write_artifact(&out_dir, ".env", &artifacts.env);
-
-    // Each module owns a `modules/<id>/` directory: its compose fragment plus any config files
-    // it emits. The planner has already rooted every `RenderFile.path` under that directory, so
-    // it is written verbatim.
-    for (module, out) in &plan.renders {
-        if !out.fragment.trim().is_empty() {
-            write_artifact(
-                &out_dir,
-                &format!("modules/{module}/compose.yaml"),
-                &out.fragment,
-            );
-        }
-        for file in &out.files {
-            write_artifact(&out_dir, &file.path, &file.contents);
-        }
+    if let Err(e) = output.write_to(&out_dir) {
+        eprintln!("failed to write artifacts: {e}");
+        std::process::exit(1);
+    }
+    for file in &output.files {
+        println!("  {} ({} bytes)", file.path, file.contents.len());
     }
 
     println!("Wrote rendered artifacts to {}", out_dir.display());
@@ -168,20 +156,4 @@ fn scratch_dir(env_name: &str) -> PathBuf {
         format!("render_stack_{env_name}")
     };
     repo_root.join("scratch").join(folder)
-}
-
-/// Write `body` to `out_dir/rel_path`, creating parent directories, and log it.
-fn write_artifact(out_dir: &Path, rel_path: &str, body: &str) {
-    let path = out_dir.join(rel_path);
-    if let Some(parent) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        eprintln!("failed to create {}: {e}", parent.display());
-        std::process::exit(1);
-    }
-    if let Err(e) = std::fs::write(&path, body) {
-        eprintln!("failed to write {}: {e}", path.display());
-        std::process::exit(1);
-    }
-    println!("  {rel_path} ({} bytes)", body.len());
 }

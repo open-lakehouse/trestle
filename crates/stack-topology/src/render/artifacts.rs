@@ -285,7 +285,7 @@ pub fn render_compose(head: &HeadFile) -> String {
 const ENVOY_CONFIG_ALIAS: &str = "envoy_config";
 
 /// The per-module-rooted host path the Envoy bootstrap is written to.
-const ENVOY_CONFIG_PATH: &str = "modules/envoy/envoy.yaml";
+pub(crate) const ENVOY_CONFIG_PATH: &str = "modules/envoy/envoy.yaml";
 
 /// The stack-aggregated artifacts for a plan, rendered together.
 pub struct Artifacts {

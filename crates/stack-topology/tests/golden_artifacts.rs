@@ -936,6 +936,41 @@ fn empty_catalog_renders_a_valid_empty_envoy() {
 }
 
 #[test]
+fn materialize_flattens_the_full_layout() {
+    // `materialize()` is pure and encodes the on-disk layout once: the top-level files, the
+    // Envoy bootstrap, and every module's fragment + config files.
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .expect("plan should succeed");
+    let out = p.materialize();
+    let paths: BTreeSet<&str> = out.files.iter().map(|f| f.path.as_str()).collect();
+
+    // The stack-level files and the Envoy bootstrap are always present.
+    for expected in ["compose.yaml", ".env", "modules/envoy/envoy.yaml"] {
+        assert!(paths.contains(expected), "missing {expected}");
+    }
+    // Each module's fragment is rooted under its own directory.
+    assert!(paths.contains("modules/postgres/compose.yaml"));
+    assert!(paths.contains("modules/mlflow/compose.yaml"));
+    // A module config file (the Postgres init script) is carried with its module-rooted path.
+    assert!(paths.contains("modules/postgres/init-databases.sh"));
+
+    // The flattened contents match what `render_all` produces for the stack files.
+    let arts = render_all(&p);
+    let by_path = |name: &str| {
+        out.files
+            .iter()
+            .find(|f| f.path == name)
+            .map(|f| f.contents.as_str())
+    };
+    assert_eq!(by_path("compose.yaml"), Some(arts.compose.as_str()));
+    assert_eq!(
+        by_path("modules/envoy/envoy.yaml"),
+        Some(arts.envoy.as_str())
+    );
+}
+
+#[test]
 fn app_upstream_becomes_the_gateway_catch_all() {
     // The app upstream is a plan input: setting it on the `PlanCtx` makes the planner emit an
     // `app` cluster and a `/` catch-all route on the shared listener — rendered straight from

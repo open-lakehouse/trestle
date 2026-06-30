@@ -95,6 +95,7 @@ pub use plan::{
 
 // --- render: the planner↔template handshake + the stack artifacts ---
 pub use render::artifacts::{Artifacts, render_all, render_compose, render_envoy};
+pub use render::output::{MaterializedOutput, OutputFile};
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 
 // --- address: the addressing resolver ---
