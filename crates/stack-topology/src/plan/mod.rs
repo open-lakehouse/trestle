@@ -48,7 +48,7 @@ pub mod routing;
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA};
-use crate::catalog::module::{ModuleId, ResolvedKnobs};
+use crate::catalog::module::{ExtraResource, ModuleId, ResolvedKnobs};
 use crate::model::connection::Connection;
 use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent};
 use crate::model::placement::Placement;
@@ -80,6 +80,13 @@ pub struct Selection {
     /// catalog, lets the user tune them, and hands the chosen values back here.
     #[serde(default)]
     pub knob_overrides: BTreeMap<ModuleId, BTreeMap<String, String>>,
+    /// Resources to provision at the environment level that no module consumes — extra
+    /// databases or object-store buckets the operator wants created for a process *outside*
+    /// the stack (e.g. a host tool querying a bucket through the gateway). Each is provisioned
+    /// on its role's chosen provider (pulling that provider into the graph if no module already
+    /// demands the role) but never bound into any module's env. See [`ExtraResource`].
+    #[serde(default)]
+    pub extra_resources: Vec<ExtraResource>,
 }
 
 impl Selection {
@@ -91,8 +98,7 @@ impl Selection {
     {
         Selection {
             modules: ids.into_iter().map(Into::into).collect(),
-            capabilities: Vec::new(),
-            knob_overrides: BTreeMap::new(),
+            ..Default::default()
         }
     }
 }
@@ -728,7 +734,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
 
     // At most one provider per resource role may end up in an environment — unless a
     // consumer explicitly pinned each (the sanctioned multi-store case).
-    check_role_exclusivity(&graph)?;
+    check_role_exclusivity(&graph, selection)?;
 
     // Resolve each module's knobs to their canonical values once, up front, and compute each
     // module's services from them. Knob resolution depends only on the knob defaults and the
@@ -769,6 +775,18 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             if !names.contains(&demand.name) {
                 names.push(demand.name.clone());
             }
+        }
+    }
+    // Fold in the environment-level extra resources, on the same provider grouping so the
+    // chosen provider's existing init job creates them (the names reach its render as
+    // `RenderCtx.objects`). Appended after the module-demanded names, deduped against a name a
+    // module already demands — so an extra naming an already-provisioned resource is a no-op.
+    for extra in &selection.extra_resources {
+        let provider =
+            choose_provider(ctx, catalog, &extra.resource, extra.provider.as_ref(), None)?;
+        let names = provisioned_by.entry(provider).or_default();
+        if !names.contains(&extra.name) {
+            names.push(extra.name.clone());
         }
     }
     let provisioned_for = |id: &str| -> Vec<String> {
@@ -1290,7 +1308,13 @@ fn resolve_with_demands(
         let mut added = false;
         for module in &graph.nodes {
             for demand in module.needs() {
-                let provider = choose_provider(ctx, catalog, demand, Some(module.id()))?;
+                let provider = choose_provider(
+                    ctx,
+                    catalog,
+                    &demand.resource,
+                    demand.provider.as_ref(),
+                    Some(module.id()),
+                )?;
                 let edges = demand_edges.entry(module.id().clone()).or_default();
                 if !edges.contains(&provider) {
                     edges.push(provider.clone());
@@ -1299,6 +1323,19 @@ fn resolve_with_demands(
                     selected.push(provider);
                     added = true;
                 }
+            }
+        }
+        // Environment-level extra resources have no consuming module, so they add their
+        // provider to the selection (becoming a graph node) but contribute no dependency
+        // edge — nothing gates on these names at startup, and the providers
+        // (postgres/seaweedfs/azurite) carry no `requires` of their own. This is what lets
+        // an extra bucket pull in an object-store provider even when no module demands one.
+        for extra in &selection.extra_resources {
+            let provider =
+                choose_provider(ctx, catalog, &extra.resource, extra.provider.as_ref(), None)?;
+            if !selected.contains(&provider) {
+                selected.push(provider);
+                added = true;
             }
         }
         if !added {
@@ -1320,31 +1357,34 @@ fn resolve_with_demands(
 /// Errors with [`PlanError::UnsatisfiedDemand`] if no module provides the role, or
 /// [`PlanError::AmbiguousProvider`] if several do and none of the above selects one.
 /// `consumer` (when known) labels an `UnsatisfiedDemand`.
+///
+/// Takes the role and optional pin directly (not a [`ResourceDemand`]) so it can satisfy both a
+/// module's demand and an environment-level [`ExtraResource`], which has no consumer to bind.
 fn choose_provider(
     ctx: &PlanCtx,
     catalog: &Catalog,
-    demand: &crate::catalog::module::ResourceDemand,
+    role: &str,
+    pin: Option<&ModuleId>,
     consumer: Option<&ModuleId>,
 ) -> Result<ModuleId, PlanError> {
-    let role = &demand.resource;
     let candidates = catalog.providers_for(role);
     if candidates.is_empty() {
         return Err(PlanError::UnsatisfiedDemand {
             module: consumer.map(|m| m.0.clone()).unwrap_or_default(),
-            resource: role.clone(),
+            resource: role.to_string(),
         });
     }
     let provides_role = |id: &ModuleId| candidates.contains(&id);
 
     // 1. Explicit pin.
-    if let Some(pin) = &demand.provider {
+    if let Some(pin) = pin {
         if provides_role(pin) {
             return Ok(pin.clone());
         }
         // A pin that doesn't provide the role is unsatisfiable for this demand.
         return Err(PlanError::UnsatisfiedDemand {
             module: consumer.map(|m| m.0.clone()).unwrap_or_default(),
-            resource: role.clone(),
+            resource: role.to_string(),
         });
     }
     // 2. Environment preference.
@@ -1367,7 +1407,7 @@ fn choose_provider(
     let mut providers: Vec<ModuleId> = candidates.into_iter().cloned().collect();
     providers.sort();
     Err(PlanError::AmbiguousProvider {
-        resource: role.clone(),
+        resource: role.to_string(),
         providers,
     })
 }
@@ -1497,7 +1537,13 @@ fn resolve_demand_providers(
     let mut chosen = ChosenProviders::new();
     for module in &graph.nodes {
         for (idx, demand) in module.needs().iter().enumerate() {
-            let provider_id = choose_provider(ctx, catalog, demand, Some(module.id()))?;
+            let provider_id = choose_provider(
+                ctx,
+                catalog,
+                &demand.resource,
+                demand.provider.as_ref(),
+                Some(module.id()),
+            )?;
             let provider = catalog
                 .get(&provider_id)
                 .expect("provider id is in catalog");
@@ -1528,16 +1574,22 @@ fn resolve_demand_providers(
 /// selected, or pulled in by `requires`. That is the case this rejects (with
 /// [`PlanError::ConflictingRoleProviders`]): selecting both SeaweedFS and Azurite with no
 /// pins is ambiguous, and the planner will not silently drop one. The exception is the
-/// deliberate multi-store shape — a consumer that pins each demand's provider — where every
-/// provider beyond the first is accounted for by a pin.
-fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
-    // The (role, provider) pairs a demand explicitly pinned — these are sanctioned.
+/// deliberate multi-store shape — a consumer that pins each demand's provider, or an
+/// environment-level [`ExtraResource`] that pins one — where every provider beyond the first is
+/// accounted for by a pin.
+fn check_role_exclusivity(graph: &ResolvedGraph, selection: &Selection) -> Result<(), PlanError> {
+    // The (role, provider) pairs a demand or an extra resource explicitly pinned — sanctioned.
     let mut pinned: BTreeSet<(String, ModuleId)> = BTreeSet::new();
     for module in &graph.nodes {
         for demand in module.needs() {
             if let Some(p) = &demand.provider {
                 pinned.insert((demand.resource.clone(), p.clone()));
             }
+        }
+    }
+    for extra in &selection.extra_resources {
+        if let Some(p) = &extra.provider {
+            pinned.insert((extra.resource.clone(), p.clone()));
         }
     }
 

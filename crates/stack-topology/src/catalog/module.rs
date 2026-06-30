@@ -152,6 +152,37 @@ pub struct ResourceDemand {
     pub bind: ConnectionBinding,
 }
 
+/// An environment-level resource to provision that **no module consumes**: an extra database
+/// or object-store bucket the operator wants created for a process running *outside* the stack
+/// (e.g. a host tool querying it through the gateway), independent of any module's
+/// [`needs`](Module::needs).
+///
+/// Like a [`ResourceDemand`], it names an abstract *role* (e.g. `"object_store"`,
+/// `"relational_db"`) — the planner chooses the satisfying provider (by [`provider`] pin,
+/// `PlanCtx` preference, uniqueness, or catalog default), pulls it into the graph if no module
+/// already demands that role, and folds the name into the provider's provisioning set so its
+/// existing init job creates it (the name reaches the provider's render as
+/// [`RenderCtx::objects`]).
+///
+/// Unlike a [`ResourceDemand`] there is **no** [`ConnectionBinding`]: with no consuming module
+/// there is nowhere to inject the resolved connection, so an extra resource only *provisions*
+/// — it never binds. Reaching it is the operator's job (a bucket through the gateway's dedicated
+/// listener, a database directly at the store's host port).
+///
+/// [`provider`]: ExtraResource::provider
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtraResource {
+    /// The resource *role* to provision (e.g. `"object_store"`, `"relational_db"`) — matched
+    /// against providers' [`Provides::resource_kinds`].
+    pub resource: String,
+    /// The concrete resource name to provision (e.g. `"analytics"`, `"exports"`).
+    pub name: String,
+    /// Pin a specific provider module, overriding preference/default. `None` lets the planner
+    /// choose, exactly like [`ResourceDemand::provider`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ModuleId>,
+}
+
 /// How a demand maps the resolved [`Connection`](crate::Connection)'s typed fields into
 /// the consuming module's [`InjectedEnv`].
 ///

@@ -973,6 +973,68 @@ fn headwaters_runs_migrations_in_an_init_job_before_serve() {
 }
 
 #[test]
+fn extra_resources_are_created_by_the_provider_init_jobs() {
+    use olai_stack_topology::{ExtraResource, ModuleId};
+
+    // An operator declares an extra database and an extra bucket no module consumes — for a
+    // host process to query (the bucket through the gateway, the DB directly). They land on the
+    // existing providers' init jobs and surface in the plan's resource lists.
+    let mut sel = default_selection();
+    sel.extra_resources = vec![
+        ExtraResource {
+            resource: "relational_db".into(),
+            name: "analytics".into(),
+            provider: None,
+        },
+        ExtraResource {
+            resource: "object_store".into(),
+            name: "exports".into(),
+            provider: None,
+        },
+    ];
+
+    let p = baseline_catalog()
+        .plan(&sel, &PlanCtx::default())
+        .expect("plan should succeed");
+
+    // The extra names join the provider-provisioned sets the plan exposes.
+    assert!(
+        p.postgres_databases.contains(&"analytics".to_string()),
+        "extra database is provisioned on postgres: {:?}",
+        p.postgres_databases
+    );
+    assert!(
+        p.s3_buckets.contains(&"exports".to_string()),
+        "extra bucket is provisioned on seaweedfs: {:?}",
+        p.s3_buckets
+    );
+
+    // ...and reach each provider's existing init job (which iterates `RenderCtx.objects`).
+    let render_of = |id: &str| -> &str {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| {
+                // Postgres init lives in a mounted file; seaweedfs init is in the fragment.
+                out.files
+                    .iter()
+                    .find(|f| f.alias.as_deref() == Some("postgres_init"))
+                    .map(|f| f.contents.as_str())
+                    .unwrap_or(out.fragment.as_str())
+            })
+            .expect("provider is in the render set")
+    };
+    assert!(
+        render_of("postgres").contains("analytics"),
+        "the extra database is created in the postgres init script"
+    );
+    assert!(
+        render_of("seaweedfs").contains("exports"),
+        "the extra bucket is created in the seaweedfs init job"
+    );
+}
+
+#[test]
 fn empty_catalog_renders_a_valid_empty_envoy() {
     // No modules → a valid, route-less Envoy config (no panic, parses cleanly).
     let p = Catalog::new()

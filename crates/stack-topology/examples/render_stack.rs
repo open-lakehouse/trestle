@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use olai_stack_topology::{ModuleId, PlanCtx, Selection, baseline_catalog};
+use olai_stack_topology::{ExtraResource, ModuleId, PlanCtx, Selection, baseline_catalog};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,19 +57,24 @@ fn main() {
     // lakehouse selection when none are given. A flag and the token right after a
     // value-taking flag (`--name`, `--port-base`) are not module picks.
     let value_flags = ["--name", "--port-base"];
-    let picks: Vec<String> = args
+    let mut skip_next = false;
+    let picks: Vec<&str> = args
         .iter()
-        .enumerate()
-        .filter(|(i, a)| {
+        .filter(|a| {
+            if skip_next {
+                skip_next = false;
+                return false;
+            }
+            if value_flags.contains(&a.as_str()) {
+                skip_next = true; // the following token is this flag's value, not a module
+                return false;
+            }
             !a.starts_with("--")
-                && !i
-                    .checked_sub(1)
-                    .and_then(|p| args.get(p))
-                    .is_some_and(|prev| value_flags.contains(&prev.as_str()))
         })
-        .map(|(_, a)| a.clone())
+        .map(String::as_str)
         .collect();
-    let selection = if picks.is_empty() {
+
+    let mut selection = if picks.is_empty() {
         // The default lakehouse. Under `--azurite` the object store is left to MLflow/UC's
         // demands (resolved to Azurite via the preference below) instead of selecting
         // SeaweedFS directly — selecting both object_store providers without a pin is a
@@ -78,11 +83,27 @@ fn main() {
         if !prefer_azurite {
             mods.push("seaweedfs");
         }
-        mods.extend(["unity-catalog", "mlflow"]);
+        mods.extend(["unity-catalog", "mlflow", "headwaters"]);
         Selection::modules(mods)
     } else {
         Selection::modules(picks)
     };
+
+    // Demonstrate environment-level extra resources: an extra database and bucket that no
+    // module consumes, created by the chosen providers' init jobs for an external host process
+    // to query (the bucket through the gateway, the database directly at Postgres).
+    selection.extra_resources = vec![
+        ExtraResource {
+            resource: "relational_db".into(),
+            name: "analytics".into(),
+            provider: None,
+        },
+        ExtraResource {
+            resource: "object_store".into(),
+            name: "exports".into(),
+            provider: None,
+        },
+    ];
 
     let mut provider_preference = BTreeMap::new();
     if prefer_azurite {

@@ -38,7 +38,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::Catalog;
-use crate::catalog::module::ModuleId;
+use crate::catalog::module::{ExtraResource, ModuleId};
 use crate::plan::{Plan, PlanCtx, PlanError, Selection};
 
 /// What can go wrong (de)serializing an [`EnvManifest`].
@@ -135,6 +135,28 @@ impl EnvManifest {
         self.selection.capabilities.retain(|c| c != cap);
     }
 
+    /// Declare an environment-level [`ExtraResource`] to provision, if not already declared
+    /// (matched on `(resource, name)`). Idempotent; a later call with the same role+name but a
+    /// different provider pin is a no-op — [`remove_extra_resource`](Self::remove_extra_resource)
+    /// first to change a pin.
+    pub fn add_extra_resource(&mut self, extra: ExtraResource) {
+        if !self
+            .selection
+            .extra_resources
+            .iter()
+            .any(|e| e.resource == extra.resource && e.name == extra.name)
+        {
+            self.selection.extra_resources.push(extra);
+        }
+    }
+
+    /// Drop the environment-level extra resource matching `(resource, name)`, if present.
+    pub fn remove_extra_resource(&mut self, resource: &str, name: &str) {
+        self.selection
+            .extra_resources
+            .retain(|e| !(e.resource == resource && e.name == name));
+    }
+
     /// Set a knob override for `module`: `key` → `value`, replacing any previous value.
     pub fn set_knob(
         &mut self,
@@ -221,6 +243,28 @@ mod tests {
         assert_eq!(manifest.version, EnvManifest::current_version());
         assert_eq!(manifest.context.gateway_host_port, 9080);
         assert_eq!(manifest.context.env_name, "lakehouse");
+        // An older manifest with no `extra_resources` still parses (empty list).
+        assert!(manifest.selection.extra_resources.is_empty());
+    }
+
+    #[test]
+    fn extra_resource_helpers_are_idempotent_and_round_trip() {
+        let mut manifest = sample_manifest();
+        let extra = ExtraResource {
+            resource: "object_store".into(),
+            name: "exports".into(),
+            provider: None,
+        };
+        manifest.add_extra_resource(extra.clone());
+        manifest.add_extra_resource(extra.clone()); // idempotent on (resource, name)
+        assert_eq!(manifest.selection.extra_resources, vec![extra.clone()]);
+
+        // Survives a TOML round-trip.
+        let back = EnvManifest::from_toml(&manifest.to_toml().unwrap()).unwrap();
+        assert_eq!(back.selection.extra_resources, vec![extra]);
+
+        manifest.remove_extra_resource("object_store", "exports");
+        assert!(manifest.selection.extra_resources.is_empty());
     }
 
     #[test]
