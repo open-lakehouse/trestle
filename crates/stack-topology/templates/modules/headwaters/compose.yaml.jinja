@@ -1,13 +1,9 @@
-# Headwaters lineage service — contributed by the `headwaters` module.
+# Headwaters lineage service
 {%- set db = connections.relational_db.0 %}
 services:
   headwaters:
-    # `0.0.6` is the (not-yet-published) tag that ships the `config.toml` loader and the
-    # distroless `healthcheck` subcommand; the stack is runnable once that image lands.
     image: ghcr.io/open-lakehouse/headwaters:0.0.6
     restart: unless-stopped
-    # Invoke the headwaters CLI directly, pointing it at the mounted config file; everything
-    # else (port, UI serve toggle, base path) is the effective config rendered into it.
     command: ["serve", "--config", "/etc/headwaters/config.toml"]
     depends_on:
 {%- for dep in dependencies %}
@@ -15,18 +11,12 @@ services:
         condition: {{ dep.condition }}
 {%- endfor %}
     environment:
-      # DSN read straight from the typed relational_db connection (no `.env` round-trip);
-      # `{name}` resolves to the demanded database name (`lineage`). Headwaters overlays
-      # this over `config.toml` at startup and runs its own sqlx migrations against it.
       DATABASE_URL: "{{ db.url }}"
     configs:
       - source: headwaters_config
         target: /etc/headwaters/config.toml
     expose:
       - "8091"
-    # The published image is distroless (no shell/curl), so the service self-probes via
-    # its own `healthcheck` subcommand (hits `/health` with a blocking client). This gives
-    # consumers a real `service_healthy` gate to depend on instead of bare start ordering.
     healthcheck:
       test: ["CMD", "/usr/local/bin/app", "healthcheck"]
       interval: 30s
