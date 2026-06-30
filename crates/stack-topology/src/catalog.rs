@@ -114,20 +114,6 @@ impl Catalog {
             .collect()
     }
 
-    /// Every capability declared by some module, mapped to the providing module ids.
-    pub fn capability_index(&self) -> BTreeMap<String, Vec<ModuleId>> {
-        let mut index: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
-        for m in &self.modules {
-            if let Some(cap) = m.provider_of() {
-                index
-                    .entry(cap.to_string())
-                    .or_default()
-                    .push(m.id().clone());
-            }
-        }
-        index
-    }
-
     /// The ids of modules that provision `resource_kind` (declare it under
     /// [`Provides::resource_kinds`](crate::Provides::resource_kinds)), in catalog
     /// order. This is the resource index the planner uses to auto-provision a provider
@@ -155,27 +141,6 @@ impl Catalog {
     /// The declared default provider for `role`, if any.
     pub fn default_provider_for(&self, role: &str) -> Option<&ModuleId> {
         self.default_provider.get(role)
-    }
-
-    /// The single provider for `resource_kind`, if exactly one module provisions it.
-    ///
-    /// Returns `Ok(None)` when no module provides the kind, `Ok(Some(id))` for exactly
-    /// one, and `Err(ids)` (all candidates, sorted) when more than one does — the
-    /// planner turns these into `UnsatisfiedDemand` / `AmbiguousProvider`.
-    pub fn unique_provider_for(
-        &self,
-        resource_kind: &str,
-    ) -> Result<Option<&ModuleId>, Vec<ModuleId>> {
-        let providers = self.providers_for(resource_kind);
-        match providers.len() {
-            0 => Ok(None),
-            1 => Ok(Some(providers[0])),
-            _ => {
-                let mut ids: Vec<ModuleId> = providers.into_iter().cloned().collect();
-                ids.sort();
-                Err(ids)
-            }
-        }
     }
 
     /// Parse and assemble a catalog from a sequence of module-manifest YAML strings.
