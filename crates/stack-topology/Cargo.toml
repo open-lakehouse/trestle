@@ -25,6 +25,11 @@ std-io = []
 serde = { workspace = true }
 serde_yaml = { workspace = true, optional = true }
 thiserror = { workspace = true }
+# TOML (de)serialization for the persisted `EnvManifest`. Non-optional: the pure
+# `to_toml`/`from_toml` are always available (only the manifest's `read_from`/`write_to`,
+# behind `std-io`, touch disk). The workspace pin is `default-features = false`, so it stays
+# wasm32-clean.
+toml = { workspace = true }
 url = { workspace = true }
 # Templating for the rendered stack artifacts (the Envoy gateway config). Rendering is
 # always available and pure (it produces strings + filenames; the consumer owns disk I/O),
