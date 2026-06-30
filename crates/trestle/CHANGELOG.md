@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.3...olai-trestle-v0.0.4) - 2026-06-30
+
+### Added
+
+- generate ergonomic ConnectRPC clients in olai-codegen (#52)
+
+### Changed
+
+- self-contained module templates + object-store gateway routing (#57)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.2...olai-trestle-v0.0.3) - 2026-06-28
 
 ### Added

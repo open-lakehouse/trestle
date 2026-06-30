@@ -1,7 +1,7 @@
 [package]
 name = "olai-trestle"
 description = "Unified CLI for proto-driven code generation and full-project scaffolding"
-version = "0.0.3"
+version = "0.0.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -19,7 +19,7 @@ path = "src/main.rs"
 
 [dependencies]
 # local crates (release-plz keeps versions in sync) (in alphabetical order)
-olai-codegen = { path = "../olai-codegen", version = "0.0.4" }
+olai-codegen = { path = "../olai-codegen", version = "0.0.5" }
 
 # workspace dependencies (in alphabetical order)
 serde = { workspace = true }
