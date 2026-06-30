@@ -850,8 +850,8 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     );
     let sel = Selection {
         modules: vec!["envoy".into(), "postgres".into(), "headwaters".into()],
-        capabilities: vec![],
         knob_overrides,
+        ..Default::default()
     };
 
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
@@ -920,6 +920,55 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     assert!(
         !routes.contains_key("/lineage"),
         "no UI route when the UI is off"
+    );
+}
+
+#[test]
+fn headwaters_runs_migrations_in_an_init_job_before_serve() {
+    use olai_stack_topology::ModuleId;
+
+    // Headwaters' `serve` refuses to start against a schema that is behind, so the fragment
+    // emits a one-shot `headwaters-migrate` service (runs `migrate`, then exits) and gates the
+    // long-running `headwaters` service on it completing successfully.
+    let sel = Selection::modules(["envoy", "postgres", "headwaters"]);
+    let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("headwaters"))
+        .expect("headwaters is in the render set");
+
+    let frag: Value =
+        serde_yaml::from_str(&out.fragment).expect("the headwaters fragment is valid YAML");
+    let services = &frag["services"];
+
+    // The one-shot migrate job: runs `migrate`, does not restart, waits for the DB to be
+    // healthy (the planner-injected gate).
+    let migrate = &services["headwaters-migrate"];
+    assert_eq!(
+        migrate["command"],
+        serde_yaml::from_str::<Value>(r#"["migrate", "--config", "/etc/headwaters/config.toml"]"#)
+            .unwrap(),
+        "the init job runs the migrate subcommand"
+    );
+    assert_eq!(migrate["restart"], Value::from("no"));
+    assert_eq!(
+        migrate["depends_on"]["db"]["condition"],
+        Value::from("service_healthy"),
+        "migrations wait for the database to be healthy"
+    );
+
+    // The serve service gates on the migrate job completing successfully.
+    let serve = &services["headwaters"];
+    assert_eq!(
+        serve["depends_on"]["headwaters-migrate"]["condition"],
+        Value::from("service_completed_successfully"),
+        "serve only starts once migrations have applied"
+    );
+    assert_eq!(
+        serve["command"],
+        serde_yaml::from_str::<Value>(r#"["serve", "--config", "/etc/headwaters/config.toml"]"#)
+            .unwrap(),
     );
 }
 
@@ -1239,8 +1288,8 @@ mod auth {
                 "mlflow".into(),
                 "headwaters".into(),
             ],
-            capabilities: vec![],
             knob_overrides,
+            ..Default::default()
         }
     }
 
