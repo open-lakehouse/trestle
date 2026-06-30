@@ -140,6 +140,93 @@ fn real_prefix_collision_fails_loudly() {
     }
 }
 
+/// Build a single-service container module with one Api endpoint, parameterized by the
+/// service name and its mount prefix — enough to provoke app-upstream collisions.
+fn svc_module(id: &str, service_name: &str, mount_prefix: &str) -> Arc<dyn Module> {
+    Arc::new(DataModule {
+        id: ModuleId::from(id),
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: service_name.to_string(),
+            role: Role::new("svc"),
+            placement: Placement::Container {
+                service: service_name.to_string(),
+            },
+            base_path: String::new(),
+            endpoints: vec![Endpoint {
+                id: "rest".into(),
+                scheme: Scheme::Http,
+                internal_port: 8080,
+                host_port: None,
+                intent: RouteIntent::Api,
+                path: String::new(),
+                mount_prefix: Some(mount_prefix.into()),
+                rewrite: Rewrite::Inherit,
+            }],
+            depends_on: vec![],
+        }],
+        provides: Provides::default(),
+        knobs: vec![],
+        render: RenderSpec::default(),
+    })
+}
+
+#[test]
+fn app_upstream_collides_with_a_module_claiming_root() {
+    use olai_stack_topology::AppUpstream;
+
+    // A module whose Api endpoint mounts at `/` claims the same route the app catch-all needs.
+    // The planner must reject this loudly rather than silently shadow one of the two `/` routes.
+    let catalog = Catalog::from_modules([svc_module("root", "root", "/")]);
+    let err = catalog
+        .plan(
+            &Selection::modules(["root"]),
+            &PlanCtx {
+                app: Some(AppUpstream {
+                    service: "my-app".into(),
+                    port: 8000,
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("a module claiming `/` must collide with the app catch-all");
+    match err {
+        PlanError::AppUpstreamCollision { conflict, .. } => assert_eq!(conflict, "root.rest"),
+        other => panic!("expected AppUpstreamCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn app_upstream_collides_with_a_module_service_named_app() {
+    use olai_stack_topology::AppUpstream;
+
+    // A module contributing a service literally named `app` reserves the cluster name the app
+    // upstream uses; injecting a second `app` cluster would be a duplicate Envoy cluster.
+    let catalog = Catalog::from_modules([svc_module("appmod", "app", "/appmod")]);
+    let err = catalog
+        .plan(
+            &Selection::modules(["appmod"]),
+            &PlanCtx {
+                app: Some(AppUpstream {
+                    service: "my-app".into(),
+                    port: 8000,
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("a module service named `app` must collide with the app cluster name");
+    match err {
+        PlanError::AppUpstreamCollision { conflict, .. } => assert_eq!(conflict, "app"),
+        other => panic!("expected AppUpstreamCollision, got {other:?}"),
+    }
+}
+
 #[test]
 fn planner_routes_round_trip_through_the_address_resolver() {
     // The planner's RoutePlan must be consumable by the existing `address` resolver

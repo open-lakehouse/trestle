@@ -325,6 +325,18 @@ pub enum PlanError {
         /// What specifically is missing.
         reason: String,
     },
+    /// The app upstream ([`PlanCtx::app`]) collides with a selected module: either a module
+    /// already claimed the `/` route the app catch-all needs, or a module contributes a service
+    /// named `app` (the cluster name the app upstream reserves). The fix is to drop the app
+    /// upstream or rename/re-prefix the conflicting module.
+    #[error("app upstream collides with module `{conflict}`: {reason}")]
+    AppUpstreamCollision {
+        /// The `service.endpoint` (for a route collision) or service name (for a cluster-name
+        /// collision) that conflicts with the app upstream.
+        conflict: String,
+        /// What specifically collides (the `/` route or the `app` cluster name).
+        reason: String,
+    },
 }
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -585,25 +597,24 @@ impl Plan {
     /// id. Errors with [`AddressError::NoSuchRole`] if nothing fills it, or
     /// [`AddressError::AmbiguousRole`] if more than one service does (address one by id then).
     pub fn service_by_role(&self, role: &Role) -> Result<ServiceRef<'_>, AddressError> {
-        let mut matches = self.services.values().flatten().filter(|s| &s.role == role);
-        let first = matches
-            .next()
-            .ok_or_else(|| AddressError::NoSuchRole(role.as_str().to_string()))?;
-        if matches.next().is_some() {
-            let mut services: Vec<String> = self
-                .services
-                .values()
-                .flatten()
-                .filter(|s| &s.role == role)
-                .map(|s| s.name.clone())
-                .collect();
-            services.sort();
-            return Err(AddressError::AmbiguousRole {
-                role: role.as_str().to_string(),
-                services,
-            });
+        let matches: Vec<&ServiceSpec> = self
+            .services
+            .values()
+            .flatten()
+            .filter(|s| &s.role == role)
+            .collect();
+        match matches.as_slice() {
+            [] => Err(AddressError::NoSuchRole(role.as_str().to_string())),
+            [only] => Ok(ServiceRef::new(only, &self.routes, &self.gateway_facts)),
+            many => {
+                let mut services: Vec<String> = many.iter().map(|s| s.name.clone()).collect();
+                services.sort();
+                Err(AddressError::AmbiguousRole {
+                    role: role.as_str().to_string(),
+                    services,
+                })
+            }
         }
-        Ok(ServiceRef::new(first, &self.routes, &self.gateway_facts))
     }
 
     /// The gateway's host-published port — what a host-side caller reaches the shared listener
@@ -911,19 +922,35 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         injected.insert(module.id().clone(), module_env);
     }
 
-    // The user's app, when present, becomes the gateway's catch-all: an `app` cluster
-    // (emitted first, before the module clusters) and a `/` route on the shared listener.
-    // The `/` route is the shortest prefix, so the most-specific-first sort below settles
-    // it last — exactly where a catch-all belongs.
+    // The user's app, when present, becomes the gateway's catch-all: an `app` cluster and a `/`
+    // route on the shared listener. The `/` route is the shortest prefix, so the
+    // most-specific-first sort below settles it last — exactly where a catch-all belongs. Run
+    // the same collision checks every module route gets (rather than blindly injecting), so an
+    // app-vs-module conflict fails loudly here instead of as an Envoy config error at launch.
     if let Some(app) = &ctx.app {
-        gateway.clusters.insert(
-            0,
-            ClusterConfig {
-                name: "app".into(),
-                host: app.service.clone(),
-                port: app.port,
-            },
-        );
+        // A module that already claimed `/` (an Api `mount_prefix: "/"` or a UiPrefixable
+        // `base_path: "/"`) would be silently shadowed by the catch-all; reject instead.
+        if let Some(first) = claimed.get("/") {
+            return Err(PlanError::AppUpstreamCollision {
+                conflict: first.clone(),
+                reason: "it already claims the `/` route the app catch-all needs".into(),
+            });
+        }
+        // `app` is the reserved cluster name for the upstream; a module service named `app`
+        // would produce a duplicate Envoy cluster.
+        if let Some(c) = gateway.clusters.iter().find(|c| c.name == "app") {
+            return Err(PlanError::AppUpstreamCollision {
+                conflict: c.name.clone(),
+                reason: "a module contributes a service named `app`, the cluster name the app \
+                         upstream reserves"
+                    .into(),
+            });
+        }
+        gateway.clusters.push(ClusterConfig {
+            name: "app".into(),
+            host: app.service.clone(),
+            port: app.port,
+        });
         shared_routes.push(GatewayRoute {
             prefix: "/".into(),
             cluster: "app".into(),

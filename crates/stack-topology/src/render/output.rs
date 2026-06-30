@@ -54,11 +54,23 @@ pub(crate) fn materialize(plan: &Plan) -> MaterializedOutput {
             path: ".env".into(),
             contents: artifacts.env,
         },
-        OutputFile {
+    ];
+
+    // The Envoy bootstrap is written only when the plan has a gateway — the same condition
+    // under which `render_all` declares the `envoy_config` mount. A gateway-less plan would
+    // otherwise get an orphan `modules/envoy/envoy.yaml` that the top-level compose never
+    // mounts. Detect the gateway by role (not module-id), matching `render_all`.
+    let gateway_present = plan
+        .services
+        .values()
+        .flatten()
+        .any(|s| s.role == crate::Role::gateway());
+    if gateway_present {
+        files.push(OutputFile {
             path: ENVOY_CONFIG_PATH.into(),
             contents: artifacts.envoy,
-        },
-    ];
+        });
+    }
 
     // Each module owns a `modules/<id>/` directory: its compose fragment (skipped when empty)
     // plus any config files it emits (their `path` is already rooted under that directory).

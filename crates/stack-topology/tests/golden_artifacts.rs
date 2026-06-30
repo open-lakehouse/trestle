@@ -933,6 +933,17 @@ fn empty_catalog_renders_a_valid_empty_envoy() {
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
     assert!(routes.is_empty());
     assert!(clusters.is_empty());
+
+    // A gateway-less plan must not materialize an orphan `modules/envoy/envoy.yaml` — nothing
+    // mounts it (no `envoy_config` config is declared without a gateway).
+    let materialized = p.materialize();
+    assert!(
+        !materialized
+            .files
+            .iter()
+            .any(|f| f.path == "modules/envoy/envoy.yaml"),
+        "gateway-less plan should not write an unreferenced envoy bootstrap"
+    );
 }
 
 #[test]
