@@ -76,7 +76,7 @@ pub(super) fn generate_server(service: &ServiceHandler<'_>) -> crate::error::Res
     let mod_path = service.models_path();
     // handler_name is a validated Rust identifier, so this parse is infallible.
     let trait_path: Path =
-        syn::parse_str(&format!("super::handler::{}", &service.plan.handler_name)).unwrap();
+        syn::parse_str(&format!("super::handler::{}", service.plan.handler_name)).unwrap();
     let result_path: Path =
         syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
 
