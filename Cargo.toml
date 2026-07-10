@@ -9,7 +9,7 @@ exclude = [
   # out of the default build/test. Run explicitly via its own --manifest-path.
   "crates/olai-codegen/tests/buffa_e2e",
   # Reference example: a self-contained scaffolded app with its own workspace.
-  # Built on its own (see `examples/JOURNAL.md`), never by the root build.
+  # Built on its own, never by the root build.
   "examples/*",
 ]
 
