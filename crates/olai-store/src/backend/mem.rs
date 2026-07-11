@@ -19,8 +19,8 @@ use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
 use crate::store::{
-    AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
-    StoreExec, StoreTx, Transactional,
+    AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
+    ObjectStoreReader, Precondition, StoreExec, StoreTx, Transactional,
 };
 use crate::{Error, Result};
 
@@ -243,7 +243,7 @@ fn op_add_edge<L: Label>(
     }
     let from_label = state.objects.get(&from_id).map(|o| o.label);
     state.edges.push(Association {
-        id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
         from_id,
         label: label.to_string(),
         to_id,
@@ -260,7 +260,7 @@ fn op_add_edge<L: Label>(
             .any(|e| e.from_id == to_id && e.to_id == from_id && e.label == inv)
     {
         state.edges.push(Association {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             from_id: to_id,
             label: inv,
             to_id: from_id,
@@ -295,26 +295,35 @@ fn op_remove_edge<L: Label>(
     Ok(())
 }
 
-fn op_list_edges<L: Label>(
+fn op_query_edges<L: Label>(
     state: &State<L>,
-    from_id: Uuid,
-    label: &str,
-    target_label: Option<L>,
-    max_results: Option<usize>,
-    page_token: Option<String>,
+    query: EdgeQuery<'_, L>,
 ) -> Result<(Vec<Association<L>>, Option<String>)> {
+    // The endpoint fixes which side we anchor on; `target_id` restricts the *other* side.
+    let (into, anchor_id) = match query.endpoint {
+        EdgeEndpoint::From(id) => (false, id),
+        EdgeEndpoint::Into(id) => (true, id),
+    };
+    // For a `From` query the anchor is `from_id` and the other side is `to_id`; `Into` swaps them.
+    let anchor = |e: &Association<L>| if into { e.to_id } else { e.from_id };
+    let other = |e: &Association<L>| if into { e.from_id } else { e.to_id };
     let mut matches: Vec<Association<L>> = state
         .edges
         .iter()
         .filter(|e| {
-            e.from_id == from_id
-                && e.label == label
-                && target_label.is_none_or(|tl| e.to_label == tl)
+            anchor(e) == anchor_id
+                && e.label == query.label
+                && query.target_label.is_none_or(|tl| e.to_label == tl)
+                && query.target_id.is_none_or(|tid| other(e) == tid)
+                && query
+                    .filter
+                    .is_none_or(|f| f.matches(crate::store::props_or_null(&e.properties)))
         })
         .cloned()
         .collect();
-    matches.sort_by_key(|e| e.id);
-    paginate(matches, max_results, page_token)
+    // Most-recent-first: v7 edge ids are time-ordered, so descending id is descending time.
+    matches.sort_by_key(|e| std::cmp::Reverse(e.id));
+    paginate(matches, query.max_results, query.page_token)
 }
 
 /// Offset-based pagination over an already-ordered vec. The token is the
@@ -446,22 +455,11 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for InMemoryStore<L> {
-    async fn list(
+    async fn query_edges(
         &self,
-        from_id: Uuid,
-        label: &str,
-        target_label: Option<L>,
-        max_results: Option<usize>,
-        page_token: Option<String>,
+        query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        op_list_edges(
-            &self.state.lock().unwrap(),
-            from_id,
-            label,
-            target_label,
-            max_results,
-            page_token,
-        )
+        op_query_edges(&self.state.lock().unwrap(), query)
     }
 }
 
@@ -606,15 +604,11 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for InMemoryTx<L> {
-    async fn list(
+    async fn query_edges(
         &self,
-        from_id: Uuid,
-        label: &str,
-        target_label: Option<L>,
-        max_results: Option<usize>,
-        page_token: Option<String>,
+        query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        self.with_state(|s| op_list_edges(s, from_id, label, target_label, max_results, page_token))
+        self.with_state(|s| op_query_edges(s, query))
     }
 }
 
@@ -779,7 +773,8 @@ mod tests {
             .unwrap();
         assert_eq!(renamed.id, a.id);
         assert_eq!(renamed.name, rn("a2"));
-        let (edges, _) = AssociationStoreReader::list(&store, a.id, "link", None, None, None)
+        let (edges, _) = store
+            .query_edges(EdgeQuery::from(a.id, "link"))
             .await
             .unwrap();
         assert_eq!(edges.len(), 1);
@@ -827,9 +822,7 @@ mod tests {
             .await;
         let a_id = res.unwrap();
         assert!(store.get(&a_id).await.is_ok());
-        let (edges, _) = AssociationStoreReader::list(&store, a_id, "e", None, None, None)
-            .await
-            .unwrap();
+        let (edges, _) = store.query_edges(EdgeQuery::from(a_id, "e")).await.unwrap();
         assert_eq!(edges.len(), 1);
     }
 
@@ -850,12 +843,14 @@ mod tests {
 
         store.add(p.id, c.id, "parent_of", None).await.unwrap();
         // Forward edge present.
-        let (fwd, _) = AssociationStoreReader::list(&store, p.id, "parent_of", None, None, None)
+        let (fwd, _) = store
+            .query_edges(EdgeQuery::from(p.id, "parent_of"))
             .await
             .unwrap();
         assert_eq!(fwd.len(), 1);
         // Inverse edge present.
-        let (inv, _) = AssociationStoreReader::list(&store, c.id, "child_of", None, None, None)
+        let (inv, _) = store
+            .query_edges(EdgeQuery::from(c.id, "child_of"))
             .await
             .unwrap();
         assert_eq!(inv.len(), 1);
@@ -863,7 +858,8 @@ mod tests {
 
         // Removing the forward edge removes the inverse too.
         store.remove(p.id, c.id, "parent_of").await.unwrap();
-        let (inv, _) = AssociationStoreReader::list(&store, c.id, "child_of", None, None, None)
+        let (inv, _) = store
+            .query_edges(EdgeQuery::from(c.id, "child_of"))
             .await
             .unwrap();
         assert!(inv.is_empty());

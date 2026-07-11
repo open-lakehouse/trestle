@@ -13,7 +13,7 @@
 //! SQL is checked at compile time with sqlx's `query!` macros against the
 //! committed `.sqlx/` offline cache (regenerate with `cargo sqlx prepare` after
 //! changing a query or the `migrations/`). The one exception is
-//! [`search`](ObjectStoreReader::search) / [`search_from`](AssociationStoreReader::search_from),
+//! [`search`](ObjectStoreReader::search) / [`query_edges`](AssociationStoreReader::query_edges),
 //! whose payload-filter `WHERE` clause is built dynamically with [`sqlx::QueryBuilder`] and so is
 //! neither compile-time checked nor cached — see the "Filter pushdown" section below.
 //!
@@ -41,8 +41,8 @@ use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
 use crate::store::{
-    AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
-    StoreExec, StoreTx, Transactional,
+    AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
+    ObjectStoreReader, Precondition, StoreExec, StoreTx, Transactional,
 };
 use crate::{Error, Result};
 
@@ -332,7 +332,7 @@ async fn op_list_objects<L: Label>(
 // `WHERE` clause over `json_extract(properties, '$.path')`, so the database does the filtering
 // and real `LIMIT`/`OFFSET` pagination. Anything outside that subset falls back to the trait's
 // Rust-side default (drain the full listing, filter with `Filter::matches`) — see
-// `op_search_objects` / `op_search_edges`.
+// `op_search_objects` / `op_query_edges`.
 //
 // The translated query is built with [`sqlx::QueryBuilder`], so it is **not** compile-time
 // checked and has **no** `.sqlx` offline-cache entry — the accepted tradeoff for a dynamic
@@ -577,54 +577,86 @@ async fn op_search_objects<L: Label>(
     paginate(objects, offset, limit)
 }
 
-/// Search associations by payload, pushing the filter into SQL when it translates faithfully.
+/// List edges matching an [`EdgeQuery`], most-recent-first, pushing every predicate it can into
+/// one `WHERE`.
 ///
-/// The `from_id` + edge `label` + `target_label` (`to_label`) filters all push into the same
-/// `WHERE`, so pushing the payload filter also lets `LIMIT`/`OFFSET` page correctly — which
-/// incidentally removes the post-`LIMIT` `target_label` filtering hazard that [`op_list_edges`]
-/// still carries. When the filter isn't pushable, fall back to the Rust default.
-async fn op_search_edges<L: Label>(
+/// The anchor (`from_id` for [`EdgeEndpoint::From`], `to_id` for [`EdgeEndpoint::Into`]), the edge
+/// `label`, an optional `target_label` (`to_label`) and an optional `target_id` (the *opposite*
+/// endpoint column) all push into the same `WHERE`, so `LIMIT`/`OFFSET` page correctly. Ordering
+/// is `id DESC`: edge ids are UUIDv7 (time-ordered), so descending id is most-recent-first.
+///
+/// A payload `filter` pushes too when [`is_pushable`]; when it is not, we push everything *else*
+/// (so the non-filter predicates still shrink the scan), fetch the full ordered set, and apply
+/// the filter + pagination in Rust — never letting a `LIMIT` truncate ahead of the Rust filter.
+async fn op_query_edges<L: Label>(
     conn: &mut SqliteConnection,
-    from_id: Uuid,
-    label: &str,
-    target_label: Option<L>,
-    filter: &Filter,
-    max_results: Option<usize>,
-    page_token: Option<String>,
+    query: EdgeQuery<'_, L>,
 ) -> Result<(Vec<Association<L>>, Option<String>)> {
-    if !is_pushable(filter) {
-        let offset = crate::store::parse_offset(page_token)?;
-        let (all, _) = op_list_edges(conn, from_id, label, target_label, None, None).await?;
-        let matched: Vec<_> = all
+    // Anchor column + the "other" endpoint column that `target_id` restricts.
+    let (anchor_col, other_col, anchor_id) = match query.endpoint {
+        EdgeEndpoint::From(id) => ("from_id", "to_id", id),
+        EdgeEndpoint::Into(id) => ("to_id", "from_id", id),
+    };
+
+    // Emit the anchor + label + target restrictions shared by both paths.
+    let base = |qb: &mut sqlx::QueryBuilder<'_, Sqlite>| {
+        qb.push(" WHERE ");
+        qb.push(anchor_col);
+        qb.push(" = ");
+        qb.push_bind(anchor_id.hyphenated().to_string());
+        qb.push(" AND label = ");
+        qb.push_bind(query.label.to_string());
+        // `target_label` always filters `to_label` (the only label denormalized on the row);
+        // it is meaningful for `From` queries and matches the anchor's own label for `Into`.
+        if let Some(tl) = query.target_label {
+            qb.push(" AND to_label = ");
+            qb.push_bind(tl.as_str().to_string());
+        }
+        if let Some(tid) = query.target_id {
+            qb.push(" AND ");
+            qb.push(other_col);
+            qb.push(" = ");
+            qb.push_bind(tid.hyphenated().to_string());
+        }
+    };
+
+    const SELECT: &str = "SELECT id, from_id, label, to_id, to_label, properties, created_at, updated_at \
+         FROM associations";
+
+    // Non-pushable filter: push everything else, fetch the full ordered set, filter in Rust.
+    if let Some(filter) = query.filter
+        && !is_pushable(filter)
+    {
+        let offset = crate::store::parse_offset(query.page_token)?;
+        let mut qb = sqlx::QueryBuilder::<Sqlite>::new(SELECT);
+        base(&mut qb);
+        qb.push(" ORDER BY id DESC");
+        let rows = qb.build().fetch_all(conn).await?;
+        let matched: Vec<_> = rows
+            .into_iter()
+            .map(edge_from_row)
+            .collect::<Result<Vec<_>>>()?
             .into_iter()
             .filter(|a| filter.matches(crate::store::props_or_null(&a.properties)))
             .collect();
         return Ok(crate::store::paginate_filtered(
             matched,
             offset,
-            max_results,
+            query.max_results,
         ));
     }
 
-    let offset = parse_token(page_token)?;
-    let limit = max_results.unwrap_or(usize::MAX);
+    let offset = parse_token(query.page_token)?;
+    let limit = query.max_results.unwrap_or(usize::MAX);
     let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
-    let from_s = from_id.hyphenated().to_string();
 
-    let mut qb = sqlx::QueryBuilder::<Sqlite>::new(
-        r#"SELECT id, from_id, label, to_id, to_label, properties, created_at, updated_at
-           FROM associations WHERE from_id = "#,
-    );
-    qb.push_bind(from_s);
-    qb.push(" AND label = ");
-    qb.push_bind(label.to_string());
-    if let Some(tl) = target_label {
-        qb.push(" AND to_label = ");
-        qb.push_bind(tl.as_str().to_string());
+    let mut qb = sqlx::QueryBuilder::<Sqlite>::new(SELECT);
+    base(&mut qb);
+    if let Some(filter) = query.filter {
+        qb.push(" AND ");
+        build_where(&mut qb, filter);
     }
-    qb.push(" AND ");
-    build_where(&mut qb, filter);
-    qb.push(" ORDER BY id LIMIT ");
+    qb.push(" ORDER BY id DESC LIMIT ");
     qb.push_bind(fetch);
     qb.push(" OFFSET ");
     qb.push_bind(offset as i64);
@@ -635,6 +667,31 @@ async fn op_search_edges<L: Label>(
         .map(edge_from_row)
         .collect::<Result<Vec<_>>>()?;
     paginate(edges, offset, limit)
+}
+
+/// Count edges matching an anchor + `label` (+ optional `target_label`) via `COUNT(*)`.
+async fn op_count_edges<L: Label>(
+    conn: &mut SqliteConnection,
+    endpoint: EdgeEndpoint,
+    label: &str,
+    target_label: Option<L>,
+) -> Result<u64> {
+    let (anchor_col, anchor_id) = match endpoint {
+        EdgeEndpoint::From(id) => ("from_id", id),
+        EdgeEndpoint::Into(id) => ("to_id", id),
+    };
+    let mut qb = sqlx::QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM associations WHERE ");
+    qb.push(anchor_col);
+    qb.push(" = ");
+    qb.push_bind(anchor_id.hyphenated().to_string());
+    qb.push(" AND label = ");
+    qb.push_bind(label.to_string());
+    if let Some(tl) = target_label {
+        qb.push(" AND to_label = ");
+        qb.push_bind(tl.as_str().to_string());
+    }
+    let count: i64 = qb.build_query_scalar().fetch_one(conn).await?;
+    Ok(count as u64)
 }
 
 /// Build an [`Object`] from a dynamically-queried row (the pushdown path can't use the typed
@@ -883,52 +940,6 @@ async fn op_delete(conn: &mut SqliteConnection, id: &Uuid) -> Result<()> {
     Ok(())
 }
 
-async fn op_list_edges<L: Label>(
-    conn: &mut SqliteConnection,
-    from_id: Uuid,
-    label: &str,
-    target_label: Option<L>,
-    max_results: Option<usize>,
-    page_token: Option<String>,
-) -> Result<(Vec<Association<L>>, Option<String>)> {
-    let offset = parse_token(page_token)?;
-    let limit = max_results.unwrap_or(usize::MAX);
-    let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
-    let offset_i = offset as i64;
-    let from_s = from_id.hyphenated().to_string();
-    let rows = sqlx::query!(
-        r#"SELECT id AS "id!", from_id, label, to_id, to_label, properties, created_at, updated_at
-           FROM associations WHERE from_id = ? AND label = ? ORDER BY id LIMIT ? OFFSET ?"#,
-        from_s,
-        label,
-        fetch,
-        offset_i
-    )
-    .fetch_all(conn)
-    .await?;
-
-    let mut edges = rows
-        .into_iter()
-        .map(|r| {
-            Ok(Association {
-                id: Uuid::parse_str(&r.id)?,
-                from_id: Uuid::parse_str(&r.from_id)?,
-                label: r.label,
-                to_id: Uuid::parse_str(&r.to_id)?,
-                to_label: L::from_str(&r.to_label)
-                    .map_err(|_| Error::generic("unknown label in row"))?,
-                properties: r.properties.map(|p| serde_json::from_str(&p)).transpose()?,
-                created_at: parse_ts(&r.created_at)?,
-                updated_at: r.updated_at.as_deref().map(parse_ts).transpose()?,
-            })
-        })
-        .collect::<Result<Vec<Association<L>>>>()?;
-    if let Some(tl) = target_label {
-        edges.retain(|e| e.to_label == tl);
-    }
-    paginate(edges, offset, limit)
-}
-
 async fn op_add_edge<L: Label>(
     conn: &mut SqliteConnection,
     from_id: Uuid,
@@ -962,7 +973,8 @@ async fn insert_edge<L: Label>(
     to_label: L,
     properties: Option<serde_json::Value>,
 ) -> Result<()> {
-    let id_s = Uuid::new_v4().hyphenated().to_string();
+    // v7 (time-ordered) so `ORDER BY id DESC` in `op_query_edges` is most-recent-first.
+    let id_s = Uuid::now_v7().hyphenated().to_string();
     let from_s = from_id.hyphenated().to_string();
     let to_s = to_id.hyphenated().to_string();
     let to_label_s = to_label.as_str().to_string();
@@ -1136,46 +1148,22 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for SqlStore<L> {
-    async fn list(
+    async fn query_edges(
         &self,
-        from_id: Uuid,
-        label: &str,
-        target_label: Option<L>,
-        max_results: Option<usize>,
-        page_token: Option<String>,
+        query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
         let mut conn = self.pool.acquire().await?;
-        op_list_edges(
-            &mut conn,
-            from_id,
-            label,
-            target_label,
-            max_results,
-            page_token,
-        )
-        .await
+        op_query_edges(&mut conn, query).await
     }
 
-    async fn search_from(
+    async fn count_edges(
         &self,
-        from_id: Uuid,
+        endpoint: EdgeEndpoint,
         label: &str,
         target_label: Option<L>,
-        filter: &Filter,
-        max_results: Option<usize>,
-        page_token: Option<String>,
-    ) -> Result<(Vec<Association<L>>, Option<String>)> {
+    ) -> Result<u64> {
         let mut conn = self.pool.acquire().await?;
-        op_search_edges(
-            &mut conn,
-            from_id,
-            label,
-            target_label,
-            filter,
-            max_results,
-            page_token,
-        )
-        .await
+        op_count_edges(&mut conn, endpoint, label, target_label).await
     }
 }
 
@@ -1289,24 +1277,22 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for SqlTx<L> {
-    async fn list(
+    async fn query_edges(
         &self,
-        from_id: Uuid,
-        label: &str,
-        target_label: Option<L>,
-        max_results: Option<usize>,
-        page_token: Option<String>,
+        query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
         let mut tx = self.tx.lock().await;
-        op_list_edges(
-            &mut tx,
-            from_id,
-            label,
-            target_label,
-            max_results,
-            page_token,
-        )
-        .await
+        op_query_edges(&mut tx, query).await
+    }
+
+    async fn count_edges(
+        &self,
+        endpoint: EdgeEndpoint,
+        label: &str,
+        target_label: Option<L>,
+    ) -> Result<u64> {
+        let mut tx = self.tx.lock().await;
+        op_count_edges(&mut tx, endpoint, label, target_label).await
     }
 }
 
@@ -1405,9 +1391,14 @@ mod tests {
         conformance::search_object_predicates(&fresh().await).await;
         conformance::search_object_pagination_filters_completely(&fresh().await).await;
         conformance::search_namespace_and_filter(&fresh().await).await;
-        conformance::search_from_predicates(&fresh().await).await;
-        conformance::search_from_pagination_filters_completely(&fresh().await).await;
+        conformance::edge_filter_predicates(&fresh().await).await;
+        conformance::edge_filter_pagination_completes(&fresh().await).await;
         conformance::search_fallback_predicates_agree(&fresh().await).await;
+        conformance::edge_listing_is_recency_ordered(&fresh().await).await;
+        conformance::edge_target_label_pages_completely(&fresh().await).await;
+        conformance::incoming_edges_listed(&fresh().await).await;
+        conformance::edge_target_id_restriction(&fresh().await).await;
+        conformance::count_edges_matches_list(&fresh().await).await;
 
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -1434,11 +1425,11 @@ mod tests {
             let ns_name = ResourceName::from_naive_str_split(format!("ns.item{i}"));
             let other = ResourceName::from_naive_str_split(format!("other.item{i}"));
             store
-                .create(ConformanceLabel, &ns_name, None, None, None)
+                .create(ConformanceLabel::Node, &ns_name, None, None, None)
                 .await
                 .unwrap();
             store
-                .create(ConformanceLabel, &other, None, None, None)
+                .create(ConformanceLabel::Node, &other, None, None, None)
                 .await
                 .unwrap();
         }
@@ -1448,7 +1439,7 @@ mod tests {
         let mut token = None;
         loop {
             let (page, next) =
-                ObjectStoreReader::list(&store, ConformanceLabel, Some(&ns), Some(2), token)
+                ObjectStoreReader::list(&store, ConformanceLabel::Node, Some(&ns), Some(2), token)
                     .await
                     .unwrap();
             assert!(page.iter().all(|o| o.name.prefix_matches(&ns)));
@@ -1488,7 +1479,13 @@ mod tests {
         // migration: `connect` does not run DDL.
         let store = SqlStore::<ConformanceLabel>::connect(pool);
         let obj = store
-            .create(ConformanceLabel, &"m".parse().unwrap(), None, None, None)
+            .create(
+                ConformanceLabel::Node,
+                &"m".parse().unwrap(),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(store.get(&obj.id).await.is_ok());

@@ -319,71 +319,199 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     }
 }
 
+/// The object an edge listing is anchored on, and thus the direction it walks.
+///
+/// TAO-style graphs traverse edges from a fixed endpoint: the *outgoing* edges of a
+/// source object, or the *incoming* edges of a target object. [`From`](Self::From) walks
+/// the former (matching the edge's `from_id`), [`Into`](Self::Into) the latter (matching
+/// its `to_id`). Incoming listing is a direct reverse scan on `to_id`; it does **not** rely
+/// on the inverse-edge mechanism (see [`AssociationStore`]) and so works regardless of
+/// whether an inverse resolver is configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeEndpoint {
+    /// Outgoing edges from this source object — matches `from_id` (TAO `assoc_range`).
+    From(Uuid),
+    /// Incoming edges into this target object — matches `to_id` (a reverse scan).
+    Into(Uuid),
+}
+
+/// A read query over edges, always ordered most-recent-first.
+///
+/// This is the single edge-read surface: it unifies direction ([`endpoint`](Self::endpoint)),
+/// the restrictions that used to be positional arguments ([`target_label`](Self::target_label)
+/// and an optional payload [`filter`](Self::filter)), a single-target restriction
+/// ([`target_id`](Self::target_id), TAO `assoc_get`), and offset pagination.
+///
+/// Results are **always most-recent-first** — there is no ordering knob. The shipped backends
+/// realize this by generating time-ordered (UUIDv7) edge ids and ordering by `id DESC`; a
+/// caveat applies to edges created before v7 ids shipped (see [`query_edges`]).
+///
+/// Build one with [`EdgeQuery::from`] / [`EdgeQuery::into`] and the chaining setters:
+///
+/// ```
+/// # use olai_store::{EdgeQuery, Filter};
+/// # use uuid::Uuid;
+/// # use olai_store::conformance::ConformanceLabel;
+/// # let (src, dst) = (Uuid::nil(), Uuid::nil());
+/// let filter = Filter::gt("weight", 4);
+/// let q = EdgeQuery::<ConformanceLabel>::from(src, "link")
+///     .target_id(dst)
+///     .filter(&filter)
+///     .page(Some(50), None);
+/// # let _ = q;
+/// ```
+///
+/// [`query_edges`]: AssociationStoreReader::query_edges
+pub struct EdgeQuery<'a, L: Label> {
+    /// Which object the listing is anchored on, and the direction it walks.
+    pub endpoint: EdgeEndpoint,
+    /// The edge label to list (required).
+    pub label: &'a str,
+    /// Restrict to edges whose target object (`to_label`) has this label.
+    ///
+    /// Only the target object's label is denormalized onto the edge row, so this filters
+    /// `to_label` regardless of direction. For a [`From`](EdgeEndpoint::From) query that is the
+    /// *other* endpoint (the useful case). For an [`Into`](EdgeEndpoint::Into) query the target
+    /// **is** the anchor, so this can only match the anchor's own label — it cannot restrict the
+    /// incoming edges by their *source* label (the source label is not stored; that would need a
+    /// join). Leave it `None` on `Into` queries.
+    pub target_label: Option<L>,
+    /// Restrict to the single edge whose *other* endpoint is this object (TAO `assoc_get`).
+    pub target_id: Option<Uuid>,
+    /// Optional payload predicate over each edge's [`properties`](Association::properties).
+    pub filter: Option<&'a Filter>,
+    /// Maximum edges to return this page; `None` means no limit.
+    pub max_results: Option<usize>,
+    /// Continuation token from a previous page of the *same* query, or `None` to start.
+    pub page_token: Option<String>,
+}
+
+impl<'a, L: Label> EdgeQuery<'a, L> {
+    /// A query for the outgoing edges of `from_id` with edge `label`.
+    pub fn from(from_id: Uuid, label: &'a str) -> Self {
+        Self::anchored(EdgeEndpoint::From(from_id), label)
+    }
+
+    /// A query for the incoming edges into `to_id` with edge `label`.
+    pub fn into(to_id: Uuid, label: &'a str) -> Self {
+        Self::anchored(EdgeEndpoint::Into(to_id), label)
+    }
+
+    fn anchored(endpoint: EdgeEndpoint, label: &'a str) -> Self {
+        Self {
+            endpoint,
+            label,
+            target_label: None,
+            target_id: None,
+            filter: None,
+            max_results: None,
+            page_token: None,
+        }
+    }
+
+    /// Restrict to edges whose target object (`to_label`) has this label.
+    ///
+    /// See [the field](Self::target_label): meaningful on [`from`](Self::from) queries; on
+    /// [`into`](Self::into) queries it can only match the anchor's own label.
+    #[must_use]
+    pub fn target_label(mut self, target_label: L) -> Self {
+        self.target_label = Some(target_label);
+        self
+    }
+
+    /// Restrict to the single edge whose *other* endpoint is this object.
+    ///
+    /// The other endpoint is the target for a [`from`](Self::from) query and the source for an
+    /// [`into`](Self::into) query, so this works correctly in both directions.
+    #[must_use]
+    pub fn target_id(mut self, target_id: Uuid) -> Self {
+        self.target_id = Some(target_id);
+        self
+    }
+
+    /// Apply a payload predicate.
+    #[must_use]
+    pub fn filter(mut self, filter: &'a Filter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Set the page size and continuation token.
+    #[must_use]
+    pub fn page(mut self, max_results: Option<usize>, page_token: Option<String>) -> Self {
+        self.max_results = max_results;
+        self.page_token = page_token;
+        self
+    }
+}
+
 /// Read-only interface for the association (edge) store.
 #[async_trait::async_trait]
 pub trait AssociationStoreReader<L: Label>: Send + Sync + 'static {
-    /// List associations from a given source object with a specific edge label.
+    /// List edges matching an [`EdgeQuery`], most-recent-first.
     ///
-    /// Optionally filter by the target object's label. Results are returned in a
-    /// stable order; at most `max_results` associations are returned per call, and
-    /// when more remain the returned continuation token is `Some` and should be
-    /// passed back as `page_token` to fetch the next page (a `None` token marks the
-    /// final page). `page_token` must be a token previously produced by this method
-    /// on the same query.
+    /// This is the one edge-read primitive: [`EdgeQuery`] carries the direction
+    /// ([`endpoint`](EdgeQuery::endpoint)), the edge `label`, optional restriction to the other
+    /// endpoint's object [`label`](EdgeQuery::target_label) or a specific
+    /// [`id`](EdgeQuery::target_id), an optional payload [`filter`](EdgeQuery::filter), and
+    /// offset pagination. At most `max_results` edges are returned per call; when more remain
+    /// the returned token is `Some` and must be passed back as `page_token` to fetch the next
+    /// page (a `None` token marks the final page). An edge with no properties is matched against
+    /// JSON `null`.
+    ///
+    /// # Ordering
+    ///
+    /// Results are **most-recent-first**. The shipped backends realize this by generating
+    /// time-ordered (UUIDv7) edge ids and ordering by `id` descending. Edges created before v7
+    /// ids shipped carry random v4 ids, which sort before every v7 id, so any such legacy edge
+    /// appears as "oldest" (last) and legacy edges have no meaningful order among themselves.
+    /// No backfill is performed; edges written from now on are correctly time-ordered.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is not a valid token for
-    /// this query.
-    async fn list(
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is not
+    /// a valid token for this query.
+    async fn query_edges(
         &self,
-        from_id: Uuid,
-        label: &str,
-        target_label: Option<L>,
-        max_results: Option<usize>,
-        page_token: Option<String>,
+        query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)>;
 
-    /// Search associations from `from_id` with edge `label` whose properties match `filter`,
-    /// optionally filtered by the target object's label.
+    /// Count the edges matching an anchor + `label`, optionally restricted by target label
+    /// (TAO `assoc_count`).
     ///
-    /// Mirrors [`list`](Self::list) with an added `filter` applied to each edge's stored
-    /// [`properties`](Association::properties) via [`Filter::matches`] — same ordering,
-    /// pagination, and token contract. An edge with no properties is matched against JSON
-    /// `null`.
-    ///
-    /// The default implementation drains the full matching listing and filters in process;
-    /// backends may override it but must return identical results (enforced by conformance).
+    /// The default implementation drains [`query_edges`](Self::query_edges) and counts; backends
+    /// may override it with a `COUNT(*)` for efficiency but must return the same total.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is
-    /// not a valid token for this query.
-    async fn search_from(
+    /// Returns a backend error if the count cannot be computed.
+    async fn count_edges(
         &self,
-        from_id: Uuid,
+        endpoint: EdgeEndpoint,
         label: &str,
         target_label: Option<L>,
-        filter: &Filter,
-        max_results: Option<usize>,
-        page_token: Option<String>,
-    ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        let offset = parse_offset(page_token)?;
-        let mut matched = Vec::new();
+    ) -> Result<u64> {
+        let mut total: u64 = 0;
         let mut token = None;
         loop {
-            let (batch, next) = self.list(from_id, label, target_label, None, token).await?;
-            matched.extend(
-                batch
-                    .into_iter()
-                    .filter(|a| filter.matches(props_or_null(&a.properties))),
-            );
+            let (batch, next) = self
+                .query_edges(EdgeQuery {
+                    endpoint,
+                    label,
+                    target_label,
+                    target_id: None,
+                    filter: None,
+                    max_results: None,
+                    page_token: token,
+                })
+                .await?;
+            total += batch.len() as u64;
             match next {
                 Some(t) => token = Some(t),
                 None => break,
             }
         }
-        Ok(paginate_filtered(matched, offset, max_results))
+        Ok(total)
     }
 }
 
@@ -510,36 +638,20 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
 
 #[async_trait::async_trait]
 impl<L: Label, T: AssociationStoreReader<L>> AssociationStoreReader<L> for Arc<T> {
-    async fn list(
+    async fn query_edges(
         &self,
-        from_id: Uuid,
-        label: &str,
-        target_label: Option<L>,
-        max_results: Option<usize>,
-        page_token: Option<String>,
+        query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        T::list(self, from_id, label, target_label, max_results, page_token).await
+        T::query_edges(self, query).await
     }
 
-    async fn search_from(
+    async fn count_edges(
         &self,
-        from_id: Uuid,
+        endpoint: EdgeEndpoint,
         label: &str,
         target_label: Option<L>,
-        filter: &Filter,
-        max_results: Option<usize>,
-        page_token: Option<String>,
-    ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        T::search_from(
-            self,
-            from_id,
-            label,
-            target_label,
-            filter,
-            max_results,
-            page_token,
-        )
-        .await
+    ) -> Result<u64> {
+        T::count_edges(self, endpoint, label, target_label).await
     }
 }
 

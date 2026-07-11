@@ -34,17 +34,26 @@ use std::str::FromStr;
 use crate::filter::Filter;
 use crate::name::ResourceName;
 use crate::store::{
-    AssociationStoreReader, ObjectStoreReader, Precondition, StoreExec, Transactional,
+    EdgeEndpoint, EdgeQuery, ObjectStoreReader, Precondition, StoreExec, Transactional,
 };
 use crate::{Error, Label};
 
-/// A minimal single-variant [`Label`] the conformance checks operate over.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct ConformanceLabel;
+/// A minimal [`Label`] the conformance checks operate over.
+///
+/// Two variants so target-label filtering has something to discriminate on;
+/// [`Node`](Self::Node) is the default used by every check that doesn't care about kind.
+#[derive(Debug, Clone, Copy, Default, Hash, PartialEq, Eq)]
+pub enum ConformanceLabel {
+    /// The default object kind.
+    #[default]
+    Node,
+    /// A second kind, used only to exercise `target_label` filtering.
+    Other,
+}
 
 impl fmt::Display for ConformanceLabel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("node")
+        f.write_str(self.as_str())
     }
 }
 
@@ -52,7 +61,8 @@ impl FromStr for ConformanceLabel {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, String> {
         match s {
-            "node" => Ok(ConformanceLabel),
+            "node" => Ok(ConformanceLabel::Node),
+            "other" => Ok(ConformanceLabel::Other),
             other => Err(format!("unknown label: {other}")),
         }
     }
@@ -60,7 +70,10 @@ impl FromStr for ConformanceLabel {
 
 impl Label for ConformanceLabel {
     fn as_str(&self) -> &str {
-        "node"
+        match self {
+            ConformanceLabel::Node => "node",
+            ConformanceLabel::Other => "other",
+        }
     }
 }
 
@@ -81,7 +94,7 @@ fn rn(s: &str) -> ResourceName {
 /// `Any` is unconditional.
 pub async fn cas_update<S: StoreExec<ConformanceLabel>>(store: &S) {
     let obj = store
-        .create(ConformanceLabel, &rn("a"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("a"), None, None, None)
         .await
         .unwrap();
     assert_eq!(obj.version, 0, "fresh object starts at version 0");
@@ -112,11 +125,11 @@ pub async fn cas_update<S: StoreExec<ConformanceLabel>>(store: &S) {
 /// collisions.
 pub async fn rename_semantics<S: StoreExec<ConformanceLabel>>(store: &S) {
     let a = store
-        .create(ConformanceLabel, &rn("a"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("a"), None, None, None)
         .await
         .unwrap();
     let b = store
-        .create(ConformanceLabel, &rn("b"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("b"), None, None, None)
         .await
         .unwrap();
     store.add(a.id, b.id, "link", None).await.unwrap();
@@ -138,7 +151,8 @@ pub async fn rename_semantics<S: StoreExec<ConformanceLabel>>(store: &S) {
     assert_eq!(renamed.name, rn("a2"));
     assert!(renamed.version > a.version, "rename bumps the version");
 
-    let (edges, _) = AssociationStoreReader::list(store, a.id, "link", None, None, None)
+    let (edges, _) = store
+        .query_edges(EdgeQuery::from(a.id, "link"))
         .await
         .unwrap();
     assert_eq!(edges.len(), 1, "rename preserves outgoing associations");
@@ -152,7 +166,7 @@ pub async fn transaction_atomicity<
     store: &S,
 ) {
     let seed = store
-        .create(ConformanceLabel, &rn("seed"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("seed"), None, None, None)
         .await
         .unwrap();
     let seed_id = seed.id;
@@ -161,7 +175,7 @@ pub async fn transaction_atomicity<
         .transaction(Box::new(move |tx| {
             Box::pin(async move {
                 tx.delete(&seed_id).await?;
-                tx.create(ConformanceLabel, &rn("new"), None, None, None)
+                tx.create(ConformanceLabel::Node, &rn("new"), None, None, None)
                     .await?;
                 Err(Error::generic("boom"))
             })
@@ -175,7 +189,7 @@ pub async fn transaction_atomicity<
     );
     assert!(
         store
-            .get_by_name(ConformanceLabel, &rn("new"))
+            .get_by_name(ConformanceLabel::Node, &rn("new"))
             .await
             .is_err(),
         "rollback must discard the created object"
@@ -192,10 +206,10 @@ pub async fn transaction_commit<
         .transaction(Box::new(|tx| {
             Box::pin(async move {
                 let a = tx
-                    .create(ConformanceLabel, &rn("x"), None, None, None)
+                    .create(ConformanceLabel::Node, &rn("x"), None, None, None)
                     .await?;
                 let b = tx
-                    .create(ConformanceLabel, &rn("y"), None, None, None)
+                    .create(ConformanceLabel::Node, &rn("y"), None, None, None)
                     .await?;
                 tx.add(a.id, b.id, "e", None).await?;
                 Ok(a.id)
@@ -207,9 +221,7 @@ pub async fn transaction_commit<
         store.get(&a_id).await.is_ok(),
         "committed object must persist"
     );
-    let (edges, _) = AssociationStoreReader::list(store, a_id, "e", None, None, None)
-        .await
-        .unwrap();
+    let (edges, _) = store.query_edges(EdgeQuery::from(a_id, "e")).await.unwrap();
     assert_eq!(edges.len(), 1, "committed edge must persist");
 }
 
@@ -218,27 +230,30 @@ pub async fn transaction_commit<
 /// `store` must be configured with [`parent_child_inverse`].
 pub async fn inverse_edges<S: StoreExec<ConformanceLabel>>(store: &S) {
     let p = store
-        .create(ConformanceLabel, &rn("p"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("p"), None, None, None)
         .await
         .unwrap();
     let c = store
-        .create(ConformanceLabel, &rn("c"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("c"), None, None, None)
         .await
         .unwrap();
 
     store.add(p.id, c.id, "parent_of", None).await.unwrap();
-    let (fwd, _) = AssociationStoreReader::list(store, p.id, "parent_of", None, None, None)
+    let (fwd, _) = store
+        .query_edges(EdgeQuery::from(p.id, "parent_of"))
         .await
         .unwrap();
     assert_eq!(fwd.len(), 1, "forward edge present");
-    let (inv, _) = AssociationStoreReader::list(store, c.id, "child_of", None, None, None)
+    let (inv, _) = store
+        .query_edges(EdgeQuery::from(c.id, "child_of"))
         .await
         .unwrap();
     assert_eq!(inv.len(), 1, "inverse edge maintained on add");
     assert_eq!(inv[0].to_id, p.id);
 
     store.remove(p.id, c.id, "parent_of").await.unwrap();
-    let (inv, _) = AssociationStoreReader::list(store, c.id, "child_of", None, None, None)
+    let (inv, _) = store
+        .query_edges(EdgeQuery::from(c.id, "child_of"))
         .await
         .unwrap();
     assert!(inv.is_empty(), "inverse edge removed on remove");
@@ -255,7 +270,13 @@ pub async fn sensitive_blob_roundtrip<S: StoreExec<ConformanceLabel>>(store: &S)
 
     let blob = Bytes::from_static(b"opaque-sealed-bytes");
     let obj = store
-        .create(ConformanceLabel, &rn("s"), None, None, Some(blob.clone()))
+        .create(
+            ConformanceLabel::Node,
+            &rn("s"),
+            None,
+            None,
+            Some(blob.clone()),
+        )
         .await
         .unwrap();
 
@@ -334,7 +355,7 @@ pub async fn search_object_predicates<S: StoreExec<ConformanceLabel>>(store: &S)
     for (i, p) in payloads.iter().enumerate() {
         store
             .create(
-                ConformanceLabel,
+                ConformanceLabel::Node,
                 &rn(&format!("o{i}")),
                 Some(p.clone()),
                 None,
@@ -348,7 +369,7 @@ pub async fn search_object_predicates<S: StoreExec<ConformanceLabel>>(store: &S)
     // the reference evaluator selects (compared as an id set, order-independent).
     let check = async |filter: Filter| {
         let (hits, token) = store
-            .search(ConformanceLabel, None, &filter, None, None)
+            .search(ConformanceLabel::Node, None, &filter, None, None)
             .await
             .unwrap();
         assert!(token.is_none(), "unbounded search returns a single page");
@@ -407,7 +428,7 @@ pub async fn search_object_pagination_filters_completely<S: StoreExec<Conformanc
             let p = serde_json::json!({ "keep": keep, "i": i });
             let name = rn(&format!("k{keep}i{i}"));
             store
-                .create(ConformanceLabel, &name, Some(p), None, None)
+                .create(ConformanceLabel::Node, &name, Some(p), None, None)
                 .await
                 .unwrap();
         }
@@ -418,7 +439,7 @@ pub async fn search_object_pagination_filters_completely<S: StoreExec<Conformanc
     let mut token = None;
     loop {
         let (page, next) = store
-            .search(ConformanceLabel, None, &filter, Some(2), token)
+            .search(ConformanceLabel::Node, None, &filter, Some(2), token)
             .await
             .unwrap();
         assert!(page.len() <= 2, "respects max_results");
@@ -454,7 +475,7 @@ pub async fn search_namespace_and_filter<S: StoreExec<ConformanceLabel>>(store: 
     ] {
         let p = serde_json::json!({ "active": active });
         store
-            .create(ConformanceLabel, &rn(name), Some(p), None, None)
+            .create(ConformanceLabel::Node, &rn(name), Some(p), None, None)
             .await
             .unwrap();
     }
@@ -465,7 +486,7 @@ pub async fn search_namespace_and_filter<S: StoreExec<ConformanceLabel>>(store: 
     let mut token = None;
     loop {
         let (page, next) = store
-            .search(ConformanceLabel, Some(&ns), &filter, Some(2), token)
+            .search(ConformanceLabel::Node, Some(&ns), &filter, Some(2), token)
             .await
             .unwrap();
         for o in &page {
@@ -485,11 +506,10 @@ pub async fn search_namespace_and_filter<S: StoreExec<ConformanceLabel>>(store: 
     );
 }
 
-/// Searching edges by payload matches the set the reference [`Filter::matches`] selects, and
-/// respects the target-label filter.
-pub async fn search_from_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
+/// Querying edges with a payload filter matches the set the reference [`Filter::matches`] selects.
+pub async fn edge_filter_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
     let src = store
-        .create(ConformanceLabel, &rn("src"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
         .await
         .unwrap();
     let edges = [
@@ -499,7 +519,13 @@ pub async fn search_from_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
     ];
     for (i, e) in edges.iter().enumerate() {
         let dst = store
-            .create(ConformanceLabel, &rn(&format!("dst{i}")), None, None, None)
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("dst{i}")),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         store
@@ -510,7 +536,7 @@ pub async fn search_from_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
 
     let check = async |filter: Filter| {
         let (hits, token) = store
-            .search_from(src.id, "link", None, &filter, None, None)
+            .query_edges(EdgeQuery::from(src.id, "link").filter(&filter))
             .await
             .unwrap();
         assert!(token.is_none());
@@ -524,7 +550,7 @@ pub async fn search_from_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
         want.sort_by_key(|v| v.to_string());
         assert_eq!(
             got, want,
-            "search_from disagreed with Filter::matches for {filter:?}"
+            "query_edges disagreed with Filter::matches for {filter:?}"
         );
     };
 
@@ -538,18 +564,18 @@ pub async fn search_from_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
     check(Filter::exists("kind")).await;
 }
 
-/// Paging a filtered edge search returns every match exactly once even when matching and
+/// Paging a filtered edge query returns every match exactly once even when matching and
 /// non-matching edges are interleaved.
-pub async fn search_from_pagination_filters_completely<S: StoreExec<ConformanceLabel>>(store: &S) {
+pub async fn edge_filter_pagination_completes<S: StoreExec<ConformanceLabel>>(store: &S) {
     let src = store
-        .create(ConformanceLabel, &rn("src"), None, None, None)
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
         .await
         .unwrap();
     for i in 0..6 {
         for keep in [true, false] {
             let dst = store
                 .create(
-                    ConformanceLabel,
+                    ConformanceLabel::Node,
                     &rn(&format!("d{keep}{i}")),
                     None,
                     None,
@@ -567,7 +593,11 @@ pub async fn search_from_pagination_filters_completely<S: StoreExec<ConformanceL
     let mut token = None;
     loop {
         let (page, next) = store
-            .search_from(src.id, "link", None, &filter, Some(2), token)
+            .query_edges(
+                EdgeQuery::from(src.id, "link")
+                    .filter(&filter)
+                    .page(Some(2), token),
+            )
             .await
             .unwrap();
         assert!(page.len() <= 2);
@@ -603,7 +633,7 @@ pub async fn search_fallback_predicates_agree<S: StoreExec<ConformanceLabel>>(st
     for (i, p) in payloads.iter().enumerate() {
         store
             .create(
-                ConformanceLabel,
+                ConformanceLabel::Node,
                 &rn(&format!("f{i}")),
                 Some(p.clone()),
                 None,
@@ -615,7 +645,7 @@ pub async fn search_fallback_predicates_agree<S: StoreExec<ConformanceLabel>>(st
 
     let check = async |filter: Filter| {
         let (hits, _) = store
-            .search(ConformanceLabel, None, &filter, None, None)
+            .search(ConformanceLabel::Node, None, &filter, None, None)
             .await
             .unwrap();
         let mut got: Vec<_> = hits.iter().map(|o| o.properties.clone().unwrap()).collect();
@@ -659,6 +689,227 @@ pub async fn search_fallback_predicates_agree<S: StoreExec<ConformanceLabel>>(st
     check(Filter::exists(crate::filter::FieldPath::new(["a.b"]))).await;
 }
 
+/// Listing outgoing edges returns them most-recent-first, and paging preserves that order
+/// with no gaps or duplicates.
+///
+/// This is the load-bearing recency check: it forces both backends onto time-ordered
+/// (UUIDv7) edge ids, since a random id would not sort by creation time.
+pub async fn edge_listing_is_recency_ordered<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    // Insert edges in a known order; each carries its insertion index in the payload.
+    let n = 7usize;
+    for i in 0..n {
+        let dst = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("dst{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .add(
+                src.id,
+                dst.id,
+                "link",
+                Some(serde_json::json!({ "seq": i })),
+            )
+            .await
+            .unwrap();
+    }
+
+    // A single unpaged listing is newest-first: seq counts down from n-1 to 0.
+    let (all, token) = store
+        .query_edges(EdgeQuery::from(src.id, "link"))
+        .await
+        .unwrap();
+    assert!(token.is_none());
+    let seqs: Vec<u64> = all
+        .iter()
+        .map(|e| e.properties.as_ref().unwrap()["seq"].as_u64().unwrap())
+        .collect();
+    let expected: Vec<u64> = (0..n as u64).rev().collect();
+    assert_eq!(seqs, expected, "listing must be most-recent-first");
+
+    // Paging preserves the order and covers every edge exactly once.
+    let mut paged = Vec::new();
+    let mut tok = None;
+    loop {
+        let (page, next) = store
+            .query_edges(EdgeQuery::from(src.id, "link").page(Some(3), tok))
+            .await
+            .unwrap();
+        assert!(page.len() <= 3);
+        paged.extend(
+            page.iter()
+                .map(|e| e.properties.as_ref().unwrap()["seq"].as_u64().unwrap()),
+        );
+        match next {
+            Some(t) => tok = Some(t),
+            None => break,
+        }
+    }
+    assert_eq!(
+        paged, expected,
+        "paged listing must match the unpaged order"
+    );
+}
+
+/// A `target_label` filter returns every matching edge across pages — guarding the historical
+/// hazard of filtering the target label *after* a SQL `LIMIT` (which could drop matches).
+pub async fn edge_target_label_pages_completely<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    // Interleave Node- and Other-labelled targets so a naive post-LIMIT filter would drop some.
+    let mut want = 0usize;
+    for i in 0..12 {
+        let label = if i % 2 == 0 {
+            ConformanceLabel::Node
+        } else {
+            ConformanceLabel::Other
+        };
+        if label == ConformanceLabel::Other {
+            want += 1;
+        }
+        let dst = store
+            .create(label, &rn(&format!("dst{i}")), None, None, None)
+            .await
+            .unwrap();
+        store.add(src.id, dst.id, "link", None).await.unwrap();
+    }
+
+    let mut seen = Vec::new();
+    let mut tok = None;
+    loop {
+        let (page, next) = store
+            .query_edges(
+                EdgeQuery::from(src.id, "link")
+                    .target_label(ConformanceLabel::Other)
+                    .page(Some(2), tok),
+            )
+            .await
+            .unwrap();
+        assert!(page.len() <= 2);
+        assert!(
+            page.iter().all(|e| e.to_label == ConformanceLabel::Other),
+            "target_label must be honored"
+        );
+        seen.extend(page.into_iter().map(|e| e.id));
+        match next {
+            Some(t) => tok = Some(t),
+            None => break,
+        }
+    }
+    seen.sort();
+    seen.dedup();
+    assert_eq!(
+        seen.len(),
+        want,
+        "every Other-target edge must be paged, none dropped"
+    );
+}
+
+/// Incoming edges are listed by a reverse scan on the target — independent of any inverse
+/// resolver (this store is built without one).
+pub async fn incoming_edges_listed<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let x = store
+        .create(ConformanceLabel::Node, &rn("x"), None, None, None)
+        .await
+        .unwrap();
+    for name in ["a", "b", "c"] {
+        let src = store
+            .create(ConformanceLabel::Node, &rn(name), None, None, None)
+            .await
+            .unwrap();
+        store.add(src.id, x.id, "link", None).await.unwrap();
+    }
+
+    let (incoming, token) = store
+        .query_edges(EdgeQuery::into(x.id, "link"))
+        .await
+        .unwrap();
+    assert!(token.is_none());
+    assert_eq!(incoming.len(), 3, "all incoming edges listed");
+    assert!(
+        incoming.iter().all(|e| e.to_id == x.id),
+        "incoming edges all point at x"
+    );
+}
+
+/// A `target_id` restriction returns only the single edge to that specific target.
+pub async fn edge_target_id_restriction<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    let mut targets = Vec::new();
+    for i in 0..4 {
+        let dst = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("dst{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store.add(src.id, dst.id, "link", None).await.unwrap();
+        targets.push(dst.id);
+    }
+
+    let (hits, token) = store
+        .query_edges(EdgeQuery::from(src.id, "link").target_id(targets[2]))
+        .await
+        .unwrap();
+    assert!(token.is_none());
+    assert_eq!(hits.len(), 1, "exactly the one edge to the chosen target");
+    assert_eq!(hits[0].to_id, targets[2]);
+}
+
+/// `count_edges` agrees with the length of the full listing, with and without a target label.
+pub async fn count_edges_matches_list<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    for i in 0..5 {
+        let label = if i < 2 {
+            ConformanceLabel::Other
+        } else {
+            ConformanceLabel::Node
+        };
+        let dst = store
+            .create(label, &rn(&format!("dst{i}")), None, None, None)
+            .await
+            .unwrap();
+        store.add(src.id, dst.id, "link", None).await.unwrap();
+    }
+
+    let count = store
+        .count_edges(EdgeEndpoint::From(src.id), "link", None)
+        .await
+        .unwrap();
+    assert_eq!(count, 5, "count matches total edges");
+
+    let count_other = store
+        .count_edges(
+            EdgeEndpoint::From(src.id),
+            "link",
+            Some(ConformanceLabel::Other),
+        )
+        .await
+        .unwrap();
+    assert_eq!(count_other, 2, "count honors target_label");
+}
+
 /// Run the entire battery.
 ///
 /// `fresh` builds a new empty store; `with_inverse` builds one that maintains
@@ -679,9 +930,14 @@ where
     search_object_predicates(&fresh()).await;
     search_object_pagination_filters_completely(&fresh()).await;
     search_namespace_and_filter(&fresh()).await;
-    search_from_predicates(&fresh()).await;
-    search_from_pagination_filters_completely(&fresh()).await;
+    edge_filter_predicates(&fresh()).await;
+    edge_filter_pagination_completes(&fresh()).await;
     search_fallback_predicates_agree(&fresh()).await;
+    edge_listing_is_recency_ordered(&fresh()).await;
+    edge_target_label_pages_completely(&fresh()).await;
+    incoming_edges_listed(&fresh()).await;
+    edge_target_id_restriction(&fresh()).await;
+    count_edges_matches_list(&fresh()).await;
 }
 
 #[cfg(test)]

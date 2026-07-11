@@ -30,8 +30,8 @@ sqlx = { workspace = true, optional = true, features = [
 thiserror = { workspace = true }
 # `sync` for the in-memory backend's owned transaction guard (`OwnedMutexGuard`).
 tokio = { workspace = true, features = ["sync"] }
-# `v4` for the in-memory backend to mint object/edge ids.
-uuid = { workspace = true, features = ["v4"] }
+# `v4` for object ids; `v7` for time-ordered edge ids (so edge listings are most-recent-first).
+uuid = { workspace = true, features = ["v4", "v7"] }
 # Zeroize KEK material on drop (behind the `encryption` feature).
 zeroize = { workspace = true, optional = true, features = ["derive"] }
 
@@ -46,9 +46,8 @@ encryption = ["dep:aes-gcm", "dep:zeroize"]
 
 [dev-dependencies]
 tokio = { version = "1.29.0", features = ["rt", "macros"] }
-# `v4` is only needed by the in-memory test doubles to mint object ids;
-# real store backends generate their own ids, so the lib does not need it.
-uuid = { version = "1", features = ["v4"] }
+# `v4` mints object ids; `v7` mints time-ordered edge ids in the in-memory backend.
+uuid = { version = "1", features = ["v4", "v7"] }
 
 [lints.rust]
 # `docsrs` is set only by the docs.rs build (see `[package.metadata.docs.rs]`) to
