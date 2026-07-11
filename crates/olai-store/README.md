@@ -72,11 +72,13 @@ let store = ManagedObjectStore::new(backend, registry);
 // ManagedObjectStore::with_encryptor(backend, my_encryptor, registry)
 ```
 
-With the `encryption` feature, `Sensitive` fields are sealed by an injectable
-`EnvelopeEncryptor` (AES-256-GCM envelope encryption; pluggable `KeyProvider` for a
-local KEK or a cloud KMS) and stored — atomically with the object — in a nullable
-`sensitive` blob column. Without an encryptor the fields are stripped but not stored.
-See the rustdoc for the full API.
+`ManagedObjectStore` is the primary store API; the raw `InMemoryStore` / `SqlStore`
+backends are a taxonomy-blind blob layer it wraps. With the `encryption` feature,
+`Sensitive` fields are sealed by an injectable `EnvelopeEncryptor` (AES-256-GCM
+envelope encryption; pluggable `KeyProvider` for a local KEK or a cloud KMS) and
+stored — atomically with the object — in a nullable `sensitive` blob column.
+Writing a resource that *has* sensitive fields through a store with no encryptor is
+a hard error, never a silent drop. See the rustdoc for the full API.
 
 ## License
 

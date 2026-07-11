@@ -20,8 +20,9 @@
 //! (or vice versa): create/update/delete are single atomic writes.
 //!
 //! The blob is bound (as AEAD associated data) to the object's UUID, so a sealed value cannot be
-//! relocated to a different object. Without an encryptor, sensitive fields are stripped but not
-//! stored — the same behaviour as before an encryptor is supplied.
+//! relocated to a different object. A store built without an encryptor cannot store sensitive
+//! fields at all: writing a resource that has one is an [`Error::InvalidArgument`], never a silent
+//! drop.
 //!
 //! Because sensitive fields never enter `properties`, they are absent from the searchable payload:
 //! encrypting them does not reduce searchability, and there is no need for (and this crate does
@@ -35,22 +36,31 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::Result;
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::Object;
 use crate::registry::{FieldRole, ResourceRegistry};
 use crate::store::{ObjectStore, ObjectStoreReader, Precondition};
+use crate::{Error, Result};
 
-/// A registry-aware object store that enforces field roles.
+/// A registry-aware object store that enforces field roles — the primary store API.
 ///
-/// Wraps an inner [`ObjectStore`] and uses a [`ResourceRegistry`] to determine how each field
-/// should be handled during CRUD operations.
+/// Wraps an inner [`ObjectStore`] backend (the taxonomy-blind blob layer, e.g.
+/// [`InMemoryStore`](crate::InMemoryStore) or `SqlStore`) and uses a [`ResourceRegistry`] to
+/// determine how each field is handled during CRUD: store-owned `Identifier`/`Managed` fields are
+/// stripped on write and injected on read, and `Sensitive` fields (proto `debug_redact = true`)
+/// are redacted on read.
 ///
 /// When an [`EnvelopeEncryptor`](crate::EnvelopeEncryptor) is provided (via
 /// [`with_encryptor`](ManagedObjectStore::with_encryptor), behind the `encryption` feature),
-/// sensitive fields (marked with `debug_redact = true` in proto definitions) are sealed and
-/// stored inline on the object row. Otherwise they are stripped from `properties` but not stored.
+/// sensitive fields are sealed into an opaque blob stored inline on the object row, written
+/// atomically with the object; [`get_with_secrets`](ManagedObjectStore::get_with_secrets) opens
+/// them back.
+///
+/// **A resource that has sensitive fields can only be written through a store that can encrypt
+/// them.** Attempting to `create`/`update` such a resource on a store built with
+/// [`new`](ManagedObjectStore::new) (no encryptor) is an [`Error::InvalidArgument`] — the crate
+/// never silently drops secret data. Resources with no sensitive fields need no encryptor.
 pub struct ManagedObjectStore<L: Label, S> {
     inner: S,
     #[cfg(feature = "encryption")]
@@ -62,7 +72,9 @@ pub struct ManagedObjectStore<L: Label, S> {
 impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     /// Create a managed store without encryption.
     ///
-    /// Sensitive fields are stripped from `properties` but not stored anywhere.
+    /// Suitable for taxonomies with **no** sensitive fields. Writing a resource that has a
+    /// sensitive field through such a store is an [`Error::InvalidArgument`] (see the type-level
+    /// docs); use [`with_encryptor`](Self::with_encryptor) for those.
     pub fn new(inner: S, registry: ResourceRegistry<L>) -> Self {
         Self {
             inner,
@@ -196,23 +208,41 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
         }
     }
 
-    /// Seal a sensitive field map into an opaque blob bound to the object's id.
+    /// Resolve the sensitive fields stripped from a write into the opaque blob to persist.
     ///
-    /// Returns `Ok(None)` when there is nothing to seal or no encryptor is configured (in which
-    /// case sensitive fields are simply not stored). Serialization of the map to bytes happens
-    /// here so the crypto layer only ever sees opaque bytes.
-    #[cfg(feature = "encryption")]
-    async fn seal_sensitive(
+    /// - No sensitive fields (`None`) → `Ok(None)`: nothing to store.
+    /// - Sensitive fields present **and** an encryptor is configured → seal them and return the
+    ///   blob.
+    /// - Sensitive fields present but **no** encryptor (either the `encryption` feature is off, or
+    ///   the store was built with [`new`](Self::new)) → [`Error::InvalidArgument`]. We refuse to
+    ///   silently drop secret data: a resource with sensitive fields can only be written through a
+    ///   store that can encrypt them.
+    ///
+    /// Serialization of the map to bytes happens here so the crypto layer only ever sees opaque
+    /// bytes.
+    async fn resolve_sensitive_blob(
         &self,
         id: &Uuid,
+        label: L,
         sensitive: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> Result<Option<bytes::Bytes>> {
-        let (Some(encryptor), Some(map)) = (self.encryptor.as_ref(), sensitive) else {
+        let Some(map) = sensitive else {
             return Ok(None);
         };
-        let plaintext = serde_json::to_vec(&serde_json::Value::Object(map))?;
-        let blob = encryptor.seal(&secret_name(id), &plaintext).await?;
-        Ok(Some(bytes::Bytes::from(blob)))
+
+        #[cfg(feature = "encryption")]
+        if let Some(encryptor) = self.encryptor.as_ref() {
+            let plaintext = serde_json::to_vec(&serde_json::Value::Object(map))?;
+            let blob = encryptor.seal(&secret_name(id), &plaintext).await?;
+            return Ok(Some(bytes::Bytes::from(blob)));
+        }
+
+        let _ = (id, &map);
+        Err(Error::invalid_argument(format!(
+            "resource '{label}' has sensitive field(s) but the store has no encryptor configured \
+             to seal them; build the store with `ManagedObjectStore::with_encryptor` (requires the \
+             `encryption` feature)"
+        )))
     }
 }
 
@@ -285,15 +315,12 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
         // `create`, so there is no orphan/rollback window.
         let id = id.unwrap_or_else(Uuid::new_v4);
 
-        #[cfg(feature = "encryption")]
-        let sealed = self.seal_sensitive(&id, sensitive_fields).await?;
-        #[cfg(not(feature = "encryption"))]
-        let sealed = {
-            let _ = sensitive_fields; // stripped but not stored without an encryptor
-            None
-        };
-
-        let blob = sealed.or(sensitive);
+        // Seal the sensitive fields (or error if there are any and no encryptor is configured).
+        // A caller-supplied pre-sealed blob is used only when there are no sensitive fields.
+        let blob = self
+            .resolve_sensitive_blob(&id, label, sensitive_fields)
+            .await?
+            .or(sensitive);
         let mut object = self
             .inner
             .create(label, name, stripped, Some(id), blob)
@@ -315,17 +342,13 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
         let existing = self.inner.get(id).await?;
         let (stripped, sensitive_fields) = self.strip_fields(existing.label, properties);
 
-        #[cfg(feature = "encryption")]
-        let sealed = self.seal_sensitive(id, sensitive_fields).await?;
-        #[cfg(not(feature = "encryption"))]
-        let sealed = {
-            let _ = sensitive_fields;
-            None
-        };
-
         // A `None` blob leaves any existing sealed value untouched; a `Some` blob replaces it,
-        // atomically with the properties update.
-        let blob = sealed.or(sensitive);
+        // atomically with the properties update. Errors if sensitive fields are present but no
+        // encryptor is configured.
+        let blob = self
+            .resolve_sensitive_blob(id, existing.label, sensitive_fields)
+            .await?
+            .or(sensitive);
         let mut object = self.inner.update(id, stripped, precondition, blob).await?;
         self.inject_fields(&mut object);
         Ok(object)
@@ -358,8 +381,8 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists, or a
-    /// decryption error if the stored blob cannot be opened.
+    /// Returns [`Error::NotFound`] if no object with `id` exists, or a decryption error if the
+    /// stored blob cannot be opened.
     pub async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
         let mut object = self.inner.get(id).await?;
         self.inject_fields(&mut object);
@@ -575,10 +598,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strips_sensitive_but_does_not_store_it_without_encryptor() {
+    async fn writing_sensitive_field_without_encryptor_errors() {
         let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
 
-        let created = store
+        // A resource with a sensitive field cannot be written without an encryptor: we refuse to
+        // silently drop the secret.
+        let err = store
             .create(
                 TestLabel::Widget,
                 &rn("w1"),
@@ -587,32 +612,50 @@ mod tests {
                 None,
             )
             .await
-            .unwrap();
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidArgument(_)),
+            "expected InvalidArgument, got {err:?}"
+        );
 
-        // Sensitive field stripped from the returned/redacted object.
-        let map = created.properties.as_ref().unwrap().as_object().unwrap();
-        assert!(!map.contains_key("api_key"));
-
-        // And no blob stored (no encryptor to seal with).
+        // Nothing was persisted.
         assert!(
             store
-                .inner
-                .get_sensitive(&created.id)
+                .get_by_name(TestLabel::Widget, &rn("w1"))
                 .await
-                .unwrap()
-                .is_none()
+                .is_err()
         );
-        // get_with_secrets can't reconstitute it either.
-        let full = store.get_with_secrets(&created.id).await.unwrap();
-        assert!(
-            !full
-                .properties
-                .as_ref()
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("api_key")
-        );
+    }
+
+    #[tokio::test]
+    async fn write_without_sensitive_fields_succeeds_without_encryptor() {
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
+
+        // A resource with no sensitive field in the payload writes fine without an encryptor.
+        let created = store
+            .create(
+                TestLabel::Widget,
+                &rn("w1"),
+                props(serde_json::json!({ "color": "blue" })),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let map = created.properties.as_ref().unwrap().as_object().unwrap();
+        assert_eq!(map["color"], serde_json::json!("blue"));
+        assert!(!map.contains_key("api_key"));
+        // "other" has no sensitive fields at all, so it also writes fine.
+        store
+            .create(
+                TestLabel::Other,
+                &rn("o1"),
+                props(serde_json::json!({ "value": "v" })),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
     }
 
     // --- Sealing + redaction (with encryptor) ---
