@@ -18,7 +18,8 @@ pub enum FieldRole {
     /// Derived from `google.api.field_behavior = IDENTIFIER`.
     Identifier,
 
-    /// Sensitive field — routed to the secret store.
+    /// Sensitive field — sealed into an envelope-encrypted blob stored inline on
+    /// the object row, redacted from ordinary reads.
     /// Derived from `debug_redact = true` on the proto field.
     Sensitive,
 

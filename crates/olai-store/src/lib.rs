@@ -19,7 +19,7 @@
 //!   sensitive): stripping store-owned fields, injecting them back on read, and
 //!   sealing/redacting sensitive fields. Encryption is optional — build it with
 //!   [`new`](ManagedObjectStore::new) for a store with no sensitive fields, or
-//!   [`with_encryptor`](ManagedObjectStore::with_encryptor) (the `encryption`
+//!   `with_encryptor` (the `encryption`
 //!   feature) to seal them. Writing a resource that *has* sensitive fields through
 //!   a store with no encryptor is a hard error, never a silent drop.
 //!
