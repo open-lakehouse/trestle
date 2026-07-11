@@ -16,9 +16,14 @@
 //!
 //! - A path that does not resolve (a missing object key at any segment) makes the predicate
 //!   **not match**; it is never an error.
-//! - A type mismatch between the value at the path and the compared value makes the predicate
-//!   **not match**; it is never an error.
-//! - Numbers are compared as [`f64`]; strings are compared lexicographically.
+//! - [`Eq`](CompareOp::Eq) / [`Ne`](CompareOp::Ne) test structural equality across every JSON
+//!   type (null, bool, string, number, array, object): `Eq` matches equal values, `Ne` matches
+//!   a present-but-unequal value (a value of a different type is unequal, so `Ne` matches it).
+//! - For the ordered comparisons ([`Lt`](CompareOp::Lt)/[`Le`](CompareOp::Le)/
+//!   [`Gt`](CompareOp::Gt)/[`Ge`](CompareOp::Ge)) a type mismatch — or a value that is not an
+//!   orderable scalar — makes the predicate **not match**; it is never an error.
+//! - Numbers are compared as [`f64`] (so `42` and `42.0` are equal); strings are compared
+//!   lexicographically.
 //! - [`Contains`](CompareOp::Contains) is a substring match when the value at the path is a
 //!   string, and an element-membership test when it is a JSON array.
 //! - [`Exists`](Predicate::Exists) is `true` when the path resolves to any value — **including
@@ -258,15 +263,13 @@ impl Predicate {
 fn compare(found: &Value, op: CompareOp, value: &Value) -> bool {
     match op {
         CompareOp::Contains => contains(found, value),
-        CompareOp::Eq => ordering(found, value) == Some(std::cmp::Ordering::Equal),
-        CompareOp::Ne => {
-            // `Ne` matches only when both sides are comparable and unequal; an
-            // incomparable pair (type mismatch) does not match.
-            matches!(
-                ordering(found, value),
-                Some(o) if o != std::cmp::Ordering::Equal
-            )
-        }
+        // Equality is structural across every JSON type (null, bool, string, number, array,
+        // object), not just the ordered scalars — `ordering` returns `None` for null/array/
+        // object, so it must not gate `Eq`/`Ne`.
+        CompareOp::Eq => equal(found, value),
+        // `Ne` matches only when the field is present (a missing path already returned `false`
+        // upstream) and the values differ.
+        CompareOp::Ne => !equal(found, value),
         CompareOp::Lt => ordering(found, value) == Some(std::cmp::Ordering::Less),
         CompareOp::Le => matches!(
             ordering(found, value),
@@ -277,6 +280,22 @@ fn compare(found: &Value, op: CompareOp, value: &Value) -> bool {
             ordering(found, value),
             Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
         ),
+    }
+}
+
+/// Structural equality between two JSON values, with numbers normalized to [`f64`].
+///
+/// Unlike [`ordering`], this is total over every JSON type: `null == null`, and arrays and
+/// objects compare element-wise via [`serde_json`]'s own equality. Numbers are compared as
+/// `f64` so integer and float encodings of the same value (`42` and `42.0`) are equal,
+/// matching the ordering-based comparisons.
+fn equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        },
+        _ => a == b,
     }
 }
 
@@ -300,7 +319,7 @@ fn contains(found: &Value, value: &Value) -> bool {
         Value::String(haystack) => value
             .as_str()
             .is_some_and(|needle| haystack.contains(needle)),
-        Value::Array(items) => items.iter().any(|item| item == value),
+        Value::Array(items) => items.iter().any(|item| equal(item, value)),
         _ => false,
     }
 }
@@ -328,6 +347,8 @@ mod tests {
         assert!(!Filter::eq("n", "5").matches(&p), "number vs string");
         assert!(!Filter::gt("s", 1).matches(&p), "string vs number");
         assert!(!Filter::lt("n", "z").matches(&p));
+        // A present field of a different type is unequal, so `Ne` matches it.
+        assert!(Filter::ne("n", "5").matches(&p), "different type is Ne");
     }
 
     #[test]
@@ -338,6 +359,42 @@ mod tests {
         assert!(Filter::gt("n", 41.9).matches(&p));
         assert!(Filter::le("n", 42).matches(&p));
         assert!(!Filter::lt("n", 42).matches(&p));
+    }
+
+    #[test]
+    fn eq_ne_over_all_json_types() {
+        // Equality is structural, not restricted to the ordered scalars.
+        let p = json!({ "nil": null, "arr": ["a", "b"], "obj": { "k": 1 }, "flag": true });
+        assert!(Filter::eq("nil", Value::Null).matches(&p), "null == null");
+        assert!(
+            Filter::eq("arr", json!(["a", "b"])).matches(&p),
+            "array equality"
+        );
+        assert!(!Filter::eq("arr", json!(["a"])).matches(&p));
+        assert!(
+            Filter::eq("obj", json!({ "k": 1 })).matches(&p),
+            "object equality"
+        );
+        assert!(Filter::eq("flag", true).matches(&p));
+
+        // Ne is the negation of Eq on a present field.
+        assert!(
+            Filter::ne("arr", json!(["x"])).matches(&p),
+            "differing array is Ne"
+        );
+        assert!(!Filter::ne("arr", json!(["a", "b"])).matches(&p));
+        assert!(!Filter::ne("nil", Value::Null).matches(&p));
+        // Numeric equality still normalizes int/float encodings.
+        assert!(Filter::eq("obj.k", 1.0).matches(&p));
+    }
+
+    #[test]
+    fn contains_number_membership_normalizes() {
+        // Integer-encoded array element matches a float query and vice versa.
+        let p = json!({ "nums": [1, 2, 3] });
+        assert!(Filter::contains("nums", 3.0).matches(&p));
+        assert!(Filter::contains("nums", 2).matches(&p));
+        assert!(!Filter::contains("nums", 4).matches(&p));
     }
 
     #[test]
