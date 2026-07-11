@@ -11,8 +11,8 @@
 //! - [`ObjectStore<L>`][ObjectStore] / [`AssociationStore<L>`][AssociationStore]
 //!   — async read/write traits (with `*Reader` read-only counterparts).
 //! - [`ManagedObjectStore`] — wraps an `ObjectStore` and enforces field roles
-//!   (data / identifier / managed / sensitive) from a [`ResourceRegistry`].
-//! - [`SecretManager`] — encrypted storage for sensitive field values.
+//!   (data / identifier / managed / sensitive) from a [`ResourceRegistry`], sealing
+//!   sensitive values with an optional `EnvelopeEncryptor` (see the `encryption` feature).
 //!
 //! **Note:** this store favours simplicity over features and performance. It's a
 //! good default for bootstrapping Trestle projects, prototypes, and demos, but is
@@ -80,6 +80,8 @@
 
 pub mod backend;
 pub mod conformance;
+#[cfg(feature = "encryption")]
+pub mod encryption;
 pub mod error;
 pub mod label;
 pub mod managed;
@@ -87,21 +89,21 @@ pub mod name;
 pub mod object;
 pub mod reference;
 pub mod registry;
-pub mod secrets;
 pub mod store;
 
 // Re-exports for convenience.
 pub use backend::mem::InMemoryStore;
 #[cfg(feature = "sqlite")]
 pub use backend::sql::{SqlStore, migrate as migrate_sql, migrator as sql_migrator};
+#[cfg(feature = "encryption")]
+pub use encryption::{EnvelopeEncryptor, KekId, KeyProvider, LocalKeyProvider};
 pub use error::{Error, Result};
 pub use label::Label;
-pub use managed::{ManagedObjectStore, NoSecrets};
+pub use managed::ManagedObjectStore;
 pub use name::{EMPTY_RESOURCE_NAME, ResourceName};
 pub use object::{Association, Object};
 pub use reference::ResourceRef;
 pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, ResourceTypeDescriptor};
-pub use secrets::{ProvidesSecretManager, SecretManager};
 pub use store::{
     AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
     StoreExec, StoreTx, Transactional,

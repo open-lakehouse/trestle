@@ -1,76 +1,101 @@
 //! Registry-aware object store decorator that enforces field roles.
 //!
-//! [`ManagedObjectStore`] wraps an [`ObjectStore`] and optionally a [`SecretManager`]
-//! to automatically:
+//! [`ManagedObjectStore`] wraps an [`ObjectStore`] and uses a [`ResourceRegistry`] to
+//! automatically:
 //!
 //! - Strip [`FieldRole::Identifier`] and [`FieldRole::Managed`] fields on create/update
 //!   (the store is the source of truth for these)
-//! - Route [`FieldRole::Sensitive`] fields to the [`SecretManager`]
+//! - Route [`FieldRole::Sensitive`] fields into an envelope-encrypted blob stored *inline* on
+//!   the object row (see below)
 //! - Inject Identifier and Managed fields back into properties on read
-//! - Redact Sensitive fields on read (unless `get_with_secrets` is used)
+//! - Redact Sensitive fields on read (unless [`get_with_secrets`] is used)
+//!
+//! # Sensitive fields
+//!
+//! Sensitive fields (proto `debug_redact = true`) are split out of the object's `properties`
+//! and, when an [`EnvelopeEncryptor`] is configured, sealed into an opaque blob that is written
+//! *atomically with the object* through the store's
+//! [`sensitive`](ObjectStore::create) parameter. Because the sealed blob rides the same row,
+//! there is no separate secret store and no window in which an object exists without its secret
+//! (or vice versa): create/update/delete are single atomic writes.
+//!
+//! The blob is bound (as AEAD associated data) to the object's UUID, so a sealed value cannot be
+//! relocated to a different object. Without an encryptor, sensitive fields are stripped but not
+//! stored — the same behaviour as before an encryptor is supplied.
+//!
+//! Because sensitive fields never enter `properties`, they are absent from the searchable payload:
+//! encrypting them does not reduce searchability, and there is no need for (and this crate does
+//! not provide) searchable encryption.
+//!
+//! [`get_with_secrets`]: ManagedObjectStore::get_with_secrets
+//! [`EnvelopeEncryptor`]: crate::EnvelopeEncryptor
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use uuid::Uuid;
 
+use crate::Result;
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::Object;
 use crate::registry::{FieldRole, ResourceRegistry};
-use crate::secrets::SecretManager;
 use crate::store::{ObjectStore, ObjectStoreReader, Precondition};
-use crate::{Error, Result};
 
 /// A registry-aware object store that enforces field roles.
 ///
-/// Wraps an inner [`ObjectStore`] and uses a [`ResourceRegistry`] to determine
-/// how each field should be handled during CRUD operations.
+/// Wraps an inner [`ObjectStore`] and uses a [`ResourceRegistry`] to determine how each field
+/// should be handled during CRUD operations.
 ///
-/// When a [`SecretManager`] is provided, sensitive fields (marked with
-/// `debug_redact = true` in proto definitions) are automatically separated
-/// into encrypted secret storage.
-pub struct ManagedObjectStore<L: Label, S, M = NoSecrets> {
+/// When an [`EnvelopeEncryptor`](crate::EnvelopeEncryptor) is provided (via
+/// [`with_encryptor`](ManagedObjectStore::with_encryptor), behind the `encryption` feature),
+/// sensitive fields (marked with `debug_redact = true` in proto definitions) are sealed and
+/// stored inline on the object row. Otherwise they are stripped from `properties` but not stored.
+pub struct ManagedObjectStore<L: Label, S> {
     inner: S,
-    secrets: M,
+    #[cfg(feature = "encryption")]
+    encryptor: Option<crate::encryption::EnvelopeEncryptor>,
     registry: Arc<ResourceRegistry<L>>,
     _label: PhantomData<L>,
 }
 
-/// Placeholder type for when no [`SecretManager`] is configured.
-pub struct NoSecrets;
-
-impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S, NoSecrets> {
-    /// Create a managed store without secret management.
+impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
+    /// Create a managed store without encryption.
     ///
-    /// Sensitive fields will be stripped from properties but not stored anywhere.
+    /// Sensitive fields are stripped from `properties` but not stored anywhere.
     pub fn new(inner: S, registry: ResourceRegistry<L>) -> Self {
         Self {
             inner,
-            secrets: NoSecrets,
+            #[cfg(feature = "encryption")]
+            encryptor: None,
             registry: Arc::new(registry),
             _label: PhantomData,
         }
     }
-}
 
-impl<L: Label, S: ObjectStore<L>, M: SecretManager> ManagedObjectStore<L, S, M> {
-    /// Create a managed store with secret management.
-    pub fn with_secrets(inner: S, secrets: M, registry: ResourceRegistry<L>) -> Self {
+    /// Create a managed store that seals sensitive fields with `encryptor`.
+    ///
+    /// Sensitive fields are sealed into an opaque blob stored inline on the object row, written
+    /// atomically with the object.
+    #[cfg(feature = "encryption")]
+    pub fn with_encryptor(
+        inner: S,
+        encryptor: crate::encryption::EnvelopeEncryptor,
+        registry: ResourceRegistry<L>,
+    ) -> Self {
         Self {
             inner,
-            secrets,
+            encryptor: Some(encryptor),
             registry: Arc::new(registry),
             _label: PhantomData,
         }
     }
 }
 
-impl<L: Label, S, M> ManagedObjectStore<L, S, M> {
+impl<L: Label, S> ManagedObjectStore<L, S> {
     /// Strip fields that should not be stored in properties on create/update.
     ///
-    /// Returns (stripped_properties, sensitive_fields_map).
+    /// Returns `(stripped_properties, sensitive_fields_map)`.
     fn strip_fields(
         &self,
         label: L,
@@ -96,7 +121,7 @@ impl<L: Label, S, M> ManagedObjectStore<L, S, M> {
                     map.remove(field.name);
                 }
                 FieldRole::Sensitive => {
-                    // Extract — will be routed to secret store
+                    // Extract — will be sealed and stored inline
                     if let Some(value) = map.remove(field.name) {
                         sensitive_map.insert(field.name.to_string(), value);
                     }
@@ -161,7 +186,7 @@ impl<L: Label, S, M> ManagedObjectStore<L, S, M> {
                     }
                 }
                 FieldRole::Sensitive => {
-                    // Redact: ensure sensitive fields are null in the response
+                    // Redact: ensure sensitive fields are absent from the response
                     map.remove(field.name);
                 }
                 FieldRole::Data => {
@@ -170,14 +195,40 @@ impl<L: Label, S, M> ManagedObjectStore<L, S, M> {
             }
         }
     }
+
+    /// Seal a sensitive field map into an opaque blob bound to the object's id.
+    ///
+    /// Returns `Ok(None)` when there is nothing to seal or no encryptor is configured (in which
+    /// case sensitive fields are simply not stored). Serialization of the map to bytes happens
+    /// here so the crypto layer only ever sees opaque bytes.
+    #[cfg(feature = "encryption")]
+    async fn seal_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<Option<bytes::Bytes>> {
+        let (Some(encryptor), Some(map)) = (self.encryptor.as_ref(), sensitive) else {
+            return Ok(None);
+        };
+        let plaintext = serde_json::to_vec(&serde_json::Value::Object(map))?;
+        let blob = encryptor.seal(&secret_name(id), &plaintext).await?;
+        Ok(Some(bytes::Bytes::from(blob)))
+    }
+}
+
+/// The AAD name a sensitive blob is bound to: the object's stable [`Uuid`].
+///
+/// Binding to the id (not the [`ResourceName`]) means a [`rename`](ObjectStore::rename) needs no
+/// re-sealing, and a blob cannot be opened against a different object.
+#[cfg(feature = "encryption")]
+fn secret_name(id: &Uuid) -> String {
+    id.hyphenated().to_string()
 }
 
 // --- ObjectStoreReader impl ---
 
 #[async_trait::async_trait]
-impl<L: Label, S: ObjectStoreReader<L>, M: Send + Sync + 'static> ObjectStoreReader<L>
-    for ManagedObjectStore<L, S, M>
-{
+impl<L: Label, S: ObjectStoreReader<L>> ObjectStoreReader<L> for ManagedObjectStore<L, S> {
     async fn get(&self, id: &Uuid) -> Result<Object<L>> {
         let mut object = self.inner.get(id).await?;
         self.inject_fields(&mut object);
@@ -206,178 +257,76 @@ impl<L: Label, S: ObjectStoreReader<L>, M: Send + Sync + 'static> ObjectStoreRea
         }
         Ok((objects, token))
     }
+
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<bytes::Bytes>> {
+        self.inner.get_sensitive(id).await
+    }
 }
 
-// --- ObjectStore impl (without secrets) ---
+// --- ObjectStore impl ---
 
 #[async_trait::async_trait]
-impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S, NoSecrets> {
+impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
+    /// The managed store seals its own sensitive fields, so `sensitive` is normally `None`; a
+    /// caller-supplied pre-sealed blob is used only when the resource has no sensitive fields to
+    /// seal (the sealed blob otherwise takes precedence).
     async fn create(
         &self,
         label: L,
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<bytes::Bytes>,
     ) -> Result<Object<L>> {
-        let (stripped, _sensitive) = self.strip_fields(label, properties);
-        let mut object = self.inner.create(label, name, stripped, id).await?;
-        self.inject_fields(&mut object);
-        Ok(object)
-    }
+        let (stripped, sensitive_fields) = self.strip_fields(label, properties);
 
-    async fn update(
-        &self,
-        id: &Uuid,
-        properties: Option<serde_json::Value>,
-        precondition: Precondition,
-    ) -> Result<Object<L>> {
-        // We need the label to look up the descriptor. Fetch the object first.
-        let existing = self.inner.get(id).await?;
-        let (stripped, _sensitive) = self.strip_fields(existing.label, properties);
-        let mut object = self.inner.update(id, stripped, precondition).await?;
-        self.inject_fields(&mut object);
-        Ok(object)
-    }
+        // Pre-allocate the id so the sealed blob can be bound to it before the row is written.
+        // The object row and its sealed sensitive blob are written together in one atomic
+        // `create`, so there is no orphan/rollback window.
+        let id = id.unwrap_or_else(Uuid::new_v4);
 
-    async fn rename(
-        &self,
-        id: &Uuid,
-        new_name: &ResourceName,
-        precondition: Precondition,
-    ) -> Result<Object<L>> {
-        // Secrets are keyed by the stable `id`, so a rename needs no secret
-        // re-keying here.
-        let mut object = self.inner.rename(id, new_name, precondition).await?;
-        self.inject_fields(&mut object);
-        Ok(object)
-    }
-
-    async fn delete(&self, id: &Uuid) -> Result<()> {
-        self.inner.delete(id).await
-    }
-}
-
-// --- ObjectStore impl (with secrets) ---
-
-#[async_trait::async_trait]
-impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedObjectStore<L, S, M> {
-    async fn create(
-        &self,
-        label: L,
-        name: &ResourceName,
-        properties: Option<serde_json::Value>,
-        id: Option<Uuid>,
-    ) -> Result<Object<L>> {
-        let (stripped, sensitive) = self.strip_fields(label, properties);
-
-        // Create the object first so we have its stable `id` to key the secret
-        // by. Keying secrets by `id` (not `name`) means a later rename needs no
-        // secret movement.
-        let mut object = self.inner.create(label, name, stripped, id).await?;
-
-        // Store sensitive fields in secret manager, keyed by the object's id.
-        // If the secret write fails, best-effort compensate by deleting the
-        // object we just created so it does not linger without its secret.
-        if let Some(sensitive_map) = sensitive {
-            let secret_bytes = Bytes::from(serde_json::to_vec(&serde_json::Value::Object(
-                sensitive_map,
-            ))?);
-            if let Err(e) = self
-                .secrets
-                .create_secret(&secret_key(&object.id), secret_bytes)
-                .await
-            {
-                if let Err(cleanup_err) = self.inner.delete(&object.id).await {
-                    tracing::warn!(
-                        id = %object.id,
-                        error = %cleanup_err,
-                        "failed to compensate (delete) object after secret create failed; \
-                         object may linger without its secret"
-                    );
-                }
-                return Err(e);
-            }
-        }
-
-        self.inject_fields(&mut object);
-        Ok(object)
-    }
-
-    /// Update an object, routing sensitive fields to the [`SecretManager`].
-    ///
-    /// Sensitive fields are written to the secret store *before* the inner object
-    /// store is updated. If the inner update then fails, we issue a best-effort
-    /// compensating delete of the just-written secret so it does not linger as an
-    /// orphan referencing a row that was never updated.
-    ///
-    /// # Residual risk
-    ///
-    /// This is best-effort, not a transaction. A window remains where the secret
-    /// write has succeeded but the object write has not yet committed:
-    ///
-    /// - If the process crashes between the two writes, the compensating delete
-    ///   never runs and the secret is orphaned (or, for a previously-existing
-    ///   secret, left holding the new value while the object keeps the old data).
-    /// - The compensating delete can itself fail (it is logged and ignored), again
-    ///   leaving an orphan.
-    /// - When the secret already existed, the compensating delete *removes* it
-    ///   entirely rather than restoring the prior value — we do not snapshot and
-    ///   roll back the old secret. A subsequent read will see the secret as missing.
-    ///
-    /// Callers that need stronger guarantees should layer a reconciliation/GC pass
-    /// over the secret store, keyed by object id, to reap orphans.
-    async fn update(
-        &self,
-        id: &Uuid,
-        properties: Option<serde_json::Value>,
-        precondition: Precondition,
-    ) -> Result<Object<L>> {
-        let existing = self.inner.get(id).await?;
-        let (stripped, sensitive) = self.strip_fields(existing.label, properties);
-
-        // Track whether we wrote a secret, so we can compensate if the inner
-        // update below fails.
-        let mut wrote_secret_key: Option<String> = None;
-
-        // Update sensitive fields in secret manager, keyed by the stable id.
-        if let Some(sensitive_map) = sensitive {
-            let secret_bytes = Bytes::from(serde_json::to_vec(&serde_json::Value::Object(
-                sensitive_map,
-            ))?);
-            let key = secret_key(id);
-            // Try update; if the secret doesn't exist yet, create it
-            match self.secrets.update_secret(&key, secret_bytes.clone()).await {
-                Ok(_) => {}
-                Err(Error::NotFound) => {
-                    self.secrets.create_secret(&key, secret_bytes).await?;
-                }
-                Err(e) => return Err(e),
-            }
-            wrote_secret_key = Some(key);
-        }
-
-        let object = match self.inner.update(id, stripped, precondition).await {
-            Ok(object) => object,
-            Err(e) => {
-                // The inner store write failed after we already wrote the secret.
-                // Best-effort: undo the secret write so it does not orphan. Errors
-                // from the compensating delete are swallowed (logged) — we surface
-                // the original update error to the caller regardless.
-                if let Some(key) = wrote_secret_key
-                    && let Err(cleanup_err) = self.secrets.delete_secret(&key).await
-                {
-                    tracing::warn!(
-                        secret_key = %key,
-                        error = %cleanup_err,
-                        "failed to compensate (delete) orphaned secret after inner store \
-                         update failed; secret may be orphaned"
-                    );
-                }
-                return Err(e);
-            }
+        #[cfg(feature = "encryption")]
+        let sealed = self.seal_sensitive(&id, sensitive_fields).await?;
+        #[cfg(not(feature = "encryption"))]
+        let sealed = {
+            let _ = sensitive_fields; // stripped but not stored without an encryptor
+            None
         };
 
-        let mut object = object;
+        let blob = sealed.or(sensitive);
+        let mut object = self
+            .inner
+            .create(label, name, stripped, Some(id), blob)
+            .await?;
+        self.inject_fields(&mut object);
+        Ok(object)
+    }
+
+    /// As with [`create`](Self::create), `sensitive` is normally `None`; the managed store seals
+    /// any sensitive fields found in `properties` itself.
+    async fn update(
+        &self,
+        id: &Uuid,
+        properties: Option<serde_json::Value>,
+        precondition: Precondition,
+        sensitive: Option<bytes::Bytes>,
+    ) -> Result<Object<L>> {
+        // Look up the label to resolve field roles.
+        let existing = self.inner.get(id).await?;
+        let (stripped, sensitive_fields) = self.strip_fields(existing.label, properties);
+
+        #[cfg(feature = "encryption")]
+        let sealed = self.seal_sensitive(id, sensitive_fields).await?;
+        #[cfg(not(feature = "encryption"))]
+        let sealed = {
+            let _ = sensitive_fields;
+            None
+        };
+
+        // A `None` blob leaves any existing sealed value untouched; a `Some` blob replaces it,
+        // atomically with the properties update.
+        let blob = sealed.or(sensitive);
+        let mut object = self.inner.update(id, stripped, precondition, blob).await?;
         self.inject_fields(&mut object);
         Ok(object)
     }
@@ -388,61 +337,63 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
         new_name: &ResourceName,
         precondition: Precondition,
     ) -> Result<Object<L>> {
-        // Secrets are keyed by the stable `id`, so renaming the object requires
-        // no secret movement — just delegate.
+        // The sealed blob rides the object row and is bound to the stable id, so a rename needs
+        // no re-sealing — just delegate.
         let mut object = self.inner.rename(id, new_name, precondition).await?;
         self.inject_fields(&mut object);
         Ok(object)
     }
 
     async fn delete(&self, id: &Uuid) -> Result<()> {
-        // Delete secret first (best-effort — may not exist)
-        let object = self.inner.get(id).await?;
-        if self.registry.has_sensitive_fields(object.label) {
-            match self.secrets.delete_secret(&secret_key(id)).await {
-                Ok(()) | Err(Error::NotFound) => {}
-                Err(e) => return Err(e),
-            }
-        }
+        // The sealed blob is stored on the object row, so deleting the object drops it too.
         self.inner.delete(id).await
     }
 }
 
-/// The secret-store key for an object's sensitive fields.
-///
-/// Keyed by the object's stable [`Uuid`] (not its [`ResourceName`]) so that a
-/// [`rename`](ObjectStore::rename) needs no secret re-keying.
-fn secret_key(id: &Uuid) -> String {
-    id.hyphenated().to_string()
-}
-
-impl<L: Label, S: ObjectStore<L>, M: SecretManager> ManagedObjectStore<L, S, M> {
-    /// Get an object with its sensitive fields populated from the secret store.
+impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
+    /// Get an object with its sensitive fields decrypted and merged back into `properties`.
     ///
-    /// This is intended for internal use (e.g., credential vending) where the
-    /// caller needs access to the full credential data.
+    /// Intended for internal use (e.g. credential vending) where the caller needs the full value.
+    /// Without an encryptor, or when no blob is stored, this behaves like [`get`](Self::get).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists, or a
+    /// decryption error if the stored blob cannot be opened.
     pub async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
         let mut object = self.inner.get(id).await?;
         self.inject_fields(&mut object);
 
-        // Join sensitive fields from secret store
-        if self.registry.has_sensitive_fields(object.label) {
-            match self.secrets.get_secret(&secret_key(id)).await {
-                Ok((_version, secret_bytes)) => {
-                    let sensitive: serde_json::Value = serde_json::from_slice(&secret_bytes)?;
-                    if let (Some(props), serde_json::Value::Object(secret_map)) =
-                        (object.properties.as_mut(), sensitive)
-                        && let Some(props_map) = props.as_object_mut()
-                    {
-                        for (key, value) in secret_map {
-                            props_map.insert(key, value);
-                        }
-                    }
+        #[cfg(feature = "encryption")]
+        if let Some(encryptor) = self.encryptor.as_ref()
+            && let Some(blob) = self.inner.get_sensitive(id).await?
+        {
+            let name = secret_name(id);
+            let plaintext = encryptor.open(&name, &blob).await?;
+            let sensitive: serde_json::Value = serde_json::from_slice(&plaintext)?;
+
+            if let (Some(props), serde_json::Value::Object(secret_map)) =
+                (object.properties.as_mut(), sensitive)
+                && let Some(props_map) = props.as_object_mut()
+            {
+                for (key, value) in secret_map {
+                    props_map.insert(key, value);
                 }
-                Err(Error::NotFound) => {
-                    // No secrets stored — that's fine
-                }
-                Err(e) => return Err(e),
+            }
+
+            // Lazy KEK rotation: if the blob was sealed under a retired KEK, re-wrap its data key
+            // under the active KEK and write it back. Best-effort — a write failure must not fail
+            // the read, and the value ciphertext is untouched so the result is identical.
+            if let Ok(Some(rewrapped)) = encryptor.rewrap(&blob).await {
+                let _ = self
+                    .inner
+                    .update(
+                        id,
+                        object.properties.clone(),
+                        Precondition::Any,
+                        Some(bytes::Bytes::from(rewrapped)),
+                    )
+                    .await;
             }
         }
 
@@ -453,12 +404,11 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ManagedObjectStore<L, S, M> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::Association;
+    use crate::InMemoryStore;
     use crate::registry::{ResourceFieldDescriptor, ResourceTypeDescriptor};
-    use crate::store::{AssociationStore, AssociationStoreReader};
-    use std::collections::HashMap;
     use std::str::FromStr;
-    use std::sync::Mutex;
+
+    use crate::Error;
 
     // --- A minimal Label implementation ---
 
@@ -496,8 +446,8 @@ mod tests {
 
     // --- Registry fixture ---
     //
-    // The "widget" resource has one field of each role so we can exercise
-    // stripping, injection, redaction and secret routing in one place.
+    // The "widget" resource has one field of each role so we can exercise stripping, injection,
+    // redaction and secret routing in one place.
 
     static WIDGET_FIELDS: &[ResourceFieldDescriptor] = &[
         ResourceFieldDescriptor {
@@ -551,279 +501,15 @@ mod tests {
         ResourceName::from_naive_str_split(s)
     }
 
-    // --- In-memory ObjectStore double ---
-
-    #[derive(Default)]
-    struct MemObjectStore {
-        objects: Mutex<HashMap<Uuid, Object<TestLabel>>>,
-        /// When set, the next `update` call fails with this error (then clears).
-        fail_next_update: Mutex<Option<Error>>,
-    }
-
-    impl MemObjectStore {
-        fn fail_next_update_with(&self, err: Error) {
-            *self.fail_next_update.lock().unwrap() = Some(err);
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ObjectStoreReader<TestLabel> for MemObjectStore {
-        async fn get(&self, id: &Uuid) -> Result<Object<TestLabel>> {
-            self.objects
-                .lock()
-                .unwrap()
-                .get(id)
-                .cloned()
-                .ok_or(Error::NotFound)
-        }
-
-        async fn get_by_name(
-            &self,
-            label: TestLabel,
-            name: &ResourceName,
-        ) -> Result<Object<TestLabel>> {
-            self.objects
-                .lock()
-                .unwrap()
-                .values()
-                .find(|o| o.label == label && &o.name == name)
-                .cloned()
-                .ok_or(Error::NotFound)
-        }
-
-        async fn list(
-            &self,
-            label: TestLabel,
-            _namespace: Option<&ResourceName>,
-            _max_results: Option<usize>,
-            _page_token: Option<String>,
-        ) -> Result<(Vec<Object<TestLabel>>, Option<String>)> {
-            let objects = self
-                .objects
-                .lock()
-                .unwrap()
-                .values()
-                .filter(|o| o.label == label)
-                .cloned()
-                .collect();
-            Ok((objects, None))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ObjectStore<TestLabel> for MemObjectStore {
-        async fn create(
-            &self,
-            label: TestLabel,
-            name: &ResourceName,
-            properties: Option<serde_json::Value>,
-            id: Option<Uuid>,
-        ) -> Result<Object<TestLabel>> {
-            let object = Object {
-                id: id.unwrap_or_else(Uuid::new_v4),
-                label,
-                name: name.clone(),
-                properties,
-                version: 0,
-                created_at: chrono::Utc::now(),
-                updated_at: None,
-            };
-            self.objects
-                .lock()
-                .unwrap()
-                .insert(object.id, object.clone());
-            Ok(object)
-        }
-
-        async fn update(
-            &self,
-            id: &Uuid,
-            properties: Option<serde_json::Value>,
-            precondition: Precondition,
-        ) -> Result<Object<TestLabel>> {
-            if let Some(err) = self.fail_next_update.lock().unwrap().take() {
-                return Err(err);
-            }
-            let mut guard = self.objects.lock().unwrap();
-            let object = guard.get_mut(id).ok_or(Error::NotFound)?;
-            precondition.check(object.version)?;
-            object.properties = properties;
-            object.version += 1;
-            object.updated_at = Some(chrono::Utc::now());
-            Ok(object.clone())
-        }
-
-        async fn rename(
-            &self,
-            id: &Uuid,
-            new_name: &ResourceName,
-            precondition: Precondition,
-        ) -> Result<Object<TestLabel>> {
-            let mut guard = self.objects.lock().unwrap();
-            // Reject a collision with a different object of the same label.
-            let label = guard.get(id).ok_or(Error::NotFound)?.label;
-            if guard
-                .values()
-                .any(|o| o.id != *id && o.label == label && &o.name == new_name)
-            {
-                return Err(Error::AlreadyExists);
-            }
-            let object = guard.get_mut(id).ok_or(Error::NotFound)?;
-            precondition.check(object.version)?;
-            object.name = new_name.clone();
-            object.version += 1;
-            object.updated_at = Some(chrono::Utc::now());
-            Ok(object.clone())
-        }
-
-        async fn delete(&self, id: &Uuid) -> Result<()> {
-            self.objects
-                .lock()
-                .unwrap()
-                .remove(id)
-                .map(|_| ())
-                .ok_or(Error::NotFound)
-        }
-    }
-
-    // --- In-memory AssociationStore double ---
-
-    #[derive(Default)]
-    struct MemAssociationStore {
-        edges: Mutex<Vec<Association<TestLabel>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl AssociationStoreReader<TestLabel> for MemAssociationStore {
-        async fn list(
-            &self,
-            from_id: Uuid,
-            label: &str,
-            target_label: Option<TestLabel>,
-            _max_results: Option<usize>,
-            _page_token: Option<String>,
-        ) -> Result<(Vec<Association<TestLabel>>, Option<String>)> {
-            let edges = self
-                .edges
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|e| {
-                    e.from_id == from_id
-                        && e.label == label
-                        && target_label.is_none_or(|tl| e.to_label == tl)
-                })
-                .cloned()
-                .collect();
-            Ok((edges, None))
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl AssociationStore<TestLabel> for MemAssociationStore {
-        async fn add(
-            &self,
-            from_id: Uuid,
-            to_id: Uuid,
-            label: &str,
-            properties: Option<serde_json::Value>,
-        ) -> Result<()> {
-            self.edges.lock().unwrap().push(Association {
-                id: Uuid::new_v4(),
-                from_id,
-                label: label.to_string(),
-                to_id,
-                to_label: TestLabel::Widget,
-                properties,
-                created_at: chrono::Utc::now(),
-                updated_at: None,
-            });
-            Ok(())
-        }
-
-        async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
-            self.edges
-                .lock()
-                .unwrap()
-                .retain(|e| !(e.from_id == from_id && e.to_id == to_id && e.label == label));
-            Ok(())
-        }
-    }
-
-    // --- In-memory SecretManager double ---
-
-    #[derive(Default)]
-    struct MemSecretManager {
-        secrets: Mutex<HashMap<String, (Uuid, Bytes)>>,
-        /// When set, the next `delete_secret` call fails with this error.
-        fail_next_delete: Mutex<Option<Error>>,
-    }
-
-    impl MemSecretManager {
-        fn contains(&self, name: &str) -> bool {
-            self.secrets.lock().unwrap().contains_key(name)
-        }
-
-        fn fail_next_delete_with(&self, err: Error) {
-            *self.fail_next_delete.lock().unwrap() = Some(err);
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl SecretManager for MemSecretManager {
-        async fn get_secret(&self, secret_name: &str) -> Result<(Uuid, Bytes)> {
-            self.secrets
-                .lock()
-                .unwrap()
-                .get(secret_name)
-                .cloned()
-                .ok_or(Error::NotFound)
-        }
-
-        async fn get_secret_version(&self, secret_name: &str, version: Uuid) -> Result<Bytes> {
-            let guard = self.secrets.lock().unwrap();
-            match guard.get(secret_name) {
-                Some((v, bytes)) if *v == version => Ok(bytes.clone()),
-                Some(_) => Err(Error::NotFound),
-                None => Err(Error::NotFound),
-            }
-        }
-
-        async fn create_secret(&self, secret_name: &str, secret_value: Bytes) -> Result<Uuid> {
-            let mut guard = self.secrets.lock().unwrap();
-            if guard.contains_key(secret_name) {
-                return Err(Error::AlreadyExists);
-            }
-            let version = Uuid::new_v4();
-            guard.insert(secret_name.to_string(), (version, secret_value));
-            Ok(version)
-        }
-
-        async fn update_secret(&self, secret_name: &str, secret_value: Bytes) -> Result<Uuid> {
-            let mut guard = self.secrets.lock().unwrap();
-            if !guard.contains_key(secret_name) {
-                return Err(Error::NotFound);
-            }
-            let version = Uuid::new_v4();
-            guard.insert(secret_name.to_string(), (version, secret_value));
-            Ok(version)
-        }
-
-        async fn delete_secret(&self, secret_name: &str) -> Result<()> {
-            if let Some(err) = self.fail_next_delete.lock().unwrap().take() {
-                return Err(err);
-            }
-            self.secrets
-                .lock()
-                .unwrap()
-                .remove(secret_name)
-                .map(|_| ())
-                .ok_or(Error::NotFound)
-        }
-    }
-
     fn props(json: serde_json::Value) -> Option<serde_json::Value> {
         Some(json)
+    }
+
+    #[cfg(feature = "encryption")]
+    fn encryptor() -> crate::encryption::EnvelopeEncryptor {
+        crate::encryption::EnvelopeEncryptor::local(
+            crate::encryption::LocalKeyProvider::dev_insecure(),
+        )
     }
 
     // --- ResourceRegistry tests ---
@@ -847,11 +533,11 @@ mod tests {
         assert_eq!(reg.path_names(TestLabel::Widget), Some(&["name"][..]));
     }
 
-    // --- NoSecrets variant: stripping + injection ---
+    // --- Stripping + injection (no encryptor) ---
 
     #[tokio::test]
-    async fn no_secrets_strips_managed_and_identifier_on_create_and_injects_on_read() {
-        let store = ManagedObjectStore::new(MemObjectStore::default(), registry());
+    async fn strips_managed_and_identifier_on_create_and_injects_on_read() {
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
 
         // Caller supplies id/created_at (should be stripped) and color (kept).
         let created = store
@@ -863,6 +549,7 @@ mod tests {
                     "created_at": "client-supplied-time",
                     "color": "red",
                 })),
+                None,
                 None,
             )
             .await
@@ -888,14 +575,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_secrets_strips_sensitive_but_does_not_store_it() {
-        let store = ManagedObjectStore::new(MemObjectStore::default(), registry());
+    async fn strips_sensitive_but_does_not_store_it_without_encryptor() {
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
 
         let created = store
             .create(
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "blue", "api_key": "supersecret" })),
+                None,
                 None,
             )
             .await
@@ -905,19 +593,36 @@ mod tests {
         let map = created.properties.as_ref().unwrap().as_object().unwrap();
         assert!(!map.contains_key("api_key"));
 
-        // And not persisted in the inner store (no secret manager to route to).
-        let raw = store.inner.get(&created.id).await.unwrap();
-        let raw_map = raw.properties.as_ref().unwrap().as_object().unwrap();
-        assert!(!raw_map.contains_key("api_key"));
+        // And no blob stored (no encryptor to seal with).
+        assert!(
+            store
+                .inner
+                .get_sensitive(&created.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // get_with_secrets can't reconstitute it either.
+        let full = store.get_with_secrets(&created.id).await.unwrap();
+        assert!(
+            !full
+                .properties
+                .as_ref()
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("api_key")
+        );
     }
 
-    // --- Secret routing + redaction ---
+    // --- Sealing + redaction (with encryptor) ---
 
+    #[cfg(feature = "encryption")]
     #[tokio::test]
-    async fn sensitive_value_routed_to_secret_manager_and_redacted_on_get() {
-        let store = ManagedObjectStore::with_secrets(
-            MemObjectStore::default(),
-            MemSecretManager::default(),
+    async fn sensitive_value_sealed_and_redacted_on_get() {
+        let store = ManagedObjectStore::with_encryptor(
+            InMemoryStore::<TestLabel>::new(),
+            encryptor(),
             registry(),
         );
 
@@ -926,6 +631,7 @@ mod tests {
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "green", "api_key": "topsecret" })),
+                None,
                 None,
             )
             .await
@@ -936,8 +642,14 @@ mod tests {
         assert!(!map.contains_key("api_key"));
         assert_eq!(map["color"], serde_json::json!("green"));
 
-        // The api_key MUST be in the secret manager, keyed by the object's id.
-        assert!(store.secrets.contains(&created.id.hyphenated().to_string()));
+        // A sealed blob is stored on the row, and it is ciphertext (no plaintext substring).
+        let blob = store
+            .inner
+            .get_sensitive(&created.id)
+            .await
+            .unwrap()
+            .expect("blob stored");
+        assert!(!blob.windows(b"topsecret".len()).any(|w| w == b"topsecret"));
 
         // A plain get redacts the secret.
         let got = store.get(&created.id).await.unwrap();
@@ -957,40 +669,46 @@ mod tests {
         assert_eq!(full_map["color"], serde_json::json!("green"));
     }
 
-    // --- update -> NotFound -> create fallback ---
-
+    #[cfg(feature = "encryption")]
     #[tokio::test]
-    async fn update_creates_secret_when_missing() {
-        let store = ManagedObjectStore::with_secrets(
-            MemObjectStore::default(),
-            MemSecretManager::default(),
+    async fn update_seals_new_sensitive_value() {
+        let store = ManagedObjectStore::with_encryptor(
+            InMemoryStore::<TestLabel>::new(),
+            encryptor(),
             registry(),
         );
 
-        // Create without a secret value, so no secret exists yet.
+        // Create without a secret value, so no blob exists yet.
         let created = store
             .create(
                 TestLabel::Widget,
                 &rn("w1"),
                 props(serde_json::json!({ "color": "green" })),
                 None,
+                None,
             )
             .await
             .unwrap();
-        let key = created.id.hyphenated().to_string();
-        assert!(!store.secrets.contains(&key));
+        assert!(
+            store
+                .inner
+                .get_sensitive(&created.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
-        // Update with a sensitive value -> update_secret returns NotFound -> create.
+        // Update with a sensitive value -> a blob is sealed and stored.
         store
             .update(
                 &created.id,
                 props(serde_json::json!({ "color": "green", "api_key": "k1" })),
                 Precondition::Any,
+                None,
             )
             .await
             .unwrap();
 
-        assert!(store.secrets.contains(&key));
         let full = store.get_with_secrets(&created.id).await.unwrap();
         assert_eq!(
             full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
@@ -998,11 +716,12 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "encryption")]
     #[tokio::test]
     async fn update_overwrites_existing_secret() {
-        let store = ManagedObjectStore::with_secrets(
-            MemObjectStore::default(),
-            MemSecretManager::default(),
+        let store = ManagedObjectStore::with_encryptor(
+            InMemoryStore::<TestLabel>::new(),
+            encryptor(),
             registry(),
         );
 
@@ -1012,16 +731,17 @@ mod tests {
                 &rn("w1"),
                 props(serde_json::json!({ "api_key": "old" })),
                 None,
+                None,
             )
             .await
             .unwrap();
-        assert!(store.secrets.contains(&created.id.hyphenated().to_string()));
 
         store
             .update(
                 &created.id,
                 props(serde_json::json!({ "api_key": "new" })),
                 Precondition::Any,
+                None,
             )
             .await
             .unwrap();
@@ -1033,54 +753,12 @@ mod tests {
         );
     }
 
-    // --- Compensating delete on inner-store failure (Task 1.6) ---
-
+    #[cfg(feature = "encryption")]
     #[tokio::test]
-    async fn update_compensates_secret_when_inner_update_fails() {
-        let store = ManagedObjectStore::with_secrets(
-            MemObjectStore::default(),
-            MemSecretManager::default(),
-            registry(),
-        );
-
-        // Start with no secret stored.
-        let created = store
-            .create(
-                TestLabel::Widget,
-                &rn("w1"),
-                props(serde_json::json!({ "color": "green" })),
-                None,
-            )
-            .await
-            .unwrap();
-        let key = created.id.hyphenated().to_string();
-        assert!(!store.secrets.contains(&key));
-
-        // Arrange for the inner update to fail.
-        store.inner.fail_next_update_with(Error::generic("boom"));
-
-        let err = store
-            .update(
-                &created.id,
-                props(serde_json::json!({ "color": "green", "api_key": "leaked?" })),
-                Precondition::Any,
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(err, Error::Generic(_)));
-
-        // The secret that was created during the failed update must be compensated away.
-        assert!(
-            !store.secrets.contains(&key),
-            "secret should have been compensated (deleted) after inner update failed"
-        );
-    }
-
-    #[tokio::test]
-    async fn update_surfaces_original_error_even_if_compensating_delete_fails() {
-        let store = ManagedObjectStore::with_secrets(
-            MemObjectStore::default(),
-            MemSecretManager::default(),
+    async fn update_without_sensitive_fields_preserves_blob() {
+        let store = ManagedObjectStore::with_encryptor(
+            InMemoryStore::<TestLabel>::new(),
+            encryptor(),
             registry(),
         );
 
@@ -1088,43 +766,37 @@ mod tests {
             .create(
                 TestLabel::Widget,
                 &rn("w1"),
-                props(serde_json::json!({ "color": "green" })),
+                props(serde_json::json!({ "color": "green", "api_key": "keep-me" })),
+                None,
                 None,
             )
             .await
             .unwrap();
 
+        // Update only the data field; no sensitive field in the payload.
         store
-            .inner
-            .fail_next_update_with(Error::generic("inner failure"));
-        // Make the compensating delete itself fail; the error should be swallowed/logged.
-        store
-            .secrets
-            .fail_next_delete_with(Error::generic("delete failure"));
-
-        let err = store
             .update(
                 &created.id,
-                props(serde_json::json!({ "api_key": "x" })),
+                props(serde_json::json!({ "color": "blue" })),
                 Precondition::Any,
+                None,
             )
             .await
-            .unwrap_err();
+            .unwrap();
 
-        // The ORIGINAL inner error is surfaced, not the cleanup error.
-        match err {
-            Error::Generic(msg) => assert_eq!(msg, "inner failure"),
-            other => panic!("expected original inner failure, got {other:?}"),
-        }
+        // The previously sealed value must still be reconstitutable.
+        let full = store.get_with_secrets(&created.id).await.unwrap();
+        let full_map = full.properties.as_ref().unwrap().as_object().unwrap();
+        assert_eq!(full_map["api_key"], serde_json::json!("keep-me"));
+        assert_eq!(full_map["color"], serde_json::json!("blue"));
     }
 
-    // --- delete removes the secret ---
-
+    #[cfg(feature = "encryption")]
     #[tokio::test]
-    async fn delete_removes_associated_secret() {
-        let store = ManagedObjectStore::with_secrets(
-            MemObjectStore::default(),
-            MemSecretManager::default(),
+    async fn delete_removes_sealed_blob() {
+        let store = ManagedObjectStore::with_encryptor(
+            InMemoryStore::<TestLabel>::new(),
+            encryptor(),
             registry(),
         );
 
@@ -1134,36 +806,88 @@ mod tests {
                 &rn("w1"),
                 props(serde_json::json!({ "api_key": "s" })),
                 None,
+                None,
             )
             .await
             .unwrap();
-        let key = created.id.hyphenated().to_string();
-        assert!(store.secrets.contains(&key));
+        assert!(
+            store
+                .inner
+                .get_sensitive(&created.id)
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         store.delete(&created.id).await.unwrap();
-        assert!(!store.secrets.contains(&key));
         assert!(matches!(
             store.get(&created.id).await.unwrap_err(),
             Error::NotFound
         ));
+        // The blob is gone with the row.
+        assert!(
+            store
+                .inner
+                .get_sensitive(&created.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
-    // --- AssociationStore double sanity (exercises that trait too) ---
-
+    #[cfg(feature = "encryption")]
     #[tokio::test]
-    async fn association_store_add_list_remove() {
-        let store = MemAssociationStore::default();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+    async fn rotation_rewraps_on_read() {
+        use crate::encryption::{EnvelopeEncryptor, LocalKeyProvider};
 
-        store.add(a, b, "parent_of", None).await.unwrap();
-        let (edges, token) = store.list(a, "parent_of", None, None, None).await.unwrap();
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].to_id, b);
-        assert!(token.is_none());
+        let k1 = vec![1u8; 32];
+        let k2 = vec![2u8; 32];
 
-        store.remove(a, b, "parent_of").await.unwrap();
-        let (edges, _) = store.list(a, "parent_of", None, None, None).await.unwrap();
-        assert!(edges.is_empty());
+        // Seal under v1.
+        let store_v1 = ManagedObjectStore::with_encryptor(
+            InMemoryStore::<TestLabel>::new(),
+            EnvelopeEncryptor::local(LocalKeyProvider::single("v1", k1.clone()).unwrap()),
+            registry(),
+        );
+        let created = store_v1
+            .create(
+                TestLabel::Widget,
+                &rn("w1"),
+                props(serde_json::json!({ "api_key": "rotate-me" })),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Move the same inner store under a v2-active/v1-retired encryptor.
+        let inner = store_v1.inner;
+        let store_v2 = ManagedObjectStore::with_encryptor(
+            inner,
+            EnvelopeEncryptor::local(
+                LocalKeyProvider::new("v2", [("v1".into(), k1), ("v2".into(), k2.clone())])
+                    .unwrap(),
+            ),
+            registry(),
+        );
+
+        // Reading with secrets still works and rewrites the row under v2.
+        let full = store_v2.get_with_secrets(&created.id).await.unwrap();
+        assert_eq!(
+            full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
+            serde_json::json!("rotate-me")
+        );
+
+        // A v2-only encryptor can now open the rewritten blob.
+        let store_v2_only = ManagedObjectStore::with_encryptor(
+            store_v2.inner,
+            EnvelopeEncryptor::local(LocalKeyProvider::single("v2", k2).unwrap()),
+            registry(),
+        );
+        let full = store_v2_only.get_with_secrets(&created.id).await.unwrap();
+        assert_eq!(
+            full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
+            serde_json::json!("rotate-me")
+        );
     }
 }

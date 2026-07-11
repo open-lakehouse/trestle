@@ -61,18 +61,22 @@ derived from proto annotations — built from a `RESOURCE_DESCRIPTORS` static th
 | `Data` | (default) | Stored in properties JSON, returned as-is |
 | `Identifier` | `field_behavior = IDENTIFIER` | Stripped on write; mapped to `Object.id` |
 | `Managed` | `OUTPUT_ONLY` + known name | Stripped on write; injected on read (`created_at`, …) |
-| `Sensitive` | `debug_redact = true` | Routed to a `SecretManager`; redacted on read |
+| `Sensitive` | `debug_redact = true` | Sealed into an encrypted blob stored inline on the object row; redacted on read |
 
 ```rust,ignore
 use olai_store::{ManagedObjectStore, ResourceRegistry};
 
 let registry = ResourceRegistry::from_static(&RESOURCE_DESCRIPTORS);
 let store = ManagedObjectStore::new(backend, registry);
-// With secret storage: ManagedObjectStore::with_secrets(backend, my_vault, registry)
+// With envelope encryption (needs the `encryption` feature):
+// ManagedObjectStore::with_encryptor(backend, my_encryptor, registry)
 ```
 
-`SecretManager` is a trait for encrypting `Sensitive` fields into a vault/KMS;
-the default `NoSecrets` strips them instead. See the rustdoc for the full API.
+With the `encryption` feature, `Sensitive` fields are sealed by an injectable
+`EnvelopeEncryptor` (AES-256-GCM envelope encryption; pluggable `KeyProvider` for a
+local KEK or a cloud KMS) and stored — atomically with the object — in a nullable
+`sensitive` blob column. Without an encryptor the fields are stripped but not stored.
+See the rustdoc for the full API.
 
 ## License
 
