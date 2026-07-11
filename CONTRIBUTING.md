@@ -121,7 +121,10 @@ binaries attached (so a release-plz run that didn't bump the CLI crate, or a
 re-run, is a safe no-op).
 
 - **Add a target:** extend the `matrix.include` list in
-  `release-binaries.yml`. Linux + macOS (x86_64 + aarch64) ship today; Windows,
+  `release-binaries.yml`. Linux x86_64 + aarch64 and macOS aarch64 (Apple
+  Silicon) ship today. Intel macOS (`x86_64-apple-darwin`) is intentionally
+  dropped — GitHub's Intel macOS runners are on a deprecation path and were
+  starving the job; those users fall back to a source build. Windows,
   code-signing/notarization, and musl are deferred follow-ups.
 - **Test without cutting a release:** run the workflow via **Run workflow**
   (`workflow_dispatch`) with an existing tag (e.g. `olai-trestle-v0.0.4`); it

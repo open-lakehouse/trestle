@@ -17,9 +17,10 @@ Prebuilt binaries (no Rust toolchain, no compile) via
 cargo binstall olai-trestle
 ```
 
-This downloads the release archive for your platform (Linux/macOS, x86_64 or
-aarch64) and installs the `trestle` command. Each archive ships with a `.sha256`
-checksum and a GitHub build-provenance attestation you can verify:
+This downloads the release archive for your platform and installs the `trestle`
+command. Prebuilt targets: Linux x86_64 + aarch64, and macOS on Apple Silicon
+(aarch64); other platforms fall back to a source build. Each archive ships with
+a `.sha256` checksum and a GitHub build-provenance attestation you can verify:
 
 ```bash
 gh attestation verify trestle-<target>.tar.gz --repo open-lakehouse/trestle

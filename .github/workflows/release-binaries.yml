@@ -127,8 +127,6 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            os: macos-13
           - target: aarch64-apple-darwin
             os: macos-latest
     steps:
@@ -156,7 +154,10 @@ jobs:
           leading-dir: true
           checksum: sha256
           include: LICENSE,README.md
-          ref: ${{ needs.resolve.outputs.tag }}
+          # This action requires a *fully-formed* tag ref (checkout above takes
+          # the bare tag). Since we run from workflow_run/workflow_dispatch — not
+          # a tag/release event — we must pass it explicitly.
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
       # Key-free SLSA build provenance over the archive + checksum, verifiable
       # with `gh attestation verify <archive> --repo <owner>/<repo>`.
