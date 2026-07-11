@@ -1,15 +1,14 @@
 /// A convenience type for declaring Results in the resource store.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Errors returned by the resource store, association store, and secret manager.
+/// Errors returned by the resource store and association store.
 ///
 /// Store operations report failures through these variants; the doc comments on
-/// the [`ObjectStore`], [`AssociationStore`], and [`SecretManager`] trait methods
-/// note which variant a given method returns and when.
+/// the [`ObjectStore`] and [`AssociationStore`] trait methods note which variant
+/// a given method returns and when.
 ///
 /// [`ObjectStore`]: crate::ObjectStore
 /// [`AssociationStore`]: crate::AssociationStore
-/// [`SecretManager`]: crate::SecretManager
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Entity not found.")]

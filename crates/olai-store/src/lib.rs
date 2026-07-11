@@ -9,10 +9,22 @@
 //!   [`ResourceName`], and a JSON properties blob.
 //! - [`Association<L>`][Association] — a directed edge between two objects.
 //! - [`ObjectStore<L>`][ObjectStore] / [`AssociationStore<L>`][AssociationStore]
-//!   — async read/write traits (with `*Reader` read-only counterparts).
-//! - [`ManagedObjectStore`] — wraps an `ObjectStore` and enforces field roles
-//!   (data / identifier / managed / sensitive) from a [`ResourceRegistry`].
-//! - [`SecretManager`] — encrypted storage for sensitive field values.
+//!   — the async read/write storage traits (with `*Reader` read-only
+//!   counterparts). The bundled [`InMemoryStore`] and `SqlStore` backends
+//!   implement them; they are a **taxonomy-blind blob layer** — they persist
+//!   already-shaped properties plus an opaque sensitive blob and know nothing of
+//!   field roles.
+//! - [`ManagedObjectStore`] — **the store you reach for.** It wraps a backend and
+//!   a [`ResourceRegistry`] to enforce field roles (data / identifier / managed /
+//!   sensitive): stripping store-owned fields, injecting them back on read, and
+//!   sealing/redacting sensitive fields. Encryption is optional — build it with
+//!   [`new`](ManagedObjectStore::new) for a store with no sensitive fields, or
+//!   [`with_encryptor`](ManagedObjectStore::with_encryptor) (the `encryption`
+//!   feature) to seal them. Writing a resource that *has* sensitive fields through
+//!   a store with no encryptor is a hard error, never a silent drop.
+//!
+//! Most callers construct a `ManagedObjectStore` and use it through the
+//! `ObjectStore` trait; the raw backends are the pluggable layer underneath.
 //!
 //! **Note:** this store favours simplicity over features and performance. It's a
 //! good default for bootstrapping Trestle projects, prototypes, and demos, but is
@@ -80,6 +92,8 @@
 
 pub mod backend;
 pub mod conformance;
+#[cfg(feature = "encryption")]
+pub mod encryption;
 pub mod error;
 pub mod label;
 pub mod managed;
@@ -87,21 +101,21 @@ pub mod name;
 pub mod object;
 pub mod reference;
 pub mod registry;
-pub mod secrets;
 pub mod store;
 
 // Re-exports for convenience.
 pub use backend::mem::InMemoryStore;
 #[cfg(feature = "sqlite")]
 pub use backend::sql::{SqlStore, migrate as migrate_sql, migrator as sql_migrator};
+#[cfg(feature = "encryption")]
+pub use encryption::{EnvelopeEncryptor, KekId, KeyProvider, LocalKeyProvider};
 pub use error::{Error, Result};
 pub use label::Label;
-pub use managed::{ManagedObjectStore, NoSecrets};
+pub use managed::ManagedObjectStore;
 pub use name::{EMPTY_RESOURCE_NAME, ResourceName};
 pub use object::{Association, Object};
 pub use reference::ResourceRef;
 pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, ResourceTypeDescriptor};
-pub use secrets::{ProvidesSecretManager, SecretManager};
 pub use store::{
     AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
     StoreExec, StoreTx, Transactional,

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT sensitive FROM objects WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "sensitive",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "6d3c45f25f1267f0b582ab8508d5be0b8de45c5e4639d073385a3eb1829c259c"
+}
