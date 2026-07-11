@@ -30,7 +30,6 @@ sqlx = { workspace = true, optional = true, features = [
 thiserror = { workspace = true }
 # `sync` for the in-memory backend's owned transaction guard (`OwnedMutexGuard`).
 tokio = { workspace = true, features = ["sync"] }
-tracing = { workspace = true }
 # `v4` for the in-memory backend to mint object/edge ids.
 uuid = { workspace = true, features = ["v4"] }
 # Zeroize KEK material on drop (behind the `encryption` feature).
