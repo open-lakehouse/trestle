@@ -24,6 +24,9 @@ use crate::store::{
 };
 use crate::{Error, Result};
 
+/// The OpenTelemetry `db.system` value for this backend's operation spans.
+const DB_SYSTEM: &str = "memory";
+
 /// Resolves an edge label to its paired inverse label, if any.
 ///
 /// When an inverse label is returned, [`InMemoryStore`] maintains the inverse
@@ -360,29 +363,86 @@ fn paginate<T>(
 
 // --- Top-level store: each op takes the state lock and auto-commits. ---
 
+/// Record the failure of `result` onto the current span's OpenTelemetry status fields.
+///
+/// The span must declare `otel.status_code` and `error.type` as
+/// [`tracing::field::Empty`] for these to take effect. Only the error *kind*
+/// ([`Error::kind_str`]) is recorded — never a payload or message body.
+fn record_err<T>(result: &Result<T>) {
+    if let Err(e) = result {
+        let span = tracing::Span::current();
+        span.record("otel.status_code", "ERROR");
+        span.record("error.type", e.kind_str());
+    }
+}
+
 #[async_trait::async_trait]
 impl<L: Label> ObjectStoreReader<L> for InMemoryStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get(&self, id: &Uuid) -> Result<Object<L>> {
-        self.state
+        let out = self
+            .state
             .lock()
             .unwrap()
             .objects
             .get(id)
             .cloned()
-            .ok_or(Error::NotFound)
+            .ok_or(Error::NotFound);
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_by_name",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_by_name",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_by_name(&self, label: L, name: &ResourceName) -> Result<Object<L>> {
-        self.state
+        let out = self
+            .state
             .lock()
             .unwrap()
             .objects
             .values()
             .find(|o| o.label == label && &o.name == name)
             .cloned()
-            .ok_or(Error::NotFound)
+            .ok_or(Error::NotFound);
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn list(
         &self,
         label: L,
@@ -390,22 +450,60 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryStore<L> {
         max_results: Option<usize>,
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
-        op_list_objects(
+        let out = op_list_objects(
             &self.state.lock().unwrap(),
             label,
             namespace,
             max_results,
             page_token,
-        )
+        );
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
-        op_get_sensitive(&self.state.lock().unwrap(), id)
+        let out = op_get_sensitive(&self.state.lock().unwrap(), id);
+        record_err(&out);
+        out
+    }
+}
+
+/// Emit a `debug` event when `result` is a CAS (`Precondition::Version`) conflict.
+///
+/// Records only the object `id` — the `Conflict` variant carries no payload.
+fn debug_cas_conflict<T>(result: &Result<T>, id: &Uuid) {
+    if let Err(Error::Conflict) = result {
+        tracing::debug!(id = %id, "CAS precondition conflict");
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.create",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "create",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn create(
         &self,
         label: L,
@@ -414,16 +512,31 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
         id: Option<Uuid>,
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        op_create(
+        let out = op_create(
             &mut self.state.lock().unwrap(),
             label,
             name,
             properties,
             id,
             sensitive,
-        )
+        );
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.update",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "update",
+            id = %id,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn update(
         &self,
         id: &Uuid,
@@ -431,45 +544,121 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
         precondition: Precondition,
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        op_update(
+        let out = op_update(
             &mut self.state.lock().unwrap(),
             id,
             properties,
             precondition,
             sensitive,
-        )
+        );
+        record_err(&out);
+        debug_cas_conflict(&out, id);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.rename",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "rename",
+            id = %id,
+            name = %new_name,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn rename(
         &self,
         id: &Uuid,
         new_name: &ResourceName,
         precondition: Precondition,
     ) -> Result<Object<L>> {
-        op_rename(&mut self.state.lock().unwrap(), id, new_name, precondition)
+        let out = op_rename(&mut self.state.lock().unwrap(), id, new_name, precondition);
+        record_err(&out);
+        debug_cas_conflict(&out, id);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.delete",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "delete",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn delete(&self, id: &Uuid) -> Result<()> {
-        op_delete(&mut self.state.lock().unwrap(), id)
+        let out = op_delete(&mut self.state.lock().unwrap(), id);
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.set_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "set_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
-        op_set_sensitive(&mut self.state.lock().unwrap(), id, sensitive)
+        let out = op_set_sensitive(&mut self.state.lock().unwrap(), id, sensitive);
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for InMemoryStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.query_edges",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "query_edges",
+            label = %query.label,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn query_edges(
         &self,
         query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        op_query_edges(&self.state.lock().unwrap(), query)
+        let out = op_query_edges(&self.state.lock().unwrap(), query);
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStore<L> for InMemoryStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.add_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "add_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn add(
         &self,
         from_id: Uuid,
@@ -477,24 +666,42 @@ impl<L: Label> AssociationStore<L> for InMemoryStore<L> {
         label: &str,
         properties: Option<serde_json::Value>,
     ) -> Result<()> {
-        op_add_edge(
+        let out = op_add_edge(
             &mut self.state.lock().unwrap(),
             from_id,
             to_id,
             label,
             properties,
             &self.inverse,
-        )
+        );
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.remove_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "remove_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
-        op_remove_edge(
+        let out = op_remove_edge(
             &mut self.state.lock().unwrap(),
             from_id,
             to_id,
             label,
             &self.inverse,
-        )
+        );
+        record_err(&out);
+        out
     }
 }
 
@@ -537,20 +744,62 @@ impl<L: Label> InMemoryTx<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStoreReader<L> for InMemoryTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get(&self, id: &Uuid) -> Result<Object<L>> {
-        self.with_state(|s| s.objects.get(id).cloned().ok_or(Error::NotFound))
+        let out = self.with_state(|s| s.objects.get(id).cloned().ok_or(Error::NotFound));
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_by_name",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_by_name",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_by_name(&self, label: L, name: &ResourceName) -> Result<Object<L>> {
-        self.with_state(|s| {
+        let out = self.with_state(|s| {
             s.objects
                 .values()
                 .find(|o| o.label == label && &o.name == name)
                 .cloned()
                 .ok_or(Error::NotFound)
-        })
+        });
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn list(
         &self,
         label: L,
@@ -558,16 +807,46 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryTx<L> {
         max_results: Option<usize>,
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
-        self.with_state(|s| op_list_objects(s, label, namespace, max_results, page_token))
+        let out =
+            self.with_state(|s| op_list_objects(s, label, namespace, max_results, page_token));
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
-        self.with_state(|s| op_get_sensitive(s, id))
+        let out = self.with_state(|s| op_get_sensitive(s, id));
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.create",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "create",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn create(
         &self,
         label: L,
@@ -576,9 +855,24 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
         id: Option<Uuid>,
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        self.with_state(|s| op_create(s, label, name, properties, id, sensitive))
+        let out = self.with_state(|s| op_create(s, label, name, properties, id, sensitive));
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.update",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "update",
+            id = %id,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn update(
         &self,
         id: &Uuid,
@@ -586,39 +880,115 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
         precondition: Precondition,
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        self.with_state(|s| op_update(s, id, properties, precondition, sensitive))
+        let out = self.with_state(|s| op_update(s, id, properties, precondition, sensitive));
+        record_err(&out);
+        debug_cas_conflict(&out, id);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.rename",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "rename",
+            id = %id,
+            name = %new_name,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn rename(
         &self,
         id: &Uuid,
         new_name: &ResourceName,
         precondition: Precondition,
     ) -> Result<Object<L>> {
-        self.with_state(|s| op_rename(s, id, new_name, precondition))
+        let out = self.with_state(|s| op_rename(s, id, new_name, precondition));
+        record_err(&out);
+        debug_cas_conflict(&out, id);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.delete",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "delete",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn delete(&self, id: &Uuid) -> Result<()> {
-        self.with_state(|s| op_delete(s, id))
+        let out = self.with_state(|s| op_delete(s, id));
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.set_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "set_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
-        self.with_state(|s| op_set_sensitive(s, id, sensitive))
+        let out = self.with_state(|s| op_set_sensitive(s, id, sensitive));
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for InMemoryTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.query_edges",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "query_edges",
+            label = %query.label,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn query_edges(
         &self,
         query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
-        self.with_state(|s| op_query_edges(s, query))
+        let out = self.with_state(|s| op_query_edges(s, query));
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStore<L> for InMemoryTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.add_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "add_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn add(
         &self,
         from_id: Uuid,
@@ -627,17 +997,39 @@ impl<L: Label> AssociationStore<L> for InMemoryTx<L> {
         properties: Option<serde_json::Value>,
     ) -> Result<()> {
         let inverse = self.store.inverse.clone();
-        self.with_state(|s| op_add_edge(s, from_id, to_id, label, properties, &inverse))
+        let out = self.with_state(|s| op_add_edge(s, from_id, to_id, label, properties, &inverse));
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.remove_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "remove_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
         let inverse = self.store.inverse.clone();
-        self.with_state(|s| op_remove_edge(s, from_id, to_id, label, &inverse))
+        let out = self.with_state(|s| op_remove_edge(s, from_id, to_id, label, &inverse));
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> StoreTx<L> for InMemoryTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(otel.kind = "client", db.system = DB_SYSTEM, db.operation.name = "commit")
+    )]
     async fn commit(self: Box<Self>) -> Result<()> {
         if let Some(working) = self.working.lock().unwrap().take() {
             *self.store.state.lock().unwrap() = working;
@@ -645,6 +1037,10 @@ impl<L: Label> StoreTx<L> for InMemoryTx<L> {
         Ok(())
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(otel.kind = "client", db.system = DB_SYSTEM, db.operation.name = "rollback")
+    )]
     async fn rollback(self: Box<Self>) -> Result<()> {
         *self.working.lock().unwrap() = None;
         Ok(())
@@ -653,6 +1049,17 @@ impl<L: Label> StoreTx<L> for InMemoryTx<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> Transactional<L> for InMemoryStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.transaction",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "transaction",
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn transaction<'a, T>(
         &'a self,
         f: Box<
@@ -675,12 +1082,19 @@ impl<L: Label> Transactional<L> for InMemoryStore<L> {
             }
             Err(e) => {
                 // rollback: discard the working snapshot
+                let span = tracing::Span::current();
+                span.record("otel.status_code", "ERROR");
+                span.record("error.type", e.kind_str());
                 *tx.working.lock().unwrap() = None;
                 Err(e)
             }
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(otel.kind = "client", db.system = DB_SYSTEM, db.operation.name = "begin")
+    )]
     async fn begin(&self) -> Result<Box<dyn StoreTx<L>>> {
         Ok(Box::new(self.begin_tx().await))
     }
@@ -721,6 +1135,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[tracing_test::traced_test]
     async fn cas_update_detects_conflict() {
         let store = InMemoryStore::<Kind>::new();
         let obj = store
@@ -742,6 +1157,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict));
+
+        // The conflict is surfaced as a `debug` event for operators.
+        assert!(logs_contain("CAS precondition conflict"));
 
         // `Any` still works unconditionally.
         let again = store
@@ -868,6 +1286,50 @@ mod tests {
             .await
             .unwrap();
         assert!(inv.is_empty());
+    }
+
+    /// The `skip_all` guardrail: no operation span/event may echo the properties payload or a
+    /// sensitive blob. Drive a write whose payload and sealed blob carry sentinels and assert
+    /// neither ever appears in emitted tracing output.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn spans_never_leak_payload_or_secret() {
+        let store = InMemoryStore::<Kind>::new();
+        let created = store
+            .create(
+                Kind::Node,
+                &rn("n"),
+                Some(serde_json::json!({ "field": "SECRET_SENTINEL_VALUE" })),
+                None,
+                Some(Bytes::from_static(b"SECRET_BLOB_BYTES")),
+            )
+            .await
+            .unwrap();
+        // Exercise more instrumented paths carrying the same payload.
+        store
+            .update(
+                &created.id,
+                Some(serde_json::json!({ "field": "SECRET_SENTINEL_VALUE" })),
+                Precondition::Any,
+                Some(Bytes::from_static(b"SECRET_BLOB_BYTES")),
+            )
+            .await
+            .unwrap();
+        let _ = store.get(&created.id).await.unwrap();
+
+        logs_assert(|lines: &[&str]| {
+            for line in lines {
+                if line.contains("SECRET_SENTINEL_VALUE") {
+                    return Err(format!(
+                        "properties payload leaked into tracing output: {line}"
+                    ));
+                }
+                if line.contains("SECRET_BLOB_BYTES") {
+                    return Err(format!("sensitive blob leaked into tracing output: {line}"));
+                }
+            }
+            Ok(())
+        });
     }
 
     #[tokio::test]

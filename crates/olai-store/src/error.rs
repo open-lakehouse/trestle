@@ -47,4 +47,22 @@ impl Error {
     pub fn invalid_argument(msg: impl Into<String>) -> Self {
         Self::InvalidArgument(msg.into())
     }
+
+    /// A stable, low-cardinality kind string for use as a `tracing` / OpenTelemetry
+    /// `error.type` field.
+    ///
+    /// Returns a `&'static str` and never includes an inner message, so recording it on a
+    /// span cannot leak the caller-supplied text carried by [`InvalidArgument`](Self::InvalidArgument)
+    /// or [`Generic`](Self::Generic).
+    pub(crate) fn kind_str(&self) -> &'static str {
+        match self {
+            Error::NotFound => "not_found",
+            Error::AlreadyExists => "already_exists",
+            Error::Conflict => "conflict",
+            Error::InvalidArgument(_) => "invalid_argument",
+            Error::InvalidIdentifier(_) => "invalid_identifier",
+            Error::Generic(_) => "generic",
+            Error::SerDe(_) => "serde",
+        }
+    }
 }
