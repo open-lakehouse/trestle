@@ -28,6 +28,17 @@
 //! encrypting them does not reduce searchability, and there is no need for (and this crate does
 //! not provide) searchable encryption.
 //!
+//! # Searchability of managed fields
+//!
+//! [`search`](crate::ObjectStoreReader::search) filters the *stored* `properties` — the plaintext
+//! data fields. Store-owned `Identifier` and `Managed` fields are stripped on write and only
+//! injected back on read, so, like `Sensitive` fields, they are **not part of the searchable
+//! payload**. Filter on data fields; address a resource by its identifier with
+//! [`get_by_name`](crate::ObjectStoreReader::get_by_name). A resource's `created_at`/`updated_at`
+//! are first-class [`Object`] columns rather than payload, and time-range queries
+//! over associations are a separate, deferred concern (they need a `created_at` index and keyset
+//! pagination, not the payload filter).
+//!
 //! [`get_with_secrets`]: ManagedObjectStore::get_with_secrets
 //! [`EnvelopeEncryptor`]: crate::EnvelopeEncryptor
 
