@@ -587,6 +587,78 @@ pub async fn search_from_pagination_filters_completely<S: StoreExec<ConformanceL
     assert_eq!(seen.len(), 6, "no duplicates across pages");
 }
 
+/// The predicates a SQL backend cannot push faithfully — `Contains`, `Ne`, comparisons whose
+/// value is null/array/object, and any composite that includes one — still match the reference
+/// [`Filter::matches`] semantics, because the backend falls back to Rust-side filtering.
+///
+/// This guards the fallback path specifically: a pushdown backend must produce the same result
+/// as the in-memory backend for every filter here.
+pub async fn search_fallback_predicates_agree<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let payloads = [
+        serde_json::json!({ "tags": ["red", "blue"], "state": "active", "nick": null, "a.b": 1 }),
+        serde_json::json!({ "tags": ["green"], "state": "archived" }),
+        serde_json::json!({ "tags": [], "state": "active", "count": 3 }),
+        serde_json::json!({ "note": "hello world", "state": "active", "a.b": 2 }),
+    ];
+    for (i, p) in payloads.iter().enumerate() {
+        store
+            .create(
+                ConformanceLabel,
+                &rn(&format!("f{i}")),
+                Some(p.clone()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    let check = async |filter: Filter| {
+        let (hits, _) = store
+            .search(ConformanceLabel, None, &filter, None, None)
+            .await
+            .unwrap();
+        let mut got: Vec<_> = hits.iter().map(|o| o.properties.clone().unwrap()).collect();
+        let mut want: Vec<_> = payloads
+            .iter()
+            .filter(|p| filter.matches(p))
+            .cloned()
+            .collect();
+        got.sort_by_key(|v| v.to_string());
+        want.sort_by_key(|v| v.to_string());
+        assert_eq!(
+            got, want,
+            "fallback search disagreed with Filter::matches for {filter:?}"
+        );
+    };
+
+    // Contains — array membership and string substring.
+    check(Filter::contains("tags", "blue")).await;
+    check(Filter::contains("note", "world")).await;
+    // Ne — including a missing path (must not match) and a present mismatch.
+    check(Filter::ne("state", "active")).await;
+    check(Filter::ne("count", 3)).await;
+    // Comparisons whose value is not a pushable scalar.
+    check(Filter::eq("nick", serde_json::Value::Null)).await;
+    check(Filter::eq("tags", serde_json::json!([]))).await;
+    // A composite mixing a pushable leaf with a non-pushable one falls back wholesale.
+    check(Filter::all([
+        Filter::eq("state", "active"),
+        Filter::contains("tags", "red"),
+    ]))
+    .await;
+    check(Filter::any([
+        Filter::gt("count", 2),
+        Filter::ne("state", "archived"),
+    ]))
+    .await;
+    // A field key containing a JSONPath metacharacter: a `$.a.b` path can't be pushed to
+    // SQLite (it would parse as nested `a`→`b`), so it must fall back and still match the
+    // literal key `"a.b"`.
+    check(Filter::eq(crate::filter::FieldPath::new(["a.b"]), 1)).await;
+    check(Filter::exists(crate::filter::FieldPath::new(["a.b"]))).await;
+}
+
 /// Run the entire battery.
 ///
 /// `fresh` builds a new empty store; `with_inverse` builds one that maintains
@@ -609,6 +681,7 @@ where
     search_namespace_and_filter(&fresh()).await;
     search_from_predicates(&fresh()).await;
     search_from_pagination_filters_completely(&fresh()).await;
+    search_fallback_predicates_agree(&fresh()).await;
 }
 
 #[cfg(test)]

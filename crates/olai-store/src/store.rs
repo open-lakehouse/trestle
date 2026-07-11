@@ -59,13 +59,13 @@ const NULL: serde_json::Value = serde_json::Value::Null;
 
 /// The value a filter evaluates against for a possibly-absent payload: the stored
 /// properties, or JSON `null` when there are none (so predicates see a missing path).
-fn props_or_null(properties: &Option<serde_json::Value>) -> &serde_json::Value {
+pub(crate) fn props_or_null(properties: &Option<serde_json::Value>) -> &serde_json::Value {
     properties.as_ref().unwrap_or(&NULL)
 }
 
 /// Parse a page token into an offset. Shared by the default `search` implementations, which
 /// use the same plain-offset token shape as the backends' `list` methods.
-fn parse_offset(page_token: Option<String>) -> Result<usize> {
+pub(crate) fn parse_offset(page_token: Option<String>) -> Result<usize> {
     match page_token {
         Some(t) => t
             .parse()
@@ -79,7 +79,8 @@ fn parse_offset(page_token: Option<String>) -> Result<usize> {
 ///
 /// The default `search` impls filter the *entire* listing before paginating — never letting a
 /// `LIMIT` truncate ahead of the filter — so paging a filtered result cannot drop matches.
-fn paginate_filtered<T>(
+/// A backend that pushes filtering into storage reuses this for the offset+limit slice.
+pub(crate) fn paginate_filtered<T>(
     mut items: Vec<T>,
     offset: usize,
     max_results: Option<usize>,
