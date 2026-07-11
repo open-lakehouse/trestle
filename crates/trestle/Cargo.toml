@@ -17,6 +17,23 @@ doctest = false
 name = "trestle"
 path = "src/main.rs"
 
+# cargo-binstall metadata. Binstall's defaults don't fit this crate: the release
+# tag is `olai-trestle-v{version}` (not `v{version}`), and the package name
+# (`olai-trestle`) differs from the binary name (`trestle`). These templates
+# match the assets produced by `.github/workflows/release-binaries.yml`
+# (taiki-e/upload-rust-binary-action, `archive: trestle-$target`, `tar=unix`,
+# `leading-dir=true`), so `cargo binstall olai-trestle` resolves to the prebuilt
+# archives.
+#
+# The extension is a literal `.tar.gz` (NOT `{ archive-format }`): binstall would
+# render `{ archive-format }` as `tgz`, but upload-rust-binary-action always
+# names its gzipped-tar asset `.tar.gz`. `pkg-fmt = "tgz"` is only the
+# decompression hint (tgz == gzipped tar); it does not affect the URL here.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/olai-trestle-v{ version }/trestle-{ target }.tar.gz"
+bin-dir = "trestle-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [dependencies]
 # local crates (release-plz keeps versions in sync) (in alphabetical order)
 olai-codegen = { path = "../olai-codegen", version = "0.0.5" }
