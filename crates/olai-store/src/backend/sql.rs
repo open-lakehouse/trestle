@@ -12,8 +12,19 @@
 //!
 //! SQL is checked at compile time with sqlx's `query!` macros against the
 //! committed `.sqlx/` offline cache (regenerate with `cargo sqlx prepare` after
-//! changing a query or the `migrations/`). The schema is applied at runtime by
-//! [`sqlx::migrate!`].
+//! changing a query or the `migrations/`).
+//!
+//! # Migrations
+//!
+//! Applying the schema is an **explicit** step, decoupled from constructing the
+//! store — [`SqlStore::connect`] assumes an already-migrated pool and runs no
+//! DDL. This matters for multi-process deployments (e.g. many pods on one
+//! Postgres): eager migrate-on-connect would have every process race the
+//! migration lock on boot and strips operators of a gated deploy step. Run
+//! [`migrate`] / [`migrator`] once as a deliberate step, then
+//! [`connect`](SqlStore::connect). For single-process / ephemeral cases (SQLite,
+//! tests), [`SqlStore::connect_and_migrate`] and [`SqlStore::in_memory`] bundle
+//! migrate-then-connect for convenience.
 
 use std::sync::Arc;
 
@@ -34,6 +45,52 @@ use crate::{Error, Result};
 /// [`InMemoryStore`](crate::InMemoryStore)).
 pub type InverseResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
+/// The crate's embedded schema [`Migrator`](sqlx::migrate::Migrator) for the
+/// `SqlStore` backend.
+///
+/// This is the primary way to apply the store's schema. Migrations are a
+/// deliberate, explicit step — [`SqlStore::connect`] does **not** run them for
+/// you (see its docs for why eager migrate-on-connect is the wrong default for a
+/// multi-process deployment). Run them at deploy time (a release-phase job),
+/// apply them inside a larger transaction alongside your own tables, or compose
+/// this set with your own. The migrator is embedded at compile time (via
+/// [`sqlx::migrate!`]) — it needs no `migrations/` directory at runtime — and can
+/// run against anything implementing [`sqlx::Acquire`] (a pool, a connection, or
+/// an open transaction):
+///
+/// ```no_run
+/// # async fn run(pool: sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+/// olai_store::backend::sql::migrator().run(&pool).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// `Migrator::run` takes a migration lock (a Postgres advisory lock; a busy-wait
+/// on SQLite), so concurrent callers serialize safely — but prefer running
+/// migrations once as a gated step over racing them from every process on boot.
+pub fn migrator() -> sqlx::migrate::Migrator {
+    sqlx::migrate!("./migrations")
+}
+
+/// Apply the crate's schema migrations to `pool`.
+///
+/// A convenience wrapper over [`migrator`]. Migrations are idempotent and
+/// versioned: running them against an already-current database is a no-op. This
+/// is the explicit migration entry point — call it as a deliberate step (e.g. a
+/// deploy/release job or test setup), then hand the migrated pool to
+/// [`SqlStore::connect`]. For single-process/ephemeral cases where
+/// migrate-on-startup is fine, [`SqlStore::connect_and_migrate`] bundles the two.
+///
+/// # Errors
+///
+/// Returns a backend error if a migration fails to apply.
+pub async fn migrate(pool: &SqlitePool) -> Result<()> {
+    migrator()
+        .run(pool)
+        .await
+        .map_err(|e| Error::generic(e.to_string()))
+}
+
 impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
         match e {
@@ -53,38 +110,53 @@ pub struct SqlStore<L: Label> {
 }
 
 impl<L: Label> SqlStore<L> {
-    /// Wrap an existing pool and apply the schema migrations.
+    /// Wrap an existing, **already-migrated** pool.
     ///
-    /// # Errors
+    /// This does **not** apply migrations — it assumes the schema is already in
+    /// place. Coupling DDL to store construction is the wrong default for a
+    /// multi-process deployment (e.g. many pods against one Postgres): every
+    /// process would race the migration lock on boot, and operators lose the
+    /// ability to run migrations as a deliberate, gated deploy step. Apply the
+    /// schema once, explicitly, via [`migrate`] / [`migrator`] (typically a
+    /// release-phase job), then call this.
     ///
-    /// Returns a backend error if the migration fails.
-    pub async fn connect(pool: SqlitePool) -> Result<Self> {
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|e| Error::generic(e.to_string()))?;
-        Ok(Self {
+    /// For a single-process or ephemeral database (SQLite, tests) where
+    /// migrate-on-startup is fine, use [`connect_and_migrate`](Self::connect_and_migrate)
+    /// or [`in_memory`](Self::in_memory).
+    pub fn connect(pool: SqlitePool) -> Self {
+        Self {
             pool,
             inverse: Arc::new(|_| None),
             _label: std::marker::PhantomData,
-        })
+        }
     }
 
-    /// Like [`connect`](Self::connect) but maintains inverse edges via `resolver`.
+    /// Apply the schema migrations to `pool`, then wrap it.
+    ///
+    /// A convenience for single-process / ephemeral setups (SQLite, tests) where
+    /// migrate-on-startup is acceptable. **Do not** use this as the default in a
+    /// multi-process deployment — migrate explicitly and use
+    /// [`connect`](Self::connect) instead (see its docs).
     ///
     /// # Errors
     ///
-    /// Returns a backend error if the migration fails.
-    pub async fn connect_with_inverse(
-        pool: SqlitePool,
-        resolver: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
-    ) -> Result<Self> {
-        let mut this = Self::connect(pool).await?;
-        this.inverse = Arc::new(resolver);
-        Ok(this)
+    /// Returns a backend error if a migration fails.
+    pub async fn connect_and_migrate(pool: SqlitePool) -> Result<Self> {
+        migrate(&pool).await?;
+        Ok(Self::connect(pool))
     }
 
-    /// Open an in-memory SQLite database (handy for tests).
+    /// Maintain inverse edges via `resolver`. Chainable onto either constructor.
+    #[must_use]
+    pub fn with_inverse(
+        mut self,
+        resolver: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.inverse = Arc::new(resolver);
+        self
+    }
+
+    /// Open a migrated in-memory SQLite database (handy for tests).
     ///
     /// The pool is pinned to a **single connection**: each physical connection
     /// to `sqlite::memory:` gets its own private database, so a multi-connection
@@ -99,7 +171,7 @@ impl<L: Label> SqlStore<L> {
             .max_connections(1)
             .connect("sqlite::memory:")
             .await?;
-        Self::connect(pool).await
+        Self::connect_and_migrate(pool).await
     }
 }
 
@@ -865,12 +937,10 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        let inv = SqlStore::<ConformanceLabel>::connect_with_inverse(
-            pool,
-            conformance::parent_child_inverse,
-        )
-        .await
-        .unwrap();
+        let inv = SqlStore::<ConformanceLabel>::connect_and_migrate(pool)
+            .await
+            .unwrap()
+            .with_inverse(conformance::parent_child_inverse);
         conformance::inverse_edges(&inv).await;
     }
 
@@ -916,5 +986,34 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), 6, "no duplicates across pages");
+    }
+
+    /// The public migration API applies the schema to a caller-supplied pool,
+    /// so a consumer can migrate independently and then build the store on the
+    /// same, already-migrated pool. Migrations are idempotent — running twice is
+    /// a no-op.
+    #[tokio::test]
+    async fn public_migrate_api_is_reusable_and_idempotent() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Caller runs migrations themselves, before constructing any store.
+        migrate(&pool).await.unwrap();
+        // Idempotent: a second run against the current schema is a no-op.
+        migrate(&pool).await.unwrap();
+        // And the embedded migrator is reachable for advanced composition.
+        migrator().run(&pool).await.unwrap();
+
+        // Building the store on the already-migrated pool needs no further
+        // migration: `connect` does not run DDL.
+        let store = SqlStore::<ConformanceLabel>::connect(pool);
+        let obj = store
+            .create(ConformanceLabel, &"m".parse().unwrap(), None, None)
+            .await
+            .unwrap();
+        assert!(store.get(&obj.id).await.is_ok());
     }
 }
