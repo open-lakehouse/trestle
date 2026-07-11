@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::{Sqlite, SqliteConnection};
 use uuid::Uuid;
 
@@ -86,11 +86,19 @@ impl<L: Label> SqlStore<L> {
 
     /// Open an in-memory SQLite database (handy for tests).
     ///
+    /// The pool is pinned to a **single connection**: each physical connection
+    /// to `sqlite::memory:` gets its own private database, so a multi-connection
+    /// pool would scatter writes across unrelated in-memory databases (and only
+    /// migrate one of them). One connection keeps all state coherent.
+    ///
     /// # Errors
     ///
     /// Returns a backend error if the connection or migration fails.
     pub async fn in_memory() -> Result<Self> {
-        let pool = SqlitePool::connect("sqlite::memory:").await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
         Self::connect(pool).await
     }
 }
@@ -191,9 +199,21 @@ async fn op_list_objects<L: Label>(
 ) -> Result<(Vec<Object<L>>, Option<String>)> {
     let offset = parse_token(page_token)?;
     let limit = max_results.unwrap_or(usize::MAX);
-    let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
-    let offset_i = offset as i64;
     let label_s = label.as_str().to_string();
+
+    // The namespace filter is a prefix over the escaped `ResourceName` string,
+    // which does not translate to a `LIKE`/`GLOB` the DB can page on. So when a
+    // namespace is set, we cannot let SQL `LIMIT`/`OFFSET` truncate before the
+    // filter runs — that would drop matching rows and desync the page token.
+    // Fetch all label rows and paginate the filtered result in-process; without
+    // a namespace, keep the efficient SQL `LIMIT`/`OFFSET` path.
+    let (fetch, offset_i) = match namespace {
+        Some(_) => (i64::MAX, 0),
+        None => (
+            limit.saturating_add(1).min(i64::MAX as usize) as i64,
+            offset as i64,
+        ),
+    };
     let rows = sqlx::query!(
         r#"SELECT id AS "id!", label, name, properties, version, created_at, updated_at
            FROM objects WHERE label = ? ORDER BY id LIMIT ? OFFSET ?"#,
@@ -218,8 +238,13 @@ async fn op_list_objects<L: Label>(
             )
         })
         .collect::<Result<Vec<_>>>()?;
+
     if let Some(ns) = namespace {
+        // Filter, then apply offset + limit over the filtered set in-process.
         objects.retain(|o| o.name.prefix_matches(ns));
+        let start = offset.min(objects.len());
+        objects.drain(..start);
+        return paginate(objects, offset, limit);
     }
     paginate(objects, offset, limit)
 }
@@ -835,12 +860,61 @@ mod tests {
         conformance::transaction_atomicity(&fresh().await).await;
         conformance::transaction_commit(&fresh().await).await;
 
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
         let inv = SqlStore::<ConformanceLabel>::connect_with_inverse(
-            SqlitePool::connect("sqlite::memory:").await.unwrap(),
+            pool,
             conformance::parent_child_inverse,
         )
         .await
         .unwrap();
         conformance::inverse_edges(&inv).await;
+    }
+
+    /// Paging a namespace-filtered listing must not drop matching rows even when
+    /// non-matching rows are interleaved (the filter runs after SQL LIMIT would
+    /// have truncated).
+    #[tokio::test]
+    async fn namespace_filtered_listing_pages_completely() {
+        use crate::name::ResourceName;
+        let store = fresh().await;
+        // Interleave matching (ns.*) and non-matching (other.*) names so a naive
+        // SQL LIMIT before filtering would lose matches.
+        for i in 0..6 {
+            let ns_name = ResourceName::from_naive_str_split(format!("ns.item{i}"));
+            let other = ResourceName::from_naive_str_split(format!("other.item{i}"));
+            store
+                .create(ConformanceLabel, &ns_name, None, None)
+                .await
+                .unwrap();
+            store
+                .create(ConformanceLabel, &other, None, None)
+                .await
+                .unwrap();
+        }
+
+        let ns = ResourceName::from_naive_str_split("ns");
+        let mut seen = Vec::new();
+        let mut token = None;
+        loop {
+            let (page, next) =
+                ObjectStoreReader::list(&store, ConformanceLabel, Some(&ns), Some(2), token)
+                    .await
+                    .unwrap();
+            assert!(page.iter().all(|o| o.name.prefix_matches(&ns)));
+            seen.extend(page.into_iter().map(|o| o.id));
+            match next {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+        // All six ns.* objects must be returned exactly once.
+        assert_eq!(seen.len(), 6, "every namespaced object must be paged");
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 6, "no duplicates across pages");
     }
 }
