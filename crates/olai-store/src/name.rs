@@ -127,11 +127,49 @@ impl ResourceName {
     /// assert!(name.prefix_matches(&ResourceName::new(["catalog", "schema"])));
     /// assert!(!name.prefix_matches(&ResourceName::new(["catalog", "other"])));
     /// ```
+    ///
+    /// Segments are compared case-insensitively for ASCII, matching the
+    /// `COLLATE NOCASE` folding the SQLite backend applies to the `name` column
+    /// (so namespace prefix listing agrees with `get_by_name` equality). Case
+    /// folding is ASCII-only; non-ASCII segments compare byte-for-byte.
+    ///
+    /// ```
+    /// use olai_store::ResourceName;
+    ///
+    /// let name = ResourceName::new(["Catalog", "Schema", "table"]);
+    /// assert!(name.prefix_matches(&ResourceName::new(["catalog", "schema"])));
+    /// ```
     pub fn prefix_matches(&self, prefix: &ResourceName) -> bool {
         if self.len() < prefix.len() {
             return false;
         }
-        prefix.iter().zip(self.iter()).all(|(a, b)| a == b)
+        prefix
+            .iter()
+            .zip(self.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    }
+
+    /// Compare two resource names for equality, folding ASCII case per segment.
+    ///
+    /// This mirrors the `COLLATE NOCASE` folding the SQLite backend applies to
+    /// the `name` column, so in-memory name lookups agree with the persistent
+    /// backend: `Catalog` and `catalog` are the same name. Case folding is
+    /// ASCII-only; non-ASCII segments compare byte-for-byte.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use olai_store::ResourceName;
+    ///
+    /// assert!(ResourceName::new(["Catalog"]).eq_ignore_ascii_case(&ResourceName::new(["catalog"])));
+    /// assert!(!ResourceName::new(["a", "b"]).eq_ignore_ascii_case(&ResourceName::new(["a"])));
+    /// ```
+    pub fn eq_ignore_ascii_case(&self, other: &ResourceName) -> bool {
+        self.len() == other.len()
+            && self
+                .iter()
+                .zip(other.iter())
+                .all(|(a, b)| a.eq_ignore_ascii_case(b))
     }
 }
 

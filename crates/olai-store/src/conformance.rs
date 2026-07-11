@@ -159,6 +159,64 @@ pub async fn rename_semantics<S: StoreExec<ConformanceLabel>>(store: &S) {
     assert_eq!(edges[0].to_id, b.id);
 }
 
+/// Object names fold ASCII case: a name differing only in case is the same
+/// object. `get_by_name` finds it, `create` collides with it, and namespace
+/// prefix listing matches it — consistently across backends.
+pub async fn case_insensitive_names<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let created = store
+        .create(ConformanceLabel::Node, &rn("Catalog"), None, None, None)
+        .await
+        .unwrap();
+
+    // get_by_name folds case.
+    let by_lower = store
+        .get_by_name(ConformanceLabel::Node, &rn("catalog"))
+        .await
+        .unwrap();
+    assert_eq!(by_lower.id, created.id, "get_by_name must fold ASCII case");
+    let by_upper = store
+        .get_by_name(ConformanceLabel::Node, &rn("CATALOG"))
+        .await
+        .unwrap();
+    assert_eq!(by_upper.id, created.id, "get_by_name must fold ASCII case");
+
+    // create collides with a case-variant of an existing name.
+    let err = store
+        .create(ConformanceLabel::Node, &rn("catalog"), None, None, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::AlreadyExists),
+        "creating a case-variant of an existing name must collide, got {err:?}"
+    );
+
+    // Namespace prefix listing folds case: a child under `Catalog.Schema`
+    // is listed when scoping to the differently-cased `catalog.schema`.
+    let child = store
+        .create(
+            ConformanceLabel::Node,
+            &rn("Catalog.Schema.table"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let (listed, _) = store
+        .list(
+            ConformanceLabel::Node,
+            Some(&rn("catalog.schema")),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        listed.iter().any(|o| o.id == child.id),
+        "namespace prefix listing must fold ASCII case"
+    );
+}
+
 /// A transaction that errors leaves no partial writes.
 pub async fn transaction_atomicity<
     S: StoreExec<ConformanceLabel> + Transactional<ConformanceLabel>,
@@ -1005,6 +1063,7 @@ where
 {
     cas_update(&fresh()).await;
     rename_semantics(&fresh()).await;
+    case_insensitive_names(&fresh()).await;
     transaction_atomicity(&fresh()).await;
     transaction_commit(&fresh()).await;
     sensitive_blob_roundtrip(&fresh()).await;
