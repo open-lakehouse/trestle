@@ -29,3 +29,8 @@ CREATE TABLE IF NOT EXISTS associations (
 
 CREATE UNIQUE INDEX IF NOT EXISTS assoc_from_to_label
     ON associations (from_id, to_id, label);
+
+-- Serves incoming-edge queries (`WHERE to_id = ? AND label = ?`) and the `OR to_id = ?`
+-- branch of object deletion; the trailing `id` keeps `ORDER BY id` index-ordered.
+CREATE INDEX IF NOT EXISTS assoc_to_label
+    ON associations (to_id, label, id);
