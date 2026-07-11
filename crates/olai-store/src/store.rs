@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use uuid::Uuid;
 
@@ -90,6 +91,26 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
         max_results: Option<usize>,
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)>;
+
+    /// Return the opaque sensitive blob stored alongside the object, if any.
+    ///
+    /// The blob is written by [`create`](ObjectStore::create) /
+    /// [`update`](ObjectStore::update) and is kept off the public [`Object`] so it never
+    /// serializes out through the ordinary read path — only this method exposes it. Backends
+    /// that do not store a sensitive blob (the default) return `Ok(None)`.
+    ///
+    /// [`ManagedObjectStore`](crate::ManagedObjectStore) uses this to reconstitute sealed
+    /// sensitive fields; the bytes are an [`EnvelopeEncryptor`](crate::EnvelopeEncryptor)
+    /// envelope, not plaintext. It reads the object first, so a missing object surfaces there;
+    /// callers of this method directly should treat `Ok(None)` as "no blob" regardless of
+    /// whether the object exists.
+    ///
+    /// The default implementation returns `Ok(None)`, for backends that do not persist a
+    /// sensitive blob.
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+        let _ = id;
+        Ok(None)
+    }
 }
 
 /// Read-write interface for the object store.
@@ -110,6 +131,13 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     /// embedding the id in its storage path); pass `None` to have the store
     /// generate a time-ordered id.
     ///
+    /// `sensitive` is an opaque blob (typically an
+    /// [`EnvelopeEncryptor`](crate::EnvelopeEncryptor) envelope) persisted alongside the
+    /// object and returned only by [`get_sensitive`](ObjectStoreReader::get_sensitive) — it
+    /// never appears on the [`Object`] read back. It is stored atomically with the object, so
+    /// there is no window in which one exists without the other. Pass `None` for objects with
+    /// no sensitive data.
+    ///
     /// # Errors
     ///
     /// - [`Error::AlreadyExists`](crate::Error::AlreadyExists) if an object with the same `label` and `name`,
@@ -121,6 +149,7 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>>;
 
     /// Update an existing object's properties.
@@ -129,6 +158,11 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     /// Pass a [`Precondition::Version`] to make this a compare-and-swap and close
     /// the read-modify-write race; [`Precondition::Any`] overwrites
     /// unconditionally.
+    ///
+    /// `sensitive` replaces the object's stored sensitive blob when `Some`, atomically with
+    /// the properties update. Passing `None` **leaves any existing blob untouched** (it does
+    /// not clear it), so an update that does not carry sensitive fields preserves the sealed
+    /// value already on the row.
     ///
     /// # Errors
     ///
@@ -141,6 +175,7 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
         id: &Uuid,
         properties: Option<serde_json::Value>,
         precondition: Precondition,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>>;
 
     /// Rename (or move) an object to a new [`ResourceName`], preserving its
@@ -263,6 +298,10 @@ impl<L: Label, T: ObjectStoreReader<L>> ObjectStoreReader<L> for Arc<T> {
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         T::list(self, label, namespace, max_results, page_token).await
     }
+
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+        T::get_sensitive(self, id).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -273,8 +312,9 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        T::create(self, label, name, properties, id).await
+        T::create(self, label, name, properties, id, sensitive).await
     }
 
     async fn update(
@@ -282,8 +322,9 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
         id: &Uuid,
         properties: Option<serde_json::Value>,
         precondition: Precondition,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        T::update(self, id, properties, precondition).await
+        T::update(self, id, properties, precondition, sensitive).await
     }
 
     async fn rename(

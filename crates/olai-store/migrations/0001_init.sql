@@ -5,6 +5,10 @@ CREATE TABLE IF NOT EXISTS objects (
     label       TEXT    NOT NULL,
     name        TEXT    NOT NULL,
     properties  TEXT,
+    -- Opaque envelope-encrypted blob for the object's sensitive fields, written
+    -- atomically with the row (see `ManagedObjectStore`). NULL when the resource
+    -- type has no sensitive fields or none were supplied.
+    sensitive   BLOB,
     version     INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT

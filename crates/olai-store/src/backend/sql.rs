@@ -28,6 +28,7 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::{Sqlite, SqliteConnection};
 use uuid::Uuid;
@@ -327,6 +328,7 @@ async fn op_create<L: Label>(
     name: &ResourceName,
     properties: Option<serde_json::Value>,
     id: Option<Uuid>,
+    sensitive: Option<Bytes>,
 ) -> Result<Object<L>> {
     let object = Object {
         id: id.unwrap_or_else(Uuid::new_v4),
@@ -342,18 +344,31 @@ async fn op_create<L: Label>(
     let name_s = object.name.to_string();
     let props = json_str(&object.properties)?;
     let created = object.created_at.to_rfc3339();
+    // The sensitive blob is bound in the same INSERT so the row and its sealed value
+    // land atomically (NULL when there is nothing sealed).
+    let sensitive = sensitive.as_deref();
     sqlx::query!(
-        "INSERT INTO objects (id, label, name, properties, version, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, 0, ?, NULL)",
+        "INSERT INTO objects (id, label, name, properties, sensitive, version, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, 0, ?, NULL)",
         id_s,
         label_s,
         name_s,
         props,
+        sensitive,
         created,
     )
     .execute(conn)
     .await?;
     Ok(object)
+}
+
+async fn op_get_sensitive(conn: &mut SqliteConnection, id: &Uuid) -> Result<Option<Bytes>> {
+    let id_s = id.hyphenated().to_string();
+    let row = sqlx::query!(r#"SELECT sensitive FROM objects WHERE id = ?"#, id_s)
+        .fetch_optional(conn)
+        .await?
+        .ok_or(Error::NotFound)?;
+    Ok(row.sensitive.map(Bytes::from))
 }
 
 /// A zero-row conditional write means either the row is gone (`NotFound`) or its
@@ -371,15 +386,19 @@ async fn op_update<L: Label>(
     id: &Uuid,
     properties: Option<serde_json::Value>,
     precondition: Precondition,
+    sensitive: Option<Bytes>,
 ) -> Result<Object<L>> {
     let id_s = id.hyphenated().to_string();
     let props = json_str(&properties)?;
     let now = chrono::Utc::now().to_rfc3339();
+    let blob = sensitive.as_deref();
 
-    // Two literal queries keep compile-time checking while supporting the
-    // optional CAS guard.
-    let affected = match precondition {
-        Precondition::Any => sqlx::query!(
+    // Literal queries keep compile-time checking while supporting the optional CAS guard
+    // and the optional sensitive-blob replacement. A `None` blob leaves the stored
+    // `sensitive` column untouched; a `Some` blob replaces it in the same statement so the
+    // properties and the sealed value update atomically.
+    let affected = match (precondition, blob) {
+        (Precondition::Any, None) => sqlx::query!(
             "UPDATE objects SET properties = ?, version = version + 1, updated_at = ? \
                  WHERE id = ?",
             props,
@@ -389,12 +408,38 @@ async fn op_update<L: Label>(
         .execute(&mut *conn)
         .await?
         .rows_affected(),
-        Precondition::Version(v) => {
+        (Precondition::Any, Some(blob)) => sqlx::query!(
+            "UPDATE objects SET properties = ?, sensitive = ?, version = version + 1, updated_at = ? \
+                 WHERE id = ?",
+            props,
+            blob,
+            now,
+            id_s
+        )
+        .execute(&mut *conn)
+        .await?
+        .rows_affected(),
+        (Precondition::Version(v), None) => {
             let v = v as i64;
             sqlx::query!(
                 "UPDATE objects SET properties = ?, version = version + 1, updated_at = ? \
                  WHERE id = ? AND version = ?",
                 props,
+                now,
+                id_s,
+                v
+            )
+            .execute(&mut *conn)
+            .await?
+            .rows_affected()
+        }
+        (Precondition::Version(v), Some(blob)) => {
+            let v = v as i64;
+            sqlx::query!(
+                "UPDATE objects SET properties = ?, sensitive = ?, version = version + 1, updated_at = ? \
+                 WHERE id = ? AND version = ?",
+                props,
+                blob,
                 now,
                 id_s,
                 v
@@ -651,6 +696,11 @@ impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
         let mut conn = self.pool.acquire().await?;
         op_list_objects(&mut conn, label, namespace, max_results, page_token).await
     }
+
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+        let mut conn = self.pool.acquire().await?;
+        op_get_sensitive(&mut conn, id).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -661,9 +711,10 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut conn = self.pool.acquire().await?;
-        op_create(&mut conn, label, name, properties, id).await
+        op_create(&mut conn, label, name, properties, id, sensitive).await
     }
 
     async fn update(
@@ -671,9 +722,10 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
         id: &Uuid,
         properties: Option<serde_json::Value>,
         precondition: Precondition,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut tx = self.pool.begin().await?;
-        let out = op_update(&mut tx, id, properties, precondition).await?;
+        let out = op_update(&mut tx, id, properties, precondition, sensitive).await?;
         tx.commit().await?;
         Ok(out)
     }
@@ -776,6 +828,11 @@ impl<L: Label> ObjectStoreReader<L> for SqlTx<L> {
         let mut tx = self.tx.lock().await;
         op_list_objects(&mut tx, label, namespace, max_results, page_token).await
     }
+
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+        let mut tx = self.tx.lock().await;
+        op_get_sensitive(&mut tx, id).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -786,9 +843,10 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_create(&mut tx, label, name, properties, id).await
+        op_create(&mut tx, label, name, properties, id, sensitive).await
     }
 
     async fn update(
@@ -796,9 +854,10 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
         id: &Uuid,
         properties: Option<serde_json::Value>,
         precondition: Precondition,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_update(&mut tx, id, properties, precondition).await
+        op_update(&mut tx, id, properties, precondition, sensitive).await
     }
 
     async fn rename(
@@ -957,11 +1016,11 @@ mod tests {
             let ns_name = ResourceName::from_naive_str_split(format!("ns.item{i}"));
             let other = ResourceName::from_naive_str_split(format!("other.item{i}"));
             store
-                .create(ConformanceLabel, &ns_name, None, None)
+                .create(ConformanceLabel, &ns_name, None, None, None)
                 .await
                 .unwrap();
             store
-                .create(ConformanceLabel, &other, None, None)
+                .create(ConformanceLabel, &other, None, None, None)
                 .await
                 .unwrap();
         }
@@ -1011,7 +1070,7 @@ mod tests {
         // migration: `connect` does not run DDL.
         let store = SqlStore::<ConformanceLabel>::connect(pool);
         let obj = store
-            .create(ConformanceLabel, &"m".parse().unwrap(), None, None)
+            .create(ConformanceLabel, &"m".parse().unwrap(), None, None, None)
             .await
             .unwrap();
         assert!(store.get(&obj.id).await.is_ok());

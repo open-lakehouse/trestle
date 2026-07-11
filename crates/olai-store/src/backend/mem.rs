@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::label::Label;
@@ -31,9 +32,15 @@ use crate::{Error, Result};
 pub type InverseResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// The committed state: objects keyed by id, plus a flat edge list.
+///
+/// The opaque `sensitive` blob (an envelope-encrypted payload written by
+/// [`ManagedObjectStore`](crate::ManagedObjectStore)) is held in a sibling map rather than on
+/// the [`Object`] so it stays out of the ordinary read path — only
+/// [`get_sensitive`](ObjectStoreReader::get_sensitive) exposes it.
 #[derive(Clone)]
 struct State<L: Label> {
     objects: HashMap<Uuid, Object<L>>,
+    sensitive: HashMap<Uuid, Bytes>,
     edges: Vec<Association<L>>,
 }
 
@@ -41,6 +48,7 @@ impl<L: Label> Default for State<L> {
     fn default() -> Self {
         Self {
             objects: HashMap::new(),
+            sensitive: HashMap::new(),
             edges: Vec::new(),
         }
     }
@@ -101,6 +109,7 @@ fn op_create<L: Label>(
     name: &ResourceName,
     properties: Option<serde_json::Value>,
     id: Option<Uuid>,
+    sensitive: Option<Bytes>,
 ) -> Result<Object<L>> {
     if state
         .objects
@@ -123,6 +132,9 @@ fn op_create<L: Label>(
         updated_at: None,
     };
     state.objects.insert(id, object.clone());
+    if let Some(blob) = sensitive {
+        state.sensitive.insert(id, blob);
+    }
     Ok(object)
 }
 
@@ -131,13 +143,23 @@ fn op_update<L: Label>(
     id: &Uuid,
     properties: Option<serde_json::Value>,
     precondition: Precondition,
+    sensitive: Option<Bytes>,
 ) -> Result<Object<L>> {
     let object = state.objects.get_mut(id).ok_or(Error::NotFound)?;
     precondition.check(object.version)?;
     object.properties = properties;
     object.version += 1;
     object.updated_at = Some(chrono::Utc::now());
-    Ok(object.clone())
+    let updated = object.clone();
+    // `None` preserves any existing blob; `Some` replaces it.
+    if let Some(blob) = sensitive {
+        state.sensitive.insert(*id, blob);
+    }
+    Ok(updated)
+}
+
+fn op_get_sensitive<L: Label>(state: &State<L>, id: &Uuid) -> Result<Option<Bytes>> {
+    Ok(state.sensitive.get(id).cloned())
 }
 
 fn op_rename<L: Label>(
@@ -166,6 +188,8 @@ fn op_delete<L: Label>(state: &mut State<L>, id: &Uuid) -> Result<()> {
     if state.objects.remove(id).is_none() {
         return Err(Error::NotFound);
     }
+    // The sensitive blob rides the object; drop it in the same operation.
+    state.sensitive.remove(id);
     // Cascade: drop every edge touching this object (either direction).
     state.edges.retain(|e| e.from_id != *id && e.to_id != *id);
     Ok(())
@@ -351,6 +375,10 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryStore<L> {
             page_token,
         )
     }
+
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+        op_get_sensitive(&self.state.lock().unwrap(), id)
+    }
 }
 
 #[async_trait::async_trait]
@@ -361,8 +389,16 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        op_create(&mut self.state.lock().unwrap(), label, name, properties, id)
+        op_create(
+            &mut self.state.lock().unwrap(),
+            label,
+            name,
+            properties,
+            id,
+            sensitive,
+        )
     }
 
     async fn update(
@@ -370,12 +406,14 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
         id: &Uuid,
         properties: Option<serde_json::Value>,
         precondition: Precondition,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         op_update(
             &mut self.state.lock().unwrap(),
             id,
             properties,
             precondition,
+            sensitive,
         )
     }
 
@@ -506,6 +544,10 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryTx<L> {
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         self.with_state(|s| op_list_objects(s, label, namespace, max_results, page_token))
     }
+
+    async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+        self.with_state(|s| op_get_sensitive(s, id))
+    }
 }
 
 #[async_trait::async_trait]
@@ -516,8 +558,9 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
         name: &ResourceName,
         properties: Option<serde_json::Value>,
         id: Option<Uuid>,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        self.with_state(|s| op_create(s, label, name, properties, id))
+        self.with_state(|s| op_create(s, label, name, properties, id, sensitive))
     }
 
     async fn update(
@@ -525,8 +568,9 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
         id: &Uuid,
         properties: Option<serde_json::Value>,
         precondition: Precondition,
+        sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        self.with_state(|s| op_update(s, id, properties, precondition))
+        self.with_state(|s| op_update(s, id, properties, precondition, sensitive))
     }
 
     async fn rename(
@@ -664,28 +708,28 @@ mod tests {
     async fn cas_update_detects_conflict() {
         let store = InMemoryStore::<Kind>::new();
         let obj = store
-            .create(Kind::Node, &rn("a"), None, None)
+            .create(Kind::Node, &rn("a"), None, None, None)
             .await
             .unwrap();
         assert_eq!(obj.version, 0);
 
         // Fresh version succeeds and bumps.
         let updated = store
-            .update(&obj.id, None, Precondition::Version(0))
+            .update(&obj.id, None, Precondition::Version(0), None)
             .await
             .unwrap();
         assert_eq!(updated.version, 1);
 
         // Stale version conflicts.
         let err = store
-            .update(&obj.id, None, Precondition::Version(0))
+            .update(&obj.id, None, Precondition::Version(0), None)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Conflict));
 
         // `Any` still works unconditionally.
         let again = store
-            .update(&obj.id, None, Precondition::Any)
+            .update(&obj.id, None, Precondition::Any, None)
             .await
             .unwrap();
         assert_eq!(again.version, 2);
@@ -695,11 +739,11 @@ mod tests {
     async fn rename_preserves_id_and_associations_and_rejects_collision() {
         let store = InMemoryStore::<Kind>::new();
         let a = store
-            .create(Kind::Node, &rn("a"), None, None)
+            .create(Kind::Node, &rn("a"), None, None, None)
             .await
             .unwrap();
         let b = store
-            .create(Kind::Node, &rn("b"), None, None)
+            .create(Kind::Node, &rn("b"), None, None, None)
             .await
             .unwrap();
         store.add(a.id, b.id, "link", None).await.unwrap();
@@ -729,7 +773,7 @@ mod tests {
     async fn transaction_rolls_back_on_err() {
         let store = InMemoryStore::<Kind>::new();
         let seed = store
-            .create(Kind::Node, &rn("seed"), None, None)
+            .create(Kind::Node, &rn("seed"), None, None, None)
             .await
             .unwrap();
 
@@ -739,7 +783,7 @@ mod tests {
             .transaction(Box::new(move |tx| {
                 Box::pin(async move {
                     tx.delete(&seed_id).await?;
-                    tx.create(Kind::Node, &rn("new"), None, None).await?;
+                    tx.create(Kind::Node, &rn("new"), None, None, None).await?;
                     Err(Error::generic("boom"))
                 })
             }))
@@ -757,8 +801,8 @@ mod tests {
         let res: Result<Uuid> = store
             .transaction(Box::new(|tx| {
                 Box::pin(async move {
-                    let a = tx.create(Kind::Node, &rn("x"), None, None).await?;
-                    let b = tx.create(Kind::Node, &rn("y"), None, None).await?;
+                    let a = tx.create(Kind::Node, &rn("x"), None, None, None).await?;
+                    let b = tx.create(Kind::Node, &rn("y"), None, None, None).await?;
                     tx.add(a.id, b.id, "e", None).await?;
                     Ok(a.id)
                 })
@@ -779,11 +823,11 @@ mod tests {
             _ => None,
         });
         let p = store
-            .create(Kind::Node, &rn("p"), None, None)
+            .create(Kind::Node, &rn("p"), None, None, None)
             .await
             .unwrap();
         let c = store
-            .create(Kind::Node, &rn("c"), None, None)
+            .create(Kind::Node, &rn("c"), None, None, None)
             .await
             .unwrap();
 
@@ -813,7 +857,7 @@ mod tests {
         let store = InMemoryStore::<Kind>::new();
         for i in 0..5 {
             store
-                .create(Kind::Node, &rn(&format!("n{i}")), None, None)
+                .create(Kind::Node, &rn(&format!("n{i}")), None, None, None)
                 .await
                 .unwrap();
         }

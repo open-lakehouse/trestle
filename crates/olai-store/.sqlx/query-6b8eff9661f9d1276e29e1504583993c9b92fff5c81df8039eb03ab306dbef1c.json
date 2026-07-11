@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO objects (id, label, name, properties, sensitive, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "6b8eff9661f9d1276e29e1504583993c9b92fff5c81df8039eb03ab306dbef1c"
+}
