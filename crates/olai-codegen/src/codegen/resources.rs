@@ -844,6 +844,9 @@ fn emit_to_object(
                     name: obj.resource_name(),
                     label: #label_expr,
                     properties: Some(::serde_json::to_value(obj)?),
+                    // A freshly-built Object carries no persisted version yet; the
+                    // store assigns and bumps the real version on write.
+                    version: 0,
                     updated_at: None,
                     created_at: chrono::Utc::now(),
                 })
