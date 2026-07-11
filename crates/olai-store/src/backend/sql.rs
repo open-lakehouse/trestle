@@ -46,6 +46,21 @@ use crate::store::{
 };
 use crate::{Error, Result};
 
+/// The OpenTelemetry `db.system` value for this backend's operation spans.
+const DB_SYSTEM: &str = "sqlite";
+
+/// Record the failure of `result` onto the current span's OpenTelemetry status fields.
+///
+/// The span must declare `otel.status_code` and `error.type` as [`tracing::field::Empty`].
+/// Only the error *kind* ([`Error::kind_str`]) is recorded — never a payload or message body.
+fn record_err<T>(result: &Result<T>) {
+    if let Err(e) = result {
+        let span = tracing::Span::current();
+        span.record("otel.status_code", "ERROR");
+        span.record("error.type", e.kind_str());
+    }
+}
+
 /// Resolves an edge label to its paired inverse label, if any (see
 /// [`InMemoryStore`](crate::InMemoryStore)).
 pub type InverseResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
@@ -809,7 +824,10 @@ async fn op_set_sensitive(conn: &mut SqliteConnection, id: &Uuid, blob: &[u8]) -
 /// version moved (`Conflict`). Re-read to disambiguate.
 async fn classify_miss<L: Label>(conn: &mut SqliteConnection, id: &Uuid) -> Error {
     match op_get::<L>(conn, id).await {
-        Ok(_) => Error::Conflict,
+        Ok(_) => {
+            tracing::debug!(id = %id, "CAS precondition conflict (version moved)");
+            Error::Conflict
+        }
         Err(Error::NotFound) => Error::NotFound,
         Err(e) => e,
     }
@@ -1065,16 +1083,58 @@ fn paginate<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Result<(Vec<T>
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get(&self, id: &Uuid) -> Result<Object<L>> {
         let mut conn = self.pool.acquire().await?;
-        op_get(&mut conn, id).await
+        let out = op_get(&mut conn, id).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_by_name",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_by_name",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_by_name(&self, label: L, name: &ResourceName) -> Result<Object<L>> {
         let mut conn = self.pool.acquire().await?;
-        op_get_by_name(&mut conn, label, name).await
+        let out = op_get_by_name(&mut conn, label, name).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn list(
         &self,
         label: L,
@@ -1083,9 +1143,24 @@ impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut conn = self.pool.acquire().await?;
-        op_list_objects(&mut conn, label, namespace, max_results, page_token).await
+        let out = op_list_objects(&mut conn, label, namespace, max_results, page_token).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.search",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "search",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn search(
         &self,
         label: L,
@@ -1095,17 +1170,47 @@ impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut conn = self.pool.acquire().await?;
-        op_search_objects(&mut conn, label, namespace, filter, max_results, page_token).await
+        let out =
+            op_search_objects(&mut conn, label, namespace, filter, max_results, page_token).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let mut conn = self.pool.acquire().await?;
-        op_get_sensitive(&mut conn, id).await
+        let out = op_get_sensitive(&mut conn, id).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStore<L> for SqlStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.create",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "create",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn create(
         &self,
         label: L,
@@ -1115,9 +1220,24 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut conn = self.pool.acquire().await?;
-        op_create(&mut conn, label, name, properties, id, sensitive).await
+        let out = op_create(&mut conn, label, name, properties, id, sensitive).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.update",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "update",
+            id = %id,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn update(
         &self,
         id: &Uuid,
@@ -1125,47 +1245,128 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
         precondition: Precondition,
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
-        let mut tx = self.pool.begin().await?;
-        let out = op_update(&mut tx, id, properties, precondition, sensitive).await?;
-        tx.commit().await?;
-        Ok(out)
+        let out = async {
+            let mut tx = self.pool.begin().await?;
+            let out = op_update(&mut tx, id, properties, precondition, sensitive).await?;
+            tx.commit().await?;
+            Ok(out)
+        }
+        .await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.rename",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "rename",
+            id = %id,
+            name = %new_name,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn rename(
         &self,
         id: &Uuid,
         new_name: &ResourceName,
         precondition: Precondition,
     ) -> Result<Object<L>> {
-        let mut tx = self.pool.begin().await?;
-        let out = op_rename(&mut tx, id, new_name, precondition).await?;
-        tx.commit().await?;
-        Ok(out)
+        let out = async {
+            let mut tx = self.pool.begin().await?;
+            let out = op_rename(&mut tx, id, new_name, precondition).await?;
+            tx.commit().await?;
+            Ok(out)
+        }
+        .await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.delete",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "delete",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn delete(&self, id: &Uuid) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        op_delete(&mut tx, id).await?;
-        tx.commit().await?;
-        Ok(())
+        let out = async {
+            let mut tx = self.pool.begin().await?;
+            op_delete(&mut tx, id).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        .await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.set_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "set_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
-        op_set_sensitive(&mut conn, id, &sensitive).await
+        let out = op_set_sensitive(&mut conn, id, &sensitive).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for SqlStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.query_edges",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "query_edges",
+            label = %query.label,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn query_edges(
         &self,
         query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
         let mut conn = self.pool.acquire().await?;
-        op_query_edges(&mut conn, query).await
+        let out = op_query_edges(&mut conn, query).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.count_edges",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "count_edges",
+            label = %label,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn count_edges(
         &self,
         endpoint: EdgeEndpoint,
@@ -1173,12 +1374,28 @@ impl<L: Label> AssociationStoreReader<L> for SqlStore<L> {
         target_label: Option<L>,
     ) -> Result<u64> {
         let mut conn = self.pool.acquire().await?;
-        op_count_edges(&mut conn, endpoint, label, target_label).await
+        let out = op_count_edges(&mut conn, endpoint, label, target_label).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStore<L> for SqlStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.add_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "add_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn add(
         &self,
         from_id: Uuid,
@@ -1186,17 +1403,41 @@ impl<L: Label> AssociationStore<L> for SqlStore<L> {
         label: &str,
         properties: Option<serde_json::Value>,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        op_add_edge::<L>(&mut tx, from_id, to_id, label, properties, &self.inverse).await?;
-        tx.commit().await?;
-        Ok(())
+        let out = async {
+            let mut tx = self.pool.begin().await?;
+            op_add_edge::<L>(&mut tx, from_id, to_id, label, properties, &self.inverse).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        .await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.remove_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "remove_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        op_remove_edge(&mut tx, from_id, to_id, label, &self.inverse).await?;
-        tx.commit().await?;
-        Ok(())
+        let out = async {
+            let mut tx = self.pool.begin().await?;
+            op_remove_edge(&mut tx, from_id, to_id, label, &self.inverse).await?;
+            tx.commit().await?;
+            Ok(())
+        }
+        .await;
+        record_err(&out);
+        out
     }
 }
 
@@ -1212,16 +1453,58 @@ pub struct SqlTx<L: Label> {
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStoreReader<L> for SqlTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get(&self, id: &Uuid) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_get(&mut tx, id).await
+        let out = op_get(&mut tx, id).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_by_name",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_by_name",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_by_name(&self, label: L, name: &ResourceName) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_get_by_name(&mut tx, label, name).await
+        let out = op_get_by_name(&mut tx, label, name).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn list(
         &self,
         label: L,
@@ -1230,17 +1513,46 @@ impl<L: Label> ObjectStoreReader<L> for SqlTx<L> {
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut tx = self.tx.lock().await;
-        op_list_objects(&mut tx, label, namespace, max_results, page_token).await
+        let out = op_list_objects(&mut tx, label, namespace, max_results, page_token).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.get_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "get_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let mut tx = self.tx.lock().await;
-        op_get_sensitive(&mut tx, id).await
+        let out = op_get_sensitive(&mut tx, id).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> ObjectStore<L> for SqlTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.create",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "create",
+            db.collection.name = label.as_str(),
+            name = %name,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn create(
         &self,
         label: L,
@@ -1250,9 +1562,24 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_create(&mut tx, label, name, properties, id, sensitive).await
+        let out = op_create(&mut tx, label, name, properties, id, sensitive).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.update",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "update",
+            id = %id,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn update(
         &self,
         id: &Uuid,
@@ -1261,9 +1588,25 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
         sensitive: Option<Bytes>,
     ) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_update(&mut tx, id, properties, precondition, sensitive).await
+        let out = op_update(&mut tx, id, properties, precondition, sensitive).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.rename",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "rename",
+            id = %id,
+            name = %new_name,
+            precondition = ?precondition,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn rename(
         &self,
         id: &Uuid,
@@ -1271,30 +1614,86 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
         precondition: Precondition,
     ) -> Result<Object<L>> {
         let mut tx = self.tx.lock().await;
-        op_rename(&mut tx, id, new_name, precondition).await
+        let out = op_rename(&mut tx, id, new_name, precondition).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.delete",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "delete",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn delete(&self, id: &Uuid) -> Result<()> {
         let mut tx = self.tx.lock().await;
-        op_delete(&mut tx, id).await
+        let out = op_delete(&mut tx, id).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.set_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "set_sensitive",
+            id = %id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
         let mut tx = self.tx.lock().await;
-        op_set_sensitive(&mut tx, id, &sensitive).await
+        let out = op_set_sensitive(&mut tx, id, &sensitive).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStoreReader<L> for SqlTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.query_edges",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "query_edges",
+            label = %query.label,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn query_edges(
         &self,
         query: EdgeQuery<'_, L>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
         let mut tx = self.tx.lock().await;
-        op_query_edges(&mut tx, query).await
+        let out = op_query_edges(&mut tx, query).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.count_edges",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "count_edges",
+            label = %label,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn count_edges(
         &self,
         endpoint: EdgeEndpoint,
@@ -1302,12 +1701,28 @@ impl<L: Label> AssociationStoreReader<L> for SqlTx<L> {
         target_label: Option<L>,
     ) -> Result<u64> {
         let mut tx = self.tx.lock().await;
-        op_count_edges(&mut tx, endpoint, label, target_label).await
+        let out = op_count_edges(&mut tx, endpoint, label, target_label).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> AssociationStore<L> for SqlTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.add_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "add_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn add(
         &self,
         from_id: Uuid,
@@ -1317,23 +1732,49 @@ impl<L: Label> AssociationStore<L> for SqlTx<L> {
     ) -> Result<()> {
         let inverse = self.inverse.clone();
         let mut tx = self.tx.lock().await;
-        op_add_edge::<L>(&mut tx, from_id, to_id, label, properties, &inverse).await
+        let out = op_add_edge::<L>(&mut tx, from_id, to_id, label, properties, &inverse).await;
+        record_err(&out);
+        out
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.remove_edge",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "remove_edge",
+            label = %label,
+            from_id = %from_id,
+            to_id = %to_id,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
         let inverse = self.inverse.clone();
         let mut tx = self.tx.lock().await;
-        op_remove_edge(&mut tx, from_id, to_id, label, &inverse).await
+        let out = op_remove_edge(&mut tx, from_id, to_id, label, &inverse).await;
+        record_err(&out);
+        out
     }
 }
 
 #[async_trait::async_trait]
 impl<L: Label> StoreTx<L> for SqlTx<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(otel.kind = "client", db.system = DB_SYSTEM, db.operation.name = "commit")
+    )]
     async fn commit(self: Box<Self>) -> Result<()> {
         self.tx.into_inner().commit().await?;
         Ok(())
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(otel.kind = "client", db.system = DB_SYSTEM, db.operation.name = "rollback")
+    )]
     async fn rollback(self: Box<Self>) -> Result<()> {
         self.tx.into_inner().rollback().await?;
         Ok(())
@@ -1342,6 +1783,17 @@ impl<L: Label> StoreTx<L> for SqlTx<L> {
 
 #[async_trait::async_trait]
 impl<L: Label> Transactional<L> for SqlStore<L> {
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.transaction",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "transaction",
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
     async fn transaction<'a, T>(
         &'a self,
         f: Box<
@@ -1365,12 +1817,21 @@ impl<L: Label> Transactional<L> for SqlStore<L> {
                 Ok(value)
             }
             Err(e) => {
-                let _ = handle.tx.into_inner().rollback().await;
+                let span = tracing::Span::current();
+                span.record("otel.status_code", "ERROR");
+                span.record("error.type", e.kind_str());
+                if let Err(rb) = handle.tx.into_inner().rollback().await {
+                    tracing::warn!(error = %rb, "transaction rollback failed after operation error");
+                }
                 Err(e)
             }
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(otel.kind = "client", db.system = DB_SYSTEM, db.operation.name = "begin")
+    )]
     async fn begin(&self) -> Result<Box<dyn StoreTx<L>>> {
         let tx = self.pool.begin().await?;
         Ok(Box::new(SqlTx::<L> {
@@ -1421,6 +1882,31 @@ mod tests {
             .unwrap()
             .with_inverse(conformance::parent_child_inverse);
         conformance::inverse_edges(&inv).await;
+    }
+
+    /// A stale-version conditional write is disambiguated as a conflict and surfaced as a
+    /// `debug` event (via `classify_miss`), not swallowed.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn cas_conflict_emits_debug() {
+        use crate::name::ResourceName;
+        let store = fresh().await;
+        let name = ResourceName::from_naive_str_split("a");
+        let obj = store
+            .create(ConformanceLabel::Node, &name, None, None, None)
+            .await
+            .unwrap();
+        // Bump to version 1, then re-issue the stale (version 0) precondition.
+        store
+            .update(&obj.id, None, Precondition::Version(0), None)
+            .await
+            .unwrap();
+        let err = store
+            .update(&obj.id, None, Precondition::Version(0), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Conflict));
+        assert!(logs_contain("CAS precondition conflict"));
     }
 
     /// Paging a namespace-filtered listing must not drop matching rows even when
