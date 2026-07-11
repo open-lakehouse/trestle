@@ -189,8 +189,8 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
     /// that do not store a sensitive blob (the default) return `Ok(None)`.
     ///
     /// [`ManagedObjectStore`](crate::ManagedObjectStore) uses this to reconstitute sealed
-    /// sensitive fields; the bytes are an [`EnvelopeEncryptor`](crate::EnvelopeEncryptor)
-    /// envelope, not plaintext. It reads the object first, so a missing object surfaces there;
+    /// sensitive fields; the bytes are an `EnvelopeEncryptor` envelope, not plaintext (the
+    /// `encryption` feature). It reads the object first, so a missing object surfaces there;
     /// callers of this method directly should treat `Ok(None)` as "no blob" regardless of
     /// whether the object exists.
     ///
@@ -220,8 +220,8 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     /// embedding the id in its storage path); pass `None` to have the store
     /// generate a time-ordered id.
     ///
-    /// `sensitive` is an opaque blob (typically an
-    /// [`EnvelopeEncryptor`](crate::EnvelopeEncryptor) envelope) persisted alongside the
+    /// `sensitive` is an opaque blob (typically an `EnvelopeEncryptor` envelope, from the
+    /// `encryption` feature) persisted alongside the
     /// object and returned only by [`get_sensitive`](ObjectStoreReader::get_sensitive) — it
     /// never appears on the [`Object`] read back. It is stored atomically with the object, so
     /// there is no window in which one exists without the other. Pass `None` for objects with

@@ -6,14 +6,14 @@
 //! - Strip [`FieldRole::Identifier`] and [`FieldRole::Managed`] fields on create/update
 //!   (the store is the source of truth for these)
 //! - Route [`FieldRole::Sensitive`] fields into an envelope-encrypted blob stored *inline* on
-//!   the object row (see below)
+//!   the object row (see below), with the `encryption` feature
 //! - Inject Identifier and Managed fields back into properties on read
 //! - Redact Sensitive fields on read (unless [`get_with_secrets`] is used)
 //!
 //! # Sensitive fields
 //!
 //! Sensitive fields (proto `debug_redact = true`) are split out of the object's `properties`
-//! and, when an [`EnvelopeEncryptor`] is configured, sealed into an opaque blob that is written
+//! and, when an `EnvelopeEncryptor` is configured, sealed into an opaque blob that is written
 //! *atomically with the object* through the store's
 //! [`sensitive`](ObjectStore::create) parameter. Because the sealed blob rides the same row,
 //! there is no separate secret store and no window in which an object exists without its secret
@@ -40,7 +40,6 @@
 //! pagination, not the payload filter).
 //!
 //! [`get_with_secrets`]: ManagedObjectStore::get_with_secrets
-//! [`EnvelopeEncryptor`]: crate::EnvelopeEncryptor
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -62,8 +61,8 @@ use crate::{Error, Result};
 /// stripped on write and injected on read, and `Sensitive` fields (proto `debug_redact = true`)
 /// are redacted on read.
 ///
-/// When an [`EnvelopeEncryptor`](crate::EnvelopeEncryptor) is provided (via
-/// [`with_encryptor`](ManagedObjectStore::with_encryptor), behind the `encryption` feature),
+/// When an `EnvelopeEncryptor` is provided (via
+/// `with_encryptor`, behind the `encryption` feature),
 /// sensitive fields are sealed into an opaque blob stored inline on the object row, written
 /// atomically with the object; [`get_with_secrets`](ManagedObjectStore::get_with_secrets) opens
 /// them back.
@@ -85,7 +84,7 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     ///
     /// Suitable for taxonomies with **no** sensitive fields. Writing a resource that has a
     /// sensitive field through such a store is an [`Error::InvalidArgument`] (see the type-level
-    /// docs); use [`with_encryptor`](Self::with_encryptor) for those.
+    /// docs); use `with_encryptor` (the `encryption` feature) for those.
     pub fn new(inner: S, registry: ResourceRegistry<L>) -> Self {
         Self {
             inner,

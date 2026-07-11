@@ -1,3 +1,13 @@
+//! Hierarchical resource names and their dotted, backtick-escaped string form.
+//!
+//! A [`ResourceName`] is a path of field-name segments (`["catalog", "schema", "table"]`)
+//! identifying a resource within a taxonomy's hierarchy. It round-trips to and from a dotted
+//! string via [`Display`] and [`FromStr`](std::str::FromStr): segments join with `.`, and a segment containing a
+//! dot, whitespace, other non-alphanumeric character, or a leading digit is wrapped in backticks
+//! (`` ` ``) with any literal backtick doubled — the same quoting rule SQL uses for identifiers.
+//! [`parse_column_name_list`](ResourceName::parse_column_name_list) parses a comma-separated
+//! list of such names.
+
 use crate::{Error, Result};
 
 use std::borrow::Borrow;
@@ -9,10 +19,32 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
+/// A shared, empty [`ResourceName`] (a zero-segment path).
+///
+/// Useful as a default or as the root of a hierarchy without allocating a fresh empty name.
 pub static EMPTY_RESOURCE_NAME: LazyLock<ResourceName> =
     LazyLock::new(|| ResourceName::new(&[] as &[String]));
 
-/// A (possibly nested) resource name represented as a path of field names.
+/// A (possibly nested) resource name: a path of field-name segments.
+///
+/// Segments are ordered outermost-first (`["catalog", "schema", "table"]`). The name derefs to
+/// `&[String]`, and [`Display`]/[`FromStr`](std::str::FromStr) convert to and from the dotted, backtick-escaped
+/// string form described in the [module docs](self).
+///
+/// # Examples
+///
+/// ```
+/// use olai_store::ResourceName;
+///
+/// let name: ResourceName = "catalog.schema.table".parse().unwrap();
+/// assert_eq!(name.path(), ["catalog", "schema", "table"]);
+/// assert_eq!(name.to_string(), "catalog.schema.table");
+///
+/// // A segment needing quoting round-trips through backticks.
+/// let quoted = ResourceName::new(["my catalog", "t.1"]);
+/// assert_eq!(quoted.to_string(), "`my catalog`.`t.1`");
+/// assert_eq!(quoted.to_string().parse::<ResourceName>().unwrap(), quoted);
+/// ```
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(feature = "sqlx", sqlx(transparent, no_pg_array))]
@@ -37,6 +69,15 @@ impl ResourceName {
 
     /// Parses a comma-separated list of resource names, properly accounting for escapes and special
     /// characters.
+    ///
+    /// Surrounding whitespace around each name is ignored; an empty input yields an empty list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Generic`] if any name is malformed — for example an
+    /// unterminated backtick quote or an invalid character following a segment.
+    ///
+    /// [`Error::Generic`]: crate::Error::Generic
     pub fn parse_column_name_list(names: impl AsRef<str>) -> Result<Vec<ResourceName>> {
         let names = names.as_ref();
         let chars = &mut names.chars().peekable();
@@ -71,7 +112,21 @@ impl ResourceName {
         self.0
     }
 
-    /// Returns true if this name starts with the given prefix.
+    /// Returns `true` if this name starts with the given prefix.
+    ///
+    /// The comparison is segment-wise, not by string prefix: a name matches `prefix` when its
+    /// first `prefix.len()` segments equal `prefix`'s segments. An empty prefix matches every name.
+    /// Used to scope listings to a namespace subtree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use olai_store::ResourceName;
+    ///
+    /// let name = ResourceName::new(["catalog", "schema", "table"]);
+    /// assert!(name.prefix_matches(&ResourceName::new(["catalog", "schema"])));
+    /// assert!(!name.prefix_matches(&ResourceName::new(["catalog", "other"])));
+    /// ```
     pub fn prefix_matches(&self, prefix: &ResourceName) -> bool {
         if self.len() < prefix.len() {
             return false;
@@ -173,6 +228,16 @@ fn drop_leading_whitespace(iter: &mut Peekable<impl Iterator<Item = char>>) {
 impl std::str::FromStr for ResourceName {
     type Err = Error;
 
+    /// Parses the dotted, backtick-escaped string form (see the [module docs](self)).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Generic`] if the string is malformed — an
+    /// unterminated backtick quote, an invalid character after a segment, or a trailing comma
+    /// (parse a comma-separated list with
+    /// [`parse_column_name_list`](ResourceName::parse_column_name_list) instead).
+    ///
+    /// [`Error::Generic`]: crate::Error::Generic
     fn from_str(s: &str) -> Result<Self> {
         match parse_resource_name(&mut s.chars().peekable())? {
             (_, FieldEnding::NextColumn) => Err(Error::generic("Trailing comma in column name")),
