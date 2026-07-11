@@ -595,10 +595,10 @@ pub async fn search_from_pagination_filters_completely<S: StoreExec<ConformanceL
 /// as the in-memory backend for every filter here.
 pub async fn search_fallback_predicates_agree<S: StoreExec<ConformanceLabel>>(store: &S) {
     let payloads = [
-        serde_json::json!({ "tags": ["red", "blue"], "state": "active", "nick": null }),
+        serde_json::json!({ "tags": ["red", "blue"], "state": "active", "nick": null, "a.b": 1 }),
         serde_json::json!({ "tags": ["green"], "state": "archived" }),
         serde_json::json!({ "tags": [], "state": "active", "count": 3 }),
-        serde_json::json!({ "note": "hello world", "state": "active" }),
+        serde_json::json!({ "note": "hello world", "state": "active", "a.b": 2 }),
     ];
     for (i, p) in payloads.iter().enumerate() {
         store
@@ -652,6 +652,11 @@ pub async fn search_fallback_predicates_agree<S: StoreExec<ConformanceLabel>>(st
         Filter::ne("state", "archived"),
     ]))
     .await;
+    // A field key containing a JSONPath metacharacter: a `$.a.b` path can't be pushed to
+    // SQLite (it would parse as nested `a`→`b`), so it must fall back and still match the
+    // literal key `"a.b"`.
+    check(Filter::eq(crate::filter::FieldPath::new(["a.b"]), 1)).await;
+    check(Filter::exists(crate::filter::FieldPath::new(["a.b"]))).await;
 }
 
 /// Run the entire battery.

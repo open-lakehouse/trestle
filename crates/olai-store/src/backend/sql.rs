@@ -353,20 +353,40 @@ fn is_pushable(filter: &Filter) -> bool {
     match filter {
         Filter::And(fs) | Filter::Or(fs) => fs.iter().all(is_pushable),
         Filter::Not(f) => is_pushable(f),
-        Filter::Predicate(Predicate::Exists { .. }) => true,
-        Filter::Predicate(Predicate::Compare { op, value, .. }) => match op {
-            // `Ne`/`Contains` are deliberately not pushed (see the module comment above).
-            CompareOp::Ne | CompareOp::Contains => false,
-            // Only scalar comparands translate; null/array/object are left to the fallback.
-            CompareOp::Eq | CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge => {
-                value.is_string() || value.is_number() || value.is_boolean()
-            }
-        },
+        Filter::Predicate(Predicate::Exists { path }) => is_pushable_path(path),
+        Filter::Predicate(Predicate::Compare { path, op, value }) => {
+            is_pushable_path(path)
+                && match op {
+                    // `Ne`/`Contains` are deliberately not pushed (see the module comment above).
+                    CompareOp::Ne | CompareOp::Contains => false,
+                    // Only scalar comparands translate; null/array/object are left to the fallback.
+                    CompareOp::Eq
+                    | CompareOp::Lt
+                    | CompareOp::Le
+                    | CompareOp::Gt
+                    | CompareOp::Ge => value.is_string() || value.is_number() || value.is_boolean(),
+                }
+        }
     }
+}
+
+/// Whether every segment of `path` is safe to render into a bare `$.a.b` JSONPath.
+///
+/// [`json_path`] joins segments with `.`, so a segment containing a JSONPath metacharacter
+/// (`.`, `[`, `]`, `"`) would be mis-parsed by SQLite (e.g. `["a.b"]` → `$.a.b`, read as nested
+/// `a`→`b`) and diverge from the reference evaluator, which treats each segment as a literal
+/// object key. Such paths are left to the Rust fallback, which resolves them correctly.
+fn is_pushable_path(path: &crate::filter::FieldPath) -> bool {
+    path.segments()
+        .iter()
+        .all(|seg| !seg.contains(['.', '[', ']', '"']))
 }
 
 /// The JSONPath string for a field path: `["a", "b"]` → `"$.a.b"`. Bound as a parameter to
 /// `json_extract` / `json_type`, never interpolated into SQL text.
+///
+/// Only called for paths that pass [`is_pushable_path`], so no segment contains a JSONPath
+/// metacharacter that would change how SQLite parses the path.
 fn json_path(path: &crate::filter::FieldPath) -> String {
     let mut s = String::from("$");
     for seg in path.segments() {
