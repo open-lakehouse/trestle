@@ -1015,6 +1015,12 @@ mod tests {
         conformance::rename_semantics(&fresh().await).await;
         conformance::transaction_atomicity(&fresh().await).await;
         conformance::transaction_commit(&fresh().await).await;
+        conformance::sensitive_blob_roundtrip(&fresh().await).await;
+        conformance::search_object_predicates(&fresh().await).await;
+        conformance::search_object_pagination_filters_completely(&fresh().await).await;
+        conformance::search_namespace_and_filter(&fresh().await).await;
+        conformance::search_from_predicates(&fresh().await).await;
+        conformance::search_from_pagination_filters_completely(&fresh().await).await;
 
         let pool = SqlitePoolOptions::new()
             .max_connections(1)

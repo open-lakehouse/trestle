@@ -5,6 +5,7 @@ use futures::future::BoxFuture;
 use uuid::Uuid;
 
 use crate::Result;
+use crate::filter::Filter;
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
@@ -53,6 +54,47 @@ impl Precondition {
     }
 }
 
+/// A JSON `null` reference, used to give payload-less rows a value to match against.
+const NULL: serde_json::Value = serde_json::Value::Null;
+
+/// The value a filter evaluates against for a possibly-absent payload: the stored
+/// properties, or JSON `null` when there are none (so predicates see a missing path).
+fn props_or_null(properties: &Option<serde_json::Value>) -> &serde_json::Value {
+    properties.as_ref().unwrap_or(&NULL)
+}
+
+/// Parse a page token into an offset. Shared by the default `search` implementations, which
+/// use the same plain-offset token shape as the backends' `list` methods.
+fn parse_offset(page_token: Option<String>) -> Result<usize> {
+    match page_token {
+        Some(t) => t
+            .parse()
+            .map_err(|_| crate::Error::invalid_argument("invalid page token")),
+        None => Ok(0),
+    }
+}
+
+/// Apply `offset` and `max_results` over an already-filtered, already-ordered set and compute
+/// the next token.
+///
+/// The default `search` impls filter the *entire* listing before paginating — never letting a
+/// `LIMIT` truncate ahead of the filter — so paging a filtered result cannot drop matches.
+fn paginate_filtered<T>(
+    mut items: Vec<T>,
+    offset: usize,
+    max_results: Option<usize>,
+) -> (Vec<T>, Option<String>) {
+    let start = offset.min(items.len());
+    items.drain(..start);
+    let limit = max_results.unwrap_or(usize::MAX);
+    let has_more = items.len() > limit;
+    if has_more {
+        items.truncate(limit);
+    }
+    let next = has_more.then(|| (offset + limit).to_string());
+    (items, next)
+}
+
 /// Read-only interface for the object store.
 #[async_trait::async_trait]
 pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
@@ -91,6 +133,52 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
         max_results: Option<usize>,
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)>;
+
+    /// Search objects of a given label whose stored properties match `filter`,
+    /// optionally scoped to a namespace prefix.
+    ///
+    /// Semantics mirror [`list`](Self::list) — same label scoping, same namespace prefix
+    /// rule, same stable ordering, and the same offset-style pagination and token contract —
+    /// with the sole addition of `filter`, applied to each object's stored
+    /// [`properties`](Object::properties) using the reference semantics of
+    /// [`Filter::matches`]. An object with no properties is matched against JSON `null`
+    /// (predicates see a missing path). Filtering operates only on the plaintext payload;
+    /// sensitive fields are sealed off the payload and are structurally unsearchable.
+    ///
+    /// The default implementation drains the full matching listing via [`list`](Self::list)
+    /// and filters in process, so it is correct on any backend. Backends may override it to
+    /// push the filter into storage, but must return results identical to the default (this
+    /// is enforced by the shared conformance battery).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is
+    /// not a valid token for this query.
+    async fn search(
+        &self,
+        label: L,
+        namespace: Option<&ResourceName>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Object<L>>, Option<String>)> {
+        let offset = parse_offset(page_token)?;
+        let mut matched = Vec::new();
+        let mut token = None;
+        loop {
+            let (batch, next) = self.list(label, namespace, None, token).await?;
+            matched.extend(
+                batch
+                    .into_iter()
+                    .filter(|o| filter.matches(props_or_null(&o.properties))),
+            );
+            match next {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+        Ok(paginate_filtered(matched, offset, max_results))
+    }
 
     /// Return the opaque sensitive blob stored alongside the object, if any.
     ///
@@ -254,6 +342,48 @@ pub trait AssociationStoreReader<L: Label>: Send + Sync + 'static {
         max_results: Option<usize>,
         page_token: Option<String>,
     ) -> Result<(Vec<Association<L>>, Option<String>)>;
+
+    /// Search associations from `from_id` with edge `label` whose properties match `filter`,
+    /// optionally filtered by the target object's label.
+    ///
+    /// Mirrors [`list`](Self::list) with an added `filter` applied to each edge's stored
+    /// [`properties`](Association::properties) via [`Filter::matches`] — same ordering,
+    /// pagination, and token contract. An edge with no properties is matched against JSON
+    /// `null`.
+    ///
+    /// The default implementation drains the full matching listing and filters in process;
+    /// backends may override it but must return identical results (enforced by conformance).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is
+    /// not a valid token for this query.
+    async fn search_from(
+        &self,
+        from_id: Uuid,
+        label: &str,
+        target_label: Option<L>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Association<L>>, Option<String>)> {
+        let offset = parse_offset(page_token)?;
+        let mut matched = Vec::new();
+        let mut token = None;
+        loop {
+            let (batch, next) = self.list(from_id, label, target_label, None, token).await?;
+            matched.extend(
+                batch
+                    .into_iter()
+                    .filter(|a| filter.matches(props_or_null(&a.properties))),
+            );
+            match next {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+        Ok(paginate_filtered(matched, offset, max_results))
+    }
 }
 
 /// Read-write interface for the association (edge) store.
@@ -320,6 +450,17 @@ impl<L: Label, T: ObjectStoreReader<L>> ObjectStoreReader<L> for Arc<T> {
         T::list(self, label, namespace, max_results, page_token).await
     }
 
+    async fn search(
+        &self,
+        label: L,
+        namespace: Option<&ResourceName>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Object<L>>, Option<String>)> {
+        T::search(self, label, namespace, filter, max_results, page_token).await
+    }
+
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         T::get_sensitive(self, id).await
     }
@@ -377,6 +518,27 @@ impl<L: Label, T: AssociationStoreReader<L>> AssociationStoreReader<L> for Arc<T
         page_token: Option<String>,
     ) -> Result<(Vec<Association<L>>, Option<String>)> {
         T::list(self, from_id, label, target_label, max_results, page_token).await
+    }
+
+    async fn search_from(
+        &self,
+        from_id: Uuid,
+        label: &str,
+        target_label: Option<L>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Association<L>>, Option<String>)> {
+        T::search_from(
+            self,
+            from_id,
+            label,
+            target_label,
+            filter,
+            max_results,
+            page_token,
+        )
+        .await
     }
 }
 
