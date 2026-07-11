@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO associations (id, from_id, label, to_id, to_label, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "feda5cf66d40e40c4fd5b9eef52f254c9ee75f3fa651dea925c2719b4f0e7e3d"
+}

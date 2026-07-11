@@ -28,6 +28,7 @@ keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store
 async-trait = "0.1"
 bytes = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
 itertools = "0.14"
 pbjson = "0.9"
 pbjson-types = "0.9"
@@ -45,6 +46,7 @@ serde_yaml = "0.9"
 sqlx = "0.8"
 strum = { version = "0.27", features = ["derive"] }
 thiserror = "2"
+tokio = { version = "1", default-features = false }
 # Pure-Rust TOML (de)serialization for the persisted environment manifest. Kept lean and
 # wasm32-clean: no `default-features` (drops the indexmap-backed preserve-order machinery
 # the manifest does not need; its types use BTreeMaps for deterministic order already).

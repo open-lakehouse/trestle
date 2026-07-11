@@ -78,6 +78,8 @@
 //!
 //! [Trestle]: https://github.com/open-lakehouse/trestle
 
+pub mod backend;
+pub mod conformance;
 pub mod error;
 pub mod label;
 pub mod managed;
@@ -89,6 +91,9 @@ pub mod secrets;
 pub mod store;
 
 // Re-exports for convenience.
+pub use backend::mem::InMemoryStore;
+#[cfg(feature = "sqlite")]
+pub use backend::sql::{SqlStore, migrate as migrate_sql, migrator as sql_migrator};
 pub use error::{Error, Result};
 pub use label::Label;
 pub use managed::{ManagedObjectStore, NoSecrets};
@@ -97,4 +102,7 @@ pub use object::{Association, Object};
 pub use reference::ResourceRef;
 pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, ResourceTypeDescriptor};
 pub use secrets::{ProvidesSecretManager, SecretManager};
-pub use store::{AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader};
+pub use store::{
+    AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
+    StoreExec, StoreTx, Transactional,
+};

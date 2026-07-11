@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM associations WHERE from_id = ? AND to_id = ? AND label = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "85eb36f1323282a9ec154533f2b9857057a50ed59ee28bd6eb520ebe4890f246"
+}

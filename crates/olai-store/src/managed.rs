@@ -20,7 +20,7 @@ use crate::name::ResourceName;
 use crate::object::Object;
 use crate::registry::{FieldRole, ResourceRegistry};
 use crate::secrets::SecretManager;
-use crate::store::{ObjectStore, ObjectStoreReader};
+use crate::store::{ObjectStore, ObjectStoreReader, Precondition};
 use crate::{Error, Result};
 
 /// A registry-aware object store that enforces field roles.
@@ -225,11 +225,29 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S, No
         Ok(object)
     }
 
-    async fn update(&self, id: &Uuid, properties: Option<serde_json::Value>) -> Result<Object<L>> {
+    async fn update(
+        &self,
+        id: &Uuid,
+        properties: Option<serde_json::Value>,
+        precondition: Precondition,
+    ) -> Result<Object<L>> {
         // We need the label to look up the descriptor. Fetch the object first.
         let existing = self.inner.get(id).await?;
         let (stripped, _sensitive) = self.strip_fields(existing.label, properties);
-        let mut object = self.inner.update(id, stripped).await?;
+        let mut object = self.inner.update(id, stripped, precondition).await?;
+        self.inject_fields(&mut object);
+        Ok(object)
+    }
+
+    async fn rename(
+        &self,
+        id: &Uuid,
+        new_name: &ResourceName,
+        precondition: Precondition,
+    ) -> Result<Object<L>> {
+        // Secrets are keyed by the stable `id`, so a rename needs no secret
+        // re-keying here.
+        let mut object = self.inner.rename(id, new_name, precondition).await?;
         self.inject_fields(&mut object);
         Ok(object)
     }
@@ -252,17 +270,35 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
     ) -> Result<Object<L>> {
         let (stripped, sensitive) = self.strip_fields(label, properties);
 
-        // Store sensitive fields in secret manager
+        // Create the object first so we have its stable `id` to key the secret
+        // by. Keying secrets by `id` (not `name`) means a later rename needs no
+        // secret movement.
+        let mut object = self.inner.create(label, name, stripped, id).await?;
+
+        // Store sensitive fields in secret manager, keyed by the object's id.
+        // If the secret write fails, best-effort compensate by deleting the
+        // object we just created so it does not linger without its secret.
         if let Some(sensitive_map) = sensitive {
             let secret_bytes = Bytes::from(serde_json::to_vec(&serde_json::Value::Object(
                 sensitive_map,
             ))?);
-            self.secrets
-                .create_secret(&name.to_string(), secret_bytes)
-                .await?;
+            if let Err(e) = self
+                .secrets
+                .create_secret(&secret_key(&object.id), secret_bytes)
+                .await
+            {
+                if let Err(cleanup_err) = self.inner.delete(&object.id).await {
+                    tracing::warn!(
+                        id = %object.id,
+                        error = %cleanup_err,
+                        "failed to compensate (delete) object after secret create failed; \
+                         object may linger without its secret"
+                    );
+                }
+                return Err(e);
+            }
         }
 
-        let mut object = self.inner.create(label, name, stripped, id).await?;
         self.inject_fields(&mut object);
         Ok(object)
     }
@@ -289,50 +325,49 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
     ///   roll back the old secret. A subsequent read will see the secret as missing.
     ///
     /// Callers that need stronger guarantees should layer a reconciliation/GC pass
-    /// over the secret store, keyed by resource name, to reap orphans.
-    async fn update(&self, id: &Uuid, properties: Option<serde_json::Value>) -> Result<Object<L>> {
+    /// over the secret store, keyed by object id, to reap orphans.
+    async fn update(
+        &self,
+        id: &Uuid,
+        properties: Option<serde_json::Value>,
+        precondition: Precondition,
+    ) -> Result<Object<L>> {
         let existing = self.inner.get(id).await?;
         let (stripped, sensitive) = self.strip_fields(existing.label, properties);
 
         // Track whether we wrote a secret, so we can compensate if the inner
         // update below fails.
-        let mut wrote_secret_name: Option<String> = None;
+        let mut wrote_secret_key: Option<String> = None;
 
-        // Update sensitive fields in secret manager
+        // Update sensitive fields in secret manager, keyed by the stable id.
         if let Some(sensitive_map) = sensitive {
             let secret_bytes = Bytes::from(serde_json::to_vec(&serde_json::Value::Object(
                 sensitive_map,
             ))?);
-            let secret_name = existing.name.to_string();
+            let key = secret_key(id);
             // Try update; if the secret doesn't exist yet, create it
-            match self
-                .secrets
-                .update_secret(&secret_name, secret_bytes.clone())
-                .await
-            {
+            match self.secrets.update_secret(&key, secret_bytes.clone()).await {
                 Ok(_) => {}
                 Err(Error::NotFound) => {
-                    self.secrets
-                        .create_secret(&secret_name, secret_bytes)
-                        .await?;
+                    self.secrets.create_secret(&key, secret_bytes).await?;
                 }
                 Err(e) => return Err(e),
             }
-            wrote_secret_name = Some(secret_name);
+            wrote_secret_key = Some(key);
         }
 
-        let object = match self.inner.update(id, stripped).await {
+        let object = match self.inner.update(id, stripped, precondition).await {
             Ok(object) => object,
             Err(e) => {
                 // The inner store write failed after we already wrote the secret.
                 // Best-effort: undo the secret write so it does not orphan. Errors
                 // from the compensating delete are swallowed (logged) — we surface
                 // the original update error to the caller regardless.
-                if let Some(secret_name) = wrote_secret_name
-                    && let Err(cleanup_err) = self.secrets.delete_secret(&secret_name).await
+                if let Some(key) = wrote_secret_key
+                    && let Err(cleanup_err) = self.secrets.delete_secret(&key).await
                 {
                     tracing::warn!(
-                        secret_name = %secret_name,
+                        secret_key = %key,
                         error = %cleanup_err,
                         "failed to compensate (delete) orphaned secret after inner store \
                          update failed; secret may be orphaned"
@@ -347,18 +382,38 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ObjectStore<L> for ManagedOb
         Ok(object)
     }
 
+    async fn rename(
+        &self,
+        id: &Uuid,
+        new_name: &ResourceName,
+        precondition: Precondition,
+    ) -> Result<Object<L>> {
+        // Secrets are keyed by the stable `id`, so renaming the object requires
+        // no secret movement — just delegate.
+        let mut object = self.inner.rename(id, new_name, precondition).await?;
+        self.inject_fields(&mut object);
+        Ok(object)
+    }
+
     async fn delete(&self, id: &Uuid) -> Result<()> {
         // Delete secret first (best-effort — may not exist)
         let object = self.inner.get(id).await?;
         if self.registry.has_sensitive_fields(object.label) {
-            let secret_name = object.name.to_string();
-            match self.secrets.delete_secret(&secret_name).await {
+            match self.secrets.delete_secret(&secret_key(id)).await {
                 Ok(()) | Err(Error::NotFound) => {}
                 Err(e) => return Err(e),
             }
         }
         self.inner.delete(id).await
     }
+}
+
+/// The secret-store key for an object's sensitive fields.
+///
+/// Keyed by the object's stable [`Uuid`] (not its [`ResourceName`]) so that a
+/// [`rename`](ObjectStore::rename) needs no secret re-keying.
+fn secret_key(id: &Uuid) -> String {
+    id.hyphenated().to_string()
 }
 
 impl<L: Label, S: ObjectStore<L>, M: SecretManager> ManagedObjectStore<L, S, M> {
@@ -372,8 +427,7 @@ impl<L: Label, S: ObjectStore<L>, M: SecretManager> ManagedObjectStore<L, S, M> 
 
         // Join sensitive fields from secret store
         if self.registry.has_sensitive_fields(object.label) {
-            let secret_name = object.name.to_string();
-            match self.secrets.get_secret(&secret_name).await {
+            match self.secrets.get_secret(&secret_key(id)).await {
                 Ok((_version, secret_bytes)) => {
                     let sensitive: serde_json::Value = serde_json::from_slice(&secret_bytes)?;
                     if let (Some(props), serde_json::Value::Object(secret_map)) =
@@ -570,6 +624,7 @@ mod tests {
                 label,
                 name: name.clone(),
                 properties,
+                version: 0,
                 created_at: chrono::Utc::now(),
                 updated_at: None,
             };
@@ -584,13 +639,39 @@ mod tests {
             &self,
             id: &Uuid,
             properties: Option<serde_json::Value>,
+            precondition: Precondition,
         ) -> Result<Object<TestLabel>> {
             if let Some(err) = self.fail_next_update.lock().unwrap().take() {
                 return Err(err);
             }
             let mut guard = self.objects.lock().unwrap();
             let object = guard.get_mut(id).ok_or(Error::NotFound)?;
+            precondition.check(object.version)?;
             object.properties = properties;
+            object.version += 1;
+            object.updated_at = Some(chrono::Utc::now());
+            Ok(object.clone())
+        }
+
+        async fn rename(
+            &self,
+            id: &Uuid,
+            new_name: &ResourceName,
+            precondition: Precondition,
+        ) -> Result<Object<TestLabel>> {
+            let mut guard = self.objects.lock().unwrap();
+            // Reject a collision with a different object of the same label.
+            let label = guard.get(id).ok_or(Error::NotFound)?.label;
+            if guard
+                .values()
+                .any(|o| o.id != *id && o.label == label && &o.name == new_name)
+            {
+                return Err(Error::AlreadyExists);
+            }
+            let object = guard.get_mut(id).ok_or(Error::NotFound)?;
+            precondition.check(object.version)?;
+            object.name = new_name.clone();
+            object.version += 1;
             object.updated_at = Some(chrono::Utc::now());
             Ok(object.clone())
         }
@@ -855,8 +936,8 @@ mod tests {
         assert!(!map.contains_key("api_key"));
         assert_eq!(map["color"], serde_json::json!("green"));
 
-        // The api_key MUST be in the secret manager, keyed by resource name.
-        assert!(store.secrets.contains("w1"));
+        // The api_key MUST be in the secret manager, keyed by the object's id.
+        assert!(store.secrets.contains(&created.id.hyphenated().to_string()));
 
         // A plain get redacts the secret.
         let got = store.get(&created.id).await.unwrap();
@@ -896,18 +977,20 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!store.secrets.contains("w1"));
+        let key = created.id.hyphenated().to_string();
+        assert!(!store.secrets.contains(&key));
 
         // Update with a sensitive value -> update_secret returns NotFound -> create.
         store
             .update(
                 &created.id,
                 props(serde_json::json!({ "color": "green", "api_key": "k1" })),
+                Precondition::Any,
             )
             .await
             .unwrap();
 
-        assert!(store.secrets.contains("w1"));
+        assert!(store.secrets.contains(&key));
         let full = store.get_with_secrets(&created.id).await.unwrap();
         assert_eq!(
             full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
@@ -932,10 +1015,14 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(store.secrets.contains("w1"));
+        assert!(store.secrets.contains(&created.id.hyphenated().to_string()));
 
         store
-            .update(&created.id, props(serde_json::json!({ "api_key": "new" })))
+            .update(
+                &created.id,
+                props(serde_json::json!({ "api_key": "new" })),
+                Precondition::Any,
+            )
             .await
             .unwrap();
 
@@ -966,7 +1053,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!store.secrets.contains("w1"));
+        let key = created.id.hyphenated().to_string();
+        assert!(!store.secrets.contains(&key));
 
         // Arrange for the inner update to fail.
         store.inner.fail_next_update_with(Error::generic("boom"));
@@ -975,6 +1063,7 @@ mod tests {
             .update(
                 &created.id,
                 props(serde_json::json!({ "color": "green", "api_key": "leaked?" })),
+                Precondition::Any,
             )
             .await
             .unwrap_err();
@@ -982,7 +1071,7 @@ mod tests {
 
         // The secret that was created during the failed update must be compensated away.
         assert!(
-            !store.secrets.contains("w1"),
+            !store.secrets.contains(&key),
             "secret should have been compensated (deleted) after inner update failed"
         );
     }
@@ -1014,7 +1103,11 @@ mod tests {
             .fail_next_delete_with(Error::generic("delete failure"));
 
         let err = store
-            .update(&created.id, props(serde_json::json!({ "api_key": "x" })))
+            .update(
+                &created.id,
+                props(serde_json::json!({ "api_key": "x" })),
+                Precondition::Any,
+            )
             .await
             .unwrap_err();
 
@@ -1044,10 +1137,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(store.secrets.contains("w1"));
+        let key = created.id.hyphenated().to_string();
+        assert!(store.secrets.contains(&key));
 
         store.delete(&created.id).await.unwrap();
-        assert!(!store.secrets.contains("w1"));
+        assert!(!store.secrets.contains(&key));
         assert!(matches!(
             store.get(&created.id).await.unwrap_err(),
             Error::NotFound

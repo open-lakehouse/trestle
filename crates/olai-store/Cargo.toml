@@ -15,6 +15,7 @@ keywords.workspace = true
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # convenience for downstream crates that want to use certain types with sqlx
@@ -25,12 +26,18 @@ sqlx = { workspace = true, optional = true, features = [
   "json",
 ] }
 thiserror = { workspace = true }
+# `sync` for the in-memory backend's owned transaction guard (`OwnedMutexGuard`).
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
-uuid = { workspace = true }
+# `v4` for the in-memory backend to mint object/edge ids.
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []
 sqlx = ["dep:sqlx"]
+# Persistent sqlx-backed `SqlStore`.
+sqlite = ["dep:sqlx", "sqlx/sqlite", "sqlx/runtime-tokio", "sqlx/migrate"]
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/runtime-tokio", "sqlx/migrate"]
 
 [dev-dependencies]
 tokio = { version = "1.29.0", features = ["rt", "macros"] }
