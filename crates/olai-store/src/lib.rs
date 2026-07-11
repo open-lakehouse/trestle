@@ -95,6 +95,7 @@ pub mod conformance;
 #[cfg(feature = "encryption")]
 pub mod encryption;
 pub mod error;
+pub mod filter;
 pub mod label;
 pub mod managed;
 pub mod name;
@@ -110,6 +111,7 @@ pub use backend::sql::{SqlStore, migrate as migrate_sql, migrator as sql_migrato
 #[cfg(feature = "encryption")]
 pub use encryption::{EnvelopeEncryptor, KekId, KeyProvider, LocalKeyProvider};
 pub use error::{Error, Result};
+pub use filter::{CompareOp, FieldPath, Filter, Predicate};
 pub use label::Label;
 pub use managed::ManagedObjectStore;
 pub use name::{EMPTY_RESOURCE_NAME, ResourceName};
