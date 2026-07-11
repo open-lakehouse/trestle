@@ -99,4 +99,5 @@ pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, Resourc
 pub use secrets::{ProvidesSecretManager, SecretManager};
 pub use store::{
     AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
+    StoreExec, StoreTx, Transactional,
 };

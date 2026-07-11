@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use uuid::Uuid;
 
 use crate::Result;
@@ -320,4 +321,105 @@ impl<L: Label, T: AssociationStore<L>> AssociationStore<L> for Arc<T> {
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
         T::remove(self, from_id, to_id, label).await
     }
+}
+
+// --- Transactions ---
+
+/// The object-safe execution surface shared by a top-level store and an open
+/// transaction handle.
+///
+/// Every object and association operation is written once against
+/// `&dyn StoreExec<L>`, so a repository function composes the same way whether it
+/// runs standalone (auto-committing each call) or inside a
+/// [`transaction`](Transactional::transaction). This mirrors the sqlx/sea-orm
+/// idiom where the transaction handle implements the same trait as a plain
+/// connection.
+pub trait StoreExec<L: Label>: ObjectStore<L> + AssociationStore<L> {}
+
+impl<L: Label, T: ObjectStore<L> + AssociationStore<L>> StoreExec<L> for T {}
+
+/// An open transaction handle: a [`StoreExec`] whose writes are staged until
+/// [`commit`](StoreTx::commit) (or discarded on [`rollback`](StoreTx::rollback)
+/// / drop).
+///
+/// This is the escape hatch for imperative control flow that the closure form of
+/// [`Transactional::transaction`] cannot express. Prefer the closure form, which
+/// commits/rolls back automatically.
+#[async_trait::async_trait]
+pub trait StoreTx<L: Label>: StoreExec<L> {
+    /// Commit the staged writes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the commit fails; the transaction is consumed
+    /// regardless.
+    async fn commit(self: Box<Self>) -> Result<()>;
+
+    /// Discard the staged writes.
+    ///
+    /// Dropping the handle without committing has the same effect; this is the
+    /// explicit form.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the rollback fails.
+    async fn rollback(self: Box<Self>) -> Result<()>;
+}
+
+/// A store that can run several operations as one atomic unit of work.
+///
+/// Two entry points, both backed by a real backend transaction:
+///
+/// - [`transaction`](Transactional::transaction) — the safe default. Runs a
+///   closure against a borrowed [`StoreExec`]; commits on `Ok`, rolls back on
+///   `Err`. Because of an async-closure lifetime limitation (the returned future
+///   borrows the handle for a higher-ranked lifetime), the closure must return a
+///   [`BoxFuture`] — write it as
+///   `Box::new(|tx| Box::pin(async move { … }))`.
+/// - [`begin`](Transactional::begin) — an explicit [`StoreTx`] handle for
+///   imperative flows the closure form cannot express.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use olai_store::{Label, Result, Transactional, StoreExec};
+/// # use futures::future::BoxFuture;
+/// # async fn run<L: Label>(store: impl Transactional<L>) -> Result<()> {
+/// let sum: i64 = store
+///     .transaction(Box::new(|tx: &dyn StoreExec<L>| {
+///         Box::pin(async move {
+///             // ... tx.create(...).await?; tx.delete(...).await?; ...
+///             Ok(42)
+///         })
+///     }))
+///     .await?;
+/// # let _ = sum;
+/// # Ok(())
+/// # }
+/// ```
+#[async_trait::async_trait]
+pub trait Transactional<L: Label>: Send + Sync + 'static {
+    /// Run a closure as a single atomic unit of work: commit on `Ok`, roll back
+    /// on `Err`.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces the closure's error (after rolling back), or a backend error
+    /// from begin/commit.
+    async fn transaction<'a, T>(
+        &'a self,
+        f: Box<dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> BoxFuture<'t, Result<T>> + Send + 'a>,
+    ) -> Result<T>
+    where
+        T: Send + 'a;
+
+    /// Begin an explicit transaction, returning a [`StoreTx`] handle.
+    ///
+    /// The caller is responsible for calling [`commit`](StoreTx::commit);
+    /// dropping the handle rolls back.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if the transaction cannot be started.
+    async fn begin(&self) -> Result<Box<dyn StoreTx<L>>>;
 }
