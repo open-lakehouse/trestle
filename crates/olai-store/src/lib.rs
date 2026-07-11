@@ -97,4 +97,6 @@ pub use object::{Association, Object};
 pub use reference::ResourceRef;
 pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, ResourceTypeDescriptor};
 pub use secrets::{ProvidesSecretManager, SecretManager};
-pub use store::{AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader};
+pub use store::{
+    AssociationStore, AssociationStoreReader, ObjectStore, ObjectStoreReader, Precondition,
+};

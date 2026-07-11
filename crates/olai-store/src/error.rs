@@ -18,6 +18,9 @@ pub enum Error {
     #[error("Entity already exists.")]
     AlreadyExists,
 
+    #[error("Precondition failed: the object was modified concurrently.")]
+    Conflict,
+
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 

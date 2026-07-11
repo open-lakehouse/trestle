@@ -7,6 +7,50 @@ use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
 
+/// A precondition guarding a mutating object operation (optimistic concurrency).
+///
+/// Modelled as an extensible value object (cf. the `object_store` crate's
+/// `PutMode` and Google [AIP-154]) so new precondition kinds can be added
+/// without changing method signatures. A mismatch yields
+/// [`Error::Conflict`](crate::Error::Conflict) — never
+/// [`Error::NotFound`](crate::Error::NotFound), since the object may exist at a
+/// different version.
+///
+/// [AIP-154]: https://google.aip.dev/154
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Precondition {
+    /// No check — the operation applies unconditionally.
+    #[default]
+    Any,
+    /// Compare-and-swap: apply only if the stored [`version`](Object::version)
+    /// equals this value, otherwise return
+    /// [`Error::Conflict`](crate::Error::Conflict).
+    Version(u64),
+}
+
+impl Precondition {
+    /// Check `self` against an object's current `version`, returning
+    /// [`Error::Conflict`](crate::Error::Conflict) on a
+    /// [`Precondition::Version`] mismatch.
+    ///
+    /// A helper for store backends implementing compare-and-swap:
+    ///
+    /// ```
+    /// use olai_store::Precondition;
+    ///
+    /// assert!(Precondition::Any.check(7).is_ok());
+    /// assert!(Precondition::Version(7).check(7).is_ok());
+    /// assert!(Precondition::Version(6).check(7).is_err());
+    /// ```
+    pub fn check(&self, current_version: u64) -> Result<()> {
+        match self {
+            Precondition::Any => Ok(()),
+            Precondition::Version(expected) if *expected == current_version => Ok(()),
+            Precondition::Version(_) => Err(crate::Error::Conflict),
+        }
+    }
+}
+
 /// Read-only interface for the object store.
 #[async_trait::async_trait]
 pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
@@ -72,11 +116,46 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
 
     /// Update an existing object's properties.
     ///
+    /// The returned object carries the incremented [`version`](Object::version).
+    /// Pass a [`Precondition::Version`] to make this a compare-and-swap and close
+    /// the read-modify-write race; [`Precondition::Any`] overwrites
+    /// unconditionally.
+    ///
     /// # Errors
     ///
     /// - [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists.
+    /// - [`Error::Conflict`](crate::Error::Conflict) if `precondition` is
+    ///   [`Precondition::Version`] and the stored version no longer matches.
     /// - [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `properties` are malformed.
-    async fn update(&self, id: &Uuid, properties: Option<serde_json::Value>) -> Result<Object<L>>;
+    async fn update(
+        &self,
+        id: &Uuid,
+        properties: Option<serde_json::Value>,
+        precondition: Precondition,
+    ) -> Result<Object<L>>;
+
+    /// Rename (or move) an object to a new [`ResourceName`], preserving its
+    /// `id`, associations, and any secrets.
+    ///
+    /// The new name may change the object's namespace (a cross-subtree move) or
+    /// only its leaf segment; the store layer permits either, and higher layers
+    /// gate policy. The returned object carries the incremented
+    /// [`version`](Object::version).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists.
+    /// - [`Error::AlreadyExists`](crate::Error::AlreadyExists) if an object with
+    ///   the same label and `new_name` already exists.
+    /// - [`Error::Conflict`](crate::Error::Conflict) if `precondition` is
+    ///   [`Precondition::Version`] and the stored version no longer matches.
+    /// - [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `new_name` is malformed.
+    async fn rename(
+        &self,
+        id: &Uuid,
+        new_name: &ResourceName,
+        precondition: Precondition,
+    ) -> Result<Object<L>>;
 
     /// Delete an object and all its associations.
     ///
@@ -189,8 +268,22 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
         T::create(self, label, name, properties, id).await
     }
 
-    async fn update(&self, id: &Uuid, properties: Option<serde_json::Value>) -> Result<Object<L>> {
-        T::update(self, id, properties).await
+    async fn update(
+        &self,
+        id: &Uuid,
+        properties: Option<serde_json::Value>,
+        precondition: Precondition,
+    ) -> Result<Object<L>> {
+        T::update(self, id, properties, precondition).await
+    }
+
+    async fn rename(
+        &self,
+        id: &Uuid,
+        new_name: &ResourceName,
+        precondition: Precondition,
+    ) -> Result<Object<L>> {
+        T::rename(self, id, new_name, precondition).await
     }
 
     async fn delete(&self, id: &Uuid) -> Result<()> {

@@ -1583,6 +1583,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "futures",
  "serde",
  "serde_json",
  "sqlx",

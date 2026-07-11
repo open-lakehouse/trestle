@@ -24,6 +24,17 @@ pub struct Object<L: Label> {
     /// The properties of the object (serialized resource fields).
     pub properties: Option<serde_json::Value>,
 
+    /// Monotonic version, bumped on every mutating operation.
+    ///
+    /// Serves as an opaque optimistic-concurrency token (an etag): pass the
+    /// version observed on a read back in a [`Precondition::Version`] to perform
+    /// a compare-and-swap. A fresh object starts at version `0`; each successful
+    /// [`update`](crate::ObjectStore::update) or [`rename`](crate::ObjectStore::rename)
+    /// increments it.
+    ///
+    /// [`Precondition::Version`]: crate::Precondition::Version
+    pub version: u64,
+
     /// The time when the object was created.
     pub created_at: chrono::DateTime<chrono::Utc>,
 
