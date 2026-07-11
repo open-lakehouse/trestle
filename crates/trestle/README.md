@@ -10,6 +10,23 @@ framework. Published as `olai-trestle`; installs a `trestle` binary.
 
 ## Install
 
+Prebuilt binaries (no Rust toolchain, no compile) via
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+```bash
+cargo binstall olai-trestle
+```
+
+This downloads the release archive for your platform (Linux/macOS, x86_64 or
+aarch64) and installs the `trestle` command. Each archive ships with a `.sha256`
+checksum and a GitHub build-provenance attestation you can verify:
+
+```bash
+gh attestation verify trestle-<target>.tar.gz --repo open-lakehouse/trestle
+```
+
+Or build from source:
+
 ```bash
 cargo install olai-trestle   # or: cargo install --git https://github.com/open-lakehouse/trestle --bin trestle
 ```

@@ -90,6 +90,44 @@ The flow:
 
 That's it — merging the Release PR is the release.
 
+### Prebuilt CLI binaries (`cargo binstall`)
+
+After release-plz publishes an `olai-trestle-v*` GitHub Release, a second
+workflow — `.github/workflows/release-binaries.yml` — builds the `trestle` CLI
+for each supported target and attaches the archives (`trestle-<target>.tar.gz`),
+their `.sha256` checksums, and SLSA build-provenance attestations to **that same
+release**. This lets users install a prebuilt binary instead of compiling from
+source:
+
+```bash
+cargo binstall olai-trestle
+# verify (optional):
+gh attestation verify trestle-<target>.tar.gz --repo open-lakehouse/trestle
+```
+
+The install URL and archive layout are pinned in
+`crates/trestle/[package.metadata.binstall]` and **must** stay in sync with the
+workflow's `archive` / `leading-dir` settings. Only the CLI crate ships binaries;
+the other crates are libraries and publish source-only to crates.io.
+
+**How it's triggered — and why not `release: published`.** release-plz creates
+the release with the default `GITHUB_TOKEN`, and GitHub does not start new
+workflow runs from default-token events (fixed anti-recursion behavior; no
+repo/org setting overrides it — verified). A `release:` trigger would never
+fire. Instead the workflow chains off the **Release-plz workflow completing on
+`main`** (`workflow_run`), then a `resolve` job finds the newest
+`olai-trestle-v*` release and builds only if it doesn't already have the
+binaries attached (so a release-plz run that didn't bump the CLI crate, or a
+re-run, is a safe no-op).
+
+- **Add a target:** extend the `matrix.include` list in
+  `release-binaries.yml`. Linux + macOS (x86_64 + aarch64) ship today; Windows,
+  code-signing/notarization, and musl are deferred follow-ups.
+- **Test without cutting a release:** run the workflow via **Run workflow**
+  (`workflow_dispatch`) with an existing tag (e.g. `olai-trestle-v0.0.4`); it
+  builds the matrix and uploads assets onto that existing release. Remove test
+  assets afterward with `gh release delete-asset <tag> <asset>`.
+
 ### Per-crate versioning & the inter-crate dependency
 
 Versions live in each crate's own `[package].version` (not in

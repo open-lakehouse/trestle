@@ -1,0 +1,168 @@
+name: Release binaries
+
+# Builds the `trestle` CLI for each supported target and attaches the archives
+# (+ SHA-256 checksums + SLSA build-provenance attestations) to the GitHub
+# Release that release-plz publishes for each `olai-trestle-v*` tag. This makes
+# `cargo binstall olai-trestle` download a prebuilt binary instead of compiling
+# from source. The binstall URL/layout is pinned in crates/trestle/Cargo.toml
+# (`[package.metadata.binstall]`) and MUST stay in sync with the `archive` /
+# `leading-dir` settings below.
+#
+# Why `workflow_run` and not `release: published`?
+#   release-plz creates the GitHub Release with the default GITHUB_TOKEN, and
+#   GitHub does not start new workflow runs from default-token events (fixed
+#   anti-recursion behavior — no repo/org setting overrides it). A `release:`
+#   trigger would therefore never fire. Instead we chain off the Release-plz
+#   workflow completing on `main`, then discover the freshly-created
+#   `olai-trestle-v*` release ourselves. `workflow_dispatch` remains for manual
+#   and test runs against an existing tag.
+
+on:
+  # zizmor: ignore[dangerous-triggers] — workflow_run is flagged as dangerous
+  # because it runs privileged and is typically misused to build untrusted PR
+  # code. That escalation path is absent here: this workflow never checks out
+  # PR/fork content. The `resolve` job takes no attacker-controlled input (it
+  # only reads releases), and `upload-binaries` checks out a released
+  # `olai-trestle-v*` tag from main's history, gated on `resolve`. Chaining off
+  # Release-plz is required because release-plz creates the release with the
+  # default GITHUB_TOKEN, whose events cannot start a `release:`-triggered run.
+  workflow_run:
+    workflows: ["Release-plz"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing olai-trestle-v* tag to build + attach assets to"
+        required: true
+        type: string
+
+# Least privilege: nothing at the top level.
+permissions: {}
+
+concurrency:
+  group: release-binaries-${{ github.event.inputs.tag || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  # Decide whether there is a CLI release to build for, and which tag. For a
+  # manual dispatch this is just the provided tag. For the chained run we only
+  # proceed if the Release-plz run succeeded on `main` AND the latest
+  # olai-trestle release does not already have the binary assets attached (so a
+  # release-plz run that didn't bump the CLI crate, or a re-run, is a no-op).
+  resolve:
+    name: Resolve target release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    permissions:
+      contents: read # read releases/tags via the API
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      tag: ${{ steps.decide.outputs.tag }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          # A sentinel asset that exists once binaries have been uploaded, used
+          # to make the chained path idempotent.
+          MARKER_ASSET: trestle-x86_64-unknown-linux-gnu.tar.gz
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            case "$INPUT_TAG" in
+              olai-trestle-v*) ;;
+              *) echo "::error::tag must start with olai-trestle-v (got '$INPUT_TAG')"; exit 1 ;;
+            esac
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch → building $INPUT_TAG"
+            exit 0
+          fi
+
+          # Chained run: find the most recent olai-trestle release.
+          tag="$(gh release list --repo "$REPO" --limit 30 \
+                  --json tagName --jq '[.[] | select(.tagName | startswith("olai-trestle-v"))][0].tagName')"
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "No olai-trestle release found → nothing to do."
+            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # Idempotency: skip if this release already carries the binaries.
+          if gh release view "$tag" --repo "$REPO" --json assets \
+               --jq '.assets[].name' | grep -qx "$MARKER_ASSET"; then
+            echo "$tag already has binaries → nothing to do."
+            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Chained run → building $tag"
+
+  upload-binaries:
+    name: ${{ matrix.target }}
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    # Protected environment mirrors the release-plz job boundary. No secrets are
+    # consumed here (attestations use OIDC), but keeping the boundary consistent
+    # guards future signing credentials.
+    environment: release
+    permissions:
+      contents: write # attach assets to the existing GitHub Release
+      id-token: write # OIDC for build-provenance attestations
+      attestations: write # write the attestation to the attestations store
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Build the exact commit the release tag points at, not the branch tip.
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.88"
+          targets: ${{ matrix.target }}
+      # Build (release profile from the workspace), package as
+      # `trestle-<target>.tar.gz` with a `trestle-<target>/` leading dir (matches
+      # the binstall `bin-dir` template), emit a `.sha256`, and upload both to the
+      # release identified by `ref`. The action attaches to the existing release
+      # — it does not create one.
+      - name: Build + upload
+        id: upload
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: trestle
+          target: ${{ matrix.target }}
+          archive: trestle-$target
+          leading-dir: true
+          checksum: sha256
+          include: LICENSE,README.md
+          ref: ${{ needs.resolve.outputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      # Key-free SLSA build provenance over the archive + checksum, verifiable
+      # with `gh attestation verify <archive> --repo <owner>/<repo>`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            ${{ steps.upload.outputs.tar }}
+            ${{ steps.upload.outputs.sha256 }}
