@@ -93,6 +93,14 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
 }
 
 /// Read-write interface for the object store.
+///
+/// An object's [`label`](Object::label) — its resource *kind* — is fixed at
+/// [`create`](ObjectStore::create) and is **immutable** thereafter: no method
+/// takes a label to change it. Retyping an object is not an update or a rename;
+/// it is conceptually a delete-and-recreate of a different kind, and a consumer
+/// that genuinely needs it should model it as exactly that inside a
+/// [`transaction`](Transactional::transaction) (delete the old object, create
+/// the new one atomically).
 #[async_trait::async_trait]
 pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     /// Create a new object. The store generates `created_at` and `updated_at`.
