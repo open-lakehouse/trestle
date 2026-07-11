@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE objects SET name = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a10d83e8df6a0da02d8fa59ad19f2bc1275d8abe936fe557f42f47f557ccaf56"
+}

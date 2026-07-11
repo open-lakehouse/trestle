@@ -92,6 +92,8 @@ pub mod store;
 
 // Re-exports for convenience.
 pub use backend::mem::InMemoryStore;
+#[cfg(feature = "sqlite")]
+pub use backend::sql::SqlStore;
 pub use error::{Error, Result};
 pub use label::Label;
 pub use managed::{ManagedObjectStore, NoSecrets};

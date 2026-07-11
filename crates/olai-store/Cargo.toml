@@ -35,9 +35,9 @@ uuid = { workspace = true, features = ["v4"] }
 [features]
 default = []
 sqlx = ["dep:sqlx"]
-# Persistent sqlx-backed `SqlStore` (added in a later step).
-sqlite = ["dep:sqlx", "sqlx/sqlite", "sqlx/runtime-tokio"]
-postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/runtime-tokio"]
+# Persistent sqlx-backed `SqlStore`.
+sqlite = ["dep:sqlx", "sqlx/sqlite", "sqlx/runtime-tokio", "sqlx/migrate"]
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/runtime-tokio", "sqlx/migrate"]
 
 [dev-dependencies]
 tokio = { version = "1.29.0", features = ["rt", "macros"] }
