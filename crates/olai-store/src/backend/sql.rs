@@ -373,9 +373,9 @@ fn is_pushable(filter: &Filter) -> bool {
 /// Whether every segment of `path` is safe to render into a bare `$.a.b` JSONPath.
 ///
 /// [`json_path`] joins segments with `.`, so a segment containing a JSONPath metacharacter
-/// (`.`, `[`, `]`, `"`) would be mis-parsed by SQLite (e.g. `["a.b"]` → `$.a.b`, read as nested
-/// `a`→`b`) and diverge from the reference evaluator, which treats each segment as a literal
-/// object key. Such paths are left to the Rust fallback, which resolves them correctly.
+/// (`.`, `[`, `]`, `"`) would be parsed differently by SQLite (e.g. `["a.b"]` → `$.a.b`, read as
+/// nested `a`→`b`) and diverge from the reference evaluator, which treats each segment as a
+/// literal object key. Such paths are left to the Rust fallback, which resolves them correctly.
 fn is_pushable_path(path: &crate::filter::FieldPath) -> bool {
     path.segments()
         .iter()
