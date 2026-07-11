@@ -49,3 +49,17 @@ tokio = { version = "1.29.0", features = ["rt", "macros"] }
 # `v4` is only needed by the in-memory test doubles to mint object ids;
 # real store backends generate their own ids, so the lib does not need it.
 uuid = { version = "1", features = ["v4"] }
+
+[lints.rust]
+# `docsrs` is set only by the docs.rs build (see `[package.metadata.docs.rs]`) to
+# turn on the nightly `doc_cfg` feature; declare it so it isn't flagged as an
+# unexpected cfg on ordinary builds.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+# docs.rs builds default to default features only, which would hide every
+# `sqlite` / `postgres` / `encryption` item (`SqlStore`, `EnvelopeEncryptor`, …)
+# from the published docs. Build the full API and pass `--cfg docsrs` so
+# feature-gated items render an "available on crate feature X" badge.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

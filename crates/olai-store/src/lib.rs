@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
 //! Generic, TAO-inspired resource store for typed objects and associations — the
 //! async storage layer for services built with the [Trestle] framework.
 //!
