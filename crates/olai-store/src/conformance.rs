@@ -31,6 +31,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::filter::Filter;
 use crate::name::ResourceName;
 use crate::store::{
     AssociationStoreReader, ObjectStoreReader, Precondition, StoreExec, Transactional,
@@ -317,6 +318,275 @@ pub async fn sensitive_blob_roundtrip<S: StoreExec<ConformanceLabel>>(store: &S)
     );
 }
 
+/// Searching objects by payload matches exactly the set the reference
+/// [`Filter::matches`] selects, for each operator and boolean composition.
+///
+/// The store's [`search`](ObjectStoreReader::search) result is checked against the payloads
+/// filtered directly through `Filter::matches`, binding any backend (including a pushdown
+/// backend) to the reference evaluator as the source of truth.
+pub async fn search_object_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let payloads = [
+        serde_json::json!({ "owner": "alice", "size": 10, "tags": ["a", "b"] }),
+        serde_json::json!({ "owner": "bob", "size": 20, "tags": ["b", "c"] }),
+        serde_json::json!({ "owner": "carol", "size": 30, "archived": null }),
+        serde_json::json!({ "owner": "alice", "size": 40, "tags": [] }),
+    ];
+    for (i, p) in payloads.iter().enumerate() {
+        store
+            .create(
+                ConformanceLabel,
+                &rn(&format!("o{i}")),
+                Some(p.clone()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    // For a given filter, the store's search must return exactly the objects whose payloads
+    // the reference evaluator selects (compared as an id set, order-independent).
+    let check = async |filter: Filter| {
+        let (hits, token) = store
+            .search(ConformanceLabel, None, &filter, None, None)
+            .await
+            .unwrap();
+        assert!(token.is_none(), "unbounded search returns a single page");
+        let mut got: Vec<_> = hits.iter().map(|o| o.properties.clone().unwrap()).collect();
+        let mut want: Vec<_> = payloads
+            .iter()
+            .filter(|p| filter.matches(p))
+            .cloned()
+            .collect();
+        got.sort_by_key(|v| v.to_string());
+        want.sort_by_key(|v| v.to_string());
+        assert_eq!(
+            got, want,
+            "search disagreed with Filter::matches for {filter:?}"
+        );
+    };
+
+    check(Filter::eq("owner", "alice")).await;
+    check(Filter::ne("owner", "alice")).await;
+    check(Filter::gt("size", 20)).await;
+    check(Filter::ge("size", 20)).await;
+    check(Filter::lt("size", 20)).await;
+    check(Filter::le("size", 20)).await;
+    check(Filter::contains("tags", "b")).await;
+    check(Filter::exists("archived")).await;
+    check(Filter::exists("tags")).await;
+    check(Filter::all([
+        Filter::eq("owner", "alice"),
+        Filter::gt("size", 15),
+    ]))
+    .await;
+    check(Filter::any([
+        Filter::eq("owner", "bob"),
+        Filter::eq("owner", "carol"),
+    ]))
+    .await;
+    check(Filter::eq("owner", "alice").negate()).await;
+    // A predicate no object matches, and one every object matches.
+    check(Filter::eq("owner", "nobody")).await;
+    check(Filter::all([])).await;
+}
+
+/// Paging a filtered object search returns every match exactly once even when matching and
+/// non-matching payloads are interleaved — the filter must never run behind a `LIMIT` that
+/// could truncate matches (the search analogue of
+/// [`namespace_filtered_listing_pages_completely`]).
+///
+/// [`namespace_filtered_listing_pages_completely`]: crate::backend
+pub async fn search_object_pagination_filters_completely<S: StoreExec<ConformanceLabel>>(
+    store: &S,
+) {
+    // Interleave matching (keep=true) and non-matching (keep=false) payloads so a naive
+    // "SQL LIMIT then filter" would lose matches and desync the page token.
+    for i in 0..6 {
+        for keep in [true, false] {
+            let p = serde_json::json!({ "keep": keep, "i": i });
+            let name = rn(&format!("k{keep}i{i}"));
+            store
+                .create(ConformanceLabel, &name, Some(p), None, None)
+                .await
+                .unwrap();
+        }
+    }
+
+    let filter = Filter::eq("keep", true);
+    let mut seen = Vec::new();
+    let mut token = None;
+    loop {
+        let (page, next) = store
+            .search(ConformanceLabel, None, &filter, Some(2), token)
+            .await
+            .unwrap();
+        assert!(page.len() <= 2, "respects max_results");
+        assert!(
+            page.iter()
+                .all(|o| o.properties.as_ref().unwrap()["keep"] == true),
+            "every returned object matches the filter"
+        );
+        seen.extend(page.into_iter().map(|o| o.id));
+        match next {
+            Some(t) => token = Some(t),
+            None => break,
+        }
+    }
+    assert_eq!(seen.len(), 6, "every matching object must be paged");
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 6, "no duplicates across pages");
+}
+
+/// A namespace prefix and a payload filter compose: only objects under the namespace *and*
+/// matching the filter are returned, and paging still drains completely.
+pub async fn search_namespace_and_filter<S: StoreExec<ConformanceLabel>>(store: &S) {
+    // Under "ns": three match the filter, two don't. Under "other": one matches — must be
+    // excluded by the namespace.
+    for (name, active) in [
+        ("ns.a", true),
+        ("ns.b", true),
+        ("ns.c", true),
+        ("ns.d", false),
+        ("ns.e", false),
+        ("other.f", true),
+    ] {
+        let p = serde_json::json!({ "active": active });
+        store
+            .create(ConformanceLabel, &rn(name), Some(p), None, None)
+            .await
+            .unwrap();
+    }
+
+    let ns = rn("ns");
+    let filter = Filter::eq("active", true);
+    let mut seen = Vec::new();
+    let mut token = None;
+    loop {
+        let (page, next) = store
+            .search(ConformanceLabel, Some(&ns), &filter, Some(2), token)
+            .await
+            .unwrap();
+        for o in &page {
+            assert!(o.name.prefix_matches(&ns), "namespace prefix honored");
+            assert_eq!(o.properties.as_ref().unwrap()["active"], true);
+        }
+        seen.extend(page.into_iter().map(|o| o.id));
+        match next {
+            Some(t) => token = Some(t),
+            None => break,
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        3,
+        "only ns.* objects matching the filter, all of them"
+    );
+}
+
+/// Searching edges by payload matches the set the reference [`Filter::matches`] selects, and
+/// respects the target-label filter.
+pub async fn search_from_predicates<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    let edges = [
+        serde_json::json!({ "weight": 1, "kind": "x" }),
+        serde_json::json!({ "weight": 5, "kind": "y" }),
+        serde_json::json!({ "weight": 9, "kind": "x" }),
+    ];
+    for (i, e) in edges.iter().enumerate() {
+        let dst = store
+            .create(ConformanceLabel, &rn(&format!("dst{i}")), None, None, None)
+            .await
+            .unwrap();
+        store
+            .add(src.id, dst.id, "link", Some(e.clone()))
+            .await
+            .unwrap();
+    }
+
+    let check = async |filter: Filter| {
+        let (hits, token) = store
+            .search_from(src.id, "link", None, &filter, None, None)
+            .await
+            .unwrap();
+        assert!(token.is_none());
+        let mut got: Vec<_> = hits.iter().map(|a| a.properties.clone().unwrap()).collect();
+        let mut want: Vec<_> = edges
+            .iter()
+            .filter(|e| filter.matches(e))
+            .cloned()
+            .collect();
+        got.sort_by_key(|v| v.to_string());
+        want.sort_by_key(|v| v.to_string());
+        assert_eq!(
+            got, want,
+            "search_from disagreed with Filter::matches for {filter:?}"
+        );
+    };
+
+    check(Filter::eq("kind", "x")).await;
+    check(Filter::gt("weight", 4)).await;
+    check(Filter::all([
+        Filter::eq("kind", "x"),
+        Filter::lt("weight", 5),
+    ]))
+    .await;
+    check(Filter::exists("kind")).await;
+}
+
+/// Paging a filtered edge search returns every match exactly once even when matching and
+/// non-matching edges are interleaved.
+pub async fn search_from_pagination_filters_completely<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    for i in 0..6 {
+        for keep in [true, false] {
+            let dst = store
+                .create(
+                    ConformanceLabel,
+                    &rn(&format!("d{keep}{i}")),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+            let p = serde_json::json!({ "keep": keep });
+            store.add(src.id, dst.id, "link", Some(p)).await.unwrap();
+        }
+    }
+
+    let filter = Filter::eq("keep", true);
+    let mut seen = Vec::new();
+    let mut token = None;
+    loop {
+        let (page, next) = store
+            .search_from(src.id, "link", None, &filter, Some(2), token)
+            .await
+            .unwrap();
+        assert!(page.len() <= 2);
+        assert!(
+            page.iter()
+                .all(|a| a.properties.as_ref().unwrap()["keep"] == true)
+        );
+        seen.extend(page.into_iter().map(|a| a.id));
+        match next {
+            Some(t) => token = Some(t),
+            None => break,
+        }
+    }
+    assert_eq!(seen.len(), 6, "every matching edge must be paged");
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 6, "no duplicates across pages");
+}
+
 /// Run the entire battery.
 ///
 /// `fresh` builds a new empty store; `with_inverse` builds one that maintains
@@ -334,6 +604,11 @@ where
     transaction_commit(&fresh()).await;
     sensitive_blob_roundtrip(&fresh()).await;
     inverse_edges(&with_inverse(parent_child_inverse)).await;
+    search_object_predicates(&fresh()).await;
+    search_object_pagination_filters_completely(&fresh()).await;
+    search_namespace_and_filter(&fresh()).await;
+    search_from_predicates(&fresh()).await;
+    search_from_pagination_filters_completely(&fresh()).await;
 }
 
 #[cfg(test)]
