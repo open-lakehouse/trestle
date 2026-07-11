@@ -760,6 +760,88 @@ pub async fn edge_listing_is_recency_ordered<S: StoreExec<ConformanceLabel>>(sto
     );
 }
 
+/// A `[since, until)` time window selects exactly the edges created within it, resolved against
+/// the time-ordered (UUIDv7) edge id.
+///
+/// Edges are inserted with a real gap between them so each lands in a distinct millisecond; the
+/// timestamp captured *between* two inserts is then a boundary that cleanly partitions them.
+pub async fn edge_time_window_selects_range<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let src = store
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+
+    // Insert 5 edges, recording the instant just before each. A 2ms sleep guarantees the next
+    // edge's v7 id lands in a strictly later millisecond than the captured boundary.
+    let mut bounds = Vec::new();
+    for i in 0..5 {
+        bounds.push(chrono::Utc::now());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let dst = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("dst{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .add(
+                src.id,
+                dst.id,
+                "link",
+                Some(serde_json::json!({ "seq": i })),
+            )
+            .await
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+
+    let seqs = async |q: EdgeQuery<'_, ConformanceLabel>| -> Vec<u64> {
+        let (edges, _) = store.query_edges(q).await.unwrap();
+        edges
+            .iter()
+            .map(|e| e.properties.as_ref().unwrap()["seq"].as_u64().unwrap())
+            .collect()
+    };
+
+    // since = bound before edge 2 → edges 2,3,4 (newest-first: 4,3,2).
+    assert_eq!(
+        seqs(EdgeQuery::from(src.id, "link").since(bounds[2])).await,
+        vec![4, 3, 2],
+        "since selects edges created at or after the boundary"
+    );
+
+    // until = bound before edge 2 → edges 0,1 (newest-first: 1,0).
+    assert_eq!(
+        seqs(EdgeQuery::from(src.id, "link").until(bounds[2])).await,
+        vec![1, 0],
+        "until excludes edges created at or after the boundary"
+    );
+
+    // [since edge1, until edge4) → edges 1,2,3 (newest-first: 3,2,1).
+    assert_eq!(
+        seqs(
+            EdgeQuery::from(src.id, "link")
+                .since(bounds[1])
+                .until(bounds[4])
+        )
+        .await,
+        vec![3, 2, 1],
+        "half-open window selects the interior edges"
+    );
+
+    // A window before everything is empty; a window after everything is empty.
+    assert!(
+        seqs(EdgeQuery::from(src.id, "link").until(bounds[0]))
+            .await
+            .is_empty(),
+        "window entirely before the first edge is empty"
+    );
+}
+
 /// A `target_label` filter returns every matching edge across pages — guarding the historical
 /// hazard of filtering the target label *after* a SQL `LIMIT` (which could drop matches).
 pub async fn edge_target_label_pages_completely<S: StoreExec<ConformanceLabel>>(store: &S) {
@@ -934,6 +1016,7 @@ where
     edge_filter_pagination_completes(&fresh()).await;
     search_fallback_predicates_agree(&fresh()).await;
     edge_listing_is_recency_ordered(&fresh()).await;
+    edge_time_window_selects_range(&fresh()).await;
     edge_target_label_pages_completely(&fresh()).await;
     incoming_edges_listed(&fresh()).await;
     edge_target_id_restriction(&fresh()).await;

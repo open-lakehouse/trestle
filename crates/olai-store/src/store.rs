@@ -96,6 +96,22 @@ pub(crate) fn paginate_filtered<T>(
     (items, next)
 }
 
+/// The smallest possible UUIDv7 for a given instant: the millisecond timestamp in the high 48
+/// bits and every other bit zero.
+///
+/// Edge ids are v7 (time-ordered), so this is a stable, index-friendly *time boundary* over the
+/// `id` column: any real edge minted in millisecond `t` sorts at or after `v7_lower_bound(t)`
+/// (its version nibble `0x7` and random tail only add to the value), and strictly before
+/// `v7_lower_bound(t')` for any later millisecond `t'`. That makes a `[since, until)` window on
+/// creation time expressible as `since_id <= id < until_id` without a separate `created_at`
+/// index. Sub-millisecond precision in `t` is truncated to the millisecond (v7's resolution).
+pub(crate) fn v7_lower_bound(t: chrono::DateTime<chrono::Utc>) -> Uuid {
+    // Clamp to the representable 48-bit unix-millis range; negative (pre-epoch) maps to 0.
+    let millis = t.timestamp_millis().max(0) as u128;
+    // Layout: bits 127..80 = unix_ts_ms (48 bits), everything below zero.
+    Uuid::from_u128(millis << 80)
+}
+
 /// Read-only interface for the object store.
 #[async_trait::async_trait]
 pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
@@ -380,6 +396,13 @@ pub struct EdgeQuery<'a, L: Label> {
     pub target_id: Option<Uuid>,
     /// Optional payload predicate over each edge's [`properties`](Association::properties).
     pub filter: Option<&'a Filter>,
+    /// Inclusive lower bound on edge creation time — only edges created at or after this instant
+    /// (TAO's "connections since T"). Resolved against the time-ordered edge id at millisecond
+    /// precision.
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Exclusive upper bound on edge creation time — only edges created strictly before this
+    /// instant. Resolved against the time-ordered edge id at millisecond precision.
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
     /// Maximum edges to return this page; `None` means no limit.
     pub max_results: Option<usize>,
     /// Continuation token from a previous page of the *same* query, or `None` to start.
@@ -404,6 +427,8 @@ impl<'a, L: Label> EdgeQuery<'a, L> {
             target_label: None,
             target_id: None,
             filter: None,
+            since: None,
+            until: None,
             max_results: None,
             page_token: None,
         }
@@ -433,6 +458,26 @@ impl<'a, L: Label> EdgeQuery<'a, L> {
     #[must_use]
     pub fn filter(mut self, filter: &'a Filter) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    /// Restrict to edges created at or after `since` (inclusive), TAO's "connections since T".
+    ///
+    /// Combines with [`until`](Self::until) to form the half-open window `[since, until)`.
+    /// Resolved at millisecond precision against the time-ordered edge id.
+    #[must_use]
+    pub fn since(mut self, since: chrono::DateTime<chrono::Utc>) -> Self {
+        self.since = Some(since);
+        self
+    }
+
+    /// Restrict to edges created strictly before `until` (exclusive).
+    ///
+    /// Combines with [`since`](Self::since) to form the half-open window `[since, until)`.
+    /// Resolved at millisecond precision against the time-ordered edge id.
+    #[must_use]
+    pub fn until(mut self, until: chrono::DateTime<chrono::Utc>) -> Self {
+        self.until = Some(until);
         self
     }
 
@@ -501,6 +546,8 @@ pub trait AssociationStoreReader<L: Label>: Send + Sync + 'static {
                     target_label,
                     target_id: None,
                     filter: None,
+                    since: None,
+                    until: None,
                     max_results: None,
                     page_token: token,
                 })
@@ -771,4 +818,36 @@ pub trait Transactional<L: Label>: Send + Sync + 'static {
     ///
     /// Returns a backend error if the transaction cannot be started.
     async fn begin(&self) -> Result<Box<dyn StoreTx<L>>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A real v7 id sorts at or after its own millisecond's lower bound and strictly before the
+    /// next millisecond's — the invariant the edge time-window range scan relies on.
+    #[test]
+    fn v7_lower_bound_brackets_real_ids() {
+        let t = chrono::Utc::now();
+        let lo = v7_lower_bound(t);
+        let next = v7_lower_bound(t + chrono::Duration::milliseconds(1));
+
+        // The boundary carries the timestamp with a zero tail, so it's <= any real v7 id in
+        // that millisecond and < the next millisecond's boundary.
+        assert!(lo < next, "consecutive millisecond bounds are ordered");
+        let id = Uuid::new_v7(uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            t.timestamp() as u64,
+            t.timestamp_subsec_nanos(),
+        ));
+        assert!(id >= lo, "a real v7 id is at or after its ms lower bound");
+        assert!(id < next, "and strictly before the next ms bound");
+    }
+
+    /// Pre-epoch instants clamp to the zero boundary rather than wrapping.
+    #[test]
+    fn v7_lower_bound_clamps_pre_epoch() {
+        let pre = chrono::DateTime::<chrono::Utc>::from_timestamp(-100, 0).unwrap();
+        assert_eq!(v7_lower_bound(pre), Uuid::from_u128(0));
+    }
 }

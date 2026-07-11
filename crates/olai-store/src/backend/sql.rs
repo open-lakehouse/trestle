@@ -618,6 +618,16 @@ async fn op_query_edges<L: Label>(
             qb.push(" = ");
             qb.push_bind(tid.hyphenated().to_string());
         }
+        // Time window: v7 ids are time-ordered, so a `[since, until)` window on creation time is
+        // an id range. `since` inclusive → `id >= since_lo`; `until` exclusive → `id < until_lo`.
+        if let Some(since) = query.since {
+            qb.push(" AND id >= ");
+            qb.push_bind(crate::store::v7_lower_bound(since).hyphenated().to_string());
+        }
+        if let Some(until) = query.until {
+            qb.push(" AND id < ");
+            qb.push_bind(crate::store::v7_lower_bound(until).hyphenated().to_string());
+        }
     };
 
     const SELECT: &str = "SELECT id, from_id, label, to_id, to_label, properties, created_at, updated_at \
@@ -1395,6 +1405,7 @@ mod tests {
         conformance::edge_filter_pagination_completes(&fresh().await).await;
         conformance::search_fallback_predicates_agree(&fresh().await).await;
         conformance::edge_listing_is_recency_ordered(&fresh().await).await;
+        conformance::edge_time_window_selects_range(&fresh().await).await;
         conformance::edge_target_label_pages_completely(&fresh().await).await;
         conformance::incoming_edges_listed(&fresh().await).await;
         conformance::edge_target_id_restriction(&fresh().await).await;

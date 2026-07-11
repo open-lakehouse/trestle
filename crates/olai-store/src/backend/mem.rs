@@ -307,6 +307,9 @@ fn op_query_edges<L: Label>(
     // For a `From` query the anchor is `from_id` and the other side is `to_id`; `Into` swaps them.
     let anchor = |e: &Association<L>| if into { e.to_id } else { e.from_id };
     let other = |e: &Association<L>| if into { e.from_id } else { e.to_id };
+    // Time window as a v7 id range, matching the SQL backend: `[since_lo, until_lo)`.
+    let since_lo = query.since.map(crate::store::v7_lower_bound);
+    let until_lo = query.until.map(crate::store::v7_lower_bound);
     let mut matches: Vec<Association<L>> = state
         .edges
         .iter()
@@ -315,6 +318,8 @@ fn op_query_edges<L: Label>(
                 && e.label == query.label
                 && query.target_label.is_none_or(|tl| e.to_label == tl)
                 && query.target_id.is_none_or(|tid| other(e) == tid)
+                && since_lo.is_none_or(|lo| e.id >= lo)
+                && until_lo.is_none_or(|lo| e.id < lo)
                 && query
                     .filter
                     .is_none_or(|f| f.matches(crate::store::props_or_null(&e.properties)))
