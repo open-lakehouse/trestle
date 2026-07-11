@@ -25,6 +25,7 @@ keywords = ["lakehouse", "data-platform", "protobuf", "codegen", "resource-store
 
 [workspace.dependencies]
 # crates.io dependencies (in alphabetical order)
+aes-gcm = "0.10"
 async-trait = "0.1"
 bytes = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -54,6 +55,7 @@ toml = { version = "0.9", default-features = false, features = ["parse", "displa
 tracing = { version = "0.1", features = ["log"] }
 url = { version = "2.5", features = ["serde", "std"], default-features = false }
 uuid = { version = "1", features = ["serde"] }
+zeroize = { version = "1.8", features = ["derive"] }
 
 [profile.release]
 lto = true

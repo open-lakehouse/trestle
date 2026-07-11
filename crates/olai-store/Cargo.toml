@@ -12,6 +12,8 @@ keywords.workspace = true
 
 [dependencies]
 # workspace dependencies (in alphabetical order)
+# AES-256-GCM envelope encryption for sensitive fields (behind the `encryption` feature).
+aes-gcm = { workspace = true, optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -31,6 +33,8 @@ tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
 # `v4` for the in-memory backend to mint object/edge ids.
 uuid = { workspace = true, features = ["v4"] }
+# Zeroize KEK material on drop (behind the `encryption` feature).
+zeroize = { workspace = true, optional = true, features = ["derive"] }
 
 [features]
 default = []
@@ -38,6 +42,8 @@ sqlx = ["dep:sqlx"]
 # Persistent sqlx-backed `SqlStore`.
 sqlite = ["dep:sqlx", "sqlx/sqlite", "sqlx/runtime-tokio", "sqlx/migrate"]
 postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/runtime-tokio", "sqlx/migrate"]
+# Envelope encryption for sensitive fields (`EnvelopeEncryptor`, `KeyProvider`).
+encryption = ["dep:aes-gcm", "dep:zeroize"]
 
 [dev-dependencies]
 tokio = { version = "1.29.0", features = ["rt", "macros"] }
