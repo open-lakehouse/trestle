@@ -12,7 +12,10 @@
 //!
 //! SQL is checked at compile time with sqlx's `query!` macros against the
 //! committed `.sqlx/` offline cache (regenerate with `cargo sqlx prepare` after
-//! changing a query or the `migrations/`).
+//! changing a query or the `migrations/`). The one exception is
+//! [`search`](ObjectStoreReader::search) / [`search_from`](AssociationStoreReader::search_from),
+//! whose payload-filter `WHERE` clause is built dynamically with [`sqlx::QueryBuilder`] and so is
+//! neither compile-time checked nor cached — see the "Filter pushdown" section below.
 //!
 //! # Migrations
 //!
@@ -33,6 +36,7 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::{Sqlite, SqliteConnection};
 use uuid::Uuid;
 
+use crate::filter::{CompareOp, Filter, Predicate};
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
@@ -320,6 +324,334 @@ async fn op_list_objects<L: Label>(
         return paginate(objects, offset, limit);
     }
     paginate(objects, offset, limit)
+}
+
+// --- Filter pushdown ------------------------------------------------------------------------
+//
+// `search` translates the subset of the `Filter` AST that maps *faithfully* to SQLite into a
+// `WHERE` clause over `json_extract(properties, '$.path')`, so the database does the filtering
+// and real `LIMIT`/`OFFSET` pagination. Anything outside that subset falls back to the trait's
+// Rust-side default (drain the full listing, filter with `Filter::matches`) — see
+// `op_search_objects` / `op_search_edges`.
+//
+// The translated query is built with [`sqlx::QueryBuilder`], so it is **not** compile-time
+// checked and has **no** `.sqlx` offline-cache entry — the accepted tradeoff for a dynamic
+// predicate. Every other query in this backend keeps the checked `sqlx::query!` form. All values
+// and JSONPaths are `push_bind`'d; only static column identifiers are written into the SQL text,
+// so no user input is ever interpolated.
+
+/// Which predicates translate faithfully to SQLite. The reference evaluator
+/// ([`Filter::matches`]) is the source of truth; a predicate is only pushed when its SQL form
+/// provably agrees with it.
+///
+/// Pushable: [`Exists`](Predicate::Exists); and [`Eq`](CompareOp::Eq) / ordered comparisons on a
+/// scalar (string / number / bool) value, combined with `And`/`Or`/`Not`. Everything else —
+/// `Contains`, `Ne`, and comparisons whose query value is `null`, an array, or an object — is
+/// left for the Rust fallback, where matching SQLite's three-valued logic and type coercion to
+/// the evaluator would be error-prone.
+fn is_pushable(filter: &Filter) -> bool {
+    match filter {
+        Filter::And(fs) | Filter::Or(fs) => fs.iter().all(is_pushable),
+        Filter::Not(f) => is_pushable(f),
+        Filter::Predicate(Predicate::Exists { .. }) => true,
+        Filter::Predicate(Predicate::Compare { op, value, .. }) => match op {
+            // `Ne`/`Contains` are deliberately not pushed (see the module comment above).
+            CompareOp::Ne | CompareOp::Contains => false,
+            // Only scalar comparands translate; null/array/object are left to the fallback.
+            CompareOp::Eq | CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge => {
+                value.is_string() || value.is_number() || value.is_boolean()
+            }
+        },
+    }
+}
+
+/// The JSONPath string for a field path: `["a", "b"]` → `"$.a.b"`. Bound as a parameter to
+/// `json_extract` / `json_type`, never interpolated into SQL text.
+fn json_path(path: &crate::filter::FieldPath) -> String {
+    let mut s = String::from("$");
+    for seg in path.segments() {
+        s.push('.');
+        s.push_str(seg);
+    }
+    s
+}
+
+/// The `json_type(properties, ?)` values a scalar comparand is allowed to match, mirroring
+/// [`crate::filter`]'s `ordering`/`equal`: numbers match `integer`/`real`, strings match `text`,
+/// and booleans match `true`/`false`. A row whose value at the path has any other type (or is
+/// absent) must not match — matching the evaluator's "type mismatch ⇒ no match".
+fn allowed_types(value: &serde_json::Value) -> &'static [&'static str] {
+    if value.is_number() {
+        &["integer", "real"]
+    } else if value.is_string() {
+        &["text"]
+    } else {
+        // booleans (is_pushable already excluded everything else)
+        &["true", "false"]
+    }
+}
+
+/// Emit the SQL comparison operator for a pushable [`CompareOp`]. `Eq` uses `=`; the ordered ops
+/// map directly. (`Ne`/`Contains` never reach here — `is_pushable` rejects them.)
+fn sql_op(op: CompareOp) -> &'static str {
+    match op {
+        CompareOp::Eq => "=",
+        CompareOp::Lt => "<",
+        CompareOp::Le => "<=",
+        CompareOp::Gt => ">",
+        CompareOp::Ge => ">=",
+        CompareOp::Ne | CompareOp::Contains => unreachable!("not pushable"),
+    }
+}
+
+/// Recursively emit `filter` into `qb` as a boolean SQL expression that evaluates to a definite
+/// 0/1 (never SQL `NULL`), so it composes correctly under `AND`/`OR`/`NOT`.
+///
+/// Precondition: `is_pushable(filter)` is `true`.
+fn build_where(qb: &mut sqlx::QueryBuilder<'_, Sqlite>, filter: &Filter) {
+    match filter {
+        // Empty And ⇒ true (1); empty Or ⇒ false (0); matching the evaluator's identities.
+        Filter::And(fs) if fs.is_empty() => {
+            qb.push("1");
+        }
+        Filter::Or(fs) if fs.is_empty() => {
+            qb.push("0");
+        }
+        Filter::And(fs) | Filter::Or(fs) => {
+            let sep = if matches!(filter, Filter::And(_)) {
+                " AND "
+            } else {
+                " OR "
+            };
+            qb.push("(");
+            for (i, f) in fs.iter().enumerate() {
+                if i > 0 {
+                    qb.push(sep);
+                }
+                build_where(qb, f);
+            }
+            qb.push(")");
+        }
+        Filter::Not(f) => {
+            // `build_where` yields a definite 0/1, so plain NOT can't leak NULL.
+            qb.push("(NOT ");
+            build_where(qb, f);
+            qb.push(")");
+        }
+        Filter::Predicate(Predicate::Exists { path }) => {
+            // Present (including JSON null) ⇔ json_type is non-NULL; absent ⇔ NULL.
+            qb.push("(json_type(properties, ");
+            qb.push_bind(json_path(path));
+            qb.push(") IS NOT NULL)");
+        }
+        Filter::Predicate(Predicate::Compare { path, op, value }) => {
+            let p = json_path(path);
+            // Two-valued result: type guard AND value comparison, wrapped in COALESCE so an
+            // absent path (json_type NULL) yields 0 rather than NULL.
+            qb.push("COALESCE((json_type(properties, ");
+            qb.push_bind(p.clone());
+            qb.push(") IN (");
+            for (i, ty) in allowed_types(value).iter().enumerate() {
+                if i > 0 {
+                    qb.push(", ");
+                }
+                qb.push_bind(*ty);
+            }
+            qb.push(")) AND (json_extract(properties, ");
+            qb.push_bind(p);
+            qb.push(") ");
+            qb.push(sql_op(*op));
+            qb.push(" ");
+            bind_comparand(qb, value);
+            qb.push("), 0)");
+        }
+    }
+}
+
+/// Bind a scalar comparand so SQLite compares it in the same domain the evaluator does:
+/// numbers as reals, booleans as their `json_extract` integer form (1/0), strings as text.
+fn bind_comparand(qb: &mut sqlx::QueryBuilder<'_, Sqlite>, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Number(n) => {
+            // Compare numerically as f64, matching `filter::ordering`.
+            qb.push_bind(n.as_f64().unwrap_or(f64::NAN));
+        }
+        serde_json::Value::Bool(b) => {
+            // `json_extract` returns 1/0 for JSON booleans.
+            qb.push_bind(if *b { 1_i64 } else { 0_i64 });
+        }
+        serde_json::Value::String(s) => {
+            qb.push_bind(s.clone());
+        }
+        // is_pushable guarantees a scalar; other variants never reach here.
+        _ => unreachable!("non-scalar comparand is not pushable"),
+    }
+}
+
+/// Search objects by payload, pushing the filter into SQL when it translates faithfully.
+///
+/// - Fully pushable **and** no namespace: a single `WHERE label = ? AND <filter>` query with
+///   real `LIMIT`/`OFFSET`.
+/// - Fully pushable **and** a namespace prefix: push the filter to shrink the scan, but (as in
+///   [`op_list_objects`]) fetch every matching row and apply the namespace prefix + pagination
+///   in Rust, since the prefix can't be pushed and must not run behind a `LIMIT`.
+/// - Not pushable: fall back to the Rust default — list everything and filter with
+///   [`Filter::matches`].
+async fn op_search_objects<L: Label>(
+    conn: &mut SqliteConnection,
+    label: L,
+    namespace: Option<&ResourceName>,
+    filter: &Filter,
+    max_results: Option<usize>,
+    page_token: Option<String>,
+) -> Result<(Vec<Object<L>>, Option<String>)> {
+    if !is_pushable(filter) {
+        // Rust fallback: drain the full (namespaced) listing, then filter + paginate in process.
+        let offset = crate::store::parse_offset(page_token)?;
+        let (all, _) = op_list_objects(conn, label, namespace, None, None).await?;
+        let matched: Vec<_> = all
+            .into_iter()
+            .filter(|o| filter.matches(crate::store::props_or_null(&o.properties)))
+            .collect();
+        return Ok(crate::store::paginate_filtered(
+            matched,
+            offset,
+            max_results,
+        ));
+    }
+
+    let offset = parse_token(page_token)?;
+    let limit = max_results.unwrap_or(usize::MAX);
+    let label_s = label.as_str().to_string();
+
+    let mut qb = sqlx::QueryBuilder::<Sqlite>::new(
+        r#"SELECT id, label, name, properties, version, created_at, updated_at
+           FROM objects WHERE label = "#,
+    );
+    qb.push_bind(label_s);
+    qb.push(" AND ");
+    build_where(&mut qb, filter);
+    qb.push(" ORDER BY id");
+
+    // Without a namespace, SQL can page directly (over-fetch one row to detect "has more").
+    // With a namespace, fetch every filter-matching row and page after the Rust prefix filter.
+    if namespace.is_none() {
+        let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
+        qb.push(" LIMIT ");
+        qb.push_bind(fetch);
+        qb.push(" OFFSET ");
+        qb.push_bind(offset as i64);
+    }
+
+    let rows = qb.build().fetch_all(conn).await?;
+    let mut objects = rows
+        .into_iter()
+        .map(object_from_row)
+        .collect::<Result<Vec<_>>>()?;
+
+    if let Some(ns) = namespace {
+        objects.retain(|o| o.name.prefix_matches(ns));
+        let start = offset.min(objects.len());
+        objects.drain(..start);
+    }
+    paginate(objects, offset, limit)
+}
+
+/// Search associations by payload, pushing the filter into SQL when it translates faithfully.
+///
+/// The `from_id` + edge `label` + `target_label` (`to_label`) filters all push into the same
+/// `WHERE`, so pushing the payload filter also lets `LIMIT`/`OFFSET` page correctly — which
+/// incidentally removes the post-`LIMIT` `target_label` filtering hazard that [`op_list_edges`]
+/// still carries. When the filter isn't pushable, fall back to the Rust default.
+async fn op_search_edges<L: Label>(
+    conn: &mut SqliteConnection,
+    from_id: Uuid,
+    label: &str,
+    target_label: Option<L>,
+    filter: &Filter,
+    max_results: Option<usize>,
+    page_token: Option<String>,
+) -> Result<(Vec<Association<L>>, Option<String>)> {
+    if !is_pushable(filter) {
+        let offset = crate::store::parse_offset(page_token)?;
+        let (all, _) = op_list_edges(conn, from_id, label, target_label, None, None).await?;
+        let matched: Vec<_> = all
+            .into_iter()
+            .filter(|a| filter.matches(crate::store::props_or_null(&a.properties)))
+            .collect();
+        return Ok(crate::store::paginate_filtered(
+            matched,
+            offset,
+            max_results,
+        ));
+    }
+
+    let offset = parse_token(page_token)?;
+    let limit = max_results.unwrap_or(usize::MAX);
+    let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
+    let from_s = from_id.hyphenated().to_string();
+
+    let mut qb = sqlx::QueryBuilder::<Sqlite>::new(
+        r#"SELECT id, from_id, label, to_id, to_label, properties, created_at, updated_at
+           FROM associations WHERE from_id = "#,
+    );
+    qb.push_bind(from_s);
+    qb.push(" AND label = ");
+    qb.push_bind(label.to_string());
+    if let Some(tl) = target_label {
+        qb.push(" AND to_label = ");
+        qb.push_bind(tl.as_str().to_string());
+    }
+    qb.push(" AND ");
+    build_where(&mut qb, filter);
+    qb.push(" ORDER BY id LIMIT ");
+    qb.push_bind(fetch);
+    qb.push(" OFFSET ");
+    qb.push_bind(offset as i64);
+
+    let rows = qb.build().fetch_all(conn).await?;
+    let edges = rows
+        .into_iter()
+        .map(edge_from_row)
+        .collect::<Result<Vec<_>>>()?;
+    paginate(edges, offset, limit)
+}
+
+/// Build an [`Object`] from a dynamically-queried row (the pushdown path can't use the typed
+/// `query!` row, so it reads columns by name via [`sqlx::Row`]).
+fn object_from_row<L: Label>(row: sqlx::sqlite::SqliteRow) -> Result<Object<L>> {
+    use sqlx::Row;
+    build_object(
+        row.try_get("id")?,
+        row.try_get("label")?,
+        row.try_get("name")?,
+        row.try_get("properties")?,
+        row.try_get("version")?,
+        row.try_get("created_at")?,
+        row.try_get("updated_at")?,
+    )
+}
+
+/// Build an [`Association`] from a dynamically-queried row.
+fn edge_from_row<L: Label>(row: sqlx::sqlite::SqliteRow) -> Result<Association<L>> {
+    use sqlx::Row;
+    let id: String = row.try_get("id")?;
+    let from_id: String = row.try_get("from_id")?;
+    let to_id: String = row.try_get("to_id")?;
+    let to_label: String = row.try_get("to_label")?;
+    let properties: Option<String> = row.try_get("properties")?;
+    let created_at: String = row.try_get("created_at")?;
+    let updated_at: Option<String> = row.try_get("updated_at")?;
+    Ok(Association {
+        id: Uuid::parse_str(&id)?,
+        from_id: Uuid::parse_str(&from_id)?,
+        label: row.try_get("label")?,
+        to_id: Uuid::parse_str(&to_id)?,
+        to_label: L::from_str(&to_label).map_err(|_| Error::generic("unknown label in row"))?,
+        properties: properties.map(|p| serde_json::from_str(&p)).transpose()?,
+        created_at: parse_ts(&created_at)?,
+        updated_at: updated_at.as_deref().map(parse_ts).transpose()?,
+    })
 }
 
 async fn op_create<L: Label>(
@@ -712,6 +1044,18 @@ impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
         op_list_objects(&mut conn, label, namespace, max_results, page_token).await
     }
 
+    async fn search(
+        &self,
+        label: L,
+        namespace: Option<&ResourceName>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Object<L>>, Option<String>)> {
+        let mut conn = self.pool.acquire().await?;
+        op_search_objects(&mut conn, label, namespace, filter, max_results, page_token).await
+    }
+
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let mut conn = self.pool.acquire().await?;
         op_get_sensitive(&mut conn, id).await
@@ -786,6 +1130,28 @@ impl<L: Label> AssociationStoreReader<L> for SqlStore<L> {
             from_id,
             label,
             target_label,
+            max_results,
+            page_token,
+        )
+        .await
+    }
+
+    async fn search_from(
+        &self,
+        from_id: Uuid,
+        label: &str,
+        target_label: Option<L>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Association<L>>, Option<String>)> {
+        let mut conn = self.pool.acquire().await?;
+        op_search_edges(
+            &mut conn,
+            from_id,
+            label,
+            target_label,
+            filter,
             max_results,
             page_token,
         )
@@ -1021,6 +1387,7 @@ mod tests {
         conformance::search_namespace_and_filter(&fresh().await).await;
         conformance::search_from_predicates(&fresh().await).await;
         conformance::search_from_pagination_filters_completely(&fresh().await).await;
+        conformance::search_fallback_predicates_agree(&fresh().await).await;
 
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
