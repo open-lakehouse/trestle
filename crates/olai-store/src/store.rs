@@ -207,6 +207,27 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     ///
     /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists.
     async fn delete(&self, id: &Uuid) -> Result<()>;
+
+    /// Replace **only** the object's opaque sensitive blob, leaving its properties,
+    /// [`version`](Object::version), and `updated_at` untouched.
+    ///
+    /// This is the in-place counterpart to the `sensitive` parameter of
+    /// [`create`](ObjectStore::create) / [`update`](ObjectStore::update): it is used to rewrite
+    /// the sealed blob without touching the row's data — e.g. lazy KEK re-wrapping during a read,
+    /// where bumping the version or overwriting properties would be wrong. Unlike `update`, it is
+    /// **not** a versioned write and takes no [`Precondition`].
+    ///
+    /// The default implementation is a no-op returning `Ok(())`, for backends that do not persist
+    /// a sensitive blob; backends that do must override it to rewrite the blob column only.
+    ///
+    /// # Errors
+    ///
+    /// Backends that persist a blob return [`Error::NotFound`](crate::Error::NotFound) if no
+    /// object with `id` exists.
+    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        let _ = (id, sensitive);
+        Ok(())
+    }
 }
 
 /// Read-only interface for the association (edge) store.
@@ -338,6 +359,10 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
 
     async fn delete(&self, id: &Uuid) -> Result<()> {
         T::delete(self, id).await
+    }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        T::set_sensitive(self, id, sensitive).await
     }
 }
 

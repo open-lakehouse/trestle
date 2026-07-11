@@ -294,14 +294,26 @@ pub async fn sensitive_blob_roundtrip<S: StoreExec<ConformanceLabel>>(store: &S)
         "supplying a blob must replace the existing one"
     );
 
-    // Deleting the object drops the blob with it.
+    // `set_sensitive` rewrites only the blob, leaving the object's version untouched.
+    let before = ObjectStoreReader::get(store, &obj.id).await.unwrap();
+    let blob3 = Bytes::from_static(b"rewrapped");
+    store.set_sensitive(&obj.id, blob3.clone()).await.unwrap();
+    assert_eq!(
+        store.get_sensitive(&obj.id).await.unwrap().as_deref(),
+        Some(&blob3[..]),
+        "set_sensitive must replace the blob"
+    );
+    let after = ObjectStoreReader::get(store, &obj.id).await.unwrap();
+    assert_eq!(
+        after.version, before.version,
+        "set_sensitive must not bump the object version"
+    );
+
+    // Deleting the object drops the blob with it; a missing object reads as `Ok(None)`.
     store.delete(&obj.id).await.unwrap();
     assert!(
-        matches!(
-            store.get_sensitive(&obj.id).await,
-            Ok(None) | Err(Error::NotFound)
-        ),
-        "blob must be gone once the object is deleted"
+        matches!(store.get_sensitive(&obj.id).await, Ok(None)),
+        "blob must be gone (Ok(None)) once the object is deleted"
     );
 }
 

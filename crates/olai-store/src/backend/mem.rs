@@ -162,6 +162,15 @@ fn op_get_sensitive<L: Label>(state: &State<L>, id: &Uuid) -> Result<Option<Byte
     Ok(state.sensitive.get(id).cloned())
 }
 
+/// Replace only the sensitive blob, leaving the object (and its version) untouched.
+fn op_set_sensitive<L: Label>(state: &mut State<L>, id: &Uuid, blob: Bytes) -> Result<()> {
+    if !state.objects.contains_key(id) {
+        return Err(Error::NotFound);
+    }
+    state.sensitive.insert(*id, blob);
+    Ok(())
+}
+
 fn op_rename<L: Label>(
     state: &mut State<L>,
     id: &Uuid,
@@ -429,6 +438,10 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
     async fn delete(&self, id: &Uuid) -> Result<()> {
         op_delete(&mut self.state.lock().unwrap(), id)
     }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        op_set_sensitive(&mut self.state.lock().unwrap(), id, sensitive)
+    }
 }
 
 #[async_trait::async_trait]
@@ -584,6 +597,10 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
 
     async fn delete(&self, id: &Uuid) -> Result<()> {
         self.with_state(|s| op_delete(s, id))
+    }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        self.with_state(|s| op_set_sensitive(s, id, sensitive))
     }
 }
 

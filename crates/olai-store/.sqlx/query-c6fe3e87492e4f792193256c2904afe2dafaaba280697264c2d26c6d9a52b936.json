@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE objects SET sensitive = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c6fe3e87492e4f792193256c2904afe2dafaaba280697264c2d26c6d9a52b936"
+}

@@ -364,11 +364,26 @@ async fn op_create<L: Label>(
 
 async fn op_get_sensitive(conn: &mut SqliteConnection, id: &Uuid) -> Result<Option<Bytes>> {
     let id_s = id.hyphenated().to_string();
+    // A missing object and an object with no blob both yield `Ok(None)` — matching the
+    // `InMemoryStore` backend and the trait contract ("treat `Ok(None)` as no blob regardless
+    // of whether the object exists").
     let row = sqlx::query!(r#"SELECT sensitive FROM objects WHERE id = ?"#, id_s)
         .fetch_optional(conn)
+        .await?;
+    Ok(row.and_then(|r| r.sensitive).map(Bytes::from))
+}
+
+/// Replace only the `sensitive` column, leaving properties and version untouched.
+async fn op_set_sensitive(conn: &mut SqliteConnection, id: &Uuid, blob: &[u8]) -> Result<()> {
+    let id_s = id.hyphenated().to_string();
+    let affected = sqlx::query!("UPDATE objects SET sensitive = ? WHERE id = ?", blob, id_s)
+        .execute(conn)
         .await?
-        .ok_or(Error::NotFound)?;
-    Ok(row.sensitive.map(Bytes::from))
+        .rows_affected();
+    if affected == 0 {
+        return Err(Error::NotFound);
+    }
+    Ok(())
 }
 
 /// A zero-row conditional write means either the row is gone (`NotFound`) or its
@@ -748,6 +763,11 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
         tx.commit().await?;
         Ok(())
     }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        let mut conn = self.pool.acquire().await?;
+        op_set_sensitive(&mut conn, id, &sensitive).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -873,6 +893,11 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
     async fn delete(&self, id: &Uuid) -> Result<()> {
         let mut tx = self.tx.lock().await;
         op_delete(&mut tx, id).await
+    }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        let mut tx = self.tx.lock().await;
+        op_set_sensitive(&mut tx, id, &sensitive).await
     }
 }
 

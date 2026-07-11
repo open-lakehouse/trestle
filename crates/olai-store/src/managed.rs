@@ -407,15 +407,16 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
             // Lazy KEK rotation: if the blob was sealed under a retired KEK, re-wrap its data key
             // under the active KEK and write it back. Best-effort — a write failure must not fail
             // the read, and the value ciphertext is untouched so the result is identical.
+            //
+            // The writeback touches *only* the sealed blob via `set_sensitive`: we must not route
+            // `object.properties` back through `update`, because by this point it has the decrypted
+            // sensitive fields merged in — persisting that would leak plaintext into the (searchable,
+            // unencrypted) properties column. `set_sensitive` also leaves the version/updated_at
+            // untouched, so a read does not masquerade as a mutation.
             if let Ok(Some(rewrapped)) = encryptor.rewrap(&blob).await {
                 let _ = self
                     .inner
-                    .update(
-                        id,
-                        object.properties.clone(),
-                        Precondition::Any,
-                        Some(bytes::Bytes::from(rewrapped)),
-                    )
+                    .set_sensitive(id, bytes::Bytes::from(rewrapped))
                     .await;
             }
         }
@@ -919,6 +920,32 @@ mod tests {
         assert_eq!(
             full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
             serde_json::json!("rotate-me")
+        );
+
+        // The lazy-rotation writeback must NOT leak the decrypted secret into the stored
+        // properties, and must NOT bump the version (a read is not a mutation).
+        let raw = store_v2.inner.get(&created.id).await.unwrap();
+        assert!(
+            raw.properties
+                .as_ref()
+                .and_then(|p| p.as_object())
+                .is_none_or(|m| !m.contains_key("api_key")),
+            "rotation writeback leaked plaintext into stored properties"
+        );
+        assert_eq!(
+            raw.version, created.version,
+            "rotation writeback must not bump the object version"
+        );
+        // A plain get stays redacted after rotation.
+        let redacted = store_v2.get(&created.id).await.unwrap();
+        assert!(
+            !redacted
+                .properties
+                .as_ref()
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("api_key")
         );
 
         // A v2-only encryptor can now open the rewritten blob.
