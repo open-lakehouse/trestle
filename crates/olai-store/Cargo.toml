@@ -26,12 +26,18 @@ sqlx = { workspace = true, optional = true, features = [
   "json",
 ] }
 thiserror = { workspace = true }
+# `sync` for the in-memory backend's owned transaction guard (`OwnedMutexGuard`).
+tokio = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
-uuid = { workspace = true }
+# `v4` for the in-memory backend to mint object/edge ids.
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []
 sqlx = ["dep:sqlx"]
+# Persistent sqlx-backed `SqlStore` (added in a later step).
+sqlite = ["dep:sqlx", "sqlx/sqlite", "sqlx/runtime-tokio"]
+postgres = ["dep:sqlx", "sqlx/postgres", "sqlx/runtime-tokio"]
 
 [dev-dependencies]
 tokio = { version = "1.29.0", features = ["rt", "macros"] }
