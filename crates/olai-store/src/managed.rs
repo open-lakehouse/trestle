@@ -48,9 +48,12 @@ use uuid::Uuid;
 
 use crate::label::Label;
 use crate::name::ResourceName;
-use crate::object::Object;
+use crate::object::{Association, Object};
 use crate::registry::{FieldRole, ResourceRegistry};
-use crate::store::{ObjectStore, ObjectStoreReader, Precondition};
+use crate::store::{
+    AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
+    ObjectStoreReader, Precondition, SecretObjectReader, StoreExec, StoreTx, Transactional,
+};
 use crate::{Error, Result};
 
 /// A registry-aware object store that enforces field roles — the primary store API.
@@ -77,6 +80,20 @@ pub struct ManagedObjectStore<L: Label, S> {
     encryptor: Option<crate::encryption::EnvelopeEncryptor>,
     registry: Arc<ResourceRegistry<L>>,
     _label: PhantomData<L>,
+}
+
+// Hand-written so the bound is `S: Clone` only — a `#[derive(Clone)]` would also demand
+// `L: Clone` (via `PhantomData<L>`), and the registry is shared behind an `Arc`.
+impl<L: Label, S: Clone> Clone for ManagedObjectStore<L, S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            #[cfg(feature = "encryption")]
+            encryptor: self.encryptor.clone(),
+            registry: Arc::clone(&self.registry),
+            _label: PhantomData,
+        }
+    }
 }
 
 impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
@@ -186,18 +203,24 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
                     );
                 }
                 FieldRole::Managed => {
+                    // Timestamps are injected as epoch milliseconds (a JSON number), the
+                    // representation UC-style resource models use for `created_at` /
+                    // `updated_at` (proto `int64`). A string (e.g. RFC 3339) would fail to
+                    // deserialize back into those integer fields.
                     match field.name {
                         "created_at" => {
                             map.insert(
                                 field.name.to_string(),
-                                serde_json::Value::String(object.created_at.to_rfc3339()),
+                                serde_json::Value::Number(
+                                    object.created_at.timestamp_millis().into(),
+                                ),
                             );
                         }
                         "updated_at" => {
                             if let Some(updated) = object.updated_at {
                                 map.insert(
                                     field.name.to_string(),
-                                    serde_json::Value::String(updated.to_rfc3339()),
+                                    serde_json::Value::Number(updated.timestamp_millis().into()),
                                 );
                             }
                         }
@@ -381,13 +404,69 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
         // The sealed blob is stored on the object row, so deleting the object drops it too.
         self.inner.delete(id).await
     }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: bytes::Bytes) -> Result<()> {
+        // The sealed blob lives on the inner row; forward so the decorator does not
+        // silently swallow a blob rewrite (e.g. a KEK-rotation writeback routed through
+        // the outer store) via the trait's no-op default.
+        self.inner.set_sensitive(id, sensitive).await
+    }
 }
 
-impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
+// --- AssociationStore(Reader) pass-through ---
+//
+// Associations carry no field-role or sensitive-field semantics — they are edges
+// between objects, not payload the registry governs. So the managed decorator adds
+// nothing here and delegates the edge surface straight to the inner store. This lets
+// `ManagedObjectStore` stand in wherever both `ObjectStore` and `AssociationStore` are
+// required (e.g. a `ResourceStore` adapter over the full graph), rather than forcing
+// callers to route objects and edges through two different handles.
+
+#[async_trait::async_trait]
+impl<L: Label, S: AssociationStoreReader<L>> AssociationStoreReader<L>
+    for ManagedObjectStore<L, S>
+{
+    async fn query_edges(
+        &self,
+        query: EdgeQuery<'_, L>,
+    ) -> Result<(Vec<Association<L>>, Option<String>)> {
+        self.inner.query_edges(query).await
+    }
+
+    async fn count_edges(
+        &self,
+        endpoint: EdgeEndpoint,
+        label: &str,
+        target_label: Option<L>,
+    ) -> Result<u64> {
+        self.inner.count_edges(endpoint, label, target_label).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<L: Label, S: AssociationStore<L>> AssociationStore<L> for ManagedObjectStore<L, S> {
+    async fn add(
+        &self,
+        from_id: Uuid,
+        to_id: Uuid,
+        label: &str,
+        properties: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.inner.add(from_id, to_id, label, properties).await
+    }
+
+    async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
+        self.inner.remove(from_id, to_id, label).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<L: Label, S: ObjectStore<L>> SecretObjectReader<L> for ManagedObjectStore<L, S> {
     /// Get an object with its sensitive fields decrypted and merged back into `properties`.
     ///
     /// Intended for internal use (e.g. credential vending) where the caller needs the full value.
-    /// Without an encryptor, or when no blob is stored, this behaves like [`get`](Self::get).
+    /// Without an encryptor, or when no blob is stored, this behaves like
+    /// [`get`](ObjectStoreReader::get).
     ///
     /// # Errors
     ///
@@ -401,7 +480,7 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
             otel.kind = "client",
         )
     )]
-    pub async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
+    async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
         let mut object = self.inner.get(id).await?;
         self.inject_fields(&mut object);
 
@@ -459,6 +538,43 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
         }
 
         Ok(object)
+    }
+}
+
+// --- Transactional pass-through ---
+//
+// A transaction is a backend-level unit of work, so the managed decorator delegates
+// `transaction`/`begin` straight to the inner store when it is [`Transactional`]. This lets
+// `ManagedObjectStore` be the sole store handle a caller holds while still expressing atomic
+// multi-object work (e.g. deleting a staging reservation and creating a table at the same id in
+// one commit).
+//
+// NOTE: the closure and the returned [`StoreTx`] operate on the **raw** [`StoreExec`] surface of
+// the inner store — the managed layer's field-role stripping/injection and sensitive-field
+// sealing are *not* applied inside the transaction. That is deliberate and sound only for
+// resources with **no sensitive fields**: a raw `create`/`update` there would otherwise leak
+// unsealed secret material into the plaintext properties column. The current in-tree caller
+// (the managed-table commit swap over `StagingTable`/`Table`, neither of which has a sensitive
+// field) satisfies that constraint; do not route a resource with sensitive fields through this
+// path.
+#[async_trait::async_trait]
+impl<L: Label, S: Transactional<L>> Transactional<L> for ManagedObjectStore<L, S> {
+    async fn transaction<'a, T>(
+        &'a self,
+        f: Box<
+            dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> futures::future::BoxFuture<'t, Result<T>>
+                + Send
+                + 'a,
+        >,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+    {
+        self.inner.transaction(f).await
+    }
+
+    async fn begin(&self) -> Result<Box<dyn StoreTx<L>>> {
+        self.inner.begin().await
     }
 }
 
@@ -621,10 +737,11 @@ mod tests {
         assert_eq!(map["color"], serde_json::json!("red"));
         // Identifier injected from the store's real id, not the client value.
         assert_eq!(map["id"], serde_json::json!(created.id.to_string()));
-        // Managed created_at injected from the store, not the client value.
+        // Managed created_at injected from the store (as epoch millis), not the
+        // client value.
         assert_eq!(
             map["created_at"],
-            serde_json::json!(created.created_at.to_rfc3339())
+            serde_json::json!(created.created_at.timestamp_millis())
         );
 
         // Verify the underlying store never persisted the stripped fields.
@@ -633,6 +750,70 @@ mod tests {
         assert!(!raw_map.contains_key("id"));
         assert!(!raw_map.contains_key("created_at"));
         assert_eq!(raw_map["color"], serde_json::json!("red"));
+    }
+
+    #[tokio::test]
+    async fn association_ops_pass_through_to_inner() {
+        use crate::store::{AssociationStore, AssociationStoreReader, EdgeQuery};
+
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
+
+        // Two objects to connect.
+        let a = store
+            .create(TestLabel::Widget, &rn("a"), None, None, None)
+            .await
+            .unwrap();
+        let b = store
+            .create(TestLabel::Other, &rn("b"), None, None, None)
+            .await
+            .unwrap();
+
+        // Add an edge through the managed store — it must reach the inner store...
+        store.add(a.id, b.id, "links", None).await.unwrap();
+
+        // ...and be visible via the managed store's `query_edges` delegation.
+        let (edges, token) = store
+            .query_edges(EdgeQuery::from(a.id, "links"))
+            .await
+            .unwrap();
+        assert_eq!(token, None);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to_id, b.id);
+        assert_eq!(edges[0].to_label, TestLabel::Other);
+
+        // `remove` also delegates.
+        store.remove(a.id, b.id, "links").await.unwrap();
+        let (edges, _) = store
+            .query_edges(EdgeQuery::from(a.id, "links"))
+            .await
+            .unwrap();
+        assert!(edges.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transaction_passes_through_to_inner_and_commits() {
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
+
+        // Create two objects inside one transaction through the managed store — both must
+        // reach the inner store and be visible after the closure commits on `Ok`.
+        let (a_id, b_id) = store
+            .transaction(Box::new(|tx: &dyn StoreExec<TestLabel>| {
+                Box::pin(async move {
+                    let a = tx
+                        .create(TestLabel::Other, &rn("a"), None, None, None)
+                        .await?;
+                    let b = tx
+                        .create(TestLabel::Other, &rn("b"), None, None, None)
+                        .await?;
+                    Ok((a.id, b.id))
+                })
+            }))
+            .await
+            .unwrap();
+
+        // Both committed rows are readable through the managed store.
+        assert_eq!(store.get(&a_id).await.unwrap().id, a_id);
+        assert_eq!(store.get(&b_id).await.unwrap().id, b_id);
     }
 
     #[tokio::test]
