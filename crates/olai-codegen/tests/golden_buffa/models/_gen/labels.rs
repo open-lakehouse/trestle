@@ -107,6 +107,7 @@ impl TryFrom<super::catalog::v1::Catalog> for Object {
             name: obj.resource_name(),
             label: ObjectLabel::Catalog,
             properties: Some(::serde_json::to_value(obj)?),
+            version: 0,
             updated_at: None,
             created_at: chrono::Utc::now(),
         })

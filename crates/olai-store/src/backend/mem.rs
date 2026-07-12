@@ -117,7 +117,7 @@ fn op_create<L: Label>(
     if state
         .objects
         .values()
-        .any(|o| o.label == label && &o.name == name)
+        .any(|o| o.label == label && o.name.eq_ignore_ascii_case(name))
     {
         return Err(Error::AlreadyExists);
     }
@@ -184,7 +184,7 @@ fn op_rename<L: Label>(
     if state
         .objects
         .values()
-        .any(|o| o.id != *id && o.label == label && &o.name == new_name)
+        .any(|o| o.id != *id && o.label == label && o.name.eq_ignore_ascii_case(new_name))
     {
         return Err(Error::AlreadyExists);
     }
@@ -423,7 +423,7 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryStore<L> {
             .unwrap()
             .objects
             .values()
-            .find(|o| o.label == label && &o.name == name)
+            .find(|o| o.label == label && o.name.eq_ignore_ascii_case(name))
             .cloned()
             .ok_or(Error::NotFound);
         record_err(&out);
@@ -779,7 +779,7 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryTx<L> {
         let out = self.with_state(|s| {
             s.objects
                 .values()
-                .find(|o| o.label == label && &o.name == name)
+                .find(|o| o.label == label && o.name.eq_ignore_ascii_case(name))
                 .cloned()
                 .ok_or(Error::NotFound)
         });
