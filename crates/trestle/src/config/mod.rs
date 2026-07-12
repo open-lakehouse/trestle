@@ -22,7 +22,7 @@ mod derive;
 mod lower;
 mod validate;
 
-pub use buf_gen::emit_buf_gen;
+pub use buf_gen::{emit_buf_gen, merge_buf_gen};
 
 use std::fs;
 use std::path::Path;

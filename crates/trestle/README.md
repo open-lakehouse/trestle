@@ -4,7 +4,10 @@ The unified CLI for the [Trestle](https://github.com/open-lakehouse/trestle)
 framework. Published as `olai-trestle`; installs a `trestle` binary.
 
 1. **Project scaffolding** — `trestle new <name> --template <name|git-url|path>`
-2. **Code generation** — `trestle generate -c trestle.yaml` and
+2. **Config bootstrap** — `trestle init` runs a guided interview and writes
+   `trestle.yaml` (+ derived `buf.gen.yaml`); `trestle config` reconfigures an
+   existing project (both accept the same flags for non-interactive use)
+3. **Code generation** — `trestle generate -c trestle.yaml` and
    `trestle enrich-openapi -c trestle.yaml` (see
    [`olai-codegen`](https://crates.io/crates/olai-codegen))
 

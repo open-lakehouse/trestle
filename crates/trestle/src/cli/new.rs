@@ -38,7 +38,7 @@ use crate::template::validate::validate_resolved;
 use crate::template::wizard::{WizardInput, run_wizard};
 use crate::template::{
     ComponentCatalog, Renderer, TemplateSource, aggregate_stack_context, collect_variables,
-    load_template, preview, render_tree,
+    load_template, port_collisions, preview, render_tree,
 };
 
 #[derive(Args, Clone)]
@@ -282,6 +282,30 @@ pub fn run(args: NewArgs) -> Result<()> {
     validate_resolved(&components)?;
 
     let component_manifests: Vec<&_> = components.iter().map(|c| &c.loaded.manifest).collect();
+
+    // Fail fast on host-port conflicts: two components claiming the same host
+    // port (under different names) render happily but break `docker compose up`.
+    let collisions = port_collisions(&component_manifests);
+    if !collisions.is_empty() {
+        let detail = collisions
+            .iter()
+            .map(|c| {
+                let who = c
+                    .claimants
+                    .iter()
+                    .map(|(comp, port)| format!("{comp} ({port})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("  host port {} claimed by: {who}", c.port)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(Error::other(format!(
+            "host-port collision between selected components:\n{detail}\n\
+             pick a different component for one of these categories, or adjust its port."
+        )));
+    }
+
     let stack = aggregate_stack_context(&component_manifests);
 
     let merged_static_ctx = merge_static_context(&base, &apps);
@@ -776,4 +800,69 @@ fn build_final_ctx(
         serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
     );
     Value::from_serialize(serde_json::Value::Object(map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_key_val_splits_on_first_equals() {
+        assert_eq!(
+            parse_key_val("project_name=my-app").unwrap(),
+            ("project_name".to_string(), "my-app".to_string())
+        );
+        // Only the first `=` splits; the value may contain more.
+        assert_eq!(
+            parse_key_val("url=https://x/y?a=b").unwrap(),
+            ("url".to_string(), "https://x/y?a=b".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_key_val_rejects_missing_equals() {
+        assert!(parse_key_val("noequals").is_err());
+    }
+
+    #[test]
+    fn parse_selection_splits_and_trims_values() {
+        assert_eq!(
+            parse_selection("storage=a, b ,c").unwrap(),
+            (
+                "storage".to_string(),
+                vec!["a".to_string(), "b".to_string(), "c".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn parse_selection_drops_empty_values() {
+        // Trailing comma / empty segments are filtered, yielding an empty pick.
+        assert_eq!(
+            parse_selection("storage=").unwrap(),
+            ("storage".to_string(), Vec::<String>::new())
+        );
+        assert_eq!(
+            parse_selection("storage=a,,").unwrap(),
+            ("storage".to_string(), vec!["a".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_selection_rejects_missing_equals() {
+        assert!(parse_selection("storage").is_err());
+    }
+
+    #[test]
+    fn validate_project_name_accepts_kebab() {
+        assert!(validate_project_name("my-app-2").is_ok());
+        assert!(validate_project_name("a").is_ok());
+    }
+
+    #[test]
+    fn validate_project_name_rejects_traversal_and_bad_chars() {
+        for bad in ["../foo", "/abs", "Foo", "1app", "my_app", "app!", ""] {
+            assert!(validate_project_name(bad).is_err(), "should reject {bad:?}");
+        }
+    }
 }

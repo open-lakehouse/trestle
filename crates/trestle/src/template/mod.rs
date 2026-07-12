@@ -29,7 +29,7 @@ pub mod validate;
 pub mod walk;
 pub mod wizard;
 
-pub use aggregate::{StackContext, aggregate_stack_context};
+pub use aggregate::{PortCollision, StackContext, aggregate_stack_context, port_collisions};
 pub use catalog::{ComponentCatalog, ComponentSummary};
 pub use loader::{TemplateSource, load_template};
 pub use manifest::{
