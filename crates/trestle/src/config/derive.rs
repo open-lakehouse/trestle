@@ -69,6 +69,7 @@ mod tests {
             },
             generate: GenerateConfig {
                 proto_lib: Default::default(),
+                json_field_names: Default::default(),
                 descriptors: "api.bin".into(),
                 servers: Servers::default(),
                 clients: Clients::default(),

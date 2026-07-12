@@ -583,6 +583,7 @@ fn emit_project_config(
         },
         generate: GenerateConfig {
             proto_lib,
+            json_field_names: Default::default(),
             descriptors: "api.bin".to_string(),
             servers: Servers {
                 rest: true,

@@ -15,7 +15,7 @@
 //! are hard errors. Rules (3)–(5) are always hard errors — they're enforced by
 //! the schema being `required`, but checked here too for a friendly message.
 
-use super::{ProtoLib, Transport, TrestleConfig};
+use super::{JsonFieldNames, ProtoLib, Transport, TrestleConfig};
 use crate::error::{Error, Result};
 
 impl TrestleConfig {
@@ -28,6 +28,19 @@ impl TrestleConfig {
             && self.generate.proto_lib != ProtoLib::Buffa
         {
             self.resolve_buffa_requirement(reason, interactive)?;
+        }
+
+        // `json_field_names: proto` only affects buffa output (it post-processes the
+        // buffa plugin's serde renames). Under prost, casing is controlled by the
+        // prost-serde `preserve_proto_field_names` buf option instead, so the knob
+        // would silently do nothing — flag it as a config mistake.
+        if self.generate.json_field_names == JsonFieldNames::Proto
+            && self.generate.proto_lib != ProtoLib::Buffa
+        {
+            return Err(Error::other(
+                "`json_field_names: proto` only applies to `proto_lib: buffa`; under \
+                 prost, use the prost-serde `preserve_proto_field_names` option instead",
+            ));
         }
 
         // Identity / per-client required fields. The schema already makes these
@@ -110,6 +123,7 @@ mod tests {
             },
             generate: GenerateConfig {
                 proto_lib: ProtoLib::Prost,
+                json_field_names: Default::default(),
                 descriptors: "api.bin".into(),
                 servers: Servers::default(),
                 clients: Clients::default(),
@@ -150,6 +164,22 @@ mod tests {
         let mut c = base();
         c.generate.proto_lib = ProtoLib::Buffa;
         c.generate.servers.connect = true;
+        assert!(c.validate(false).is_ok());
+    }
+
+    #[test]
+    fn json_field_names_proto_on_prost_errors() {
+        let mut c = base();
+        c.generate.json_field_names = crate::config::JsonFieldNames::Proto;
+        // proto_lib is Prost in `base()`.
+        assert!(c.validate(false).is_err());
+    }
+
+    #[test]
+    fn json_field_names_proto_on_buffa_passes() {
+        let mut c = base();
+        c.generate.proto_lib = ProtoLib::Buffa;
+        c.generate.json_field_names = crate::config::JsonFieldNames::Proto;
         assert!(c.validate(false).is_ok());
     }
 
