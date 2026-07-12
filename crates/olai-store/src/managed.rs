@@ -48,9 +48,12 @@ use uuid::Uuid;
 
 use crate::label::Label;
 use crate::name::ResourceName;
-use crate::object::Object;
+use crate::object::{Association, Object};
 use crate::registry::{FieldRole, ResourceRegistry};
-use crate::store::{ObjectStore, ObjectStoreReader, Precondition};
+use crate::store::{
+    AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
+    ObjectStoreReader, Precondition,
+};
 use crate::{Error, Result};
 
 /// A registry-aware object store that enforces field roles — the primary store API.
@@ -383,6 +386,53 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
     }
 }
 
+// --- AssociationStore(Reader) pass-through ---
+//
+// Associations carry no field-role or sensitive-field semantics — they are edges
+// between objects, not payload the registry governs. So the managed decorator adds
+// nothing here and delegates the edge surface straight to the inner store. This lets
+// `ManagedObjectStore` stand in wherever both `ObjectStore` and `AssociationStore` are
+// required (e.g. a `ResourceStore` adapter over the full graph), rather than forcing
+// callers to route objects and edges through two different handles.
+
+#[async_trait::async_trait]
+impl<L: Label, S: AssociationStoreReader<L>> AssociationStoreReader<L>
+    for ManagedObjectStore<L, S>
+{
+    async fn query_edges(
+        &self,
+        query: EdgeQuery<'_, L>,
+    ) -> Result<(Vec<Association<L>>, Option<String>)> {
+        self.inner.query_edges(query).await
+    }
+
+    async fn count_edges(
+        &self,
+        endpoint: EdgeEndpoint,
+        label: &str,
+        target_label: Option<L>,
+    ) -> Result<u64> {
+        self.inner.count_edges(endpoint, label, target_label).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<L: Label, S: AssociationStore<L>> AssociationStore<L> for ManagedObjectStore<L, S> {
+    async fn add(
+        &self,
+        from_id: Uuid,
+        to_id: Uuid,
+        label: &str,
+        properties: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.inner.add(from_id, to_id, label, properties).await
+    }
+
+    async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
+        self.inner.remove(from_id, to_id, label).await
+    }
+}
+
 impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     /// Get an object with its sensitive fields decrypted and merged back into `properties`.
     ///
@@ -633,6 +683,44 @@ mod tests {
         assert!(!raw_map.contains_key("id"));
         assert!(!raw_map.contains_key("created_at"));
         assert_eq!(raw_map["color"], serde_json::json!("red"));
+    }
+
+    #[tokio::test]
+    async fn association_ops_pass_through_to_inner() {
+        use crate::store::{AssociationStore, AssociationStoreReader, EdgeQuery};
+
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
+
+        // Two objects to connect.
+        let a = store
+            .create(TestLabel::Widget, &rn("a"), None, None, None)
+            .await
+            .unwrap();
+        let b = store
+            .create(TestLabel::Other, &rn("b"), None, None, None)
+            .await
+            .unwrap();
+
+        // Add an edge through the managed store — it must reach the inner store...
+        store.add(a.id, b.id, "links", None).await.unwrap();
+
+        // ...and be visible via the managed store's `query_edges` delegation.
+        let (edges, token) = store
+            .query_edges(EdgeQuery::from(a.id, "links"))
+            .await
+            .unwrap();
+        assert_eq!(token, None);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to_id, b.id);
+        assert_eq!(edges[0].to_label, TestLabel::Other);
+
+        // `remove` also delegates.
+        store.remove(a.id, b.id, "links").await.unwrap();
+        let (edges, _) = store
+            .query_edges(EdgeQuery::from(a.id, "links"))
+            .await
+            .unwrap();
+        assert!(edges.is_empty());
     }
 
     #[tokio::test]
