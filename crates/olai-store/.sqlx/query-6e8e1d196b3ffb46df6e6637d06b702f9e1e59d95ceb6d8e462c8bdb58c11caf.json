@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO associations (id, from_id, label, to_id, to_label, properties, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e8e1d196b3ffb46df6e6637d06b702f9e1e59d95ceb6d8e462c8bdb58c11caf"
+}
