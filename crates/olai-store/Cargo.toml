@@ -15,6 +15,8 @@ keywords.workspace = true
 # AES-256-GCM envelope encryption for sensitive fields (behind the `encryption` feature).
 aes-gcm = { workspace = true, optional = true }
 async-trait = { workspace = true }
+# base64url encoding of the opaque keyset pagination cursor.
+base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
@@ -33,8 +35,8 @@ tokio = { workspace = true, features = ["sync"] }
 # Structured spans/events over the store's async operations. Always-on: disabled
 # `tracing` macros compile to a cheap level check, so no feature gate is warranted.
 tracing = { workspace = true }
-# `v4` for object ids; `v7` for time-ordered edge ids (so edge listings are most-recent-first).
-uuid = { workspace = true, features = ["v4", "v7"] }
+# `v7` for time-ordered object and edge ids, so listings order (and page) by creation time.
+uuid = { workspace = true, features = ["v7"] }
 # Zeroize KEK material on drop (behind the `encryption` feature).
 zeroize = { workspace = true, optional = true, features = ["derive"] }
 
@@ -51,8 +53,8 @@ encryption = ["dep:aes-gcm", "dep:zeroize"]
 tokio = { version = "1.29.0", features = ["rt", "macros"] }
 # Capture emitted spans/events to assert instrumentation fires and never leaks payloads.
 tracing-test = "0.2"
-# `v4` mints object ids; `v7` mints time-ordered edge ids in the in-memory backend.
-uuid = { version = "1", features = ["v4", "v7"] }
+# `v7` mints time-ordered object and edge ids in the in-memory backend.
+uuid = { version = "1", features = ["v7"] }
 
 [lints.rust]
 # `docsrs` is set only by the docs.rs build (see `[package.metadata.docs.rs]`) to

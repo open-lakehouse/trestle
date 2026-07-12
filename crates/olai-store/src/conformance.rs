@@ -1061,6 +1061,236 @@ pub async fn count_edges_matches_list<S: StoreExec<ConformanceLabel>>(store: &S)
     assert_eq!(count_other, 2, "count honors target_label");
 }
 
+/// Keyset pagination is stable under concurrent mutation: mutating rows *before* the cursor never
+/// displaces, skips, or duplicates a not-yet-returned object.
+///
+/// This is the property offset pagination lacks. After the first page is returned, we **delete**
+/// one of the objects already returned. Under offset pagination the deletion shifts every later
+/// row's position left by one, so the next `OFFSET n` page skips the row that slid into the gap.
+/// Keyset pages by the last-seen id (`WHERE id > cursor`), which is immune to the shift. So the
+/// remaining, still-live objects are each paged exactly once. (A concurrent insert is exercised
+/// too, but its v7 id sorts after the cursor, so it can only ever append at the tail.)
+pub async fn listing_stable_under_concurrent_insert<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let mut original = Vec::new();
+    for i in 0..6 {
+        let o = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("o{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        original.push(o.id);
+    }
+
+    // First page (2 of 6). These two ids are now behind the cursor.
+    let (page, token) = store
+        .list(ConformanceLabel::Node, None, Some(2), None)
+        .await
+        .unwrap();
+    let returned: Vec<_> = page.into_iter().map(|o| o.id).collect();
+    let mut seen = returned.clone();
+    let mut token = token;
+
+    // Concurrent mutation before continuing:
+    //  - delete an already-returned object (a row *before* the cursor) — the offset-drift trigger;
+    //  - insert two brand-new objects (their v7 ids sort after the cursor).
+    store.delete(&returned[0]).await.unwrap();
+    for i in 6..8 {
+        store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("o{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    while let Some(t) = token {
+        let (page, next) = store
+            .list(ConformanceLabel::Node, None, Some(2), Some(t))
+            .await
+            .unwrap();
+        seen.extend(page.into_iter().map(|o| o.id));
+        token = next;
+    }
+
+    // Every original object except the deleted one is seen exactly once — no skips from the
+    // shift, no duplicates. (New objects may or may not appear; we assert nothing about them.)
+    for id in &original[1..] {
+        assert_eq!(
+            seen.iter().filter(|s| *s == id).count(),
+            1,
+            "live object {id} must be paged exactly once despite a delete before the cursor"
+        );
+    }
+}
+
+/// The edge analogue of [`listing_stable_under_concurrent_insert`]: edges page newest-first
+/// (`id DESC`), and a concurrently-added edge gets a *newer* v7 id that sorts before the cursor.
+/// Offset pagination would re-serve the shifted tail (duplicates); keyset (`id < cursor`) excludes
+/// the new edge cleanly, so every original edge is seen exactly once.
+pub async fn edge_listing_stable_under_concurrent_insert<S: StoreExec<ConformanceLabel>>(
+    store: &S,
+) {
+    let src = store
+        .create(ConformanceLabel::Node, &rn("src"), None, None, None)
+        .await
+        .unwrap();
+    let mut original = Vec::new();
+    for i in 0..6 {
+        let dst = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("d{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // The edge id isn't returned by `add`; it's recovered from the full listing below.
+        store.add(src.id, dst.id, "link", None).await.unwrap();
+    }
+    // Capture the original edge ids (newest-first).
+    let (all, _) = store
+        .query_edges(EdgeQuery::from(src.id, "link"))
+        .await
+        .unwrap();
+    original.extend(all.iter().map(|e| e.id));
+    assert_eq!(original.len(), 6);
+
+    // First page.
+    let (page, token) = store
+        .query_edges(EdgeQuery::from(src.id, "link").page(Some(2), None))
+        .await
+        .unwrap();
+    let mut seen: Vec<_> = page.into_iter().map(|e| e.id).collect();
+    let mut token = token;
+
+    // Concurrent insert: two new edges (newer v7 ids, sorting *before* the descending cursor).
+    for i in 6..8 {
+        let dst = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("d{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store.add(src.id, dst.id, "link", None).await.unwrap();
+    }
+
+    while let Some(t) = token {
+        let (page, next) = store
+            .query_edges(EdgeQuery::from(src.id, "link").page(Some(2), Some(t)))
+            .await
+            .unwrap();
+        seen.extend(page.into_iter().map(|e| e.id));
+        token = next;
+    }
+
+    for id in &original {
+        assert_eq!(
+            seen.iter().filter(|s| *s == id).count(),
+            1,
+            "original edge {id} must be paged exactly once under a concurrent insert"
+        );
+    }
+}
+
+/// Objects list in creation order: server-minted ids are time-ordered (UUIDv7), so `ORDER BY id`
+/// reads oldest-first. This would not hold for the old random-v4 ids.
+pub async fn object_listing_is_chronological<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let mut created_ids = Vec::new();
+    for i in 0..8 {
+        let o = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("c{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        created_ids.push(o.id);
+    }
+
+    let (listed, _) = store
+        .list(ConformanceLabel::Node, None, None, None)
+        .await
+        .unwrap();
+    // Listing order matches the order objects were created in. The ids are time-ordered (v7), so
+    // this is the chronological guarantee; comparing against the captured creation sequence is
+    // exact and clock-independent (unlike re-deriving it from a separately-read `created_at`).
+    let listed_ids: Vec<_> = listed.iter().map(|o| o.id).collect();
+    assert_eq!(
+        listed_ids, created_ids,
+        "listing order must match creation order (v7 time-ordered ids)"
+    );
+}
+
+/// A page token is bound to the query that produced it: replaying one against a *different* query
+/// (here, a different namespace scope) is rejected rather than silently seeking to a wrong place.
+pub async fn page_token_rejected_across_queries<S: StoreExec<ConformanceLabel>>(store: &S) {
+    for i in 0..4 {
+        store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("ns.o{i}")),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    // Mint a token from an unscoped listing.
+    let (_, token) = store
+        .list(ConformanceLabel::Node, None, Some(2), None)
+        .await
+        .unwrap();
+    let token = token.expect("more than one page, so a token is minted");
+
+    // Replay it against a namespaced listing (a different query fingerprint).
+    let ns = rn("ns");
+    let err = store
+        .list(ConformanceLabel::Node, Some(&ns), Some(2), Some(token))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(_)),
+        "a token from a different query must be rejected, got {err:?}"
+    );
+}
+
+/// The pre-keyset token shape was a bare decimal offset. Those are no longer valid tokens: the
+/// decoder rejects them (a hard cutover), so an in-flight stream from before the upgrade restarts
+/// rather than silently resurrecting the offset-drift bug.
+pub async fn legacy_offset_token_rejected<S: StoreExec<ConformanceLabel>>(store: &S) {
+    store
+        .create(ConformanceLabel::Node, &rn("o"), None, None, None)
+        .await
+        .unwrap();
+    let err = store
+        .list(ConformanceLabel::Node, None, Some(1), Some("2".to_string()))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(_)),
+        "a legacy plain-offset token must be rejected, got {err:?}"
+    );
+}
+
 /// Run the entire battery.
 ///
 /// `fresh` builds a new empty store; `with_inverse` builds one that maintains
@@ -1091,6 +1321,11 @@ where
     incoming_edges_listed(&fresh()).await;
     edge_target_id_restriction(&fresh()).await;
     count_edges_matches_list(&fresh()).await;
+    listing_stable_under_concurrent_insert(&fresh()).await;
+    edge_listing_stable_under_concurrent_insert(&fresh()).await;
+    object_listing_is_chronological(&fresh()).await;
+    page_token_rejected_across_queries(&fresh()).await;
+    legacy_offset_token_rejected(&fresh()).await;
 }
 
 #[cfg(test)]

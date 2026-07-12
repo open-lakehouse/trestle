@@ -1657,6 +1657,7 @@ version = "0.0.5"
 dependencies = [
  "aes-gcm",
  "async-trait",
+ "base64",
  "bytes",
  "chrono",
  "futures",

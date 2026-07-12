@@ -4,8 +4,8 @@
 -- images are). The floor is the non-deterministic ICU collation below
 -- (`deterministic = false`, added in PG 12); every other feature here (jsonb,
 -- GIN `jsonb_path_ops`, `timestamptz`, `bytea`) predates that. Note it is *not*
--- driven by UUIDv7: object/edge ids are minted client-side by the `uuid` crate
--- (`Uuid::new_v4` / `Uuid::now_v7`) and bound as parameters, so `id` is a plain
+-- driven by UUIDv7 in the schema: object/edge ids are minted client-side by the
+-- `uuid` crate (`Uuid::now_v7`) and bound as parameters, so `id` is a plain
 -- `uuid` column with no `DEFAULT` — the database never generates ids and needs
 -- neither the PG 18 native `uuidv7()` nor a hand-rolled PL/pgSQL generator.
 --
