@@ -5,8 +5,16 @@
 //! library (prost vs buffa); the Connect RPC facade adds the remote
 //! `connect-rust` plugin (plus the packaging plugin that stitches the per-service
 //! `mod.rs` tree).
+//!
+//! Two write modes exist. [`emit_buf_gen`] renders the **whole** file from
+//! scratch — used by `trestle new` (fresh project) and `trestle config` (explicit
+//! author/update). [`merge_buf_gen`] reconciles trestle's *managed* plugins into
+//! an **existing** file while preserving any plugins an adopter added — used by
+//! `trestle generate`, which regenerates on every run and must not clobber
+//! adopter customization.
 
 use super::{GenerateConfig, MODELS_GEN_SUBDIR, ProtoLib};
+use crate::error::{Error, Result};
 
 /// Version pin shared by the buffa model plugin and the connect-rust plugin so
 /// they bump in lockstep.
@@ -93,6 +101,103 @@ fn connect_out_dir(cfg: &GenerateConfig) -> String {
     format!("{server_src}/connect")
 }
 
+/// The plugin refs `emit_buf_gen` can produce, regardless of `cfg`. An entry in
+/// an existing `buf.gen.yaml` is "trestle-managed" iff its ref is in this set;
+/// everything else is adopter-owned and preserved verbatim by [`merge_buf_gen`].
+///
+/// Kept exhaustive by construction: the buffa/prost/serde/connect refs mirror the
+/// literals in [`emit_buf_gen`]. If a new managed plugin is added there, add its
+/// ref here too (the roundtrip test guards this).
+const MANAGED_PLUGIN_REFS: &[&str] = &[
+    "buf.build/anthropics/buffa",
+    "buf.build/community/neoeinstein-prost",
+    "buf.build/community/neoeinstein-prost-serde",
+    "buf.build/anthropics/connect-rust",
+    "protoc-gen-buffa-packaging",
+];
+
+/// Extract the plugin ref (`remote:`/`local:` value) from a plugin entry,
+/// stripping any `:vX.Y.Z` version suffix on remote refs so version bumps don't
+/// change managed-vs-adopter identity.
+fn plugin_ref(entry: &serde_yaml::Value) -> Option<String> {
+    let map = entry.as_mapping()?;
+    for key in ["remote", "local"] {
+        if let Some(v) = map
+            .get(serde_yaml::Value::from(key))
+            .and_then(|v| v.as_str())
+        {
+            // Remote refs carry a `:vX` version; strip it for identity. Local
+            // plugin names have no version suffix.
+            let base = v.rsplit_once(':').map(|(name, _)| name).unwrap_or(v);
+            return Some(base.to_string());
+        }
+    }
+    None
+}
+
+fn is_managed(entry: &serde_yaml::Value) -> bool {
+    plugin_ref(entry).is_some_and(|r| MANAGED_PLUGIN_REFS.contains(&r.as_str()))
+}
+
+/// Reconcile trestle's managed plugins into an existing `buf.gen.yaml`, preserving
+/// adopter-added plugins and any top-level keys trestle doesn't own.
+///
+/// - Managed plugin entries (identified by [`plugin_ref`] against
+///   [`MANAGED_PLUGIN_REFS`]) are **replaced** by the current set derived from
+///   `cfg`, so a config change (e.g. prost→buffa) is reflected.
+/// - Non-managed plugins keep their relative order and are appended after the
+///   managed block.
+/// - The existing file's `version`, `inputs`, and any extra top-level keys are
+///   left untouched.
+///
+/// Returns the serialized merged document. Idempotent: merging an
+/// already-merged file yields the same managed set.
+pub fn merge_buf_gen(cfg: &GenerateConfig, existing: &str) -> Result<String> {
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(existing).map_err(Error::PlainYaml)?;
+
+    let map = doc
+        .as_mapping_mut()
+        .ok_or_else(|| Error::other("buf.gen.yaml is not a YAML mapping"))?;
+
+    // Split the existing plugins into adopter-owned (preserved) and managed
+    // (dropped — re-added from the canonical set below, deduped by ref so an
+    // adopter copy of a managed plugin doesn't double up).
+    let existing_plugins: Vec<serde_yaml::Value> = map
+        .get(serde_yaml::Value::from("plugins"))
+        .and_then(|p| p.as_sequence())
+        .cloned()
+        .unwrap_or_default();
+    let adopter_plugins: Vec<serde_yaml::Value> = existing_plugins
+        .into_iter()
+        .filter(|e| !is_managed(e))
+        .collect();
+
+    // Fast path: no adopter customization, so there's nothing to preserve.
+    // Return the canonical hand-formatted output so `generate` doesn't reformat
+    // the file (and matches what `new` / `config` write).
+    if adopter_plugins.is_empty() {
+        return Ok(emit_buf_gen(cfg));
+    }
+
+    // The managed plugins we want present, in canonical order.
+    let managed_doc: serde_yaml::Value =
+        serde_yaml::from_str(&emit_buf_gen(cfg)).map_err(Error::PlainYaml)?;
+    let managed_plugins: Vec<serde_yaml::Value> = managed_doc
+        .get("plugins")
+        .and_then(|p| p.as_sequence())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut merged = managed_plugins;
+    merged.extend(adopter_plugins);
+    map.insert(
+        serde_yaml::Value::from("plugins"),
+        serde_yaml::Value::Sequence(merged),
+    );
+
+    serde_yaml::to_string(&doc).map_err(Error::PlainYaml)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +255,84 @@ mod tests {
         assert!(s.contains("buffa_module=::golden_path_app_common::models"));
         assert!(s.contains("protoc-gen-buffa-packaging"));
         assert!(!s.contains("local: protoc-gen-connect-rust"));
+    }
+
+    fn plugin_refs(yaml: &str) -> Vec<String> {
+        let doc: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        doc.get("plugins")
+            .and_then(|p| p.as_sequence())
+            .unwrap()
+            .iter()
+            .filter_map(plugin_ref)
+            .collect()
+    }
+
+    #[test]
+    fn merge_preserves_adopter_plugin() {
+        let existing = "\
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+    out: crates/common/src/models/_gen
+  - remote: buf.build/grpc/python:v1.0.0
+    out: gen/python
+";
+        let merged = merge_buf_gen(&mk(ProtoLib::Prost, false), existing).unwrap();
+        let refs = plugin_refs(&merged);
+        // Adopter's python plugin survives...
+        assert!(refs.contains(&"buf.build/grpc/python".to_string()));
+        // ...and trestle's managed prost/serde are present.
+        assert!(refs.contains(&"buf.build/community/neoeinstein-prost".to_string()));
+        assert!(refs.contains(&"buf.build/community/neoeinstein-prost-serde".to_string()));
+    }
+
+    #[test]
+    fn merge_reflects_prost_to_buffa_switch() {
+        let existing = emit_buf_gen(&mk(ProtoLib::Prost, false));
+        let merged = merge_buf_gen(&mk(ProtoLib::Buffa, false), &existing).unwrap();
+        let refs = plugin_refs(&merged);
+        assert!(refs.contains(&"buf.build/anthropics/buffa".to_string()));
+        // The old prost/serde managed entries are gone after the switch.
+        assert!(!refs.contains(&"buf.build/community/neoeinstein-prost".to_string()));
+        assert!(!refs.contains(&"buf.build/community/neoeinstein-prost-serde".to_string()));
+    }
+
+    #[test]
+    fn merge_without_adopter_plugins_keeps_canonical_formatting() {
+        // No adopter plugins → identical to emit_buf_gen, so `generate` doesn't
+        // reformat a file that `new`/`config` wrote.
+        let cfg = mk(ProtoLib::Buffa, true);
+        let canonical = emit_buf_gen(&cfg);
+        assert_eq!(merge_buf_gen(&cfg, &canonical).unwrap(), canonical);
+    }
+
+    #[test]
+    fn merge_is_idempotent() {
+        let cfg = mk(ProtoLib::Buffa, true);
+        let once = merge_buf_gen(&cfg, &emit_buf_gen(&cfg)).unwrap();
+        let twice = merge_buf_gen(&cfg, &once).unwrap();
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn merge_dedupes_adopter_copy_of_managed_plugin() {
+        // An adopter who pasted the exact managed prost plugin shouldn't end up
+        // with it twice after a merge.
+        let existing = "\
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+    out: somewhere/else
+";
+        let merged = merge_buf_gen(&mk(ProtoLib::Prost, false), existing).unwrap();
+        let count = plugin_refs(&merged)
+            .iter()
+            .filter(|r| *r == "buf.build/community/neoeinstein-prost")
+            .count();
+        assert_eq!(count, 1);
     }
 }

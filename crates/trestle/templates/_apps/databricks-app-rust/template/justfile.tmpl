@@ -7,11 +7,10 @@ project := "{{ project_name | kebab_case }}"
 # Codegen
 # ------------------------------------------------------------------------------
 
-# Regenerate all code from proto: buf plugins (models{% if with_connect %} + Connect facade{% endif %}),
-# then the trestle-generated server/client/TS{% if with_frontend %}, then the browser WASM client{% endif %}.
+# Regenerate all code from proto. `trestle generate` drives the whole pipeline:
+# buf plugins (models{% if with_connect %} + Connect facade{% endif %}), the proto descriptor, and the
+# trestle-generated server/client/TS{% if with_frontend %}, then the browser WASM client{% endif %}.
 regen:
-    buf generate
-    buf build -o api.bin
     trestle generate -c trestle.yaml
 {%- if with_frontend %}
     just build-wasm

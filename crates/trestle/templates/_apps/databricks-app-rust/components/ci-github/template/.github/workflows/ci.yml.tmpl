@@ -66,10 +66,8 @@ jobs:
         run: cargo install --locked protoc-gen-buffa-packaging
 {%- endif %}
       - name: regenerate code
-        run: |
-          buf generate
-          buf build -o api.bin
-          trestle generate -c trestle.yaml
+        # `trestle generate` drives buf generate + buf build + codegen.
+        run: trestle generate -c trestle.yaml
       - name: assert clean tree
         run: |
           git diff --exit-code || {

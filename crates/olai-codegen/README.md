@@ -21,7 +21,8 @@ your own build tool. For how it fits the wider Trestle pipeline, see the
 | `python/` `node/` `node_ts/` | PyO3 / NAPI-RS / TypeScript bindings |
 
 ```text
-.proto  ──buf build──▶  descriptor (.bin)  ──trestle generate──▶  Rust / Python / TS
+proto/  ──────────────── trestle generate ────────────────▶  Rust / Python / TS
+         (buf generate models · buf build descriptor · codegen)
 ```
 
 ## Proto annotations
@@ -74,35 +75,30 @@ binding-mode details.
 
 ## Usage
 
-Codegen is driven by the `trestle` CLI (a YAML config is recommended for
-multi-crate workspaces). `trestle generate --help` documents every flag.
+Codegen is driven by the `trestle` CLI. `trestle generate` runs the **whole
+pipeline** — it invokes `buf generate` (model plugins), `buf build` (the proto
+descriptor), then trestle's own codegen — so you only need one command:
 
 ```bash
 cargo install olai-trestle              # installs the `trestle` binary
-buf build --as-file-descriptor-set -o api.bin
-trestle generate --config trestle.yaml  # CLI flags override config values
+trestle generate --config trestle.yaml  # buf generate + buf build + codegen
 ```
 
-```yaml
-# trestle.yaml (core knobs; see `trestle generate --help` for the rest)
-descriptors: api.bin
-generate:
-  output_common: crates/server/src/gen/common
-  output_models: crates/common/src/models     # labels.rs lands in <output_models>/_gen/
-  output_server: crates/server/src/gen/server
-  output_client: crates/client/src/gen/client
-  context_type:  my_crate::RequestContext
-  result_type:   my_crate::Result
-  models_path_template:       my_models::models::{service}::v1
-  models_path_crate_template: crate::models::{service}::v1
-  generate_resource_enum:     true             # requires olai-store
-  generate_store_integration: true
-  # python: / typescript: blocks add language bindings
+This requires `buf` on your `PATH`. For environments where `buf` isn't available
+(e.g. a central/Bazel build produces the descriptor upstream), pass a pre-built
+`FileDescriptorSet` and the `buf` steps are skipped:
+
+```bash
+trestle generate --config trestle.yaml --descriptors path/to/api.bin
 ```
 
-`trestle new databricks-app-rust` scaffolds a project already wired in the
-recommended four-crate layout (`common` / `server` / `client` + proto), so you
-rarely set this up by hand.
+The config is `trestle.yaml`, a **nested** schema (proto library × servers ×
+clients). See `trestle config --help` to author it, or the `TrestleConfig`
+documentation in the `olai-trestle` crate for the full field reference — this
+README intentionally does not duplicate the schema. `trestle new
+databricks-app-rust` scaffolds a project already wired in the recommended
+four-crate layout (`common` / `server` / `client` + proto) with a ready
+`trestle.yaml`, so you rarely author it by hand.
 
 ## What you write vs. generate
 
