@@ -121,7 +121,8 @@ fn op_create<L: Label>(
     {
         return Err(Error::AlreadyExists);
     }
-    let id = id.unwrap_or_else(Uuid::new_v4);
+    // UUIDv7 (time-ordered) so `id` doubles as the chronological keyset pagination key.
+    let id = id.unwrap_or_else(Uuid::now_v7);
     if state.objects.contains_key(&id) {
         return Err(Error::AlreadyExists);
     }
@@ -214,15 +215,25 @@ fn op_list_objects<L: Label>(
     max_results: Option<usize>,
     page_token: Option<String>,
 ) -> Result<(Vec<Object<L>>, Option<String>)> {
+    let q = crate::store::object_fingerprint(label, namespace, None);
+    let cursor = crate::store::decode_cursor(page_token, q)?;
     let mut matches: Vec<Object<L>> = state
         .objects
         .values()
         .filter(|o| o.label == label && namespace.is_none_or(|ns| o.name.prefix_matches(ns)))
         .cloned()
         .collect();
-    // Stable order for deterministic paging: by id.
+    // Ascending id order (creation order for v7 ids); keyset resumes strictly past the cursor.
     matches.sort_by_key(|o| o.id);
-    paginate(matches, max_results, page_token)
+    if let Some(k) = cursor {
+        matches.retain(|o| o.id > k);
+    }
+    Ok(crate::store::paginate_keyset(
+        matches,
+        max_results,
+        |o| o.id,
+        q,
+    ))
 }
 
 fn op_add_edge<L: Label>(
@@ -302,6 +313,8 @@ fn op_query_edges<L: Label>(
     state: &State<L>,
     query: EdgeQuery<'_, L>,
 ) -> Result<(Vec<Association<L>>, Option<String>)> {
+    let q = crate::store::edge_fingerprint(&query);
+    let cursor = crate::store::decode_cursor(query.page_token.clone(), q)?;
     // The endpoint fixes which side we anchor on; `target_id` restricts the *other* side.
     let (into, anchor_id) = match query.endpoint {
         EdgeEndpoint::From(id) => (false, id),
@@ -331,33 +344,15 @@ fn op_query_edges<L: Label>(
         .collect();
     // Most-recent-first: v7 edge ids are time-ordered, so descending id is descending time.
     matches.sort_by_key(|e| std::cmp::Reverse(e.id));
-    paginate(matches, query.max_results, query.page_token)
-}
-
-/// Offset-based pagination over an already-ordered vec. The token is the
-/// stringified next offset.
-fn paginate<T>(
-    items: Vec<T>,
-    max_results: Option<usize>,
-    page_token: Option<String>,
-) -> Result<(Vec<T>, Option<String>)> {
-    let start: usize = match page_token {
-        Some(tok) => tok
-            .parse()
-            .map_err(|_| Error::invalid_argument("invalid page token"))?,
-        None => 0,
-    };
-    let limit = max_results.unwrap_or(usize::MAX);
-    let end = start.saturating_add(limit).min(items.len());
-    let start = start.min(items.len());
-    let next = if end < items.len() {
-        Some(end.to_string())
-    } else {
-        None
-    };
-    Ok((
-        items.into_iter().skip(start).take(end - start).collect(),
-        next,
+    // Keyset resumes strictly past the cursor; descending order means "after" is a smaller id.
+    if let Some(k) = cursor {
+        matches.retain(|e| e.id < k);
+    }
+    Ok(crate::store::paginate_keyset(
+        matches,
+        query.max_results,
+        |e| e.id,
+        q,
     ))
 }
 

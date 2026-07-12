@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!\", label, name, properties, version, created_at, updated_at\n           FROM objects WHERE label = ? ORDER BY id LIMIT ? OFFSET ?",
+  "query": "SELECT id AS \"id!\", label, name, properties, version, created_at, updated_at\n                   FROM objects WHERE label = ? AND id > ? ORDER BY id LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -52,5 +52,5 @@
       true
     ]
   },
-  "hash": "0f378c199e25f11197c73bde4b35cde43c604509f8862f236c65876ef9acad5b"
+  "hash": "ac091c7d3fde022f8389a8fc66f0643a0c466168025148335bab1b2193807ef9"
 }

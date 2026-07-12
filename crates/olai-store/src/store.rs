@@ -63,36 +63,136 @@ pub(crate) fn props_or_null(properties: &Option<serde_json::Value>) -> &serde_js
     properties.as_ref().unwrap_or(&NULL)
 }
 
-/// Parse a page token into an offset. Shared by the default `search` implementations, which
-/// use the same plain-offset token shape as the backends' `list` methods.
-pub(crate) fn parse_offset(page_token: Option<String>) -> Result<usize> {
-    match page_token {
-        Some(t) => t
-            .parse()
-            .map_err(|_| crate::Error::invalid_argument("invalid page token")),
-        None => Ok(0),
-    }
+// --- Keyset pagination cursor ---------------------------------------------------------------
+//
+// The `next_page_token` is a *keyset* (seek) cursor, not a positional offset: it carries the id
+// of the last row on the page just returned. The next page is "the rows after that id" — objects
+// page `WHERE id > :k` ascending, edges page `WHERE id < :k` descending — so a concurrent insert
+// or delete before the cursor can no longer shift a positional window and skip or duplicate rows.
+// Object and edge ids are UUIDv7, so `id` order is creation order and a cursor is a stable
+// high-water mark.
+//
+// The token is opaque to callers: base64url(JSON) of `{v, k, q}`. `q` is a non-cryptographic
+// fingerprint of the query the cursor belongs to; replaying a token against a *different* query
+// is rejected with `InvalidArgument`. It is misuse detection, not a tamper-proof signature —
+// callers must treat the token as opaque and must not construct or mutate one.
+
+/// The current cursor schema version. Bumped if the wire shape of [`Cursor`] ever changes; an
+/// unrecognized version is rejected as an invalid token.
+const CURSOR_VERSION: u8 = 1;
+
+/// The decoded form of a `next_page_token`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Cursor {
+    /// Schema version (see [`CURSOR_VERSION`]).
+    v: u8,
+    /// The last-seen row id (the keyset key).
+    k: Uuid,
+    /// Fingerprint of the query this cursor belongs to (see [`object_fingerprint`] /
+    /// [`edge_fingerprint`]).
+    q: u64,
 }
 
-/// Apply `offset` and `max_results` over an already-filtered, already-ordered set and compute
-/// the next token.
+/// Encode a keyset cursor as an opaque `next_page_token`: base64url(JSON) with no padding.
+pub(crate) fn encode_cursor(last_id: Uuid, q: u64) -> String {
+    use base64::Engine as _;
+    let json = serde_json::to_vec(&Cursor {
+        v: CURSOR_VERSION,
+        k: last_id,
+        q,
+    })
+    .expect("Cursor serializes");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+}
+
+/// Decode a `page_token` into the keyset key it carries, checking it belongs to this query.
 ///
-/// The default `search` impls filter the *entire* listing before paginating — never letting a
-/// `LIMIT` truncate ahead of the filter — so paging a filtered result cannot drop matches.
-/// A backend that pushes filtering into storage reuses this for the offset+limit slice.
-pub(crate) fn paginate_filtered<T>(
+/// `None` (the first page) yields `Ok(None)`. A present token must decode to the current
+/// [`CURSOR_VERSION`] and carry a matching query fingerprint `q`; anything else — a legacy
+/// offset token, a corrupt token, or one minted for a *different* query — is an
+/// [`Error::InvalidArgument`](crate::Error::InvalidArgument). There is no back-compat path for
+/// the old plain-offset tokens: an in-flight stream started before this shipped simply restarts
+/// from the beginning.
+pub(crate) fn decode_cursor(page_token: Option<String>, q: u64) -> Result<Option<Uuid>> {
+    use base64::Engine as _;
+    let Some(token) = page_token else {
+        return Ok(None);
+    };
+    let invalid = || crate::Error::invalid_argument("invalid page token");
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(token.as_bytes())
+        .map_err(|_| invalid())?;
+    let cursor: Cursor = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if cursor.v != CURSOR_VERSION || cursor.q != q {
+        return Err(invalid());
+    }
+    Ok(Some(cursor.k))
+}
+
+/// Query fingerprint for an object `list`/`search`: the label, optional namespace, and optional
+/// filter. Binds a cursor to its query so a token cannot be replayed against a different one.
+/// Excludes `max_results` (page size may legitimately change between calls).
+pub(crate) fn object_fingerprint<L: Label>(
+    label: L,
+    namespace: Option<&ResourceName>,
+    filter: Option<&Filter>,
+) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    label.hash(&mut h);
+    // `Filter`/`ResourceName` aren't `Hash`; fold in their canonical serialized forms instead.
+    namespace.map(ToString::to_string).hash(&mut h);
+    filter
+        .map(|f| serde_json::to_string(f).expect("Filter serializes"))
+        .hash(&mut h);
+    h.finish()
+}
+
+/// Query fingerprint for an [`EdgeQuery`]: everything that shapes the result set (endpoint,
+/// label, target restrictions, time window, filter) but not the pagination knobs.
+pub(crate) fn edge_fingerprint<L: Label>(query: &EdgeQuery<'_, L>) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match query.endpoint {
+        EdgeEndpoint::From(id) => (0u8, id).hash(&mut h),
+        EdgeEndpoint::Into(id) => (1u8, id).hash(&mut h),
+    }
+    query.label.hash(&mut h);
+    query
+        .target_label
+        .map(|l| l.as_str().to_string())
+        .hash(&mut h);
+    query.target_id.hash(&mut h);
+    query.since.hash(&mut h);
+    query.until.hash(&mut h);
+    query
+        .filter
+        .map(|f| serde_json::to_string(f).expect("Filter serializes"))
+        .hash(&mut h);
+    h.finish()
+}
+
+/// Finish a keyset page over an already-ordered, already-past-the-cursor slice.
+///
+/// The caller has ordered `items` by id (ascending for objects, descending for edges) and
+/// already dropped everything up to and including the previous cursor — whether in SQL
+/// (`WHERE id >/< :k`) or in Rust for the fallback paths. This trims to `max_results` and mints
+/// the next token from the last kept row's id, so paging a filtered result never lets a `LIMIT`
+/// truncate ahead of the filter and cannot drop matches.
+pub(crate) fn paginate_keyset<T>(
     mut items: Vec<T>,
-    offset: usize,
     max_results: Option<usize>,
+    key: impl Fn(&T) -> Uuid,
+    q: u64,
 ) -> (Vec<T>, Option<String>) {
-    let start = offset.min(items.len());
-    items.drain(..start);
     let limit = max_results.unwrap_or(usize::MAX);
     let has_more = items.len() > limit;
     if has_more {
         items.truncate(limit);
     }
-    let next = has_more.then(|| (offset + limit).to_string());
+    let next = has_more
+        .then(|| items.last().map(|last| encode_cursor(key(last), q)))
+        .flatten();
     (items, next)
 }
 
@@ -132,17 +232,26 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
 
     /// List objects of a given label, optionally scoped to a namespace prefix.
     ///
-    /// Returns the matching objects and an optional continuation token. Results
-    /// are returned in a stable order so that paging is deterministic. At most
-    /// `max_results` objects are returned per call; when more remain, the returned
-    /// token is `Some` and should be passed back as `page_token` to fetch the next
-    /// page. A returned token of `None` indicates the final page. `page_token`
-    /// must be a token previously produced by this method on the same query.
+    /// Returns the matching objects and an optional continuation token. Objects
+    /// are ordered by `id`, which for server-minted (UUIDv7) ids is creation
+    /// order — so a listing reads oldest-first and paging is deterministic. At
+    /// most `max_results` objects are returned per call; when more remain, the
+    /// returned token is `Some` and should be passed back as `page_token` to
+    /// fetch the next page. A returned token of `None` indicates the final page.
+    ///
+    /// Pagination is **keyset (seek)**, not offset: the opaque token carries the
+    /// last-seen id, so the next page is the rows *after* that id. A concurrent
+    /// insert or delete before the cursor therefore cannot shift the window and
+    /// skip or duplicate an already-returned object; a newly-created object (its
+    /// UUIDv7 id sorts after every existing one) only appears once paging reaches
+    /// the tail. The token is opaque and bound to this exact query — `page_token`
+    /// must be one previously produced by this method on the *same* query.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is not a valid token for
-    /// this query.
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if
+    /// `page_token` is not a valid token for this query (including a token minted
+    /// for a different query, or a legacy pre-keyset offset token).
     async fn list(
         &self,
         label: L,
@@ -155,7 +264,7 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
     /// optionally scoped to a namespace prefix.
     ///
     /// Semantics mirror [`list`](Self::list) — same label scoping, same namespace prefix
-    /// rule, same stable ordering, and the same offset-style pagination and token contract —
+    /// rule, same stable ordering, and the same keyset pagination and token contract —
     /// with the sole addition of `filter`, applied to each object's stored
     /// [`properties`](Object::properties) using the reference semantics of
     /// [`Filter::matches`]. An object with no properties is matched against JSON `null`
@@ -179,22 +288,19 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
         max_results: Option<usize>,
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
-        let offset = parse_offset(page_token)?;
-        let mut matched = Vec::new();
-        let mut token = None;
-        loop {
-            let (batch, next) = self.list(label, namespace, None, token).await?;
-            matched.extend(
-                batch
-                    .into_iter()
-                    .filter(|o| filter.matches(props_or_null(&o.properties))),
-            );
-            match next {
-                Some(t) => token = Some(t),
-                None => break,
-            }
-        }
-        Ok(paginate_filtered(matched, offset, max_results))
+        let q = object_fingerprint(label, namespace, Some(filter));
+        let cursor = decode_cursor(page_token, q)?;
+        // Drain the full listing (`list` yields the whole set in one call when unpaginated),
+        // filter it, then keyset-paginate over the id-ordered matches. Dropping everything up to
+        // and including the cursor here — never behind a `LIMIT` — is what keeps a filtered page
+        // from silently losing matches.
+        let (all, _) = self.list(label, namespace, None, None).await?;
+        let matched: Vec<Object<L>> = all
+            .into_iter()
+            .filter(|o| filter.matches(props_or_null(&o.properties)))
+            .filter(|o| cursor.is_none_or(|k| o.id > k))
+            .collect();
+        Ok(paginate_keyset(matched, max_results, |o| o.id, q))
     }
 
     /// Return the opaque sensitive blob stored alongside the object, if any.
@@ -234,7 +340,9 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     /// `id` lets the caller pre-allocate the object's id (e.g. a managed table
     /// adopting the id reserved by its staging reservation, or a managed volume
     /// embedding the id in its storage path); pass `None` to have the store
-    /// generate a time-ordered id.
+    /// generate a time-ordered UUIDv7, so `id` order is creation order and the id
+    /// doubles as a stable [`list`](ObjectStoreReader::list) pagination key. A
+    /// caller-supplied `id` is stored as-is and is not required to be v7.
     ///
     /// `sensitive` is an opaque blob (typically an `EnvelopeEncryptor` envelope, from the
     /// `encryption` feature) persisted alongside the
@@ -375,7 +483,7 @@ pub enum EdgeEndpoint {
 /// This is the single edge-read surface: it unifies direction ([`endpoint`](Self::endpoint)),
 /// the restrictions that used to be positional arguments ([`target_label`](Self::target_label)
 /// and an optional payload [`filter`](Self::filter)), a single-target restriction
-/// ([`target_id`](Self::target_id), TAO `assoc_get`), and offset pagination.
+/// ([`target_id`](Self::target_id), TAO `assoc_get`), and keyset pagination.
 ///
 /// Results are **always most-recent-first** — there is no ordering knob. The shipped backends
 /// realize this by generating time-ordered (UUIDv7) edge ids and ordering by `id DESC`; a
@@ -424,7 +532,8 @@ pub struct EdgeQuery<'a, L: Label> {
     pub until: Option<chrono::DateTime<chrono::Utc>>,
     /// Maximum edges to return this page; `None` means no limit.
     pub max_results: Option<usize>,
-    /// Continuation token from a previous page of the *same* query, or `None` to start.
+    /// Opaque keyset continuation token from a previous page of the *same* query, or `None` to
+    /// start. Carries the last-seen edge id; a token minted for a different query is rejected.
     pub page_token: Option<String>,
 }
 
@@ -892,5 +1001,50 @@ mod tests {
     fn v7_lower_bound_clamps_pre_epoch() {
         let pre = chrono::DateTime::<chrono::Utc>::from_timestamp(-100, 0).unwrap();
         assert_eq!(v7_lower_bound(pre), Uuid::from_u128(0));
+    }
+
+    /// A cursor round-trips through encode/decode when the query fingerprint matches.
+    #[test]
+    fn cursor_roundtrips() {
+        let id = Uuid::now_v7();
+        let token = encode_cursor(id, 42);
+        assert_eq!(decode_cursor(Some(token), 42).unwrap(), Some(id));
+    }
+
+    /// `None` (the first page) decodes to no cursor regardless of fingerprint.
+    #[test]
+    fn cursor_none_is_start() {
+        assert_eq!(decode_cursor(None, 7).unwrap(), None);
+    }
+
+    /// A token minted for one query is rejected when replayed against a different query
+    /// (different fingerprint) — the misuse guard.
+    #[test]
+    fn cursor_rejected_on_fingerprint_mismatch() {
+        let token = encode_cursor(Uuid::now_v7(), 1);
+        assert!(decode_cursor(Some(token), 2).is_err());
+    }
+
+    /// A legacy plain-offset token (a bare integer) is not a valid keyset cursor — hard cutover.
+    #[test]
+    fn cursor_rejects_legacy_offset_token() {
+        assert!(decode_cursor(Some("2".to_string()), 0).is_err());
+        assert!(decode_cursor(Some("garbage".to_string()), 0).is_err());
+    }
+
+    /// `paginate_keyset` respects `max_results` and mints a next token from the last kept id only
+    /// when more rows remain.
+    #[test]
+    fn paginate_keyset_trims_and_tokenizes() {
+        let ids: Vec<Uuid> = (0..3).map(|_| Uuid::now_v7()).collect();
+        let (page, next) = paginate_keyset(ids.clone(), Some(2), |id| *id, 9);
+        assert_eq!(page, ids[..2]);
+        // The next token is the second id's cursor for the same fingerprint.
+        assert_eq!(decode_cursor(next, 9).unwrap(), Some(ids[1]));
+
+        // Exactly `max_results` items left → no next token (final page).
+        let (page, next) = paginate_keyset(ids.clone(), Some(3), |id| *id, 9);
+        assert_eq!(page, ids);
+        assert!(next.is_none());
     }
 }

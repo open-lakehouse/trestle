@@ -291,6 +291,28 @@ async fn op_get_by_name<L: Label>(
     )
 }
 
+/// Map the object rows from any of the `op_list_objects` `query!` arms (each a distinct
+/// anonymous row type with the same columns) into `Object`s. A macro rather than a function
+/// because the row type differs per `query!` invocation and cannot be named.
+macro_rules! rows_to_objects {
+    ($rows:expr) => {
+        $rows
+            .into_iter()
+            .map(|r| {
+                build_object(
+                    r.id,
+                    r.label,
+                    r.name,
+                    r.properties,
+                    r.version,
+                    r.created_at,
+                    r.updated_at,
+                )
+            })
+            .collect::<Result<Vec<_>>>()
+    };
+}
+
 async fn op_list_objects<L: Label>(
     conn: &mut SqliteConnection,
     label: L,
@@ -298,56 +320,72 @@ async fn op_list_objects<L: Label>(
     max_results: Option<usize>,
     page_token: Option<String>,
 ) -> Result<(Vec<Object<L>>, Option<String>)> {
-    let offset = parse_token(page_token)?;
+    let q = crate::store::object_fingerprint(label, namespace, None);
+    let cursor = crate::store::decode_cursor(page_token, q)?;
     let limit = max_results.unwrap_or(usize::MAX);
     let label_s = label.as_str().to_string();
 
-    // The namespace filter is a prefix over the escaped `ResourceName` string,
-    // which does not translate to a `LIKE`/`GLOB` the DB can page on. So when a
-    // namespace is set, we cannot let SQL `LIMIT`/`OFFSET` truncate before the
-    // filter runs — that would drop matching rows and desync the page token.
-    // Fetch all label rows and paginate the filtered result in-process; without
-    // a namespace, keep the efficient SQL `LIMIT`/`OFFSET` path.
-    let (fetch, offset_i) = match namespace {
-        Some(_) => (i64::MAX, 0),
-        None => (
-            limit.saturating_add(1).min(i64::MAX as usize) as i64,
-            offset as i64,
-        ),
-    };
-    let rows = sqlx::query!(
-        r#"SELECT id AS "id!", label, name, properties, version, created_at, updated_at
-           FROM objects WHERE label = ? ORDER BY id LIMIT ? OFFSET ?"#,
-        label_s,
-        fetch,
-        offset_i
-    )
-    .fetch_all(conn)
-    .await?;
-
-    let mut objects = rows
-        .into_iter()
-        .map(|r| {
-            build_object(
-                r.id,
-                r.label,
-                r.name,
-                r.properties,
-                r.version,
-                r.created_at,
-                r.updated_at,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-
+    // The namespace filter is a prefix over the escaped `ResourceName` string, which does not
+    // translate to a `LIKE`/`GLOB` the DB can page on. So when a namespace is set, we cannot let
+    // a SQL `LIMIT` truncate before the filter runs — that would drop matching rows. Fetch all
+    // label rows in id order and keyset-paginate the filtered result in-process; without a
+    // namespace, bound the scan in SQL with `id > :cursor` and over-fetch one to detect more.
     if let Some(ns) = namespace {
-        // Filter, then apply offset + limit over the filtered set in-process.
+        let rows = sqlx::query!(
+            r#"SELECT id AS "id!", label, name, properties, version, created_at, updated_at
+               FROM objects WHERE label = ? ORDER BY id"#,
+            label_s
+        )
+        .fetch_all(conn)
+        .await?;
+        let mut objects: Vec<Object<L>> = rows_to_objects!(rows)?;
         objects.retain(|o| o.name.prefix_matches(ns));
-        let start = offset.min(objects.len());
-        objects.drain(..start);
-        return paginate(objects, offset, limit);
+        if let Some(k) = cursor {
+            objects.retain(|o| o.id > k);
+        }
+        return Ok(crate::store::paginate_keyset(
+            objects,
+            max_results,
+            |o| o.id,
+            q,
+        ));
     }
-    paginate(objects, offset, limit)
+
+    // No namespace: push the keyset bound into SQL. Two arms keep `query!`'s compile-time check;
+    // each yields a distinct anonymous row type, so map to `Object`s inside the arm.
+    let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
+    let objects = match cursor {
+        Some(k) => {
+            let k_s = k.hyphenated().to_string();
+            let rows = sqlx::query!(
+                r#"SELECT id AS "id!", label, name, properties, version, created_at, updated_at
+                   FROM objects WHERE label = ? AND id > ? ORDER BY id LIMIT ?"#,
+                label_s,
+                k_s,
+                fetch
+            )
+            .fetch_all(conn)
+            .await?;
+            rows_to_objects!(rows)?
+        }
+        None => {
+            let rows = sqlx::query!(
+                r#"SELECT id AS "id!", label, name, properties, version, created_at, updated_at
+                   FROM objects WHERE label = ? ORDER BY id LIMIT ?"#,
+                label_s,
+                fetch
+            )
+            .fetch_all(conn)
+            .await?;
+            rows_to_objects!(rows)?
+        }
+    };
+    Ok(crate::store::paginate_keyset(
+        objects,
+        max_results,
+        |o| o.id,
+        q,
+    ))
 }
 
 // --- Filter pushdown ------------------------------------------------------------------------
@@ -549,22 +587,25 @@ async fn op_search_objects<L: Label>(
     max_results: Option<usize>,
     page_token: Option<String>,
 ) -> Result<(Vec<Object<L>>, Option<String>)> {
+    let q = crate::store::object_fingerprint(label, namespace, Some(filter));
+    let cursor = crate::store::decode_cursor(page_token, q)?;
+
     if !is_pushable(filter) {
-        // Rust fallback: drain the full (namespaced) listing, then filter + paginate in process.
-        let offset = crate::store::parse_offset(page_token)?;
+        // Rust fallback: drain the full (namespaced) listing, then filter + keyset-paginate.
         let (all, _) = op_list_objects(conn, label, namespace, None, None).await?;
         let matched: Vec<_> = all
             .into_iter()
             .filter(|o| filter.matches(crate::store::props_or_null(&o.properties)))
+            .filter(|o| cursor.is_none_or(|k| o.id > k))
             .collect();
-        return Ok(crate::store::paginate_filtered(
+        return Ok(crate::store::paginate_keyset(
             matched,
-            offset,
             max_results,
+            |o| o.id,
+            q,
         ));
     }
 
-    let offset = parse_token(page_token)?;
     let limit = max_results.unwrap_or(usize::MAX);
     let label_s = label.as_str().to_string();
 
@@ -575,16 +616,20 @@ async fn op_search_objects<L: Label>(
     qb.push_bind(label_s);
     qb.push(" AND ");
     build_where(&mut qb, filter);
+    // Without a namespace, SQL can page directly: bound by the keyset cursor and over-fetch one
+    // row to detect "has more". With a namespace, fetch every filter-matching row and page after
+    // the Rust prefix filter (the prefix can't be pushed and must not run behind a `LIMIT`).
+    if namespace.is_none()
+        && let Some(k) = cursor
+    {
+        qb.push(" AND id > ");
+        qb.push_bind(k.hyphenated().to_string());
+    }
     qb.push(" ORDER BY id");
-
-    // Without a namespace, SQL can page directly (over-fetch one row to detect "has more").
-    // With a namespace, fetch every filter-matching row and page after the Rust prefix filter.
     if namespace.is_none() {
         let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
         qb.push(" LIMIT ");
         qb.push_bind(fetch);
-        qb.push(" OFFSET ");
-        qb.push_bind(offset as i64);
     }
 
     let rows = qb.build().fetch_all(conn).await?;
@@ -595,10 +640,16 @@ async fn op_search_objects<L: Label>(
 
     if let Some(ns) = namespace {
         objects.retain(|o| o.name.prefix_matches(ns));
-        let start = offset.min(objects.len());
-        objects.drain(..start);
+        if let Some(k) = cursor {
+            objects.retain(|o| o.id > k);
+        }
     }
-    paginate(objects, offset, limit)
+    Ok(crate::store::paginate_keyset(
+        objects,
+        max_results,
+        |o| o.id,
+        q,
+    ))
 }
 
 /// List edges matching an [`EdgeQuery`], most-recent-first, pushing every predicate it can into
@@ -616,6 +667,9 @@ async fn op_query_edges<L: Label>(
     conn: &mut SqliteConnection,
     query: EdgeQuery<'_, L>,
 ) -> Result<(Vec<Association<L>>, Option<String>)> {
+    let q = crate::store::edge_fingerprint(&query);
+    let cursor = crate::store::decode_cursor(query.page_token.clone(), q)?;
+
     // Anchor column + the "other" endpoint column that `target_id` restricts.
     let (anchor_col, other_col, anchor_id) = match query.endpoint {
         EdgeEndpoint::From(id) => ("from_id", "to_id", id),
@@ -652,6 +706,11 @@ async fn op_query_edges<L: Label>(
             qb.push(" AND id < ");
             qb.push_bind(crate::store::v7_lower_bound(until).hyphenated().to_string());
         }
+        // Keyset cursor: edges page descending, so "after the cursor" is a strictly smaller id.
+        if let Some(k) = cursor {
+            qb.push(" AND id < ");
+            qb.push_bind(k.hyphenated().to_string());
+        }
     };
 
     const SELECT: &str = "SELECT id, from_id, label, to_id, to_label, properties, created_at, updated_at \
@@ -661,7 +720,6 @@ async fn op_query_edges<L: Label>(
     if let Some(filter) = query.filter
         && !is_pushable(filter)
     {
-        let offset = crate::store::parse_offset(query.page_token)?;
         let mut qb = sqlx::QueryBuilder::<Sqlite>::new(SELECT);
         base(&mut qb);
         qb.push(" ORDER BY id DESC");
@@ -673,14 +731,14 @@ async fn op_query_edges<L: Label>(
             .into_iter()
             .filter(|a| filter.matches(crate::store::props_or_null(&a.properties)))
             .collect();
-        return Ok(crate::store::paginate_filtered(
+        return Ok(crate::store::paginate_keyset(
             matched,
-            offset,
             query.max_results,
+            |e| e.id,
+            q,
         ));
     }
 
-    let offset = parse_token(query.page_token)?;
     let limit = query.max_results.unwrap_or(usize::MAX);
     let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
 
@@ -692,15 +750,18 @@ async fn op_query_edges<L: Label>(
     }
     qb.push(" ORDER BY id DESC LIMIT ");
     qb.push_bind(fetch);
-    qb.push(" OFFSET ");
-    qb.push_bind(offset as i64);
 
     let rows = qb.build().fetch_all(conn).await?;
     let edges = rows
         .into_iter()
         .map(edge_from_row)
         .collect::<Result<Vec<_>>>()?;
-    paginate(edges, offset, limit)
+    Ok(crate::store::paginate_keyset(
+        edges,
+        query.max_results,
+        |e| e.id,
+        q,
+    ))
 }
 
 /// Count edges matching an anchor + `label` (+ optional `target_label`) via `COUNT(*)`.
@@ -774,7 +835,8 @@ async fn op_create<L: Label>(
     sensitive: Option<Bytes>,
 ) -> Result<Object<L>> {
     let object = Object {
-        id: id.unwrap_or_else(Uuid::new_v4),
+        // UUIDv7 (time-ordered) so `id` doubles as the chronological keyset pagination key.
+        id: id.unwrap_or_else(Uuid::now_v7),
         label,
         name: name.clone(),
         properties,
@@ -1066,25 +1128,6 @@ async fn op_remove_edge(
         .await?;
     }
     Ok(())
-}
-
-fn parse_token(token: Option<String>) -> Result<usize> {
-    match token {
-        Some(t) => t
-            .parse()
-            .map_err(|_| Error::invalid_argument("invalid page token")),
-        None => Ok(0),
-    }
-}
-
-/// Trim the over-fetched extra row and compute the next token.
-fn paginate<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Result<(Vec<T>, Option<String>)> {
-    let has_more = items.len() > limit;
-    if has_more {
-        items.truncate(limit);
-    }
-    let next = has_more.then(|| (offset + limit).to_string());
-    Ok((items, next))
 }
 
 // --- Top-level store: acquire a connection (or open a txn for multi-statement
