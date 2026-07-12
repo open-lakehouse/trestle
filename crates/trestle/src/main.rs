@@ -1,17 +1,42 @@
-use olai_trestle::cli;
+use std::io::IsTerminal;
+
+use olai_trestle::{Error, cli};
 
 fn main() {
     init_logging();
 
     if let Err(err) = cli::run() {
-        eprintln!("error: {err}");
-        // Walk the error chain so users see the underlying cause.
-        let mut src = std::error::Error::source(&err);
-        while let Some(s) = src {
-            eprintln!("  caused by: {s}");
-            src = s.source();
-        }
+        report_error(&err);
         std::process::exit(1);
+    }
+}
+
+/// Render an error to stderr: a red `error:` headline, the `caused by:` chain,
+/// and — when present — a `try:` suggestion. Colors are emitted only when stderr
+/// is a terminal so piped/CI output stays clean.
+fn report_error(err: &Error) {
+    let color = std::io::stderr().is_terminal();
+    let (red, yellow, dim, reset) = if color {
+        ("\x1b[31m", "\x1b[33m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
+
+    // Peel the hint wrapper so the real cause is the headline, not a
+    // transparent duplicate, and the hint is shown last.
+    let (head, hint): (&dyn std::error::Error, Option<&str>) = match err {
+        Error::WithHint { source, hint } => (source.as_ref(), Some(hint.as_str())),
+        other => (other, other.hint()),
+    };
+
+    eprintln!("{red}error:{reset} {head}");
+    let mut src = std::error::Error::source(head);
+    while let Some(s) = src {
+        eprintln!("  {dim}caused by:{reset} {s}");
+        src = s.source();
+    }
+    if let Some(hint) = hint {
+        eprintln!("{yellow}try:{reset} {hint}");
     }
 }
 

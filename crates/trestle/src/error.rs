@@ -71,6 +71,17 @@ pub enum Error {
     #[error("codegen error: {0}")]
     Codegen(#[from] olai_codegen::Error),
 
+    /// An error carrying an actionable suggestion, rendered as a `try:` line.
+    /// The wrapped error is the real cause; [`hint`](Error::hint) exposes the
+    /// suggestion so the CLI can print it after the error chain. Display
+    /// delegates to the wrapped error (the CLI peels this layer for rendering).
+    #[error("{source}")]
+    WithHint {
+        #[source]
+        source: Box<Error>,
+        hint: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }
@@ -78,6 +89,24 @@ pub enum Error {
 impl Error {
     pub fn other(msg: impl Into<String>) -> Self {
         Self::Other(msg.into())
+    }
+
+    /// Attach an actionable suggestion to this error. Rendered by the CLI as a
+    /// `try: <hint>` line after the `caused by:` chain.
+    pub fn with_hint(self, hint: impl Into<String>) -> Self {
+        Self::WithHint {
+            source: Box::new(self),
+            hint: hint.into(),
+        }
+    }
+
+    /// The actionable suggestion attached via [`with_hint`](Error::with_hint),
+    /// if any.
+    pub fn hint(&self) -> Option<&str> {
+        match self {
+            Self::WithHint { hint, .. } => Some(hint),
+            _ => None,
+        }
     }
 
     pub fn io_at(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
