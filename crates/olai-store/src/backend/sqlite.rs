@@ -46,24 +46,10 @@ use crate::store::{
 };
 use crate::{Error, Result};
 
+use super::sql_common::{InverseResolver, merge, record_err};
+
 /// The OpenTelemetry `db.system` value for this backend's operation spans.
 const DB_SYSTEM: &str = "sqlite";
-
-/// Record the failure of `result` onto the current span's OpenTelemetry status fields.
-///
-/// The span must declare `otel.status_code` and `error.type` as [`tracing::field::Empty`].
-/// Only the error *kind* ([`Error::kind_str`]) is recorded — never a payload or message body.
-fn record_err<T>(result: &Result<T>) {
-    if let Err(e) = result {
-        let span = tracing::Span::current();
-        span.record("otel.status_code", "ERROR");
-        span.record("error.type", e.kind_str());
-    }
-}
-
-/// Resolves an edge label to its paired inverse label, if any (see
-/// [`InMemoryStore`](crate::InMemoryStore)).
-pub type InverseResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// The crate's embedded schema [`Migrator`](sqlx::migrate::Migrator) for the
 /// `SqlStore` backend.
@@ -89,7 +75,7 @@ pub type InverseResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 /// on SQLite), so concurrent callers serialize safely — but prefer running
 /// migrations once as a gated step over racing them from every process on boot.
 pub fn migrator() -> sqlx::migrate::Migrator {
-    sqlx::migrate!("./migrations")
+    sqlx::migrate!("./migrations/sqlite")
 }
 
 /// Build a single [`Migrator`](sqlx::migrate::Migrator) over this crate's schema
@@ -122,14 +108,7 @@ pub fn migrator() -> sqlx::migrate::Migrator {
 pub fn migrator_with(
     extra: impl IntoIterator<Item = sqlx::migrate::Migration>,
 ) -> sqlx::migrate::Migrator {
-    let mut migrations: Vec<sqlx::migrate::Migration> =
-        migrator().migrations.iter().cloned().collect();
-    migrations.extend(extra);
-    migrations.sort_by_key(|m| m.version);
-    sqlx::migrate::Migrator {
-        migrations: std::borrow::Cow::Owned(migrations),
-        ..sqlx::migrate::Migrator::DEFAULT
-    }
+    merge(migrator(), extra)
 }
 
 /// Apply the crate's schema migrations to `pool`.
@@ -149,16 +128,6 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
         .run(pool)
         .await
         .map_err(|e| Error::generic(e.to_string()))
-}
-
-impl From<sqlx::Error> for Error {
-    fn from(e: sqlx::Error) -> Self {
-        match e {
-            sqlx::Error::RowNotFound => Error::NotFound,
-            sqlx::Error::Database(db) if db.is_unique_violation() => Error::AlreadyExists,
-            other => Error::generic(other.to_string()),
-        }
-    }
 }
 
 /// A SQLite-backed [`ObjectStore`] + [`AssociationStore`] + [`Transactional`].

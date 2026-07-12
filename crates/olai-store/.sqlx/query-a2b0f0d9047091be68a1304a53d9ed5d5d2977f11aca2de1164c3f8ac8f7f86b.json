@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM associations WHERE from_id = $1 AND to_id = $2 AND label = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2b0f0d9047091be68a1304a53d9ed5d5d2977f11aca2de1164c3f8ac8f7f86b"
+}

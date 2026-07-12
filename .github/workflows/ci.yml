@@ -45,6 +45,11 @@ jobs:
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-store/sqlx -- -D warnings
+      # The sqlite + postgres backends are dialect-bound `sqlx::query!` code checked
+      # against the committed `.sqlx/` offline cache — no live database is needed for
+      # clippy. Lint the SQLite and native-Postgres backends (both together, so the
+      # `--features sqlite,postgres` combination is covered too).
+      - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
 
   machete:
@@ -109,6 +114,56 @@ jobs:
       - name: Run tests (olai-http recording feature)
         run: cargo test --locked --lib --tests -p olai-http --features recording
 
+  postgres:
+    name: Postgres backend
+    runs-on: ubuntu-latest
+    # A live Postgres for the `olai-store` Postgres-backend conformance battery.
+    # The SQL is checked at compile time against the committed `.sqlx/` offline
+    # cache, so only the runtime conformance *test* needs this service; build /
+    # clippy run without it.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: olai_store
+        ports:
+          - 5432:5432
+        # Wait until the server accepts connections before the job's steps run.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.88"
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      # `DATABASE_URL_PG` (not `DATABASE_URL`) drives the conformance test; the
+      # migrator applies `migrations/postgres/` to the fresh database first. The
+      # test skips (does not fail) if the variable is unset, so it is set here.
+      # The URL is composed from parts (matching the service `env:` above) rather
+      # than written as one literal.
+      - name: Run Postgres conformance
+        env:
+          SQLX_OFFLINE: "true"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: olai_store
+        run: |
+          export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
+          # `--lib` runs the conformance battery; `--doc` compiles the postgres-only
+          # doc examples (behind `#[cfg(feature = "postgres")]`), which no other job
+          # builds — without this they would never be checked. `--doc` cannot be
+          # combined with other target selectors, so it is a separate invocation.
+          cargo test --locked --lib -p olai-store --features postgres
+          cargo test --locked --doc -p olai-store --features postgres
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -122,6 +177,23 @@ jobs:
     env:
       RUSTC_WRAPPER: ""
       SCCACHE_GHA_ENABLED: ""
+    # A live Postgres so the `postgres`-feature coverage run below exercises the
+    # `PgStore` conformance battery (its code is `#[cfg(feature = "postgres")]`,
+    # so without this run `backend/postgres.rs` would report 0% coverage).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: olai_store
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -139,20 +211,33 @@ jobs:
       - uses: taiki-e/install-action@8b3c737da4b541bf0fb5a3e0488ff20535badac9 # v2.82.1
         with:
           tool: cargo-llvm-cov
-      # Accumulate coverage across the same feature combinations the `test` job
-      # exercises (default + the two opt-in features), then emit one merged
-      # report. `--no-report` collects raw profdata; the final `report` step
-      # writes codecov.json. Doctests are disabled workspace-wide (see
-      # CLAUDE.md), so there is no separate doctest pass.
+      # Accumulate coverage across the feature combinations that gate real code,
+      # then emit one merged report. `--no-report` collects raw profdata; the final
+      # `report` step writes codecov.json.
+      #
+      # The `sqlite` and `postgres` backends are each behind their own feature
+      # (`sqlx` alone only pulls in the shared types, not the `SqlStore`/`PgStore`
+      # code), so both are run explicitly or their `backend/{sqlite,postgres}.rs`
+      # would report 0%. The Postgres run needs the live service above and reads
+      # `DATABASE_URL_PG` (the conformance test skips, not fails, when it is unset).
       #
       # `--ignore-filename-regex` drops committed prost output (olai-codegen/src/gen)
       # and the golden/scaffolding/example trees from the report itself, mirroring
       # codecov.yml's `ignore`. Keep the two in sync. Note `src/codegen` is the
       # hand-written template logic and is intentionally NOT excluded.
       - name: Collect coverage
+        env:
+          # Compile the `query!` macros against the committed offline cache; the
+          # live service is only for running the conformance test, not building.
+          SQLX_OFFLINE: "true"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: olai_store
         run: |
           cargo llvm-cov --no-report --locked --lib --tests
-          cargo llvm-cov --no-report --locked --lib --tests -p olai-store --features sqlx
+          cargo llvm-cov --no-report --locked --lib --tests -p olai-store --features sqlite
+          export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
+          cargo llvm-cov --no-report --locked --lib --tests -p olai-store --features postgres
           cargo llvm-cov --no-report --locked --lib --tests -p olai-http --features recording
           cargo llvm-cov report --codecov --output-path codecov.json \
             --ignore-filename-regex 'olai-codegen/src/(\./)?gen/|olai-codegen/tests/golden|/templates/|/examples/'

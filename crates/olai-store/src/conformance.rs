@@ -409,6 +409,10 @@ pub async fn search_object_predicates<S: StoreExec<ConformanceLabel>>(store: &S)
         serde_json::json!({ "owner": "bob", "size": 20, "tags": ["b", "c"] }),
         serde_json::json!({ "owner": "carol", "size": 30, "archived": null }),
         serde_json::json!({ "owner": "alice", "size": 40, "tags": [] }),
+        // Uppercase owner: sorts *before* `"M"` in byte order (`'B'` = 0x42) but a
+        // locale/case-insensitive collation would order it with the lowercase names.
+        // Exercises the ordered-string checks below against the pushdown's collation.
+        serde_json::json!({ "owner": "Bob", "size": 50, "tags": ["x"] }),
     ];
     for (i, p) in payloads.iter().enumerate() {
         store
@@ -451,6 +455,13 @@ pub async fn search_object_predicates<S: StoreExec<ConformanceLabel>>(store: &S)
     check(Filter::ge("size", 20)).await;
     check(Filter::lt("size", 20)).await;
     check(Filter::le("size", 20)).await;
+    // Ordered string comparisons must use byte/scalar order (what `Filter::matches`
+    // does), not a locale/case-insensitive collation. The `"M"` boundary sits
+    // between uppercase and lowercase ASCII, so a backend that folds case or sorts
+    // linguistically (e.g. Postgres under a non-`C` default collation) would select
+    // a different set than the evaluator and fail here.
+    check(Filter::gt("owner", "M")).await;
+    check(Filter::lt("owner", "M")).await;
     check(Filter::contains("tags", "b")).await;
     check(Filter::exists("archived")).await;
     check(Filter::exists("tags")).await;
