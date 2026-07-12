@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "convert_case",
  "glob",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "olai-store"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -1674,7 +1674,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "clap",
  "cliclack",
