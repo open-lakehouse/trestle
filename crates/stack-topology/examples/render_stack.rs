@@ -79,7 +79,7 @@ fn main() {
         // demands (resolved to Azurite via the preference below) instead of selecting
         // SeaweedFS directly — selecting both object_store providers without a pin is a
         // `ConflictingRoleProviders` error.
-        let mut mods = vec!["envoy", "postgres", "mlflow", "headwaters", "azurite"];
+        let mods = vec!["envoy", "postgres", "mlflow", "headwaters", "azurite"];
         // if !prefer_azurite {
         //     mods.push("seaweedfs");
         // }

@@ -99,6 +99,27 @@ impl ProtoLib {
     }
 }
 
+/// How JSON field names are serialized for [`ProtoLib::Buffa`] models.
+///
+/// buffa emits per-field `#[serde(rename = "camelCase", alias = "snake_case")]`,
+/// so by default (`Json`) it serializes lowerCamelCase field names per the proto3
+/// JSON spec while still accepting snake_case on read. Some REST APIs — notably
+/// Unity Catalog — require snake_case *on the wire*. Setting `Proto` post-processes
+/// the buffa output to swap the `rename`/`alias` values so serialization emits
+/// snake_case (still accepting camelCase on read).
+///
+/// No effect under [`ProtoLib::Prost`]: the prost-serde plugin controls casing via
+/// its own `preserve_proto_field_names` buf option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonFieldNames {
+    /// lowerCamelCase field names (buffa's native proto3-JSON default).
+    #[default]
+    Json,
+    /// snake_case (proto) field names — required for Unity Catalog wire-compat.
+    Proto,
+}
+
 /// Code-generation configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +127,11 @@ pub struct GenerateConfig {
     /// Protobuf runtime the generated code consumes.
     #[serde(default)]
     pub proto_lib: ProtoLib,
+
+    /// How JSON field names are serialized (buffa only). Defaults to `json`
+    /// (lowerCamelCase); set `proto` for snake_case wire-compat (e.g. Unity Catalog).
+    #[serde(default)]
+    pub json_field_names: JsonFieldNames,
 
     /// Path to the compiled `FileDescriptorSet` — the foundational codegen input.
     /// Defaults to `api.bin`.

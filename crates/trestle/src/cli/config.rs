@@ -146,6 +146,7 @@ fn default_config() -> TrestleConfig {
         },
         generate: GenerateConfig {
             proto_lib: ProtoLib::default(),
+            json_field_names: Default::default(),
             descriptors: "api.bin".to_string(),
             servers: Servers::default(),
             clients: Clients::default(),

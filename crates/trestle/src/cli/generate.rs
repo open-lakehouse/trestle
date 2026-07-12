@@ -23,8 +23,10 @@ use clap::Args;
 use olai_codegen::{CodeGenConfig, generate_code, parse_file_descriptor_set};
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
+use regex::Regex;
+use walkdir::WalkDir;
 
-use crate::config::{TrestleConfig, merge_buf_gen};
+use crate::config::{JsonFieldNames, ProtoLib, TrestleConfig, merge_buf_gen};
 use crate::error::{Error, Result};
 
 #[derive(Args, Clone)]
@@ -79,6 +81,16 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     let metadata = parse_file_descriptor_set(&file_descriptor_set)?;
     let config = cfg.to_codegen_config()?;
     generate_code(&metadata, &config)?;
+
+    // Rewrite buffa's camelCase JSON field names to snake_case when requested, so
+    // the models serialize proto (snake_case) JSON field names (e.g. Unity Catalog
+    // wire-compat). Runs after all `.rs` are on disk but before `cargo fmt`, so the
+    // subsequent format pass normalizes any whitespace the edit introduces.
+    if cfg.generate.proto_lib == ProtoLib::Buffa
+        && cfg.generate.json_field_names == JsonFieldNames::Proto
+    {
+        rewrite_serde_field_names(&config)?;
+    }
 
     // Format the emitted code so a fresh regen matches an already-formatted tree.
     // Best-effort: a missing/failing formatter is warned about, never fatal.
@@ -228,6 +240,123 @@ fn format_generated(config: &CodeGenConfig, project_dir: &Path) {
     }
 }
 
+/// Rewrite buffa's generated JSON field names from camelCase to snake_case (proto
+/// names) across every `.rs` file in the model output, so the models serialize
+/// snake_case while still accepting camelCase on read (e.g. Unity Catalog
+/// wire-compat). See [`snakeify_json_field_names`] for the exact transform.
+///
+/// Scoped to the buffa model output (`models_subdir_path`) — the only place these
+/// plugin-emitted names live. A no-op when the config has no models dir.
+fn rewrite_serde_field_names(config: &CodeGenConfig) -> Result<()> {
+    let Some(gen_dir) = config.output.models_subdir_path() else {
+        return Ok(());
+    };
+    if !gen_dir.exists() {
+        return Ok(());
+    }
+
+    let mut files_changed = 0usize;
+    for entry in WalkDir::new(&gen_dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() || path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let src = fs::read_to_string(path).map_err(|e| Error::io_at(path, e))?;
+        let rewritten = snakeify_json_field_names(&src);
+        if rewritten != src {
+            fs::write(path, rewritten.as_bytes()).map_err(|e| Error::io_at(path, e))?;
+            files_changed += 1;
+        }
+    }
+
+    tracing::info!(
+        "rewrote serde field names to snake_case in {files_changed} file(s) under {}",
+        gen_dir.display()
+    );
+    Ok(())
+}
+
+/// Rewrite buffa's JSON field names in `src` from camelCase to snake_case,
+/// returning the rewritten source. Pure over its input so it can be unit-tested
+/// without touching the filesystem.
+///
+/// buffa emits the JSON name in two places, both handled here:
+///
+/// 1. On owned message structs (`#[derive(Serialize)]`) via
+///    `#[serde(rename = "camelCase", alias = "snake_case")]` — the two values are
+///    swapped so serialization emits snake_case while still accepting camelCase on
+///    read. Attributes with only a `rename` (single-word fields, already snake) or
+///    none (`#[serde(default)]`) are left unchanged.
+/// 2. On zero-copy `*View` structs, whose hand-written `Serialize` impls call
+///    `__map.serialize_entry("camelCase", …)` with the name as a string literal
+///    (bypassing serde attributes) — the literal is converted to snake_case.
+///
+/// Everything else in each attribute/call (`with = "…"`, `skip_serializing_if`,
+/// the value expression) is preserved byte-for-byte, so the hand-rolled enum/scalar
+/// serde is unaffected.
+fn snakeify_json_field_names(src: &str) -> String {
+    let src = swap_serde_renames(src);
+    snakeify_serialize_entries(&src)
+}
+
+/// Swap the `rename`/`alias` values in `#[serde(...)]` attributes that have both.
+fn swap_serde_renames(src: &str) -> String {
+    // Match one `#[serde( ... )]` attribute; the body never contains `)]`.
+    let serde_attr = Regex::new(r"#\[serde\((?P<body>[^)]*)\)\]").expect("valid regex");
+    let rename_re = Regex::new(r#"rename = "(?P<v>[^"]*)""#).expect("valid regex");
+    let alias_re = Regex::new(r#"alias = "(?P<v>[^"]*)""#).expect("valid regex");
+
+    serde_attr
+        .replace_all(src, |caps: &regex::Captures| {
+            let whole = &caps[0];
+            let body = &caps["body"];
+            let (Some(rn), Some(al)) = (rename_re.captures(body), alias_re.captures(body)) else {
+                return whole.to_string();
+            };
+            let rename_val = rn["v"].to_string();
+            let alias_val = al["v"].to_string();
+            if rename_val == alias_val {
+                return whole.to_string();
+            }
+            // rename ⇄ alias: rename takes the old (snake) alias, alias takes the
+            // old (camel) rename.
+            let body = alias_re.replace(body, format!(r#"alias = "{rename_val}""#));
+            let body = rename_re.replace(&body, format!(r#"rename = "{alias_val}""#));
+            format!("#[serde({body})]")
+        })
+        .into_owned()
+}
+
+/// Convert `serialize_entry("camelCase", …)` JSON-name literals (emitted in the
+/// `*View` `Serialize` impls) to snake_case.
+fn snakeify_serialize_entries(src: &str) -> String {
+    let entry_re = Regex::new(r#"serialize_entry\("(?P<name>[^"]*)""#).expect("valid regex");
+    entry_re
+        .replace_all(src, |caps: &regex::Captures| {
+            let snake = camel_to_snake(&caps["name"]);
+            format!(r#"serialize_entry("{snake}""#)
+        })
+        .into_owned()
+}
+
+/// Convert a lowerCamelCase proto3-JSON field name to its snake_case proto name.
+///
+/// Inverts the proto3 JSON mapping (`my_field` → `myField`): each uppercase letter
+/// becomes `_` + its lowercase. Already-snake names (no uppercase) are returned
+/// unchanged, so it is a safe identity on single-word and already-converted names.
+fn camel_to_snake(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            out.push('_');
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Run a formatter, degrading a missing binary or non-zero exit to a warning.
 ///
 /// Unlike [`run_buf`], formatting is best-effort: generation has already
@@ -294,5 +423,94 @@ fn print_clippy_hint(project_dir: &Path) {
         println!("  {clippy}");
     } else {
         println!("  (cd {} && {clippy})", project_dir.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{camel_to_snake, snakeify_json_field_names, swap_serde_renames};
+
+    #[test]
+    fn camel_to_snake_conversions() {
+        assert_eq!(camel_to_snake("displayName"), "display_name");
+        assert_eq!(camel_to_snake("storageRoot"), "storage_root");
+        assert_eq!(camel_to_snake("nextPageToken"), "next_page_token");
+        // Already snake / single-word: identity.
+        assert_eq!(camel_to_snake("name"), "name");
+        assert_eq!(camel_to_snake("id"), "id");
+    }
+
+    #[test]
+    fn snakeifies_view_serialize_entry_literal() {
+        // The zero-copy View `Serialize` impl hardcodes the JSON name.
+        let src = r#"                __map.serialize_entry("displayName", self.display_name)?;"#;
+        let out = snakeify_json_field_names(src);
+        assert!(out.contains(r#"serialize_entry("display_name", self.display_name)"#));
+    }
+
+    #[test]
+    fn view_serialize_entry_single_word_untouched() {
+        let src = r#"__map.serialize_entry("name", self.name)?;"#.to_string();
+        assert_eq!(snakeify_json_field_names(&src), src);
+    }
+
+    #[test]
+    fn swaps_multiword_rename_alias_pair() {
+        // Multi-line attribute as buffa actually emits it.
+        let src = r#"    #[serde(
+        rename = "storageRoot",
+        alias = "storage_root",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]
+    pub storage_root: Option<String>,"#;
+        let out = swap_serde_renames(src);
+        assert!(out.contains(r#"rename = "storage_root""#));
+        assert!(out.contains(r#"alias = "storageRoot""#));
+        // Untouched options are preserved.
+        assert!(out.contains(r#"skip_serializing_if = "::core::option::Option::is_none""#));
+    }
+
+    #[test]
+    fn single_word_rename_only_is_untouched() {
+        // Single-word field: buffa emits `rename` with no `alias` (snake == camel).
+        let src =
+            r#"    #[serde(rename = "name", skip_serializing_if = "Option::is_none")]"#.to_string();
+        assert_eq!(swap_serde_renames(&src), src);
+    }
+
+    #[test]
+    fn enum_and_scalar_with_helpers_preserved() {
+        // The `with = "..."` helper (hand-rolled enum/scalar serde) must survive the
+        // swap unchanged; only the rename/alias values move.
+        let src = r#"    #[serde(
+        rename = "catalogType",
+        alias = "catalog_type",
+        with = "::buffa::json_helpers::opt_enum",
+        skip_serializing_if = "::core::option::Option::is_none"
+    )]"#;
+        let out = swap_serde_renames(src);
+        assert!(out.contains(r#"rename = "catalog_type""#));
+        assert!(out.contains(r#"alias = "catalogType""#));
+        assert!(out.contains(r#"with = "::buffa::json_helpers::opt_enum""#));
+    }
+
+    #[test]
+    fn non_field_serde_attr_is_untouched() {
+        // Struct-level `#[serde(default)]` has neither rename nor alias.
+        let src = "#[serde(default)]".to_string();
+        assert_eq!(swap_serde_renames(&src), src);
+    }
+
+    #[test]
+    fn swaps_only_within_one_attribute_across_a_file() {
+        // Two fields in one blob: a multi-word pair swaps, a single-word rename does
+        // not, and each `#[serde(...)]` is handled independently.
+        let src = r#"    #[serde(rename = "pageToken", alias = "page_token", skip_serializing_if = "x")]
+    pub page_token: Option<String>,
+    #[serde(rename = "name")]
+    pub name: String,"#;
+        let out = swap_serde_renames(src);
+        assert!(out.contains(r#"rename = "page_token", alias = "pageToken""#));
+        assert!(out.contains(r#"#[serde(rename = "name")]"#));
     }
 }

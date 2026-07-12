@@ -206,6 +206,7 @@ mod tests {
     fn mk(proto_lib: ProtoLib, connect: bool) -> GenerateConfig {
         GenerateConfig {
             proto_lib,
+            json_field_names: Default::default(),
             descriptors: "api.bin".into(),
             servers: Servers {
                 rest: true,
