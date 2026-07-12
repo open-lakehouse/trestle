@@ -70,6 +70,54 @@ pub struct PortCtx {
     pub internal_only: bool,
 }
 
+/// A host-port claimed by more than one component.
+///
+/// Two components may declare ports under different [`names`](PortDecl::name) yet
+/// map to the same host port number; deduping by name alone (see
+/// [`aggregate_stack_context`]) does not catch that, and the conflict only
+/// surfaces at `docker compose up`. [`port_collisions`] reports these so callers
+/// can fail fast with an actionable message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortCollision {
+    /// The host port claimed more than once.
+    pub port: u16,
+    /// The component + port-name pairs that claim it, in aggregation order.
+    pub claimants: Vec<(String, String)>,
+}
+
+/// Detect host-port collisions across the active components.
+///
+/// Only host-published ports participate: [`internal_only`](PortDecl::internal_only)
+/// ports are container-network-local and never bind a host port, so they cannot
+/// collide. Returns one [`PortCollision`] per contended host port (empty when the
+/// stack is conflict-free).
+pub fn port_collisions(components: &[&ComponentManifest]) -> Vec<PortCollision> {
+    // port number -> claimants, preserving first-seen order of the ports.
+    let mut by_port: BTreeMap<u16, Vec<(String, String)>> = BTreeMap::new();
+    let mut seen_components: BTreeSet<String> = BTreeSet::new();
+    for c in components {
+        // Mirror aggregate's component dedupe so a component listed twice (e.g.
+        // pulled in via two dependency paths) isn't counted as self-colliding.
+        if !seen_components.insert(c.name.clone()) {
+            continue;
+        }
+        for p in &c.provides.ports {
+            if p.internal_only {
+                continue;
+            }
+            by_port
+                .entry(p.default)
+                .or_default()
+                .push((c.name.clone(), p.name.clone()));
+        }
+    }
+    by_port
+        .into_iter()
+        .filter(|(_, claimants)| claimants.len() > 1)
+        .map(|(port, claimants)| PortCollision { port, claimants })
+        .collect()
+}
+
 /// Aggregate `provides:` blocks from a list of (already topologically sorted)
 /// component manifests into a single [`StackContext`].
 pub fn aggregate_stack_context(components: &[&ComponentManifest]) -> StackContext {
@@ -157,5 +205,54 @@ fn flatten_port(p: &PortDecl) -> PortCtx {
         name: p.name.clone(),
         default: p.default,
         internal_only: p.internal_only,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(yaml: &str) -> ComponentManifest {
+        serde_yaml::from_str(yaml).expect("valid component manifest")
+    }
+
+    #[test]
+    fn no_collision_when_ports_differ() {
+        let a = manifest("name: a\nprovides:\n  ports:\n    - { name: a_http, default: 5432 }\n");
+        let b = manifest("name: b\nprovides:\n  ports:\n    - { name: b_http, default: 8081 }\n");
+        assert!(port_collisions(&[&a, &b]).is_empty());
+    }
+
+    #[test]
+    fn detects_same_host_port_under_different_names() {
+        let a = manifest("name: a\nprovides:\n  ports:\n    - { name: a_http, default: 8080 }\n");
+        let b = manifest("name: b\nprovides:\n  ports:\n    - { name: b_http, default: 8080 }\n");
+        let collisions = port_collisions(&[&a, &b]);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].port, 8080);
+        assert_eq!(
+            collisions[0].claimants,
+            vec![
+                ("a".to_string(), "a_http".to_string()),
+                ("b".to_string(), "b_http".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn internal_only_ports_never_collide() {
+        let a = manifest(
+            "name: a\nprovides:\n  ports:\n    - { name: a_int, default: 9000, internal_only: true }\n",
+        );
+        let b = manifest(
+            "name: b\nprovides:\n  ports:\n    - { name: b_int, default: 9000, internal_only: true }\n",
+        );
+        assert!(port_collisions(&[&a, &b]).is_empty());
+    }
+
+    #[test]
+    fn same_component_listed_twice_is_not_self_collision() {
+        let a = manifest("name: a\nprovides:\n  ports:\n    - { name: a_http, default: 8080 }\n");
+        assert!(port_collisions(&[&a, &a]).is_empty());
     }
 }
