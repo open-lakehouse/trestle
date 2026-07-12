@@ -345,8 +345,10 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
 
         // Pre-allocate the id so the sealed blob can be bound to it before the row is written.
         // The object row and its sealed sensitive blob are written together in one atomic
-        // `create`, so there is no orphan/rollback window.
-        let id = id.unwrap_or_else(Uuid::new_v4);
+        // `create`, so there is no orphan/rollback window. Mint a UUIDv7 (time-ordered) so the
+        // id doubles as a stable, chronological pagination key (see the keyset pagination in
+        // `crate::store`); a caller-supplied id is honored as-is.
+        let id = id.unwrap_or_else(Uuid::now_v7);
 
         // Seal the sensitive fields (or error if there are any and no encryptor is configured).
         // A caller-supplied pre-sealed blob is used only when there are no sensitive fields.

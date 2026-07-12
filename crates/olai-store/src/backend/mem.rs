@@ -121,7 +121,8 @@ fn op_create<L: Label>(
     {
         return Err(Error::AlreadyExists);
     }
-    let id = id.unwrap_or_else(Uuid::new_v4);
+    // UUIDv7 (time-ordered) so `id` doubles as the chronological keyset pagination key.
+    let id = id.unwrap_or_else(Uuid::now_v7);
     if state.objects.contains_key(&id) {
         return Err(Error::AlreadyExists);
     }

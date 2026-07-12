@@ -774,7 +774,8 @@ async fn op_create<L: Label>(
     sensitive: Option<Bytes>,
 ) -> Result<Object<L>> {
     let object = Object {
-        id: id.unwrap_or_else(Uuid::new_v4),
+        // UUIDv7 (time-ordered) so `id` doubles as the chronological keyset pagination key.
+        id: id.unwrap_or_else(Uuid::now_v7),
         label,
         name: name.clone(),
         properties,
