@@ -374,3 +374,82 @@ fn write_buf_gen(generate: &GenerateConfig, path: &std::path::Path, force: bool)
     }
     std::fs::write(path, emit_buf_gen(generate)).map_err(|e| Error::io_at(path, e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args() -> ConfigArgs {
+        ConfigArgs {
+            name: None,
+            description: None,
+            proto_lib: None,
+            servers: vec![],
+            clients: vec![],
+            rust_transport: None,
+            node_napi: false,
+            node_wasm: false,
+            node_ts: false,
+            out: PathBuf::from("trestle.yaml"),
+            non_interactive: true,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn apply_flags_sets_buffa_and_servers() {
+        let mut cfg = default_config();
+        let a = ConfigArgs {
+            proto_lib: Some(ProtoLibArg::Buffa),
+            servers: vec![ServerArg::Rest, ServerArg::Connect],
+            ..args()
+        };
+        apply_flags(&mut cfg, &a);
+        assert!(matches!(cfg.generate.proto_lib, ProtoLib::Buffa));
+        assert!(cfg.generate.servers.rest);
+        assert!(cfg.generate.servers.connect);
+    }
+
+    #[test]
+    fn apply_flags_rust_client_honours_wasm_transport() {
+        let mut cfg = default_config();
+        let a = ConfigArgs {
+            clients: vec![ClientArg::Rust],
+            rust_transport: Some(TransportArg::Wasm),
+            ..args()
+        };
+        apply_flags(&mut cfg, &a);
+        let rust = cfg.generate.clients.rust.expect("rust client set");
+        assert!(matches!(rust.transport, Transport::Wasm));
+    }
+
+    #[test]
+    fn apply_flags_node_defaults_to_napi() {
+        // `--client node` with no variant flag still yields a usable NAPI client.
+        let mut cfg = default_config();
+        let a = ConfigArgs {
+            clients: vec![ClientArg::Node],
+            ..args()
+        };
+        apply_flags(&mut cfg, &a);
+        let node = cfg.generate.clients.node.expect("node client set");
+        assert!(node.napi.is_some());
+        assert!(node.ts.is_none());
+        assert!(node.wasm.is_none());
+    }
+
+    #[test]
+    fn apply_flags_node_ts_variant_only() {
+        let mut cfg = default_config();
+        let a = ConfigArgs {
+            clients: vec![ClientArg::Node],
+            node_ts: true,
+            ..args()
+        };
+        apply_flags(&mut cfg, &a);
+        let node = cfg.generate.clients.node.expect("node client set");
+        assert!(node.ts.is_some());
+        // No napi flag and a variant given => napi not force-enabled.
+        assert!(node.napi.is_none());
+    }
+}
