@@ -1,6 +1,7 @@
 // @generated — do not edit by hand.
 #![allow(unexpected_cfgs)]
 #![allow(clippy::empty_docs)]
+#![allow(clippy::useless_borrows_in_formatting)]
 #![allow(non_camel_case_types)]
 #![allow(clippy::derivable_impls)]
 use std::collections::HashMap;

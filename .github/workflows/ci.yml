@@ -300,16 +300,18 @@ jobs:
           buf generate
           buf build -o api.bin
           trestle generate -c trestle.yaml
-      - name: Apply the post-codegen pass (clippy --fix + fmt)
+      # `trestle generate` now runs the formatters (cargo fmt / biome / ruff)
+      # itself, so this pass only needs the clippy lint-fix that generate
+      # deliberately doesn't run in-pipeline.
+      - name: Apply the post-codegen pass (clippy --fix)
         working-directory: examples/golden-path-app
         run: |
           cargo clippy --fix --allow-dirty --allow-staged --workspace --all-targets || true
-          cargo fmt
       - name: Assert the committed example does not diverge
         working-directory: examples/golden-path-app
         run: |
           git diff --exit-code -- . ':(exclude)api.bin' || {
-            echo "::error::The committed example diverges from a fresh regen + clippy-fix + fmt. Run 'just regen' in examples/golden-path-app and commit the result."
+            echo "::error::The committed example diverges from a fresh regen + clippy-fix. Run 'just regen' in examples/golden-path-app and commit the result."
             exit 1
           }
       - name: Build + lint the example

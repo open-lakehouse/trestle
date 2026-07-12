@@ -954,6 +954,11 @@ pub fn generate_models_mod(
         // generated service methods; allow them so `clippy -D warnings` stays
         // green when the `grpc` feature is enabled.
         #![allow(clippy::empty_docs)]
+        // The prost-serde plugin emits `write!(f, "...", &FIELDS)` for the
+        // deserializer's expected-fields message; newer clippy flags the `&` as a
+        // useless borrow in a formatting macro. Allow it here so plugin output
+        // stays `-D warnings` clean without post-processing each generated serde file.
+        #![allow(clippy::useless_borrows_in_formatting)]
         #lint_allows
 
         use std::collections::HashMap;

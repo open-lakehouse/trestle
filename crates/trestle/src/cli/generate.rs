@@ -40,6 +40,15 @@ pub struct GenerateArgs {
     /// generate` / `buf build` steps are skipped and this descriptor is used as-is.
     #[clap(long, short)]
     pub descriptors: Option<PathBuf>,
+
+    /// Skip running language formatters (`cargo fmt` / `biome` / `ruff`) on the
+    /// generated output.
+    ///
+    /// Formatting runs by default so a fresh regen is byte-identical to a
+    /// formatted tree (no churn). Missing formatters are warned about and
+    /// skipped, so this flag is only needed to suppress formatting entirely.
+    #[clap(long)]
+    pub no_format: bool,
 }
 
 pub fn run(args: GenerateArgs) -> Result<()> {
@@ -71,7 +80,14 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     let config = cfg.to_codegen_config()?;
     generate_code(&metadata, &config)?;
 
+    // Format the emitted code so a fresh regen matches an already-formatted tree.
+    // Best-effort: a missing/failing formatter is warned about, never fatal.
+    if !args.no_format {
+        format_generated(&config, &project_dir);
+    }
+
     print_summary(&config);
+    print_clippy_hint(&project_dir);
     Ok(())
 }
 
@@ -159,6 +175,84 @@ fn run_buf(args: &[&str], dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Run the language formatters over the emitted output so a fresh regen is
+/// byte-identical to an already-formatted tree.
+///
+/// Best-effort: each formatter is dispatched only for languages that were
+/// actually emitted, and a missing or failing formatter degrades to a warning
+/// (see [`run_formatter`]) rather than aborting a successful generation.
+fn format_generated(config: &CodeGenConfig, project_dir: &Path) {
+    let out = &config.output;
+
+    // Rust: run `cargo fmt` in the project. We deliberately shell out to
+    // `cargo fmt` rather than invoking `rustfmt` on a hand-collected file list —
+    // `cargo fmt` resolves the module tree from the crate roots (so nested `mod`s
+    // format in their parent's context), honors the `// @generated` marker (so the
+    // buf-plugin model files are left as the plugin emitted them), and discovers
+    // the workspace edition + any `rustfmt.toml`. That makes generate's output a
+    // fixed point for a developer's `cargo fmt` / pre-commit hook and CI — the
+    // least-churn outcome. A bare `rustfmt <files>` pass subtly diverges from
+    // `cargo fmt` on both counts.
+    run_formatter(
+        "cargo",
+        &["fmt"],
+        project_dir,
+        "cargo fmt (rust)",
+        "install rustfmt with `rustup component add rustfmt`",
+    );
+
+    // TypeScript: the TS client dir, plus the `.d.ts` co-located in the wasm dir.
+    let ts_dirs: Vec<&PathBuf> = [&out.node_ts, &out.wasm].into_iter().flatten().collect();
+    if !ts_dirs.is_empty() {
+        let mut args = vec!["format", "--write"];
+        let ts_paths: Vec<String> = ts_dirs.iter().map(|p| p.display().to_string()).collect();
+        args.extend(ts_paths.iter().map(String::as_str));
+        run_formatter(
+            "biome",
+            &args,
+            project_dir,
+            "biome format (typescript)",
+            "install biome (https://biomejs.dev/guides/getting-started/)",
+        );
+    }
+
+    // Python: PyO3 binding wrappers + typings. Run ruff via uvx (no local install).
+    if let Some(py) = &out.python {
+        run_formatter(
+            "uvx",
+            &["ruff", "format", &py.display().to_string()],
+            project_dir,
+            "ruff format (python)",
+            "install uv to get uvx (https://docs.astral.sh/uv/getting-started/installation/)",
+        );
+    }
+}
+
+/// Run a formatter, degrading a missing binary or non-zero exit to a warning.
+///
+/// Unlike [`run_buf`], formatting is best-effort: generation has already
+/// succeeded, so a formatter that is absent or fails must not abort the run. When
+/// the binary isn't on `PATH`, `install_hint` tells the user how to get it.
+fn run_formatter(program: &str, args: &[&str], dir: &Path, label: &str, install_hint: &str) {
+    let spinner = cliclack::spinner();
+    spinner.start(label);
+    match Command::new(program).args(args).current_dir(dir).status() {
+        Ok(status) if status.success() => spinner.stop(label),
+        Ok(status) => {
+            spinner.stop(label);
+            tracing::warn!("`{program}` exited with {status}; leaving output unformatted");
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            spinner.stop(label);
+            tracing::warn!("`{program}` not found on PATH; skipping {label} — {install_hint}");
+        }
+        Err(e) => {
+            spinner.stop(label);
+            tracing::warn!("failed to run `{program}`: {e}; skipping {label}");
+        }
+    }
+}
+
 /// Print the directories code was generated into, always (not log-gated), so a
 /// successful run gives visible feedback.
 fn print_summary(config: &CodeGenConfig) {
@@ -181,5 +275,24 @@ fn print_summary(config: &CodeGenConfig) {
     println!("Generated code into:");
     for d in dirs {
         println!("  {d}");
+    }
+}
+
+/// Print a copy-pasteable `clippy --fix` command as a hint.
+///
+/// We deliberately don't run `clippy --fix` in-pipeline (it's semantic and slow),
+/// but a lint-fix pass over the generated code is still worth doing. Surfacing the
+/// exact command — always, even under `--no-format` — lets consuming agents/users
+/// run it without guessing. Scoped to `project_dir` so it targets the generated
+/// crates rather than an unrelated workspace.
+fn print_clippy_hint(project_dir: &Path) {
+    let clippy = "cargo clippy --fix --allow-dirty --all-targets -- -D warnings";
+    println!("\nTip: lint the generated code with:");
+    // When generating in-place (project_dir is "."), the plain command is enough;
+    // otherwise wrap it in a `cd` so it's copy-pasteable from anywhere.
+    if project_dir.as_os_str() == "." {
+        println!("  {clippy}");
+    } else {
+        println!("  (cd {} && {clippy})", project_dir.display());
     }
 }
