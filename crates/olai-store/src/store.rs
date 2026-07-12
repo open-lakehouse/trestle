@@ -662,6 +662,13 @@ impl<L: Label, T: ObjectStoreReader<L>> ObjectStoreReader<L> for Arc<T> {
 }
 
 #[async_trait::async_trait]
+impl<L: Label, T: SecretObjectReader<L>> SecretObjectReader<L> for Arc<T> {
+    async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
+        T::get_with_secrets(self, id).await
+    }
+}
+
+#[async_trait::async_trait]
 impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
     async fn create(
         &self,
@@ -735,6 +742,23 @@ impl<L: Label, T: AssociationStore<L>> AssociationStore<L> for Arc<T> {
 
     async fn remove(&self, from_id: Uuid, to_id: Uuid, label: &str) -> Result<()> {
         T::remove(self, from_id, to_id, label).await
+    }
+}
+
+#[async_trait::async_trait]
+impl<L: Label, T: Transactional<L>> Transactional<L> for Arc<T> {
+    async fn transaction<'a, U>(
+        &'a self,
+        f: Box<dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> BoxFuture<'t, Result<U>> + Send + 'a>,
+    ) -> Result<U>
+    where
+        U: Send + 'a,
+    {
+        T::transaction(self, f).await
+    }
+
+    async fn begin(&self) -> Result<Box<dyn StoreTx<L>>> {
+        T::begin(self).await
     }
 }
 

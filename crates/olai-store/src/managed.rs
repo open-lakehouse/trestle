@@ -52,7 +52,7 @@ use crate::object::{Association, Object};
 use crate::registry::{FieldRole, ResourceRegistry};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, SecretObjectReader,
+    ObjectStoreReader, Precondition, SecretObjectReader, StoreExec, StoreTx, Transactional,
 };
 use crate::{Error, Result};
 
@@ -541,6 +541,43 @@ impl<L: Label, S: ObjectStore<L>> SecretObjectReader<L> for ManagedObjectStore<L
     }
 }
 
+// --- Transactional pass-through ---
+//
+// A transaction is a backend-level unit of work, so the managed decorator delegates
+// `transaction`/`begin` straight to the inner store when it is [`Transactional`]. This lets
+// `ManagedObjectStore` be the sole store handle a caller holds while still expressing atomic
+// multi-object work (e.g. deleting a staging reservation and creating a table at the same id in
+// one commit).
+//
+// NOTE: the closure and the returned [`StoreTx`] operate on the **raw** [`StoreExec`] surface of
+// the inner store — the managed layer's field-role stripping/injection and sensitive-field
+// sealing are *not* applied inside the transaction. That is deliberate and sound only for
+// resources with **no sensitive fields**: a raw `create`/`update` there would otherwise leak
+// unsealed secret material into the plaintext properties column. The current in-tree caller
+// (the managed-table commit swap over `StagingTable`/`Table`, neither of which has a sensitive
+// field) satisfies that constraint; do not route a resource with sensitive fields through this
+// path.
+#[async_trait::async_trait]
+impl<L: Label, S: Transactional<L>> Transactional<L> for ManagedObjectStore<L, S> {
+    async fn transaction<'a, T>(
+        &'a self,
+        f: Box<
+            dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> futures::future::BoxFuture<'t, Result<T>>
+                + Send
+                + 'a,
+        >,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+    {
+        self.inner.transaction(f).await
+    }
+
+    async fn begin(&self) -> Result<Box<dyn StoreTx<L>>> {
+        self.inner.begin().await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,6 +788,32 @@ mod tests {
             .await
             .unwrap();
         assert!(edges.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transaction_passes_through_to_inner_and_commits() {
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
+
+        // Create two objects inside one transaction through the managed store — both must
+        // reach the inner store and be visible after the closure commits on `Ok`.
+        let (a_id, b_id) = store
+            .transaction(Box::new(|tx: &dyn StoreExec<TestLabel>| {
+                Box::pin(async move {
+                    let a = tx
+                        .create(TestLabel::Other, &rn("a"), None, None, None)
+                        .await?;
+                    let b = tx
+                        .create(TestLabel::Other, &rn("b"), None, None, None)
+                        .await?;
+                    Ok((a.id, b.id))
+                })
+            }))
+            .await
+            .unwrap();
+
+        // Both committed rows are readable through the managed store.
+        assert_eq!(store.get(&a_id).await.unwrap().id, a_id);
+        assert_eq!(store.get(&b_id).await.unwrap().id, b_id);
     }
 
     #[tokio::test]
