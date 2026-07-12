@@ -108,7 +108,9 @@ pub mod store;
 // Re-exports for convenience.
 pub use backend::mem::InMemoryStore;
 #[cfg(feature = "sqlite")]
-pub use backend::sql::{SqlStore, migrate as migrate_sql, migrator as sql_migrator};
+pub use backend::sql::{
+    SqlStore, migrate as migrate_sql, migrator as sql_migrator, migrator_with as sql_migrator_with,
+};
 #[cfg(feature = "encryption")]
 pub use encryption::{EnvelopeEncryptor, KekId, KeyProvider, LocalKeyProvider};
 pub use error::{Error, Result};

@@ -92,6 +92,46 @@ pub fn migrator() -> sqlx::migrate::Migrator {
     sqlx::migrate!("./migrations")
 }
 
+/// Build a single [`Migrator`](sqlx::migrate::Migrator) over this crate's schema
+/// migrations **plus** the consumer's own, in one ordered ledger.
+///
+/// A consumer that stores its own tables in the same database as the object
+/// graph (e.g. a secrets or audit table) would otherwise need a *second*
+/// `sqlx::migrate!` migrator — but two migrators share sqlx's single hardcoded
+/// `_sqlx_migrations` ledger, which forces non-overlapping version ranges and
+/// `set_ignore_missing(true)` on both so neither trips over the other's rows.
+/// Merging into one migrator sidesteps all of that: one ledger, ordinary
+/// version ordering, no `ignore_missing`.
+///
+/// `extra` is typically the consumer's own `sqlx::migrate!().migrations` (or any
+/// iterator of [`Migration`](sqlx::migrate::Migration)). Versions across the
+/// combined set must be unique and are applied in ascending version order, so
+/// number your migrations above this crate's (which occupy the low range).
+///
+/// ```no_run
+/// # async fn run(pool: sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+/// // The consumer's own migrations live in its `./migrations` dir, versioned
+/// // above olai-store's (e.g. 0100+).
+/// let local = sqlx::migrate!("./migrations");
+/// olai_store::sql_migrator_with(local.migrations.iter().cloned())
+///     .run(&pool)
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn migrator_with(
+    extra: impl IntoIterator<Item = sqlx::migrate::Migration>,
+) -> sqlx::migrate::Migrator {
+    let mut migrations: Vec<sqlx::migrate::Migration> =
+        migrator().migrations.iter().cloned().collect();
+    migrations.extend(extra);
+    migrations.sort_by_key(|m| m.version);
+    sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(migrations),
+        ..sqlx::migrate::Migrator::DEFAULT
+    }
+}
+
 /// Apply the crate's schema migrations to `pool`.
 ///
 /// A convenience wrapper over [`migrator`]. Migrations are idempotent and
