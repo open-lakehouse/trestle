@@ -82,6 +82,20 @@ pub struct ManagedObjectStore<L: Label, S> {
     _label: PhantomData<L>,
 }
 
+// Hand-written so the bound is `S: Clone` only — a `#[derive(Clone)]` would also demand
+// `L: Clone` (via `PhantomData<L>`), and the registry is shared behind an `Arc`.
+impl<L: Label, S: Clone> Clone for ManagedObjectStore<L, S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            #[cfg(feature = "encryption")]
+            encryptor: self.encryptor.clone(),
+            registry: Arc::clone(&self.registry),
+            _label: PhantomData,
+        }
+    }
+}
+
 impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     /// Create a managed store without encryption.
     ///
@@ -189,18 +203,24 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
                     );
                 }
                 FieldRole::Managed => {
+                    // Timestamps are injected as epoch milliseconds (a JSON number), the
+                    // representation UC-style resource models use for `created_at` /
+                    // `updated_at` (proto `int64`). A string (e.g. RFC 3339) would fail to
+                    // deserialize back into those integer fields.
                     match field.name {
                         "created_at" => {
                             map.insert(
                                 field.name.to_string(),
-                                serde_json::Value::String(object.created_at.to_rfc3339()),
+                                serde_json::Value::Number(
+                                    object.created_at.timestamp_millis().into(),
+                                ),
                             );
                         }
                         "updated_at" => {
                             if let Some(updated) = object.updated_at {
                                 map.insert(
                                     field.name.to_string(),
-                                    serde_json::Value::String(updated.to_rfc3339()),
+                                    serde_json::Value::Number(updated.timestamp_millis().into()),
                                 );
                             }
                         }
@@ -680,10 +700,11 @@ mod tests {
         assert_eq!(map["color"], serde_json::json!("red"));
         // Identifier injected from the store's real id, not the client value.
         assert_eq!(map["id"], serde_json::json!(created.id.to_string()));
-        // Managed created_at injected from the store, not the client value.
+        // Managed created_at injected from the store (as epoch millis), not the
+        // client value.
         assert_eq!(
             map["created_at"],
-            serde_json::json!(created.created_at.to_rfc3339())
+            serde_json::json!(created.created_at.timestamp_millis())
         );
 
         // Verify the underlying store never persisted the stripped fields.
