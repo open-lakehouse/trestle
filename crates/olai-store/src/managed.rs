@@ -52,7 +52,7 @@ use crate::object::{Association, Object};
 use crate::registry::{FieldRole, ResourceRegistry};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition,
+    ObjectStoreReader, Precondition, SecretObjectReader,
 };
 use crate::{Error, Result};
 
@@ -384,6 +384,13 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
         // The sealed blob is stored on the object row, so deleting the object drops it too.
         self.inner.delete(id).await
     }
+
+    async fn set_sensitive(&self, id: &Uuid, sensitive: bytes::Bytes) -> Result<()> {
+        // The sealed blob lives on the inner row; forward so the decorator does not
+        // silently swallow a blob rewrite (e.g. a KEK-rotation writeback routed through
+        // the outer store) via the trait's no-op default.
+        self.inner.set_sensitive(id, sensitive).await
+    }
 }
 
 // --- AssociationStore(Reader) pass-through ---
@@ -433,11 +440,13 @@ impl<L: Label, S: AssociationStore<L>> AssociationStore<L> for ManagedObjectStor
     }
 }
 
-impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
+#[async_trait::async_trait]
+impl<L: Label, S: ObjectStore<L>> SecretObjectReader<L> for ManagedObjectStore<L, S> {
     /// Get an object with its sensitive fields decrypted and merged back into `properties`.
     ///
     /// Intended for internal use (e.g. credential vending) where the caller needs the full value.
-    /// Without an encryptor, or when no blob is stored, this behaves like [`get`](Self::get).
+    /// Without an encryptor, or when no blob is stored, this behaves like
+    /// [`get`](ObjectStoreReader::get).
     ///
     /// # Errors
     ///
@@ -451,7 +460,7 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
             otel.kind = "client",
         )
     )]
-    pub async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
+    async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>> {
         let mut object = self.inner.get(id).await?;
         self.inject_fields(&mut object);
 

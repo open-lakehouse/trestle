@@ -335,6 +335,25 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     }
 }
 
+/// Read access to an object *including* its sealed sensitive fields.
+///
+/// Ordinary [`ObjectStoreReader::get`] redacts `Sensitive` fields; this trait exposes the
+/// decrypted view for the narrow internal callers that genuinely need the secret material
+/// (e.g. credential vending). It is implemented by
+/// [`ManagedObjectStore`](crate::ManagedObjectStore) — the only layer that holds the
+/// registry and encryptor needed to unseal — so requiring this bound instead of a bare
+/// [`ObjectStoreReader`] makes "I may read secrets" explicit in a store's type.
+#[async_trait::async_trait]
+pub trait SecretObjectReader<L: Label>: ObjectStoreReader<L> {
+    /// Get an object with its sensitive fields decrypted and merged back into `properties`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists, or a
+    /// decryption error if a stored sensitive blob cannot be opened.
+    async fn get_with_secrets(&self, id: &Uuid) -> Result<Object<L>>;
+}
+
 /// The object an edge listing is anchored on, and thus the direction it walks.
 ///
 /// TAO-style graphs traverse edges from a fixed endpoint: the *outgoing* edges of a
