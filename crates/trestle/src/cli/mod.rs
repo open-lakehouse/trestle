@@ -26,6 +26,11 @@ pub struct Cli {
 pub enum Commands {
     /// Scaffold a new project from a base template + zero or more apps.
     New(Box<new::NewArgs>),
+    /// Initialize `trestle.yaml` (+ `buf.gen.yaml`) via a guided interview.
+    ///
+    /// A discoverable alias for `config` aimed at bootstrapping a fresh project;
+    /// `config` remains for scripted / non-interactive updates. Same flags.
+    Init(Box<config::ConfigArgs>),
     /// Author or update the structured project config (`trestle.yaml` + `buf.gen.yaml`).
     Config(Box<config::ConfigArgs>),
     /// Generate Rust/Python/Node.js code from a proto descriptor.
@@ -48,7 +53,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::New(args) => new::run(*args),
-        Commands::Config(args) => config::run(*args),
+        Commands::Init(args) | Commands::Config(args) => config::run(*args),
         Commands::Generate(args) => generate::run(*args),
         Commands::EnrichOpenapi(args) => enrich_openapi::run(args),
         Commands::ListTemplates => list::run_templates(),

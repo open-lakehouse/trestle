@@ -313,6 +313,42 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
         });
     }
 
+    // Output layout: confirm the models module dir (crate names derive from it).
+    let models_dir: String = cliclack::input("Models module directory?")
+        .default_input(&cfg.generate.models.dir)
+        .interact()
+        .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
+    cfg.generate.models.dir = models_dir;
+
+    // Server layout + store integration only matter when a server is emitted.
+    if cfg.generate.servers.rest {
+        let server_out: String = cliclack::input("Server crate `src` directory?")
+            .default_input(
+                cfg.generate
+                    .server
+                    .output
+                    .as_deref()
+                    .unwrap_or("crates/server/src"),
+            )
+            .interact()
+            .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
+        cfg.generate.server.output = Some(server_out);
+
+        // olai-store integration: wiring the generated Resource/Label enums +
+        // store glue. Off by default; a single confirm gates the whole set.
+        let store = cliclack::confirm("Wire olai-store resource integration?")
+            .initial_value(cfg.generate.server.store_integration)
+            .interact()
+            .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
+        cfg.generate.server.store_integration = store;
+        // The resource enum + conversions are prerequisites for store glue, so
+        // enabling the integration implies them.
+        if store {
+            cfg.generate.server.resource_enum = true;
+            cfg.generate.server.object_conversions = true;
+        }
+    }
+
     Ok(())
 }
 
