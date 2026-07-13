@@ -63,3 +63,25 @@ test-pg PG_PORT="5433":
   done
   export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
   SQLX_OFFLINE=true cargo test --locked --lib -p olai-store --features postgres
+
+# Regenerate the Homebrew formula for an existing `olai-trestle-v*` release and
+# print it (does not push). Downloads the `.sha256` sidecars from that release
+# and renders `Formula/trestle.rb` via scripts/gen-homebrew-formula.sh — the same
+# path the `bump-homebrew` CI job takes. Useful for eyeballing / `brew style`ing
+# the formula locally before cutting a release. Needs `gh` authenticated.
+#   just homebrew-formula olai-trestle-v0.0.5
+homebrew-formula TAG:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  repo=open-lakehouse/trestle
+  version="${TAG#olai-trestle-v}"
+  d="$(mktemp -d)"
+  trap 'rm -rf "$d"' EXIT
+  echo ">> downloading checksums for {{ TAG }}" >&2
+  gh release download "{{ TAG }}" --repo "$repo" --dir "$d" --pattern '*.sha256'
+  scripts/gen-homebrew-formula.sh \
+    --tool trestle --crate olai-trestle --version "$version" \
+    --repo "$repo" --tag-prefix olai-trestle-v \
+    --desc "Unified CLI for proto-driven code generation and full-project scaffolding" \
+    --homepage https://github.com/open-lakehouse/trestle \
+    --checksums-dir "$d"
