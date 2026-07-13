@@ -139,8 +139,11 @@ A third job in `release-plz.yml` — `bump-homebrew` — keeps the formula in
 [`open-lakehouse/homebrew-tap`](https://github.com/open-lakehouse/homebrew-tap)
 in sync. It runs after `release-binaries` (same "CLI released this run" gate),
 downloads the `.sha256` sidecars the binaries job just attached, regenerates
-`Formula/trestle.rb` with `scripts/gen-homebrew-formula.sh`, and commits it to
-the tap. No manual step per release.
+`Formula/trestle.rb` with `scripts/gen-homebrew-formula.sh`, and **opens a PR**
+against the tap. A tap maintainer reviews the URL + `sha256` and merges — so a
+compromised release/App credential can only propose a formula change, never
+silently rewrite one (supply-chain hardening; the tap's `main` is protected and
+admits no direct pushes).
 
 - **Generator:** `scripts/gen-homebrew-formula.sh` is standalone and
   parameterized (tool/crate/version/repo/tag-prefix/checksums-dir) so it can be
@@ -148,11 +151,12 @@ the tap. No manual step per release.
   It auto-detects which target archives exist and emits only those platform
   blocks. Preview a formula locally for an existing release with
   `just homebrew-formula olai-trestle-v<version>`.
-- **Cross-repo push credential:** the job mints a short-lived token via
-  `actions/create-github-app-token` from a GitHub App (Contents: write, installed
-  on `homebrew-tap`) — the default `GITHUB_TOKEN` cannot push to another repo,
-  and this avoids a long-lived PAT. It needs two secrets in the **`release`
-  environment**: `HOMEBREW_TAP_APP_ID` and `HOMEBREW_TAP_APP_PRIVATE_KEY`.
+- **Cross-repo credential:** the job mints a short-lived token via
+  `actions/create-github-app-token` from a GitHub App installed on `homebrew-tap`
+  (Contents + Pull requests: write, to push a branch and open the PR) — the
+  default `GITHUB_TOKEN` cannot touch another repo, and this avoids a long-lived
+  PAT. It needs two secrets in the **`release` environment**:
+  `HOMEBREW_TAP_APP_ID` and `HOMEBREW_TAP_APP_PRIVATE_KEY`.
 - **Verify a formula end-to-end:** `brew tap open-lakehouse/tap && brew install
   open-lakehouse/tap/trestle`, then `trestle --version`. `brew style` /
   `brew audit --strict` gate the generated file.

@@ -139,9 +139,12 @@ jobs:
         with:
           ref: ${{ needs.release-plz-release.outputs.cli_tag }}
           persist-credentials: false
-      # Mint a short-lived token scoped to the tap repo (App installed there with
-      # Contents: write). No long-lived PAT; the default GITHUB_TOKEN cannot push
-      # to another repository.
+      # Mint a short-lived token scoped to the tap repo (App installed there).
+      # No long-lived PAT; the default GITHUB_TOKEN cannot touch another repo.
+      # The bot only ever *proposes* a formula change (branch + PR) — it does not
+      # write `main` — so a compromised App key cannot silently mutate a formula;
+      # a tap maintainer still reviews the PR. That requires pull-requests:write
+      # in addition to contents:write (to push the PR branch).
       - name: Mint tap token
         id: tap-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -150,18 +153,12 @@ jobs:
           private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: homebrew-tap
-          # Narrow the minted token to exactly what the push needs, rather than
-          # inheriting the App installation's blanket permissions.
+          # Narrow the minted token to exactly what opening a PR needs.
           permission-contents: write
-      - name: Check out the tap
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: ${{ github.repository_owner }}/homebrew-tap
-          token: ${{ steps.tap-token.outputs.token }}
-          path: homebrew-tap
-          persist-credentials: true # keep the App token for the push below
+          permission-pull-requests: write
       # Pull the .sha256 sidecars the release-binaries job just attached, then
-      # render Formula/trestle.rb from them.
+      # render the formula (standalone file — we write it to the tap through the
+      # API below, so no tap checkout is needed).
       - name: Render formula
         env:
           GH_TOKEN: ${{ github.token }} # read-only, for `gh release download`
@@ -172,25 +169,57 @@ jobs:
           sums="$(mktemp -d)"
           gh release download "$TAG" --repo "${{ github.repository }}" \
             --dir "$sums" --pattern '*.sha256'
-          mkdir -p homebrew-tap/Formula
           scripts/gen-homebrew-formula.sh \
             --tool trestle --crate olai-trestle --version "$VERSION" \
             --repo "${{ github.repository }}" --tag-prefix olai-trestle-v \
             --desc "Unified CLI for proto-driven code generation and full-project scaffolding" \
             --homepage "https://github.com/${{ github.repository }}" \
-            --checksums-dir "$sums" > homebrew-tap/Formula/trestle.rb
-      - name: Commit + push to the tap
-        working-directory: homebrew-tap
+            --checksums-dir "$sums" > trestle.rb
+      # Propose the update as a PR against the tap — never a direct push to main.
+      # Commit through the GitHub Contents API (not `git`): API-authored commits
+      # are signed by GitHub automatically, satisfying the tap's required-signed-
+      # commits rule, which a plain `git push` from CI cannot. Branch name is
+      # version-stable so a re-run updates the same PR instead of duplicating it.
+      - name: Propose formula update via PR
         env:
+          GH_TOKEN: ${{ steps.tap-token.outputs.token }}
+          TAP: ${{ github.repository_owner }}/homebrew-tap
           VERSION: ${{ needs.release-plz-release.outputs.cli_version }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- Formula/trestle.rb; then
-            echo "Formula already up to date — nothing to push."
+          path="Formula/trestle.rb"
+          branch="bump-trestle-${VERSION}"
+
+          # Skip if the tap's main already has this exact content.
+          new_b64="$(base64 -w0 < trestle.rb)"
+          cur_b64="$(gh api "repos/${TAP}/contents/${path}?ref=main" --jq '.content' 2>/dev/null | tr -d '\n' || true)"
+          cur_sha="$(gh api "repos/${TAP}/contents/${path}?ref=main" --jq '.sha' 2>/dev/null || true)"
+          norm() { tr -d '\n'; }
+          if [ -n "$cur_b64" ] && [ "$(printf %s "$new_b64" | norm)" = "$(printf %s "$cur_b64" | norm)" ]; then
+            echo "Formula already up to date on main — nothing to propose."
             exit 0
           fi
-          git add Formula/trestle.rb
-          git commit -m "trestle ${VERSION}"
-          git push
+
+          # Point the PR branch at main's head, creating or fast-forwarding it.
+          base_sha="$(gh api "repos/${TAP}/git/ref/heads/main" --jq '.object.sha')"
+          if gh api "repos/${TAP}/git/ref/heads/${branch}" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/${TAP}/git/refs/heads/${branch}" \
+              -f sha="$base_sha" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/${TAP}/git/refs" \
+              -f ref="refs/heads/${branch}" -f sha="$base_sha" >/dev/null
+          fi
+
+          # Commit the file onto the branch via the Contents API (GitHub signs it).
+          # Look up the file's blob sha *on the branch* for the update case.
+          br_sha="$(gh api "repos/${TAP}/contents/${path}?ref=${branch}" --jq '.sha' 2>/dev/null || true)"
+          args=(-f message="trestle ${VERSION}" -f content="$new_b64" -f branch="$branch")
+          [ -n "$br_sha" ] && args+=(-f sha="$br_sha")
+          gh api -X PUT "repos/${TAP}/contents/${path}" "${args[@]}" >/dev/null
+
+          # Open the PR if one isn't already open for this branch.
+          if [ -z "$(gh pr list --repo "$TAP" --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --repo "$TAP" --base main --head "$branch" \
+              --title "trestle ${VERSION}" \
+              --body "Automated formula bump for \`olai-trestle-v${VERSION}\`. Generated by the release pipeline; review the URL + sha256 before merging."
+          fi
