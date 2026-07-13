@@ -37,12 +37,17 @@ The pipeline, the crate map, and the design decisions behind it are documented i
 Install the CLI, then scaffold a project:
 
 ```bash
-cargo install olai-trestle   # installs the `trestle` binary
+brew install open-lakehouse/tap/trestle   # macOS / Linux, prebuilt binary
+# or: cargo binstall olai-trestle          # prebuilt binary via cargo-binstall
+# or: cargo install olai-trestle           # build from source
 
 # A full Databricks-Apps-ready Rust service + React frontend, with a local
 # Postgres/MLflow/Envoy stack that emulates Databricks URLs.
 trestle new my-app --template databricks-app-rust --profile dbx-emulator
 ```
+
+All three install a binary called `trestle` (the crate is published as
+`olai-trestle`; the command is `trestle`).
 
 `trestle list-templates` shows the embedded templates;
 `trestle new --help` documents every flag. See

@@ -114,22 +114,48 @@ the other crates are libraries and publish source-only to crates.io.
 the release with the default `GITHUB_TOKEN`, and GitHub does not start new
 workflow runs from default-token events (fixed anti-recursion behavior; no
 repo/org setting overrides it — verified). A `release:` trigger would never
-fire. Instead the workflow chains off the **Release-plz workflow completing on
-`main`** (`workflow_run`), then a `resolve` job finds the newest
-`olai-trestle-v*` release and builds only if it doesn't already have the
-binaries attached (so a release-plz run that didn't bump the CLI crate, or a
-re-run, is a safe no-op).
+fire. Instead `release-binaries.yml` is invoked as an inline `workflow_call`
+job (`release-binaries`) from `release-plz.yml`: the `release-plz-release` job
+parses release-plz's `releases` output, and if `olai-trestle` was released this
+run it passes that tag straight into the called workflow. Because the build is
+gated on "the CLI was released this run", a release-plz run that didn't bump the
+CLI crate is simply a no-op — no re-discovery of the freshly-created release.
+`workflow_dispatch` remains for manual rebuilds against an existing tag.
 
 - **Add a target:** extend the `matrix.include` list in
-  `release-binaries.yml`. Linux x86_64 + aarch64 and macOS aarch64 (Apple
-  Silicon) ship today. Intel macOS (`x86_64-apple-darwin`) is intentionally
-  dropped — GitHub's Intel macOS runners are on a deprecation path and were
-  starving the job; those users fall back to a source build. Windows,
-  code-signing/notarization, and musl are deferred follow-ups.
+  `release-binaries.yml`. Shipping today: Linux x86_64 + aarch64 (glibc) and
+  macOS aarch64 + x86_64. Intel macOS (`x86_64-apple-darwin`) is cross-compiled
+  on the arm64 `macos-latest` runner (GitHub's native Intel macOS runners are
+  deprecated) — this is what lets the Homebrew formula ship an Intel bottle.
+  Windows, code-signing/notarization, and musl are deferred follow-ups.
 - **Test without cutting a release:** run the workflow via **Run workflow**
   (`workflow_dispatch`) with an existing tag (e.g. `olai-trestle-v0.0.4`); it
   builds the matrix and uploads assets onto that existing release. Remove test
   assets afterward with `gh release delete-asset <tag> <asset>`.
+
+### Homebrew tap (`brew install open-lakehouse/tap/trestle`)
+
+A third job in `release-plz.yml` — `bump-homebrew` — keeps the formula in
+[`open-lakehouse/homebrew-tap`](https://github.com/open-lakehouse/homebrew-tap)
+in sync. It runs after `release-binaries` (same "CLI released this run" gate),
+downloads the `.sha256` sidecars the binaries job just attached, regenerates
+`Formula/trestle.rb` with `scripts/gen-homebrew-formula.sh`, and commits it to
+the tap. No manual step per release.
+
+- **Generator:** `scripts/gen-homebrew-formula.sh` is standalone and
+  parameterized (tool/crate/version/repo/tag-prefix/checksums-dir) so it can be
+  lifted into a shared org reusable workflow when a second tool needs a formula.
+  It auto-detects which target archives exist and emits only those platform
+  blocks. Preview a formula locally for an existing release with
+  `just homebrew-formula olai-trestle-v<version>`.
+- **Cross-repo push credential:** the job mints a short-lived token via
+  `actions/create-github-app-token` from a GitHub App (Contents: write, installed
+  on `homebrew-tap`) — the default `GITHUB_TOKEN` cannot push to another repo,
+  and this avoids a long-lived PAT. It needs two secrets in the **`release`
+  environment**: `HOMEBREW_TAP_APP_ID` and `HOMEBREW_TAP_APP_PRIVATE_KEY`.
+- **Verify a formula end-to-end:** `brew tap open-lakehouse/tap && brew install
+  open-lakehouse/tap/trestle`, then `trestle --version`. `brew style` /
+  `brew audit --strict` gate the generated file.
 
 ### Per-crate versioning & the inter-crate dependency
 
