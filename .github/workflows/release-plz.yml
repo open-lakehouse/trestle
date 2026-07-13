@@ -119,3 +119,78 @@ jobs:
     uses: ./.github/workflows/release-binaries.yml
     with:
       tag: ${{ needs.release-plz-release.outputs.cli_tag }}
+
+  # --- Update the Homebrew formula in open-lakehouse/homebrew-tap, iff the CLI
+  #     was released AND its prebuilt binaries were attached this run ---
+  bump-homebrew:
+    name: Bump Homebrew formula
+    needs: [release-plz-release, release-binaries]
+    if: ${{ needs.release-plz-release.outputs.cli_version != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release # where HOMEBREW_TAP_APP_* secrets live
+    # Only read access here; the cross-repo write happens with the App token
+    # minted below, scoped to homebrew-tap — never the workflow's GITHUB_TOKEN.
+    permissions:
+      contents: read
+    steps:
+      # Need the generator script from this repo at the released tag.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-plz-release.outputs.cli_tag }}
+          persist-credentials: false
+      # Mint a short-lived token scoped to the tap repo (App installed there with
+      # Contents: write). No long-lived PAT; the default GITHUB_TOKEN cannot push
+      # to another repository.
+      - name: Mint tap token
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-tap
+          # Narrow the minted token to exactly what the push needs, rather than
+          # inheriting the App installation's blanket permissions.
+          permission-contents: write
+      - name: Check out the tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-tap
+          token: ${{ steps.tap-token.outputs.token }}
+          path: homebrew-tap
+          persist-credentials: true # keep the App token for the push below
+      # Pull the .sha256 sidecars the release-binaries job just attached, then
+      # render Formula/trestle.rb from them.
+      - name: Render formula
+        env:
+          GH_TOKEN: ${{ github.token }} # read-only, for `gh release download`
+          TAG: ${{ needs.release-plz-release.outputs.cli_tag }}
+          VERSION: ${{ needs.release-plz-release.outputs.cli_version }}
+        run: |
+          set -euo pipefail
+          sums="$(mktemp -d)"
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --dir "$sums" --pattern '*.sha256'
+          mkdir -p homebrew-tap/Formula
+          scripts/gen-homebrew-formula.sh \
+            --tool trestle --crate olai-trestle --version "$VERSION" \
+            --repo "${{ github.repository }}" --tag-prefix olai-trestle-v \
+            --desc "Unified CLI for proto-driven code generation and full-project scaffolding" \
+            --homepage "https://github.com/${{ github.repository }}" \
+            --checksums-dir "$sums" > homebrew-tap/Formula/trestle.rb
+      - name: Commit + push to the tap
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ needs.release-plz-release.outputs.cli_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Formula/trestle.rb; then
+            echo "Formula already up to date — nothing to push."
+            exit 0
+          fi
+          git add Formula/trestle.rb
+          git commit -m "trestle ${VERSION}"
+          git push
