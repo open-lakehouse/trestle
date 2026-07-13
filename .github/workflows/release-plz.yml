@@ -4,6 +4,12 @@ name: Release-plz
 # single "Release PR" containing per-crate version bumps + regenerated
 # changelogs. When that PR is merged, release-plz creates the per-crate git
 # tags + GitHub Releases and publishes to crates.io (OIDC trusted publishing).
+#
+# When that run releases the `olai-trestle` CLI crate, a downstream
+# `release-binaries` job (a `workflow_call` into release-binaries.yml) builds the
+# prebuilt CLI binaries and attaches them to the release. It is gated on the CLI
+# actually being released this run — the version + tag come straight from
+# release-plz's `releases` output, so there is no second trigger or re-discovery.
 # See CONTRIBUTING.md for the full flow.
 
 on:
@@ -51,6 +57,11 @@ jobs:
     permissions:
       contents: write # create tags + GitHub Releases
       id-token: write # crates.io OIDC trusted publishing
+    outputs:
+      # olai-trestle version + tag IF this run released the CLI crate, else empty
+      # — the release-binaries job keys off this.
+      cli_version: ${{ steps.cli.outputs.version }}
+      cli_tag: ${{ steps.cli.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -60,8 +71,51 @@ jobs:
         with:
           toolchain: "1.88"
       - name: Run release-plz (release)
+        id: release
         uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # release-plz's `release` command emits a `releases` JSON array of the
+      # crates it released this run ({ package_name, version, tag, ... }). If
+      # `olai-trestle` is among them, surface its version + tag so the downstream
+      # `release-binaries` job fires and builds the prebuilt CLI archives. When
+      # the CLI was not released (no bump, or a re-run), the outputs stay empty
+      # and that job is skipped — idempotent by design.
+      - name: Extract olai-trestle release
+        id: cli
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          set -euo pipefail
+          # `releases` is empty when nothing was released this run.
+          if [ -z "${RELEASES:-}" ]; then
+            echo "No releases this run — skipping CLI binaries."
+            exit 0
+          fi
+          entry="$(jq -c '[.[] | select(.package_name == "olai-trestle")][0] // empty' <<< "$RELEASES")"
+          if [ -z "$entry" ]; then
+            echo "olai-trestle not released this run — skipping CLI binaries."
+            exit 0
+          fi
+          version="$(jq -r '.version' <<< "$entry")"
+          tag="$(jq -r '.tag' <<< "$entry")"
+          echo "olai-trestle ${version} released (tag ${tag}) → building CLI binaries."
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  # --- Build + attach the prebuilt CLI binaries, iff olai-trestle was released ---
+  release-binaries:
+    name: Release binaries
+    needs: release-plz-release
+    if: ${{ needs.release-plz-release.outputs.cli_version != '' }}
+    # A called workflow cannot exceed the caller job's permissions; grant exactly
+    # what upload-binaries needs (attach assets + OIDC attestations).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      tag: ${{ needs.release-plz-release.outputs.cli_tag }}
