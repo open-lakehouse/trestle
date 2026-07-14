@@ -67,18 +67,31 @@ class Schema():
     """A Schema is a child resource of a Catalog. This fixture exercises the generated nested resource-
 scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and the cross-module
 model import for the create method's enum parameter (`SchemaType`)."""
+    catalog_name: str
+    """Component name fields the derived `full_name` composite is recomposed from."""
     comment: str
     created_at: int
     full_name: str
-    """Dot-joined `catalog.schema` full name."""
+    """
+    Server-computed dot-joined `catalog.schema` composite. OUTPUT_ONLY: the client sends
+    the component fields (`catalog_name`, `name`), not the join. This field exercises the
+    generated object-conversion behavior for derived composites — it is stripped before an
+    object is persisted and recomputed from the components (via `qualified_name()`) on read.
+    """
+    name: str
+    schema_id: str
+    """Stable server-assigned identifier; drives the generated `Object` <-> resource conversions."""
     schema_type: SchemaType
 
     def __init__(
 
             self,
+            catalog_name: Optional[str] = None,
             comment: Optional[str] = None,
             created_at: Optional[int] = None,
             full_name: Optional[str] = None,
+            name: Optional[str] = None,
+            schema_id: Optional[str] = None,
             schema_type: Optional[SchemaType] = None
         ) -> None:
         ...
