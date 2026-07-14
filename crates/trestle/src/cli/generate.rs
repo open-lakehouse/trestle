@@ -318,6 +318,15 @@ fn swap_serde_renames(src: &str) -> String {
             if rename_val == alias_val {
                 return whole.to_string();
             }
+            // Idempotency guard: only swap when `rename` is still the camelCase name
+            // buffa emits (i.e. it differs from its own snake_case form). If `rename`
+            // is already snake_case, this attribute was processed on a prior run —
+            // swapping again would flip it *back* to camelCase and break wire-compat.
+            // This matters on the `--descriptors` path, where buffa does not overwrite
+            // the on-disk models first, so the rewrite may see already-snake output.
+            if rename_val == camel_to_snake(&rename_val) {
+                return whole.to_string();
+            }
             // rename ⇄ alias: rename takes the old (snake) alias, alias takes the
             // old (camel) rename.
             let body = alias_re.replace(body, format!(r#"alias = "{rename_val}""#));
@@ -492,6 +501,18 @@ mod tests {
         assert!(out.contains(r#"rename = "catalog_type""#));
         assert!(out.contains(r#"alias = "catalogType""#));
         assert!(out.contains(r#"with = "::buffa::json_helpers::opt_enum""#));
+    }
+
+    #[test]
+    fn swap_is_idempotent_on_already_swapped_output() {
+        // On the `--descriptors` path buffa does not overwrite the on-disk models, so a
+        // second `generate` run sees already-swapped output. Re-running must be a no-op:
+        // the snake `rename` must NOT flip back to camelCase (which would break wire-compat).
+        let camel = r#"    #[serde(rename = "storageRoot", alias = "storage_root", skip_serializing_if = "x")]"#;
+        let once = swap_serde_renames(camel);
+        assert!(once.contains(r#"rename = "storage_root", alias = "storageRoot""#));
+        // Second application is a fixed point.
+        assert_eq!(swap_serde_renames(&once), once);
     }
 
     #[test]
