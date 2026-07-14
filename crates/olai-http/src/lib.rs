@@ -86,6 +86,7 @@ mod util;
 pub use client::{Certificate, ClientConfigKey, ClientOptions};
 pub use credential::*;
 pub use error::*;
+pub use retry::Error as RetryError;
 pub use retry::RetryConfig;
 pub use service::{ReqwestService, SpawnService};
 
@@ -596,7 +597,72 @@ impl CloudRequestBuilder {
             Ok(response)
         }
     }
+
+    /// Sign and send the request, preserving the classified non-success result.
+    ///
+    /// This behaves exactly like [`send`](Self::send) — same signing, same
+    /// [`RetryConfig`] semantics (5xx and transport failures retried, 4xx
+    /// returned immediately) — but a non-success outcome is surfaced as the
+    /// [`RetryError`] the retry layer already classified, rather than being
+    /// remapped through [`RetryError::error`] into an opaque [`Error`].
+    ///
+    /// Use this when the caller needs the HTTP **status** and **response body**
+    /// of a failed request — for example to parse a protocol-specific error
+    /// envelope. [`RetryError::status`] and [`RetryError::body`] expose them;
+    /// [`send`](Self::send) discards both by boxing the status into a coarse
+    /// [`Error`] variant (`NotFound`, `AlreadyExists`, …).
+    ///
+    /// When the `recording` feature is enabled the request is captured to disk
+    /// via the same single-shot path as [`send`](Self::send) and the recorded
+    /// [`reqwest::Response`] is returned for any status (no status→error
+    /// mapping), so a non-success status is `Ok(response)` in that build — the
+    /// caller inspects [`reqwest::Response::status`] itself.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if signing fails. Otherwise, on a non-success status
+    /// (in the default build) returns [`RetryError`] carrying the status and
+    /// response body; a transport failure surfaces as
+    /// [`RetryError::Reqwest`]/[`RetryError::Transport`].
+    #[cfg(not(feature = "recording"))]
+    pub async fn send_raw(mut self) -> Result<reqwest::Response, SendRawError> {
+        self.builder = self.client.signer.sign(self.builder).await?;
+        self.builder
+            .send_retry(&self.client.retry_config, self.client.service.clone())
+            .await
+            .map_err(SendRawError::Retry)
+    }
+
+    /// See [`send_raw`](Self::send_raw). Under the `recording` feature this maps
+    /// to the single-shot capture path and returns the response for any status.
+    #[cfg(feature = "recording")]
+    pub async fn send_raw(self) -> Result<reqwest::Response, SendRawError> {
+        send_record(self).await
+    }
 }
+
+/// The error returned by [`CloudRequestBuilder::send_raw`].
+///
+/// Distinguishes a failure to *sign* the request (an [`Error`] from the signer,
+/// e.g. a credential-refresh failure) from a failure of the *request itself*
+/// (a [`RetryError`] carrying the HTTP status and response body). This lets a
+/// caller parse a protocol error envelope from [`RetryError::body`] while still
+/// propagating signing failures faithfully.
+#[cfg(not(feature = "recording"))]
+#[derive(Debug, thiserror::Error)]
+pub enum SendRawError {
+    /// The request could not be signed (e.g. credential resolution failed).
+    #[error(transparent)]
+    Sign(#[from] Error),
+    /// The request was sent but failed; carries the classified status + body.
+    #[error(transparent)]
+    Retry(RetryError),
+}
+
+/// Under the `recording` feature `send_raw` returns the recorded response for
+/// any status, so the only error it can produce is a signing/capture [`Error`].
+#[cfg(feature = "recording")]
+pub type SendRawError = Error;
 
 #[cfg(feature = "recording")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1200,6 +1266,93 @@ mod retry_integration_tests {
 
         assert!(matches!(err, Error::NotFound { .. }), "got {err:?}");
         mock.assert_async().await;
+    }
+
+    // send_raw preserves the classified status + body of a non-success
+    // response instead of remapping it into an opaque Error. A 404 and a 409
+    // must both surface as Err(RetryError) whose status()/body() are intact,
+    // and a 5xx must still be retried (503 then 200 -> Ok(200)).
+    #[tokio::test]
+    async fn send_raw_preserves_status_and_body() {
+        let mut server = mockito::Server::new_async().await;
+
+        // 404 with a body envelope: status + body must survive.
+        let not_found = server
+            .mock("GET", "/nf")
+            .with_status(404)
+            .with_body(r#"{"error":{"type":"NoSuchTableException"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        // 409 conflict: same — non-retryable, body preserved.
+        let conflict = server
+            .mock("POST", "/cf")
+            .with_status(409)
+            .with_body(r#"{"error":{"type":"CommitVersionConflictException"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        // 5xx is still retried under send_raw: one 503 then a 200.
+        let fail = server
+            .mock("GET", "/rt")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+        let ok = server
+            .mock("GET", "/rt")
+            .with_status(200)
+            .with_body("ok")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new_unauthenticated().with_retry_config(fast_retry(3));
+
+        let err = client
+            .get(format!("{}/nf", server.url()))
+            .send_raw()
+            .await
+            .unwrap_err();
+        match err {
+            SendRawError::Retry(e) => {
+                assert_eq!(e.status(), Some(reqwest::StatusCode::NOT_FOUND));
+                assert_eq!(
+                    e.body(),
+                    Some(r#"{"error":{"type":"NoSuchTableException"}}"#)
+                );
+            }
+            other => panic!("expected Retry error, got {other:?}"),
+        }
+
+        let err = client
+            .post(format!("{}/cf", server.url()))
+            .send_raw()
+            .await
+            .unwrap_err();
+        match err {
+            SendRawError::Retry(e) => {
+                assert_eq!(e.status(), Some(reqwest::StatusCode::CONFLICT));
+                assert_eq!(
+                    e.body(),
+                    Some(r#"{"error":{"type":"CommitVersionConflictException"}}"#)
+                );
+            }
+            other => panic!("expected Retry error, got {other:?}"),
+        }
+
+        let resp = client
+            .get(format!("{}/rt", server.url()))
+            .send_raw()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.text().await.unwrap(), "ok");
+
+        not_found.assert_async().await;
+        conflict.assert_async().await;
+        fail.assert_async().await;
+        ok.assert_async().await;
     }
 
     // sign_and_send takes a pre-built reqwest::Request, applies the signer
