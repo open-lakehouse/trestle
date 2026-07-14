@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.2...olai-stack-topology-v0.0.3) - 2026-07-14
+
+### Added
+
+- snake_case JSON field names for buffa models (#95)
+
 ## [0.0.2](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.1...olai-stack-topology-v0.0.2) - 2026-06-30
 
 ### Added

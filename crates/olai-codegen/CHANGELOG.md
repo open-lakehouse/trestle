@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.6...olai-codegen-v0.0.7) - 2026-07-14
+
+### Added
+
+- recompose derived full_name on read + idempotent serde rename swap (#100)
+- *(trestle)* format generated code in `trestle generate` (#94)
+- [**breaking**] trestle generate owns the buf pipeline + usability fixes (#92)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.5...olai-codegen-v0.0.6) - 2026-07-12
 
 ### Added
