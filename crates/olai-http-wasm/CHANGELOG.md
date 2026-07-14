@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-http-wasm-v0.0.3...olai-http-wasm-v0.0.4) - 2026-07-14
+
+### Added
+
+- add send_raw to preserve non-2xx status and body (#101)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-http-wasm-v0.0.2...olai-http-wasm-v0.0.3) - 2026-06-28
 
 ### Added
