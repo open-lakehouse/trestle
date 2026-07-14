@@ -102,11 +102,13 @@ impl TryFrom<super::catalog::v1::Catalog> for Object {
     fn try_from(obj: super::catalog::v1::Catalog) -> Result<Self, Self::Error> {
         let id = ::uuid::Uuid::parse_str(&obj.name)
             .unwrap_or_else(|_| ::uuid::Uuid::nil());
+        let name = obj.resource_name();
+        let properties = ::serde_json::to_value(obj)?;
         Ok(Object {
             id,
-            name: obj.resource_name(),
+            name,
             label: ObjectLabel::Catalog,
-            properties: Some(::serde_json::to_value(obj)?),
+            properties: Some(properties),
             version: 0,
             updated_at: None,
             created_at: chrono::Utc::now(),
@@ -127,10 +129,63 @@ impl ResourceExt for super::catalog::v1::Catalog {
         (ObjectLabel::Catalog).to_ident(self.resource_ref())
     }
 }
+impl TryFrom<Object> for super::schemas::v1::Schema {
+    type Error = Error;
+    fn try_from(object: Object) -> Result<Self, Self::Error> {
+        let props = object
+            .properties
+            .ok_or_else(|| Error::generic("expected properties"))?;
+        let mut res: super::schemas::v1::Schema = ::serde_json::from_value(props)?;
+        res.schema_id = object.id.hyphenated().to_string();
+        res.full_name = res.qualified_name();
+        Ok(res)
+    }
+}
+impl TryFrom<super::schemas::v1::Schema> for Object {
+    type Error = Error;
+    fn try_from(obj: super::schemas::v1::Schema) -> Result<Self, Self::Error> {
+        let id = ::uuid::Uuid::parse_str(&obj.schema_id)
+            .unwrap_or_else(|_| ::uuid::Uuid::nil());
+        let name = obj.resource_name();
+        let mut properties = ::serde_json::to_value(obj)?;
+        if let ::serde_json::Value::Object(ref mut map) = properties {
+            map.remove("full_name");
+        }
+        Ok(Object {
+            id,
+            name,
+            label: ObjectLabel::Schema,
+            properties: Some(properties),
+            version: 0,
+            updated_at: None,
+            created_at: chrono::Utc::now(),
+        })
+    }
+}
+impl ResourceExt for super::schemas::v1::Schema {
+    fn resource_name(&self) -> ResourceName {
+        ResourceName::new([&self.catalog_name, &self.name])
+    }
+    fn resource_ref(&self) -> ResourceRef {
+        ::uuid::Uuid::parse_str(&self.schema_id)
+            .ok()
+            .map(ResourceRef::Uuid)
+            .unwrap_or_else(|| ResourceRef::Name(self.resource_name()))
+    }
+    fn resource_ident(&self) -> ResourceIdent {
+        (ObjectLabel::Schema).to_ident(self.resource_ref())
+    }
+}
 impl super::catalog::v1::Catalog {
     /// Returns the fully-qualified dot-separated name computed from component fields.
     pub fn qualified_name(&self) -> String {
         self.name.clone()
+    }
+}
+impl super::schemas::v1::Schema {
+    /// Returns the fully-qualified dot-separated name computed from component fields.
+    pub fn qualified_name(&self) -> String {
+        format!("{}.{}", self.catalog_name, self.name)
     }
 }
 impl ::olai_store::Label for ObjectLabel {
@@ -194,6 +249,18 @@ pub static RESOURCE_DESCRIPTORS: &[::olai_store::ResourceTypeDescriptor<ObjectLa
             ::olai_store::ResourceFieldDescriptor {
                 name: "created_at",
                 role: ::olai_store::FieldRole::Managed,
+            },
+            ::olai_store::ResourceFieldDescriptor {
+                name: "schema_id",
+                role: ::olai_store::FieldRole::Identifier,
+            },
+            ::olai_store::ResourceFieldDescriptor {
+                name: "catalog_name",
+                role: ::olai_store::FieldRole::Data,
+            },
+            ::olai_store::ResourceFieldDescriptor {
+                name: "name",
+                role: ::olai_store::FieldRole::Data,
             },
         ],
         path_names: &["catalog_name", "name"],

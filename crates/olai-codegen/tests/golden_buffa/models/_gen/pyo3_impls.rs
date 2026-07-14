@@ -1349,7 +1349,10 @@ impl PySchema {
             full_name = None,
             comment = None,
             schema_type = None,
-            created_at = None
+            created_at = None,
+            schema_id = None,
+            catalog_name = None,
+            name = None
         )
     )]
     fn new(
@@ -1357,6 +1360,9 @@ impl PySchema {
         comment: ::core::option::Option<::std::string::String>,
         schema_type: ::core::option::Option<PySchemaType>,
         created_at: ::core::option::Option<i64>,
+        schema_id: ::core::option::Option<::std::string::String>,
+        catalog_name: ::core::option::Option<::std::string::String>,
+        name: ::core::option::Option<::std::string::String>,
     ) -> Self {
         let mut inner = <super::schemas::v1::Schema as ::core::default::Default>::default();
         if let ::core::option::Option::Some(value) = full_name {
@@ -1372,6 +1378,15 @@ impl PySchema {
         }
         if let ::core::option::Option::Some(value) = created_at {
             inner.created_at = value;
+        }
+        if let ::core::option::Option::Some(value) = schema_id {
+            inner.schema_id = value;
+        }
+        if let ::core::option::Option::Some(value) = catalog_name {
+            inner.catalog_name = value;
+        }
+        if let ::core::option::Option::Some(value) = name {
+            inner.name = value;
         }
         Self(inner)
     }
@@ -1391,6 +1406,18 @@ impl PySchema {
     fn created_at(&self) -> i64 {
         self.0.created_at
     }
+    #[getter]
+    fn schema_id(&self) -> ::std::string::String {
+        self.0.schema_id.clone()
+    }
+    #[getter]
+    fn catalog_name(&self) -> ::std::string::String {
+        self.0.catalog_name.clone()
+    }
+    #[getter]
+    fn name(&self) -> ::std::string::String {
+        self.0.name.clone()
+    }
     #[setter(full_name)]
     fn set_full_name(&mut self, value: ::std::string::String) {
         self.0.full_name = value;
@@ -1408,6 +1435,18 @@ impl PySchema {
     #[setter(created_at)]
     fn set_created_at(&mut self, value: i64) {
         self.0.created_at = value;
+    }
+    #[setter(schema_id)]
+    fn set_schema_id(&mut self, value: ::std::string::String) {
+        self.0.schema_id = value;
+    }
+    #[setter(catalog_name)]
+    fn set_catalog_name(&mut self, value: ::std::string::String) {
+        self.0.catalog_name = value;
+    }
+    #[setter(name)]
+    fn set_name(&mut self, value: ::std::string::String) {
+        self.0.name = value;
     }
     fn __repr__(&self) -> ::std::string::String {
         ::std::format!("{:?}", self.0)

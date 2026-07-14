@@ -109,7 +109,13 @@ pub(crate) fn generate_resource_enum(
         // Derive path_names from the service plan for this resource.
         // A resource is hierarchical if its descriptor explicitly sets name_field (any value)
         // OR if the message has a full_name field (server-computed dot-joined composite).
-        let message_has_full_name = info.fields.iter().any(|f| f.name == "full_name");
+        let full_name_field = info.fields.iter().find(|f| f.name == "full_name");
+        let message_has_full_name = full_name_field.is_some();
+        // Whether the `full_name` field is `Option<String>` vs a bare `String`, so the
+        // object-conversion emitter can recompose it with the right shape.
+        let full_name_is_optional = full_name_field
+            .map(|f| f.unified_type.is_optional)
+            .unwrap_or(false);
         // The leaf name component. Defaults to `name`, but `google.api.resource.name_field`
         // may point at a different scalar leaf field (e.g. `tag_key`). `full_name` is excluded:
         // it denotes a composite full name that is *decomposed* into parents + leaf, not the leaf
@@ -164,6 +170,7 @@ pub(crate) fn generate_resource_enum(
             id_is_optional,
             path_names,
             has_full_name: message_has_full_name,
+            full_name_is_optional,
             field_descriptors,
         });
     }
@@ -354,6 +361,21 @@ fn build_object_conversions(
     let mut qualified_name_impls: Vec<TokenStream> = Vec::new();
 
     for r in resources {
+        // `full_name` is a server-computed OUTPUT_ONLY composite, so it must be a bare
+        // `string` — never `optional` — for schema uniformity. Reject the inconsistency
+        // for *every* resource, not just those with an IDENTIFIER field (the emitter
+        // below is skipped for identifier-less resources, so validating there would let
+        // an `optional full_name` on such a resource slip through unchecked).
+        if r.has_full_name && r.full_name_is_optional {
+            return Err(crate::error::Error::InvalidAnnotation {
+                object: r.rust_path.clone(),
+                message: "`full_name` is declared `optional`; a server-computed OUTPUT_ONLY \
+                          composite name must be a bare `string` (consistent with every other \
+                          resource). Drop the `optional` in the proto."
+                    .to_string(),
+            });
+        }
+
         let Some(ref id_field) = r.id_field else {
             // No IDENTIFIER annotation — skip
             continue;
@@ -377,8 +399,19 @@ fn build_object_conversions(
             .map(|n| format_ident!("{}", n))
             .collect();
 
-        conversion_impls.push(emit_from_object(path, &id_ident, is_optional));
-        conversion_impls.push(emit_to_object(path, &label_expr, &id_ident, is_optional));
+        conversion_impls.push(emit_from_object(
+            path,
+            &id_ident,
+            is_optional,
+            r.has_full_name,
+        ));
+        conversion_impls.push(emit_to_object(
+            path,
+            &label_expr,
+            &id_ident,
+            is_optional,
+            r.has_full_name,
+        ));
         conversion_impls.push(emit_resource_impl(
             path,
             &label_expr,
@@ -433,9 +466,11 @@ struct ResourceEntry {
     id_is_optional: bool,
     /// Ordered list of field names used to build `ResourceName`, e.g. `["catalog_name", "schema_name", "name"]`.
     path_names: Vec<String>,
-    /// Whether the message has a `full_name` field (used for `qualified_name()` generation).
-    #[allow(dead_code)]
+    /// Whether the message has a `full_name` field. When set, the object-conversion
+    /// emitter recomposes the derived composite name on read (`qualified_name()`).
     has_full_name: bool,
+    /// Whether the `full_name` field is `Option<String>` (vs a bare `String`).
+    full_name_is_optional: bool,
     /// All fields with their computed roles for the resource descriptor registry.
     field_descriptors: Vec<FieldDescriptorEntry>,
 }
@@ -791,11 +826,27 @@ fn emit_from_object(
     path: &syn::Type,
     id_ident: &proc_macro2::Ident,
     is_optional: bool,
+    has_full_name: bool,
 ) -> TokenStream {
     let id_assignment = if is_optional {
         quote! { res.#id_ident = Some(object.id.hyphenated().to_string()); }
     } else {
         quote! { res.#id_ident = object.id.hyphenated().to_string(); }
+    };
+    // `full_name` is a purely *derived* composite (`catalog.schema.name`): it is never
+    // persisted (see `emit_to_object`, which strips it before storing) and always
+    // recomputed from the component fields on read via the resource's own
+    // `qualified_name()`. Treating it as computed on both sides keeps it consistent —
+    // there is no stored value to go stale when a component name field changes.
+    //
+    // An `optional string full_name` is rejected earlier (see `build_object_conversions`),
+    // so here `full_name` is always a bare `String` and the assignment type-checks.
+    let full_name_assignment = if has_full_name {
+        quote! {
+            res.full_name = res.qualified_name();
+        }
+    } else {
+        quote! {}
     };
     quote! {
         impl TryFrom<Object> for #path {
@@ -807,6 +858,7 @@ fn emit_from_object(
                     .ok_or_else(|| Error::generic("expected properties"))?;
                 let mut res: #path = ::serde_json::from_value(props)?;
                 #id_assignment
+                #full_name_assignment
                 Ok(res)
             }
         }
@@ -818,6 +870,7 @@ fn emit_to_object(
     label_expr: &syn::Expr,
     id_ident: &proc_macro2::Ident,
     is_optional: bool,
+    has_full_name: bool,
 ) -> TokenStream {
     let id_field = if is_optional {
         quote! {
@@ -833,17 +886,39 @@ fn emit_to_object(
             let id = ::uuid::Uuid::parse_str(&obj.#id_ident).unwrap_or_else(|_| ::uuid::Uuid::nil());
         }
     };
+    // `full_name` is a purely derived composite — never persist it. Strip it from the
+    // serialized properties so the stored object holds only the component fields; it is
+    // recomputed from those on read (see `emit_from_object`). This keeps the field
+    // consistent: there is no stored copy to drift when a component name field changes.
+    // `mut` only when we actually strip, else `unused_mut` fires in generated code.
+    let properties_binding = if has_full_name {
+        quote! { let mut properties = ::serde_json::to_value(obj)?; }
+    } else {
+        quote! { let properties = ::serde_json::to_value(obj)?; }
+    };
+    let strip_full_name = if has_full_name {
+        quote! {
+            if let ::serde_json::Value::Object(ref mut map) = properties {
+                map.remove("full_name");
+            }
+        }
+    } else {
+        quote! {}
+    };
     quote! {
         impl TryFrom<#path> for Object {
             type Error = Error;
 
             fn try_from(obj: #path) -> Result<Self, Self::Error> {
                 #id_field
+                let name = obj.resource_name();
+                #properties_binding
+                #strip_full_name
                 Ok(Object {
                     id,
-                    name: obj.resource_name(),
+                    name,
                     label: #label_expr,
-                    properties: Some(::serde_json::to_value(obj)?),
+                    properties: Some(properties),
                     // A freshly-built Object carries no persisted version yet; the
                     // store assigns and bumps the real version on write.
                     version: 0,

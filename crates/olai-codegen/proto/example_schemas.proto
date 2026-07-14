@@ -17,11 +17,19 @@ message Schema {
     name_field: "full_name"
   };
 
-  // Dot-joined `catalog.schema` full name.
+  // Server-computed dot-joined `catalog.schema` composite. OUTPUT_ONLY: the client sends
+  // the component fields (`catalog_name`, `name`), not the join. This field exercises the
+  // generated object-conversion behavior for derived composites — it is stripped before an
+  // object is persisted and recomputed from the components (via `qualified_name()`) on read.
   string full_name = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
   string comment = 2 [(google.api.field_behavior) = OPTIONAL];
   SchemaType schema_type = 3;
   int64 created_at = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Stable server-assigned identifier; drives the generated `Object` <-> resource conversions.
+  string schema_id = 5 [(google.api.field_behavior) = IDENTIFIER];
+  // Component name fields the derived `full_name` composite is recomposed from.
+  string catalog_name = 6;
+  string name = 7;
 }
 
 enum SchemaType {
