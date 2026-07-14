@@ -282,6 +282,24 @@ impl WasmRequestBuilder {
             .await
     }
 
+    /// Send the request, returning the raw [`reqwest::Response`] for any status.
+    ///
+    /// This is the wasm counterpart to `olai_http::CloudRequestBuilder::send_raw`:
+    /// it mirrors the native seam that preserves a non-success status and body so
+    /// callers can parse a protocol error envelope. On wasm the base transport is
+    /// plain `reqwest` with no retry layer, so a non-success status is already
+    /// returned as `Ok(response)` (never mapped to an error) — this is simply an
+    /// alias for [`send`](Self::send) that lets target-agnostic code call
+    /// `send_raw()` uniformly across the native and wasm builders.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only for a transport/network failure, exactly like
+    /// [`send`](Self::send); a non-success HTTP status is `Ok(response)`.
+    pub async fn send_raw(self) -> reqwest::Result<reqwest::Response> {
+        self.send().await
+    }
+
     /// Invoke the auth hook (if any) and merge its headers onto the request. Applies on every
     /// target so off-wasm unit tests exercise the same header logic.
     fn with_auth_headers(mut self) -> Self {
