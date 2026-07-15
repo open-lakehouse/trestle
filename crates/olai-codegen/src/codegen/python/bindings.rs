@@ -164,13 +164,16 @@ impl BindingBackend for PyBackend {
         // Generated PyO3 modules structurally trip dead_code (full surface
         // emitted), too_many_arguments (flat `#[pymethods]`), and unused_imports
         // (per-module use-prelude). Allow them so the binding crate builds clean.
-        let service_modules = services.iter().filter(|s| s.is_resource_scoped()).map(|s| {
-            let module_name = format_ident!("{}", s.plan.base_path);
-            quote! {
-                #[allow(dead_code, unused_imports, clippy::too_many_arguments)]
-                pub mod #module_name;
-            }
-        });
+        let service_modules = services
+            .iter()
+            .filter(|s| s.emits_scoped_binding())
+            .map(|s| {
+                let module_name = format_ident!("{}", s.plan.base_path);
+                quote! {
+                    #[allow(dead_code, unused_imports, clippy::too_many_arguments)]
+                    pub mod #module_name;
+                }
+            });
 
         let bindings = services
             .first()
@@ -205,10 +208,10 @@ impl BindingBackend for PyBackend {
             })
             .collect();
 
-        // Only resource-scoped services expose a per-service scoped client to import.
+        // Only services with a scoped binding expose a per-service scoped client to import.
         let codegen_imports = sorted_services
             .iter()
-            .filter(|s| s.is_resource_scoped())
+            .filter(|s| s.emits_scoped_binding())
             .map(|s| {
                 let mod_name = format_ident!("{}", s.plan.base_path);
                 let client_name = format_ident!("Py{}", s.client_type().to_string());

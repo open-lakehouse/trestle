@@ -112,6 +112,11 @@ pub(crate) fn resource_accessor_methods(
 ) -> Vec<TokenStream> {
     services
         .iter()
+        // Skip resources that can't be modeled by a string-component scoped client (e.g. a
+        // model version keyed by a composite `{full_name}` + integer `{version}`); no scoped
+        // client is generated for them, so an accessor would dangle. See
+        // `ServiceHandler::supports_scoped_client`.
+        .filter(|s| s.supports_scoped_client())
         .filter_map(|s| backend.emit_resource_accessor(s))
         .collect()
 }

@@ -96,12 +96,15 @@ impl BindingBackend for NapiBackend {
     }
 
     fn main_module(&self, services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
-        // Only resource-scoped services have a per-service scoped module; resource-less services'
-        // methods live on the root client.
-        let service_modules = services.iter().filter(|s| s.is_resource_scoped()).map(|s| {
-            let module_name = format_ident!("{}", s.plan.base_path);
-            quote! { pub mod #module_name; }
-        });
+        // Only services with a scoped binding have a per-service scoped module; resource-less and
+        // flat-lowered services' methods live on the root client.
+        let service_modules = services
+            .iter()
+            .filter(|s| s.emits_scoped_binding())
+            .map(|s| {
+                let module_name = format_ident!("{}", s.plan.base_path);
+                quote! { pub mod #module_name; }
+            });
 
         let bindings = services
             .first()
@@ -122,10 +125,10 @@ impl BindingBackend for NapiBackend {
             quote! { use #mod_path::*; }
         });
 
-        // Only resource-scoped services expose a per-service scoped client to import.
+        // Only services with a scoped binding expose a per-service scoped client to import.
         let codegen_imports = sorted_services
             .iter()
-            .filter(|s| s.is_resource_scoped())
+            .filter(|s| s.emits_scoped_binding())
             .map(|s| {
                 let mod_name = format_ident!("{}", s.plan.base_path);
                 let client_name = format_ident!("Napi{}", s.client_type().to_string());

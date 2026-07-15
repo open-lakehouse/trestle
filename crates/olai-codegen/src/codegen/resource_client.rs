@@ -43,6 +43,14 @@ pub(crate) fn generate(
         return Ok(None);
     };
 
+    // A resource whose scoped methods carry a non-string path parameter (e.g. a model
+    // version, addressed by its parent's composite `{full_name}` plus an integer
+    // `{version}`) cannot be expressed by the string-component scoped client. Skip it;
+    // its methods remain available on the low-level service client.
+    if !service.supports_scoped_client() {
+        return Ok(None);
+    }
+
     let low_level_ident = service.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let components: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
     let join_format = spec.join_format();

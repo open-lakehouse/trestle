@@ -48,8 +48,9 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
         let service = &services[i];
         // Resource-less (Flat) services have no per-service scoped client in the real bindings
         // (their methods live on the aggregate client), so they must not get a phantom scoped
-        // class in the `.pyi` either.
-        if !service.is_resource_scoped() {
+        // class in the `.pyi` either. Flat-lowered resource services (no scoped client) are
+        // likewise excluded.
+        if !service.emits_scoped_binding() {
             continue;
         }
         let service_class = generate_service_class_typings(service, services);
@@ -387,6 +388,13 @@ fn generate_resource_accessor_methods_for_typings(
             None => continue,
         };
 
+        // No scoped client is generated for a child with a non-string path parameter (e.g. a
+        // model version keyed by `{full_name}` + integer `{version}`), so skip its accessor to
+        // avoid referencing a client type that won't exist. See `supports_scoped_client`.
+        if !other.supports_scoped_client() {
+            continue;
+        }
+
         // --- Annotation-driven path ---
         // A child service owns this parent if any of its hierarchy entries name this parent.
         let annotation_match = other.plan.hierarchy.iter().any(|h| {
@@ -548,7 +556,7 @@ fn generate_main_client_class_typings(
             // aggregate client (instance methods live on the scoped client). Resource-less (Flat)
             // services contribute *all* of their methods, lowered flat with every param including
             // path params — matching the real bindings.
-            let is_flat = !service.is_resource_scoped();
+            let is_flat = !service.emits_scoped_binding();
             service.methods().filter_map(move |method| {
                 let emit = if is_flat {
                     // Flat services emit every method (`flat_client_method` handles all request
