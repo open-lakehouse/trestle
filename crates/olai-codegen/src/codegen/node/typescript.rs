@@ -344,7 +344,7 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
 
     let mut native_classes: Vec<String> = vec![format!("{} as NativeClient", napi_aggregate_name)];
     for service in services {
-        if service.resource().is_some() {
+        if service.emits_scoped_binding() {
             let napi_name = format!("Napi{}", service.client_type());
             let native_alias = format!("Native{}", service.client_type());
             native_classes.push(format!("{napi_name} as {native_alias}"));
@@ -461,7 +461,17 @@ fn generate_options_interface(method: &MethodHandler<'_>) -> Option<String> {
 }
 
 /// Generate a resource client class (e.g. CatalogClient, SchemaClient).
+///
+/// Emitted only for services with a string-component scoped binding
+/// ([`ServiceHandler::emits_scoped_binding`]): the class wraps a `Native<Client>` NAPI handle
+/// and is `new`ed from the aggregate accessor. A resource whose identity a scoped client can't
+/// express (e.g. a model version keyed by a composite `{full_name}` + integer `{version}`) has
+/// no such NAPI class nor import, so emitting the wrapper here would reference an undeclared
+/// `Native<Client>` and break `tsc`. Its methods live on the aggregate client instead.
 fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String> {
+    if !service.emits_scoped_binding() {
+        return None;
+    }
     let resource = service.resource()?;
     let type_name = resource
         .type_name
@@ -739,8 +749,12 @@ fn generate_aggregate_client_sorted(
                     }
                 }
 
-                // Resource accessor methods (e.g. .catalog("name"), .schema("cat", "schema"))
-                if let Some(accessor) = generate_resource_accessor(service) {
+                // Resource accessor methods (e.g. .catalog("name"), .schema("cat", "schema")).
+                // Skipped for resources without a string-component scoped client (see
+                // `ServiceHandler::supports_scoped_client`).
+                if service.supports_scoped_client()
+                    && let Some(accessor) = generate_resource_accessor(service)
+                {
                     methods.push_str(&accessor);
                 }
             }

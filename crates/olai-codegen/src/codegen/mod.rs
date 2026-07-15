@@ -387,10 +387,10 @@ fn generate_python_code(
         })
         .collect_vec();
 
-    // Per-service scoped client modules are only meaningful for resource-scoped services. The
-    // methods of resource-less services live on the root client (emitted by `main_module`), so
-    // they don't get a scoped module of their own.
-    for service in handlers.iter().filter(|s| s.is_resource_scoped()) {
+    // Per-service scoped client modules are only meaningful for services with a scoped binding.
+    // The methods of resource-less and flat-lowered services live on the root client (emitted by
+    // `main_module`), so they don't get a scoped module of their own.
+    for service in handlers.iter().filter(|s| s.emits_scoped_binding()) {
         let python_code = python::generate(service)?;
         files.insert(format!("{}.rs", service.plan.base_path), python_code);
     }
@@ -424,9 +424,9 @@ fn generate_node_code(
         })
         .collect_vec();
 
-    // See `generate_python_code`: only resource-scoped services get a per-service scoped module;
-    // resource-less services' methods live on the root client.
-    for service in handlers.iter().filter(|s| s.is_resource_scoped()) {
+    // See `generate_python_code`: only services with a scoped binding get a per-service scoped
+    // module; resource-less and flat-lowered services' methods live on the root client.
+    for service in handlers.iter().filter(|s| s.emits_scoped_binding()) {
         let napi_code = node::generate(service)?;
         files.insert(format!("{}.rs", service.plan.base_path), napi_code);
     }
@@ -1042,12 +1042,23 @@ impl ServiceHandler<'_> {
     }
 
     /// The [`BindingMode`] used to lower this service's methods in language bindings.
+    ///
+    /// A resource service whose identity can't be modeled by a string-component scoped client
+    /// (see [`Self::supports_scoped_client`]) is lowered flat, exactly like a resource-less
+    /// service: every method lives on the root client and passes all params directly.
     pub(crate) fn binding_mode(&self) -> BindingMode {
-        if self.is_resource_scoped() {
+        if self.emits_scoped_binding() {
             BindingMode::Scoped
         } else {
             BindingMode::Flat
         }
+    }
+
+    /// Whether language bindings emit a per-service scoped client module + accessor for this
+    /// service. True only for resource services whose identity a string-component scoped client
+    /// can express; others are lowered flat onto the root client. See [`Self::binding_mode`].
+    pub(crate) fn emits_scoped_binding(&self) -> bool {
+        self.is_resource_scoped() && self.supports_scoped_client()
     }
 
     /// The language-agnostic spec for this service's resource accessor on the aggregate client, or
@@ -1165,6 +1176,29 @@ impl ServiceHandler<'_> {
     /// call sites that generate the scoped client / its accessor.
     pub(crate) fn scoped_client_type(&self) -> Option<Ident> {
         self.resource().map(|_| self.client_type())
+    }
+
+    /// Whether this service's resource can be modeled by an ergonomic resource-scoped client.
+    ///
+    /// The scoped client (and the aggregate client's `<singular>(…)` accessor) captures a
+    /// resource's identity as an ordered list of *string* name components and fills each method's
+    /// path parameters from them. A resource whose scoped instance methods carry a non-string path
+    /// parameter — e.g. a model version addressed by its parent's composite `{full_name}` plus an
+    /// integer `{version}` — cannot be expressed that way, so no scoped client is emitted for it
+    /// (its methods remain available on the low-level service client). Returns `false` in that case.
+    pub(crate) fn supports_scoped_client(&self) -> bool {
+        !self
+            .methods()
+            .filter(|m| m.is_scoped_instance_method())
+            .any(|m| {
+                m.required_parameters().any(|p| {
+                    p.is_path_param()
+                        && !matches!(
+                            p.field_type().base_type,
+                            crate::parsing::types::BaseType::String
+                        )
+                })
+            })
     }
 
     /// The module segment under which this service's generated models live.

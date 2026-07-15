@@ -128,13 +128,95 @@ pub(crate) fn generate_resource_enum(
         } else {
             "name".to_string()
         };
-        let path_names = derive_path_names(
+        let derived_path_names = derive_path_names(
             &rd.singular,
             !rd.name_field.is_empty() || message_has_full_name,
             &leaf_name,
             plan,
             metadata,
         );
+        // `derive_path_names` returns *request*-derived field names (e.g. a `full_name`
+        // path param). The `ResourceName` and `qualified_name()` impls, however, read
+        // fields off the resource *message*. When a derived segment names a field that
+        // does not exist on the message but the message carries the standard decomposed
+        // name components (`catalog_name` / `schema_name`), rewrite the segment list to
+        // those message fields so the emitted accessors type-check. This lets a resource
+        // whose HTTP identity is a composite `{full_name}` (e.g. model versions, keyed by
+        // `catalog.schema.model` + an integer `version`) still key off its own fields.
+        let message_field_names: std::collections::HashSet<&str> =
+            info.fields.iter().map(|f| f.name.as_str()).collect();
+        // The `ResourceName` / `qualified_name()` impls read fields off the resource *message*,
+        // whereas `derive_path_names` returns *request*-derived segments. Two cases force a
+        // rewrite of the segment list to the message's own decomposed name components:
+        //
+        //  1. A derived segment names a field the message lacks — the resource's HTTP identity is
+        //     a composite `{full_name}` path param, which is not a message field. Rebuild so the
+        //     emitted accessors reference real fields and type-check.
+        //  2. The resource is hierarchical (it declares a `name_field` or carries a `full_name`)
+        //     but `derive_path_names` could not recover its parent chain from request params — so
+        //     the derived path is a bare leaf (e.g. a model version's `[version]`) that omits the
+        //     `catalog_name` / `schema_name` prefix the message exposes. Rebuild the full
+        //     hierarchy (`catalog.schema.model.version`) from the message fields.
+        //
+        // A *non-hierarchical* resource is left untouched even when it carries `catalog_name` /
+        // `schema_name` as data: it can deliberately key its identity off a flat name (e.g. a
+        // staging table, whose proto `pattern` is `staging-tables/{staging_table}` and which sets
+        // no `name_field`). Forcing the prefix there would wrongly key it as a schema child and break
+        // lookups (the delta staging → createTable flow 404s).
+        let is_hierarchical = !rd.name_field.is_empty() || message_has_full_name;
+        let derived_are_message_fields = derived_path_names
+            .iter()
+            .all(|n| message_field_names.contains(n.as_str()));
+        let missing_expected_prefix = ["catalog_name", "schema_name"]
+            .iter()
+            .any(|c| message_field_names.contains(c) && !derived_path_names.iter().any(|n| n == c));
+        let needs_rebuild =
+            !derived_are_message_fields || (is_hierarchical && missing_expected_prefix);
+        let path_names: Vec<String> = if !needs_rebuild {
+            derived_path_names
+        } else {
+            let mut segments: Vec<String> = Vec::new();
+            for candidate in ["catalog_name", "schema_name"] {
+                if message_field_names.contains(candidate) {
+                    segments.push(candidate.to_string());
+                }
+            }
+            // Any remaining `*_name` component on the message is an ancestor segment
+            // between the catalog/schema prefix and the leaf, e.g. `model_name` for a
+            // model version (whose parent registered model is named by `model_name`
+            // even though the parent's resource singular is `registered_model`). These
+            // sit in message field order, which mirrors the resource hierarchy.
+            for f in &info.fields {
+                if f.name == leaf_name
+                    || f.name == "catalog_name"
+                    || f.name == "schema_name"
+                    || f.name == "full_name"
+                {
+                    continue;
+                }
+                if f.name.ends_with("_name") && matches!(f.unified_type.base_type, BaseType::String)
+                {
+                    segments.push(f.name.clone());
+                }
+            }
+            segments.push(leaf_name.clone());
+            segments
+        };
+        // Parallel to `path_names`: whether each segment field is a plain `String` (emit
+        // `&self.field`) or some other scalar such as `int64` (emit `&self.field.to_string()`),
+        // so non-string leaves like a model version's integer `version` render correctly.
+        let path_name_is_string: Vec<bool> = path_names
+            .iter()
+            .map(|n| {
+                info.fields
+                    .iter()
+                    .find(|f| &f.name == n)
+                    .map(|f| matches!(f.unified_type.base_type, BaseType::String))
+                    // Unknown fields (shouldn't happen after the rewrite above) default to
+                    // string handling to preserve prior behavior.
+                    .unwrap_or(true)
+            })
+            .collect();
 
         // Compute field descriptors with roles for the resource registry.
         let known_managed_fields: &[&str] =
@@ -169,6 +251,7 @@ pub(crate) fn generate_resource_enum(
             id_field: id_field_name,
             id_is_optional,
             path_names,
+            path_name_is_string,
             has_full_name: message_has_full_name,
             full_name_is_optional,
             field_descriptors,
@@ -393,10 +476,27 @@ fn build_object_conversions(
         let id_ident = format_ident!("{}", id_field);
         let is_optional = r.id_is_optional;
 
-        let path_name_idents: Vec<proc_macro2::Ident> = r
+        // Per-segment accessor expressions, each evaluating to a `&String`: string fields
+        // borrow directly (`&self.field`); non-string scalars (e.g. an `int64` version)
+        // are stringified (`&self.field.to_string()`). Both consumers below — the
+        // `ResourceName` builder and `qualified_name()` — use the same expressions.
+        let segment_accessors: Vec<TokenStream> = r
             .path_names
             .iter()
-            .map(|n| format_ident!("{}", n))
+            .zip(
+                r.path_name_is_string
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat(true)),
+            )
+            .map(|(n, is_string)| {
+                let ident = format_ident!("{}", n);
+                if is_string {
+                    quote! { &self.#ident }
+                } else {
+                    quote! { &self.#ident.to_string() }
+                }
+            })
             .collect();
 
         conversion_impls.push(emit_from_object(
@@ -416,12 +516,13 @@ fn build_object_conversions(
             path,
             &label_expr,
             &id_ident,
-            &path_name_idents,
+            &segment_accessors,
             is_optional,
         ));
 
         // qualified_name() impl
-        let format_expr: TokenStream = build_qualified_name_expr(&r.path_names);
+        let format_expr: TokenStream =
+            build_qualified_name_expr(&r.path_names, &r.path_name_is_string);
         qualified_name_impls.push(quote! {
             impl #path {
                 /// Returns the fully-qualified dot-separated name computed from component fields.
@@ -466,6 +567,10 @@ struct ResourceEntry {
     id_is_optional: bool,
     /// Ordered list of field names used to build `ResourceName`, e.g. `["catalog_name", "schema_name", "name"]`.
     path_names: Vec<String>,
+    /// Parallel to [`path_names`](ResourceEntry::path_names): whether each segment field is a plain
+    /// `String` (`true`) or another scalar (`false`, e.g. an `int64` `version`) that must be
+    /// rendered via `.to_string()` when building a `ResourceName`.
+    path_name_is_string: Vec<bool>,
     /// Whether the message has a `full_name` field. When set, the object-conversion
     /// emitter recomposes the derived composite name on read (`qualified_name()`).
     has_full_name: bool,
@@ -589,29 +694,44 @@ fn derive_path_names(
     }
 }
 
-/// Build a `qualified_name()` return expression from an ordered list of path field names.
+/// Build a `qualified_name()` return expression from the ordered path field names and a
+/// parallel flag marking which are plain `String` fields (vs. other scalars like an `int64`
+/// `version` that must be stringified).
 ///
-/// - `["name"]` → `self.name.clone()`
+/// - `["name"]` (string) → `self.name.clone()`
+/// - `["version"]` (non-string) → `self.version.to_string()`
 /// - `["catalog_name", "name"]` → `format!("{}.{}", self.catalog_name, self.name)`
-/// - `["catalog_name", "schema_name", "name"]` → `format!("{}.{}.{}", ...)`
-fn build_qualified_name_expr(path_names: &[String]) -> TokenStream {
-    if path_names.len() == 1 {
-        let field = format_ident!("{}", &path_names[0]);
-        return quote! { self.#field.clone() };
-    }
-    let format_str = path_names
-        .iter()
-        .map(|_| "{}")
-        .collect::<Vec<_>>()
-        .join(".");
-    let field_refs: Vec<TokenStream> = path_names
+/// - `["catalog_name", "schema_name", "version"]` (version non-string)
+///   → `format!("{}.{}.{}", self.catalog_name, self.schema_name, self.version)`
+fn build_qualified_name_expr(path_names: &[String], is_string: &[bool]) -> TokenStream {
+    // A field expression that renders the segment as a `String`-compatible value inside
+    // `format!` — a bare field ref for any type (Display handles the stringification).
+    let field_exprs: Vec<TokenStream> = path_names
         .iter()
         .map(|n| {
             let ident = format_ident!("{}", n);
             quote! { self.#ident }
         })
         .collect();
-    quote! { format!(#format_str, #(#field_refs),*) }
+
+    // Single-segment resources return the leaf directly (no `format!`), matching the prior
+    // behavior and avoiding a needless borrow: `clone()` for a `String` leaf, `to_string()`
+    // for a non-string one.
+    if let [only] = field_exprs.as_slice() {
+        let leaf_is_string = is_string.first().copied().unwrap_or(true);
+        return if leaf_is_string {
+            quote! { #only.clone() }
+        } else {
+            quote! { #only.to_string() }
+        };
+    }
+
+    let format_str = field_exprs
+        .iter()
+        .map(|_| "{}")
+        .collect::<Vec<_>>()
+        .join(".");
+    quote! { format!(#format_str, #(#field_exprs),*) }
 }
 
 /// Infer the package prefix from a list of proto package names.
@@ -934,7 +1054,7 @@ fn emit_resource_impl(
     path: &syn::Type,
     label_expr: &syn::Expr,
     id_ident: &proc_macro2::Ident,
-    path_name_idents: &[proc_macro2::Ident],
+    segment_accessors: &[TokenStream],
     is_optional: bool,
 ) -> TokenStream {
     let resource_ref = if is_optional {
@@ -957,7 +1077,7 @@ fn emit_resource_impl(
     quote! {
         impl ResourceExt for #path {
             fn resource_name(&self) -> ResourceName {
-                ResourceName::new([#(&self.#path_name_idents),*])
+                ResourceName::new([#(#segment_accessors),*])
             }
             fn resource_ref(&self) -> ResourceRef {
                 #resource_ref
@@ -1142,23 +1262,53 @@ mod tests {
 
     #[test]
     fn test_build_qualified_name_expr_flat() {
-        let expr = build_qualified_name_expr(&["name".to_string()]);
+        // Single string leaf: returned directly via `clone()`, no `format!` / borrow.
+        let expr = build_qualified_name_expr(&["name".to_string()], &[true]);
         let s = expr.to_string();
-        assert!(s.contains("self"), "expr: {s}");
-        assert!(s.contains("name"), "expr: {s}");
+        assert!(!s.contains("format"), "expr: {s}");
         assert!(s.contains("clone"), "expr: {s}");
+        assert!(s.contains("name"), "expr: {s}");
     }
 
     #[test]
     fn test_build_qualified_name_expr_hierarchical() {
-        let expr = build_qualified_name_expr(&[
-            "catalog_name".to_string(),
-            "schema_name".to_string(),
-            "name".to_string(),
-        ]);
+        let expr = build_qualified_name_expr(
+            &[
+                "catalog_name".to_string(),
+                "schema_name".to_string(),
+                "name".to_string(),
+            ],
+            &[true, true, true],
+        );
         let s = expr.to_string();
         assert!(s.contains("format"), "expr: {s}");
         assert!(s.contains("catalog_name"), "expr: {s}");
         assert!(s.contains("schema_name"), "expr: {s}");
+    }
+
+    #[test]
+    fn test_build_qualified_name_expr_non_string_leaf() {
+        // A non-string leaf (e.g. an int64 `version`) is interpolated by `format!`, which
+        // stringifies via Display — no explicit `.to_string()` needed in the multi-segment case.
+        let expr = build_qualified_name_expr(
+            &[
+                "catalog_name".to_string(),
+                "schema_name".to_string(),
+                "version".to_string(),
+            ],
+            &[true, true, false],
+        );
+        let s = expr.to_string();
+        assert!(s.contains("format"), "expr: {s}");
+        assert!(s.contains("version"), "expr: {s}");
+    }
+
+    #[test]
+    fn test_build_qualified_name_expr_single_non_string_leaf() {
+        // A single non-string leaf is stringified directly via `to_string()`.
+        let expr = build_qualified_name_expr(&["version".to_string()], &[false]);
+        let s = expr.to_string();
+        assert!(!s.contains("format"), "expr: {s}");
+        assert!(s.contains("to_string"), "expr: {s}");
     }
 }

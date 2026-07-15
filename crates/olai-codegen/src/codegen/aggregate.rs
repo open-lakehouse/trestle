@@ -360,6 +360,11 @@ fn resource_accessor_method(service: &ServiceHandler<'_>) -> Option<TokenStream>
     if !service.config.output.generate_resource_clients {
         return None;
     }
+    // The scoped client is skipped for resources with a non-string path parameter (see
+    // `supports_scoped_client`); don't emit an accessor to a client that won't exist.
+    if !service.supports_scoped_client() {
+        return None;
+    }
     let spec = service.accessor_spec()?;
     let client_ty = service.scoped_client_type()?;
     let method_name = format_ident!("{}", spec.singular);
