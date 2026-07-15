@@ -36,9 +36,26 @@ pub struct FileEnrichOpenApiConfig {
     pub jsonschema_dir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camel_case: Option<bool>,
+    /// Rename emitted OpenAPI component-schema keys: `<current key>: <desired key>`.
+    /// gnostic derives the schema key from the proto message name with no override;
+    /// this decouples them so the spec can present the official `*Info` naming
+    /// (e.g. `Catalog: CatalogInfo`) without renaming the proto/Rust model types.
+    /// Source keys absent from the spec are ignored. Config-file only.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub schema_renames: std::collections::BTreeMap<String, String>,
+    /// Component-schema keys whose body gnostic clobbers via a name collision with
+    /// one of its own OpenAPI meta-model types (e.g. a proto message named `Schema`
+    /// is overwritten by gnostic's meta `Schema`). For each listed key, the enrich
+    /// pass rebuilds the component from the authoritative JSON Schema instead of
+    /// merge-enriching the clobbered one. Config-file only.
+    #[serde(default, skip_serializing_if = "std::collections::HashSet::is_empty")]
+    pub schema_overrides: std::collections::HashSet<String>,
 }
 
 pub fn run(mut args: EnrichOpenApiArgs) -> Result<()> {
+    let mut schema_renames = std::collections::BTreeMap::new();
+    let mut schema_overrides = std::collections::HashSet::new();
+
     if let Some(config_path) = args.config.clone() {
         let file = crate::config::TrestleConfig::load(&config_path)?;
 
@@ -59,6 +76,8 @@ pub fn run(mut args: EnrichOpenApiArgs) -> Result<()> {
         fill!(spec);
         fill!(jsonschema_dir);
         fill!(camel_case);
+        schema_renames = cfg.schema_renames;
+        schema_overrides = cfg.schema_overrides;
     }
 
     let spec = args
@@ -74,6 +93,8 @@ pub fn run(mut args: EnrichOpenApiArgs) -> Result<()> {
         &jsonschema_dir,
         camel_case,
         args.descriptors.as_deref(),
+        &schema_renames,
+        &schema_overrides,
     )
     .map_err(Error::from)?;
 
