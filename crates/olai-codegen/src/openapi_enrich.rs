@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -10,12 +10,15 @@ use serde_yaml::Value as YamlValue;
 use crate::Result;
 use crate::parsing::{CodeGenMetadata, parse_file_descriptor_set};
 
-/// Run Pass 0 (gnostic ref fix), Pass 1 (validation enrichment), and optionally Pass 2 (path/body dedup).
+/// Run Pass 0 (gnostic ref fix), Pass 1 (validation enrichment), optionally Pass 2
+/// (path/body dedup), and Pass 3 (schema-key aliasing).
 pub fn run(
     spec: &Path,
     jsonschema_dir: &Path,
     camel_case: bool,
     descriptors: Option<&Path>,
+    schema_renames: &BTreeMap<String, String>,
+    schema_overrides: &HashSet<String>,
 ) -> Result<()> {
     let spec_str = fs::read_to_string(spec)
         .map_err(|e| crate::Error::Build(format!("Failed to read {}: {}", spec.display(), e)))?;
@@ -24,7 +27,7 @@ pub fn run(
     })?;
 
     fix_gnostic_refs(&mut doc);
-    enrich_from_jsonschema(&mut doc, jsonschema_dir, camel_case)?;
+    enrich_from_jsonschema(&mut doc, jsonschema_dir, camel_case, schema_overrides)?;
 
     if let Some(desc_path) = descriptors {
         let bytes = fs::read(desc_path).map_err(|e| {
@@ -39,6 +42,8 @@ pub fn run(
         let metadata = parse_file_descriptor_set(&fds)?;
         dedup_path_params(&mut doc, &metadata);
     }
+
+    rename_schemas(&mut doc, schema_renames);
 
     let out = serde_yaml::to_string(&doc)
         .map_err(|e| crate::Error::Build(format!("Failed to serialize YAML: {e}")))?;
@@ -88,6 +93,7 @@ fn enrich_from_jsonschema(
     spec: &mut YamlValue,
     jsonschema_dir: &Path,
     camel_case: bool,
+    schema_overrides: &HashSet<String>,
 ) -> Result<()> {
     let pattern = jsonschema_dir
         .join("*.schema.strict.bundle.json")
@@ -205,6 +211,19 @@ fn enrich_from_jsonschema(
             .as_mapping_mut()
             .and_then(|m| m.get_mut(type_name.as_str()));
         if let Some(oa) = oa_schema {
+            // Authoritative override: gnostic can clobber a proto message whose name
+            // collides with one of its own OpenAPI meta-model types (e.g. our
+            // `unitycatalog.schemas.v1.Schema` is overwritten by gnostic's `Schema`),
+            // leaving the emitted component with meta-object fields instead of the
+            // real entity's. For such keys, rebuild the component body from the
+            // authoritative JSON Schema root before the usual validation merge.
+            if schema_overrides.contains(type_name.as_str()) {
+                *oa = json_to_yaml(&root_schema);
+                // Drop JSON-Schema-only keys that must not leak into the OpenAPI spec.
+                if let Some(m) = oa.as_mapping_mut() {
+                    m.remove(YamlValue::String("$schema".into()));
+                }
+            }
             enrich_schema(oa, &root_schema, &defs, camel_case);
         }
     }
@@ -441,6 +460,85 @@ fn dedup_path_params(spec: &mut YamlValue, metadata: &CodeGenMetadata) {
         println!(
             "enrich-openapi: dedup removed {removed_total} path-bound field(s) from request body schemas"
         );
+    }
+}
+
+// ── Pass 3 ──────────────────────────────────────────────────────────────────
+
+/// Rename `components/schemas` map keys and rewrite every `$ref` that points at a
+/// renamed key.
+///
+/// The OpenAPI schema key is derived by gnostic from the proto message name, and
+/// gnostic offers no per-message key override. This pass decouples the two: the
+/// proto message (and thus every Rust/Python/Node model type) keeps its clean
+/// name, while the emitted spec presents a different key — used here to align the
+/// spec with the official Unity Catalog `*Info` naming (`Catalog` -> `CatalogInfo`)
+/// so downstream OpenAPI consumers match the reference spec without churning the
+/// internal model API.
+///
+/// `renames` maps current schema key -> desired schema key. Entries whose source
+/// key is absent from the spec are ignored (logged), so a rename table can name
+/// keys that only some builds emit.
+fn rename_schemas(spec: &mut YamlValue, renames: &BTreeMap<String, String>) {
+    if renames.is_empty() {
+        return;
+    }
+
+    // Rename the component definitions themselves. Preserve map order by rebuilding
+    // the schemas mapping with keys substituted in place.
+    let mut applied = 0usize;
+    if let Some(schemas) = spec
+        .get_mut("components")
+        .and_then(|c| c.get_mut("schemas"))
+        .and_then(|s| s.as_mapping_mut())
+    {
+        let mut rebuilt = serde_yaml::Mapping::new();
+        for (k, v) in std::mem::take(schemas) {
+            match k.as_str().and_then(|key| renames.get(key)) {
+                Some(new_key) => {
+                    rebuilt.insert(YamlValue::String(new_key.clone()), v);
+                    applied += 1;
+                }
+                None => {
+                    rebuilt.insert(k, v);
+                }
+            }
+        }
+        *schemas = rebuilt;
+    }
+
+    // Rewrite every `$ref: #/components/schemas/<old>` to the new key, everywhere.
+    rewrite_schema_refs(spec, renames);
+
+    let requested = renames.len();
+    if applied < requested {
+        eprintln!(
+            "enrich-openapi: schema rename applied {applied}/{requested} (some source keys were absent from the spec)"
+        );
+    } else {
+        eprintln!("enrich-openapi: schema rename applied {applied} key(s)");
+    }
+}
+
+fn rewrite_schema_refs(node: &mut YamlValue, renames: &BTreeMap<String, String>) {
+    match node {
+        YamlValue::Mapping(map) => {
+            if let Some(YamlValue::String(s)) = map.get_mut("$ref")
+                && let Some(old) = s.strip_prefix("#/components/schemas/")
+                && let Some(new_key) = renames.get(old)
+            {
+                *s = format!("#/components/schemas/{new_key}");
+            }
+            for (_, v) in map.iter_mut() {
+                rewrite_schema_refs(v, renames);
+            }
+        }
+        YamlValue::Sequence(seq) => {
+            for item in seq.iter_mut() {
+                rewrite_schema_refs(item, renames);
+            }
+        }
+        _ => {}
     }
 }
 
