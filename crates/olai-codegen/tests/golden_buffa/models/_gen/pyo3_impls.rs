@@ -1,6 +1,6 @@
 // @generated — do not edit by hand.
 #[allow(non_camel_case_types)]
-#[::pyo3::pyclass(eq, eq_int, name = "CatalogType")]
+#[::pyo3::pyclass(eq, eq_int, name = "CatalogType", from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PyCatalogType {
     CATALOG_TYPE_UNSPECIFIED = 0isize,
@@ -39,7 +39,7 @@ impl ::core::convert::From<PyCatalogType> for super::catalog::v1::CatalogType {
     }
 }
 #[allow(non_camel_case_types)]
-#[::pyo3::pyclass(eq, eq_int, name = "GetSchemaRequestView")]
+#[::pyo3::pyclass(eq, eq_int, name = "GetSchemaRequestView", from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PyGetSchemaRequestView {
     VIEW_UNSPECIFIED = 0isize,
@@ -84,7 +84,7 @@ for super::schemas::v1::get_schema_request::View {
     }
 }
 #[allow(non_camel_case_types)]
-#[::pyo3::pyclass(eq, eq_int, name = "SchemaType")]
+#[::pyo3::pyclass(eq, eq_int, name = "SchemaType", from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum PySchemaType {
     SCHEMA_TYPE_UNSPECIFIED = 0isize,
@@ -122,7 +122,7 @@ impl ::core::convert::From<PySchemaType> for super::schemas::v1::SchemaType {
             .unwrap_or_default()
     }
 }
-#[::pyo3::pyclass(name = "AzureConfig")]
+#[::pyo3::pyclass(name = "AzureConfig", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyAzureConfig(pub super::catalog::v1::AzureConfig);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -162,7 +162,7 @@ impl ::core::convert::From<PyAzureConfig> for super::catalog::v1::AzureConfig {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "Catalog")]
+#[::pyo3::pyclass(name = "Catalog", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyCatalog(pub super::catalog::v1::Catalog);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -291,7 +291,7 @@ impl ::core::convert::From<PyCatalog> for super::catalog::v1::Catalog {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "CatalogStatus")]
+#[::pyo3::pyclass(name = "CatalogStatus", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyCatalogStatus(pub super::catalog::v1::CatalogStatus);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -331,7 +331,7 @@ impl ::core::convert::From<PyCatalogStatus> for super::catalog::v1::CatalogStatu
         value.0
     }
 }
-#[::pyo3::pyclass(name = "CatalogToken")]
+#[::pyo3::pyclass(name = "CatalogToken", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyCatalogToken(pub super::catalog::v1::CatalogToken);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -371,7 +371,7 @@ impl ::core::convert::From<PyCatalogToken> for super::catalog::v1::CatalogToken 
         value.0
     }
 }
-#[::pyo3::pyclass(name = "CreateCatalogRequest")]
+#[::pyo3::pyclass(name = "CreateCatalogRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyCreateCatalogRequest(pub super::catalog::v1::CreateCatalogRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -418,7 +418,7 @@ for super::catalog::v1::CreateCatalogRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "DeleteCatalogRequest")]
+#[::pyo3::pyclass(name = "DeleteCatalogRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyDeleteCatalogRequest(pub super::catalog::v1::DeleteCatalogRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -460,7 +460,7 @@ for super::catalog::v1::DeleteCatalogRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "DeleteCatalogResponse")]
+#[::pyo3::pyclass(name = "DeleteCatalogResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyDeleteCatalogResponse(pub super::catalog::v1::DeleteCatalogResponse);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -489,7 +489,7 @@ for super::catalog::v1::DeleteCatalogResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "GenerateCatalogTokenRequest")]
+#[::pyo3::pyclass(name = "GenerateCatalogTokenRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyGenerateCatalogTokenRequest(
     pub super::catalog::v1::GenerateCatalogTokenRequest,
@@ -533,7 +533,7 @@ for super::catalog::v1::GenerateCatalogTokenRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "GetCatalogRequest")]
+#[::pyo3::pyclass(name = "GetCatalogRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyGetCatalogRequest(pub super::catalog::v1::GetCatalogRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -575,7 +575,7 @@ for super::catalog::v1::GetCatalogRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "GetCatalogStatusRequest")]
+#[::pyo3::pyclass(name = "GetCatalogStatusRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyGetCatalogStatusRequest(pub super::catalog::v1::GetCatalogStatusRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -617,7 +617,7 @@ for super::catalog::v1::GetCatalogStatusRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListByCatalogTypeRequest")]
+#[::pyo3::pyclass(name = "ListByCatalogTypeRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListByCatalogTypeRequest(pub super::catalog::v1::ListByCatalogTypeRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -665,7 +665,7 @@ for super::catalog::v1::ListByCatalogTypeRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListByTagsRequest")]
+#[::pyo3::pyclass(name = "ListByTagsRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListByTagsRequest(pub super::catalog::v1::ListByTagsRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -721,7 +721,7 @@ for super::catalog::v1::ListByTagsRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListByTagsResponse")]
+#[::pyo3::pyclass(name = "ListByTagsResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListByTagsResponse(pub super::catalog::v1::ListByTagsResponse);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -765,7 +765,7 @@ for super::catalog::v1::ListByTagsResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListCatalogsRequest")]
+#[::pyo3::pyclass(name = "ListCatalogsRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListCatalogsRequest(pub super::catalog::v1::ListCatalogsRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -821,7 +821,7 @@ for super::catalog::v1::ListCatalogsRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListCatalogsResponse")]
+#[::pyo3::pyclass(name = "ListCatalogsResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListCatalogsResponse(pub super::catalog::v1::ListCatalogsResponse);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -880,7 +880,7 @@ for super::catalog::v1::ListCatalogsResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "S3Config")]
+#[::pyo3::pyclass(name = "S3Config", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyS3Config(pub super::catalog::v1::S3Config);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -920,7 +920,7 @@ impl ::core::convert::From<PyS3Config> for super::catalog::v1::S3Config {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "StorageConfig")]
+#[::pyo3::pyclass(name = "StorageConfig", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyStorageConfig(pub super::catalog::v1::StorageConfig);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -947,7 +947,7 @@ impl ::core::convert::From<PyStorageConfig> for super::catalog::v1::StorageConfi
         value.0
     }
 }
-#[::pyo3::pyclass(name = "UpdateCatalogRequest")]
+#[::pyo3::pyclass(name = "UpdateCatalogRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyUpdateCatalogRequest(pub super::catalog::v1::UpdateCatalogRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1008,7 +1008,7 @@ for super::catalog::v1::UpdateCatalogRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "CreateSchemaRequest")]
+#[::pyo3::pyclass(name = "CreateSchemaRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyCreateSchemaRequest(pub super::schemas::v1::CreateSchemaRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1080,7 +1080,7 @@ for super::schemas::v1::CreateSchemaRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "DeleteSchemaRequest")]
+#[::pyo3::pyclass(name = "DeleteSchemaRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyDeleteSchemaRequest(pub super::schemas::v1::DeleteSchemaRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1122,7 +1122,7 @@ for super::schemas::v1::DeleteSchemaRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "DeleteSchemaResponse")]
+#[::pyo3::pyclass(name = "DeleteSchemaResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyDeleteSchemaResponse(pub super::schemas::v1::DeleteSchemaResponse);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1151,7 +1151,7 @@ for super::schemas::v1::DeleteSchemaResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "GetSchemaRequest")]
+#[::pyo3::pyclass(name = "GetSchemaRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyGetSchemaRequest(pub super::schemas::v1::GetSchemaRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1213,7 +1213,7 @@ impl ::core::convert::From<PyGetSchemaRequest> for super::schemas::v1::GetSchema
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListSchemasRequest")]
+#[::pyo3::pyclass(name = "ListSchemasRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListSchemasRequest(pub super::schemas::v1::ListSchemasRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1281,7 +1281,7 @@ for super::schemas::v1::ListSchemasRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListSchemasResponse")]
+#[::pyo3::pyclass(name = "ListSchemasResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListSchemasResponse(pub super::schemas::v1::ListSchemasResponse);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1337,7 +1337,7 @@ for super::schemas::v1::ListSchemasResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "Schema")]
+#[::pyo3::pyclass(name = "Schema", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PySchema(pub super::schemas::v1::Schema);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1465,7 +1465,7 @@ impl ::core::convert::From<PySchema> for super::schemas::v1::Schema {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "UpdateSchemaRequest")]
+#[::pyo3::pyclass(name = "UpdateSchemaRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyUpdateSchemaRequest(pub super::schemas::v1::UpdateSchemaRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1526,7 +1526,7 @@ for super::schemas::v1::UpdateSchemaRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "CreateTagAssignmentRequest")]
+#[::pyo3::pyclass(name = "CreateTagAssignmentRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyCreateTagAssignmentRequest(pub super::tags::v1::CreateTagAssignmentRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1599,7 +1599,7 @@ for super::tags::v1::CreateTagAssignmentRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "DeleteTagAssignmentRequest")]
+#[::pyo3::pyclass(name = "DeleteTagAssignmentRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyDeleteTagAssignmentRequest(pub super::tags::v1::DeleteTagAssignmentRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1667,7 +1667,7 @@ for super::tags::v1::DeleteTagAssignmentRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "DeleteTagAssignmentResponse")]
+#[::pyo3::pyclass(name = "DeleteTagAssignmentResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyDeleteTagAssignmentResponse(
     pub super::tags::v1::DeleteTagAssignmentResponse,
@@ -1698,7 +1698,7 @@ for super::tags::v1::DeleteTagAssignmentResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "GetTagAssignmentRequest")]
+#[::pyo3::pyclass(name = "GetTagAssignmentRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyGetTagAssignmentRequest(pub super::tags::v1::GetTagAssignmentRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1766,7 +1766,7 @@ for super::tags::v1::GetTagAssignmentRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListTagAssignmentsRequest")]
+#[::pyo3::pyclass(name = "ListTagAssignmentsRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListTagAssignmentsRequest(pub super::tags::v1::ListTagAssignmentsRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1853,7 +1853,7 @@ for super::tags::v1::ListTagAssignmentsRequest {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "ListTagAssignmentsResponse")]
+#[::pyo3::pyclass(name = "ListTagAssignmentsResponse", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyListTagAssignmentsResponse(pub super::tags::v1::ListTagAssignmentsResponse);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -1915,7 +1915,7 @@ for super::tags::v1::ListTagAssignmentsResponse {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "TagAssignment")]
+#[::pyo3::pyclass(name = "TagAssignment", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyTagAssignment(pub super::tags::v1::TagAssignment);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -2000,7 +2000,7 @@ impl ::core::convert::From<PyTagAssignment> for super::tags::v1::TagAssignment {
         value.0
     }
 }
-#[::pyo3::pyclass(name = "TouchTagAssignmentRequest")]
+#[::pyo3::pyclass(name = "TouchTagAssignmentRequest", from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyTouchTagAssignmentRequest(pub super::tags::v1::TouchTagAssignmentRequest);
 #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
