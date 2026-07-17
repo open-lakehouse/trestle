@@ -198,7 +198,9 @@ fn enum_wrapper(
         // Variant idents mirror the proto value names (UPPER_SNAKE), which trip the
         // camel-case lint; the conversions are intentionally exhaustive.
         #[allow(non_camel_case_types)]
-        #[::pyo3::pyclass(eq, eq_int, name = #class_name)]
+        // `from_py_object`: `Clone` + pyo3 0.28's opt-in `FromPyObject` (see the message
+        // wrapper emitter). Keep the derive explicit to preserve pre-0.28 behavior.
+        #[::pyo3::pyclass(eq, eq_int, name = #class_name, from_py_object)]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
         pub enum #wrapper {
             #(#variants = #numbers,)*
@@ -277,7 +279,11 @@ fn message_wrapper(
     let ctor = constructor(&accessors, &inner);
 
     Ok(quote! {
-        #[::pyo3::pyclass(name = #class_name)]
+        // `from_py_object`: these wrappers are `Clone`, and pyo3 0.28 made the auto
+        // `FromPyObject` derive for `Clone` `#[pyclass]` types opt-in. Keep the pre-0.28
+        // behavior (derive it) explicitly so Python callers can still pass a wrapper into
+        // Rust-side functions and to silence the deprecation under `-D warnings`.
+        #[::pyo3::pyclass(name = #class_name, from_py_object)]
         #[derive(Clone, Debug)]
         pub struct #wrapper(pub #inner);
 
