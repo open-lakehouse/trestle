@@ -318,7 +318,7 @@ impl BindingBackend for PyBackend {
                 let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     let result: ::std::vec::Vec<_> = runtime.block_on(async move { request.into_stream().try_collect().await })?;
                     Ok::<_, #py_error_type>(result.into_iter().map(#item_wrapper::from).collect())
                 })
@@ -348,7 +348,7 @@ impl BindingBackend for PyBackend {
                 let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     #[allow(clippy::let_unit_value)]
                     let result = runtime.block_on(request.into_future())?;
                     Ok::<_, #py_error_type>(#convert)
@@ -382,7 +382,7 @@ impl BindingBackend for PyBackend {
                 let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     // `let result = ...` then convert: `result` is the bare model the
                     // Rust client returns; `#convert` lifts it into the `Py` wrapper
                     // (or passes a unit through unchanged).
@@ -418,7 +418,7 @@ impl BindingBackend for PyBackend {
                 let #mut_kw request = #client_call;
                 #(#builder_calls)*
                 let runtime = get_runtime(py)?;
-                py.allow_threads(|| {
+                py.detach(|| {
                     runtime.block_on(request.into_future())?;
                     Ok::<_, #py_error_type>(())
                 })

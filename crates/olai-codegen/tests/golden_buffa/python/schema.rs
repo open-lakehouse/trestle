@@ -20,7 +20,7 @@ impl PySchemaClient {
     ) -> PyExampleResult<PySchema> {
         let request = self.client.get(view.into());
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PySchema::from(result))
@@ -35,7 +35,7 @@ impl PySchemaClient {
         let mut request = self.client.update();
         request = request.with_schema(schema.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PySchema::from(result))
@@ -44,7 +44,7 @@ impl PySchemaClient {
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {
         let request = self.client.delete();
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(())
         })

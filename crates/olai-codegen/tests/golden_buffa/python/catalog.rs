@@ -15,7 +15,7 @@ impl PyCatalogClient {
     pub fn get(&self, py: Python) -> PyExampleResult<PyCatalog> {
         let request = self.client.get();
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyCatalog::from(result))
@@ -30,7 +30,7 @@ impl PyCatalogClient {
         let mut request = self.client.update();
         request = request.with_catalog(catalog.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyCatalog::from(result))
@@ -39,7 +39,7 @@ impl PyCatalogClient {
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {
         let request = self.client.delete();
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(())
         })
@@ -47,7 +47,7 @@ impl PyCatalogClient {
     pub fn get_catalog_status(&self, py: Python) -> PyExampleResult<PyCatalogStatus> {
         let request = self.client.get_catalog_status();
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyCatalogStatus::from(result))

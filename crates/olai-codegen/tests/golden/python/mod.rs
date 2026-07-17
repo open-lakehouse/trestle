@@ -45,7 +45,7 @@ impl PyExampleClient {
         let mut request = self.client.create_catalog();
         request = request.with_catalog(catalog.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyCatalog::from(result))
@@ -59,7 +59,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<::std::vec::Vec<PyCatalog>> {
         let request = self.client.list_catalogs(max_results, page_token);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             let result: ::std::vec::Vec<_> = runtime
                 .block_on(async move { request.into_stream().try_collect().await })?;
             Ok::<_, PyExampleError>(result.into_iter().map(PyCatalog::from).collect())
@@ -73,7 +73,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<PyCatalogToken> {
         let request = self.client.generate_catalog_token(catalog_id);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyCatalogToken::from(result))
@@ -88,7 +88,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_tags(tags, max_results);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
@@ -102,7 +102,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_catalog_type(catalog_type.into());
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
@@ -118,7 +118,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<PySchema> {
         let request = self.client.create_schema(name, catalog_name, schema_type.into());
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PySchema::from(result))
@@ -133,7 +133,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<::std::vec::Vec<PySchema>> {
         let request = self.client.list_schemas(catalog_name, max_results, page_token);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             let result: ::std::vec::Vec<_> = runtime
                 .block_on(async move { request.into_stream().try_collect().await })?;
             Ok::<_, PyExampleError>(result.into_iter().map(PySchema::from).collect())
@@ -152,7 +152,7 @@ impl PyExampleClient {
             .client
             .list_tag_assignments(entity_type, entity_name, max_results, page_token);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyListTagAssignmentsResponse::from(result))
@@ -169,7 +169,7 @@ impl PyExampleClient {
         let mut request = self.client.create_tag_assignment(entity_type, entity_name);
         request = request.with_tag(tag.map(::core::convert::Into::into));
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyTagAssignment::from(result))
@@ -185,7 +185,7 @@ impl PyExampleClient {
     ) -> PyExampleResult<PyTagAssignment> {
         let request = self.client.get_tag_assignment(entity_type, entity_name, tag_key);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyTagAssignment::from(result))
@@ -203,7 +203,7 @@ impl PyExampleClient {
             .client
             .delete_tag_assignment(entity_type, entity_name, tag_key);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(PyDeleteTagAssignmentResponse::from(result))
@@ -221,7 +221,7 @@ impl PyExampleClient {
             .client
             .touch_tag_assignment(entity_type, entity_name, tag_key);
         let runtime = get_runtime(py)?;
-        py.allow_threads(|| {
+        py.detach(|| {
             #[allow(clippy::let_unit_value)]
             let result = runtime.block_on(request.into_future())?;
             Ok::<_, PyExampleError>(result)
