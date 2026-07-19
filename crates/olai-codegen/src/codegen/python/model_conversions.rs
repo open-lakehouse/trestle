@@ -45,7 +45,7 @@ use super::super::format_tokens;
 use crate::analysis::GenerationPlan;
 use crate::codegen::Runtime;
 use crate::parsing::types::{BaseType, UnifiedType};
-use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo};
+use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo, OneofVariant};
 use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
 
 /// Generate the `pyo3_impls.rs` content: a `#[pyclass]` wrapper for every message
@@ -254,19 +254,24 @@ fn message_wrapper(
     let class_name = python_class_name(fq_name);
     let inner: syn::Path = parse_path(rust_path, fq_name)?;
 
-    // Build per-field accessor descriptors. Oneof fields are not yet expressed as
-    // typed getters; they are skipped here (PR-follow-up) but still round-trip via
-    // the inner type's serde when constructed elsewhere.
-    let fields: Vec<&MessageField> = info
+    // Plain (non-oneof) fields get one `FieldAccessor` each; oneof fields are
+    // handled separately by `OneofAccessor`, which flattens each oneof into one
+    // optional keyword arg / per-variant setter+getter (see issue #99).
+    let plain_fields: Vec<&MessageField> = info
         .fields
         .iter()
         .filter(|f| f.oneof_variants.is_none())
+        .collect();
+    let oneof_fields: Vec<&MessageField> = info
+        .fields
+        .iter()
+        .filter(|f| f.oneof_variants.is_some())
         .collect();
 
     let packages = metadata_packages(metadata);
     let project_pkg_refs: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
     let boxed = boxed_fields(metadata, runtime);
-    let accessors: Vec<FieldAccessor> = fields
+    let accessors: Vec<FieldAccessor> = plain_fields
         .iter()
         .map(|f| {
             let is_boxed = boxed.contains(&(fq_name.to_string(), f.name.clone()));
@@ -274,9 +279,20 @@ fn message_wrapper(
         })
         .collect();
 
+    // Resolve each oneof into its variants. The oneof enum lives in the message's
+    // parent module (buffa exposes it there via a natural-path re-export, prost
+    // nests it directly); every variant payload is resolved to its Python-visible
+    // wrapper type just like a plain field.
+    let oneofs: Vec<OneofAccessor> = oneof_fields
+        .iter()
+        .map(|f| OneofAccessor::new(f, &inner, runtime, &packages))
+        .collect();
+
     let getters = accessors.iter().map(FieldAccessor::getter);
     let setters = accessors.iter().map(FieldAccessor::setter);
-    let ctor = constructor(&accessors, &inner);
+    let oneof_getters = oneofs.iter().flat_map(OneofAccessor::variant_getters);
+    let oneof_setters = oneofs.iter().flat_map(OneofAccessor::variant_setters);
+    let ctor = constructor(&accessors, &oneofs, &inner);
 
     Ok(quote! {
         // `from_py_object`: these wrappers are `Clone`, and pyo3 0.28 made the auto
@@ -294,6 +310,8 @@ fn message_wrapper(
 
             #(#getters)*
             #(#setters)*
+            #(#oneof_getters)*
+            #(#oneof_setters)*
 
             fn __repr__(&self) -> ::std::string::String {
                 ::std::format!("{:?}", self.0)
@@ -737,6 +755,293 @@ impl FieldAccessor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Oneof accessors
+// ---------------------------------------------------------------------------
+
+/// A proto `oneof`, resolved into the tokens needed to expose it across the PyO3
+/// boundary. Each oneof is *flattened*: one optional keyword arg + one
+/// `set_<variant>` setter + one `<variant>` getter per member (issue #99).
+///
+/// The inner model stores a oneof as `Option<Enum>` where `Enum` has one tuple
+/// variant per member. buffa reaches the enum through a natural-path re-export in
+/// the message's snake_case module and boxes *every* message/group payload
+/// (`Variant(Box<T>)`); prost nests the enum in the same module and stores message
+/// payloads inline (`Variant(T)`), boxing only recursion-cycle payloads. The
+/// message write/read paths branch on [`Runtime`] to add/strip that `Box`
+/// (`Box::new`/`**` for buffa, direct/`*` for prost); scalar and enum payloads are
+/// inline for both. Payloads cross the boundary via the wrapper's `From`/`Into`.
+struct OneofAccessor {
+    /// The oneof field ident on the inner struct (e.g. `provider`).
+    field_ident: proc_macro2::Ident,
+    /// In-crate path to the oneof enum (e.g. `super::catalog::v1::storage_config::Provider`).
+    enum_path: TokenStream,
+    runtime: Runtime,
+    variants: Vec<OneofVariantAccessor>,
+}
+
+/// One member of a oneof, resolved to its Python-visible payload type and the
+/// Rust variant it maps to.
+struct OneofVariantAccessor {
+    /// The Rust enum variant ident (PascalCase proto field name, e.g. `S3`).
+    variant_ident: proc_macro2::Ident,
+    /// The flattened keyword-arg / accessor ident (the proto field name, e.g. `s3`).
+    param_ident: proc_macro2::Ident,
+    /// The setter ident (`set_<param>`).
+    setter_ident: proc_macro2::Ident,
+    /// The Python-visible payload wrapper type (e.g. `PyS3Config`, `i64`).
+    payload_ty: TokenStream,
+    /// Whether the payload is an in-project message (needs `.into()`/`From` bridge)
+    /// vs. a scalar (stored/read directly).
+    is_message: bool,
+    /// Whether the payload is an in-project enum (crosses via the enum wrapper's
+    /// `From`, and is stored inline — never boxed).
+    is_enum: bool,
+    /// Documentation carried from the proto variant, for the getter.
+    documentation: Option<String>,
+}
+
+impl OneofAccessor {
+    fn new(
+        field: &MessageField,
+        inner: &syn::Path,
+        runtime: Runtime,
+        packages: &BTreeSet<String>,
+    ) -> Self {
+        let field_ident = format_ident!("{}", super::sanitize_python_field_name(&field.name));
+
+        // The oneof enum's name in the IR is already `<msg_snake>::<OneofPascal>`
+        // (built in `parsing/message.rs`); it lives in the message's parent module.
+        // Splice it onto the message's own module path: drop the message leaf from
+        // `inner` (e.g. `super::catalog::v1::StorageConfig`) and append the enum name.
+        let BaseType::OneOf(enum_name) = &field.unified_type.base_type else {
+            // Only ever constructed for oneof fields; fall back defensively.
+            unreachable!("OneofAccessor::new called on a non-oneof field");
+        };
+        let enum_path = oneof_enum_path(inner, enum_name);
+
+        let variants = field
+            .oneof_variants
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|v| OneofVariantAccessor::new(v, packages))
+            .collect();
+
+        Self {
+            field_ident,
+            enum_path,
+            runtime,
+            variants,
+        }
+    }
+
+    /// The flattened keyword-arg idents (proto field names), for the `#[pyo3(signature)]`.
+    fn variant_param_idents(&self) -> Vec<String> {
+        self.variants
+            .iter()
+            .map(|v| v.param_ident.to_string())
+            .collect()
+    }
+
+    /// One `Option<PyPayload>` constructor param per variant.
+    fn ctor_params(&self) -> Vec<TokenStream> {
+        self.variants
+            .iter()
+            .map(|v| {
+                let ident = &v.param_ident;
+                let ty = &v.payload_ty;
+                quote! { #ident: ::core::option::Option<#ty> }
+            })
+            .collect()
+    }
+
+    /// Constructor body: set the oneof from whichever variant kwarg is `Some`.
+    /// Emitted in declaration order, so a later variant overrides an earlier one.
+    fn ctor_assigns(&self) -> Vec<TokenStream> {
+        let field_ident = &self.field_ident;
+        self.variants
+            .iter()
+            .map(|v| {
+                let param = &v.param_ident;
+                let store = v.write_variant(&self.enum_path, self.runtime);
+                quote! {
+                    if let ::core::option::Option::Some(value) = #param {
+                        inner.#field_ident = ::core::option::Option::Some(#store);
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// A `#[setter]` per variant: setting one variant to `Some` replaces the oneof;
+    /// setting it to `None` clears the oneof only if that variant is currently active.
+    fn variant_setters(&self) -> Vec<TokenStream> {
+        let field_ident = &self.field_ident;
+        self.variants
+            .iter()
+            .map(|v| {
+                let setter = &v.setter_ident;
+                let param = &v.param_ident;
+                let ty = &v.payload_ty;
+                let variant = &v.variant_ident;
+                let enum_path = &self.enum_path;
+                let store = v.write_variant(enum_path, self.runtime);
+                quote! {
+                    #[setter(#param)]
+                    fn #setter(&mut self, value: ::core::option::Option<#ty>) {
+                        match value {
+                            ::core::option::Option::Some(value) => {
+                                self.0.#field_ident = ::core::option::Option::Some(#store);
+                            }
+                            // Clearing this variant only clears the oneof when it is
+                            // the active one; leave a different active variant intact.
+                            ::core::option::Option::None => {
+                                if ::core::matches!(
+                                    self.0.#field_ident,
+                                    ::core::option::Option::Some(#enum_path::#variant(_))
+                                ) {
+                                    self.0.#field_ident = ::core::option::Option::None;
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// A `#[getter]` per variant returning `Option<PyPayload>` — `Some` only when
+    /// that variant is the active one.
+    fn variant_getters(&self) -> Vec<TokenStream> {
+        let field_ident = &self.field_ident;
+        self.variants
+            .iter()
+            .map(|v| {
+                let getter = &v.param_ident;
+                let ty = &v.payload_ty;
+                let variant = &v.variant_ident;
+                let enum_path = &self.enum_path;
+                let read = v.read_variant(self.runtime);
+                let doc = v
+                    .documentation
+                    .as_deref()
+                    .map(|d| quote! { #[doc = #d] })
+                    .unwrap_or_default();
+                quote! {
+                    #doc
+                    #[getter]
+                    fn #getter(&self) -> ::core::option::Option<#ty> {
+                        match &self.0.#field_ident {
+                            ::core::option::Option::Some(#enum_path::#variant(value)) => {
+                                ::core::option::Option::Some(#read)
+                            }
+                            _ => ::core::option::Option::None,
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+}
+
+impl OneofVariantAccessor {
+    fn new(variant: &OneofVariant, packages: &BTreeSet<String>) -> Self {
+        let param_ident =
+            format_ident!("{}", super::sanitize_python_field_name(&variant.field_name));
+        let setter_ident = format_ident!("set_{param_ident}");
+        let variant_ident = format_ident!("{}", variant.variant_name);
+
+        let (is_message, is_enum) = match &variant.field_type.base_type {
+            BaseType::Message(n) => (is_in_project(n.as_str(), packages), false),
+            BaseType::Enum(n) => (false, is_in_project(n.as_str(), packages)),
+            _ => (false, false),
+        };
+        let in_project = is_message || is_enum;
+        let payload_ty = py_type_for(&variant.field_type, in_project);
+
+        Self {
+            variant_ident,
+            param_ident,
+            setter_ident,
+            payload_ty,
+            is_message,
+            is_enum,
+            documentation: variant.documentation.clone(),
+        }
+    }
+
+    /// Expression producing `<EnumPath>::<Variant>(payload)` from a bound `value`
+    /// of the Python-visible payload type.
+    fn write_variant(&self, enum_path: &TokenStream, runtime: Runtime) -> TokenStream {
+        let variant = &self.variant_ident;
+        if self.is_message {
+            // Message payloads bridge via `From<PyWrapper>` for the bare model type.
+            // buffa boxes *every* message variant; prost stores it inline (matching
+            // the builder's `generate_oneof_variant_methods`). A prost oneof whose
+            // variant is recursive would be boxed by prost and mismatch here — the
+            // same untested corner the builder shares; no IR flag distinguishes it.
+            match runtime {
+                Runtime::Buffa => quote! {
+                    #enum_path::#variant(::std::boxed::Box::new(value.into()))
+                },
+                Runtime::Prost => quote! {
+                    #enum_path::#variant(value.into())
+                },
+            }
+        } else if self.is_enum {
+            // Enum payloads: the wrapper converts to the bare model enum via `From`.
+            quote! {
+                #enum_path::#variant(value.into())
+            }
+        } else {
+            // Scalar payloads are stored directly.
+            quote! {
+                #enum_path::#variant(value)
+            }
+        }
+    }
+
+    /// Expression converting the matched variant payload — bound as `value` by ref
+    /// in the getter's `match` arm — into the Python-visible type.
+    fn read_variant(&self, runtime: Runtime) -> TokenStream {
+        let ty = &self.payload_ty;
+        if self.is_message {
+            // buffa boxes message variants (`value: &Box<T>`), prost does not
+            // (`value: &T`). Deref to `T` accordingly, clone, then bridge to the
+            // wrapper via `From<T>`.
+            match runtime {
+                Runtime::Buffa => quote! { <#ty>::from((**value).clone()) },
+                Runtime::Prost => quote! { <#ty>::from((*value).clone()) },
+            }
+        } else if self.is_enum {
+            // `value: &BareEnum` (`Copy`); the wrapper bridges via `From<BareEnum>`.
+            quote! { <#ty>::from(*value) }
+        } else {
+            // Scalar payloads: clone the referenced value out.
+            quote! { ::core::clone::Clone::clone(value) }
+        }
+    }
+}
+
+/// Build the in-crate Rust path to a oneof enum, given the containing message's
+/// path (`inner`) and the enum's IR name (`<msg_snake>::<OneofPascal>`).
+///
+/// The enum sits in the message's *parent* module — buffa via a natural-path
+/// re-export, prost via direct nesting — so we drop the message's own leaf
+/// segment from `inner` (e.g. `super::catalog::v1::StorageConfig` →
+/// `super::catalog::v1`) and append the enum name (`storage_config::Provider`).
+fn oneof_enum_path(inner: &syn::Path, enum_name: &str) -> TokenStream {
+    let parent_segments = inner
+        .segments
+        .iter()
+        .take(inner.segments.len().saturating_sub(1))
+        .map(|s| s.ident.clone());
+    let tail: syn::Path =
+        syn::parse_str(enum_name).expect("oneof enum IR name is a valid `snake::Pascal` path");
+    quote! { #(#parent_segments::)* #tail }
+}
+
 /// The Python-visible base type (no cardinality wrapping) for a unified type.
 fn py_type_for(ty: &UnifiedType, in_project: bool) -> TokenStream {
     match &ty.base_type {
@@ -783,11 +1088,18 @@ fn read_map(access: &TokenStream, value: &UnifiedType, in_project: bool) -> Toke
     }
 }
 
-/// The keyword `#[new]` constructor: every field is an optional keyword argument
-/// defaulting to `None`; provided values are stored, omitted ones fall back to the
-/// inner type's `Default`.
-fn constructor(accessors: &[FieldAccessor], inner: &syn::Path) -> TokenStream {
-    if accessors.is_empty() {
+/// The keyword `#[new]` constructor: every plain field is an optional keyword
+/// argument defaulting to `None`, and each oneof is *flattened* into one optional
+/// keyword arg per variant (matching the hand-written constructors downstream
+/// adopters used, see issue #99). Provided values are stored; omitted ones fall
+/// back to the inner type's `Default`. If more than one variant of the same oneof
+/// is supplied, the last one in proto declaration order wins.
+fn constructor(
+    accessors: &[FieldAccessor],
+    oneofs: &[OneofAccessor],
+    inner: &syn::Path,
+) -> TokenStream {
+    if accessors.is_empty() && oneofs.is_empty() {
         return quote! {
             #[new]
             fn new() -> Self {
@@ -796,23 +1108,29 @@ fn constructor(accessors: &[FieldAccessor], inner: &syn::Path) -> TokenStream {
         };
     }
 
-    let params = accessors.iter().map(|a| {
+    // Plain-field params: fields whose Python type is *already* `Option<..>`
+    // (singular messages, explicit-presence scalars) must not be double-wrapped —
+    // `Option<Option<T>>` makes pyo3's `#[new]` arg-coercion ambiguous. For those
+    // the single `Option` already encodes the "omitted/None" keyword default.
+    let field_params = accessors.iter().map(|a| {
         let ident = &a.ident;
         let ty = a.py_type();
-        // Fields whose Python type is *already* `Option<..>` (singular messages,
-        // explicit-presence scalars) must not be double-wrapped: `Option<Option<T>>`
-        // makes pyo3's `#[new]` arg-coercion ambiguous (`SomeWrap`). For those the
-        // single `Option` already encodes the "omitted/None" keyword default.
         if a.py_type_is_optional() {
             quote! { #ident: #ty }
         } else {
             quote! { #ident: ::core::option::Option<#ty> }
         }
     });
+    // One `Option<PyPayload>` param per oneof variant, flattened across all oneofs.
+    let oneof_params = oneofs.iter().flat_map(OneofAccessor::ctor_params);
+    let params = field_params.chain(oneof_params);
 
+    // `<name> = None` for every plain field then every oneof variant, in order.
     let sig_parts = accessors
         .iter()
-        .map(|a| format!("{} = None", a.ident))
+        .map(|a| a.ident.to_string())
+        .chain(oneofs.iter().flat_map(OneofAccessor::variant_param_idents))
+        .map(|ident| format!("{ident} = None"))
         .collect::<Vec<_>>()
         .join(", ");
     let sig: TokenStream = sig_parts.parse().expect("field idents are valid tokens");
@@ -838,6 +1156,7 @@ fn constructor(accessors: &[FieldAccessor], inner: &syn::Path) -> TokenStream {
             }
         }
     });
+    let oneof_assigns = oneofs.iter().flat_map(OneofAccessor::ctor_assigns);
 
     quote! {
         #[new]
@@ -845,6 +1164,7 @@ fn constructor(accessors: &[FieldAccessor], inner: &syn::Path) -> TokenStream {
         fn new(#(#params,)*) -> Self {
             let mut inner = <#inner as ::core::default::Default>::default();
             #(#assigns)*
+            #(#oneof_assigns)*
             Self(inner)
         }
     }
@@ -935,6 +1255,27 @@ mod tests {
 
     fn pkgs(list: &[&'static str]) -> BTreeSet<&'static str> {
         list.iter().copied().collect()
+    }
+
+    #[test]
+    fn oneof_enum_path_splices_enum_name_onto_message_parent_module() {
+        // The oneof enum lives in the message's *parent* module: drop the message
+        // leaf from `inner` and append the IR enum name (`<msg_snake>::<OneofPascal>`).
+        let inner: syn::Path = syn::parse_str("super::catalog::v1::StorageConfig").unwrap();
+        let path = oneof_enum_path(&inner, "storage_config::Provider");
+        assert_eq!(
+            path.to_string().replace(' ', ""),
+            "super::catalog::v1::storage_config::Provider"
+        );
+    }
+
+    #[test]
+    fn oneof_enum_path_handles_top_level_message() {
+        // A message at the crate root (single-segment `inner`) still resolves: the
+        // parent module is empty, so the enum name is the whole path.
+        let inner: syn::Path = syn::parse_str("Shape").unwrap();
+        let path = oneof_enum_path(&inner, "shape::Kind");
+        assert_eq!(path.to_string().replace(' ', ""), "shape::Kind");
     }
 
     #[test]

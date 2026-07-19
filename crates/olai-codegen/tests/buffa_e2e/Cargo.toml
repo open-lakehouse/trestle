@@ -10,6 +10,13 @@
 # Requires `protoc` on PATH (buffa-build invokes it). The proto sources (with
 # their google.api deps) are vendored under `proto/exported/` via `buf export`,
 # so no network/buf is needed at test time.
+# Standalone workspace: the root `Cargo.toml` `exclude` list keeps this out of the
+# main workspace, but that exclude is path-relative to the root manifest, so it
+# does not match when the repo is checked out under a nested path (e.g. a git
+# worktree). An empty `[workspace]` table makes the crate self-contained in any
+# checkout — cargo stops walking up and never resolves it into a parent workspace.
+[workspace]
+
 [package]
 name = "buffa-e2e"
 version = "0.0.0"
@@ -31,8 +38,10 @@ async-trait = "0.1"
 buffa = { version = "0.7", features = ["json"] }
 buffa-types = "0.7"
 futures = "0.3"
-pyo3 = { version = "0.26", optional = true }
-pythonize = { version = "0.26", optional = true }
+# pyo3 >= 0.28: the generated wrappers use `#[pyclass(..., from_py_object)]`,
+# opt-in only from 0.28 (see `generate_pyo3_impls`).
+pyo3 = { version = "0.28", optional = true }
+pythonize = { version = "0.28", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
