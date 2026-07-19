@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "convert_case",
  "glob",
@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http-wasm"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "futures",
  "reqwest",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "clap",
  "cliclack",
