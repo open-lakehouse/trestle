@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.6...olai-trestle-v0.0.7) - 2026-07-19
+
+### Added
+
+- dual transport and wasm token cache (#107)
+- alias and repair OpenAPI schema keys in enrich-openapi (#104)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.5...olai-trestle-v0.0.6) - 2026-07-14
 
 ### Added
