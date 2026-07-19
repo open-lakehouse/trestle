@@ -232,6 +232,11 @@ impl WasmClient {
     pub fn delete<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
         self.request(Method::DELETE, url)
     }
+
+    /// Starts a `HEAD` request to `url`.
+    pub fn head<U: IntoUrl>(&self, url: U) -> WasmRequestBuilder {
+        self.request(Method::HEAD, url)
+    }
 }
 
 /// A single in-flight request. Mirrors the slice of `olai_http::CloudRequestBuilder` that

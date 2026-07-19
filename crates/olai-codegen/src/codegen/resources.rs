@@ -310,7 +310,12 @@ pub(crate) fn generate_resource_enum(
         #object_conversions_impl
     };
 
-    // Generate the resource descriptor registry and Label impl (only when store integration is enabled)
+    // Generate the resource descriptor registry and `Label` impl (only when store
+    // integration is enabled). These depend on the resource-store crate and are
+    // each `#[cfg(feature = "store")]`-gated in the emitted output (see
+    // `generate_resource_registry`) — the generated models then compile without the
+    // store backend (e.g. on wasm) while the server (which enables `store`) gets the
+    // full registry, including the public `RESOURCE_DESCRIPTORS` static.
     let registry_impl = if config.generate_store_integration {
         generate_resource_registry(&resources, config, plan, metadata)
     } else {
@@ -533,22 +538,39 @@ fn build_object_conversions(
         });
     }
 
-    // Imports are only used by the conversion impls; emitting them when every resource was
-    // skipped (no IDENTIFIER field) would leave dead `use` statements behind.
+    // The `Object`/`ResourceName` conversions depend on the resource-store crate
+    // (via `crate::models::{object, resources}`), so gate each behind the `store`
+    // feature — this lets the generated models compile without the store backend
+    // (e.g. on wasm). Items stay at file scope (not nested in a module) so their
+    // `super::` paths keep resolving. `qualified_name()` is pure string formatting
+    // and stays ungated.
+    //
+    // Imports are only used by the conversion impls; emitting them when every
+    // resource was skipped (no IDENTIFIER field) would leave dead `use` statements.
     let imports = if conversion_impls.is_empty() {
         quote! {}
     } else {
         quote! {
+            #[cfg(feature = "store")]
             use crate::Error;
+            #[cfg(feature = "store")]
             use crate::models::object::Object;
+            #[cfg(feature = "store")]
             use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
         }
     };
 
+    let gated_conversions = conversion_impls.iter().map(|impl_block| {
+        quote! {
+            #[cfg(feature = "store")]
+            #impl_block
+        }
+    });
+
     Ok(quote! {
         #imports
 
-        #(#conversion_impls)*
+        #(#gated_conversions)*
 
         #(#qualified_name_impls)*
     })
@@ -931,8 +953,12 @@ fn generate_resource_registry(
         ];
     };
 
+    // Gate each item behind the `store` feature (the resource-store crate is not a
+    // wasm dependency), keeping `RESOURCE_DESCRIPTORS` a public item when enabled.
     quote! {
+        #[cfg(feature = "store")]
         #label_impl
+        #[cfg(feature = "store")]
         #registry
     }
 }
