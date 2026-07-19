@@ -225,6 +225,14 @@ pub struct RustClient {
     /// Fully-qualified custom transport type path; overrides `transport`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport_type_path: Option<String>,
+    /// Emit a dual-transport client: a `cfg`-gated `Transport` alias resolving to
+    /// `olai_http::CloudClient` on native and `olai_http_wasm::WasmClient` on
+    /// `wasm32`, so the same client crate builds for both targets. This is the
+    /// transport-alias half of WASM support *without* the `#[wasm_bindgen]` JS
+    /// bindings — those are still emitted only when a `node.wasm` output is
+    /// configured. Requires the `buffa` proto runtime.
+    #[serde(default)]
+    pub dual_transport: bool,
     /// Which wire protocol layer(s) the generated client speaks. Defaults to `["rest"]`. List both
     /// (`["rest", "connect"]`) to emit a REST client and a ConnectRPC client side by side.
     #[serde(default = "default_protocols")]

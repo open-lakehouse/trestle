@@ -62,6 +62,7 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+        dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
         output: CodeGenOutput {
@@ -180,6 +181,7 @@ fn wasm_bindings_and_dts_are_emitted() {
         // serde-native models + the browser transport are the intended pairing for wasm output.
         runtime: olai_codegen::Runtime::Buffa,
         transport_type_path: "olai_http_wasm::WasmClient".into(),
+        dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
         output: CodeGenOutput {
@@ -311,6 +313,46 @@ fn wasm_output_emits_dual_cfg_gated_transport() {
     assert!(
         client_src.contains("new_with_token") && client_src.contains("new_in_browser"),
         "expected native cloud ctors + the browser ctor"
+    );
+
+    // Every emitted client file must still parse as valid Rust.
+    for path in walk(&tmp.path().join("client"))
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+    {
+        let src = std::fs::read_to_string(&path).expect("read generated file");
+        syn::parse_file(&src)
+            .unwrap_or_else(|e| panic!("generated {} is invalid Rust: {e}", path.display()));
+    }
+}
+
+/// `dual_transport = true` (without any `output.wasm`) emits the same cfg-gated
+/// `CloudClient`/`WasmClient` `Transport` alias as WASM output does, but WITHOUT
+/// the `#[wasm_bindgen]` JS binding layer. This lets a project build one client
+/// crate for native + `wasm32` while keeping the crate free of a JS ABI.
+#[test]
+fn dual_transport_flag_emits_alias_without_wasm_bindings() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    // The wasm transport requires the buffa runtime; no `output.wasm` is set.
+    config.runtime = olai_codegen::Runtime::Buffa;
+    config.dual_transport = true;
+    assert!(config.output.wasm.is_none(), "no JS bindings output configured");
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+
+    // The cfg-gated dual alias is present…
+    assert!(
+        client_src.contains("cfg(target_arch = \"wasm32\")")
+            && client_src.contains("CloudClient")
+            && client_src.contains("WasmClient"),
+        "dual_transport must emit the cfg-gated CloudClient/WasmClient alias"
+    );
+    // …but NOT the wasm-bindgen JS layer.
+    assert!(
+        !client_src.contains("wasm_bindgen"),
+        "dual_transport alone must not emit #[wasm_bindgen] bindings"
     );
 
     // Every emitted client file must still parse as valid Rust.
@@ -568,6 +610,7 @@ fn node_ts_bindings_generated() {
         resource_store_crate_name: "olai_store".into(),
         runtime: olai_codegen::Runtime::Prost,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+        dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
         output: CodeGenOutput {

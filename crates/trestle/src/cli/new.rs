@@ -594,6 +594,7 @@ fn emit_project_config(
                     output: "crates/client/src".to_string(),
                     transport: Transport::Cloud,
                     transport_type_path: None,
+                    dual_transport: false,
                     protocols: vec![ClientProtocol::Rest],
                     connect_client_path: None,
                 }),

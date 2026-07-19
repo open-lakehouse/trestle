@@ -1106,6 +1106,7 @@ mod tests {
             resource_store_crate_name: "olai_store".into(),
             runtime: crate::Runtime::Prost,
             transport_type_path: crate::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+            dual_transport: false,
             client_protocols: crate::ClientProtocols::default(),
             connect_client_path: None,
             output: crate::codegen::CodeGenOutput {
