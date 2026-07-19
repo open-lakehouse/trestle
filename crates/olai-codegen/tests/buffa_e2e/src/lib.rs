@@ -186,4 +186,83 @@ mod tests {
             let _ = PyType::new::<PyWidgetSize>(py);
         });
     }
+
+    /// The PyO3 wrapper `#[new]` constructor must be *oneof-aware* (issue #99):
+    /// a message with a `oneof` exposes one optional keyword arg per variant, per-
+    /// variant getters, and per-variant setters. Setting one variant sets the
+    /// corresponding oneof on the real buffa model; the pyo3 methods are only
+    /// callable through the interpreter, so this drives them via Python — which
+    /// also proves the flattened kwargs reach `#[new]` and the getters round-trip.
+    ///
+    /// Exercises both the boxed-message variant path (buffa boxes every message
+    /// oneof variant, e.g. `Shape::Circle(Box<Circle>)`) and the scalar variant
+    /// path (`Shape::Label(String)`) against real buffa types.
+    #[cfg(feature = "python")]
+    #[test]
+    fn buffa_oneof_wraps_as_flattened_pyclass_ctor() {
+        use crate::models::demo::v1::shape::Shape as ShapeOneof;
+        use crate::models::pyo3_impls::{PyCircle, PyShape, PySquare};
+        use pyo3::prelude::*;
+        use pyo3::types::{PyAnyMethods, PyType};
+
+        Python::initialize();
+        Python::attach(|py| {
+            let shape_cls = PyType::new::<PyShape>(py);
+
+            // Construct via the flattened message-variant kwarg: `Shape(circle=...)`.
+            let circle_obj = PyCircle::from(Circle { radius: 2.5, ..Default::default() })
+                .into_pyobject(py)
+                .unwrap();
+            let kwargs = pyo3::types::PyDict::new(py);
+            kwargs.set_item("circle", circle_obj).unwrap();
+            let shape = shape_cls.call((), Some(&kwargs)).unwrap();
+
+            // The active variant reads back through its getter; the others are `None`.
+            assert!(!shape.getattr("circle").unwrap().is_none(), "circle is active");
+            assert!(shape.getattr("square").unwrap().is_none(), "square inactive");
+            assert!(shape.getattr("label").unwrap().is_none(), "label inactive");
+            let circle_back: PyCircle = shape.getattr("circle").unwrap().extract().unwrap();
+            assert_eq!(Circle::from(circle_back).radius, 2.5);
+
+            // The bare buffa model carries the *boxed* message variant.
+            let wrapper: PyShape = shape.extract().unwrap();
+            let bare: crate::models::demo::v1::Shape = wrapper.into();
+            match bare.shape {
+                Some(ShapeOneof::Circle(c)) => assert_eq!(c.radius, 2.5),
+                other => panic!("expected boxed Circle variant, got {other:?}"),
+            }
+
+            // The scalar variant flattens as a plain keyword arg.
+            let labeled_kwargs = pyo3::types::PyDict::new(py);
+            labeled_kwargs.set_item("label", "hexagon").unwrap();
+            let labeled = shape_cls.call((), Some(&labeled_kwargs)).unwrap();
+            let label: String = labeled.getattr("label").unwrap().extract().unwrap();
+            assert_eq!(label, "hexagon");
+            assert!(labeled.getattr("circle").unwrap().is_none());
+
+            // A later variant wins when more than one kwarg is supplied (declaration
+            // order: circle, square, label — so `square` overrides `circle`).
+            let square_obj = PySquare::from(Square { side: 3.0, ..Default::default() })
+                .into_pyobject(py)
+                .unwrap();
+            let both_kwargs = pyo3::types::PyDict::new(py);
+            both_kwargs
+                .set_item("circle", PyCircle::from(Circle::default()).into_pyobject(py).unwrap())
+                .unwrap();
+            both_kwargs.set_item("square", square_obj).unwrap();
+            let both = shape_cls.call((), Some(&both_kwargs)).unwrap();
+            assert!(both.getattr("circle").unwrap().is_none(), "square overrides circle");
+            let sq: PySquare = both.getattr("square").unwrap().extract().unwrap();
+            assert_eq!(Square::from(sq).side, 3.0);
+
+            // Per-variant setter round-trips through the oneof, and clearing the
+            // *active* variant clears the oneof.
+            let m = shape_cls.call((), None).unwrap();
+            m.setattr("label", "octagon").unwrap();
+            let set_label: String = m.getattr("label").unwrap().extract().unwrap();
+            assert_eq!(set_label, "octagon");
+            m.setattr("label", py.None()).unwrap();
+            assert!(m.getattr("label").unwrap().is_none());
+        });
+    }
 }

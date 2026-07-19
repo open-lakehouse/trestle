@@ -927,8 +927,85 @@ pub struct PyStorageConfig(pub super::catalog::v1::StorageConfig);
 #[::pyo3::pymethods]
 impl PyStorageConfig {
     #[new]
-    fn new() -> Self {
-        Self(::core::default::Default::default())
+    #[pyo3(signature = (s3 = None, azure = None))]
+    fn new(
+        s3: ::core::option::Option<PyS3Config>,
+        azure: ::core::option::Option<PyAzureConfig>,
+    ) -> Self {
+        let mut inner = <super::catalog::v1::StorageConfig as ::core::default::Default>::default();
+        if let ::core::option::Option::Some(value) = s3 {
+            inner.provider = ::core::option::Option::Some(
+                super::catalog::v1::storage_config::Provider::S3(
+                    ::std::boxed::Box::new(value.into()),
+                ),
+            );
+        }
+        if let ::core::option::Option::Some(value) = azure {
+            inner.provider = ::core::option::Option::Some(
+                super::catalog::v1::storage_config::Provider::Azure(
+                    ::std::boxed::Box::new(value.into()),
+                ),
+            );
+        }
+        Self(inner)
+    }
+    #[getter]
+    fn s3(&self) -> ::core::option::Option<PyS3Config> {
+        match &self.0.provider {
+            ::core::option::Option::Some(
+                super::catalog::v1::storage_config::Provider::S3(value),
+            ) => ::core::option::Option::Some(<PyS3Config>::from((**value).clone())),
+            _ => ::core::option::Option::None,
+        }
+    }
+    #[getter]
+    fn azure(&self) -> ::core::option::Option<PyAzureConfig> {
+        match &self.0.provider {
+            ::core::option::Option::Some(
+                super::catalog::v1::storage_config::Provider::Azure(value),
+            ) => ::core::option::Option::Some(<PyAzureConfig>::from((**value).clone())),
+            _ => ::core::option::Option::None,
+        }
+    }
+    #[setter(s3)]
+    fn set_s3(&mut self, value: ::core::option::Option<PyS3Config>) {
+        match value {
+            ::core::option::Option::Some(value) => {
+                self.0.provider = ::core::option::Option::Some(
+                    super::catalog::v1::storage_config::Provider::S3(
+                        ::std::boxed::Box::new(value.into()),
+                    ),
+                );
+            }
+            ::core::option::Option::None => {
+                if ::core::matches!(
+                    self.0. provider,
+                    ::core::option::Option::Some(super::catalog::v1::storage_config::Provider::S3(_))
+                ) {
+                    self.0.provider = ::core::option::Option::None;
+                }
+            }
+        }
+    }
+    #[setter(azure)]
+    fn set_azure(&mut self, value: ::core::option::Option<PyAzureConfig>) {
+        match value {
+            ::core::option::Option::Some(value) => {
+                self.0.provider = ::core::option::Option::Some(
+                    super::catalog::v1::storage_config::Provider::Azure(
+                        ::std::boxed::Box::new(value.into()),
+                    ),
+                );
+            }
+            ::core::option::Option::None => {
+                if ::core::matches!(
+                    self.0. provider,
+                    ::core::option::Option::Some(super::catalog::v1::storage_config::Provider::Azure(_))
+                ) {
+                    self.0.provider = ::core::option::Option::None;
+                }
+            }
+        }
     }
     fn __repr__(&self) -> ::std::string::String {
         ::std::format!("{:?}", self.0)
