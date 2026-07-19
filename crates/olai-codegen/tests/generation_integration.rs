@@ -337,7 +337,10 @@ fn dual_transport_flag_emits_alias_without_wasm_bindings() {
     // The wasm transport requires the buffa runtime; no `output.wasm` is set.
     config.runtime = olai_codegen::Runtime::Buffa;
     config.dual_transport = true;
-    assert!(config.output.wasm.is_none(), "no JS bindings output configured");
+    assert!(
+        config.output.wasm.is_none(),
+        "no JS bindings output configured"
+    );
     generate_code(&metadata(), &config).expect("generation succeeds");
 
     let client_src = read_all(&tmp.path().join("client"));
