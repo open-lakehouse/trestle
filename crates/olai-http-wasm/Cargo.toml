@@ -16,8 +16,16 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # workspace dependencies (in alphabetical order)
+# `futures::lock::Mutex` backs the token cache — an async mutex with no tokio/std
+# dependency, so it works on wasm32 (single-threaded) and native alike.
+futures = { workspace = true }
 serde = { workspace = true }
 url = { workspace = true }
+
+# `web-time` is a drop-in `std::time::Instant`/`Duration` that works on
+# `wasm32-unknown-unknown` (where `std::time::Instant::now()` panics). Used by the
+# token cache to compute expiry. On native it transparently re-exports `std::time`.
+web-time = { version = "1.1.0" }
 
 # crates.io dependencies (in alphabetical order)
 # NOTE: a wasm-specific reqwest, NOT the workspace one. The workspace reqwest enables

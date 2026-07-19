@@ -1633,10 +1633,12 @@ dependencies = [
 name = "olai-http-wasm"
 version = "0.0.4"
 dependencies = [
+ "futures",
  "reqwest",
  "serde",
  "url",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]

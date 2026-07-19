@@ -63,6 +63,13 @@ use serde::Serialize;
 /// stay pinned to the same wasm-flavored reqwest as the transport.
 pub use reqwest;
 
+mod token;
+/// A wasm-safe temporary-token cache, API-compatible with `olai_http::TokenCache`.
+///
+/// The wasm counterpart of `olai_http::{TokenCache, TemporaryToken}` (which are
+/// native-only), so a consumer can select the cache by target and share call sites.
+pub use token::{TemporaryToken, TokenCache};
+
 /// A cheaply-cloneable, per-request header provider.
 ///
 /// Installed via [`WasmClient::with_auth`] and invoked just before each [`WasmRequestBuilder::send`],
