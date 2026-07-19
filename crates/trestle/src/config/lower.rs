@@ -119,6 +119,7 @@ impl GenerateConfig {
                 .unwrap_or_else(|| "olai_store".to_string()),
             runtime: self.proto_lib.to_runtime(),
             transport_type_path,
+            dual_transport: self.clients.rust.as_ref().is_some_and(|r| r.dual_transport),
             client_protocols: self.client_protocols(),
             connect_client_path: self
                 .clients

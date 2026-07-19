@@ -195,6 +195,7 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
                 output: "crates/client/src".to_string(),
                 transport,
                 transport_type_path: None,
+                dual_transport: false,
                 protocols: vec![crate::config::ClientProtocol::Rest],
                 connect_client_path: None,
             });
@@ -285,6 +286,7 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
             output: "crates/client/src/gen".to_string(),
             transport: Transport::Cloud,
             transport_type_path: None,
+            dual_transport: false,
             protocols: vec![crate::config::ClientProtocol::Rest],
             connect_client_path: None,
         });

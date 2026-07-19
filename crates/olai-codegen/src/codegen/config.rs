@@ -303,6 +303,15 @@ pub struct CodeGenConfig {
     /// dependency and lets the browser attach the session.
     pub transport_type_path: String,
 
+    /// Force dual-transport client emission (the `cfg`-gated `CloudClient`/`WasmClient`
+    /// `Transport` alias) even when no WASM `#[wasm_bindgen]` bindings output is
+    /// configured. See [`dual_transport`](Self::dual_transport).
+    ///
+    /// Defaults to `false`. Setting `output.wasm` also turns dual-transport on;
+    /// this flag exists so a project can build the same client crate for native
+    /// and `wasm32` *without* pulling in the JS binding layer.
+    pub dual_transport: bool,
+
     /// Which client protocol layer(s) to emit. See [`ClientProtocols`].
     ///
     /// Defaults to REST only, so existing HTTP/JSON output is unchanged.
@@ -338,14 +347,19 @@ impl CodeGenConfig {
     /// compile time by `cfg(target_arch = "wasm32")` — `CloudClient` for native
     /// targets, `olai_http_wasm::WasmClient` for the browser.
     ///
-    /// Enabled when WASM bindings output is requested (`output.wasm`): a project
-    /// that wants a browser client needs the same client crate to build both ways
+    /// Enabled when WASM bindings output is requested (`output.wasm`), or when
+    /// [`dual_transport`](Self::dual_transport) is set explicitly: a project that
+    /// wants a browser client needs the same client crate to build both ways
     /// (native for server-side/tests, wasm32 for the frontend). Native-only
-    /// projects leave `output.wasm` unset and keep the single
+    /// projects leave both unset and keep the single
     /// [`transport_type_path`](Self::transport_type_path) transport with no WASM
     /// dependency.
+    ///
+    /// The explicit flag decouples the transport alias from the JS binding layer:
+    /// `output.wasm` additionally emits `#[wasm_bindgen]` bindings, whereas
+    /// `dual_transport = true` alone emits only the `cfg`-gated `Transport` alias.
     pub fn dual_transport(&self) -> bool {
-        self.output.wasm.is_some()
+        self.output.wasm.is_some() || self.dual_transport
     }
 
     /// Validate this config without running code generation.

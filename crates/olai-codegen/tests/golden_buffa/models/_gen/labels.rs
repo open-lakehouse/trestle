@@ -83,9 +83,13 @@ impl TryFrom<Resource> for super::schemas::v1::Schema {
         }
     }
 }
+#[cfg(feature = "store")]
 use crate::Error;
+#[cfg(feature = "store")]
 use crate::models::object::Object;
+#[cfg(feature = "store")]
 use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
+#[cfg(feature = "store")]
 impl TryFrom<Object> for super::catalog::v1::Catalog {
     type Error = Error;
     fn try_from(object: Object) -> Result<Self, Self::Error> {
@@ -97,6 +101,7 @@ impl TryFrom<Object> for super::catalog::v1::Catalog {
         Ok(res)
     }
 }
+#[cfg(feature = "store")]
 impl TryFrom<super::catalog::v1::Catalog> for Object {
     type Error = Error;
     fn try_from(obj: super::catalog::v1::Catalog) -> Result<Self, Self::Error> {
@@ -115,6 +120,7 @@ impl TryFrom<super::catalog::v1::Catalog> for Object {
         })
     }
 }
+#[cfg(feature = "store")]
 impl ResourceExt for super::catalog::v1::Catalog {
     fn resource_name(&self) -> ResourceName {
         ResourceName::new([&self.name])
@@ -129,6 +135,7 @@ impl ResourceExt for super::catalog::v1::Catalog {
         (ObjectLabel::Catalog).to_ident(self.resource_ref())
     }
 }
+#[cfg(feature = "store")]
 impl TryFrom<Object> for super::schemas::v1::Schema {
     type Error = Error;
     fn try_from(object: Object) -> Result<Self, Self::Error> {
@@ -141,6 +148,7 @@ impl TryFrom<Object> for super::schemas::v1::Schema {
         Ok(res)
     }
 }
+#[cfg(feature = "store")]
 impl TryFrom<super::schemas::v1::Schema> for Object {
     type Error = Error;
     fn try_from(obj: super::schemas::v1::Schema) -> Result<Self, Self::Error> {
@@ -162,6 +170,7 @@ impl TryFrom<super::schemas::v1::Schema> for Object {
         })
     }
 }
+#[cfg(feature = "store")]
 impl ResourceExt for super::schemas::v1::Schema {
     fn resource_name(&self) -> ResourceName {
         ResourceName::new([&self.catalog_name, &self.name])
@@ -188,11 +197,13 @@ impl super::schemas::v1::Schema {
         format!("{}.{}", self.catalog_name, self.name)
     }
 }
+#[cfg(feature = "store")]
 impl ::olai_store::Label for ObjectLabel {
     fn as_str(&self) -> &str {
         self.as_ref()
     }
 }
+#[cfg(feature = "store")]
 /// Static resource type descriptors derived from proto annotations.
 ///
 /// Each entry describes a resource type's fields (with roles: data, identifier,
