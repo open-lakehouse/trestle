@@ -81,13 +81,16 @@ fn collect_files(root: &Path) -> BTreeSet<String> {
 /// golden comparison still catches topology and rendering changes.
 fn redact_secrets(mut text: String) -> String {
     for scheme in ["postgresql://", "postgres://"] {
-        while let Some(start) = text.find(scheme) {
+        let mut search_from = 0;
+        while let Some(offset) = text[search_from..].find(scheme) {
+            let start = search_from + offset;
             let credentials = start + scheme.len();
             let Some(at_offset) = text[credentials..].find('@') else {
                 break;
             };
             let at = credentials + at_offset;
             text.replace_range(credentials..at, "<redacted>");
+            search_from = credentials + "<redacted>@".len();
         }
     }
 
@@ -101,7 +104,7 @@ fn redact_secrets(mut text: String) -> String {
         text.replace_range(value_start..value_end, "<redacted>");
         search_from = value_start + "<redacted>".len();
     }
-    text
+    text.trim_end_matches('\n').to_string()
 }
 
 /// Byte-compare every file under `got` against `want`.
@@ -116,6 +119,10 @@ fn assert_tree_matches(got: &Path, want: &Path, label: &str) {
         let got_bytes = fs::read(got.join(rel)).unwrap_or_else(|_| panic!("read {rel}"));
         let want_bytes = fs::read(want.join(rel)).unwrap_or_else(|_| panic!("read golden {rel}"));
         let got_bytes = String::from_utf8(got_bytes)
+            .map(redact_secrets)
+            .map(String::into_bytes)
+            .unwrap_or_else(|bytes| bytes.into_bytes());
+        let want_bytes = String::from_utf8(want_bytes)
             .map(redact_secrets)
             .map(String::into_bytes)
             .unwrap_or_else(|bytes| bytes.into_bytes());
