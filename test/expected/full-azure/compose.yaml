@@ -1,0 +1,31 @@
+# Top-level compose entrypoint. Every backing service is pulled in via `include:`.
+# The file list is owned by the planner, not edited by hand.
+name: full-azure
+
+configs:
+  envoy_config:
+    file: ./modules/envoy/envoy.yaml
+  headwaters_config:
+    file: ./modules/headwaters/config.toml
+  postgres_init:
+    file: ./modules/postgres/init-databases.sh
+
+secrets:
+  postgres_password:
+    file: ./modules/postgres/secrets/postgres_password
+
+include:
+  - path: ./modules/azurite/compose.yaml
+    project_directory: .
+  - path: ./modules/envoy/compose.yaml
+    project_directory: .
+  - path: ./modules/jaeger/compose.yaml
+    project_directory: .
+  - path: ./modules/postgres/compose.yaml
+    project_directory: .
+  - path: ./modules/unity-catalog/compose.yaml
+    project_directory: .
+  - path: ./modules/mlflow/compose.yaml
+    project_directory: .
+  - path: ./modules/headwaters/compose.yaml
+    project_directory: .

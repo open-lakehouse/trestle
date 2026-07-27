@@ -1,12 +1,13 @@
 # Postgres + pgweb — contributed by the `postgres` module.
 services:
   db:
-    image: postgres:16
+    image: {{ knobs.image }}
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+    env_file:
+      - path: ./modules/postgres/.env/db.env
+        format: raw
+    secrets:
+      - postgres_password
     expose:
       - "5432"
     volumes:
@@ -21,13 +22,14 @@ services:
       retries: 5
 
   pgweb:
-    image: sosedoff/pgweb:latest
+    image: {{ knobs.pgweb_image }}
     restart: unless-stopped
     profiles: [svc, full]
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres?sslmode=disable
+    env_file:
+      - path: ./modules/postgres/.env/pgweb.env
+        format: raw
     expose:
       - "8081"

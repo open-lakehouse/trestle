@@ -47,6 +47,7 @@
 use std::sync::Arc;
 
 use super::Catalog;
+use crate::catalog::images;
 use crate::catalog::module::{
     ConnectionBinding, DataModule, Knob, KnobKind, Module, ModuleId, Provides, RenderSpec,
     ResolvedKnobs, ResourceDemand,
@@ -147,6 +148,52 @@ fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
     }
 }
 
+/// A generated credential-bearing file loaded through Compose `env_file`.
+fn sensitive_file(path: &str, contents: &str) -> RenderFile {
+    RenderFile {
+        path: path.into(),
+        contents: contents.into(),
+        alias: None,
+        sensitive: true,
+        secret_alias: None,
+        at_root: false,
+        preserve: false,
+    }
+}
+
+/// A generated credential-bearing file declared as a top-level Compose secret.
+fn secret_file(path: &str, alias: &str, contents: &str) -> RenderFile {
+    RenderFile {
+        path: path.into(),
+        contents: contents.into(),
+        alias: None,
+        sensitive: true,
+        secret_alias: Some(alias.into()),
+        at_root: false,
+        preserve: false,
+    }
+}
+
+/// Helper: a string knob for a container image reference, defaulting to `default`.
+///
+/// `key` is the public snake_case identifier (typically `"image"` or `"init_image"`);
+/// `legacy` is the old SCREAMING_SNAKE env-var-style name accepted as an override alias.
+fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
+    Knob {
+        key: key.into(),
+        title: Some(title.into()),
+        kind: KnobKind::String,
+        default: Some(default.into()),
+        required: false,
+        help: Some(
+            "Container image reference (repository:tag or digest). Override to pin or \
+             test a different release."
+                .into(),
+        ),
+        aliases: vec![legacy.into()],
+    }
+}
+
 /// The gateway knob that fronts API/UI routes with Authelia single-sign-on. When `true` the
 /// planner pulls in the bundled [`authelia`] module, emits its upstream cluster, and wires an
 /// `ext_authz` HTTP filter onto the shared listener (see [`crate::render_envoy`]). Resource
@@ -162,9 +209,9 @@ pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
 /// is a planner-emitted artifact, not part of this fragment (which only declares the
 /// container that mounts it).
 ///
-/// Exposes one knob, [`ENVOY_AUTH`]: turning it on fronts every API and UI route with
-/// Authelia forward-auth. The knob's effect is realized in the planner and the Envoy
-/// renderer (it pulls in the `authelia` module and emits the `ext_authz` filter), not in
+/// Exposes one behavioural knob, [`ENVOY_AUTH`] (`auth`): turning it on fronts every API and
+/// UI route with Authelia forward-auth. The knob's effect is realized in the planner and the
+/// Envoy renderer (it pulls in the `authelia` module and emits the `ext_authz` filter), not in
 /// this module's own static services — the gateway's listeners are computed from *other*
 /// modules' endpoints, so there is nothing knob-dependent in its `ServiceSpec`.
 fn envoy() -> Arc<dyn Module> {
@@ -188,18 +235,22 @@ fn envoy() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![Knob {
-            key: ENVOY_AUTH.into(),
-            title: Some("Require authentication".into()),
-            kind: KnobKind::Bool,
-            default: Some("false".into()),
-            required: false,
-            help: Some(
-                "Front API and UI routes with Authelia single-sign-on (forward-auth). \
-                 Resource backends (object stores, databases) are never gated."
-                    .into(),
-            ),
-        }],
+        knobs: vec![
+            Knob {
+                key: ENVOY_AUTH.into(),
+                title: Some("Require authentication".into()),
+                kind: KnobKind::Bool,
+                default: Some("false".into()),
+                required: false,
+                help: Some(
+                    "Front API and UI routes with Authelia single-sign-on (forward-auth). \
+                     Resource backends (object stores, databases) are never gated."
+                        .into(),
+                ),
+                aliases: vec![crate::plan::ENVOY_AUTH_KNOB_LEGACY.into()],
+            },
+            image_knob("image", "Envoy image", images::ENVOY, "ENVOY_IMAGE"),
+        ],
         render: template(include_str!("../../templates/gateway/compose.yaml.jinja")),
     })
 }
@@ -250,7 +301,12 @@ fn authelia() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![],
+        knobs: vec![image_knob(
+            "image",
+            "Authelia image",
+            images::AUTHELIA,
+            "AUTHELIA_IMAGE",
+        )],
         render: template_with_files(
             include_str!("../../templates/gateway/authelia.compose.yaml.jinja"),
             vec![
@@ -261,13 +317,42 @@ fn authelia() -> Arc<dyn Module> {
                     )
                     .into(),
                     alias: Some("authelia_config".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: false,
+                    preserve: false,
                 },
+                // Operator-facing: lives next to `compose.yaml` so users can find and edit
+                // local accounts. Seeded once (`preserve`) so later renders leave edits alone.
                 RenderFile {
                     path: "users.yml".into(),
                     contents: include_str!("../../templates/gateway/authelia.users.yml.jinja")
                         .into(),
                     alias: Some("authelia_users".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: true,
+                    preserve: true,
                 },
+                sensitive_file(
+                    ".env/authelia.env",
+                    include_str!("../../templates/gateway/authelia.env.jinja"),
+                ),
+                secret_file(
+                    "secrets/session_secret",
+                    "authelia_session_secret",
+                    "insecure_session_secret_change_me\n",
+                ),
+                secret_file(
+                    "secrets/storage_encryption_key",
+                    "authelia_storage_encryption_key",
+                    "insecure_storage_encryption_key_change_me\n",
+                ),
+                secret_file(
+                    "secrets/jwt_secret",
+                    "authelia_jwt_secret",
+                    "insecure_jwt_secret_change_me\n",
+                ),
             ],
         ),
     })
@@ -325,18 +410,47 @@ fn postgres() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![],
+        knobs: vec![
+            image_knob(
+                "image",
+                "Postgres image",
+                images::POSTGRES,
+                "POSTGRES_IMAGE",
+            ),
+            image_knob("pgweb_image", "pgweb image", images::PGWEB, "PGWEB_IMAGE"),
+        ],
         render: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
-            vec![RenderFile {
-                // Rendered from the databases the planner hands the provider via
-                // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
-                // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
-                path: "init-databases.sh".into(),
-                contents: include_str!("../../templates/modules/postgres/init-databases.sh.jinja")
+            vec![
+                RenderFile {
+                    // Rendered from the databases the planner hands the provider via
+                    // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
+                    // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
+                    path: "init-databases.sh".into(),
+                    contents: include_str!(
+                        "../../templates/modules/postgres/init-databases.sh.jinja"
+                    )
                     .into(),
-                alias: Some("postgres_init".into()),
-            }],
+                    alias: Some("postgres_init".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: false,
+                    preserve: false,
+                },
+                sensitive_file(
+                    ".env/db.env",
+                    include_str!("../../templates/modules/postgres/db.env.jinja"),
+                ),
+                sensitive_file(
+                    ".env/pgweb.env",
+                    include_str!("../../templates/modules/postgres/pgweb.env.jinja"),
+                ),
+                secret_file(
+                    "secrets/postgres_password",
+                    "postgres_password",
+                    "postgres\n",
+                ),
+            ],
         ),
     })
 }
@@ -396,10 +510,27 @@ fn seaweedfs() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![],
-        render: template(include_str!(
-            "../../templates/modules/seaweedfs/compose.yaml.jinja"
-        )),
+        knobs: vec![
+            image_knob(
+                "image",
+                "SeaweedFS image",
+                images::SEAWEEDFS,
+                "SEAWEEDFS_IMAGE",
+            ),
+            image_knob(
+                "init_image",
+                "SeaweedFS init image",
+                images::SEAWEEDFS_INIT,
+                "SEAWEEDFS_INIT_IMAGE",
+            ),
+        ],
+        render: template_with_files(
+            include_str!("../../templates/modules/seaweedfs/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/seaweedfs-init.env",
+                include_str!("../../templates/modules/seaweedfs/init.env.jinja"),
+            )],
+        ),
     })
 }
 
@@ -461,14 +592,26 @@ fn azurite() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![],
-        render: template(include_str!(
-            "../../templates/modules/azurite/compose.yaml.jinja"
-        )),
+        knobs: vec![
+            image_knob("image", "Azurite image", images::AZURITE, "AZURITE_IMAGE"),
+            image_knob(
+                "init_image",
+                "Azurite init image",
+                images::AZURITE_INIT,
+                "AZURITE_INIT_IMAGE",
+            ),
+        ],
+        render: template_with_files(
+            include_str!("../../templates/modules/azurite/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/azurite-init.env",
+                include_str!("../../templates/modules/azurite/init.env.jinja"),
+            )],
+        ),
     })
 }
 
-/// `mlflow` — experiment tracking. Fronts three ways behind the gateway:
+/// `mlflow` — experiment tracking.
 /// the Databricks-shaped tracking API, the OTel ingest path, and the UI. It serves
 /// itself under `/mlflow`, so the tracking API rewrites under that base; the OTel path
 /// is the override exception (passes through unchanged).
@@ -544,14 +687,23 @@ fn mlflow() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![],
-        render: template(include_str!(
-            "../../templates/modules/mlflow/compose.yaml.jinja"
-        )),
+        knobs: vec![image_knob(
+            "image",
+            "MLflow image",
+            images::MLFLOW,
+            "MLFLOW_IMAGE",
+        )],
+        render: template_with_files(
+            include_str!("../../templates/modules/mlflow/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/mlflow.env",
+                include_str!("../../templates/modules/mlflow/mlflow.env.jinja"),
+            )],
+        ),
     })
 }
 
-/// `unity-catalog` — the data catalog. Its REST API serves the
+/// `unity-catalog` — the data catalog.
 /// Databricks-shaped path at root, so `/api/2.1/unity-catalog` fronts with no rewrite;
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
@@ -604,10 +756,19 @@ fn unity_catalog() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![],
-        render: template(include_str!(
-            "../../templates/modules/unity-catalog/compose.yaml.jinja"
-        )),
+        knobs: vec![image_knob(
+            "image",
+            "Unity Catalog image",
+            images::UNITY_CATALOG,
+            "UC_IMAGE",
+        )],
+        render: template_with_files(
+            include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/unitycatalog.env",
+                include_str!("../../templates/modules/unity-catalog/unitycatalog.env.jinja"),
+            )],
+        ),
     })
 }
 
@@ -641,7 +802,12 @@ fn jaeger() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![],
+        knobs: vec![image_knob(
+            "image",
+            "Jaeger image",
+            images::JAEGER,
+            "JAEGER_IMAGE",
+        )],
         render: template(include_str!(
             "../../templates/modules/jaeger/compose.yaml.jinja"
         )),
@@ -649,7 +815,8 @@ fn jaeger() -> Arc<dyn Module> {
 }
 
 /// The knob key gating Headwaters' bundled lineage UI.
-const HEADWATERS_SERVE_UI: &str = "HEADWATERS_SERVE_UI";
+const HEADWATERS_SERVE_UI: &str = "serve_ui";
+const HEADWATERS_SERVE_UI_LEGACY: &str = "HEADWATERS_SERVE_UI";
 
 /// Headwaters' baked-in, Databricks-style OpenLineage REST API path — a server constant the
 /// planner must know to match the API route at the gateway (analogous to Unity Catalog's
@@ -707,18 +874,27 @@ impl Headwaters {
             // lineage UI. The value lands in the module's `InjectedEnv` under
             // `HEADWATERS_SERVE_UI` (the generated `config.toml` reads it as `ui.serve`), and
             // it also drives `services()`'s route choice below.
-            knobs: vec![Knob {
-                key: HEADWATERS_SERVE_UI.into(),
-                title: Some("Serve the lineage UI".into()),
-                kind: KnobKind::Bool,
-                default: Some("true".into()),
-                required: false,
-                help: Some(
-                    "Serve the bundled lineage web UI. Turn off to run the service API-only \
-                     (e.g. when embedding a custom UI built on the shipped components)."
-                        .into(),
+            knobs: vec![
+                Knob {
+                    key: HEADWATERS_SERVE_UI.into(),
+                    title: Some("Serve the lineage UI".into()),
+                    kind: KnobKind::Bool,
+                    default: Some("true".into()),
+                    required: false,
+                    help: Some(
+                        "Serve the bundled lineage web UI. Turn off to run the service API-only \
+                         (e.g. when embedding a custom UI built on the shipped components)."
+                            .into(),
+                    ),
+                    aliases: vec![HEADWATERS_SERVE_UI_LEGACY.into()],
+                },
+                image_knob(
+                    "image",
+                    "Headwaters image",
+                    images::HEADWATERS,
+                    "HEADWATERS_IMAGE",
                 ),
-            }],
+            ],
             provides: Provides::default(),
             // The service config is rendered to a mounted `config.toml` (so an environment's
             // effective Headwaters config is inspectable on disk) rather than threaded as
@@ -726,12 +902,28 @@ impl Headwaters {
             // over the file so the secret never lands in the checked-in config.
             render: template_with_files(
                 include_str!("../../templates/modules/headwaters/compose.yaml.jinja"),
-                vec![RenderFile {
-                    path: "config.toml".into(),
-                    contents: include_str!("../../templates/modules/headwaters/config.toml.jinja")
+                vec![
+                    RenderFile {
+                        path: "config.toml".into(),
+                        contents: include_str!(
+                            "../../templates/modules/headwaters/config.toml.jinja"
+                        )
                         .into(),
-                    alias: Some("headwaters_config".into()),
-                }],
+                        alias: Some("headwaters_config".into()),
+                        sensitive: false,
+                        secret_alias: None,
+                        at_root: false,
+                        preserve: false,
+                    },
+                    sensitive_file(
+                        ".env/headwaters-migrate.env",
+                        include_str!("../../templates/modules/headwaters/database.env.jinja"),
+                    ),
+                    sensitive_file(
+                        ".env/headwaters.env",
+                        include_str!("../../templates/modules/headwaters/database.env.jinja"),
+                    ),
+                ],
             ),
         }
     }

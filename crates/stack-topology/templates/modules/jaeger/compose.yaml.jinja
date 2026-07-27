@@ -1,7 +1,7 @@
 # Jaeger tracing
 services:
   jaeger:
-    image: cr.jaegertracing.io/jaegertracing/jaeger:2.14.1
+    image: {{ knobs.image }}
     restart: unless-stopped
     command: ["--set=extensions.jaeger_query.base_path=/jaeger"]
     expose:

@@ -231,12 +231,14 @@ pub enum KnobKind {
 
 /// One user-tunable configuration value a module exposes.
 ///
-/// A knob's [`key`](Knob::key) is the [`InjectedEnv`] variable name its value lands
-/// under (`${KEY}`), so the module's fragment and mounted files consume it through
-/// the one uniform substitution mechanism. The remaining fields are UI metadata.
+/// A knob's [`key`](Knob::key) is the public identifier used in `env.toml`,
+/// `--set module.key=value`, and templates as `{{ knobs.key }}`. Prefer
+/// `snake_case` (e.g. `"auth"`, `"image"`, `"serve_ui"`). [`aliases`](Knob::aliases)
+/// accept older spellings (e.g. legacy `SCREAMING_SNAKE_CASE` env-var names) when
+/// resolving overrides so existing manifests keep working.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Knob {
-    /// The injected-env variable name this knob feeds (e.g. `"MLFLOW_PORT"`).
+    /// The public knob identifier (e.g. `"auth"`, `"image"`).
     pub key: String,
     /// A short human-readable title for a UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,6 +255,10 @@ pub struct Knob {
     /// Optional longer help text for a UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    /// Alternate override keys accepted when resolving a selection (legacy names).
+    /// The canonical [`key`](Knob::key) always wins if both are present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 /// How a module produces its [`RenderOutput`]: a MiniJinja template the crate renders
@@ -303,6 +309,14 @@ impl RenderSpec {
                             .as_deref()
                             .map(|a| render_template(&mut env, a, ctx))
                             .transpose()?,
+                        sensitive: f.sensitive,
+                        secret_alias: f
+                            .secret_alias
+                            .as_deref()
+                            .map(|a| render_template(&mut env, a, ctx))
+                            .transpose()?,
+                        at_root: f.at_root,
+                        preserve: f.preserve,
                     })
                 })
                 .collect::<Result<_, RenderError>>()?,
@@ -368,21 +382,27 @@ pub struct DepGate {
     pub condition: DependsCondition,
 }
 
-/// The context a module's render reads: the planner-decided [`InjectedEnv`], the typed
-/// [`Connection`](crate::Connection)s resolved for the module's demands (grouped by role),
-/// and the resolved [`DepGate`]s its `depends_on` block should wait on.
+/// The context a module's render reads: the planner-decided [`InjectedEnv`], the module's
+/// resolved [`knobs`](ResolvedKnobs), the typed [`Connection`](crate::Connection)s for the
+/// module's demands (grouped by role), and the resolved [`DepGate`]s its `depends_on` block
+/// should wait on.
 ///
 /// A [`RenderSpec`] render gets the whole context as MiniJinja globals:
-/// `env` (a `{KEY: value}` map, so `{{ env.UC_DATABASE_URL }}` works), `connections` (a
+/// `env` (planner injections such as `DATA_ROOT` / `BASE_PATH`), `knobs` (user-tunable
+/// config — e.g. `{{ knobs.image }}`, `{{ knobs.auth }}`), `connections` (a
 /// `{role: [connection, …]}` map a template can branch on — e.g.
-/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`), and
+/// `{% set obj = connections.object_store.0 %}{% if obj.credential.flavour == "s3" %}`),
 /// `dependencies` (the `[{service, condition}, …]` list a template iterates to write its
-/// `depends_on` block — see [`DepGate`]); and `objects` (the resource *names* this module's
+/// `depends_on` block — see [`DepGate`]), and `objects` (the resource *names* this module's
 /// own role provisions, for a provider's init block to iterate).
 #[derive(Clone, Debug, Serialize)]
 pub struct RenderCtx<'a> {
-    /// The planner-decided environment-variable substitutions.
+    /// The planner-decided environment-variable substitutions (`DATA_ROOT`, `BASE_PATH`,
+    /// bound connection coordinates). Not the module's config knobs — those live in
+    /// [`knobs`](Self::knobs).
     pub env: &'a InjectedEnv,
+    /// The module's resolved config knobs (`{{ knobs.image }}`, `{{ knobs.auth }}`, …).
+    pub knobs: &'a ResolvedKnobs,
     /// The typed connections resolved for the module's demands, keyed by resource role.
     /// More than one connection per role is possible (a module with two same-role demands).
     /// For a *provider* module, this also carries its own role's connection (resolved for
@@ -420,16 +440,23 @@ pub struct PortMapping {
 }
 
 impl<'a> RenderCtx<'a> {
-    /// A context carrying just an [`InjectedEnv`] and no connections, dependencies, or
-    /// objects — the shape a module with no resource demands renders against.
-    pub fn from_env(env: &'a InjectedEnv) -> Self {
+    /// A context carrying an [`InjectedEnv`] and [`ResolvedKnobs`], with empty connections /
+    /// dependencies / objects — handy for unit tests.
+    pub fn from_env_and_knobs(env: &'a InjectedEnv, knobs: &'a ResolvedKnobs) -> Self {
         RenderCtx {
             env,
+            knobs,
             connections: BTreeMap::new(),
             dependencies: Vec::new(),
             objects: Vec::new(),
             published_ports: Vec::new(),
         }
+    }
+
+    /// A context carrying just an [`InjectedEnv`] and empty knobs — the shape a module with
+    /// no resource demands or knobs renders against in tests.
+    pub fn from_env(env: &'a InjectedEnv) -> Self {
+        Self::from_env_and_knobs(env, ResolvedKnobs::empty_ref())
     }
 }
 
@@ -449,7 +476,8 @@ fn render_template(
 }
 
 /// A module's knobs resolved to their canonical, coerced values — the input a module's
-/// [`services`](Module::services) reads to decide its knob-driven topology.
+/// [`services`](Module::services) reads to decide its knob-driven topology, and the
+/// `knobs` map a template reads as `{{ knobs.key }}`.
 ///
 /// Distinct from [`InjectedEnv`]: this carries *only* the module's knob values (validated
 /// and canonicalized per [`KnobKind`] at plan time), never the planner's later injections
@@ -460,7 +488,8 @@ fn render_template(
 /// `Integer`/`Port` through [`int`](ResolvedKnobs::int), a `String`/`Enum` through
 /// [`str`](ResolvedKnobs::str). The stored values are already canonical (a `Bool` is the bare
 /// `"true"`/`"false"`, an `Integer` a decimal), so these never re-validate.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct ResolvedKnobs {
     values: BTreeMap<String, String>,
 }
@@ -469,6 +498,13 @@ impl ResolvedKnobs {
     /// An empty set (no knobs resolved).
     pub fn new() -> Self {
         ResolvedKnobs::default()
+    }
+
+    /// A process-wide empty knobs map for tests that only need `env`.
+    fn empty_ref() -> &'static ResolvedKnobs {
+        use std::sync::OnceLock;
+        static EMPTY: OnceLock<ResolvedKnobs> = OnceLock::new();
+        EMPTY.get_or_init(ResolvedKnobs::new)
     }
 
     /// Set `key` to its canonical resolved `value`. The planner populates these from a
@@ -502,8 +538,7 @@ impl ResolvedKnobs {
         self.get(key)
     }
 
-    /// Iterate the resolved `(key, value)` pairs in deterministic (key) order — used by the
-    /// planner to flatten the knob values into a module's [`InjectedEnv`].
+    /// Iterate the resolved `(key, value)` pairs in deterministic (key) order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.values.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
@@ -721,9 +756,11 @@ mod tests {
         let mut connections = BTreeMap::new();
         connections.insert("object_store".to_string(), vec![s3]);
         let env = env(&[("DB_URL", "postgresql://db/x")]);
+        let knobs = ResolvedKnobs::new();
         let out = spec
             .render(&RenderCtx {
                 env: &env,
+                knobs: &knobs,
                 connections,
                 dependencies: Vec::new(),
                 objects: Vec::new(),
@@ -754,8 +791,11 @@ mod tests {
                 .into(),
             files: vec![],
         };
+        let empty_env = InjectedEnv::new();
+        let empty_knobs = ResolvedKnobs::new();
         let ctx = RenderCtx {
-            env: &InjectedEnv::new(),
+            env: &empty_env,
+            knobs: &empty_knobs,
             connections: BTreeMap::new(),
             dependencies: vec![
                 DepGate {

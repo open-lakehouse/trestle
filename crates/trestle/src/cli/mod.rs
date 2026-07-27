@@ -176,7 +176,7 @@ mod tests {
             "--select",
             "envoy,postgres",
             "--set",
-            "envoy.ENVOY_AUTH=true",
+            "envoy.auth=true",
         ]);
         assert_eq!(args.name, "lakehouse");
         assert_eq!(
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(
             args.knobs,
             vec![(
-                ("envoy".to_string(), "ENVOY_AUTH".to_string()),
+                ("envoy".to_string(), "auth".to_string()),
                 "true".to_string()
             )]
         );
@@ -196,11 +196,11 @@ mod tests {
     fn env_new_set_value_may_contain_equals() {
         // The value is split on the *first* `=`, so a value that itself contains
         // `=` (e.g. a query string or base64 padding) survives intact.
-        let args = env_new(&["lh", "--set", "svc.OPTS=a=1&b=2"]);
+        let args = env_new(&["lh", "--set", "svc.opts=a=1&b=2"]);
         assert_eq!(
             args.knobs,
             vec![(
-                ("svc".to_string(), "OPTS".to_string()),
+                ("svc".to_string(), "opts".to_string()),
                 "a=1&b=2".to_string()
             )]
         );
@@ -208,15 +208,13 @@ mod tests {
 
     #[test]
     fn env_new_rejects_malformed_set() {
-        // No `.` in the module.KNOB half.
+        // No `.` in the module.key half.
         assert!(
-            Cli::try_parse_from(["trestle", "env", "new", "lh", "--set", "ENVOY_AUTH=true"])
-                .is_err()
+            Cli::try_parse_from(["trestle", "env", "new", "lh", "--set", "auth=true"]).is_err()
         );
         // No `=` at all.
         assert!(
-            Cli::try_parse_from(["trestle", "env", "new", "lh", "--set", "envoy.ENVOY_AUTH"])
-                .is_err()
+            Cli::try_parse_from(["trestle", "env", "new", "lh", "--set", "envoy.auth"]).is_err()
         );
     }
 

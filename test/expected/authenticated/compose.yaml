@@ -1,0 +1,37 @@
+# Top-level compose entrypoint. Every backing service is pulled in via `include:`.
+# The file list is owned by the planner, not edited by hand.
+name: authenticated
+
+configs:
+  authelia_config:
+    file: ./modules/authelia/configuration.yml
+  authelia_users:
+    file: ./users.yml
+  envoy_config:
+    file: ./modules/envoy/envoy.yaml
+  postgres_init:
+    file: ./modules/postgres/init-databases.sh
+
+secrets:
+  authelia_jwt_secret:
+    file: ./modules/authelia/secrets/jwt_secret
+  authelia_session_secret:
+    file: ./modules/authelia/secrets/session_secret
+  authelia_storage_encryption_key:
+    file: ./modules/authelia/secrets/storage_encryption_key
+  postgres_password:
+    file: ./modules/postgres/secrets/postgres_password
+
+include:
+  - path: ./modules/authelia/compose.yaml
+    project_directory: .
+  - path: ./modules/envoy/compose.yaml
+    project_directory: .
+  - path: ./modules/postgres/compose.yaml
+    project_directory: .
+  - path: ./modules/seaweedfs/compose.yaml
+    project_directory: .
+  - path: ./modules/unity-catalog/compose.yaml
+    project_directory: .
+  - path: ./modules/mlflow/compose.yaml
+    project_directory: .

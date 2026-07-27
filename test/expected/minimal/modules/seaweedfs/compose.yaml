@@ -1,0 +1,19 @@
+# SeaweedFS + one-shot bucket init
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command: mini -dir=/data
+    expose:
+      - "9333"
+      - "8333"
+    volumes:
+      - ./.data/seaweedfs:/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q --spider http://127.0.0.1:9333/ && echo ok || exit 1"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

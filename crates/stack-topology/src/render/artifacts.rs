@@ -39,7 +39,7 @@ struct EnvoyCtx<'a> {
     clusters: Vec<ClusterCtx<'a>>,
     /// The Envoy admin port (bound on both sides).
     admin_port: u16,
-    /// Forward-auth config, present only when the gateway's `ENVOY_AUTH` knob is on. When set,
+    /// Forward-auth config, present only when the gateway's `auth` knob is on. When set,
     /// the listener(s) flagged `ext_authz` (the shared one only) gate every route behind it.
     auth: Option<AuthCtx<'a>>,
 }
@@ -262,6 +262,18 @@ pub fn render_compose(head: &HeadFile) -> String {
             );
         }
     }
+    if !head.secrets.is_empty() {
+        push_lines(&mut out, &["", "secrets:"]);
+        for secret in &head.secrets {
+            push_lines(
+                &mut out,
+                &[
+                    &format!("  {}:", secret.alias),
+                    &format!("    file: ./{}", secret.path),
+                ],
+            );
+        }
+    }
     push_lines(&mut out, &["", "include:"]);
     for inc in &head.includes {
         push_lines(
@@ -294,6 +306,8 @@ pub struct Artifacts {
     pub env: String,
     /// The top-level `compose.yaml`.
     pub compose: String,
+    /// Ignore rules for runtime data and generated credential-bearing files.
+    pub gitignore: String,
 }
 
 /// Render the stack-aggregated artifacts for `plan`. Per-module compose fragments and their
@@ -342,5 +356,6 @@ pub fn render_all(plan: &Plan) -> Artifacts {
         envoy,
         env: render_env(&plan.env, &referenced),
         compose: render_compose(&head),
+        gitignore: ".data/\n.env\nmodules/*/.env/\nmodules/*/secrets/\n".into(),
     }
 }

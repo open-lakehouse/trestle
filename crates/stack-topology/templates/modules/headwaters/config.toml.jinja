@@ -3,7 +3,7 @@ port = 8091
 
 [ui]
 # Whether to serve the bundled lineage web UI
-serve = {{ env.HEADWATERS_SERVE_UI }}
+serve = {{ knobs.serve_ui }}
 {%- if env.BASE_PATH %}
 # a static prefix applied to all server routes/paths
 base_path = "{{ env.BASE_PATH }}"

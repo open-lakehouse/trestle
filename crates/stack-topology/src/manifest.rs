@@ -350,9 +350,9 @@ mod tests {
         m.add_module("envoy");
         m.add_module("envoy"); // idempotent
         assert_eq!(m.selection.modules.len(), 1);
-        m.set_knob("envoy", "ENVOY_AUTH", "true");
+        m.set_knob("envoy", "auth", "true");
         assert_eq!(
-            m.selection.knob_overrides[&ModuleId::from("envoy")].get("ENVOY_AUTH"),
+            m.selection.knob_overrides[&ModuleId::from("envoy")].get("auth"),
             Some(&"true".to_string())
         );
         m.remove_module(&ModuleId::from("envoy"));

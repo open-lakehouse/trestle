@@ -1,7 +1,7 @@
 # SeaweedFS + one-shot bucket init
 services:
   seaweedfs:
-    image: chrislusf/seaweedfs:latest
+    image: {{ knobs.image }}
     restart: unless-stopped
     command: mini -dir=/data
     expose:
@@ -18,18 +18,16 @@ services:
       retries: 10
       start_period: 5s
 {%- if objects %}
-{%- set obj = connections.object_store.0 %}
 
   seaweedfs-init:
-    image: amazon/aws-cli:latest
+    image: {{ knobs.init_image }}
     restart: on-failure
     depends_on:
       seaweedfs:
         condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
-      AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
-      AWS_DEFAULT_REGION: {{ obj.credential.region }}
+    env_file:
+      - path: ./modules/seaweedfs/.env/seaweedfs-init.env
+        format: raw
     entrypoint:
       - "sh"
       - "-c"

@@ -103,8 +103,8 @@ pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, 
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB,
-    EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, HeadFile, ListenerConfig, Plan, PlanCtx,
-    PlanError, Selection,
+    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, HeadFile,
+    ListenerConfig, Plan, PlanCtx, PlanError, SecretDecl, Selection,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---
