@@ -106,26 +106,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_catalog_indexes_known_categories() {
+    fn embedded_catalog_loads_without_local_stack_components() {
+        // The composed-environment components (`local-stack-*`, `databricks-emulator-env`)
+        // moved out of `trestle new` into the `trestle env` engine, so the shared
+        // component catalog no longer indexes them. It must still load cleanly, and
+        // the compose categories it used to serve must be gone.
         let cat = ComponentCatalog::from_embedded().expect("embedded catalog loads");
-
-        for (category, expected_name) in [
-            ("gateway", "local-stack-envoy"),
-            ("metadata_db", "local-stack-postgres"),
-            ("storage", "local-stack-seaweedfs"),
-            ("ml", "local-stack-mlflow"),
-            ("catalog", "local-stack-unity-catalog"),
-            ("notebooks", "local-stack-notebooks"),
-            ("observability", "local-stack-jaeger"),
-            ("app_runtime", "databricks-emulator-env"),
+        for category in [
+            "gateway",
+            "metadata_db",
+            "storage",
+            "ml",
+            "catalog",
+            "notebooks",
+            "observability",
         ] {
-            let entries = cat.components_for_category(category);
             assert!(
-                entries.iter().any(|c| c.name == expected_name),
-                "expected `{expected_name}` under category `{category}`, got {:?}",
-                entries.iter().map(|c| &c.name).collect::<Vec<_>>()
+                cat.components_for_category(category).is_empty(),
+                "compose category `{category}` should no longer resolve any shared components"
             );
         }
+        assert!(
+            cat.all().all(|c| !c.name.starts_with("local-stack-")),
+            "no `local-stack-*` component should remain in the shared catalog"
+        );
     }
 
     #[test]

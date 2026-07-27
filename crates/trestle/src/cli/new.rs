@@ -37,8 +37,7 @@ use crate::template::resolve::{ResolveInput, ScaffoldRoot, resolve_components};
 use crate::template::validate::validate_resolved;
 use crate::template::wizard::{WizardInput, run_wizard};
 use crate::template::{
-    ComponentCatalog, Renderer, TemplateSource, aggregate_stack_context, collect_variables,
-    load_template, port_collisions, preview, render_tree,
+    ComponentCatalog, Renderer, TemplateSource, collect_variables, load_template, render_tree,
 };
 
 #[derive(Args, Clone)]
@@ -281,46 +280,8 @@ pub fn run(args: NewArgs) -> Result<()> {
     let components = resolve_components(resolve_in, &renderer)?;
     validate_resolved(&components)?;
 
-    let component_manifests: Vec<&_> = components.iter().map(|c| &c.loaded.manifest).collect();
-
-    // Fail fast on host-port conflicts: two components claiming the same host
-    // port (under different names) render happily but break `docker compose up`.
-    let collisions = port_collisions(&component_manifests);
-    if !collisions.is_empty() {
-        let detail = collisions
-            .iter()
-            .map(|c| {
-                let who = c
-                    .claimants
-                    .iter()
-                    .map(|(comp, port)| format!("{comp} ({port})"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("  host port {} claimed by: {who}", c.port)
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(Error::other(format!(
-            "host-port collision between selected components:\n{detail}\n\
-             pick a different component for one of these categories, or adjust its port."
-        )));
-    }
-
-    let stack = aggregate_stack_context(&component_manifests);
-
     let merged_static_ctx = merge_static_context(&base, &apps);
-    let final_ctx = build_final_ctx(&vars, &merged_static_ctx, &stack);
-
-    // ----- Wiring preview ----------------------------------------------------
-    let preview_text = preview::render_text(&base, &apps, &components, &stack)?;
-    if !args.non_interactive {
-        // Show the full preview via cliclack so it sits inside the prompt
-        // session visually.
-        cliclack::note("Wiring", preview_text.trim_end())
-            .map_err(|e| Error::other(format!("preview render failed: {e}")))?;
-    } else {
-        println!("{preview_text}");
-    }
+    let final_ctx = build_final_ctx(&vars, &merged_static_ctx);
 
     // ----- Render base, then apps, then components ---------------------------
     let parent_written = render_tree(&base.root, &out_dir, &final_ctx, &renderer)?;
@@ -381,9 +342,10 @@ pub fn run(args: NewArgs) -> Result<()> {
     }
     println!("\nNext steps:");
     println!("  cd {}", out_dir.display());
-    if !stack.components.is_empty() {
-        println!("  just up        # bring up the local platform stack");
-    }
+    println!(
+        "  trestle env new {} --out-dir env   # create the composed dev environment",
+        args.name
+    );
     if merged_manifest
         .variables
         .iter()
@@ -770,7 +732,6 @@ fn build_intermediate_ctx(
 fn build_final_ctx(
     vars: &BTreeMap<String, crate::template::VariableValue>,
     static_ctx: &BTreeMap<String, serde_yaml::Value>,
-    stack: &crate::template::StackContext,
 ) -> Value {
     let mut map = serde_json::Map::new();
     for (k, v) in vars {
@@ -793,9 +754,6 @@ fn build_final_ctx(
             other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
         };
         map.insert(k.clone(), rendered);
-    }
-    if let Ok(s) = serde_json::to_value(stack) {
-        map.insert("stack".to_string(), s);
     }
     map.insert(
         "trestle".to_string(),

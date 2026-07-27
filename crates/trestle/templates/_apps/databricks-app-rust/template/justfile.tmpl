@@ -29,38 +29,15 @@ build-wasm:
 # Dev loop
 # ------------------------------------------------------------------------------
 
-# Run the server (and frontend, if enabled) in watch mode.
+# Run the server (and frontend, if enabled) in watch mode. Bring up the composed
+# dev environment separately first with `trestle env` (see the project README).
 {% if with_frontend -%}
 dev:
-    docker compose --profile dev up -d
     cargo run -p {{ project_name | kebab_case }}-server &
     cd frontend && npm run dev
 {%- else %}
 dev:
-    docker compose --profile svc up -d
     cargo run -p {{ project_name | kebab_case }}-server
-{%- endif %}
-
-# ------------------------------------------------------------------------------
-# Local stack (delegated to compose)
-# ------------------------------------------------------------------------------
-
-{% if local_stack != 'none' -%}
-# Bring up the local platform stack (Postgres, MLflow, Envoy, ...).
-up profile="svc":
-    docker compose --profile {% raw %}{{profile}}{% endraw %} up -d
-
-# Stop everything and wipe volumes.
-down:
-    docker compose down -v
-
-# Tail logs (e.g. `just logs mlflow`).
-logs svc:
-    docker compose logs -f {% raw %}{{svc}}{% endraw %}
-
-# Print the active envoy route table.
-routes:
-    @sed -n '/match: { prefix:/p' docker/envoy/envoy.yaml
 {%- endif %}
 
 # ------------------------------------------------------------------------------
