@@ -1,7 +1,7 @@
 # Azurite (Azure Blob emulator)
 services:
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    image: {{ knobs.image }}
     restart: unless-stopped
     command:
       ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
@@ -21,7 +21,7 @@ services:
 {%- set obj = connections.object_store.0 %}
 
   azurite-init:
-    image: mcr.microsoft.com/azure-cli:2.87.0
+    image: {{ knobs.init_image }}
     restart: "no"
     depends_on:
       azurite:

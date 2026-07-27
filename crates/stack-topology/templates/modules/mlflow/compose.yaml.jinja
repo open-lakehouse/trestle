@@ -3,7 +3,7 @@
 {%- set obj = connections.object_store.0 %}
 services:
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.10.1-full
+    image: {{ knobs.image }}
     restart: unless-stopped
     depends_on:
 {%- for dep in dependencies %}

@@ -1,7 +1,7 @@
 # Postgres + pgweb — contributed by the `postgres` module.
 services:
   db:
-    image: postgres:16
+    image: {{ knobs.image }}
     restart: unless-stopped
     environment:
       POSTGRES_DB: postgres
@@ -21,7 +21,7 @@ services:
       retries: 5
 
   pgweb:
-    image: sosedoff/pgweb:latest
+    image: {{ knobs.pgweb_image }}
     restart: unless-stopped
     profiles: [svc, full]
     depends_on:

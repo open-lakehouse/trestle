@@ -1,7 +1,7 @@
 # SeaweedFS + one-shot bucket init
 services:
   seaweedfs:
-    image: chrislusf/seaweedfs:latest
+    image: {{ knobs.image }}
     restart: unless-stopped
     command: mini -dir=/data
     expose:
@@ -21,7 +21,7 @@ services:
 {%- set obj = connections.object_store.0 %}
 
   seaweedfs-init:
-    image: amazon/aws-cli:latest
+    image: {{ knobs.init_image }}
     restart: on-failure
     depends_on:
       seaweedfs:

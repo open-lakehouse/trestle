@@ -1,9 +1,9 @@
 # Authelia forward-auth provider — contributed by the `authelia` module (pulled in by the
-# gateway's ENVOY_AUTH knob). Self-contained for the showcase: a file-based user database and
+# gateway's `auth` knob). Self-contained for the showcase: a file-based user database and
 # local on-disk storage, so it needs no external database.
 services:
   authelia:
-    image: ghcr.io/authelia/authelia:4.39
+    image: {{ knobs.image }}
     restart: unless-stopped
     # Reached only inside the compose network: Envoy calls it via the `authelia` cluster
     # (ext_authz), and the browser hits its portal through the gateway's redirect. No host

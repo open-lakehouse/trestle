@@ -840,13 +840,13 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
 
     use olai_stack_topology::ModuleId;
 
-    // The `HEADWATERS_SERVE_UI` knob is overridable through the selection: a config UI
+    // The `serve_ui` knob is overridable through the selection: a config UI
     // (hydrofoil / Transler) surfaces it, and the chosen value is fed back here and lands
     // in the generated `config.toml` as `ui.serve`.
     let mut knob_overrides = BTreeMap::new();
     knob_overrides.insert(
         ModuleId::from("headwaters"),
-        BTreeMap::from([("HEADWATERS_SERVE_UI".to_string(), "false".to_string())]),
+        BTreeMap::from([("serve_ui".to_string(), "false".to_string())]),
     );
     let sel = Selection {
         modules: vec!["envoy".into(), "postgres".into(), "headwaters".into()],
@@ -1326,21 +1326,21 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     );
 }
 
-/// Helpers for the forward-auth (ENVOY_AUTH knob) golden tests.
+/// Helpers for the forward-auth (`auth` knob) golden tests.
 mod auth {
     use super::*;
     use olai_stack_topology::ModuleId;
     use std::collections::BTreeMap;
 
     /// A selection mixing a gatewayed object store (seaweedfs → dedicated listener), an API
-    /// surface (mlflow), and a UI surface (headwaters), with the gateway's `ENVOY_AUTH` knob
+    /// surface (mlflow), and a UI surface (headwaters), with the gateway's `auth` knob
     /// set to `on`. Exercises the protect/exempt boundary: API/UI on the shared listener get
     /// gated, the object store on its dedicated listener does not.
     fn auth_on_selection() -> Selection {
         let mut knob_overrides = BTreeMap::new();
         knob_overrides.insert(
             ModuleId::from("envoy"),
-            BTreeMap::from([("ENVOY_AUTH".to_string(), "true".to_string())]),
+            BTreeMap::from([("auth".to_string(), "true".to_string())]),
         );
         Selection {
             modules: vec![

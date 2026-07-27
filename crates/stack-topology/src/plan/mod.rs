@@ -72,9 +72,9 @@ pub struct Selection {
     pub capabilities: Vec<String>,
     /// Per-module knob overrides: module id → (knob `key` → value). A value present
     /// here wins over the knob's declared [`default`](crate::Knob::default); a knob
-    /// absent from this map falls back to its default. The value lands in the module's
-    /// [`InjectedEnv`] under the knob's `key`, exactly like any other planner-injected
-    /// variable, so the module's template reads it as `{{ env.KEY }}`.
+    /// absent from this map falls back to its default. The value is available to the
+    /// module's template as `{{ knobs.key }}` (and to [`Module::services`] via
+    /// [`ResolvedKnobs`]).
     ///
     /// This is the channel a config UI feeds: it surfaces a module's knobs from the
     /// catalog, lets the user tune them, and hands the chosen values back here.
@@ -428,7 +428,10 @@ pub struct ListenerConfig {
 /// `auth`-role provider and gate the shared listener (see [`AuthConfig`]). The contract lives
 /// here (the planner owns the wiring); the baseline catalog's `envoy` module declares the knob
 /// under this same key.
-pub const ENVOY_AUTH_KNOB: &str = "ENVOY_AUTH";
+pub const ENVOY_AUTH_KNOB: &str = "auth";
+
+/// Legacy override key accepted as an alias of [`ENVOY_AUTH_KNOB`].
+pub const ENVOY_AUTH_KNOB_LEGACY: &str = "ENVOY_AUTH";
 
 /// The [`Provides::extras`](crate::Provides::extras) key by which the `auth`-role provider declares the HTTP `ext_authz`
 /// endpoint path prefix the gateway posts authorization checks to. Provider-specific (Authelia
@@ -468,7 +471,7 @@ fn gateway_auth_enabled(selection: &Selection, catalog: &Catalog) -> Result<bool
 }
 
 /// Forward-auth (single-sign-on) configuration for the gateway: present only when the
-/// gateway's `ENVOY_AUTH` knob is on. It tells the Envoy renderer to gate the shared
+/// gateway's `auth` knob is on. It tells the Envoy renderer to gate the shared
 /// listener (API + UI routes) behind an `ext_authz` HTTP filter pointed at the auth
 /// provider, and which identity headers to treat as trusted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -872,12 +875,9 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         for (k, v) in module.provides().env_vars.iter() {
             module_env.set(k, v);
         }
-        // Inject the module's resolved knob values (computed once up front): each lands under
-        // the knob's `key`, so a fragment or a mounted config file reads it as `{{ env.KEY }}`
-        // — the same injection point as `DATA_ROOT` and `BASE_PATH`.
-        for (k, v) in resolved_knobs[module.id()].iter() {
-            module_env.set(k, v);
-        }
+        // Config knobs stay out of `env` — they are passed separately as `RenderCtx.knobs`
+        // so templates read `{{ knobs.image }}` rather than conflating them with planner
+        // injections / container env vars.
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field. The connection was resolved once up front (in `chosen`).
         for (idx, demand) in module.needs().iter().enumerate() {
@@ -1177,6 +1177,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         };
         let render_ctx = crate::catalog::module::RenderCtx {
             env: &module_env,
+            knobs: &resolved_knobs[module.id()],
             connections,
             dependencies,
             objects,
@@ -1436,24 +1437,28 @@ fn bind_connection(
     Ok(())
 }
 
-/// Resolve a knob to the value the planner should inject, **validated and coerced against
-/// its [`KnobKind`]**: an override (from [`Selection::knob_overrides`]) wins, then the
-/// knob's declared [`default`](crate::Knob::default); a [`required`](crate::Knob::required)
+/// Resolve a knob to its canonical value, **validated and coerced against its
+/// [`KnobKind`]**: an override (from [`Selection::knob_overrides`]) wins — matching the
+/// canonical [`key`](crate::Knob::key) first, then any [`aliases`](crate::Knob::aliases) —
+/// then the knob's declared [`default`](crate::Knob::default); a [`required`](crate::Knob::required)
 /// knob with neither is a [`PlanError::MissingRequiredKnob`]. A non-required knob with no
-/// value resolves to `None` (nothing injected — the module's template supplies its own).
+/// value resolves to `None`.
 ///
-/// The chosen value is checked against the knob's `kind` and canonicalized so what lands in
-/// the [`InjectedEnv`] is always a valid literal for the template's target format (e.g. a
-/// `Bool` renders as the bare TOML/JSON `true`/`false`, never `"True"` or `"yes"`). A value
-/// the kind cannot accept is a plan-time [`PlanError::InvalidKnobValue`] rather than a
-/// malformed config that fails only when the container starts.
+/// The chosen value is checked against the knob's `kind` and canonicalized so what templates
+/// read via `{{ knobs.key }}` is always a valid literal (e.g. a `Bool` is the bare
+/// `"true"`/`"false"`, never `"True"` or `"yes"`). A value the kind cannot accept is a
+/// plan-time [`PlanError::InvalidKnobValue`] rather than a malformed config that fails only
+/// when the container starts.
 fn resolve_knob(
     module: &ModuleId,
     knob: &crate::catalog::module::Knob,
     overrides: Option<&BTreeMap<String, String>>,
 ) -> Result<Option<String>, PlanError> {
     let raw = overrides
-        .and_then(|o| o.get(&knob.key))
+        .and_then(|o| {
+            o.get(&knob.key)
+                .or_else(|| knob.aliases.iter().find_map(|alias| o.get(alias)))
+        })
         .map(String::as_str)
         .or(knob.default.as_deref());
     let Some(raw) = raw else {
@@ -1954,6 +1959,7 @@ mod tests {
             default: Some(if auth_default_on { "true" } else { "false" }.into()),
             required: false,
             help: None,
+            aliases: vec![],
         }];
         m
     }
@@ -2347,12 +2353,13 @@ mod tests {
 
         let module = ModuleId::from("m");
         let knob = Knob {
-            key: "SERVE_UI".into(),
+            key: "serve_ui".into(),
             title: None,
             kind: KnobKind::Bool,
             default: Some("true".into()),
             required: false,
             help: None,
+            aliases: vec!["SERVE_UI".into()],
         };
 
         // No override → the declared default.
@@ -2362,9 +2369,18 @@ mod tests {
         );
 
         // An override wins over the default.
-        let overrides = BTreeMap::from([("SERVE_UI".to_string(), "false".to_string())]);
+        let overrides = BTreeMap::from([("serve_ui".to_string(), "false".to_string())]);
         assert_eq!(
             resolve_knob(&module, &knob, Some(&overrides))
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
+
+        // A legacy alias also wins.
+        let legacy = BTreeMap::from([("SERVE_UI".to_string(), "false".to_string())]);
+        assert_eq!(
+            resolve_knob(&module, &knob, Some(&legacy))
                 .unwrap()
                 .as_deref(),
             Some("false")
@@ -2377,12 +2393,13 @@ mod tests {
 
         let module = ModuleId::from("m");
         let knob = |kind: KnobKind, default: &str| Knob {
-            key: "K".into(),
+            key: "k".into(),
             title: None,
             kind,
             default: Some(default.into()),
             required: false,
             help: None,
+            aliases: vec![],
         };
         let resolved = |k: &Knob| resolve_knob(&module, k, None).unwrap().unwrap();
 
@@ -2426,18 +2443,19 @@ mod tests {
         let module = ModuleId::from("m");
         let reject = |kind: KnobKind, value: &str| {
             let k = Knob {
-                key: "K".into(),
+                key: "k".into(),
                 title: None,
                 kind: kind.clone(),
                 default: Some(value.into()),
                 required: false,
                 help: None,
+                aliases: vec![],
             };
             assert_eq!(
                 resolve_knob(&module, &k, None).unwrap_err(),
                 PlanError::InvalidKnobValue {
                     module: module.clone(),
-                    key: "K".into(),
+                    key: "k".into(),
                     value: value.into(),
                     kind,
                 },
@@ -2470,12 +2488,13 @@ mod tests {
 
         let module = ModuleId::from("m");
         let base = Knob {
-            key: "TOKEN".into(),
+            key: "token".into(),
             title: None,
             kind: KnobKind::String,
             default: None,
             required: false,
             help: None,
+            aliases: vec![],
         };
 
         // No value + not required → nothing injected (the template owns its own fallback).
@@ -2490,7 +2509,7 @@ mod tests {
             resolve_knob(&module, &required, None).unwrap_err(),
             PlanError::MissingRequiredKnob {
                 module,
-                key: "TOKEN".into(),
+                key: "token".into(),
             }
         );
     }

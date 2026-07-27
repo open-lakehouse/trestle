@@ -3,7 +3,7 @@
 {%- set obj = connections.object_store.0 %}
 services:
   unitycatalog:
-    image: unitycatalog/unitycatalog:main-2f2e32d
+    image: {{ knobs.image }}
     restart: unless-stopped
     depends_on:
 {%- for dep in dependencies %}
