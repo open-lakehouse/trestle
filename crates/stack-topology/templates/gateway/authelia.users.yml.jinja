@@ -1,4 +1,6 @@
-# Authelia user database — rendered by the `authelia` module. File-based auth for the showcase.
+# Authelia user database — written next to `compose.yaml` so it is easy to find and edit.
+# Seeded once on first render; subsequent `trestle env render` runs leave this file alone.
+# Delete it and re-render to restore the catalog default.
 #
 # The bundled demo user logs in with username `demo` / password `authelia`. Its `email` and
 # `displayname` populate the trusted `Remote-Email` / `Remote-Name` headers Envoy forwards to

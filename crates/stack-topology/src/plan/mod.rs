@@ -536,6 +536,15 @@ pub struct ConfigDecl {
     pub path: String,
 }
 
+/// A top-level Compose `secrets:` declaration: an alias and its sensitive host file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SecretDecl {
+    /// The alias mounted by services under `/run/secrets/<alias>`.
+    pub alias: String,
+    /// The host file path supplying the secret.
+    pub path: String,
+}
+
 /// The consolidated top-level compose plan: customization at the head (injected env),
 /// then a plain list of module fragments.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -551,6 +560,8 @@ pub struct HeadFile {
     /// [`RenderFile`](crate::RenderFile)s plus any synthetic entry the planner adds for a
     /// dedicated-renderer artifact (e.g. the gateway's envoy bootstrap).
     pub configs: Vec<ConfigDecl>,
+    /// Top-level Compose secret declarations, sorted by alias.
+    pub secrets: Vec<SecretDecl>,
 }
 
 /// The gateway facts the address resolver needs but cannot derive from the model: the
@@ -1121,6 +1132,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // Aggregated `configs:` declarations and the module each alias was first seen on, so a
     // second module reusing an alias is rejected rather than silently shadowing.
     let mut configs: Vec<ConfigDecl> = Vec::new();
+    let mut secrets: Vec<SecretDecl> = Vec::new();
     let mut alias_owner: BTreeMap<String, ModuleId> = BTreeMap::new();
     for module in &graph.nodes {
         let module_env = injected.get(module.id()).cloned().unwrap_or_default();
@@ -1191,11 +1203,21 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                 source,
             })?;
         // Root each emitted file under the module's own directory (`modules/<id>/<path>`),
-        // so a module never hard-codes the global layout and its files sit beside its
-        // fragment. The rewritten path is the single source of truth the consumer writes to
-        // and the compose `configs: file:` references.
+        // unless the module marked it `at_root` (operator-facing files live beside
+        // `compose.yaml`). The rewritten path is the single source of truth the consumer
+        // writes to and the compose `configs: file:` / `secrets: file:` references.
         for f in &mut out.files {
-            f.path = format!("modules/{}/{}", module.id().as_str(), f.path);
+            if !f.at_root {
+                f.path = format!("modules/{}/{}", module.id().as_str(), f.path);
+            }
+            if f.alias.is_some() && f.secret_alias.is_some() {
+                return Err(PlanError::Render {
+                    module: module.id().0.clone(),
+                    source: crate::catalog::module::RenderError(
+                        "a rendered file cannot be both a config and a secret".into(),
+                    ),
+                });
+            }
             if let Some(alias) = &f.alias {
                 if let Some(first) = alias_owner.get(alias) {
                     return Err(PlanError::ConfigAliasCollision {
@@ -1206,6 +1228,20 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                 }
                 alias_owner.insert(alias.clone(), module.id().clone());
                 configs.push(ConfigDecl {
+                    alias: alias.clone(),
+                    path: f.path.clone(),
+                });
+            }
+            if let Some(alias) = &f.secret_alias {
+                if let Some(first) = alias_owner.get(alias) {
+                    return Err(PlanError::ConfigAliasCollision {
+                        alias: alias.clone(),
+                        first: first.clone(),
+                        second: module.id().clone(),
+                    });
+                }
+                alias_owner.insert(alias.clone(), module.id().clone());
+                secrets.push(SecretDecl {
                     alias: alias.clone(),
                     path: f.path.clone(),
                 });
@@ -1222,12 +1258,14 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
 
     // Deterministic `configs:` order regardless of module/graph order.
     configs.sort_by(|a, b| a.alias.cmp(&b.alias));
+    secrets.sort_by(|a, b| a.alias.cmp(&b.alias));
 
     let head = HeadFile {
         name: ctx.env_name.clone(),
         env: env.clone(),
         includes,
         configs,
+        secrets,
     };
 
     // The typed connections, exposed for downstream consumers (deterministic: built from
@@ -2079,6 +2117,10 @@ mod tests {
                     path: "conf.yaml".into(),
                     contents: "k: v\n".into(),
                     alias: Some("shared_alias".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: false,
+                    preserve: false,
                 }],
             };
             arc(m)
@@ -2113,6 +2155,10 @@ mod tests {
                 path: "app.toml".into(),
                 contents: "x = 1\n".into(),
                 alias: Some("svc_config".into()),
+                sensitive: false,
+                secret_alias: None,
+                at_root: false,
+                preserve: false,
             }],
         };
         let p = plan_env(

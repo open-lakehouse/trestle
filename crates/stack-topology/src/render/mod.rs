@@ -68,10 +68,11 @@ impl InjectedEnv {
 /// as `${KEY}` for compose to substitute at run time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderFile {
-    /// Path the file should be written to. Module-relative (a bare basename or a
-    /// short subpath); the consumer roots it under the module's own directory
-    /// (`modules/<module-id>/<path>`). The consumer turns this into the host side of
-    /// the file's mount.
+    /// Path the file should be written to.
+    ///
+    /// By default this is module-relative (a bare basename or short subpath); the planner
+    /// roots it under `modules/<module-id>/`. When [`at_root`](Self::at_root) is set, the
+    /// path is already project-relative and is written beside the top-level `compose.yaml`.
     pub path: String,
     /// The file's contents (possibly containing `${KEY}` substitutions).
     pub contents: String,
@@ -85,6 +86,29 @@ pub struct RenderFile {
     /// the planner rejects a collision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    /// Whether this file contains credentials or other values that must not be committed.
+    ///
+    /// Writers restrict sensitive files to owner-only permissions on Unix.
+    #[serde(default)]
+    pub sensitive: bool,
+    /// The top-level Compose `secrets:` alias for this file, when present.
+    ///
+    /// This is distinct from [`alias`](Self::alias), which declares a non-secret Compose
+    /// `configs:` entry. A file cannot declare both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_alias: Option<String>,
+    /// Write this file at the environment root rather than under `modules/<id>/`.
+    ///
+    /// Used for operator-facing files that should sit beside `compose.yaml` (e.g. Authelia's
+    /// `users.yml`).
+    #[serde(default)]
+    pub at_root: bool,
+    /// Do not overwrite the on-disk file once it exists.
+    ///
+    /// Marks operator-owned files: the renderer seeds them on first write, then leaves local
+    /// edits alone across subsequent `trestle env render` / `env new --force` runs.
+    #[serde(default)]
+    pub preserve: bool,
 }
 
 /// What a module's render produces: a compose fragment plus any files to mount.
@@ -127,6 +151,10 @@ mod tests {
                 // compose substitutes ${BASE_PATH} at run time.
                 contents: "base_path: ${BASE_PATH}\n".into(),
                 alias: Some("mlflow_config".into()),
+                sensitive: false,
+                secret_alias: None,
+                at_root: false,
+                preserve: false,
             }],
         };
         assert_eq!(out.files.len(), 1);

@@ -347,7 +347,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // credential flavour, so the rendered compose differs between an S3 and an Azure backend.
     // Select UC + its hard `requires` only, letting the object_store demand resolve via the
     // catalog default / `ctx` preference (so the chosen provider is unambiguous).
-    let uc_fragment = |ctx: PlanCtx| -> String {
+    let uc_render = |ctx: PlanCtx| -> (String, String) {
         let sel = Selection::modules(["unity-catalog"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
         let (_, out) = p
@@ -358,14 +358,24 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         // Valid YAML in either branch.
         let _: Value =
             serde_yaml::from_str(&out.fragment).expect("rendered UC fragment must be valid YAML");
-        out.fragment.clone()
+        let env = out
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("/.env/unitycatalog.env"))
+            .expect("UC env file")
+            .contents
+            .clone();
+        (out.fragment.clone(), env)
     };
 
     // Default → SeaweedFS (S3): static AWS keys from the typed credential, a `seaweedfs-init`
     // dependency, and no `${AWS_*:-}` fallback hack or Azure connection string.
-    let s3 = uc_fragment(PlanCtx::default());
+    let (s3, s3_env) = uc_render(PlanCtx::default());
     assert!(s3.contains("seaweedfs-init:"), "S3 init dependency: {s3}");
-    assert!(s3.contains("AWS_ACCESS_KEY_ID: seaweedfs"), "S3 keys: {s3}");
+    assert!(
+        s3_env.contains("AWS_ACCESS_KEY_ID=seaweedfs"),
+        "S3 keys: {s3_env}"
+    );
     assert!(
         !s3.contains("${AWS_ACCESS_KEY_ID:-"),
         "no fallback hack: {s3}"
@@ -387,18 +397,16 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
             && !s3.contains("${UC_DATABASE_URL"),
         "UC no longer round-trips coordinates through compose ${{VAR}} refs: {s3}"
     );
-    let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
-    let s3_env = &s3_yaml["services"]["unitycatalog"]["environment"];
-    assert_eq!(
-        s3_env["S3_ENDPOINT"].as_str(),
-        Some("http://envoy:9100"),
-        "S3_ENDPOINT comes from the resolved object_store endpoint: {s3}"
+    assert!(
+        s3_env.contains("S3_ENDPOINT=http://envoy:9100"),
+        "S3_ENDPOINT comes from the resolved object_store endpoint: {s3_env}"
     );
     assert!(
-        s3_env["DATABASE_URL"]
-            .as_str()
-            .is_some_and(|u| u.contains("@db:5432/unitycatalog")),
-        "DATABASE_URL comes from the resolved relational_db url: {s3}"
+        s3_env
+            .lines()
+            .any(|line| line.starts_with("DATABASE_URL=postgresql://")
+                && line.ends_with("@db:5432/unitycatalog")),
+        "DATABASE_URL comes from the resolved relational_db url: {s3_env}"
     );
 
     // Azurite-preferred → the Azure branch: a connection string, an `azurite-init`
@@ -408,7 +416,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         "object_store".to_string(),
         vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
-    let azure = uc_fragment(PlanCtx {
+    let (azure, azure_env) = uc_render(PlanCtx {
         provider_preference: preference,
         ..Default::default()
     });
@@ -423,17 +431,14 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         uc["depends_on"]["seaweedfs-init"].is_null(),
         "no S3 init under Azure: {azure}"
     );
-    let env = &uc["environment"];
-    assert_eq!(
-        env["AZURE_STORAGE_CONNECTION_STRING"]
-            .as_str()
-            .map(|s| s.starts_with("DefaultEndpointsProtocol=")),
-        Some(true),
-        "Azure connection string from the typed credential: {azure}"
+    assert!(
+        azure_env.starts_with("DATABASE_URL=")
+            && azure_env.contains("\nAZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol="),
+        "Azure connection string from the typed credential: {azure_env}"
     );
     assert!(
-        env["AWS_ACCESS_KEY_ID"].is_null(),
-        "no AWS keys under Azure: {azure}"
+        !azure_env.contains("AWS_ACCESS_KEY_ID"),
+        "no AWS keys under Azure: {azure_env}"
     );
 }
 
@@ -445,7 +450,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     // path come from the planner's chosen `BASE_PATH`, the artifact-store env branches on the
     // object-store credential flavour, and `depends_on` is driven by the chosen providers'
     // gates (db healthy + the object-store init completed) rather than hard-coded.
-    let mlflow_fragment = |ctx: PlanCtx| -> String {
+    let mlflow_render = |ctx: PlanCtx| -> (String, String) {
         let sel = Selection::modules(["mlflow"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
         let (_, out) = p
@@ -455,11 +460,18 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
             .expect("MLflow is in the render set");
         let _: Value = serde_yaml::from_str(&out.fragment)
             .expect("rendered MLflow fragment must be valid YAML");
-        out.fragment.clone()
+        let env = out
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("/.env/mlflow.env"))
+            .expect("MLflow env file")
+            .contents
+            .clone();
+        (out.fragment.clone(), env)
     };
 
     // Default → SeaweedFS (S3).
-    let s3 = mlflow_fragment(PlanCtx::default());
+    let (s3, s3_env) = mlflow_render(PlanCtx::default());
     let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
     let svc = &s3_yaml["services"]["mlflow"];
 
@@ -483,13 +495,12 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     );
 
     // S3 branch: static AWS keys from the typed credential (no `:-` fallback), no Azure leak.
-    let env = &svc["environment"];
-    assert_eq!(env["AWS_ACCESS_KEY_ID"].as_str(), Some("seaweedfs"));
+    assert!(s3_env.contains("AWS_ACCESS_KEY_ID=seaweedfs"));
     assert!(
         !s3.contains("${AWS_ACCESS_KEY_ID:-"),
         "no fallback hack: {s3}"
     );
-    assert!(env["AZURE_STORAGE_CONNECTION_STRING"].is_null());
+    assert!(!s3_env.contains("AZURE_STORAGE_CONNECTION_STRING"));
 
     // depends_on follows the chosen providers: db healthy + seaweedfs-init completed.
     let dep = &svc["depends_on"];
@@ -506,18 +517,18 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
         "object_store".to_string(),
         vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
     );
-    let azure = mlflow_fragment(PlanCtx {
+    let (azure, azure_env) = mlflow_render(PlanCtx {
         provider_preference: preference,
         ..Default::default()
     });
     let azure_yaml: Value = serde_yaml::from_str(&azure).unwrap();
     let svc = &azure_yaml["services"]["mlflow"];
     assert!(
-        !svc["environment"]["AZURE_STORAGE_CONNECTION_STRING"].is_null(),
-        "Azure connection string present: {azure}"
+        azure_env.contains("AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol="),
+        "Azure connection string present: {azure_env}"
     );
     assert!(
-        svc["environment"]["AWS_ACCESS_KEY_ID"].is_null(),
+        !azure_env.contains("AWS_ACCESS_KEY_ID"),
         "no AWS keys under Azure"
     );
     assert!(
@@ -564,13 +575,18 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
     let doc: Value = serde_yaml::from_str(frag).expect("azurite fragment must be valid YAML");
     let init = &doc["services"]["azurite-init"];
 
-    // The connection string came from the typed credential, not a `${VAR}` placeholder.
-    assert_eq!(
-        init["environment"]["AZURE_STORAGE_CONNECTION_STRING"]
-            .as_str()
-            .map(|s| s.starts_with("DefaultEndpointsProtocol=")),
-        Some(true),
-        "connection string rendered from typed credential: {frag}"
+    // The connection string came from the typed credential and is written to the ignored
+    // service env file, not the committed fragment.
+    let env = out
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("/.env/azurite-init.env"))
+        .expect("Azurite init env file");
+    assert!(
+        env.contents
+            .starts_with("AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol="),
+        "connection string rendered from typed credential: {}",
+        env.contents
     );
     // The container-init iterates the provisioned `objects` (MLflow demands one).
     assert!(
@@ -756,13 +772,17 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
     let doc: Value =
         serde_yaml::from_str(&out.fragment).expect("headwaters fragment must be valid YAML");
     let svc = &doc["services"]["headwaters"];
-    let env = &svc["environment"];
+    let env = out
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("/.env/headwaters.env"))
+        .expect("Headwaters env file");
     assert!(
-        env["DATABASE_URL"]
-            .as_str()
-            .is_some_and(|u| u.contains("@db:5432/lineage")),
+        env.contents.lines().any(|line| {
+            line.starts_with("DATABASE_URL=postgresql://") && line.ends_with("@db:5432/lineage")
+        }),
         "DATABASE_URL comes from the resolved relational_db url: {}",
-        out.fragment
+        env.contents
     );
     // The container invokes the headwaters CLI directly, pointing it at the mounted config.
     let command: Vec<&str> = svc["command"]
@@ -797,7 +817,13 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
         .collect();
     assert_eq!(
         healthcheck_test,
-        ["CMD", "/usr/local/bin/app", "healthcheck"]
+        [
+            "CMD",
+            "/usr/local/bin/app",
+            "healthcheck",
+            "--config",
+            "/etc/headwaters/config.toml"
+        ]
     );
 
     // The generated `config.toml` carries the effective config: the UI knob defaults to
@@ -1228,6 +1254,14 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
             .map(|(_, out)| out.fragment.clone())
             .unwrap()
     };
+    let rendered_file = |id: &str, suffix: &str| {
+        p.renders
+            .iter()
+            .find(|(module, _)| module == &ModuleId::from(id))
+            .and_then(|(_, out)| out.files.iter().find(|file| file.path.ends_with(suffix)))
+            .map(|file| file.contents.clone())
+            .unwrap()
+    };
 
     // No fragment carries a compose `${VAR}` in its rendered body — all values are wired in at
     // plan time. (Header comments may *mention* `${VAR}` explanatorily, so check non-comment
@@ -1264,17 +1298,26 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     assert!(frag("seaweedfs").contains("\"8333\""));
     assert!(frag("jaeger").contains("\"16686\""));
 
-    // Postgres credentials are concrete, in both the container env and the pgweb URL.
+    // Postgres credentials live in ignored files, not the committed fragment.
     let pg = frag("postgres");
-    assert!(pg.contains("POSTGRES_USER: postgres"));
-    assert!(pg.contains("postgres://postgres:postgres@db:5432/postgres"));
+    assert!(!pg.contains("postgres:postgres@"));
+    assert!(rendered_file("postgres", "/.env/db.env").contains("POSTGRES_USER=postgres"));
+    assert!(
+        rendered_file("postgres", "/.env/pgweb.env")
+            .lines()
+            .any(|line| {
+                line.starts_with("DATABASE_URL=postgres://")
+                    && line.contains("@db:5432/postgres")
+            })
+    );
 
     // seaweedfs-init reads its S3 credential from the typed connection (the resolved
     // `seaweedfs`/`us-east-1` values), with no `${AWS_*:-…}` fallback, and iterates the
     // provisioned buckets directly.
     let sw = frag("seaweedfs");
-    assert!(sw.contains("AWS_ACCESS_KEY_ID: seaweedfs"));
-    assert!(sw.contains("AWS_DEFAULT_REGION: us-east-1"));
+    let sw_env = rendered_file("seaweedfs", "/.env/seaweedfs-init.env");
+    assert!(sw_env.contains("AWS_ACCESS_KEY_ID=seaweedfs"));
+    assert!(sw_env.contains("AWS_DEFAULT_REGION=us-east-1"));
     assert!(sw.contains("s3 mb s3://unity"));
     assert!(sw.contains("s3 mb s3://mlflow"));
 
@@ -1537,12 +1580,24 @@ mod auth {
                 "authelia mounts {alias}"
             );
         }
+        let users = out
+            .files
+            .iter()
+            .find(|f| f.alias.as_deref() == Some("authelia_users"))
+            .expect("authelia_users");
+        assert_eq!(users.path, "users.yml");
+        assert!(users.preserve, "users.yml is operator-owned");
 
         // The top-level compose includes the authelia fragment.
         let arts = render_all(&p);
         assert!(
             arts.compose.contains("./modules/authelia/compose.yaml"),
             "compose includes the authelia fragment:\n{}",
+            arts.compose
+        );
+        assert!(
+            arts.compose.contains("file: ./users.yml"),
+            "users.yml is mounted from the environment root:\n{}",
             arts.compose
         );
 

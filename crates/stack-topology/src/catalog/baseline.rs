@@ -148,6 +148,32 @@ fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
     }
 }
 
+/// A generated credential-bearing file loaded through Compose `env_file`.
+fn sensitive_file(path: &str, contents: &str) -> RenderFile {
+    RenderFile {
+        path: path.into(),
+        contents: contents.into(),
+        alias: None,
+        sensitive: true,
+        secret_alias: None,
+        at_root: false,
+        preserve: false,
+    }
+}
+
+/// A generated credential-bearing file declared as a top-level Compose secret.
+fn secret_file(path: &str, alias: &str, contents: &str) -> RenderFile {
+    RenderFile {
+        path: path.into(),
+        contents: contents.into(),
+        alias: None,
+        sensitive: true,
+        secret_alias: Some(alias.into()),
+        at_root: false,
+        preserve: false,
+    }
+}
+
 /// Helper: a string knob for a container image reference, defaulting to `default`.
 ///
 /// `key` is the public snake_case identifier (typically `"image"` or `"init_image"`);
@@ -291,13 +317,42 @@ fn authelia() -> Arc<dyn Module> {
                     )
                     .into(),
                     alias: Some("authelia_config".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: false,
+                    preserve: false,
                 },
+                // Operator-facing: lives next to `compose.yaml` so users can find and edit
+                // local accounts. Seeded once (`preserve`) so later renders leave edits alone.
                 RenderFile {
                     path: "users.yml".into(),
                     contents: include_str!("../../templates/gateway/authelia.users.yml.jinja")
                         .into(),
                     alias: Some("authelia_users".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: true,
+                    preserve: true,
                 },
+                sensitive_file(
+                    ".env/authelia.env",
+                    include_str!("../../templates/gateway/authelia.env.jinja"),
+                ),
+                secret_file(
+                    "secrets/session_secret",
+                    "authelia_session_secret",
+                    "insecure_session_secret_change_me\n",
+                ),
+                secret_file(
+                    "secrets/storage_encryption_key",
+                    "authelia_storage_encryption_key",
+                    "insecure_storage_encryption_key_change_me\n",
+                ),
+                secret_file(
+                    "secrets/jwt_secret",
+                    "authelia_jwt_secret",
+                    "insecure_jwt_secret_change_me\n",
+                ),
             ],
         ),
     })
@@ -366,15 +421,36 @@ fn postgres() -> Arc<dyn Module> {
         ],
         render: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
-            vec![RenderFile {
-                // Rendered from the databases the planner hands the provider via
-                // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
-                // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
-                path: "init-databases.sh".into(),
-                contents: include_str!("../../templates/modules/postgres/init-databases.sh.jinja")
+            vec![
+                RenderFile {
+                    // Rendered from the databases the planner hands the provider via
+                    // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
+                    // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
+                    path: "init-databases.sh".into(),
+                    contents: include_str!(
+                        "../../templates/modules/postgres/init-databases.sh.jinja"
+                    )
                     .into(),
-                alias: Some("postgres_init".into()),
-            }],
+                    alias: Some("postgres_init".into()),
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: false,
+                    preserve: false,
+                },
+                sensitive_file(
+                    ".env/db.env",
+                    include_str!("../../templates/modules/postgres/db.env.jinja"),
+                ),
+                sensitive_file(
+                    ".env/pgweb.env",
+                    include_str!("../../templates/modules/postgres/pgweb.env.jinja"),
+                ),
+                secret_file(
+                    "secrets/postgres_password",
+                    "postgres_password",
+                    "postgres\n",
+                ),
+            ],
         ),
     })
 }
@@ -448,9 +524,13 @@ fn seaweedfs() -> Arc<dyn Module> {
                 "SEAWEEDFS_INIT_IMAGE",
             ),
         ],
-        render: template(include_str!(
-            "../../templates/modules/seaweedfs/compose.yaml.jinja"
-        )),
+        render: template_with_files(
+            include_str!("../../templates/modules/seaweedfs/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/seaweedfs-init.env",
+                include_str!("../../templates/modules/seaweedfs/init.env.jinja"),
+            )],
+        ),
     })
 }
 
@@ -521,9 +601,13 @@ fn azurite() -> Arc<dyn Module> {
                 "AZURITE_INIT_IMAGE",
             ),
         ],
-        render: template(include_str!(
-            "../../templates/modules/azurite/compose.yaml.jinja"
-        )),
+        render: template_with_files(
+            include_str!("../../templates/modules/azurite/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/azurite-init.env",
+                include_str!("../../templates/modules/azurite/init.env.jinja"),
+            )],
+        ),
     })
 }
 
@@ -609,9 +693,13 @@ fn mlflow() -> Arc<dyn Module> {
             images::MLFLOW,
             "MLFLOW_IMAGE",
         )],
-        render: template(include_str!(
-            "../../templates/modules/mlflow/compose.yaml.jinja"
-        )),
+        render: template_with_files(
+            include_str!("../../templates/modules/mlflow/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/mlflow.env",
+                include_str!("../../templates/modules/mlflow/mlflow.env.jinja"),
+            )],
+        ),
     })
 }
 
@@ -674,9 +762,13 @@ fn unity_catalog() -> Arc<dyn Module> {
             images::UNITY_CATALOG,
             "UC_IMAGE",
         )],
-        render: template(include_str!(
-            "../../templates/modules/unity-catalog/compose.yaml.jinja"
-        )),
+        render: template_with_files(
+            include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
+            vec![sensitive_file(
+                ".env/unitycatalog.env",
+                include_str!("../../templates/modules/unity-catalog/unitycatalog.env.jinja"),
+            )],
+        ),
     })
 }
 
@@ -810,12 +902,28 @@ impl Headwaters {
             // over the file so the secret never lands in the checked-in config.
             render: template_with_files(
                 include_str!("../../templates/modules/headwaters/compose.yaml.jinja"),
-                vec![RenderFile {
-                    path: "config.toml".into(),
-                    contents: include_str!("../../templates/modules/headwaters/config.toml.jinja")
+                vec![
+                    RenderFile {
+                        path: "config.toml".into(),
+                        contents: include_str!(
+                            "../../templates/modules/headwaters/config.toml.jinja"
+                        )
                         .into(),
-                    alias: Some("headwaters_config".into()),
-                }],
+                        alias: Some("headwaters_config".into()),
+                        sensitive: false,
+                        secret_alias: None,
+                        at_root: false,
+                        preserve: false,
+                    },
+                    sensitive_file(
+                        ".env/headwaters-migrate.env",
+                        include_str!("../../templates/modules/headwaters/database.env.jinja"),
+                    ),
+                    sensitive_file(
+                        ".env/headwaters.env",
+                        include_str!("../../templates/modules/headwaters/database.env.jinja"),
+                    ),
+                ],
             ),
         }
     }

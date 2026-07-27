@@ -309,6 +309,14 @@ impl RenderSpec {
                             .as_deref()
                             .map(|a| render_template(&mut env, a, ctx))
                             .transpose()?,
+                        sensitive: f.sensitive,
+                        secret_alias: f
+                            .secret_alias
+                            .as_deref()
+                            .map(|a| render_template(&mut env, a, ctx))
+                            .transpose()?,
+                        at_root: f.at_root,
+                        preserve: f.preserve,
                     })
                 })
                 .collect::<Result<_, RenderError>>()?,

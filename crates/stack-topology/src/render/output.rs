@@ -25,6 +25,10 @@ pub struct OutputFile {
     pub path: String,
     /// The file's contents.
     pub contents: String,
+    /// Whether the file contains credentials and requires restricted permissions.
+    pub sensitive: bool,
+    /// Skip writing when the destination already exists (operator-owned files).
+    pub preserve: bool,
 }
 
 /// Every file a [`Plan`] produces, flattened to write-ready `(path, contents)` pairs in a
@@ -50,16 +54,28 @@ pub(crate) fn materialize(plan: &Plan) -> MaterializedOutput {
         OutputFile {
             path: "compose.yaml".into(),
             contents: artifacts.compose,
+            sensitive: false,
+            preserve: false,
         },
         OutputFile {
             path: ".env".into(),
             contents: artifacts.env,
+            sensitive: true,
+            preserve: false,
+        },
+        OutputFile {
+            path: ".gitignore".into(),
+            contents: artifacts.gitignore,
+            sensitive: false,
+            preserve: false,
         },
         // A human-readable, at-a-glance summary of the gateway layout (routes → services).
         // Pure to build (see `report::layout_report`), so it keeps `materialize` pure.
         OutputFile {
             path: "LAYOUT.md".into(),
             contents: crate::report::layout_report(plan),
+            sensitive: false,
+            preserve: false,
         },
     ];
 
@@ -76,22 +92,29 @@ pub(crate) fn materialize(plan: &Plan) -> MaterializedOutput {
         files.push(OutputFile {
             path: ENVOY_CONFIG_PATH.into(),
             contents: artifacts.envoy,
+            sensitive: false,
+            preserve: false,
         });
     }
 
     // Each module owns a `modules/<id>/` directory: its compose fragment (skipped when empty)
-    // plus any config files it emits (their `path` is already rooted under that directory).
+    // plus any config files it emits (their `path` is already rooted under that directory,
+    // or at the environment root when marked `at_root`).
     for (module, out) in &plan.renders {
         if !out.fragment.trim().is_empty() {
             files.push(OutputFile {
                 path: format!("modules/{module}/compose.yaml"),
                 contents: out.fragment.clone(),
+                sensitive: false,
+                preserve: false,
             });
         }
         for file in &out.files {
             files.push(OutputFile {
                 path: file.path.clone(),
                 contents: file.contents.clone(),
+                sensitive: file.sensitive,
+                preserve: file.preserve,
             });
         }
     }
@@ -108,10 +131,20 @@ impl MaterializedOutput {
     pub fn write_to(&self, dir: &std::path::Path) -> std::io::Result<()> {
         for file in &self.files {
             let path = dir.join(&file.path);
+            // Operator-owned files are seeded once and left alone thereafter so local edits
+            // (e.g. Authelia users) survive subsequent renders.
+            if file.preserve && path.exists() {
+                continue;
+            }
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&path, &file.contents)?;
+            #[cfg(unix)]
+            if file.sensitive {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            }
         }
         Ok(())
     }
@@ -147,6 +180,48 @@ mod tests {
                 file.path
             );
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_to_preserves_existing_operator_owned_files() {
+        // Force auth on so Authelia (and its root users.yml) is in the graph.
+        let mut selection = Selection::modules(["envoy", "postgres"]);
+        selection
+            .knob_overrides
+            .entry("envoy".into())
+            .or_default()
+            .insert("auth".into(), "true".into());
+        let plan = baseline_catalog()
+            .plan(
+                &selection,
+                &PlanCtx {
+                    env_name: "auth-preserve".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let out = plan.materialize();
+        assert!(
+            out.files
+                .iter()
+                .any(|f| f.path == "users.yml" && f.preserve),
+            "Authelia users.yml should be a preserved root file"
+        );
+
+        let dir =
+            std::env::temp_dir().join(format!("stack-topology-preserve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        out.write_to(&dir).unwrap();
+
+        let users = dir.join("users.yml");
+        assert!(users.is_file());
+        std::fs::write(&users, "users:\n  edited: {}\n").unwrap();
+
+        // Re-write: preserved files must keep the local edit.
+        out.write_to(&dir).unwrap();
+        let after = std::fs::read_to_string(&users).unwrap();
+        assert_eq!(after, "users:\n  edited: {}\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

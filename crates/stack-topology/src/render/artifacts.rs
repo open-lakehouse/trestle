@@ -262,6 +262,18 @@ pub fn render_compose(head: &HeadFile) -> String {
             );
         }
     }
+    if !head.secrets.is_empty() {
+        push_lines(&mut out, &["", "secrets:"]);
+        for secret in &head.secrets {
+            push_lines(
+                &mut out,
+                &[
+                    &format!("  {}:", secret.alias),
+                    &format!("    file: ./{}", secret.path),
+                ],
+            );
+        }
+    }
     push_lines(&mut out, &["", "include:"]);
     for inc in &head.includes {
         push_lines(
@@ -294,6 +306,8 @@ pub struct Artifacts {
     pub env: String,
     /// The top-level `compose.yaml`.
     pub compose: String,
+    /// Ignore rules for runtime data and generated credential-bearing files.
+    pub gitignore: String,
 }
 
 /// Render the stack-aggregated artifacts for `plan`. Per-module compose fragments and their
@@ -342,5 +356,6 @@ pub fn render_all(plan: &Plan) -> Artifacts {
         envoy,
         env: render_env(&plan.env, &referenced),
         compose: render_compose(&head),
+        gitignore: ".data/\n.env\nmodules/*/.env/\nmodules/*/secrets/\n".into(),
     }
 }

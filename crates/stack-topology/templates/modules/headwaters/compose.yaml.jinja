@@ -1,5 +1,4 @@
 # Headwaters lineage service
-{%- set db = connections.relational_db.0 %}
 services:
   # One-shot: apply database migrations, then exit. The `serve` service refuses to start
   # against a schema that is behind, so migrations run here first and `serve` gates on this
@@ -14,8 +13,9 @@ services:
       {{ dep.service }}:
         condition: {{ dep.condition }}
 {%- endfor %}
-    environment:
-      DATABASE_URL: "{{ db.url }}"
+    env_file:
+      - path: ./modules/headwaters/.env/headwaters-migrate.env
+        format: raw
     configs:
       - source: headwaters_config
         target: /etc/headwaters/config.toml
@@ -31,15 +31,16 @@ services:
       {{ dep.service }}:
         condition: {{ dep.condition }}
 {%- endfor %}
-    environment:
-      DATABASE_URL: "{{ db.url }}"
+    env_file:
+      - path: ./modules/headwaters/.env/headwaters.env
+        format: raw
     configs:
       - source: headwaters_config
         target: /etc/headwaters/config.toml
     expose:
       - "8091"
     healthcheck:
-      test: ["CMD", "/usr/local/bin/app", "healthcheck"]
+      test: ["CMD", "/usr/local/bin/app", "healthcheck", "--config", "/etc/headwaters/config.toml"]
       interval: 30s
       timeout: 5s
       start_period: 20s

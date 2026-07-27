@@ -18,7 +18,6 @@ services:
       retries: 10
       start_period: 3s
 {%- if objects %}
-{%- set obj = connections.object_store.0 %}
 
   azurite-init:
     image: {{ knobs.init_image }}
@@ -26,8 +25,9 @@ services:
     depends_on:
       azurite:
         condition: service_healthy
-    environment:
-      AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
+    env_file:
+      - path: ./modules/azurite/.env/azurite-init.env
+        format: raw
     entrypoint:
       - "sh"
       - "-c"

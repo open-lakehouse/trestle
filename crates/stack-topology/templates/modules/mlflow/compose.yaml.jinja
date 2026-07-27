@@ -1,6 +1,4 @@
 # MLflow tracking server
-{%- set db = connections.relational_db.0 %}
-{%- set obj = connections.object_store.0 %}
 services:
   mlflow:
     image: {{ knobs.image }}
@@ -13,10 +11,6 @@ services:
     command:
       - "mlflow"
       - "server"
-      - "--backend-store-uri"
-      - "{{ db.url }}"
-      - "--artifacts-destination"
-      - "{{ obj.uri }}"
       - "--serve-artifacts"
       - "--host"
       - "0.0.0.0"
@@ -24,15 +18,9 @@ services:
       - "5000"
       - "--static-prefix"
       - "{{ env.BASE_PATH }}"
-    environment:
-{%- if obj.credential.flavour == "s3" %}
-      MLFLOW_S3_ENDPOINT_URL: {{ obj.endpoint }}
-      AWS_ACCESS_KEY_ID: {{ obj.credential.access_key_id }}
-      AWS_SECRET_ACCESS_KEY: {{ obj.credential.secret_access_key }}
-      AWS_DEFAULT_REGION: {{ obj.credential.region }}
-{%- else %}
-      AZURE_STORAGE_CONNECTION_STRING: {{ obj.credential.connection_string }}
-{%- endif %}
+    env_file:
+      - path: ./modules/mlflow/.env/mlflow.env
+        format: raw
     expose:
       - "5000"
     healthcheck:
