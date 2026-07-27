@@ -1,0 +1,8 @@
+# Headwaters service config
+port = 8091
+
+[ui]
+# Whether to serve the bundled lineage web UI
+serve = true
+# a static prefix applied to all server routes/paths
+base_path = "/lineage"

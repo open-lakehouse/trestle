@@ -1,0 +1,17 @@
+# Authelia user database — rendered by the `authelia` module. File-based auth for the showcase.
+#
+# The bundled demo user logs in with username `demo` / password `authelia`. Its `email` and
+# `displayname` populate the trusted `Remote-Email` / `Remote-Name` headers Envoy forwards to
+# upstreams. The `password` is an argon2id hash (generate your own with
+# `docker run authelia/authelia:latest authelia crypto hash generate argon2 --password '<pw>'`).
+#
+# Add users by copying the block below; change the password hash and the email/displayname.
+users:
+  demo:
+    disabled: false
+    displayname: "Demo User"
+    # argon2id hash of "authelia".
+    password: "$argon2id$v=19$m=65536,t=3,p=4$BpLnfgDsc2WD8F2q$o/vzA4myCqZZ36bUGsDY//8mKUYNZZaR0t4MFFSs+iM"
+    email: demo@example.com
+    groups:
+      - admins

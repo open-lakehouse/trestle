@@ -1,0 +1,39 @@
+# SeaweedFS + one-shot bucket init
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    restart: unless-stopped
+    command: mini -dir=/data
+    expose:
+      - "9333"
+      - "8333"
+    volumes:
+      - ./.data/seaweedfs:/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "wget -q --spider http://127.0.0.1:9333/ && echo ok || exit 1"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  seaweedfs-init:
+    image: amazon/aws-cli:latest
+    restart: on-failure
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: seaweedfs
+      AWS_SECRET_ACCESS_KEY: seaweedfs
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint:
+      - "sh"
+      - "-c"
+      - |
+        echo "Waiting for SeaweedFS S3...";
+        until aws --endpoint-url http://seaweedfs:8333 s3 ls >/dev/null 2>&1; do sleep 2; done;
+        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://unity 2>&1 || true;
+        aws --endpoint-url http://seaweedfs:8333 s3 mb s3://mlflow 2>&1 || true;
+        echo "Buckets ready.";

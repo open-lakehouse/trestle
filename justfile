@@ -85,3 +85,70 @@ homebrew-formula TAG:
     --desc "Unified CLI for proto-driven code generation and full-project scaffolding" \
     --homepage https://github.com/open-lakehouse/trestle \
     --checksums-dir "$d"
+
+tr *args:
+  cargo run --bin trestle {{ args }}
+
+# ---------------------------------------------------------------------------
+# trestle env scenario fixtures (see test/README.md)
+# ---------------------------------------------------------------------------
+
+# List curated scenario names under test/scenarios/.
+env-scenarios:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for d in test/scenarios/*/; do
+    basename "$d"
+  done
+
+# Render a scenario manifest into scratch/env/<name>/.
+env-render SCENARIO:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  src="test/scenarios/{{ SCENARIO }}/env.toml"
+  dst="scratch/env/{{ SCENARIO }}"
+  [[ -f "$src" ]] || { echo "unknown scenario: {{ SCENARIO }} (expected $src)" >&2; exit 1; }
+  mkdir -p "$dst"
+  cp "$src" "$dst/env.toml"
+  cargo run --bin trestle -- env render "$dst" --force
+
+# Validate rendered compose syntax for a scenario.
+env-validate SCENARIO:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  dir="scratch/env/{{ SCENARIO }}"
+  [[ -f "$dir/compose.yaml" ]] || { echo "run \`just env-render {{ SCENARIO }}\` first" >&2; exit 1; }
+  docker compose -f "$dir/compose.yaml" --project-directory "$dir" config >/dev/null
+  echo ">> compose config OK for {{ SCENARIO }}"
+
+# Start a rendered scenario and wait for healthchecks.
+env-up SCENARIO:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  dir="scratch/env/{{ SCENARIO }}"
+  [[ -f "$dir/compose.yaml" ]] || { echo "run \`just env-render {{ SCENARIO }}\` first" >&2; exit 1; }
+  docker compose -f "$dir/compose.yaml" --project-directory "$dir" up -d --wait
+
+# Tear down a running scenario.
+env-down SCENARIO:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  dir="scratch/env/{{ SCENARIO }}"
+  [[ -f "$dir/compose.yaml" ]] || { echo "nothing to tear down for {{ SCENARIO }}" >&2; exit 0; }
+  docker compose -f "$dir/compose.yaml" --project-directory "$dir" down -v
+
+# Re-render every scenario and refresh test/expected/ golden fixtures.
+env-golden-refresh:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for scenario in test/scenarios/*/; do
+    name="$(basename "$scenario")"
+    echo ">> rendering $name"
+    just env-render "$name"
+    rm -rf "test/expected/$name"
+    mkdir -p "test/expected/$name"
+    # Copy rendered artifacts only — skip runtime volume data (./.data).
+    rsync -a --exclude='.data' "scratch/env/$name/" "test/expected/$name/"
+    python3 test/redact-goldens.py "test/expected/$name"
+  done
+  echo ">> golden fixtures refreshed under test/expected/"

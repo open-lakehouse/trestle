@@ -52,9 +52,9 @@ pub struct EnvNewArgs {
     #[clap(long = "select", value_name = "MODULE[,MODULE]", value_delimiter = ',')]
     pub select: Vec<String>,
 
-    /// Knob override, `module.KNOB=value` (e.g. `--set envoy.ENVOY_AUTH=true`).
+    /// Knob override, `module.key=value` (e.g. `--set envoy.auth=true`).
     /// Repeatable. A value set here is not asked for again by the wizard.
-    #[clap(long = "set", value_name = "MODULE.KNOB=VALUE", value_parser = parse_knob_override)]
+    #[clap(long = "set", value_name = "MODULE.KEY=VALUE", value_parser = parse_knob_override)]
     pub knobs: Vec<((String, String), String)>,
 
     /// Prefer a provider for a resource role, `role=provider[,provider...]`
@@ -102,19 +102,19 @@ pub struct EnvListModulesArgs {
     pub knobs: bool,
 }
 
-/// Parse a `module.KNOB=value` override. The value is split on the *first* `=`
+/// Parse a `module.key=value` override. The value is split on the *first* `=`
 /// (so a value may itself contain `=`, e.g. a connection string), and the
-/// `module.KNOB` left-hand side on its *first* `.`.
+/// `module.key` left-hand side on its *first* `.`.
 fn parse_knob_override(s: &str) -> std::result::Result<((String, String), String), String> {
     let (lhs, value) = s
         .split_once('=')
-        .ok_or_else(|| format!("expected module.KNOB=value, got `{s}`"))?;
+        .ok_or_else(|| format!("expected module.key=value, got `{s}`"))?;
     let (module, knob) = lhs
         .split_once('.')
-        .ok_or_else(|| format!("expected module.KNOB=value, got `{s}`"))?;
+        .ok_or_else(|| format!("expected module.key=value, got `{s}`"))?;
     let (module, knob) = (module.trim(), knob.trim());
     if module.is_empty() || knob.is_empty() {
-        return Err(format!("expected module.KNOB=value, got `{s}`"));
+        return Err(format!("expected module.key=value, got `{s}`"));
     }
     Ok(((module.to_string(), knob.to_string()), value.to_string()))
 }

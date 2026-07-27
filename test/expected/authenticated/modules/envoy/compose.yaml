@@ -1,0 +1,16 @@
+# Envoy gateway
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.34-latest
+    restart: unless-stopped
+    configs:
+      - source: envoy_config
+        target: /etc/envoy/envoy.yaml
+    command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    depends_on:
+      authelia:
+        condition: service_healthy
+    ports:
+      - "9080:10000"
+      - "9100:9100"
+      - "9901:9901"
