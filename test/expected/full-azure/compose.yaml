@@ -10,6 +10,10 @@ configs:
   postgres_init:
     file: ./modules/postgres/init-databases.sh
 
+secrets:
+  postgres_password:
+    file: ./modules/postgres/secrets/postgres_password
+
 include:
   - path: ./modules/azurite/compose.yaml
     project_directory: .

@@ -68,10 +68,33 @@ aliases when resolving overrides.
 - Postgres/S3/Azure/Authelia credentials (typed connection data; changing them
   requires coordinated catalog updates, not a single env var)
 
+## Runtime environment and secrets
+
+Rendered stacks keep container configuration out of Compose YAML:
+
+- Per-service variables are written under `modules/<module>/.env/` and loaded with
+  `env_file` using Compose's raw parser, so URLs and connection strings are not
+  reinterpreted.
+- Postgres and Authelia use top-level Compose `secrets` plus their native `*_FILE`
+  variables. Other images without a file-secret contract keep credentials in ignored
+  service env files.
+- Generated `.env`, module `.env/` and `secrets/` directories, and `.data/` are covered by
+  the generated environment-root `.gitignore`. Sensitive files are written with mode `0600`
+  on Unix.
+- Operator-owned files such as Authelia's `users.yml` are written at the environment root
+  (beside `compose.yaml`) and are **not** overwritten on subsequent renders. Delete the
+  file and re-render to restore the catalog default.
+
+An env file prevents credentials from landing in committed YAML; it does not hide them from
+the container process environment. Commands such as `docker compose config` may display the
+resolved environment, so treat that output as sensitive.
+
 ## Golden tests
 
 `cargo test -p olai-trestle --test env_render` renders every scenario manifest
-and compares deterministic artifacts against `test/expected/<scenario>/`.
+and compares deterministic non-sensitive artifacts against `test/expected/<scenario>/`.
+Sensitive env and secret files are generated only in temporary directories and checked
+structurally (existence, references, ignore rules, and file permissions).
 Refresh goldens after intentional catalog changes:
 
 ```bash

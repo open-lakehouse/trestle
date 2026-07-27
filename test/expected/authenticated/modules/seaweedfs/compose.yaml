@@ -24,10 +24,9 @@ services:
     depends_on:
       seaweedfs:
         condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: seaweedfs
-      AWS_SECRET_ACCESS_KEY: seaweedfs
-      AWS_DEFAULT_REGION: us-east-1
+    env_file:
+      - path: ./modules/seaweedfs/.env/seaweedfs-init.env
+        format: raw
     entrypoint:
       - "sh"
       - "-c"

@@ -6,11 +6,21 @@ configs:
   authelia_config:
     file: ./modules/authelia/configuration.yml
   authelia_users:
-    file: ./modules/authelia/users.yml
+    file: ./users.yml
   envoy_config:
     file: ./modules/envoy/envoy.yaml
   postgres_init:
     file: ./modules/postgres/init-databases.sh
+
+secrets:
+  authelia_jwt_secret:
+    file: ./modules/authelia/secrets/jwt_secret
+  authelia_session_secret:
+    file: ./modules/authelia/secrets/session_secret
+  authelia_storage_encryption_key:
+    file: ./modules/authelia/secrets/storage_encryption_key
+  postgres_password:
+    file: ./modules/postgres/secrets/postgres_password
 
 include:
   - path: ./modules/authelia/compose.yaml

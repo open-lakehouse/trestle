@@ -15,16 +15,17 @@ services:
         target: /config/configuration.yml
       - source: authelia_users
         target: /config/users.yml
+    env_file:
+      - path: ./modules/authelia/.env/authelia.env
+        format: raw
+    secrets:
+      - authelia_session_secret
+      - authelia_storage_encryption_key
+      - authelia_jwt_secret
     volumes:
       # Local storage (SQLite + session/regulation state) persists across `compose down`/`up`
       # under the stack's data root, like every other stateful module.
       - "./.data/authelia:/data"
-    environment:
-      # Dev secrets — fine for a local showcase, NOT for production. Each is the value Authelia
-      # signs/encrypts with; override them (e.g. via `.env`) for anything shared.
-      AUTHELIA_SESSION_SECRET: "insecure_session_secret_change_me"
-      AUTHELIA_STORAGE_ENCRYPTION_KEY: "insecure_storage_encryption_key_change_me"
-      AUTHELIA_JWT_SECRET: "insecure_jwt_secret_change_me"
     healthcheck:
       # Authelia ships its own healthcheck script (hits /api/health on the configured port).
       test: ["CMD", "/app/healthcheck.sh"]

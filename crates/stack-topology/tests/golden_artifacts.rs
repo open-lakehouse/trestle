@@ -1306,8 +1306,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
         rendered_file("postgres", "/.env/pgweb.env")
             .lines()
             .any(|line| {
-                line.starts_with("DATABASE_URL=postgres://")
-                    && line.contains("@db:5432/postgres")
+                line.starts_with("DATABASE_URL=postgres://") && line.contains("@db:5432/postgres")
             })
     );
 

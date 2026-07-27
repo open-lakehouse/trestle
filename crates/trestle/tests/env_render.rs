@@ -74,43 +74,21 @@ fn collect_files(root: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// Redact credentials from rendered text before comparing it with committed goldens.
-///
-/// Runtime artifacts intentionally contain fixed local-development credentials, but those
-/// values must not be checked into the repository. Preserve every non-secret byte so the
-/// golden comparison still catches topology and rendering changes.
-fn redact_secrets(mut text: String) -> String {
-    for scheme in ["postgresql://", "postgres://"] {
-        let mut search_from = 0;
-        while let Some(offset) = text[search_from..].find(scheme) {
-            let start = search_from + offset;
-            let credentials = start + scheme.len();
-            let Some(at_offset) = text[credentials..].find('@') else {
-                break;
-            };
-            let at = credentials + at_offset;
-            text.replace_range(credentials..at, "<redacted>");
-            search_from = credentials + "<redacted>@".len();
-        }
-    }
-
-    let mut search_from = 0;
-    while let Some(offset) = text[search_from..].find("AccountKey=") {
-        let value_start = search_from + offset + "AccountKey=".len();
-        let Some(end_offset) = text[value_start..].find(';') else {
-            break;
-        };
-        let value_end = value_start + end_offset;
-        text.replace_range(value_start..value_end, "<redacted>");
-        search_from = value_start + "<redacted>".len();
-    }
-    text.trim_end_matches('\n').to_string()
+/// Sensitive runtime files are generated and tested in temporary output, never committed.
+fn is_sensitive_path(path: &str) -> bool {
+    path == ".env" || path.contains("/.env/") || path.contains("/secrets/")
 }
 
-/// Byte-compare every file under `got` against `want`.
+/// Byte-compare every non-sensitive file under `got` against `want`.
 fn assert_tree_matches(got: &Path, want: &Path, label: &str) {
-    let got_files = collect_files(got);
-    let want_files = collect_files(want);
+    let got_files: BTreeSet<_> = collect_files(got)
+        .into_iter()
+        .filter(|path| !is_sensitive_path(path))
+        .collect();
+    let want_files: BTreeSet<_> = collect_files(want)
+        .into_iter()
+        .filter(|path| !is_sensitive_path(path))
+        .collect();
     assert_eq!(
         got_files, want_files,
         "{label}: rendered file set differs from golden"
@@ -118,14 +96,6 @@ fn assert_tree_matches(got: &Path, want: &Path, label: &str) {
     for rel in &got_files {
         let got_bytes = fs::read(got.join(rel)).unwrap_or_else(|_| panic!("read {rel}"));
         let want_bytes = fs::read(want.join(rel)).unwrap_or_else(|_| panic!("read golden {rel}"));
-        let got_bytes = String::from_utf8(got_bytes)
-            .map(redact_secrets)
-            .map(String::into_bytes)
-            .unwrap_or_else(|bytes| bytes.into_bytes());
-        let want_bytes = String::from_utf8(want_bytes)
-            .map(redact_secrets)
-            .map(String::into_bytes)
-            .unwrap_or_else(|bytes| bytes.into_bytes());
         assert_eq!(
             got_bytes, want_bytes,
             "{label}: `{rel}` differs from golden"
@@ -162,7 +132,13 @@ fn env_new_writes_the_expected_layout() {
     write_env(&selection, &ctx, dir.path());
 
     // Top-level artifacts + the persisted manifest.
-    for f in ["compose.yaml", ".env", "LAYOUT.md", "env.toml"] {
+    for f in [
+        "compose.yaml",
+        ".env",
+        ".gitignore",
+        "LAYOUT.md",
+        "env.toml",
+    ] {
         assert!(dir.path().join(f).is_file(), "expected {f} to be written");
     }
     // Per-module fragments land under modules/<id>/.
@@ -263,6 +239,90 @@ fn scenario_renders_match_golden_fixtures() {
 }
 
 #[test]
+fn sensitive_runtime_files_are_generated_but_not_committed() {
+    for name in ["lakehouse", "authenticated", "full-azure"] {
+        let dir = tempfile::tempdir().unwrap();
+        render_scenario(name, dir.path());
+
+        let sensitive: Vec<_> = collect_files(dir.path())
+            .into_iter()
+            .filter(|path| is_sensitive_path(path))
+            .collect();
+        assert!(
+            !sensitive.is_empty(),
+            "{name} should generate sensitive files"
+        );
+
+        for path in &sensitive {
+            assert!(
+                !expected_dir().join(name).join(path).exists(),
+                "{path} must not be committed as a golden"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let mode = fs::metadata(dir.path().join(path))
+                    .expect("sensitive metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o600, "{path} should be owner-readable only");
+            }
+        }
+    }
+}
+
+#[test]
+fn compose_artifacts_reference_env_files_and_native_secrets_without_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    render_scenario("authenticated", dir.path());
+
+    let root = fs::read_to_string(dir.path().join("compose.yaml")).unwrap();
+    assert!(root.contains("secrets:\n"));
+    assert!(root.contains("postgres_password:"));
+    assert!(root.contains("authelia_session_secret:"));
+
+    let postgres = fs::read_to_string(dir.path().join("modules/postgres/compose.yaml")).unwrap();
+    assert!(postgres.contains("format: raw"));
+    assert!(postgres.contains("./modules/postgres/.env/db.env"));
+    assert!(postgres.contains("- postgres_password"));
+
+    let authelia = fs::read_to_string(dir.path().join("modules/authelia/compose.yaml")).unwrap();
+    assert!(authelia.contains("./modules/authelia/.env/authelia.env"));
+    assert!(authelia.contains("- authelia_jwt_secret"));
+
+    for path in collect_files(dir.path())
+        .into_iter()
+        .filter(|path| !is_sensitive_path(path))
+    {
+        let contents = fs::read_to_string(dir.path().join(&path)).unwrap();
+        for forbidden in [
+            "postgresql://postgres:postgres@",
+            "postgres://postgres:postgres@",
+            "AccountKey=",
+            "insecure_session_secret_change_me",
+            "insecure_storage_encryption_key_change_me",
+            "insecure_jwt_secret_change_me",
+        ] {
+            assert!(
+                !contents.contains(forbidden),
+                "{path} contains credential-bearing text `{forbidden}`"
+            );
+        }
+    }
+}
+
+#[test]
+fn generated_gitignore_covers_runtime_credentials_and_data() {
+    let dir = tempfile::tempdir().unwrap();
+    render_scenario("minimal", dir.path());
+    let ignore = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    for rule in [".data/", ".env", "modules/*/.env/", "modules/*/secrets/"] {
+        assert!(ignore.lines().any(|line| line == rule), "missing `{rule}`");
+    }
+}
+
+#[test]
 fn authenticated_scenario_pulls_in_authelia() {
     let dir = tempfile::tempdir().unwrap();
     render_scenario("authenticated", dir.path());
@@ -270,10 +330,36 @@ fn authenticated_scenario_pulls_in_authelia() {
         dir.path().join("modules/authelia/compose.yaml").is_file(),
         "authenticated scenario should render authelia"
     );
+    assert!(
+        dir.path().join("users.yml").is_file(),
+        "Authelia users.yml should live at the environment root"
+    );
+    let compose = fs::read_to_string(dir.path().join("compose.yaml")).unwrap();
+    assert!(
+        compose.contains("file: ./users.yml"),
+        "root compose should mount ./users.yml"
+    );
     let envoy_compose = fs::read_to_string(dir.path().join("modules/envoy/compose.yaml")).unwrap();
     assert!(
         envoy_compose.contains("authelia:"),
         "envoy should depend on authelia when auth=true"
+    );
+}
+
+#[test]
+fn users_yml_survives_rerender() {
+    let dir = tempfile::tempdir().unwrap();
+    render_scenario("authenticated", dir.path());
+    let users = dir.path().join("users.yml");
+    fs::write(&users, "# edited by operator\nusers: {}\n").unwrap();
+
+    let manifest = EnvManifest::read_from(&dir.path().join("env.toml")).unwrap();
+    render_manifest(&manifest, dir.path());
+
+    let after = fs::read_to_string(&users).unwrap();
+    assert_eq!(
+        after, "# edited by operator\nusers: {}\n",
+        "operator edits to users.yml must survive re-render"
     );
 }
 

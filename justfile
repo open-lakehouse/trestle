@@ -86,6 +86,7 @@ homebrew-formula TAG:
     --homepage https://github.com/open-lakehouse/trestle \
     --checksums-dir "$d"
 
+# Run the trestle tool with the given arguments.
 tr *args:
   cargo run --bin trestle {{ args }}
 
@@ -144,11 +145,19 @@ env-golden-refresh:
   for scenario in test/scenarios/*/; do
     name="$(basename "$scenario")"
     echo ">> rendering $name"
+    # Wipe scratch first so relocated/removed artifacts (and preserved operator files)
+    # cannot linger from a prior layout and pollute the goldens.
+    rm -rf "scratch/env/$name"
     just env-render "$name"
     rm -rf "test/expected/$name"
     mkdir -p "test/expected/$name"
-    # Copy rendered artifacts only — skip runtime volume data (./.data).
-    rsync -a --exclude='.data' "scratch/env/$name/" "test/expected/$name/"
-    python3 test/redact-goldens.py "test/expected/$name"
+    # Copy only reviewable artifacts. Runtime data, env files, and Compose secret sources
+    # are generated and tested in tempdirs but never committed.
+    rsync -a \
+      --exclude='.data' \
+      --exclude='.env' \
+      --exclude='.env/' \
+      --exclude='secrets/' \
+      "scratch/env/$name/" "test/expected/$name/"
   done
   echo ">> golden fixtures refreshed under test/expected/"

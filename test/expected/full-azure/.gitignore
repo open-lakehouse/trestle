@@ -1,0 +1,4 @@
+.data/
+.env
+modules/*/.env/
+modules/*/secrets/

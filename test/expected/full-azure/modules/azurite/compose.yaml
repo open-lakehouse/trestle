@@ -24,8 +24,9 @@ services:
     depends_on:
       azurite:
         condition: service_healthy
-    environment:
-      AZURE_STORAGE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=<redacted>;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+    env_file:
+      - path: ./modules/azurite/.env/azurite-init.env
+        format: raw
     entrypoint:
       - "sh"
       - "-c"

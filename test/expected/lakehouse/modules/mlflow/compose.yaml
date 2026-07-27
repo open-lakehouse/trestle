@@ -11,10 +11,6 @@ services:
     command:
       - "mlflow"
       - "server"
-      - "--backend-store-uri"
-      - "postgresql://<redacted>@db:5432/mlflow"
-      - "--artifacts-destination"
-      - "s3://mlflow"
       - "--serve-artifacts"
       - "--host"
       - "0.0.0.0"
@@ -22,11 +18,9 @@ services:
       - "5000"
       - "--static-prefix"
       - "/mlflow"
-    environment:
-      MLFLOW_S3_ENDPOINT_URL: http://envoy:9100
-      AWS_ACCESS_KEY_ID: seaweedfs
-      AWS_SECRET_ACCESS_KEY: seaweedfs
-      AWS_DEFAULT_REGION: us-east-1
+    env_file:
+      - path: ./modules/mlflow/.env/mlflow.env
+        format: raw
     expose:
       - "5000"
     healthcheck:
