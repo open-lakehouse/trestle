@@ -56,15 +56,6 @@ categories:
       `buf.build/anthropics/connect-rust` plugin; only the local
       `protoc-gen-buffa-packaging` plugin needs a cargo install. Off by default.
 
-# Lakehouse-side dependencies. `hard:` is silently auto-enabled; `soft:` is
-# pre-checked in the relevant category multi-select but can be deselected.
-lakehouse_requires:
-  hard: [databricks-emulator-env]
-  soft: [local-stack-postgres]
-  recommended_categories:
-    ml: [local-stack-mlflow]
-    storage: [local-stack-seaweedfs]
-
 # Local app-private components. Selection comes from the `frontend` / `ci`
 # categories via the resolver's compat shim (`when:` against the derived
 # `with_frontend` / `with_ci` flags below).
@@ -80,10 +71,6 @@ template_context:
   # Baked-in defaults that replace the dropped prompts (rust_edition, license).
   rust_edition: "2024"
   license: "Apache-2.0"
-  # Legacy compat values still referenced by some `.tmpl` files. `local_stack`
-  # being non-`none` signals that some local platform stack is active; the wizard
-  # always enables Envoy + (typically) Postgres, so `custom` is a safe default.
-  local_stack: "custom"
 
 post_init:
   - run: "git init -q && git add -A && git commit -q -m 'chore: scaffolded by trestle' || true"

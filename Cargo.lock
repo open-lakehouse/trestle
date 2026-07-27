@@ -1686,6 +1686,7 @@ dependencies = [
  "ignore",
  "minijinja",
  "olai-codegen",
+ "olai-stack-topology",
  "protobuf",
  "regex",
  "rstest",

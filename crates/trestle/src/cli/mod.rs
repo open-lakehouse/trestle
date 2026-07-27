@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod enrich_openapi;
+pub mod env;
 pub mod generate;
 pub mod list;
 pub mod new;
@@ -37,6 +38,9 @@ pub enum Commands {
     Generate(Box<generate::GenerateArgs>),
     /// Enrich an OpenAPI YAML spec with validation rules from buf JSON Schema files.
     EnrichOpenapi(enrich_openapi::EnrichOpenApiArgs),
+    /// Create and render composed Docker-Compose lakehouse environments.
+    #[command(subcommand)]
+    Env(env::EnvCommand),
     /// List embedded bases + apps.
     ListTemplates,
     /// Alias for `list-templates` filtered to apps only.
@@ -56,6 +60,7 @@ pub fn run() -> Result<()> {
         Commands::Init(args) | Commands::Config(args) => config::run(*args),
         Commands::Generate(args) => generate::run(*args),
         Commands::EnrichOpenapi(args) => enrich_openapi::run(args),
+        Commands::Env(cmd) => env::run(cmd),
         Commands::ListTemplates => list::run_templates(),
         Commands::ListApps => list::run_apps(),
         Commands::ListComponents(args) => list::run_components(args),
@@ -153,5 +158,92 @@ mod tests {
     #[test]
     fn unknown_subcommand_errors() {
         assert!(Cli::try_parse_from(["trestle", "frobnicate"]).is_err());
+    }
+
+    fn env_new(args: &[&str]) -> env::EnvNewArgs {
+        let mut full = vec!["trestle", "env", "new"];
+        full.extend_from_slice(args);
+        let Commands::Env(env::EnvCommand::New(a)) = parse(&full).command else {
+            panic!("expected env new");
+        };
+        *a
+    }
+
+    #[test]
+    fn env_new_parses_select_and_set() {
+        let args = env_new(&[
+            "lakehouse",
+            "--select",
+            "envoy,postgres",
+            "--set",
+            "envoy.ENVOY_AUTH=true",
+        ]);
+        assert_eq!(args.name, "lakehouse");
+        assert_eq!(
+            args.select,
+            vec!["envoy".to_string(), "postgres".to_string()]
+        );
+        assert_eq!(
+            args.knobs,
+            vec![(
+                ("envoy".to_string(), "ENVOY_AUTH".to_string()),
+                "true".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn env_new_set_value_may_contain_equals() {
+        // The value is split on the *first* `=`, so a value that itself contains
+        // `=` (e.g. a query string or base64 padding) survives intact.
+        let args = env_new(&["lh", "--set", "svc.OPTS=a=1&b=2"]);
+        assert_eq!(
+            args.knobs,
+            vec![(
+                ("svc".to_string(), "OPTS".to_string()),
+                "a=1&b=2".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn env_new_rejects_malformed_set() {
+        // No `.` in the module.KNOB half.
+        assert!(
+            Cli::try_parse_from(["trestle", "env", "new", "lh", "--set", "ENVOY_AUTH=true"])
+                .is_err()
+        );
+        // No `=` at all.
+        assert!(
+            Cli::try_parse_from(["trestle", "env", "new", "lh", "--set", "envoy.ENVOY_AUTH"])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn env_new_parses_prefer() {
+        let args = env_new(&["lh", "--prefer", "object_store=azurite,seaweedfs"]);
+        assert_eq!(
+            args.prefer,
+            vec![(
+                "object_store".to_string(),
+                vec!["azurite".to_string(), "seaweedfs".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn env_new_requires_a_name() {
+        assert!(Cli::try_parse_from(["trestle", "env", "new"]).is_err());
+    }
+
+    #[test]
+    fn env_render_defaults_dir_to_dot() {
+        let Commands::Env(env::EnvCommand::Render(args)) =
+            parse(&["trestle", "env", "render"]).command
+        else {
+            panic!("expected env render");
+        };
+        assert_eq!(args.dir, std::path::PathBuf::from("."));
     }
 }

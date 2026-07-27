@@ -1,41 +1,19 @@
-set dotenv-load := true
-set dotenv-filename := ".env.local"
+# Project recipes. The composed local dev environment is created separately with
+# `trestle env new` (which owns the Docker Compose surface); once it is rendered,
+# run `docker compose up` from that environment directory.
 
-default := "{{ stack_profile }}"
+# Show available recipes.
+default:
+    @just --list
 
-# Bring up the stack with the chosen Docker Compose profile.
-# Profiles: db | svc | full | notebooks
-{% raw %}up profile=default:
-    docker compose --profile {{ profile }} up -d{% endraw %}
+# Create (or overwrite) the local composed environment under ./env.
+env:
+    trestle env new {{ project_name }} --out-dir env --force
 
-# Stop everything and wipe volumes.
-down:
-    docker compose down -v
+# Re-render the environment from ./env/env.toml after editing the selection.
+env-render:
+    trestle env render env
 
-# Tail logs for a service (e.g. `just logs mlflow`).
-{% raw %}logs svc:
-    docker compose logs -f {{ svc }}{% endraw %}
-
-# Open a psql shell against the given database (default: $POSTGRES_DB).
-{% raw %}psql db="$POSTGRES_DB":
-    docker compose exec db psql -U $POSTGRES_USER -d {{ db }}{% endraw %}
-
-{% if 'local-stack-envoy' in stack.components -%}
-# Convenience: open the UIs in the default browser.
-mlflow-ui:
-    @python3 -c "import webbrowser; webbrowser.open('http://localhost:'+__import__('os').environ.get('ENVOY_PORT','9080')+'/mlflow')"
-
-uc-ui:
-    @python3 -c "import webbrowser; webbrowser.open('http://localhost:'+__import__('os').environ.get('ENVOY_PORT','9080')+'/unity-catalog')"
-
-notebooks:
-    @python3 -c "import webbrowser; webbrowser.open('http://localhost:'+__import__('os').environ.get('ENVOY_PORT','9080')+'/notebooks')"
-
-# Print the current envoy route table (helpful when debugging URL rewrites).
-routes:
-    @cat docker/envoy/envoy.yaml | grep -A2 'prefix:'
-{%- endif %}
-
-# Show what's running.
-status:
-    docker compose ps
+# Build proto descriptors + regenerate code.
+regen:
+    trestle generate
