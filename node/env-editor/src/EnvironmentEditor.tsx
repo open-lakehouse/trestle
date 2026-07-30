@@ -1,15 +1,9 @@
-import {
-  Button,
-  Card,
-  Separator,
-  TooltipProvider,
-} from "@open-lakehouse/ui-kit";
+import { Button, Card, TooltipProvider } from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
 import { AlertTriangle, Loader2, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArtifactsPanel } from "./artifacts/ArtifactsPanel";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
-import { KnobsStep } from "./knobs/KnobsStep";
 import { PlannerProvider, usePlanner } from "./planner";
 import { SelectionStep } from "./selection/SelectionStep";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
@@ -155,22 +149,15 @@ function EditorBody({
           {/* Left: selection + knobs + generate */}
           <div className="flex min-h-0 flex-col gap-4 overflow-auto">
             {catalog ? (
-              <>
-                <SelectionStep
-                  catalog={catalog}
-                  selectedModules={selection.modules}
-                  selectedCapabilities={selection.capabilities}
-                  onToggleModule={toggleModule}
-                  onToggleCapability={toggleCapability}
-                />
-                <Separator />
-                <KnobsStep
-                  catalog={catalog}
-                  selectedModules={selection.modules}
-                  overrides={selection.knob_overrides}
-                  onSetKnob={setKnob}
-                />
-              </>
+              <SelectionStep
+                catalog={catalog}
+                selectedModules={selection.modules}
+                selectedCapabilities={selection.capabilities}
+                overrides={selection.knob_overrides}
+                onToggleModule={toggleModule}
+                onToggleCapability={toggleCapability}
+                onSetKnob={setKnob}
+              />
             ) : (
               <p className="text-sm text-muted-foreground">Loading catalog…</p>
             )}
