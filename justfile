@@ -161,3 +161,48 @@ env-golden-refresh:
       "scratch/env/$name/" "test/expected/$name/"
   done
   echo ">> golden fixtures refreshed under test/expected/"
+
+# ---------------------------------------------------------------------------
+# Web: the environment-editor UI (node/) + its wasm planner (crates/stack-topology-wasm)
+# ---------------------------------------------------------------------------
+
+# The wasm-bindgen crate is pinned to `=0.2.126` in the workspace Cargo.toml; the
+# installed CLI must match exactly (the ABI schema is version-bound). Bump both
+# together if you change it.
+WASM_BINDGEN_VERSION := "0.2.126"
+
+# One-time toolchain setup for building the wasm planner.
+setup-wasm:
+  rustup target add wasm32-unknown-unknown
+  cargo install -f wasm-bindgen-cli --version {{ WASM_BINDGEN_VERSION }}
+
+# Build the wasm planner and emit the JS/wasm/.d.ts into node/stack-wasm/pkg/
+# (gitignored). Uses `--target web`, which the app consumes via a bare-specifier
+# Vite alias — no vite-plugin-wasm needed.
+build-stack-wasm:
+  cargo build -p stack-topology-wasm --target wasm32-unknown-unknown --release
+  wasm-bindgen --target web \
+    --out-dir node/stack-wasm/pkg \
+    target/wasm32-unknown-unknown/release/stack_topology_wasm.wasm
+
+# Install the node workspace dependencies (Bun).
+ui-install:
+  cd node && bun install
+
+# Run the demo app against the FIXTURE planner (no wasm build needed) — the
+# fastest way to iterate on the UI.
+ui-dev:
+  cd node && bun run dev
+
+# Build the wasm planner, then run the demo app against the REAL in-browser
+# planner (live catalog → plan → render).
+ui-dev-wasm: build-stack-wasm
+  cd node && VITE_ENABLE_WASM=true bun run dev
+
+# Production build of the demo app against the real wasm planner.
+ui-build-wasm: build-stack-wasm
+  cd node && VITE_ENABLE_WASM=true bun run build
+
+# Lint + typecheck the whole node workspace (Biome + tsc).
+ui-check:
+  cd node && bun run lint && bun run typecheck
