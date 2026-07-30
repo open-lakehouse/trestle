@@ -63,8 +63,9 @@ tracing = { version = "0.1", features = ["log"] }
 url = { version = "2.5", features = ["serde", "std"], default-features = false }
 uuid = { version = "1", features = ["serde"] }
 # The wasm-bindgen crate MUST be kept in lockstep with the installed `wasm-bindgen-cli`
-# (`just setup-wasm` installs the matching CLI). Only the wasm crate depends on it, on wasm32.
-wasm-bindgen = "0.2"
+# (`just setup-wasm` installs the matching CLI). Pinned exactly so `cargo build` +
+# `wasm-bindgen` agree on the ABI schema. Only the wasm crate depends on it, on wasm32.
+wasm-bindgen = "=0.2.126"
 zeroize = { version = "1.8", features = ["derive"] }
 
 [profile.release]
