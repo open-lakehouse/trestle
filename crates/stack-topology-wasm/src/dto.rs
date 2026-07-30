@@ -277,10 +277,11 @@ pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanError> {
     let ctx = PlanCtx::default();
     let plan = catalog.plan(selection, &ctx)?;
     let materialized = plan.materialize();
+    // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
     let files = materialized
         .files
         .into_iter()
-        .filter(|f| !f.sensitive)
+        .filter(|f| !f.sensitive && f.path != "LAYOUT.md")
         .map(|f| OutputFileDto {
             path: f.path,
             contents: f.contents,
@@ -391,8 +392,8 @@ mod tests {
             "module compose fragment should be present: {paths:?}"
         );
         assert!(
-            paths.contains(&"LAYOUT.md"),
-            "layout report should be present: {paths:?}"
+            !paths.contains(&"LAYOUT.md"),
+            "LAYOUT.md should be omitted in favor of the topology diagram: {paths:?}"
         );
         assert!(
             !paths.contains(&".env"),

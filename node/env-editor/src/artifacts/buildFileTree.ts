@@ -58,9 +58,6 @@ export function buildFileTree(files: OutputFile[]): FileTreeNode[] {
 export function defaultFilePath(files: OutputFile[]): string | null {
   if (files.length === 0) return null;
   return (
-    files.find((f) => f.path === "compose.yaml")?.path ??
-    files.find((f) => f.path === "LAYOUT.md")?.path ??
-    files[0]?.path ??
-    null
+    files.find((f) => f.path === "compose.yaml")?.path ?? files[0]?.path ?? null
   );
 }
