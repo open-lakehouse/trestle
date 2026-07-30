@@ -1,11 +1,24 @@
-import { Button, Card, TooltipProvider } from "@open-lakehouse/ui-kit";
+import {
+  Button,
+  Card,
+  cn,
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  TooltipProvider,
+} from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
-import { AlertTriangle, Loader2, Play } from "lucide-react";
+import { AlertTriangle, PanelLeft, PanelLeftClose } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArtifactsPanel } from "./artifacts/ArtifactsPanel";
+import { FilesPanel } from "./artifacts/FilesPanel";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
+import { ConfigPanel } from "./layout/ConfigPanel";
 import { PlannerProvider, usePlanner } from "./planner";
-import { SelectionStep } from "./selection/SelectionStep";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export interface EnvironmentEditorProps {
@@ -30,7 +43,7 @@ const EMPTY_SELECTION: Selection = {
 
 /**
  * The environment editor: pick technologies/capabilities → tune knobs →
- * generate → inspect the "markitecture" diagram and the rendered artifacts.
+ * generate → inspect the topology diagram and rendered files.
  *
  * Headless: all planning goes through the injected `Planner` seam, so the same
  * component drives a live wasm planner in an app and a fixture planner in tests.
@@ -61,9 +74,12 @@ function EditorBody({
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
+  const [configCollapsed, setConfigCollapsed] = useState(false);
+  const [mobileConfigOpen, setMobileConfigOpen] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<"topology" | "files">(
+    "topology",
+  );
 
-  // Load the catalog once (unless seeded), then open pre-populated with the
-  // catalog's default selection.
   useEffect(() => {
     if (seededCatalog) {
       setSelection((s) => mergeDefault(s, seededCatalog.default_selection));
@@ -129,6 +145,8 @@ function EditorBody({
       const result = await planner.plan(selection);
       setPlan(result);
       setSelectedNodeId(undefined);
+      setWorkspaceTab("topology");
+      setMobileConfigOpen(false);
     } catch (e) {
       setPlan(null);
       setError(errorMessage(e));
@@ -142,67 +160,140 @@ function EditorBody({
 
   const graph = useMemo(() => plan?.graph, [plan]);
 
+  const configPanelProps = {
+    catalog,
+    selection,
+    generating,
+    canGenerate,
+    onToggleModule: toggleModule,
+    onToggleCapability: toggleCapability,
+    onSetKnob: setKnob,
+    onGenerate: () => void generate(),
+  };
+
   return (
     <TooltipProvider>
-      <div className="flex h-full min-h-0 flex-col gap-4 p-4">
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-          {/* Left: selection + knobs + generate */}
-          <div className="flex min-h-0 flex-col gap-4 overflow-auto">
-            {catalog ? (
-              <SelectionStep
-                catalog={catalog}
-                selectedModules={selection.modules}
-                selectedCapabilities={selection.capabilities}
-                overrides={selection.knob_overrides}
-                onToggleModule={toggleModule}
-                onToggleCapability={toggleCapability}
-                onSetKnob={setKnob}
-              />
-            ) : (
-              <p className="text-sm text-muted-foreground">Loading catalog…</p>
-            )}
-            <div className="sticky bottom-0 bg-background pt-2">
+      <div className="flex h-full min-h-0">
+        <aside
+          className={cn(
+            "hidden min-h-0 shrink-0 flex-col border-r bg-sidebar transition-[width] duration-200 lg:flex",
+            configCollapsed ? "w-12" : "w-[22rem]",
+          )}
+        >
+          {configCollapsed ? (
+            <div className="flex flex-col items-center gap-2 p-2">
               <Button
                 type="button"
-                onClick={() => void generate()}
-                disabled={!canGenerate || generating}
-                className="w-full"
+                variant="ghost"
+                size="icon"
+                aria-label="Expand configuration panel"
+                onClick={() => setConfigCollapsed(false)}
               >
-                {generating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                Generate environment
+                <PanelLeft className="h-4 w-4" />
               </Button>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between border-b px-3 py-2">
+                <span className="text-sm font-semibold text-sidebar-foreground">
+                  Configuration
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  aria-label="Collapse configuration panel"
+                  onClick={() => setConfigCollapsed(true)}
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="min-h-0 flex-1">
+                <ConfigPanel {...configPanelProps} />
+              </div>
+            </>
+          )}
+        </aside>
 
-          {/* Right: diagram + artifacts */}
-          <div className="flex min-h-0 flex-col gap-4">
+        <Sheet open={mobileConfigOpen} onOpenChange={setMobileConfigOpen}>
+          <SheetContent
+            side="left"
+            className="flex w-[min(100vw,22rem)] flex-col p-0"
+          >
+            <SheetHeader>
+              <SheetTitle>Configuration</SheetTitle>
+            </SheetHeader>
+            <div className="min-h-0 flex-1">
+              <ConfigPanel {...configPanelProps} />
+            </div>
+          </SheetContent>
+        </Sheet>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col p-3">
+          <Tabs
+            value={workspaceTab}
+            onValueChange={(value) =>
+              setWorkspaceTab(value as "topology" | "files")
+            }
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <TabsList>
+                <TabsTrigger value="topology">Topology</TabsTrigger>
+                <TabsTrigger value="files" disabled={!plan}>
+                  Files
+                </TabsTrigger>
+              </TabsList>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="lg:hidden"
+                onClick={() => setMobileConfigOpen(true)}
+              >
+                <PanelLeft className="h-4 w-4" />
+                Configure
+              </Button>
+            </div>
+
             {error && (
-              <Card className="flex items-start gap-2 border-destructive/40 p-3 text-sm text-destructive">
+              <Card className="mb-3 flex items-start gap-2 border-destructive/40 p-3 text-sm text-destructive">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span className="min-w-0 break-words">{error}</span>
               </Card>
             )}
-            <Card className="min-h-[280px] flex-1 overflow-hidden p-0">
-              {graph ? (
-                <MarkitectureCanvas
-                  graph={graph}
-                  selectedId={selectedNodeId}
-                  onSelect={(n) => setSelectedNodeId(n.id)}
-                  colorMode={colorMode}
-                />
-              ) : (
-                <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                  Select technologies or capabilities, then generate to see the
-                  environment topology.
-                </div>
-              )}
-            </Card>
-            {plan && <ArtifactsPanel plan={plan} />}
-          </div>
+
+            <TabsContent
+              value="topology"
+              className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+            >
+              <Card className="h-full min-h-[280px] overflow-hidden p-0">
+                {graph ? (
+                  <MarkitectureCanvas
+                    graph={graph}
+                    selectedId={selectedNodeId}
+                    onSelect={(n) => setSelectedNodeId(n.id)}
+                    colorMode={colorMode}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                    Select technologies or capabilities, then generate to see
+                    the environment topology.
+                  </div>
+                )}
+              </Card>
+            </TabsContent>
+
+            <TabsContent
+              value="files"
+              className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+            >
+              <Card className="h-full min-h-[280px] overflow-hidden p-0">
+                <FilesPanel plan={plan} />
+              </Card>
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </TooltipProvider>

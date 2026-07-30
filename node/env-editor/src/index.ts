@@ -4,7 +4,7 @@
 // injected `Planner` (see ./planner and DESIGN.md); this package has no runtime
 // dependency on the wasm engine.
 
-export { ArtifactsPanel } from "./artifacts/ArtifactsPanel";
+export { FilesPanel } from "./artifacts/FilesPanel";
 export {
   EnvironmentEditor,
   type EnvironmentEditorProps,
@@ -22,7 +22,6 @@ export {
 } from "./planner";
 export { SelectionStep } from "./selection/SelectionStep";
 export type {
-  ArtifactsDto,
   CatalogDto,
   ClusterDto,
   EdgeDto,
@@ -34,6 +33,7 @@ export type {
   KnobKind,
   ListenerDto,
   ModuleDto,
+  OutputFile,
   Planner,
   PlanResult,
   RouteDto,
