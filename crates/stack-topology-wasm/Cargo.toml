@@ -1,0 +1,34 @@
+[package]
+name = "stack-topology-wasm"
+description = "Browser/WASM bindings for the olai-stack-topology planner (catalog + plan + render)"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# Not a published artifact — it exists only to be compiled to wasm32 and consumed by the
+# `@open-lakehouse/stack-wasm` node package.
+publish = false
+
+[lib]
+# `cdylib` produces the `.wasm` that `wasm-bindgen` post-processes into a JS module; `rlib`
+# lets the crate build and its projection core be unit-tested natively (no wasm runner), the
+# same split `olai-http-wasm` uses.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# workspace dependencies (in alphabetical order)
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Depend on the pure planner ONLY — `catalog` (serde_yaml) and `std-io` (disk I/O) stay OFF so
+# the dependency tree is wasm32-clean. `baseline_catalog()` is built in Rust and needs neither.
+olai-stack-topology = { path = "../stack-topology", default-features = false }
+
+# The JS-facing glue is only needed when actually targeting wasm32. Keeping it off native builds
+# means `cargo test`/`cargo clippy` on the host never pull the wasm-bindgen toolchain, and the
+# projection core stays natively testable.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen = { workspace = true }

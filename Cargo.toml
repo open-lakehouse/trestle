@@ -30,6 +30,9 @@ async-trait = "0.1"
 base64 = "0.22"
 bytes = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
+# Readable browser panics for the wasm bindings (installs a panic hook that logs to the
+# console). Only pulled in by the wasm crate, and only on wasm32.
+console_error_panic_hook = "0.1"
 futures = "0.3"
 itertools = "0.14"
 pbjson = "0.9"
@@ -44,6 +47,9 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# JS <-> Rust value bridge for the wasm bindings (Serde types <-> `JsValue`). wasm32-only in
+# practice, pulled in by the wasm crate.
+serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
 sqlx = "0.8"
 strum = { version = "0.27", features = ["derive"] }
@@ -56,6 +62,9 @@ toml = { version = "0.9", default-features = false, features = ["parse", "displa
 tracing = { version = "0.1", features = ["log"] }
 url = { version = "2.5", features = ["serde", "std"], default-features = false }
 uuid = { version = "1", features = ["serde"] }
+# The wasm-bindgen crate MUST be kept in lockstep with the installed `wasm-bindgen-cli`
+# (`just setup-wasm` installs the matching CLI). Only the wasm crate depends on it, on wasm32.
+wasm-bindgen = "0.2"
 zeroize = { version = "1.8", features = ["derive"] }
 
 [profile.release]
