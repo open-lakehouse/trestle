@@ -12,7 +12,6 @@ import { FIXTURE_CATALOG, FIXTURE_PLAN } from "./fixtures";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export type {
-  ArtifactsDto,
   CatalogDto,
   ClusterDto,
   EdgeDto,
@@ -24,6 +23,7 @@ export type {
   KnobKind,
   ListenerDto,
   ModuleDto,
+  OutputFile,
   Planner,
   PlanResult,
   RouteDto,

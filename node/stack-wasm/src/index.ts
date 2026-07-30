@@ -14,7 +14,6 @@ import initWasm, { catalog, init, plan } from "stack-topology-wasm-pkg";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export type {
-  ArtifactsDto,
   CatalogDto,
   ClusterDto,
   EdgeDto,
@@ -26,6 +25,7 @@ export type {
   KnobKind,
   ListenerDto,
   ModuleDto,
+  OutputFile,
   Planner,
   PlanResult,
   RouteDto,
