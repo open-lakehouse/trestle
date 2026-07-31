@@ -103,12 +103,10 @@ export interface GatewayDto {
   clusters: ClusterDto[];
 }
 
-/** The rendered stack artifacts (mirrors `ArtifactsDto`). */
-export interface ArtifactsDto {
-  compose: string;
-  envoy: string;
-  env: string;
-  gitignore: string;
+/** One materialized file from a plan (mirrors `OutputFileDto`). */
+export interface OutputFile {
+  path: string;
+  contents: string;
 }
 
 /** One endpoint a service offers (mirrors `Endpoint`; loosely typed — the
@@ -135,8 +133,7 @@ export interface PlanResult {
   graph: GraphDto;
   services: Record<string, ServiceSpec[]>;
   gateway: GatewayDto;
-  artifacts: ArtifactsDto;
-  layout_report: string;
+  files: OutputFile[];
 }
 
 /**

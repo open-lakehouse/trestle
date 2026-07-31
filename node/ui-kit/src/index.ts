@@ -14,6 +14,18 @@ export {
   CardHeader,
   CardTitle,
 } from "./card";
+export {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
+} from "./dialog";
 export { Input } from "./input";
 export { Label } from "./label";
 export {
@@ -25,6 +37,17 @@ export {
   SelectValue,
 } from "./select";
 export { Separator } from "./separator";
+export {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetOverlay,
+  SheetPortal,
+  SheetTitle,
+  SheetTrigger,
+} from "./sheet";
 export { Toaster } from "./sonner";
 export { Switch, type SwitchProps } from "./switch";
 export { ThemeProvider, useTheme } from "./ThemeProvider";

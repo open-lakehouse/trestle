@@ -5,7 +5,6 @@
 // `Planner` (real wasm or fixtures) through the seam.
 
 export type {
-  ArtifactsDto,
   CatalogDto,
   ClusterDto,
   EdgeDto,
@@ -17,6 +16,7 @@ export type {
   KnobKind,
   ListenerDto,
   ModuleDto,
+  OutputFile,
   Planner,
   PlanResult,
   RouteDto,

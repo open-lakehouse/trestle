@@ -12,8 +12,10 @@ export interface SelectionStepProps {
   catalog: CatalogDto;
   selectedModules: string[];
   selectedCapabilities: string[];
+  overrides: Record<string, Record<string, string>>;
   onToggleModule: (moduleId: string) => void;
   onToggleCapability: (capability: string) => void;
+  onSetKnob: (moduleId: string, key: string, value: string) => void;
 }
 
 /**
@@ -24,8 +26,10 @@ export function SelectionStep({
   catalog,
   selectedModules,
   selectedCapabilities,
+  overrides,
   onToggleModule,
   onToggleCapability,
+  onSetKnob,
 }: SelectionStepProps) {
   return (
     <Tabs defaultValue="technologies" className="w-full">
@@ -37,7 +41,9 @@ export function SelectionStep({
         <TechnologyPicker
           catalog={catalog}
           selected={selectedModules}
+          overrides={overrides}
           onToggle={onToggleModule}
+          onSetKnob={onSetKnob}
         />
       </TabsContent>
       <TabsContent value="capabilities">

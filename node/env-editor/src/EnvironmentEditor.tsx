@@ -1,17 +1,18 @@
 import {
-  Button,
   Card,
-  Separator,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   TooltipProvider,
 } from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
-import { AlertTriangle, Loader2, Play } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArtifactsPanel } from "./artifacts/ArtifactsPanel";
+import { AlertTriangle, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FilesPanel } from "./artifacts/FilesPanel";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
-import { KnobsStep } from "./knobs/KnobsStep";
+import { ConfigPanel } from "./layout/ConfigPanel";
 import { PlannerProvider, usePlanner } from "./planner";
-import { SelectionStep } from "./selection/SelectionStep";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export interface EnvironmentEditorProps {
@@ -34,9 +35,11 @@ const EMPTY_SELECTION: Selection = {
   knob_overrides: {},
 };
 
+type WorkspaceTab = "configure" | "topology" | "files";
+
 /**
  * The environment editor: pick technologies/capabilities → tune knobs →
- * generate → inspect the "markitecture" diagram and the rendered artifacts.
+ * generate → inspect the topology diagram and rendered files.
  *
  * Headless: all planning goes through the injected `Planner` seam, so the same
  * component drives a live wasm planner in an app and a fixture planner in tests.
@@ -67,9 +70,10 @@ function EditorBody({
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("configure");
+  /** Snapshot of the selection that produced the current `plan` (for dirty checks). */
+  const plannedSelectionRef = useRef<string | null>(null);
 
-  // Load the catalog once (unless seeded), then open pre-populated with the
-  // catalog's default selection.
   useEffect(() => {
     if (seededCatalog) {
       setSelection((s) => mergeDefault(s, seededCatalog.default_selection));
@@ -128,78 +132,114 @@ function EditorBody({
     [],
   );
 
-  const generate = useCallback(async () => {
+  const canGenerate =
+    selection.modules.length > 0 || selection.capabilities.length > 0;
+
+  const selectionKey = useMemo(
+    () => serializeSelection(selection),
+    [selection],
+  );
+  const isDirty =
+    plannedSelectionRef.current === null ||
+    plannedSelectionRef.current !== selectionKey;
+
+  const generate = useCallback(async (): Promise<boolean> => {
+    if (!canGenerate) {
+      setError(
+        "Select at least one technology or capability before generating.",
+      );
+      return false;
+    }
     setGenerating(true);
     setError(null);
     try {
       const result = await planner.plan(selection);
       setPlan(result);
       setSelectedNodeId(undefined);
+      plannedSelectionRef.current = serializeSelection(selection);
+      return true;
     } catch (e) {
       setPlan(null);
+      plannedSelectionRef.current = null;
       setError(errorMessage(e));
+      return false;
     } finally {
       setGenerating(false);
     }
-  }, [planner, selection]);
+  }, [planner, selection, canGenerate]);
 
-  const canGenerate =
-    selection.modules.length > 0 || selection.capabilities.length > 0;
+  const switchTab = useCallback(
+    async (next: WorkspaceTab) => {
+      if (next === workspaceTab || generating) return;
+
+      // Leaving Configure regenerates when the selection changed (or never planned).
+      if (workspaceTab === "configure" && next !== "configure" && isDirty) {
+        const ok = await generate();
+        if (!ok) return;
+      }
+
+      setWorkspaceTab(next);
+    },
+    [workspaceTab, generating, isDirty, generate],
+  );
 
   const graph = useMemo(() => plan?.graph, [plan]);
 
   return (
     <TooltipProvider>
-      <div className="flex h-full min-h-0 flex-col gap-4 p-4">
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-          {/* Left: selection + knobs + generate */}
-          <div className="flex min-h-0 flex-col gap-4 overflow-auto">
-            {catalog ? (
-              <>
-                <SelectionStep
-                  catalog={catalog}
-                  selectedModules={selection.modules}
-                  selectedCapabilities={selection.capabilities}
-                  onToggleModule={toggleModule}
-                  onToggleCapability={toggleCapability}
-                />
-                <Separator />
-                <KnobsStep
-                  catalog={catalog}
-                  selectedModules={selection.modules}
-                  overrides={selection.knob_overrides}
-                  onSetKnob={setKnob}
-                />
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">Loading catalog…</p>
+      <div className="flex h-full min-h-0 flex-col p-3">
+        <Tabs
+          value={workspaceTab}
+          onValueChange={(value) => void switchTab(value as WorkspaceTab)}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <div className="mb-3 flex items-center gap-3">
+            <TabsList>
+              <TabsTrigger value="configure" disabled={generating}>
+                Configure
+              </TabsTrigger>
+              <TabsTrigger value="topology" disabled={generating}>
+                Topology
+              </TabsTrigger>
+              <TabsTrigger value="files" disabled={generating}>
+                Files
+              </TabsTrigger>
+            </TabsList>
+            {generating && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Generating environment…
+              </span>
             )}
-            <div className="sticky bottom-0 bg-background pt-2">
-              <Button
-                type="button"
-                onClick={() => void generate()}
-                disabled={!canGenerate || generating}
-                className="w-full"
-              >
-                {generating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                Generate environment
-              </Button>
-            </div>
           </div>
 
-          {/* Right: diagram + artifacts */}
-          <div className="flex min-h-0 flex-col gap-4">
-            {error && (
-              <Card className="flex items-start gap-2 border-destructive/40 p-3 text-sm text-destructive">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span className="min-w-0 break-words">{error}</span>
-              </Card>
-            )}
-            <Card className="min-h-[280px] flex-1 overflow-hidden p-0">
+          {error && (
+            <Card className="mb-3 flex items-start gap-2 border-destructive/40 p-3 text-sm text-destructive">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span className="min-w-0 break-words">{error}</span>
+            </Card>
+          )}
+
+          <TabsContent
+            value="configure"
+            className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+          >
+            <Card className="h-full min-h-[280px] overflow-hidden p-0">
+              <ConfigPanel
+                catalog={catalog}
+                selection={selection}
+                onToggleModule={toggleModule}
+                onToggleCapability={toggleCapability}
+                onSetKnob={setKnob}
+              />
+            </Card>
+          </TabsContent>
+
+          <TabsContent
+            value="topology"
+            className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+          >
+            <Card className="h-full min-h-[280px] overflow-hidden p-0">
               {graph ? (
                 <MarkitectureCanvas
                   graph={graph}
@@ -209,17 +249,34 @@ function EditorBody({
                 />
               ) : (
                 <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                  Select technologies or capabilities, then generate to see the
-                  environment topology.
+                  Choose technologies on the Configure tab, then switch here to
+                  generate and view the environment topology.
                 </div>
               )}
             </Card>
-            {plan && <ArtifactsPanel plan={plan} />}
-          </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent
+            value="files"
+            className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
+          >
+            <Card className="h-full min-h-[280px] overflow-hidden p-0">
+              <FilesPanel plan={plan} />
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
     </TooltipProvider>
   );
+}
+
+/** Stable JSON key for dirty-checking the working selection against the last plan. */
+function serializeSelection(selection: Selection): string {
+  return JSON.stringify({
+    modules: [...selection.modules].sort(),
+    capabilities: [...selection.capabilities].sort(),
+    knob_overrides: selection.knob_overrides,
+  });
 }
 
 /** Seed the working selection from the catalog default the first time only. */

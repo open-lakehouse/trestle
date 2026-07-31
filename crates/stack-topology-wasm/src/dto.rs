@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use olai_stack_topology::{
     Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, Module, Placement,
     Plan, PlanCtx, PlanError, Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
-    layout_report, render_all,
 };
 use serde::Serialize;
 
@@ -52,7 +51,7 @@ pub struct ModuleDto {
 }
 
 /// The result of planning a selection: the dependency graph for the diagram, the resolved
-/// services, a projected gateway layout, the rendered artifacts, and the Markdown layout report.
+/// services, a projected gateway layout, and the non-sensitive materialized files.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanResultDto {
     /// The module dependency graph — the primary input to the React Flow "markitecture".
@@ -62,10 +61,17 @@ pub struct PlanResultDto {
     /// The gateway layout (listeners → routes, and upstream clusters), projected from the
     /// non-`Serialize` planner types.
     pub gateway: GatewayDto,
-    /// The rendered stack artifacts (compose / envoy / .env / .gitignore) as strings.
-    pub artifacts: ArtifactsDto,
-    /// A terse Markdown summary of the gateway layout ([`layout_report`]).
-    pub layout_report: String,
+    /// Every non-sensitive file the plan materializes (compose fragments, configs, etc.).
+    pub files: Vec<OutputFileDto>,
+}
+
+/// One materialized file safe to expose in the browser (sensitive paths are filtered out).
+#[derive(Debug, Clone, Serialize)]
+pub struct OutputFileDto {
+    /// Path relative to the environment root (e.g. `compose.yaml`, `modules/postgres/compose.yaml`).
+    pub path: String,
+    /// The file's rendered contents.
+    pub contents: String,
 }
 
 /// The dependency graph, projected for a node diagram.
@@ -144,19 +150,6 @@ pub struct ClusterDto {
     pub host: String,
     /// The upstream port.
     pub port: u16,
-}
-
-/// The rendered stack artifacts.
-#[derive(Debug, Clone, Serialize)]
-pub struct ArtifactsDto {
-    /// The top-level `compose.yaml`.
-    pub compose: String,
-    /// The Envoy gateway bootstrap.
-    pub envoy: String,
-    /// The `.env` overlay.
-    pub env: String,
-    /// The `.gitignore`.
-    pub gitignore: String,
 }
 
 /// Render a [`Placement`] to the display string the UI shows on a node.
@@ -283,8 +276,17 @@ pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanError> {
     let catalog: Catalog = baseline_catalog();
     let ctx = PlanCtx::default();
     let plan = catalog.plan(selection, &ctx)?;
-    let artifacts = render_all(&plan);
-    let layout = layout_report(&plan);
+    let materialized = plan.materialize();
+    // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
+    let files = materialized
+        .files
+        .into_iter()
+        .filter(|f| !f.sensitive && f.path != "LAYOUT.md")
+        .map(|f| OutputFileDto {
+            path: f.path,
+            contents: f.contents,
+        })
+        .collect();
     Ok(PlanResultDto {
         graph: graph_dto(&plan),
         services: plan
@@ -293,13 +295,7 @@ pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanError> {
             .map(|(id, specs)| (id.as_str().to_string(), specs.clone()))
             .collect(),
         gateway: gateway_dto(&plan.gateway),
-        artifacts: ArtifactsDto {
-            compose: artifacts.compose,
-            envoy: artifacts.envoy,
-            env: artifacts.env,
-            gitignore: artifacts.gitignore,
-        },
-        layout_report: layout,
+        files,
     })
 }
 
@@ -351,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_result_projects_graph_edges_and_artifacts() {
+    fn plan_result_projects_graph_edges_and_files() {
         // Selecting mlflow pulls in its transitive requires (postgres, an object store, envoy).
         let selection = Selection::modules(["mlflow"]);
         let result = plan_result(&selection).expect("plan should succeed");
@@ -386,15 +382,44 @@ mod tests {
             .unwrap();
         assert_eq!(mlflow_node.role.as_deref(), Some("experiment_tracking"));
 
-        // Artifacts render to non-empty strings.
+        let paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
         assert!(
-            !result.artifacts.compose.is_empty(),
-            "compose should render"
+            paths.contains(&"compose.yaml"),
+            "compose.yaml should be present: {paths:?}"
         );
-        assert!(!result.artifacts.envoy.is_empty(), "envoy should render");
         assert!(
-            result.layout_report.contains("# Environment"),
-            "layout report renders"
+            paths.contains(&"modules/mlflow/compose.yaml"),
+            "module compose fragment should be present: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"LAYOUT.md"),
+            "LAYOUT.md should be omitted in favor of the topology diagram: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&".env"),
+            "sensitive .env should be filtered: {paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|p| p.contains("/secrets/")),
+            "secret files should be filtered: {paths:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual: regenerate node/stack-wasm fixture files"]
+    fn dump_fixture_files_json() {
+        let selection = Selection::modules([
+            "envoy",
+            "postgres",
+            "seaweedfs",
+            "unity-catalog",
+            "mlflow",
+            "jaeger",
+        ]);
+        let result = plan_result(&selection).expect("plan should succeed");
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&result.files).expect("serialize files")
         );
     }
 
