@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.7...olai-trestle-v0.0.8) - 2026-07-31
+
+### Added
+
+- *(env)* harden trestle env scenarios, knobs, and Compose secrets (#110)
+- *(trestle)* `trestle env` for composed environments; remove the duplicate compose path from `trestle new` (#108)
+
 ## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.6...olai-trestle-v0.0.7) - 2026-07-19
 
 ### Added
