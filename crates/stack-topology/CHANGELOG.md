@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.3...olai-stack-topology-v0.0.4) - 2026-07-31
+
+### Added
+
+- *(env)* harden trestle env scenarios, knobs, and Compose secrets (#110)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.2...olai-stack-topology-v0.0.3) - 2026-07-14
 
 ### Added
