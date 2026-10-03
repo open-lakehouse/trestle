@@ -37,6 +37,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["ENVOY_IMAGE"],
         },
+        {
+          key: "certs_image",
+          title: "Certificate minting image",
+          kind: {
+            kind: "string",
+          },
+          default: "eclipse-temurin:17-jdk-noble",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["GATEWAY_CERTS_IMAGE"],
+        },
       ],
     },
     {
@@ -95,9 +106,10 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
     },
     {
-      id: "seaweedfs",
-      display_name: "SeaweedFS (local S3)",
-      summary: "Self-hosted S3-compatible object store.",
+      id: "rustfs",
+      display_name: "RustFS (local S3 + STS)",
+      summary:
+        "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
       category: "storage",
       provider_of: "object_store",
       requires: [],
@@ -105,25 +117,36 @@ export const FIXTURE_CATALOG: CatalogDto = {
       knobs: [
         {
           key: "image",
-          title: "SeaweedFS image",
+          title: "RustFS image",
           kind: {
             kind: "string",
           },
-          default: "chrislusf/seaweedfs:latest",
+          default: "rustfs/rustfs:1.0.1",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
-          aliases: ["SEAWEEDFS_IMAGE"],
+          aliases: ["RUSTFS_IMAGE"],
         },
         {
           key: "init_image",
-          title: "SeaweedFS init image",
+          title: "RustFS init image",
           kind: {
             kind: "string",
           },
           default: "amazon/aws-cli:latest",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
-          aliases: ["SEAWEEDFS_INIT_IMAGE"],
+          aliases: ["RUSTFS_INIT_IMAGE"],
+        },
+        {
+          key: "sts_shim_image",
+          title: "STS shim image",
+          kind: {
+            kind: "string",
+          },
+          default: "python:3.13-alpine",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["STS_SHIM_IMAGE"],
         },
       ],
     },
@@ -197,7 +220,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "unitycatalog/unitycatalog:main-2f2e32d",
+          default: "unitycatalog/unitycatalog:v0.6.0",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["UC_IMAGE"],
@@ -272,7 +295,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
   ],
   default_selection: {
-    modules: ["envoy", "postgres", "seaweedfs"],
+    modules: ["envoy", "postgres", "rustfs"],
     capabilities: [],
     knob_overrides: {},
     extra_resources: [],
@@ -307,12 +330,13 @@ export const FIXTURE_PLAN: PlanResult = {
         placement: "container:db",
       },
       {
-        id: "seaweedfs",
-        display_name: "SeaweedFS (local S3)",
-        summary: "Self-hosted S3-compatible object store.",
+        id: "rustfs",
+        display_name: "RustFS (local S3 + STS)",
+        summary:
+          "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
         category: "storage",
         role: "object_store",
-        placement: "container:seaweedfs",
+        placement: "container:rustfs",
       },
       {
         id: "unity-catalog",
@@ -346,7 +370,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         from: "mlflow",
-        to: "seaweedfs",
+        to: "rustfs",
       },
       {
         from: "unity-catalog",
@@ -358,7 +382,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         from: "unity-catalog",
-        to: "seaweedfs",
+        to: "rustfs",
       },
     ],
   },
@@ -486,19 +510,19 @@ export const FIXTURE_PLAN: PlanResult = {
         depends_on: [],
       },
     ],
-    seaweedfs: [
+    rustfs: [
       {
-        name: "seaweedfs",
+        name: "rustfs",
         role: "object_store",
         placement: {
           kind: "container",
-          service: "seaweedfs",
+          service: "rustfs",
         },
         endpoints: [
           {
             id: "s3",
             scheme: "http",
-            internal_port: 8333,
+            internal_port: 9000,
             intent: {
               kind: "gatewayed",
             },
@@ -584,7 +608,7 @@ export const FIXTURE_PLAN: PlanResult = {
         routes: [
           {
             prefix: "/",
-            cluster: "seaweedfs",
+            cluster: "rustfs",
             rewrite: null,
           },
         ],
@@ -602,9 +626,14 @@ export const FIXTURE_PLAN: PlanResult = {
         port: 5000,
       },
       {
-        name: "seaweedfs",
-        host: "seaweedfs",
-        port: 8333,
+        name: "rustfs",
+        host: "rustfs",
+        port: 9000,
+      },
+      {
+        name: "sts-shim",
+        host: "sts-shim",
+        port: 8080,
       },
       {
         name: "unitycatalog",
