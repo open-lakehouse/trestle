@@ -6,7 +6,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      seaweedfs-init:
+      rustfs-init:
+        condition: service_completed_successfully
+      gateway-certs:
         condition: service_completed_successfully
     command:
       - "mlflow"

@@ -58,7 +58,7 @@ pub struct EnvNewArgs {
     pub knobs: Vec<((String, String), String)>,
 
     /// Prefer a provider for a resource role, `role=provider[,provider...]`
-    /// (e.g. `--prefer object_store=azurite,seaweedfs`). Repeatable.
+    /// (e.g. `--prefer object_store=azurite,rustfs`). Repeatable.
     #[clap(long = "prefer", value_name = "ROLE=PROVIDER[,PROVIDER]", value_parser = parse_selection)]
     pub prefer: Vec<(String, Vec<String>)>,
 

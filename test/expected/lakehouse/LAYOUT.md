@@ -9,7 +9,7 @@
 | shared :9080 | `/unity-catalog` | `unitycatalog` | unitycatalog:8080 | — |
 | shared :9080 | `/api/2.0/otel` | `mlflow` | mlflow:5000 | — |
 | shared :9080 | `/mlflow` | `mlflow` | mlflow:5000 | — |
-| dedicated :9100 | `/` | `seaweedfs` | seaweedfs:8333 | — |
+| dedicated :9100 | `/` | `rustfs` | rustfs:9000 | — |
 
 ## Services
 
@@ -18,5 +18,5 @@
 | `envoy` | `envoy` | `gateway` | container `envoy` | http:10000 |
 | `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, otel:5000, ui:5000 |
 | `postgres` | `db` | `relational_db` | container `db` | sql:5432 |
-| `seaweedfs` | `seaweedfs` | `object_store` | container `seaweedfs` | s3:8333 |
+| `rustfs` | `rustfs` | `object_store` | container `rustfs` | s3:9000 |
 | `unity-catalog` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |

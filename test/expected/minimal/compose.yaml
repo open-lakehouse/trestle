@@ -5,8 +5,12 @@ name: minimal
 configs:
   envoy_config:
     file: ./modules/envoy/envoy.yaml
+  gateway_certs_script:
+    file: ./modules/envoy/certs.sh
   postgres_init:
     file: ./modules/postgres/init-databases.sh
+  rustfs_sts_shim:
+    file: ./modules/rustfs/sts_shim.py
 
 secrets:
   postgres_password:
@@ -17,5 +21,5 @@ include:
     project_directory: .
   - path: ./modules/postgres/compose.yaml
     project_directory: .
-  - path: ./modules/seaweedfs/compose.yaml
+  - path: ./modules/rustfs/compose.yaml
     project_directory: .

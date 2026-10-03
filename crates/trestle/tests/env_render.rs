@@ -124,7 +124,7 @@ fn render_scenario(name: &str, dir: &Path) {
 #[test]
 fn env_new_writes_the_expected_layout() {
     let dir = tempfile::tempdir().unwrap();
-    let selection = Selection::modules(["envoy", "postgres", "mlflow", "seaweedfs"]);
+    let selection = Selection::modules(["envoy", "postgres", "mlflow", "rustfs"]);
     let ctx = PlanCtx {
         env_name: "lakehouse".into(),
         ..PlanCtx::default()
@@ -142,7 +142,7 @@ fn env_new_writes_the_expected_layout() {
         assert!(dir.path().join(f).is_file(), "expected {f} to be written");
     }
     // Per-module fragments land under modules/<id>/.
-    for m in ["envoy", "postgres", "mlflow", "seaweedfs"] {
+    for m in ["envoy", "postgres", "mlflow", "rustfs"] {
         assert!(
             dir.path()
                 .join("modules")
@@ -162,7 +162,7 @@ fn env_new_writes_the_expected_layout() {
 #[test]
 fn env_render_is_byte_stable() {
     let dir = tempfile::tempdir().unwrap();
-    let selection = Selection::modules(["envoy", "postgres", "mlflow", "seaweedfs"]);
+    let selection = Selection::modules(["envoy", "postgres", "mlflow", "rustfs"]);
     let ctx = PlanCtx {
         env_name: "lakehouse".into(),
         ..PlanCtx::default()
@@ -381,7 +381,7 @@ fn legacy_auth_alias_still_pulls_in_authelia() {
 }
 
 #[test]
-fn full_azure_scenario_uses_azurite_not_seaweedfs() {
+fn full_azure_scenario_uses_azurite_not_rustfs() {
     let dir = tempfile::tempdir().unwrap();
     render_scenario("full-azure", dir.path());
     assert!(
@@ -389,8 +389,8 @@ fn full_azure_scenario_uses_azurite_not_seaweedfs() {
         "full-azure should render azurite"
     );
     assert!(
-        !dir.path().join("modules/seaweedfs").exists(),
-        "full-azure should not render seaweedfs when azurite is preferred"
+        !dir.path().join("modules/rustfs").exists(),
+        "full-azure should not render rustfs when azurite is preferred"
     );
     let compose = fs::read_to_string(dir.path().join("compose.yaml")).unwrap();
     assert!(
@@ -398,8 +398,8 @@ fn full_azure_scenario_uses_azurite_not_seaweedfs() {
         "top-level compose should include azurite"
     );
     assert!(
-        !compose.contains("seaweedfs"),
-        "top-level compose should not include seaweedfs"
+        !compose.contains("rustfs"),
+        "top-level compose should not include rustfs"
     );
 }
 

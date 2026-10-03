@@ -128,7 +128,7 @@ mod tests {
             "--app",
             "databricks-app-rust",
             "--select",
-            "storage=seaweedfs,minio",
+            "storage=rustfs,minio",
         ]);
         let Commands::New(args) = cli.command else {
             panic!("expected new");
@@ -139,7 +139,7 @@ mod tests {
             args.selections,
             vec![(
                 "storage".to_string(),
-                vec!["seaweedfs".to_string(), "minio".to_string()]
+                vec!["rustfs".to_string(), "minio".to_string()]
             )]
         );
     }
@@ -220,12 +220,12 @@ mod tests {
 
     #[test]
     fn env_new_parses_prefer() {
-        let args = env_new(&["lh", "--prefer", "object_store=azurite,seaweedfs"]);
+        let args = env_new(&["lh", "--prefer", "object_store=azurite,rustfs"]);
         assert_eq!(
             args.prefer,
             vec![(
                 "object_store".to_string(),
-                vec!["azurite".to_string(), "seaweedfs".to_string()]
+                vec!["azurite".to_string(), "rustfs".to_string()]
             )]
         );
     }
