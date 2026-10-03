@@ -8,9 +8,17 @@ services:
       {{ dep.service }}:
         condition: {{ dep.condition }}
 {%- endfor %}
-    env_file:
-      - path: ./modules/unity-catalog/.env/unitycatalog.env
-        format: raw
+    secrets:
+      - source: unitycatalog_server_properties
+        target: /home/unitycatalog/etc/conf/server.properties
+{%- set obj = connections.object_store.0 %}
+{%- if obj.tls_trust %}
+    environment:
+      # Trust the gateway's local CA, which answers the AWS STS/S3 hostnames UC calls.
+      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore={{ obj.tls_trust.jvm_truststore }} -Djavax.net.ssl.trustStorePassword={{ obj.tls_trust.jvm_truststore_password }}
+    volumes:
+      - {{ obj.tls_trust.volume }}:{{ obj.tls_trust.mount_path }}:ro
+{%- endif %}
     expose:
       - "8080"
     healthcheck:

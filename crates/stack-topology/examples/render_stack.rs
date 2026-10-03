@@ -10,8 +10,8 @@
 //! ```text
 //! cargo run -p olai-stack-topology --example render_stack
 //! # pick your own modules:
-//! cargo run -p olai-stack-topology --example render_stack -- envoy postgres seaweedfs jaeger
-//! # prefer Azurite over SeaweedFS for the object_store role:
+//! cargo run -p olai-stack-topology --example render_stack -- envoy postgres rustfs jaeger
+//! # prefer Azurite over RustFS for the object_store role:
 //! cargo run -p olai-stack-topology --example render_stack -- --azurite
 //! # render a second, non-conflicting env (own project name, own output dir, shifted ports):
 //! cargo run -p olai-stack-topology --example render_stack -- --name lh-alt --port-base 9180
@@ -77,11 +77,11 @@ fn main() {
     let mut selection = if picks.is_empty() {
         // The default lakehouse. Under `--azurite` the object store is left to MLflow/UC's
         // demands (resolved to Azurite via the preference below) instead of selecting
-        // SeaweedFS directly — selecting both object_store providers without a pin is a
+        // RustFS directly — selecting both object_store providers without a pin is a
         // `ConflictingRoleProviders` error.
         let mods = vec!["envoy", "postgres", "mlflow", "headwaters", "azurite"];
         // if !prefer_azurite {
-        //     mods.push("seaweedfs");
+        //     mods.push("rustfs");
         // }
         // mods.extend(["unity-catalog", "mlflow", "headwaters"]);
         Selection::modules(mods)
@@ -110,7 +110,7 @@ fn main() {
         // Keyed by the `object_store` role string (see `Role::OBJECT_STORE`).
         provider_preference.insert(
             "object_store".to_string(),
-            vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+            vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
         );
     }
 

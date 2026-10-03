@@ -44,10 +44,18 @@ pub enum Connection {
         uri: String,
         /// The bucket/container name.
         bucket: String,
-        /// The in-network service endpoint (`http://seaweedfs:8333`).
+        /// The in-network service endpoint (`http://rustfs:9000`).
         endpoint: String,
         /// The credential needed to authenticate to the store.
         credential: ObjectStoreCredential,
+        /// How a consumer trusts the TLS the store is reached over at its *cloud* hostnames,
+        /// when the gateway emulates them (see
+        /// [`Provides::impersonated_hosts`](crate::Provides::impersonated_hosts)). `None` for a
+        /// store reached only at its plain [`endpoint`](Connection::ObjectStore::endpoint).
+        /// The planner fills this in; a provider's template leaves it unset. Boxed so the
+        /// rarely-set trust doesn't inflate every [`Connection`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls_trust: Option<Box<TlsTrust>>,
     },
     /// A relational database. The credential is embedded in the connection URL (matching
     /// how Postgres-style clients consume it), so there is no separate credential field.
@@ -80,6 +88,11 @@ pub enum ObjectStoreCredential {
         secret_access_key: String,
         /// The default region.
         region: String,
+        /// The role a consumer may `AssumeRole` into to vend scoped, temporary credentials
+        /// (an IAM role ARN). `None` when the store offers no STS endpoint, so consumers can
+        /// only use the static keys above.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role_arn: Option<String>,
     },
     /// An Azure Blob connection string (carries account name + key + endpoint).
     AzureBlob {
@@ -91,11 +104,14 @@ pub enum ObjectStoreCredential {
 impl std::fmt::Debug for ObjectStoreCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObjectStoreCredential::S3 { region, .. } => f
+            ObjectStoreCredential::S3 {
+                region, role_arn, ..
+            } => f
                 .debug_struct("S3")
                 .field("access_key_id", &"<redacted>")
                 .field("secret_access_key", &"<redacted>")
                 .field("region", region)
+                .field("role_arn", role_arn)
                 .finish(),
             ObjectStoreCredential::AzureBlob { .. } => f
                 .debug_struct("AzureBlob")
@@ -103,6 +119,29 @@ impl std::fmt::Debug for ObjectStoreCredential {
                 .finish(),
         }
     }
+}
+
+/// How a consumer trusts a locally-minted certificate authority: the compose volume holding
+/// the CA material, where to mount it, and the files inside it each runtime reads.
+///
+/// Present on a [`Connection::ObjectStore`] whose cloud hostnames the gateway emulates over
+/// TLS. A consumer's template mounts [`volume`](Self::volume) at
+/// [`mount_path`](Self::mount_path) and points its runtime at the matching file — a JVM at
+/// [`jvm_truststore`](Self::jvm_truststore), `botocore` / `object_store` at
+/// [`ca_pem`](Self::ca_pem). None of these are secrets (the truststore password is the
+/// well-known JDK default), so `Debug` is derived.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TlsTrust {
+    /// The compose named volume the CA material lives in.
+    pub volume: String,
+    /// Where a consumer mounts [`volume`](Self::volume) (read-only).
+    pub mount_path: String,
+    /// The PEM CA certificate, inside the mount (`SSL_CERT_FILE`, `AWS_CA_BUNDLE`).
+    pub ca_pem: String,
+    /// A PKCS#12 JVM truststore (the JDK defaults plus the CA), inside the mount.
+    pub jvm_truststore: String,
+    /// The [`jvm_truststore`](Self::jvm_truststore) password.
+    pub jvm_truststore_password: String,
 }
 
 /// A provider's connection *template*: a [`Connection`] whose string fields may contain
@@ -126,11 +165,13 @@ impl ConnectionTemplate {
                 bucket,
                 endpoint,
                 credential,
+                tls_trust,
             } => Connection::ObjectStore {
                 uri: sub(uri),
                 bucket: sub(bucket),
                 endpoint: sub(endpoint),
                 credential: credential.resolve(name),
+                tls_trust: tls_trust.clone(),
             },
             Connection::RelationalDb { url } => Connection::RelationalDb { url: sub(url) },
         }
@@ -162,6 +203,7 @@ impl ObjectStoreCredential {
                 access_key_id,
                 secret_access_key,
                 region,
+                ..
             } => vec![
                 (Self::AWS_ACCESS_KEY_ID, access_key_id.clone()),
                 (Self::AWS_SECRET_ACCESS_KEY, secret_access_key.clone()),
@@ -183,10 +225,12 @@ impl ObjectStoreCredential {
                 access_key_id,
                 secret_access_key,
                 region,
+                role_arn,
             } => ObjectStoreCredential::S3 {
                 access_key_id: sub(access_key_id),
                 secret_access_key: sub(secret_access_key),
                 region: sub(region),
+                role_arn: role_arn.as_deref().map(sub),
             },
             ObjectStoreCredential::AzureBlob { connection_string } => {
                 ObjectStoreCredential::AzureBlob {
@@ -300,21 +344,31 @@ mod tests {
         let t = ConnectionTemplate(Connection::ObjectStore {
             uri: "s3://{name}".into(),
             bucket: "{name}".into(),
-            endpoint: "http://seaweedfs:8333".into(),
+            endpoint: "http://rustfs:9000".into(),
             credential: ObjectStoreCredential::S3 {
-                access_key_id: "seaweedfs".into(),
-                secret_access_key: "seaweedfs".into(),
+                access_key_id: "rustfs".into(),
+                secret_access_key: "rustfs".into(),
                 region: "us-east-1".into(),
+                role_arn: Some("arn:aws:iam::000000000000:role/{name}".into()),
             },
+            tls_trust: None,
         });
         let c = t.resolve("artifacts");
         assert_eq!(c.field(ConnectionField::Uri), Some("s3://artifacts"));
         assert_eq!(c.field(ConnectionField::Bucket), Some("artifacts"));
         assert_eq!(
             c.field(ConnectionField::Endpoint),
-            Some("http://seaweedfs:8333")
+            Some("http://rustfs:9000")
         );
-        assert_eq!(c.field(ConnectionField::AccessKeyId), Some("seaweedfs"));
+        assert_eq!(c.field(ConnectionField::AccessKeyId), Some("rustfs"));
+        // `{name}` is substituted into the role ARN too.
+        assert!(matches!(
+            c,
+            Connection::ObjectStore {
+                credential: ObjectStoreCredential::S3 { role_arn: Some(ref arn), .. },
+                ..
+            } if arn == "arn:aws:iam::000000000000:role/artifacts"
+        ));
         assert_eq!(c.field(ConnectionField::Region), Some("us-east-1"));
         // A field the variant lacks resolves to None.
         assert_eq!(c.field(ConnectionField::Url), None);
@@ -330,6 +384,7 @@ mod tests {
             credential: ObjectStoreCredential::AzureBlob {
                 connection_string: "Conn=string".into(),
             },
+            tls_trust: None,
         };
         assert_eq!(
             c.field(ConnectionField::ConnectionString),
@@ -349,7 +404,9 @@ mod tests {
                 access_key_id: "ak".into(),
                 secret_access_key: "sk".into(),
                 region: "us-east-1".into(),
+                role_arn: None,
             },
+            tls_trust: None,
         };
         assert_eq!(
             s3.standard_env(),
@@ -367,6 +424,7 @@ mod tests {
             credential: ObjectStoreCredential::AzureBlob {
                 connection_string: "Conn=x".into(),
             },
+            tls_trust: None,
         };
         assert_eq!(
             azure.standard_env(),
@@ -387,6 +445,7 @@ mod tests {
             access_key_id: "AKIAEXAMPLE".into(),
             secret_access_key: "topsecret".into(),
             region: "us-east-1".into(),
+            role_arn: None,
         };
         let rendered = format!("{s3:?}");
         assert!(
@@ -417,6 +476,7 @@ mod tests {
             bucket: "b".into(),
             endpoint: "http://s:1".into(),
             credential: s3,
+            tls_trust: None,
         };
         assert!(!format!("{conn:?}").contains("topsecret"));
     }

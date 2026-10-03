@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use olai_stack_topology::{
     Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, DataModule,
-    ExtraResource, Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx, PlanError,
-    Provides, RenderSpec, ResourceDemand, Role, Selection, ServiceSpec, baseline_catalog,
+    ExtraResource, ImpersonatedHost, Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx,
+    PlanError, Provides, RenderSpec, ResourceDemand, Role, Selection, ServiceSpec,
+    baseline_catalog,
 };
 
 /// Build a minimal provider module that provisions `kind` and vends the given typed
@@ -67,7 +68,9 @@ fn s3_store(uri: &str) -> ConnectionTemplate {
             access_key_id: "k".into(),
             secret_access_key: "s".into(),
             region: "r".into(),
+            role_arn: None,
         },
+        tls_trust: None,
     })
 }
 
@@ -113,7 +116,7 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
         .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
         .expect("UC alone should plan, auto-provisioning its providers");
 
-    for id in ["unity-catalog", "postgres", "seaweedfs", "envoy"] {
+    for id in ["unity-catalog", "postgres", "rustfs", "envoy"] {
         assert!(
             p.graph.module(&ModuleId::from(id)).is_some(),
             "expected {id} in the auto-provisioned graph"
@@ -128,7 +131,7 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
     let pos = |id: &str| order.iter().position(|x| *x == id);
     assert!(pos("postgres") < pos("unity-catalog"));
-    assert!(pos("seaweedfs") < pos("unity-catalog"));
+    assert!(pos("rustfs") < pos("unity-catalog"));
 }
 
 #[test]
@@ -323,12 +326,12 @@ fn demand_chain_resolves_to_a_fixed_point() {
 
 // ---- Abstract `object_store` role: planner picks the provider --------------------
 
-/// A `PlanCtx` that prefers Azurite over SeaweedFS for the object store.
+/// A `PlanCtx` that prefers Azurite over RustFS for the object store.
 fn azurite_preferred() -> PlanCtx {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+        vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
     );
     PlanCtx {
         provider_preference: preference,
@@ -337,17 +340,17 @@ fn azurite_preferred() -> PlanCtx {
 }
 
 #[test]
-fn default_object_store_is_seaweedfs() {
-    // No preference → the catalog default (SeaweedFS) satisfies MLflow's object_store
+fn default_object_store_is_rustfs() {
+    // No preference → the catalog default (RustFS) satisfies MLflow's object_store
     // demand; Azurite is not deployed and no Azure vars appear.
     let p = baseline_catalog()
         .plan(&Selection::modules(["mlflow"]), &PlanCtx::default())
         .unwrap();
-    assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_some());
+    assert!(p.graph.module(&ModuleId::from("rustfs")).is_some());
     assert!(p.graph.module(&ModuleId::from("azurite")).is_none());
     assert!(p.s3_buckets.contains(&"mlflow".to_string()));
     assert!(p.azure_containers.is_empty());
-    assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), Some("seaweedfs"));
+    assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), Some("rustfs-root"));
     assert_eq!(p.env.get("AZURE_STORAGE_CONNECTION_STRING"), None);
 }
 
@@ -358,13 +361,13 @@ fn preference_selects_azurite_and_drops_aws() {
         .plan(&Selection::modules(["mlflow"]), &azurite_preferred())
         .unwrap();
 
-    // Azurite is deployed, SeaweedFS is not.
+    // Azurite is deployed, RustFS is not.
     assert!(p.graph.module(&ModuleId::from("azurite")).is_some());
-    assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_none());
+    assert!(p.graph.module(&ModuleId::from("rustfs")).is_none());
     // The container (not an S3 bucket) is provisioned on Azurite.
     assert!(p.azure_containers.contains(&"mlflow".to_string()));
     assert!(p.s3_buckets.is_empty());
-    // Azure creds present; no AWS_* leak (SeaweedFS isn't in the graph).
+    // Azure creds present; no AWS_* leak (RustFS isn't in the graph).
     assert!(p.env.get("AZURE_STORAGE_CONNECTION_STRING").is_some());
     assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), None);
 }
@@ -408,13 +411,13 @@ fn consumer_uri_follows_the_chosen_provider() {
 
 #[test]
 fn a_demand_pin_overrides_preference() {
-    // Even under an Azurite-preferred ctx, a demand pinning SeaweedFS uses S3.
+    // Even under an Azurite-preferred ctx, a demand pinning RustFS uses S3.
     let app = consumer(
         "pinned-app",
         vec![ResourceDemand {
             resource: "object_store".into(),
             name: "artifacts".into(),
-            provider: Some(ModuleId::from("seaweedfs")),
+            provider: Some(ModuleId::from("rustfs")),
             bind: bind1(ConnectionField::Uri, "STORE_URI"),
         }],
     );
@@ -422,7 +425,7 @@ fn a_demand_pin_overrides_preference() {
     let p = catalog
         .plan(&Selection::modules(["pinned-app"]), &azurite_preferred())
         .unwrap();
-    assert!(p.graph.module(&ModuleId::from("seaweedfs")).is_some());
+    assert!(p.graph.module(&ModuleId::from("rustfs")).is_some());
     assert_eq!(
         p.injected
             .get(&ModuleId::from("pinned-app"))
@@ -500,7 +503,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
         .plan(&Selection::modules(["catalog"]), &PlanCtx::default())
         .unwrap();
 
-    // Both stores are provisioned in the one chosen provider (SeaweedFS by default).
+    // Both stores are provisioned in the one chosen provider (RustFS by default).
     assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
     assert!(p.s3_buckets.contains(&"uc-external".to_string()));
 
@@ -514,7 +517,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
         p.graph
             .nodes
             .iter()
-            .filter(|m| m.id().as_str() == "seaweedfs")
+            .filter(|m| m.id().as_str() == "rustfs")
             .count(),
         1
     );
@@ -523,7 +526,7 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
 #[test]
 fn same_role_demands_can_pin_different_providers() {
     // The escape hatch: a service's two object-store demands can deliberately land on
-    // different providers (e.g. managed on SeaweedFS, external on Azurite for
+    // different providers (e.g. managed on RustFS, external on Azurite for
     // credential vending) by pinning each.
     let uc = consumer(
         "catalog",
@@ -531,7 +534,7 @@ fn same_role_demands_can_pin_different_providers() {
             ResourceDemand {
                 resource: "object_store".into(),
                 name: "uc-managed".into(),
-                provider: Some(ModuleId::from("seaweedfs")),
+                provider: Some(ModuleId::from("rustfs")),
                 bind: bind1(ConnectionField::Uri, "UC_MANAGED_URI"),
             },
             ResourceDemand {
@@ -550,7 +553,7 @@ fn same_role_demands_can_pin_different_providers() {
         .plan(&Selection::modules(["catalog"]), &PlanCtx::default())
         .unwrap();
 
-    // Managed went to SeaweedFS (s3://), external to Azurite (wasbs://).
+    // Managed went to RustFS (s3://), external to Azurite (wasbs://).
     assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
     assert!(p.azure_containers.contains(&"uc-external".to_string()));
     let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
@@ -596,9 +599,7 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
     let err = baseline_catalog()
         .plan(
             &Selection::modules([
-                "seaweedfs",
-                "azurite",
-                "mlflow", // demands an object_store, but pins nothing
+                "rustfs", "azurite", "mlflow", // demands an object_store, but pins nothing
             ]),
             &PlanCtx::default(),
         )
@@ -608,7 +609,7 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
             err,
             PlanError::ConflictingRoleProviders { ref role, ref providers }
                 if role == "object_store"
-                    && providers.contains(&ModuleId::from("seaweedfs"))
+                    && providers.contains(&ModuleId::from("rustfs"))
                     && providers.contains(&ModuleId::from("azurite"))
         ),
         "expected ConflictingRoleProviders for the unpinned object_store pair, got {err:?}"
@@ -618,7 +619,7 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
 // --- environment-level extra resources (provisioned, never bound) ---
 
 /// An extra bucket with no object_store-demanding module still pulls in a provider and is
-/// provisioned: nothing in the selection needs an object store, yet seaweedfs joins the graph
+/// provisioned: nothing in the selection needs an object store, yet rustfs joins the graph
 /// and the bucket lands in `s3_buckets`.
 #[test]
 fn extra_resource_pulls_in_a_provider_with_no_consumer() {
@@ -630,7 +631,7 @@ fn extra_resource_pulls_in_a_provider_with_no_consumer() {
     }];
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
     assert!(
-        p.services.contains_key(&ModuleId::from("seaweedfs")),
+        p.services.contains_key(&ModuleId::from("rustfs")),
         "the object_store provider is pulled into the graph"
     );
     assert_eq!(p.s3_buckets, vec!["exports".to_string()]);
@@ -653,7 +654,7 @@ fn extra_database_is_provisioned_on_postgres() {
 #[test]
 fn extra_resource_dedups_against_a_module_demand() {
     // mlflow demands the `mlflow` database on postgres; an extra naming the same is a no-op.
-    let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "seaweedfs"]);
+    let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "rustfs"]);
     sel.extra_resources = vec![ExtraResource {
         resource: Role::RELATIONAL_DB.into(),
         name: "mlflow".into(),
@@ -673,9 +674,9 @@ fn extra_resource_dedups_against_a_module_demand() {
 /// demand pin.
 #[test]
 fn pinned_extra_resource_sanctions_a_second_provider() {
-    // mlflow demands an object_store → seaweedfs (the default). An extra bucket pins azurite,
+    // mlflow demands an object_store → rustfs (the default). An extra bucket pins azurite,
     // a deliberate second object_store provider.
-    let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "seaweedfs"]);
+    let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "rustfs"]);
     sel.extra_resources = vec![ExtraResource {
         resource: Role::OBJECT_STORE.into(),
         name: "exports".into(),
@@ -692,5 +693,70 @@ fn pinned_extra_resource_sanctions_a_second_provider() {
         p.azure_containers.contains(&"exports".to_string()),
         "the extra bucket is provisioned on the pinned azurite: {:?}",
         p.azure_containers
+    );
+}
+
+/// A module answering `host` in-network, forwarding to its own service on port 80.
+fn emulator(id: &str, host: &str) -> Arc<dyn Module> {
+    let provides = Provides {
+        impersonated_hosts: vec![ImpersonatedHost {
+            host: host.into(),
+            service: id.into(),
+            port: 80,
+        }],
+        ..Provides::default()
+    };
+    Arc::new(DataModule {
+        id: ModuleId::from(id),
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![],
+        provides,
+        knobs: vec![],
+        render: RenderSpec::default(),
+    })
+}
+
+#[test]
+fn impersonated_host_claimed_twice_is_rejected() {
+    let catalog = Catalog::from_modules([
+        emulator("a", "api.example.com"),
+        emulator("b", "api.example.com"),
+    ]);
+    let err = catalog
+        .plan(&Selection::modules(["a", "b"]), &PlanCtx::default())
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            PlanError::ImpersonatedHostCollision { host, first, second }
+                if host == "api.example.com"
+                    && first == &ModuleId::from("a")
+                    && second == &ModuleId::from("b")
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn no_impersonated_hosts_means_no_tls_listener() {
+    let p = baseline_catalog()
+        .plan(&Selection::modules(["mlflow"]), &azurite_preferred())
+        .unwrap();
+    assert!(p.gateway.tls.is_none());
+    assert!(
+        p.connections.values().all(|c| !matches!(
+            c,
+            Connection::ObjectStore {
+                tls_trust: Some(_),
+                ..
+            }
+        )),
+        "no connection carries a CA when nothing is emulated"
     );
 }

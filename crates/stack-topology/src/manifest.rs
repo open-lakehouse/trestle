@@ -219,7 +219,7 @@ mod tests {
 
     fn sample_manifest() -> EnvManifest {
         EnvManifest::new(
-            Selection::modules(["envoy", "postgres", "seaweedfs", "unity-catalog", "mlflow"]),
+            Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog", "mlflow"]),
             PlanCtx::default(),
         )
     }

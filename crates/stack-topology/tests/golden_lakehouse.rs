@@ -16,7 +16,7 @@ use olai_stack_topology::{
 
 /// The always-on + common lakehouse modules.
 fn default_selection() -> Selection {
-    Selection::modules(["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"])
+    Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"])
 }
 
 fn route<'a>(routes: &'a [GatewayRoute], prefix: &str) -> &'a GatewayRoute {
@@ -81,7 +81,7 @@ fn default_lakehouse_rederives_the_working_gateway_routes() {
     );
 
     // The head file includes every module, in dependency order (deps before
-    // dependents): postgres/seaweedfs/envoy precede mlflow and unitycatalog.
+    // dependents): postgres/rustfs/envoy precede mlflow and unitycatalog.
     let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
     let pos = |id: &str| order.iter().position(|x| *x == id).unwrap();
     assert!(pos("postgres") < pos("mlflow"));
@@ -281,7 +281,7 @@ fn plan_is_byte_identical_regardless_of_selection_order() {
     let forward = cat.plan(&default_selection(), &PlanCtx::default()).unwrap();
     let reversed = cat
         .plan(
-            &Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]),
+            &Selection::modules(["unity-catalog", "mlflow", "rustfs", "postgres", "envoy"]),
             &PlanCtx::default(),
         )
         .unwrap();

@@ -107,6 +107,30 @@ pub struct Provides {
     /// it surfaces them to a consumer.
     #[serde(default)]
     pub extras: BTreeMap<String, String>,
+    /// Public cloud hostnames this module answers *inside the compose network*, for
+    /// clients that cannot be pointed at a custom endpoint (they always call the real cloud
+    /// name). When any selected module declares one, the gateway holds every such host as a
+    /// network alias, terminates TLS for it with a locally minted CA, and forwards it to the
+    /// declared upstream. The provider's connections then carry a
+    /// [`TlsTrust`](crate::TlsTrust) so consumers can trust that CA.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub impersonated_hosts: Vec<ImpersonatedHost>,
+}
+
+/// One public hostname a module answers in-network (see
+/// [`Provides::impersonated_hosts`]).
+///
+/// [`host`](Self::host) may contain the `{name}` placeholder, expanded once per resource the
+/// module provisions (e.g. a virtual-hosted bucket name, `{name}.s3.amazonaws.com`): compose
+/// DNS has no wildcard aliases, so each name needs its own entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpersonatedHost {
+    /// The hostname to answer, optionally templated on `{name}`.
+    pub host: String,
+    /// The compose service requests for this host are forwarded to.
+    pub service: String,
+    /// The upstream port on [`service`](Self::service) (plain HTTP).
+    pub port: u16,
 }
 
 /// A named, defaulted port a module exposes.
@@ -132,7 +156,7 @@ pub struct PortDecl {
 /// provisions the named resource, resolves the provider's
 /// [`ConnectionTemplate`], and binds each
 /// [`ConnectionBinding`] field into this module's environment. Naming the role (not the
-/// implementation) is what lets one consumer run on, say, SeaweedFS in one environment and
+/// implementation) is what lets one consumer run on, say, RustFS in one environment and
 /// Azurite in another.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceDemand {
@@ -293,17 +317,29 @@ impl RenderSpec {
     /// malformed fragment, or a reference to a field absent from the context (a module
     /// authored as an on-disk `module.yaml` is external input, so this is a recoverable
     /// error the planner surfaces, not a panic).
+    ///
+    /// A file whose contents render to nothing but whitespace is dropped, so a template can
+    /// make a file conditional (`{% if tls %}…{% endif %}`) without leaving an empty file
+    /// and an unused `configs:` declaration behind.
     pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, RenderError> {
         let RenderSpec { fragment, files } = self;
         let mut env = minijinja::Environment::new();
+        let mut rendered = Vec::with_capacity(files.len());
+        for f in files {
+            let contents = render_template(&mut env, &f.contents, ctx)?;
+            if contents.trim().is_empty() {
+                continue;
+            }
+            rendered.push((f, contents));
+        }
         Ok(RenderOutput {
             fragment: render_template(&mut env, fragment, ctx)?,
-            files: files
-                .iter()
-                .map(|f| {
+            files: rendered
+                .into_iter()
+                .map(|(f, contents)| {
                     Ok(RenderFile {
                         path: render_template(&mut env, &f.path, ctx)?,
-                        contents: render_template(&mut env, &f.contents, ctx)?,
+                        contents,
                         alias: f
                             .alias
                             .as_deref()
@@ -376,7 +412,7 @@ impl DependsCondition {
 /// so it never hard-codes which backend's service it waits on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DepGate {
-    /// The compose service name to depend on (e.g. `"db"`, `"seaweedfs-init"`).
+    /// The compose service name to depend on (e.g. `"db"`, `"rustfs-init"`).
     pub service: String,
     /// The condition to wait for.
     pub condition: DependsCondition,
@@ -427,6 +463,26 @@ pub struct RenderCtx<'a> {
     /// fragment hard-coding a port list. Empty for every non-gateway module.
     #[serde(default)]
     pub published_ports: Vec<PortMapping>,
+    /// The gateway's TLS emulation of public hostnames, populated only for the gateway
+    /// module and only when some module declares
+    /// [`impersonated_hosts`](Provides::impersonated_hosts). The gateway fragment reads it
+    /// to add the hosts as network aliases and to mint a certificate covering them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<GatewayTls>,
+}
+
+/// What the gateway's render needs to emulate public hostnames over TLS (see
+/// [`RenderCtx::tls`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayTls {
+    /// Every emulated hostname, sorted and deduplicated: the gateway's network aliases and
+    /// the certificate's subject alternative names.
+    pub hosts: Vec<String>,
+    /// Where the minted CA material lives and how consumers mount it.
+    pub trust: crate::model::connection::TlsTrust,
+    /// The compose one-shot service that mints the CA material. The gateway waits for it,
+    /// and so does every consumer of an emulated provider.
+    pub mint_service: String,
 }
 
 /// A `host:container` port mapping a module publishes (currently only the gateway, for its
@@ -450,6 +506,7 @@ impl<'a> RenderCtx<'a> {
             dependencies: Vec::new(),
             objects: Vec::new(),
             published_ports: Vec::new(),
+            tls: None,
         }
     }
 
@@ -751,7 +808,9 @@ mod tests {
                 access_key_id: "AKIA".into(),
                 secret_access_key: "shh".into(),
                 region: "us-east-1".into(),
+                role_arn: None,
             },
+            tls_trust: None,
         };
         let mut connections = BTreeMap::new();
         connections.insert("object_store".to_string(), vec![s3]);
@@ -765,6 +824,7 @@ mod tests {
                 dependencies: Vec::new(),
                 objects: Vec::new(),
                 published_ports: Vec::new(),
+                tls: None,
             })
             .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
@@ -803,19 +863,20 @@ mod tests {
                     condition: DependsCondition::ServiceHealthy,
                 },
                 DepGate {
-                    service: "seaweedfs-init".into(),
+                    service: "rustfs-init".into(),
                     condition: DependsCondition::ServiceCompletedSuccessfully,
                 },
             ],
             objects: Vec::new(),
             published_ports: Vec::new(),
+            tls: None,
         };
         let out = spec.render(&ctx).expect("template renders");
         // The serde value of each condition is the exact compose token.
         assert!(out.fragment.contains("db:\n    condition: service_healthy"));
         assert!(
             out.fragment
-                .contains("seaweedfs-init:\n    condition: service_completed_successfully")
+                .contains("rustfs-init:\n    condition: service_completed_successfully")
         );
     }
 

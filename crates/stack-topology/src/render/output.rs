@@ -160,7 +160,7 @@ mod tests {
     fn write_to_lands_every_file_under_the_dir() {
         let plan = baseline_catalog()
             .plan(
-                &Selection::modules(["envoy", "postgres", "seaweedfs", "unity-catalog", "mlflow"]),
+                &Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog", "mlflow"]),
                 &PlanCtx::default(),
             )
             .unwrap();

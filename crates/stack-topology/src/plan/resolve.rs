@@ -287,13 +287,13 @@ mod tests {
     #[test]
     fn pulls_in_transitive_requires() {
         let catalog = vec![
-            m("mlflow", &["postgres", "seaweedfs", "envoy"]),
+            m("mlflow", &["postgres", "rustfs", "envoy"]),
             m("postgres", &[]),
-            m("seaweedfs", &[]),
+            m("rustfs", &[]),
             m("envoy", &[]),
         ];
         let g = resolve(&["mlflow".into()], &catalog).unwrap();
-        for required in ["mlflow", "postgres", "seaweedfs", "envoy"] {
+        for required in ["mlflow", "postgres", "rustfs", "envoy"] {
             assert!(
                 ids(&g).contains(&required.to_string()),
                 "missing {required}"
@@ -349,14 +349,14 @@ mod tests {
 
     #[test]
     fn conflict_is_rejected_with_sorted_pair() {
-        let azurite = m_conflicts("azurite", &[], &["seaweedfs"]);
-        let catalog = vec![azurite, m("seaweedfs", &[])];
-        let err = resolve(&["azurite".into(), "seaweedfs".into()], &catalog).unwrap_err();
+        let azurite = m_conflicts("azurite", &[], &["rustfs"]);
+        let catalog = vec![azurite, m("rustfs", &[])];
+        let err = resolve(&["azurite".into(), "rustfs".into()], &catalog).unwrap_err();
         assert_eq!(
             err,
             ResolveError::Conflict {
                 a: "azurite".into(),
-                b: "seaweedfs".into()
+                b: "rustfs".into()
             }
         );
     }

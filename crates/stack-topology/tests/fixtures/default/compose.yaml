@@ -9,7 +9,7 @@ name:
 include:
   - path: ./docker/compose/envoy.yaml
     project_directory: .
-  - path: ./docker/compose/seaweedfs.yaml
+  - path: ./docker/compose/rustfs.yaml
     project_directory: .
   - path: ./docker/compose/postgres.yaml
     project_directory: .

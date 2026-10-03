@@ -13,7 +13,9 @@ pub mod endpoint;
 pub mod placement;
 pub mod role;
 
-pub use connection::{Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential};
+pub use connection::{
+    Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
+};
 pub use endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
 pub use placement::{Placement, Vantage};
 pub use role::{Role, ServiceSpec};
