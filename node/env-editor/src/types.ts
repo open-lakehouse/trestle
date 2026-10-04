@@ -5,9 +5,9 @@
 // `Planner` (real wasm or fixtures) through the seam.
 
 export type {
+  AuthDto,
   CatalogDto,
   ClusterDto,
-  EdgeDto,
   Endpoint,
   GatewayDto,
   GraphDto,
@@ -19,7 +19,15 @@ export type {
   OutputFile,
   Planner,
   PlanResult,
+  PortDto,
   RouteDto,
+  RouteRefDto,
   Selection,
+  ServiceKind,
+  ServiceNodeDto,
   ServiceSpec,
+  TlsDto,
+  TopologyEdgeDto,
+  TopologyEdgeKind,
+  VirtualHostDto,
 } from "@open-lakehouse/stack-wasm/types";

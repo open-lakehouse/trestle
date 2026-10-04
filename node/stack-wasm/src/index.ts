@@ -14,9 +14,9 @@ import initWasm, { catalog, init, plan } from "stack-topology-wasm-pkg";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export type {
+  AuthDto,
   CatalogDto,
   ClusterDto,
-  EdgeDto,
   Endpoint,
   GatewayDto,
   GraphDto,
@@ -28,9 +28,17 @@ export type {
   OutputFile,
   Planner,
   PlanResult,
+  PortDto,
   RouteDto,
+  RouteRefDto,
   Selection,
+  ServiceKind,
+  ServiceNodeDto,
   ServiceSpec,
+  TlsDto,
+  TopologyEdgeDto,
+  TopologyEdgeKind,
+  VirtualHostDto,
 } from "./types";
 
 let ready: Promise<void> | undefined;

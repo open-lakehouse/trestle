@@ -53,7 +53,9 @@ export interface CatalogDto {
   default_selection: Selection;
 }
 
-/** One node in the dependency diagram (mirrors `GraphNodeDto`). */
+/** One module in the diagram (mirrors `GraphNodeDto`). Services point at it
+ *  through `ServiceNodeDto.module`; it is what selection and the config panel
+ *  key on. */
 export interface GraphNodeDto {
   id: string;
   display_name?: string | null;
@@ -65,16 +67,65 @@ export interface GraphNodeDto {
   placement?: string | null;
 }
 
-/** A directed dependency edge: `from` depends on `to` (mirrors `EdgeDto`). */
-export interface EdgeDto {
-  from: string;
-  to: string;
+/** What a service node stands for (mirrors `ServiceKind`). */
+export type ServiceKind = "container" | "external" | "host";
+
+/** A host-published port mapping (mirrors `PortDto`). */
+export interface PortDto {
+  host: number;
+  container: number;
 }
 
-/** The dependency graph (mirrors `GraphDto`). */
+/** One runtime service in the diagram (mirrors `ServiceNodeDto`). One-shot
+ *  jobs (init/migrate/cert-mint) are never included. */
+export interface ServiceNodeDto {
+  /** Compose service name, or `"@host"` (Rust `HOST_NODE_ID`) for the
+   *  synthetic host/browser node. */
+  id: string;
+  /** Owning module id; null only for the host node. */
+  module?: string | null;
+  kind: ServiceKind;
+  /** Declared role; null for a fragment-only sidecar (e.g. pgweb, sts-shim). */
+  role?: string | null;
+  image?: string | null;
+  /** Host-published ports. */
+  published: PortDto[];
+  /** In-network ports. */
+  exposed: number[];
+}
+
+/** One gateway route aggregated onto a `route` edge (mirrors `RouteRefDto`). */
+export interface RouteRefDto {
+  prefix: string;
+  host_port: number;
+  rewrite?: string | null;
+  /** Behind the forward-auth check. */
+  gated: boolean;
+}
+
+/** A typed, request-direction edge: `from` calls / waits on `to` (mirrors
+ *  `TopologyEdgeDto`, serde tag "kind"). */
+export type TopologyEdgeDto =
+  | { kind: "startup"; from: string; to: string; condition: string }
+  | { kind: "route"; from: string; to: string; routes: RouteRefDto[] }
+  | { kind: "authz"; from: string; to: string; portal_prefix: string }
+  | {
+      kind: "emulated";
+      from: string;
+      to: string;
+      hosts: string[];
+      port: number;
+    }
+  | { kind: "ingress"; from: string; to: string; host_ports: number[] };
+
+/** The edge kinds, for legends and filters. */
+export type TopologyEdgeKind = TopologyEdgeDto["kind"];
+
+/** The runtime topology (mirrors `GraphDto`). */
 export interface GraphDto {
   nodes: GraphNodeDto[];
-  edges: EdgeDto[];
+  services: ServiceNodeDto[];
+  edges: TopologyEdgeDto[];
 }
 
 /** A gateway route (mirrors `RouteDto`). */
@@ -97,10 +148,33 @@ export interface ClusterDto {
   port: number;
 }
 
+/** Forward-auth wiring (mirrors `AuthDto`). */
+export interface AuthDto {
+  cluster: string;
+  portal_prefix: string;
+}
+
+/** The hostnames one cluster answers on the TLS listener (mirrors
+ *  `VirtualHostDto`). */
+export interface VirtualHostDto {
+  cluster: string;
+  hosts: string[];
+}
+
+/** The emulated-hostname TLS listener (mirrors `TlsDto`). */
+export interface TlsDto {
+  port: number;
+  hosts: string[];
+  virtual_hosts: VirtualHostDto[];
+}
+
 /** The gateway layout (mirrors `GatewayDto`). */
 export interface GatewayDto {
   listeners: ListenerDto[];
   clusters: ClusterDto[];
+  admin_port: number;
+  auth?: AuthDto | null;
+  tls?: TlsDto | null;
 }
 
 /** One materialized file from a plan (mirrors `OutputFileDto`). */

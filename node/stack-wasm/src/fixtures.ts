@@ -304,301 +304,547 @@ export const FIXTURE_CATALOG: CatalogDto = {
 
 export const FIXTURE_PLAN: PlanResult = {
   graph: {
-    nodes: [
-      {
-        id: "envoy",
-        display_name: "Envoy gateway",
-        summary: "Single-port gateway, Databricks-shaped URL rewrites.",
-        category: "gateway",
-        role: "gateway",
-        placement: "container:envoy",
-      },
-      {
-        id: "jaeger",
-        display_name: "Jaeger tracing",
-        summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
-        category: "observability",
-        role: "tracing",
-        placement: "container:jaeger",
-      },
-      {
-        id: "postgres",
-        display_name: "Postgres",
-        summary: "Postgres 16; auto-creates DBs other modules declare.",
-        category: "metadata_db",
-        role: "relational_db",
-        placement: "container:db",
-      },
-      {
-        id: "rustfs",
-        display_name: "RustFS (local S3 + STS)",
-        summary:
-          "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
-        category: "storage",
-        role: "object_store",
-        placement: "container:rustfs",
-      },
-      {
-        id: "unity-catalog",
-        display_name: "Unity Catalog",
-        summary: "Databricks UC server; Databricks-shaped REST API.",
-        category: "catalog",
-        role: "data_catalog",
-        placement: "container:unitycatalog",
-      },
-      {
-        id: "mlflow",
-        display_name: "MLflow tracking",
-        summary: "Experiment + model tracking; Databricks-shaped URLs.",
-        category: "ml",
-        role: "experiment_tracking",
-        placement: "container:mlflow",
-      },
-    ],
     edges: [
       {
-        from: "jaeger",
-        to: "envoy",
+        condition: "service_healthy",
+        from: "mlflow",
+        kind: "startup",
+        to: "db",
       },
       {
+        condition: "service_healthy",
         from: "mlflow",
-        to: "envoy",
-      },
-      {
-        from: "mlflow",
-        to: "postgres",
-      },
-      {
-        from: "mlflow",
+        kind: "startup",
         to: "rustfs",
       },
       {
-        from: "unity-catalog",
+        condition: "service_healthy",
+        from: "pgweb",
+        kind: "startup",
+        to: "db",
+      },
+      {
+        condition: "service_healthy",
+        from: "sts-shim",
+        kind: "startup",
+        to: "rustfs",
+      },
+      {
+        condition: "service_healthy",
+        from: "unitycatalog",
+        kind: "startup",
+        to: "db",
+      },
+      {
+        condition: "service_healthy",
+        from: "unitycatalog",
+        kind: "startup",
+        to: "rustfs",
+      },
+      {
+        from: "envoy",
+        kind: "route",
+        routes: [
+          {
+            gated: false,
+            host_port: 9080,
+            prefix: "/api/2.1/unity-catalog",
+            rewrite: null,
+          },
+          {
+            gated: false,
+            host_port: 9080,
+            prefix: "/unity-catalog",
+            rewrite: null,
+          },
+        ],
+        to: "unitycatalog",
+      },
+      {
+        from: "envoy",
+        kind: "route",
+        routes: [
+          {
+            gated: false,
+            host_port: 9080,
+            prefix: "/api/2.0/mlflow",
+            rewrite: "/mlflow/api/2.0/mlflow",
+          },
+          {
+            gated: false,
+            host_port: 9080,
+            prefix: "/api/2.0/otel",
+            rewrite: null,
+          },
+          {
+            gated: false,
+            host_port: 9080,
+            prefix: "/mlflow",
+            rewrite: null,
+          },
+        ],
+        to: "mlflow",
+      },
+      {
+        from: "envoy",
+        kind: "route",
+        routes: [
+          {
+            gated: false,
+            host_port: 9080,
+            prefix: "/jaeger",
+            rewrite: null,
+          },
+        ],
+        to: "jaeger",
+      },
+      {
+        from: "envoy",
+        kind: "route",
+        routes: [
+          {
+            gated: false,
+            host_port: 9100,
+            prefix: "/",
+            rewrite: null,
+          },
+        ],
+        to: "rustfs",
+      },
+      {
+        from: "unitycatalog",
+        hosts: [
+          "mlflow.s3.amazonaws.com",
+          "mlflow.s3.us-east-1.amazonaws.com",
+          "s3.amazonaws.com",
+          "s3.us-east-1.amazonaws.com",
+          "sts.amazonaws.com",
+          "sts.us-east-1.amazonaws.com",
+          "unity.s3.amazonaws.com",
+          "unity.s3.us-east-1.amazonaws.com",
+        ],
+        kind: "emulated",
+        port: 443,
         to: "envoy",
       },
       {
-        from: "unity-catalog",
-        to: "postgres",
+        from: "envoy",
+        hosts: ["sts.amazonaws.com", "sts.us-east-1.amazonaws.com"],
+        kind: "emulated",
+        port: 443,
+        to: "sts-shim",
       },
       {
-        from: "unity-catalog",
+        from: "envoy",
+        hosts: [
+          "s3.amazonaws.com",
+          "s3.us-east-1.amazonaws.com",
+          "unity.s3.amazonaws.com",
+          "mlflow.s3.amazonaws.com",
+          "unity.s3.us-east-1.amazonaws.com",
+          "mlflow.s3.us-east-1.amazonaws.com",
+        ],
+        kind: "emulated",
+        port: 443,
         to: "rustfs",
+      },
+      {
+        from: "@host",
+        host_ports: [9080, 9100, 9901],
+        kind: "ingress",
+        to: "envoy",
+      },
+    ],
+    nodes: [
+      {
+        category: "gateway",
+        display_name: "Envoy gateway",
+        id: "envoy",
+        placement: "container:envoy",
+        role: "gateway",
+        summary: "Single-port gateway, Databricks-shaped URL rewrites.",
+      },
+      {
+        category: "observability",
+        display_name: "Jaeger tracing",
+        id: "jaeger",
+        placement: "container:jaeger",
+        role: "tracing",
+        summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
+      },
+      {
+        category: "metadata_db",
+        display_name: "Postgres",
+        id: "postgres",
+        placement: "container:db",
+        role: "relational_db",
+        summary: "Postgres 16; auto-creates DBs other modules declare.",
+      },
+      {
+        category: "storage",
+        display_name: "RustFS (local S3 + STS)",
+        id: "rustfs",
+        placement: "container:rustfs",
+        role: "object_store",
+        summary:
+          "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
+      },
+      {
+        category: "catalog",
+        display_name: "Unity Catalog",
+        id: "unity-catalog",
+        placement: "container:unitycatalog",
+        role: "data_catalog",
+        summary: "Databricks UC server; Databricks-shaped REST API.",
+      },
+      {
+        category: "ml",
+        display_name: "MLflow tracking",
+        id: "mlflow",
+        placement: "container:mlflow",
+        role: "experiment_tracking",
+        summary: "Experiment + model tracking; Databricks-shaped URLs.",
+      },
+    ],
+    services: [
+      {
+        exposed: [],
+        id: "@host",
+        image: null,
+        kind: "host",
+        module: null,
+        published: [],
+        role: null,
+      },
+      {
+        exposed: [],
+        id: "envoy",
+        image: "envoyproxy/envoy:v1.34-latest",
+        kind: "container",
+        module: "envoy",
+        published: [
+          {
+            container: 10000,
+            host: 9080,
+          },
+          {
+            container: 9100,
+            host: 9100,
+          },
+          {
+            container: 9901,
+            host: 9901,
+          },
+        ],
+        role: "gateway",
+      },
+      {
+        exposed: [16686, 4317],
+        id: "jaeger",
+        image: "cr.jaegertracing.io/jaegertracing/jaeger:2.14.1",
+        kind: "container",
+        module: "jaeger",
+        published: [],
+        role: "tracing",
+      },
+      {
+        exposed: [5432],
+        id: "db",
+        image: "postgres:16",
+        kind: "container",
+        module: "postgres",
+        published: [],
+        role: "relational_db",
+      },
+      {
+        exposed: [8081],
+        id: "pgweb",
+        image: "sosedoff/pgweb:latest",
+        kind: "container",
+        module: "postgres",
+        published: [],
+        role: null,
+      },
+      {
+        exposed: [9000],
+        id: "rustfs",
+        image: "rustfs/rustfs:1.0.1",
+        kind: "container",
+        module: "rustfs",
+        published: [],
+        role: "object_store",
+      },
+      {
+        exposed: [],
+        id: "sts-shim",
+        image: "python:3.13-alpine",
+        kind: "container",
+        module: "rustfs",
+        published: [],
+        role: null,
+      },
+      {
+        exposed: [8080],
+        id: "unitycatalog",
+        image: "unitycatalog/unitycatalog:v0.6.0",
+        kind: "container",
+        module: "unity-catalog",
+        published: [],
+        role: "data_catalog",
+      },
+      {
+        exposed: [5000],
+        id: "mlflow",
+        image: "ghcr.io/mlflow/mlflow:v3.10.1-full",
+        kind: "container",
+        module: "mlflow",
+        published: [],
+        role: "experiment_tracking",
       },
     ],
   },
   services: {
     envoy: [
       {
+        depends_on: [],
+        endpoints: [
+          {
+            host_port: 9080,
+            id: "http",
+            intent: {
+              kind: "internal",
+            },
+            internal_port: 10000,
+            rewrite: "inherit",
+            scheme: "http",
+          },
+        ],
         name: "envoy",
-        role: "gateway",
         placement: {
           kind: "container",
           service: "envoy",
         },
-        endpoints: [
-          {
-            id: "http",
-            scheme: "http",
-            internal_port: 10000,
-            host_port: 9080,
-            intent: {
-              kind: "internal",
-            },
-            rewrite: "inherit",
-          },
-        ],
-        depends_on: [],
+        role: "gateway",
       },
     ],
     jaeger: [
       {
+        base_path: "/jaeger",
+        depends_on: [],
+        endpoints: [
+          {
+            host_port: 16686,
+            id: "ui",
+            intent: {
+              kind: "ui_prefixable",
+            },
+            internal_port: 16686,
+            rewrite: "inherit",
+            scheme: "http",
+          },
+          {
+            host_port: 4317,
+            id: "otlp_grpc",
+            intent: {
+              kind: "internal",
+            },
+            internal_port: 4317,
+            rewrite: "inherit",
+            scheme: "grpc",
+          },
+        ],
         name: "jaeger",
-        role: "tracing",
         placement: {
           kind: "container",
           service: "jaeger",
         },
-        endpoints: [
-          {
-            id: "ui",
-            scheme: "http",
-            internal_port: 16686,
-            host_port: 16686,
-            intent: {
-              kind: "ui_prefixable",
-            },
-            rewrite: "inherit",
-          },
-          {
-            id: "otlp_grpc",
-            scheme: "grpc",
-            internal_port: 4317,
-            host_port: 4317,
-            intent: {
-              kind: "internal",
-            },
-            rewrite: "inherit",
-          },
-        ],
-        depends_on: [],
-        base_path: "/jaeger",
+        role: "tracing",
       },
     ],
     mlflow: [
       {
+        base_path: "/mlflow",
+        depends_on: [],
+        endpoints: [
+          {
+            id: "tracking",
+            intent: {
+              kind: "api",
+            },
+            internal_port: 5000,
+            mount_prefix: "/api/2.0/mlflow",
+            rewrite: "inherit",
+            scheme: "http",
+          },
+          {
+            id: "otel",
+            intent: {
+              kind: "api",
+            },
+            internal_port: 5000,
+            mount_prefix: "/api/2.0/otel",
+            rewrite: "passthrough",
+            scheme: "http",
+          },
+          {
+            id: "ui",
+            intent: {
+              kind: "ui_prefixable",
+            },
+            internal_port: 5000,
+            rewrite: "inherit",
+            scheme: "http",
+          },
+        ],
         name: "mlflow",
-        role: "experiment_tracking",
         placement: {
           kind: "container",
           service: "mlflow",
         },
-        endpoints: [
-          {
-            id: "tracking",
-            scheme: "http",
-            internal_port: 5000,
-            intent: {
-              kind: "api",
-            },
-            mount_prefix: "/api/2.0/mlflow",
-            rewrite: "inherit",
-          },
-          {
-            id: "otel",
-            scheme: "http",
-            internal_port: 5000,
-            intent: {
-              kind: "api",
-            },
-            mount_prefix: "/api/2.0/otel",
-            rewrite: "passthrough",
-          },
-          {
-            id: "ui",
-            scheme: "http",
-            internal_port: 5000,
-            intent: {
-              kind: "ui_prefixable",
-            },
-            rewrite: "inherit",
-          },
-        ],
-        depends_on: [],
-        base_path: "/mlflow",
+        role: "experiment_tracking",
       },
     ],
     postgres: [
       {
+        depends_on: [],
+        endpoints: [
+          {
+            host_port: 5432,
+            id: "sql",
+            intent: {
+              kind: "internal",
+            },
+            internal_port: 5432,
+            rewrite: "inherit",
+            scheme: "tcp",
+          },
+        ],
         name: "db",
-        role: "relational_db",
         placement: {
           kind: "container",
           service: "db",
         },
-        endpoints: [
-          {
-            id: "sql",
-            scheme: "tcp",
-            internal_port: 5432,
-            host_port: 5432,
-            intent: {
-              kind: "internal",
-            },
-            rewrite: "inherit",
-          },
-        ],
-        depends_on: [],
+        role: "relational_db",
       },
     ],
     rustfs: [
       {
+        depends_on: [],
+        endpoints: [
+          {
+            id: "s3",
+            intent: {
+              kind: "gatewayed",
+            },
+            internal_port: 9000,
+            rewrite: "inherit",
+            scheme: "http",
+          },
+        ],
         name: "rustfs",
-        role: "object_store",
         placement: {
           kind: "container",
           service: "rustfs",
         },
-        endpoints: [
-          {
-            id: "s3",
-            scheme: "http",
-            internal_port: 9000,
-            intent: {
-              kind: "gatewayed",
-            },
-            rewrite: "inherit",
-          },
-        ],
-        depends_on: [],
+        role: "object_store",
       },
     ],
     "unity-catalog": [
       {
+        depends_on: [],
+        endpoints: [
+          {
+            id: "rest",
+            intent: {
+              kind: "api",
+            },
+            internal_port: 8080,
+            mount_prefix: "/api/2.1/unity-catalog",
+            rewrite: "inherit",
+            scheme: "http",
+          },
+          {
+            id: "rest_alias",
+            intent: {
+              kind: "api",
+            },
+            internal_port: 8080,
+            mount_prefix: "/unity-catalog",
+            rewrite: "inherit",
+            scheme: "http",
+          },
+        ],
         name: "unitycatalog",
-        role: "data_catalog",
         placement: {
           kind: "container",
           service: "unitycatalog",
         },
-        endpoints: [
-          {
-            id: "rest",
-            scheme: "http",
-            internal_port: 8080,
-            intent: {
-              kind: "api",
-            },
-            mount_prefix: "/api/2.1/unity-catalog",
-            rewrite: "inherit",
-          },
-          {
-            id: "rest_alias",
-            scheme: "http",
-            internal_port: 8080,
-            intent: {
-              kind: "api",
-            },
-            mount_prefix: "/unity-catalog",
-            rewrite: "inherit",
-          },
-        ],
-        depends_on: [],
+        role: "data_catalog",
       },
     ],
   },
   gateway: {
+    admin_port: 9901,
+    auth: null,
+    clusters: [
+      {
+        host: "jaeger",
+        name: "jaeger",
+        port: 16686,
+      },
+      {
+        host: "mlflow",
+        name: "mlflow",
+        port: 5000,
+      },
+      {
+        host: "rustfs",
+        name: "rustfs",
+        port: 9000,
+      },
+      {
+        host: "sts-shim",
+        name: "sts-shim",
+        port: 8080,
+      },
+      {
+        host: "unitycatalog",
+        name: "unitycatalog",
+        port: 8080,
+      },
+    ],
     listeners: [
       {
         host_port: 9080,
         routes: [
           {
-            prefix: "/api/2.1/unity-catalog",
             cluster: "unitycatalog",
+            prefix: "/api/2.1/unity-catalog",
             rewrite: null,
           },
           {
-            prefix: "/api/2.0/mlflow",
             cluster: "mlflow",
+            prefix: "/api/2.0/mlflow",
             rewrite: "/mlflow/api/2.0/mlflow",
           },
           {
-            prefix: "/unity-catalog",
             cluster: "unitycatalog",
+            prefix: "/unity-catalog",
             rewrite: null,
           },
           {
+            cluster: "mlflow",
             prefix: "/api/2.0/otel",
-            cluster: "mlflow",
             rewrite: null,
           },
           {
-            prefix: "/jaeger",
             cluster: "jaeger",
+            prefix: "/jaeger",
             rewrite: null,
           },
           {
-            prefix: "/mlflow",
             cluster: "mlflow",
+            prefix: "/mlflow",
             rewrite: null,
           },
         ],
@@ -607,40 +853,43 @@ export const FIXTURE_PLAN: PlanResult = {
         host_port: 9100,
         routes: [
           {
-            prefix: "/",
             cluster: "rustfs",
+            prefix: "/",
             rewrite: null,
           },
         ],
       },
     ],
-    clusters: [
-      {
-        name: "jaeger",
-        host: "jaeger",
-        port: 16686,
-      },
-      {
-        name: "mlflow",
-        host: "mlflow",
-        port: 5000,
-      },
-      {
-        name: "rustfs",
-        host: "rustfs",
-        port: 9000,
-      },
-      {
-        name: "sts-shim",
-        host: "sts-shim",
-        port: 8080,
-      },
-      {
-        name: "unitycatalog",
-        host: "unitycatalog",
-        port: 8080,
-      },
-    ],
+    tls: {
+      hosts: [
+        "mlflow.s3.amazonaws.com",
+        "mlflow.s3.us-east-1.amazonaws.com",
+        "s3.amazonaws.com",
+        "s3.us-east-1.amazonaws.com",
+        "sts.amazonaws.com",
+        "sts.us-east-1.amazonaws.com",
+        "unity.s3.amazonaws.com",
+        "unity.s3.us-east-1.amazonaws.com",
+      ],
+      port: 443,
+      virtual_hosts: [
+        {
+          cluster: "sts-shim",
+          hosts: ["sts.amazonaws.com", "sts.us-east-1.amazonaws.com"],
+        },
+        {
+          cluster: "rustfs",
+          hosts: [
+            "s3.amazonaws.com",
+            "s3.us-east-1.amazonaws.com",
+            "unity.s3.amazonaws.com",
+            "mlflow.s3.amazonaws.com",
+            "unity.s3.us-east-1.amazonaws.com",
+            "mlflow.s3.us-east-1.amazonaws.com",
+          ],
+        },
+      ],
+    },
   },
   files: FIXTURE_FILES,
 };
