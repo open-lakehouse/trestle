@@ -18,7 +18,7 @@ use serde::Serialize;
 
 pub use crate::topology::{
     CLIENTS_NODE_ID, ExposedDto, ExposedKind, GraphDto, GraphNodeDto, NodeKind, ProvisionedDto,
-    TopologyEdgeDto, graph_dto,
+    SurfaceDto, SurfaceKind, TopologyEdgeDto, graph_dto,
 };
 
 /// The whole selectable catalog, projected for the picker UI: every module with the metadata a

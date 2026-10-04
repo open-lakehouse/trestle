@@ -9,10 +9,13 @@
 //! Everything is read from the settled [`Plan`], so the picture follows the planner's actual
 //! decisions:
 //!
-//! - **Gateway surface** — every endpoint the gateway exposes (API prefixes, UIs, whole-service
-//!   listeners such as the S3 endpoint), from the [`RoutePlan`](olai_stack_topology::RoutePlan),
-//!   each attributed to the backend component it stitches in, and whether forward-auth gates it.
-//! - **Edges** — clients reaching the gateway, the gateway routing to each backend, the gateway
+//! - **Gateway surfaces** — one per listener: the shared *platform* surface that stitches the
+//!   components' APIs and UIs together under path prefixes, and a *service* surface per
+//!   dedicated listener for a backend that must own its origin because clients speak its wire
+//!   protocol (an S3 endpoint). Locally these are ports; hosted, each is its own subdomain.
+//!   Every endpoint comes from the [`RoutePlan`](olai_stack_topology::RoutePlan), attributed to
+//!   the backend it reaches, and flagged when forward-auth gates it.
+//! - **Edges** — clients reaching each surface, the gateway routing to each backend, the gateway
 //!   delegating authentication to the identity provider, and each component *using* the
 //!   capability it demanded (a relational DB, an object store) from the provider the planner
 //!   chose.
@@ -71,8 +74,9 @@ pub struct GraphNodeDto {
     pub role: Option<String>,
     /// Where the component runs (`in_process` / `host` / `container:<service>`).
     pub placement: Option<String>,
-    /// For the gateway: everything it exposes, grouped by backend in dependency order.
-    pub exposes: Vec<ExposedDto>,
+    /// For the gateway: what it exposes, one surface per listener — the platform surface
+    /// first, then each service surface.
+    pub surfaces: Vec<SurfaceDto>,
     /// For a provider: the APIs it offers its consumers (e.g. `"PostgreSQL"`, `"S3 + STS"`).
     pub offers: Vec<String>,
     /// For a provider: the resources it provisions for its consumers (databases, buckets), in
@@ -80,7 +84,32 @@ pub struct GraphNodeDto {
     pub provisions: Vec<ProvisionedDto>,
 }
 
-/// What kind of surface an [`ExposedDto`] is.
+/// What a [`SurfaceDto`] is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceKind {
+    /// The shared listener: the platform's own API + UI surface, path-multiplexed across
+    /// components.
+    Platform,
+    /// A dedicated listener for one backend whose clients address it at the origin in its own
+    /// wire protocol (e.g. S3 SDKs), so it cannot sit under a path prefix.
+    Service,
+}
+
+/// One listener of the gateway — locally a host port, hosted its own subdomain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SurfaceDto {
+    /// The host port the listener publishes.
+    pub host_port: u16,
+    /// What the surface is for.
+    pub kind: SurfaceKind,
+    /// For a service surface: the protocols its backends offer (e.g. `"S3 + STS"`).
+    pub protocols: Vec<String>,
+    /// The endpoints it exposes, grouped by backend in dependency order.
+    pub exposes: Vec<ExposedDto>,
+}
+
+/// What kind of endpoint an [`ExposedDto`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExposedKind {
@@ -103,8 +132,6 @@ pub struct ExposedDto {
     pub kind: ExposedKind,
     /// The client-facing path prefix (`/` for a whole-service listener).
     pub prefix: String,
-    /// The host port it is reachable on.
-    pub host_port: u16,
     /// Whether forward-auth gates it.
     pub gated: bool,
 }
@@ -125,22 +152,24 @@ pub struct ProvisionedDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TopologyEdgeDto {
-    /// Clients reach the gateway on these host ports.
+    /// Clients reach one of the gateway's surfaces.
     Access {
         /// Always [`CLIENTS_NODE_ID`].
         from: String,
         /// The gateway component.
         to: String,
-        /// The host ports the gateway's listeners publish.
-        host_ports: Vec<u16>,
+        /// The surface reached (its listener's host port).
+        host_port: u16,
     },
-    /// The gateway forwards part of its surface to a backend. The routed endpoints are the
-    /// gateway node's [`exposes`](GraphNodeDto::exposes) entries for `to`.
+    /// The gateway forwards part of one surface to a backend. The routed endpoints are that
+    /// [`SurfaceDto`]'s `exposes` entries for `to`.
     Route {
         /// The gateway component.
         from: String,
         /// The backend component.
         to: String,
+        /// The surface the routes belong to (its listener's host port).
+        host_port: u16,
         /// Whether any of the routed endpoints is behind forward-auth.
         gated: bool,
     },
@@ -150,6 +179,8 @@ pub enum TopologyEdgeDto {
         from: String,
         /// The identity provider.
         to: String,
+        /// The surface carrying the provider's login portal (its listener's host port).
+        host_port: u16,
         /// Where the provider's login portal is exposed (never gated).
         portal_prefix: String,
     },
@@ -248,8 +279,8 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
     // The shared listener is the first; its routes are the ones forward-auth gates.
     let shared_port = plan.gateway.listeners.first().map(|l| l.host_port);
 
-    // The gateway's exposed surface, per backend, in dependency order.
-    let mut exposes: Vec<ExposedDto> = Vec::new();
+    // Every exposed endpoint with its listener's host port, per backend in dependency order.
+    let mut exposes: Vec<(u16, ExposedDto)> = Vec::new();
     for module in &plan.graph.nodes {
         let id = module.id().as_str();
         for spec in plan.services.get(module.id()).into_iter().flatten() {
@@ -267,14 +298,16 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     Listener::Shared => (shared_port.unwrap_or_default(), true),
                     Listener::Dedicated { port } => (port, false),
                 };
-                exposes.push(ExposedDto {
-                    module: id.to_string(),
-                    endpoint: endpoint.id.clone(),
-                    kind,
-                    prefix: route.prefix.clone(),
+                exposes.push((
                     host_port,
-                    gated: shared && auth.is_some(),
-                });
+                    ExposedDto {
+                        module: id.to_string(),
+                        endpoint: endpoint.id.clone(),
+                        kind,
+                        prefix: route.prefix.clone(),
+                        gated: shared && auth.is_some(),
+                    },
+                ));
             }
         }
         // The identity provider's login portal is routed by the planner, not declared as an
@@ -282,14 +315,16 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         if let (Some(a), Some(auth_id)) = (auth, &auth_module)
             && auth_id == id
         {
-            exposes.push(ExposedDto {
-                module: id.to_string(),
-                endpoint: "portal".to_string(),
-                kind: ExposedKind::Ui,
-                prefix: a.portal_prefix.clone(),
-                host_port: shared_port.unwrap_or_default(),
-                gated: false,
-            });
+            exposes.push((
+                shared_port.unwrap_or_default(),
+                ExposedDto {
+                    module: id.to_string(),
+                    endpoint: "portal".to_string(),
+                    kind: ExposedKind::Ui,
+                    prefix: a.portal_prefix.clone(),
+                    gated: false,
+                },
+            ));
         }
     }
 
@@ -337,6 +372,59 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         }
     }
 
+    // The gateway's surfaces, one per listener in listener order (the shared one first). A
+    // service surface names the protocols its backends offer.
+    let offers_of = |id: &str| -> Vec<String> {
+        plan.graph
+            .nodes
+            .iter()
+            .find(|m| m.id().as_str() == id)
+            .map(|m| {
+                m.provides()
+                    .resource_kinds
+                    .values()
+                    .map(|t| protocol(&t.0, true))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let surfaces: Vec<SurfaceDto> = plan
+        .gateway
+        .listeners
+        .iter()
+        .filter_map(|l| {
+            let on_port: Vec<ExposedDto> = exposes
+                .iter()
+                .filter(|(port, _)| *port == l.host_port)
+                .map(|(_, e)| e.clone())
+                .collect();
+            if on_port.is_empty() {
+                return None;
+            }
+            let kind = if Some(l.host_port) == shared_port {
+                SurfaceKind::Platform
+            } else {
+                SurfaceKind::Service
+            };
+            let mut protocols: Vec<String> = Vec::new();
+            if kind == SurfaceKind::Service {
+                for e in &on_port {
+                    for p in offers_of(&e.module) {
+                        if !protocols.contains(&p) {
+                            protocols.push(p);
+                        }
+                    }
+                }
+            }
+            Some(SurfaceDto {
+                host_port: l.host_port,
+                kind,
+                protocols,
+                exposes: on_port,
+            })
+        })
+        .collect();
+
     // Components: every module that runs a service. (An env-only contract module contributes
     // configuration, not a function, so it has no node.)
     let mut nodes: Vec<GraphNodeDto> = Vec::new();
@@ -361,14 +449,9 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             category: m.category().map(str::to_string),
             role: Some(svc.role.as_str().to_string()),
             placement: Some(placement_str(&svc.placement)),
-            offers: m
-                .provides()
-                .resource_kinds
-                .values()
-                .map(|t| protocol(&t.0, true))
-                .collect(),
-            exposes: if kind == NodeKind::Gateway {
-                exposes.clone()
+            offers: offers_of(id),
+            surfaces: if kind == NodeKind::Gateway {
+                surfaces.clone()
             } else {
                 Vec::new()
             },
@@ -378,8 +461,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
 
     let mut edges: Vec<TopologyEdgeDto> = Vec::new();
     if let Some(gw) = &gateway_module {
-        let host_ports: Vec<u16> = plan.gateway.listeners.iter().map(|l| l.host_port).collect();
-        if !host_ports.is_empty() {
+        if !surfaces.is_empty() {
             nodes.insert(
                 0,
                 GraphNodeDto {
@@ -391,39 +473,45 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     role: None,
                     placement: None,
                     offers: Vec::new(),
-                    exposes: Vec::new(),
+                    surfaces: Vec::new(),
                     provisions: Vec::new(),
                 },
             );
-            edges.push(TopologyEdgeDto::Access {
-                from: CLIENTS_NODE_ID.to_string(),
-                to: gw.clone(),
-                host_ports,
-            });
-        }
-        // One route edge per backend, in surface order. The IdP's portal is folded into the
-        // `Authenticates` edge rather than drawn as a second gateway → IdP arrow.
-        let mut routed: Vec<(&str, bool)> = Vec::new();
-        for e in &exposes {
-            if Some(&e.module) == auth_module.as_ref() {
-                continue;
-            }
-            match routed.iter_mut().find(|(m, _)| *m == e.module) {
-                Some((_, gated)) => *gated |= e.gated,
-                None => routed.push((&e.module, e.gated)),
+            for surface in &surfaces {
+                edges.push(TopologyEdgeDto::Access {
+                    from: CLIENTS_NODE_ID.to_string(),
+                    to: gw.clone(),
+                    host_port: surface.host_port,
+                });
             }
         }
-        for (to, gated) in routed {
-            edges.push(TopologyEdgeDto::Route {
-                from: gw.clone(),
-                to: to.to_string(),
-                gated,
-            });
+        // One route edge per (surface, backend), in surface order. The IdP's portal is folded
+        // into the `Authenticates` edge rather than drawn as a second gateway → IdP arrow.
+        for surface in &surfaces {
+            let mut routed: Vec<(&str, bool)> = Vec::new();
+            for e in &surface.exposes {
+                if Some(&e.module) == auth_module.as_ref() {
+                    continue;
+                }
+                match routed.iter_mut().find(|(m, _)| *m == e.module) {
+                    Some((_, gated)) => *gated |= e.gated,
+                    None => routed.push((&e.module, e.gated)),
+                }
+            }
+            for (to, gated) in routed {
+                edges.push(TopologyEdgeDto::Route {
+                    from: gw.clone(),
+                    to: to.to_string(),
+                    host_port: surface.host_port,
+                    gated,
+                });
+            }
         }
         if let (Some(a), Some(idp)) = (auth, &auth_module) {
             edges.push(TopologyEdgeDto::Authenticates {
                 from: gw.clone(),
                 to: idp.clone(),
+                host_port: shared_port.unwrap_or_default(),
                 portal_prefix: a.portal_prefix.clone(),
             });
         }
@@ -538,35 +626,70 @@ mod tests {
         assert!(uses(&g, "mlflow", "envoy").is_none());
     }
 
+    /// Every exposed endpoint across the gateway's surfaces, with its surface.
+    fn exposed(g: &GraphDto) -> Vec<(&SurfaceDto, &ExposedDto)> {
+        node(g, "envoy")
+            .surfaces
+            .iter()
+            .flat_map(|s| s.exposes.iter().map(move |e| (s, e)))
+            .collect()
+    }
+
     #[test]
-    fn gateway_lists_the_surface_it_stitches_together() {
+    fn gateway_surfaces_split_the_platform_api_from_service_endpoints() {
         let g = graph_dto(&plan(&lakehouse(false)));
-        let gw = node(&g, "envoy");
-        let find = |module: &str, kind: ExposedKind| {
-            gw.exposes
-                .iter()
-                .filter(|e| e.module == module && e.kind == kind)
-                .collect::<Vec<_>>()
-        };
+        let surfaces = &node(&g, "envoy").surfaces;
+        // The platform surface comes first, on the shared listener, then the S3 service.
+        assert_eq!(surfaces[0].kind, SurfaceKind::Platform);
+        assert_eq!(surfaces[0].host_port, PlanCtx::default().gateway_host_port);
+        let s3: Vec<&SurfaceDto> = surfaces
+            .iter()
+            .filter(|s| s.kind == SurfaceKind::Service)
+            .collect();
+        assert_eq!(s3.len(), 1, "{surfaces:?}");
+        assert_ne!(s3[0].host_port, surfaces[0].host_port);
+        assert_eq!(s3[0].protocols, ["S3 + STS"]);
         assert!(
-            find("unity-catalog", ExposedKind::Api)
+            s3[0]
+                .exposes
                 .iter()
-                .any(|e| e.prefix == "/api/2.1/unity-catalog")
+                .all(|e| e.module == "rustfs" && e.kind == ExposedKind::Service)
         );
-        assert!(!find("mlflow", ExposedKind::Api).is_empty());
-        assert!(!find("mlflow", ExposedKind::Ui).is_empty());
-        // The object store is exposed whole, on its own listener.
-        let s3 = find("rustfs", ExposedKind::Service);
-        assert_eq!(s3.len(), 1, "{:?}", gw.exposes);
-        let shared = find("mlflow", ExposedKind::Api)[0].host_port;
-        assert_ne!(s3[0].host_port, shared);
-        // Every backend in the surface gets a route edge; postgres is internal-only.
-        for backend in ["unity-catalog", "mlflow", "jaeger", "rustfs"] {
+        // The platform surface stitches the components' APIs and UIs together.
+        let platform = &surfaces[0].exposes;
+        assert!(
+            platform
+                .iter()
+                .any(|e| e.module == "unity-catalog" && e.prefix == "/api/2.1/unity-catalog")
+        );
+        assert!(
+            platform
+                .iter()
+                .any(|e| e.module == "mlflow" && e.kind == ExposedKind::Ui)
+        );
+        assert!(platform.iter().all(|e| e.module != "rustfs"));
+        assert!(surfaces[0].protocols.is_empty());
+        // Postgres is internal-only: never exposed.
+        assert!(!exposed(&g).iter().any(|(_, e)| e.module == "postgres"));
+        // Clients reach each surface; routes are per (surface, backend).
+        for s in surfaces {
             assert!(g.edges.iter().any(|e| matches!(
-                e, TopologyEdgeDto::Route { to, .. } if to == backend
+                e, TopologyEdgeDto::Access { host_port, .. } if *host_port == s.host_port
             )));
         }
-        assert!(!gw.exposes.iter().any(|e| e.module == "postgres"));
+        for (backend, port) in [
+            ("unity-catalog", surfaces[0].host_port),
+            ("mlflow", surfaces[0].host_port),
+            ("jaeger", surfaces[0].host_port),
+            ("rustfs", s3[0].host_port),
+        ] {
+            assert!(
+                g.edges.iter().any(|e| matches!(
+                    e, TopologyEdgeDto::Route { to, host_port, .. } if to == backend && *host_port == port
+                )),
+                "{backend} on :{port}"
+            );
+        }
     }
 
     #[test]
@@ -577,17 +700,20 @@ mod tests {
             e,
             TopologyEdgeDto::Authenticates { from, to, .. } if from == "envoy" && to == "authelia"
         )));
-        let gw = node(&g, "envoy");
-        // The login portal is exposed and open; API/UI routes are gated; the S3 listener isn't.
-        let portal = gw.exposes.iter().find(|e| e.module == "authelia").unwrap();
-        assert!(!portal.gated);
-        for e in &gw.exposes {
-            match (e.module.as_str(), e.kind) {
-                ("authelia", _) => {}
-                (_, ExposedKind::Service) => assert!(!e.gated, "{e:?}"),
-                _ => assert!(e.gated, "{e:?}"),
+        // The login portal is on the platform surface and open; the rest of the platform surface
+        // is gated; service surfaces never are.
+        for (surface, e) in exposed(&g) {
+            match (surface.kind, e.module.as_str()) {
+                (SurfaceKind::Platform, "authelia") => assert!(!e.gated, "{e:?}"),
+                (SurfaceKind::Platform, _) => assert!(e.gated, "{e:?}"),
+                (SurfaceKind::Service, _) => assert!(!e.gated, "{e:?}"),
             }
         }
+        assert!(
+            exposed(&g)
+                .iter()
+                .any(|(s, e)| s.kind == SurfaceKind::Platform && e.module == "authelia")
+        );
         // No separate route edge to the IdP: the portal folds into `Authenticates`.
         assert!(!g.edges.iter().any(|e| matches!(
             e, TopologyEdgeDto::Route { to, .. } if to == "authelia"
