@@ -11,6 +11,9 @@ services:
     secrets:
       - source: unitycatalog_server_properties
         target: /home/unitycatalog/etc/conf/server.properties
+      # Points the metadata store at the relational_db provider instead of the built-in H2.
+      - source: unitycatalog_hibernate_properties
+        target: /home/unitycatalog/etc/conf/hibernate.properties
     expose:
       - "8080"
     healthcheck:

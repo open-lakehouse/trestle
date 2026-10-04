@@ -53,28 +53,103 @@ export interface CatalogDto {
   default_selection: Selection;
 }
 
-/** One node in the dependency diagram (mirrors `GraphNodeDto`). */
+/** What a diagram node stands for (mirrors `NodeKind`). */
+export type NodeKind = "clients" | "gateway" | "component" | "external";
+
+/** What kind of endpoint the gateway exposes (mirrors `ExposedKind`). */
+export type ExposedKind = "api" | "ui" | "service";
+
+/** What a gateway surface is for (mirrors `SurfaceKind`): the shared
+ *  platform API/UI surface, or a dedicated service endpoint (e.g. S3) whose
+ *  clients need their own origin. */
+export type SurfaceKind = "platform" | "service";
+
+/** One endpoint the gateway exposes to clients (mirrors `ExposedDto`). */
+export interface ExposedDto {
+  /** The backend component serving it. */
+  module: string;
+  endpoint: string;
+  kind: ExposedKind;
+  /** Client-facing prefix (`/` for a whole-service listener). */
+  prefix: string;
+  /** Behind forward-auth. */
+  gated: boolean;
+}
+
+/** One gateway listener — locally a host port, hosted its own subdomain
+ *  (mirrors `SurfaceDto`). */
+export interface SurfaceDto {
+  host_port: number;
+  kind: SurfaceKind;
+  /** For a service surface: the protocols it speaks (e.g. "S3 + STS"). */
+  protocols: string[];
+  /** The endpoints it exposes, grouped by backend. */
+  exposes: ExposedDto[];
+}
+
+/** A resource a provider provisions for a consumer (mirrors `ProvisionedDto`). */
+export interface ProvisionedDto {
+  resource: string;
+  name: string;
+}
+
+/** One functional component (a module), or the clients node (mirrors
+ *  `GraphNodeDto`). Helper containers (STS shim, init jobs, …) are part of
+ *  their component and never appear on their own. */
 export interface GraphNodeDto {
+  /** Module id, or `"@clients"` (Rust `CLIENTS_NODE_ID`). */
   id: string;
+  kind: NodeKind;
+  /** The implementation's name (e.g. "RustFS (local S3 + STS)"). */
   display_name?: string | null;
   summary?: string | null;
   category?: string | null;
-  /** Role of the module's primary service (e.g. "object_store", "gateway"). */
+  /** The function it fills (e.g. "object_store", "auth"). */
   role?: string | null;
   /** "in_process" | "host" | "container:<service>". */
   placement?: string | null;
+  /** For a provider: the APIs it offers (e.g. "S3 + STS"). */
+  offers: string[];
+  /** For the gateway: one surface per listener, platform first. */
+  surfaces: SurfaceDto[];
+  /** For a provider: the databases / buckets it provisions. */
+  provisions: ProvisionedDto[];
 }
 
-/** A directed dependency edge: `from` depends on `to` (mirrors `EdgeDto`). */
-export interface EdgeDto {
-  from: string;
-  to: string;
-}
+/** A typed, request-direction edge: `from` calls `to` (mirrors
+ *  `TopologyEdgeDto`, serde tag "kind"). */
+export type TopologyEdgeDto =
+  | { kind: "access"; from: string; to: string; host_port: number }
+  | {
+      kind: "route";
+      from: string;
+      to: string;
+      host_port: number;
+      gated: boolean;
+    }
+  | {
+      kind: "authenticates";
+      from: string;
+      to: string;
+      host_port: number;
+      portal_prefix: string;
+    }
+  | {
+      kind: "uses";
+      from: string;
+      to: string;
+      role: string;
+      protocol: string;
+      resources: string[];
+    };
 
-/** The dependency graph (mirrors `GraphDto`). */
+/** The edge kinds, for legends and filters. */
+export type TopologyEdgeKind = TopologyEdgeDto["kind"];
+
+/** The functional topology (mirrors `GraphDto`). */
 export interface GraphDto {
   nodes: GraphNodeDto[];
-  edges: EdgeDto[];
+  edges: TopologyEdgeDto[];
 }
 
 /** A gateway route (mirrors `RouteDto`). */
@@ -97,10 +172,33 @@ export interface ClusterDto {
   port: number;
 }
 
+/** Forward-auth wiring (mirrors `AuthDto`). */
+export interface AuthDto {
+  cluster: string;
+  portal_prefix: string;
+}
+
+/** The hostnames one cluster answers on the TLS listener (mirrors
+ *  `VirtualHostDto`). */
+export interface VirtualHostDto {
+  cluster: string;
+  hosts: string[];
+}
+
+/** The emulated-hostname TLS listener (mirrors `TlsDto`). */
+export interface TlsDto {
+  port: number;
+  hosts: string[];
+  virtual_hosts: VirtualHostDto[];
+}
+
 /** The gateway layout (mirrors `GatewayDto`). */
 export interface GatewayDto {
   listeners: ListenerDto[];
   clusters: ClusterDto[];
+  admin_port: number;
+  auth?: AuthDto | null;
+  tls?: TlsDto | null;
 }
 
 /** One materialized file from a plan (mirrors `OutputFileDto`). */

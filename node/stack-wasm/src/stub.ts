@@ -12,10 +12,12 @@ import { FIXTURE_CATALOG, FIXTURE_PLAN } from "./fixtures";
 import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export type {
+  AuthDto,
   CatalogDto,
   ClusterDto,
-  EdgeDto,
   Endpoint,
+  ExposedDto,
+  ExposedKind,
   GatewayDto,
   GraphDto,
   GraphNodeDto,
@@ -23,12 +25,20 @@ export type {
   KnobKind,
   ListenerDto,
   ModuleDto,
+  NodeKind,
   OutputFile,
   Planner,
   PlanResult,
+  ProvisionedDto,
   RouteDto,
   Selection,
   ServiceSpec,
+  SurfaceDto,
+  SurfaceKind,
+  TlsDto,
+  TopologyEdgeDto,
+  TopologyEdgeKind,
+  VirtualHostDto,
 } from "./types";
 
 /**

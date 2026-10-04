@@ -398,8 +398,8 @@ fn postgres() -> Arc<dyn Module> {
     // (Ports are written concretely in the fragment, so no `*_PORT` var is needed.)
     //
     // These are the *fixed* local-dev credentials, not an override surface: the connection URL
-    // below bakes `postgres:postgres` concretely, and consumers (MLflow, UC, pgweb) embed that
-    // resolved URL. Editing `POSTGRES_USER`/`POSTGRES_PASSWORD` in `.env` would re-credential the
+    // below bakes `postgres:postgres` concretely, and consumers (MLflow, UC) embed that
+    // resolved connection. Editing `POSTGRES_USER`/`POSTGRES_PASSWORD` in `.env` would re-credential the
     // container but NOT repoint those consumers, so they must move together. (A typed, mutable
     // relational credential on the connection is the future home for making this configurable.)
     for (k, v) in [
@@ -416,9 +416,9 @@ fn postgres() -> Arc<dyn Module> {
     // `${VAR}` fallback for a consumer to resolve at run time.
     provides.resource_kinds.insert(
         Role::RELATIONAL_DB.into(),
-        ConnectionTemplate(Connection::RelationalDb {
-            url: "postgresql://postgres:postgres@db:5432/{name}".into(),
-        }),
+        ConnectionTemplate(Connection::postgres(
+            "db", 5432, "{name}", "postgres", "postgres",
+        )),
     );
     // A consumer that demands `relational_db` should wait for the `db` service to be healthy.
     provides
@@ -442,15 +442,12 @@ fn postgres() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![
-            image_knob(
-                "image",
-                "Postgres image",
-                images::POSTGRES,
-                "POSTGRES_IMAGE",
-            ),
-            image_knob("pgweb_image", "pgweb image", images::PGWEB, "PGWEB_IMAGE"),
-        ],
+        knobs: vec![image_knob(
+            "image",
+            "Postgres image",
+            images::POSTGRES,
+            "POSTGRES_IMAGE",
+        )],
         render: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
             vec![
@@ -472,10 +469,6 @@ fn postgres() -> Arc<dyn Module> {
                 sensitive_file(
                     ".env/db.env",
                     include_str!("../../templates/modules/postgres/db.env.jinja"),
-                ),
-                sensitive_file(
-                    ".env/pgweb.env",
-                    include_str!("../../templates/modules/postgres/pgweb.env.jinja"),
                 ),
                 secret_file(
                     "secrets/postgres_password",
@@ -794,9 +787,10 @@ fn mlflow() -> Arc<dyn Module> {
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
     let provides = Provides::default();
-    // UC reads its storage config from a rendered `server.properties` (mounted as a secret: it
-    // carries the store's keys). That file reads the typed object-store connections directly,
-    // so this module injects no env vars of its own. The S3 entries are what you'd write for
+    // UC reads its storage config from a rendered `server.properties` and its metadata-store
+    // config from a rendered `hibernate.properties` (both mounted as secrets: they carry keys
+    // and a password). They read the typed connections directly, so this module injects no env
+    // vars of its own. The S3 entries are what you'd write for
     // real AWS — no endpoint override, which UC doesn't support — so the store must answer the
     // AWS hostnames itself (see `rustfs`), and the fragment trusts the gateway's local CA when
     // the connection carries a `tls_trust`.
@@ -811,10 +805,10 @@ fn unity_catalog() -> Arc<dyn Module> {
         requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         // The relational store and object store arrive as demands, but nothing is bound into
-        // UC's env: its `server.properties` reads the resolved object-store connections
-        // directly. The database is provisioned but not yet wired: UC takes its JDBC URL from
-        // `hibernate.properties`, which this module doesn't render, so it runs on its embedded
-        // H2 database.
+        // UC's env: its config files read the resolved connections directly —
+        // `hibernate.properties` takes the database's typed parts (JDBC URL, user, password), so
+        // the metadata lives in the provider rather than UC's embedded H2 file, and
+        // `server.properties` takes the object stores.
         needs: vec![
             ResourceDemand {
                 resource: Role::RELATIONAL_DB.into(),
@@ -854,11 +848,22 @@ fn unity_catalog() -> Arc<dyn Module> {
         )],
         render: template_with_files(
             include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
-            vec![secret_file(
-                "secrets/server.properties",
-                "unitycatalog_server_properties",
-                include_str!("../../templates/modules/unity-catalog/server.properties.jinja"),
-            )],
+            vec![
+                secret_file(
+                    "secrets/server.properties",
+                    "unitycatalog_server_properties",
+                    include_str!("../../templates/modules/unity-catalog/server.properties.jinja"),
+                ),
+                // The metadata store: the relational_db demand's connection, as the
+                // Hibernate config the server reads (a secret: it holds the password).
+                secret_file(
+                    "secrets/hibernate.properties",
+                    "unitycatalog_hibernate_properties",
+                    include_str!(
+                        "../../templates/modules/unity-catalog/hibernate.properties.jinja"
+                    ),
+                ),
+            ],
         ),
     })
 }
@@ -953,8 +958,8 @@ impl Headwaters {
             // demand (auto-provisioned), and its startup gate is injected by the planner.
             requires: vec![ModuleId::from("envoy")],
             // The DSN is read straight from the resolved connection in the fragment
-            // (`connections.relational_db.0.url`), like Unity Catalog — so nothing is bound
-            // into Headwaters' env here.
+            // (`connections.relational_db.0.url`) — so nothing is bound into Headwaters' env
+            // here.
             needs: vec![ResourceDemand {
                 resource: Role::RELATIONAL_DB.into(),
                 name: "lineage".into(),

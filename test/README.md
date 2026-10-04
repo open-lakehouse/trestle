@@ -74,7 +74,7 @@ just env-smoke-s3
 
 ## Image overrides
 
-Every service image is a module knob (`image`, plus `init_image` / `pgweb_image` where
+Every service image is a module knob (`image`, plus `init_image` where
 needed). Bump defaults centrally in
 `crates/stack-topology/src/catalog/images.rs`, or override per environment:
 
@@ -94,7 +94,7 @@ aliases when resolving overrides.
 
 - Module selection and `object_store` provider preference
 - Gateway host/admin ports, dedicated listener base, `data_root`
-- `auth`, `serve_ui`, and image knobs (`image`, `init_image`, `pgweb_image`, `sts_shim_image`, `certs_image`)
+- `auth`, `serve_ui`, and image knobs (`image`, `init_image`, `sts_shim_image`, `certs_image`)
 
 **Structural** (not exposed as knobs yet):
 

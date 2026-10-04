@@ -11,10 +11,15 @@
 use std::collections::BTreeMap;
 
 use olai_stack_topology::{
-    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, Module, Placement,
-    Plan, PlanCtx, PlanError, Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
+    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, PlanCtx, PlanError,
+    Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
 };
 use serde::Serialize;
+
+pub use crate::topology::{
+    CLIENTS_NODE_ID, ExposedDto, ExposedKind, GraphDto, GraphNodeDto, NodeKind, ProvisionedDto,
+    SurfaceDto, SurfaceKind, TopologyEdgeDto, graph_dto,
+};
 
 /// The whole selectable catalog, projected for the picker UI: every module with the metadata a
 /// user needs to choose it (name/summary/category), its relationships (requires/conflicts), the
@@ -50,11 +55,12 @@ pub struct ModuleDto {
     pub knobs: Vec<Knob>,
 }
 
-/// The result of planning a selection: the dependency graph for the diagram, the resolved
+/// The result of planning a selection: the runtime topology for the diagram, the resolved
 /// services, a projected gateway layout, and the non-sensitive materialized files.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanResultDto {
-    /// The module dependency graph — the primary input to the React Flow "markitecture".
+    /// The functional topology (see [`crate::topology`]) — the primary input to the React Flow
+    /// "markitecture".
     pub graph: GraphDto,
     /// Each module's resolved services (`ServiceSpec` is `Serialize`), keyed by module id.
     pub services: BTreeMap<String, Vec<ServiceSpec>>,
@@ -74,44 +80,6 @@ pub struct OutputFileDto {
     pub contents: String,
 }
 
-/// The dependency graph, projected for a node diagram.
-#[derive(Debug, Clone, Serialize)]
-pub struct GraphDto {
-    /// The modules to run, topologically ordered (dependencies first).
-    pub nodes: Vec<GraphNodeDto>,
-    /// Dependency edges: `from` depends on `to` (so `to` starts first).
-    pub edges: Vec<EdgeDto>,
-}
-
-/// One node in the diagram: a module enriched with the role/placement of its primary service, so
-/// the UI can color and icon it without a second lookup.
-#[derive(Debug, Clone, Serialize)]
-pub struct GraphNodeDto {
-    /// Module id (matches [`EdgeDto`] endpoints).
-    pub id: String,
-    /// Human-readable label; falls back to the id when unset.
-    pub display_name: Option<String>,
-    /// One-line summary, for a tooltip.
-    pub summary: Option<String>,
-    /// Wizard category, if any.
-    pub category: Option<String>,
-    /// The role of the module's primary service (e.g. `"object_store"`, `"gateway"`), used to
-    /// pick the node's icon and accent color. `None` for a module that contributes no service.
-    pub role: Option<String>,
-    /// Where the module's primary service runs (`in_process` / `host` / `container:<service>`),
-    /// as a display string. `None` when it contributes no service.
-    pub placement: Option<String>,
-}
-
-/// A directed dependency edge.
-#[derive(Debug, Clone, Serialize)]
-pub struct EdgeDto {
-    /// The dependent module id.
-    pub from: String,
-    /// The depended-on module id (starts first).
-    pub to: String,
-}
-
 /// The gateway layout, projected from the non-`Serialize` [`GatewayConfig`].
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayDto {
@@ -119,6 +87,43 @@ pub struct GatewayDto {
     pub listeners: Vec<ListenerDto>,
     /// The upstream clusters the routes forward to.
     pub clusters: Vec<ClusterDto>,
+    /// The Envoy admin port (published 1:1 on the host).
+    pub admin_port: u16,
+    /// Forward-auth, present only when the gateway's `auth` knob is on.
+    pub auth: Option<AuthDto>,
+    /// The in-network TLS listener for emulated public hostnames, present only when a module
+    /// declares impersonated hosts.
+    pub tls: Option<TlsDto>,
+}
+
+/// The gateway's forward-auth wiring, projected from [`AuthConfig`](olai_stack_topology::AuthConfig).
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthDto {
+    /// The upstream cluster the `ext_authz` check calls.
+    pub cluster: String,
+    /// The client-facing prefix of the provider's login portal (not gated).
+    pub portal_prefix: String,
+}
+
+/// The gateway's emulated-hostname TLS listener, projected from
+/// [`TlsListenerConfig`](olai_stack_topology::TlsListenerConfig).
+#[derive(Debug, Clone, Serialize)]
+pub struct TlsDto {
+    /// The listener's in-network port (never host-published).
+    pub port: u16,
+    /// Every emulated hostname, sorted.
+    pub hosts: Vec<String>,
+    /// The hostnames each upstream cluster answers.
+    pub virtual_hosts: Vec<VirtualHostDto>,
+}
+
+/// The hostnames one upstream cluster answers on the TLS listener.
+#[derive(Debug, Clone, Serialize)]
+pub struct VirtualHostDto {
+    /// The upstream cluster.
+    pub cluster: String,
+    /// The exact hostnames routed to it.
+    pub hosts: Vec<String>,
 }
 
 /// A gateway listener and its routes.
@@ -150,15 +155,6 @@ pub struct ClusterDto {
     pub host: String,
     /// The upstream port.
     pub port: u16,
-}
-
-/// Render a [`Placement`] to the display string the UI shows on a node.
-fn placement_str(placement: &Placement) -> String {
-    match placement {
-        Placement::InProcess => "in_process".to_string(),
-        Placement::Host => "host".to_string(),
-        Placement::Container { service } => format!("container:{service}"),
-    }
 }
 
 /// Project the baseline catalog into a [`CatalogDto`] for the picker.
@@ -223,48 +219,24 @@ fn gateway_dto(gateway: &GatewayConfig) -> GatewayDto {
                 port: c.port,
             })
             .collect(),
+        admin_port: gateway.admin_port,
+        auth: gateway.auth.as_ref().map(|a| AuthDto {
+            cluster: a.cluster.clone(),
+            portal_prefix: a.portal_prefix.clone(),
+        }),
+        tls: gateway.tls.as_ref().map(|t| TlsDto {
+            port: t.port,
+            hosts: t.hosts.clone(),
+            virtual_hosts: t
+                .virtual_hosts
+                .iter()
+                .map(|v| VirtualHostDto {
+                    cluster: v.cluster.clone(),
+                    hosts: v.hosts.clone(),
+                })
+                .collect(),
+        }),
     }
-}
-
-/// The role/placement of a module's primary service, if it contributes one. Reads the settled
-/// services off the [`Plan`] (`plan.services`) rather than recomputing `module.services(...)`.
-fn primary_service<'a>(plan: &'a Plan, id: &str) -> Option<&'a ServiceSpec> {
-    plan.services
-        .iter()
-        .find(|(mid, _)| mid.as_str() == id)
-        .and_then(|(_, specs)| specs.first())
-}
-
-/// Project a settled [`Plan`] into a [`GraphDto`], enriching each node with its primary service's
-/// role and placement.
-fn graph_dto(plan: &Plan) -> GraphDto {
-    let nodes = plan
-        .graph
-        .nodes
-        .iter()
-        .map(|m: &std::sync::Arc<dyn Module>| {
-            let id = m.id().as_str().to_string();
-            let svc = primary_service(plan, &id);
-            GraphNodeDto {
-                display_name: m.display_name().map(str::to_string),
-                summary: m.summary().map(str::to_string),
-                category: m.category().map(str::to_string),
-                role: svc.map(|s: &ServiceSpec| s.role.as_str().to_string()),
-                placement: svc.map(|s| placement_str(&s.placement)),
-                id,
-            }
-        })
-        .collect();
-    let edges = plan
-        .graph
-        .edges
-        .iter()
-        .map(|e| EdgeDto {
-            from: e.from.as_str().to_string(),
-            to: e.to.as_str().to_string(),
-        })
-        .collect();
-    GraphDto { nodes, edges }
 }
 
 /// Plan a selection against the baseline catalog and project the whole result into a
@@ -362,14 +334,14 @@ mod tests {
             "graph missing postgres: {node_ids:?}"
         );
 
-        // Edges reference real nodes and point mlflow at its dependencies.
+        // mlflow uses its backing capabilities (the full topology is pinned in `topology`'s
+        // tests).
         assert!(
-            result
-                .graph
-                .edges
-                .iter()
-                .any(|e| e.from == "mlflow" && node_ids.contains(&e.to.as_str())),
-            "expected an edge out of mlflow: {:?}",
+            result.graph.edges.iter().any(|e| matches!(
+                e,
+                TopologyEdgeDto::Uses { from, to, .. } if from == "mlflow" && to == "postgres"
+            )),
+            "expected mlflow to use postgres: {:?}",
             result.graph.edges
         );
 
@@ -405,21 +377,51 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore = "manual: regenerate node/stack-wasm fixture files"]
-    fn dump_fixture_files_json() {
-        let selection = Selection::modules([
+    /// The selection the `node/stack-wasm` fixtures are captured from.
+    fn fixture_selection() -> Selection {
+        Selection::modules([
             "envoy",
             "postgres",
             "rustfs",
             "unity-catalog",
             "mlflow",
             "jaeger",
-        ]);
+        ])
+    }
+
+    #[test]
+    #[ignore = "manual: regenerate node/stack-wasm fixture files"]
+    fn dump_fixture_files_json() {
+        let selection = fixture_selection();
         let result = plan_result(&selection).expect("plan should succeed");
         eprintln!(
             "{}",
             serde_json::to_string_pretty(&result.files).expect("serialize files")
+        );
+    }
+
+    #[test]
+    #[ignore = "manual: regenerate node/stack-wasm FIXTURE_CATALOG + FIXTURE_PLAN"]
+    fn dump_fixture_plan_json() {
+        // A borrowing struct, not `serde_json::json!`: `json!` sorts keys, while this keeps
+        // the DTOs' declaration order (what the wasm build emits).
+        #[derive(Serialize)]
+        struct Dump<'a> {
+            catalog: CatalogDto,
+            graph: &'a GraphDto,
+            services: &'a BTreeMap<String, Vec<ServiceSpec>>,
+            gateway: &'a GatewayDto,
+        }
+        let result = plan_result(&fixture_selection()).expect("plan should succeed");
+        let dump = Dump {
+            catalog: catalog_dto(),
+            graph: &result.graph,
+            services: &result.services,
+            gateway: &result.gateway,
+        };
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&dump).expect("serialize plan")
         );
     }
 

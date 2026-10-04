@@ -12,10 +12,13 @@
 //!   pure `plan_result` core. Compiled on **all** targets and unit-tested natively, because the
 //!   load-bearing work is projecting `Arc<dyn Module>` graph nodes and the non-`Serialize`
 //!   gateway config into plain data.
+//! - [`topology`] — the functional-topology projection behind the diagram: components, the
+//!   gateway's exposed surface, and what each component uses, read from the settled plan.
 //! - [`bindings`] — the thin `#[wasm_bindgen]` JSON-in / JsValue-out wrappers, compiled only on
 //!   `wasm32` so native builds never need the wasm-bindgen toolchain.
 
 pub mod dto;
+pub mod topology;
 
 #[cfg(target_arch = "wasm32")]
 pub mod bindings;

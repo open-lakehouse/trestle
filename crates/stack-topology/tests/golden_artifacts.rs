@@ -341,6 +341,55 @@ fn compose_declares_config_aliases_for_mounted_files() {
 }
 
 #[test]
+fn unity_catalog_keeps_its_metadata_in_the_relational_db_provider() {
+    use olai_stack_topology::ModuleId;
+
+    // Without a `hibernate.properties`, UC silently runs on its embedded H2 file and the
+    // provisioned database goes unused. The rendered file points Hibernate at the provider,
+    // and the fragment mounts it (as a secret) over the image's own.
+    let p = baseline_catalog()
+        .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
+        .expect("plan succeeds");
+    let (_, out) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
+        .expect("UC is in the render set");
+    let hibernate = out
+        .files
+        .iter()
+        .find(|file| file.path.ends_with("/secrets/hibernate.properties"))
+        .expect("UC hibernate.properties");
+    assert!(hibernate.sensitive, "it holds the database password");
+    for line in [
+        "hibernate.connection.driver_class=org.postgresql.Driver",
+        "hibernate.connection.url=jdbc:postgresql://db:5432/unitycatalog",
+        "hibernate.connection.username=postgres",
+        "hibernate.connection.password=postgres",
+        "hibernate.hbm2ddl.auto=update",
+    ] {
+        assert!(
+            hibernate.contents.lines().any(|l| l == line),
+            "missing `{line}`:\n{}",
+            hibernate.contents
+        );
+    }
+    let yaml: Value = serde_yaml::from_str(&out.fragment).expect("valid YAML");
+    let targets: Vec<&str> = yaml["services"]["unitycatalog"]["secrets"]
+        .as_sequence()
+        .expect("UC mounts secrets")
+        .iter()
+        .filter_map(|s| s["target"].as_str())
+        .collect();
+    assert!(
+        targets.contains(&"/home/unitycatalog/etc/conf/hibernate.properties"),
+        "{targets:?}"
+    );
+    // The database UC points at is the one the provider creates on first boot.
+    assert!(p.postgres_databases.iter().any(|d| d == "unitycatalog"));
+}
+
+#[test]
 fn unity_catalog_template_branches_on_the_object_store_credential() {
     use olai_stack_topology::ModuleId;
 
@@ -1309,7 +1358,6 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     }
     assert!(frag("postgres").contains("expose:"));
     assert!(frag("postgres").contains("\"5432\""));
-    assert!(frag("postgres").contains("\"8081\""));
     assert!(frag("rustfs").contains("\"9000\""));
     assert!(frag("jaeger").contains("\"16686\""));
 
@@ -1317,13 +1365,6 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     let pg = frag("postgres");
     assert!(!pg.contains("postgres:postgres@"));
     assert!(rendered_file("postgres", "/.env/db.env").contains("POSTGRES_USER=postgres"));
-    assert!(
-        rendered_file("postgres", "/.env/pgweb.env")
-            .lines()
-            .any(|line| {
-                line.starts_with("DATABASE_URL=postgres://") && line.contains("@db:5432/postgres")
-            })
-    );
 
     // RustFS's services read the root keys from an ignored env file, with no `${AWS_*:-…}`
     // fallback, and the init iterates the provisioned buckets directly.

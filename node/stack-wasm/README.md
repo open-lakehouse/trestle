@@ -29,6 +29,14 @@ The output lands in `pkg/` (gitignored). Fresh clones run the stub until built.
 ## Regenerating the fixtures
 
 `src/fixtures.ts` is captured from the real planner so the stub and Storybook
-render true output. To regenerate, run a small Rust program that calls
-`stack_topology_wasm::dto::{catalog_dto, plan_result}` and serializes the results
-to JSON, then paste them back into `fixtures.ts` (do not hand-edit).
+render true output (do not hand-edit). Two ignored tests in
+`crates/stack-topology-wasm/src/dto.rs` print the JSON to paste back:
+
+```bash
+# FIXTURE_CATALOG, plus FIXTURE_PLAN's graph / services / gateway
+cargo test -p stack-topology-wasm dump_fixture_plan_json -- --ignored --nocapture
+# FIXTURE_FILES (src/fixture-files.ts)
+cargo test -p stack-topology-wasm dump_fixture_files_json -- --ignored --nocapture
+```
+
+Then run `bun run lint:fix` to normalize the pasted JSON into the repo's style.

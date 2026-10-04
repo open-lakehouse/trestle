@@ -466,10 +466,33 @@ const AUTH_IDENTITY_HEADERS: [&str; 4] = [
     "Remote-Groups",
 ];
 
+/// The `auth`-role provider the selection picks *explicitly* — by module id, or through the
+/// `auth` capability (its first provider) — if any.
+fn selected_auth_provider(selection: &Selection, catalog: &Catalog) -> Option<ModuleId> {
+    let providers = catalog.providers_of(Role::AUTH);
+    selection
+        .modules
+        .iter()
+        .find(|m| providers.contains(m))
+        .cloned()
+        .or_else(|| {
+            selection
+                .capabilities
+                .iter()
+                .any(|c| c == Role::AUTH)
+                .then(|| providers.first().map(|p| (*p).clone()))
+                .flatten()
+        })
+}
+
 /// Whether the gateway's forward-auth knob ([`ENVOY_AUTH_KNOB`]) resolves on for this
 /// selection. Reads the bool knob off whichever catalog module fills the `gateway` role,
 /// honouring a [`Selection::knob_overrides`] value over the knob's default. Returns `Ok(false)`
 /// when there is no gateway module or it declares no such knob.
+///
+/// Explicitly selecting an identity provider (see [`selected_auth_provider`]) turns auth on
+/// unless the knob is explicitly overridden: an auth provider the gateway never consults would
+/// run as an orphan — up, but authenticating nothing.
 fn gateway_auth_enabled(selection: &Selection, catalog: &Catalog) -> Result<bool, PlanError> {
     for gateway_id in catalog.providers_of(Role::GATEWAY) {
         let Some(module) = catalog.get(gateway_id) else {
@@ -479,6 +502,12 @@ fn gateway_auth_enabled(selection: &Selection, catalog: &Catalog) -> Result<bool
             continue;
         };
         let overrides = selection.knob_overrides.get(gateway_id);
+        let explicit = overrides.is_some_and(|o| {
+            o.contains_key(&knob.key) || knob.aliases.iter().any(|a| o.contains_key(a))
+        });
+        if !explicit && selected_auth_provider(selection, catalog).is_some() {
+            return Ok(true);
+        }
         if let Some(value) = resolve_knob(gateway_id, knob, overrides)? {
             return Ok(value == "true");
         }
@@ -787,11 +816,14 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // diverge (emitting an ext_authz filter pointed at a provider that isn't in the graph).
     // `None` when the knob is off or the catalog has no `auth`-role provider; in the latter case
     // auth stays off entirely rather than gating the gateway behind a phantom upstream.
+    // An explicitly selected provider wins over the catalog's first `auth`-role provider.
     let auth_provider: Option<ModuleId> = if gateway_auth_enabled(selection, catalog)? {
-        catalog
-            .providers_of(Role::AUTH)
-            .first()
-            .map(|p| (*p).clone())
+        selected_auth_provider(selection, catalog).or_else(|| {
+            catalog
+                .providers_of(Role::AUTH)
+                .first()
+                .map(|p| (*p).clone())
+        })
     } else {
         None
     };
@@ -2233,6 +2265,37 @@ mod tests {
             .expect("provider cluster emitted");
         assert_eq!((c.host.as_str(), c.port), ("gatekeeper", 4180));
         assert!(!p.gateway.clusters.iter().any(|c| c.name == "authelia"));
+    }
+
+    #[test]
+    fn selecting_an_auth_provider_turns_gateway_auth_on() {
+        // Picking the IdP without touching the gateway's knob must still wire it in; otherwise
+        // it would run as an orphan that authenticates nothing.
+        for selection in [
+            Selection::modules(["envoy", "authelia", "mlflow"]),
+            Selection {
+                capabilities: vec![Role::AUTH.into()],
+                ..Selection::modules(["envoy", "mlflow"])
+            },
+        ] {
+            let p = plan_env(&selection, &baseline_catalog(), &PlanCtx::default())
+                .expect("plan succeeds");
+            let auth = p.gateway.auth.as_ref().expect("gateway auth on");
+            assert_eq!(auth.cluster, "authelia");
+        }
+    }
+
+    #[test]
+    fn an_explicit_auth_off_override_wins_over_a_selected_provider() {
+        let mut selection = Selection::modules(["envoy", "authelia", "mlflow"]);
+        selection
+            .knob_overrides
+            .entry(ModuleId::from("envoy"))
+            .or_default()
+            .insert(ENVOY_AUTH_KNOB.into(), "false".into());
+        let p =
+            plan_env(&selection, &baseline_catalog(), &PlanCtx::default()).expect("plan succeeds");
+        assert!(p.gateway.auth.is_none(), "explicit auth=false is honoured");
     }
 
     #[test]

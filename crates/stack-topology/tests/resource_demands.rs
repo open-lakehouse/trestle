@@ -52,9 +52,9 @@ fn provider_with_needs(
     })
 }
 
-/// A relational-db connection template at `url`-with-`{name}`.
-fn relational(url: &str) -> ConnectionTemplate {
-    ConnectionTemplate(Connection::RelationalDb { url: url.into() })
+/// A Postgres connection template on `host`, with the database named `{name}`.
+fn relational(host: &str) -> ConnectionTemplate {
+    ConnectionTemplate(Connection::postgres(host, 5432, "{name}", "u", "p"))
 }
 
 /// A minimal S3 object-store connection template (only the addressing fields matter for
@@ -149,16 +149,19 @@ fn provider_connection_is_resolved_for_the_consumer_without_binding() {
     assert_eq!(p.env.get("UC_DATABASE_URL"), None);
 
     // The typed connection is still exposed on the plan, with `{name}` resolved to UC's
-    // demanded database — this is what the fragment reads as `connections.relational_db.0.url`.
+    // demanded database — what UC's hibernate.properties reads as `connections.relational_db.0`.
     let conn = p
         .connections
         .get(&(ModuleId::from("unity-catalog"), 0))
         .expect("UC's first demand (relational_db) resolves a connection");
     match conn {
-        Connection::RelationalDb { url } => assert!(
-            url.contains("@db:5432/unitycatalog"),
-            "URL resolves UC's database name: {url}"
-        ),
+        Connection::RelationalDb { url, database, .. } => {
+            assert!(
+                url.contains("@db:5432/unitycatalog"),
+                "URL resolves UC's database name"
+            );
+            assert_eq!(database, "unitycatalog");
+        }
         other => panic!("expected a relational_db connection, got {other:?}"),
     }
 }
@@ -257,8 +260,8 @@ fn unsatisfied_demand_errors_when_no_provider_exists() {
 #[test]
 fn ambiguous_provider_errors_when_two_modules_provide_the_kind() {
     // Two providers for the same kind, no tie-break → the planner refuses to guess.
-    let p1 = provider("pg-a", "relational_db", relational("a://{name}"));
-    let p2 = provider("pg-b", "relational_db", relational("b://{name}"));
+    let p1 = provider("pg-a", "relational_db", relational("a"));
+    let p2 = provider("pg-b", "relational_db", relational("b"));
     let c = consumer(
         "needs-db",
         vec![ResourceDemand {
@@ -294,7 +297,7 @@ fn demand_chain_resolves_to_a_fixed_point() {
     let x_provider = provider_with_needs(
         "x-prov",
         "x",
-        relational("x://{name}"),
+        relational("x"),
         vec![ResourceDemand {
             resource: "y".into(),
             name: "y-res".into(),
@@ -302,7 +305,7 @@ fn demand_chain_resolves_to_a_fixed_point() {
             bind: ConnectionBinding::default(),
         }],
     );
-    let y_provider = provider("y-prov", "y", relational("y://{name}"));
+    let y_provider = provider("y-prov", "y", relational("y"));
     let c = consumer(
         "top",
         vec![ResourceDemand {

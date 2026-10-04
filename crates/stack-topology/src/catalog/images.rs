@@ -1,6 +1,6 @@
 //! Central registry of default container image references for the baseline catalog.
 //!
-//! Each default is exposed as a module `image` / `init_image` / `pgweb_image` knob so
+//! Each default is exposed as a module `image` / `init_image` knob so
 //! environments can override a single service's image via `--set` or `env.toml` without
 //! editing templates. Bump versions here when refreshing the baseline stack.
 
@@ -10,8 +10,6 @@ pub const ENVOY: &str = "envoyproxy/envoy:v1.34-latest";
 pub const AUTHELIA: &str = "ghcr.io/authelia/authelia:4.39";
 /// Postgres relational database.
 pub const POSTGRES: &str = "postgres:16";
-/// pgweb database browser (optional profile).
-pub const PGWEB: &str = "sosedoff/pgweb:latest";
 /// RustFS S3-compatible object store with STS. Pinned: the STS shim's action list was probed
 /// against this release's policy parser.
 pub const RUSTFS: &str = "rustfs/rustfs:1.0.1";
