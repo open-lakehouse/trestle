@@ -21,8 +21,6 @@ crate-type = ["cdylib", "rlib"]
 # workspace dependencies (in alphabetical order)
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Reads the rendered compose fragments for the topology diagram. Pure Rust, wasm32-clean.
-serde_yaml = { workspace = true }
 # Depend on the pure planner ONLY — `catalog` (serde_yaml) and `std-io` (disk I/O) stay OFF so
 # the dependency tree is wasm32-clean. `baseline_catalog()` is built in Rust and needs neither.
 olai-stack-topology = { path = "../stack-topology", default-features = false }

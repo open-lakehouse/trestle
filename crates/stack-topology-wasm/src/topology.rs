@@ -1,173 +1,170 @@
-//! The runtime topology projection behind the editor's "markitecture" diagram.
+//! The functional topology behind the editor's "markitecture" diagram.
 //!
-//! The planner's [`ResolvedGraph`](olai_stack_topology::ResolvedGraph) is a *selection* graph:
-//! its edges are `requires` + demand edges, used to pull modules in and order them. It is not
-//! the layout that actually runs. This module instead reads what the plan **emits** — the
-//! rendered compose fragments (`plan.head.includes`) and the structured
-//! [`GatewayConfig`] — so the diagram cannot drift from `compose.yaml`:
+//! The diagram explains *what the environment does*, not how its containers are wired: one
+//! node per functional component (a module: the object store, the data catalog, the identity
+//! provider, …), with the implementation (RustFS, Authelia, …) as a detail. Helper containers
+//! a module needs to fulfil its function — an STS shim, a bucket-init job, a cert mint — are
+//! part of that component and never appear on their own.
 //!
-//! - **Nodes** are the long-running compose services, owned by the module whose fragment
-//!   defines them. One-shot jobs (init/migrate/cert-mint) are dropped, and their startup gates
-//!   are collapsed onto what the job itself waits on. Services a module places outside compose
-//!   ([`Placement::Host`] / [`Placement::InProcess`]) appear as `external` nodes, plus a
-//!   synthetic [`HOST_NODE_ID`] node for the host/browser.
-//! - **Edges** point in request direction (caller → callee) and are typed: compose
-//!   `depends_on` gates, gateway routes, the forward-auth check, the emulated-AWS TLS path, and
-//!   host-published ports.
+//! Everything is read from the settled [`Plan`], so the picture follows the planner's actual
+//! decisions:
+//!
+//! - **Gateway surface** — every endpoint the gateway exposes (API prefixes, UIs, whole-service
+//!   listeners such as the S3 endpoint), from the [`RoutePlan`](olai_stack_topology::RoutePlan),
+//!   each attributed to the backend component it stitches in, and whether forward-auth gates it.
+//! - **Edges** — clients reaching the gateway, the gateway routing to each backend, the gateway
+//!   delegating authentication to the identity provider, and each component *using* the
+//!   capability it demanded (a relational DB, an object store) from the provider the planner
+//!   chose.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use olai_stack_topology::{GatewayConfig, Module, Placement, Plan};
-use serde::{Deserialize, Serialize};
+use olai_stack_topology::{
+    Connection, Listener, Module, ObjectStoreCredential, Placement, Plan, Role, RouteIntent,
+};
+use serde::Serialize;
 
-/// The id of the synthetic node standing for the host / browser (the source of ingress edges).
-/// `@` cannot appear in a compose service name, so it never collides with a real service.
-pub const HOST_NODE_ID: &str = "@host";
+/// The id of the synthetic node standing for the environment's clients (browsers, SDKs, CLIs on
+/// the host). `@` cannot appear in a module id, so it never collides with a component.
+pub const CLIENTS_NODE_ID: &str = "@clients";
 
-/// The diagram: modules (for grouping and selection), their runtime services, and typed edges
-/// between services.
+/// The functional diagram: components and the typed relationships between them.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphDto {
-    /// The modules in the plan, topologically ordered (dependencies first). A service's
-    /// [`module`](ServiceNodeDto::module) points here.
+    /// The [`CLIENTS_NODE_ID`] node (when the gateway exposes anything), then every component
+    /// that runs a service, in dependency order.
     pub nodes: Vec<GraphNodeDto>,
-    /// The runtime services: long-running compose services, external services, and the
-    /// [`HOST_NODE_ID`] ingress node.
-    pub services: Vec<ServiceNodeDto>,
-    /// Typed, request-direction edges between [`services`](Self::services).
+    /// Typed, request-direction edges between [`nodes`](Self::nodes).
     pub edges: Vec<TopologyEdgeDto>,
 }
 
-/// One module: enriched with the role/placement of its primary service, so the UI can color and
-/// icon it without a second lookup.
+/// What a [`GraphNodeDto`] stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeKind {
+    /// The environment's clients ([`CLIENTS_NODE_ID`]).
+    Clients,
+    /// The gateway: the single front door, carrying the exposed surface.
+    Gateway,
+    /// A component the stack runs.
+    Component,
+    /// A component the plan relies on but does not run in compose (host-bound or in-process),
+    /// e.g. an external identity provider.
+    External,
+}
+
+/// One functional component (a module), or the clients node.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNodeDto {
-    /// Module id (matches [`ServiceNodeDto::module`]).
+    /// Module id, or [`CLIENTS_NODE_ID`].
     pub id: String,
-    /// Human-readable label; falls back to the id when unset.
+    /// What the node stands for.
+    pub kind: NodeKind,
+    /// The implementation's human-readable name (e.g. `"RustFS (local S3 + STS)"`).
     pub display_name: Option<String>,
     /// One-line summary, for a tooltip.
     pub summary: Option<String>,
     /// Wizard category, if any.
     pub category: Option<String>,
-    /// The role of the module's primary service (e.g. `"object_store"`, `"gateway"`). `None`
-    /// for a module that contributes no service.
+    /// The function the component fills (its primary service's role, e.g. `"object_store"`,
+    /// `"auth"`). Drives the node's icon, accent and headline.
     pub role: Option<String>,
-    /// Where the module's primary service runs (`in_process` / `host` / `container:<service>`),
-    /// as a display string. `None` when it contributes no service.
+    /// Where the component runs (`in_process` / `host` / `container:<service>`).
     pub placement: Option<String>,
+    /// For the gateway: everything it exposes, grouped by backend in dependency order.
+    pub exposes: Vec<ExposedDto>,
+    /// For a provider: the APIs it offers its consumers (e.g. `"PostgreSQL"`, `"S3 + STS"`).
+    pub offers: Vec<String>,
+    /// For a provider: the resources it provisions for its consumers (databases, buckets), in
+    /// first-demand order.
+    pub provisions: Vec<ProvisionedDto>,
 }
 
-/// What a [`ServiceNodeDto`] stands for.
+/// What kind of surface an [`ExposedDto`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ServiceKind {
-    /// A long-running compose service.
-    Container,
-    /// A service the plan references but does not run in compose (host-bound or in-process).
-    External,
-    /// The synthetic host / browser node ([`HOST_NODE_ID`]).
-    Host,
+pub enum ExposedKind {
+    /// A REST API mounted under a path prefix on the shared listener.
+    Api,
+    /// A browser UI.
+    Ui,
+    /// A whole service on its own listener (e.g. an S3 endpoint SDKs address at the origin).
+    Service,
 }
 
-/// One runtime service in the diagram.
-#[derive(Debug, Clone, Serialize)]
-pub struct ServiceNodeDto {
-    /// The compose service name (its DNS name on the network), or [`HOST_NODE_ID`].
-    pub id: String,
-    /// The owning module's id; `None` only for the host node.
-    pub module: Option<String>,
-    /// What this node stands for.
-    pub kind: ServiceKind,
-    /// The service's declared role when it is one of the module's `ServiceSpec`s; `None` for a
-    /// sidecar the fragment adds on its own (e.g. `sts-shim`).
-    pub role: Option<String>,
-    /// The container image, as rendered.
-    pub image: Option<String>,
-    /// Host-published ports (`ports:`).
-    pub published: Vec<PortDto>,
-    /// In-network ports (`expose:`).
-    pub exposed: Vec<u16>,
-}
-
-/// A host-published port mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct PortDto {
-    /// The host-side port.
-    pub host: u16,
-    /// The container-side port.
-    pub container: u16,
-}
-
-/// A gateway route aggregated onto a [`TopologyEdgeDto::Route`] edge.
+/// One endpoint the gateway exposes to clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RouteRefDto {
-    /// The client-facing prefix matched.
+pub struct ExposedDto {
+    /// The backend component serving it.
+    pub module: String,
+    /// The backend endpoint's id (e.g. `"tracking"`, `"ui"`, `"s3"`).
+    pub endpoint: String,
+    /// What kind of surface it is.
+    pub kind: ExposedKind,
+    /// The client-facing path prefix (`/` for a whole-service listener).
     pub prefix: String,
-    /// The host port of the listener carrying the route.
+    /// The host port it is reachable on.
     pub host_port: u16,
-    /// The upstream rewrite, if the path is changed before forwarding.
-    pub rewrite: Option<String>,
-    /// Whether the route sits behind the forward-auth check.
+    /// Whether forward-auth gates it.
     pub gated: bool,
 }
 
-/// A typed, request-direction edge (`from` calls / waits on `to`).
+/// A resource a provider provisions for a consumer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProvisionedDto {
+    /// The resource kind (the demanded role, e.g. `"relational_db"`, `"object_store"`).
+    pub resource: String,
+    /// The resource's name (a database, a bucket).
+    pub name: String,
+}
+
+/// A typed, request-direction edge (`from` calls `to`).
 ///
 /// Internally tagged, with the endpoints on every variant, so it serializes to a flat JS object
 /// (`{ kind, from, to, … }`) through `serde-wasm-bindgen` without needing map support.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TopologyEdgeDto {
-    /// A compose `depends_on` gate. Gates through a dropped one-shot job are collapsed onto the
-    /// job's own dependencies.
-    Startup {
-        /// The waiting service.
+    /// Clients reach the gateway on these host ports.
+    Access {
+        /// Always [`CLIENTS_NODE_ID`].
         from: String,
-        /// The service waited on.
+        /// The gateway component.
         to: String,
-        /// The compose condition (`service_started` / `service_healthy` / …).
-        condition: String,
+        /// The host ports the gateway's listeners publish.
+        host_ports: Vec<u16>,
     },
-    /// The gateway forwards these routes to an upstream service.
+    /// The gateway forwards part of its surface to a backend. The routed endpoints are the
+    /// gateway node's [`exposes`](GraphNodeDto::exposes) entries for `to`.
     Route {
-        /// The gateway service.
+        /// The gateway component.
         from: String,
-        /// The upstream service.
+        /// The backend component.
         to: String,
-        /// Every route the gateway forwards to `to`, most-specific-first per listener.
-        routes: Vec<RouteRefDto>,
+        /// Whether any of the routed endpoints is behind forward-auth.
+        gated: bool,
     },
-    /// The gateway checks every gated request with the auth provider (`ext_authz`).
-    Authz {
-        /// The gateway service.
+    /// The gateway delegates authentication of gated requests to the identity provider.
+    Authenticates {
+        /// The gateway component.
         from: String,
-        /// The auth provider service.
+        /// The identity provider.
         to: String,
-        /// Where the provider's login portal is routed (open, not gated).
+        /// Where the provider's login portal is exposed (never gated).
         portal_prefix: String,
     },
-    /// Emulated public hostnames: a client calls real-cloud hostnames (e.g. AWS S3/STS), which
-    /// resolve to the gateway's in-network TLS listener; the gateway forwards them to the local
-    /// stand-in.
-    Emulated {
-        /// The caller: a client trusting the gateway's CA, or the gateway itself.
+    /// A component uses a capability another component provides.
+    Uses {
+        /// The consumer.
         from: String,
-        /// The gateway (for a client), or the upstream answering the hostnames.
+        /// The provider the planner chose.
         to: String,
-        /// The hostnames carried on this hop.
-        hosts: Vec<String>,
-        /// The TLS listener's in-network port.
-        port: u16,
-    },
-    /// Host-published ports reaching a service from outside compose.
-    Ingress {
-        /// Always [`HOST_NODE_ID`].
-        from: String,
-        /// The publishing service.
-        to: String,
-        /// The host ports published by `to`.
-        host_ports: Vec<u16>,
+        /// The capability used (the demanded role, e.g. `"object_store"`).
+        role: String,
+        /// How it is spoken, at the functional level (e.g. `"PostgreSQL"`, `"S3"`).
+        protocol: String,
+        /// The resources used (database / bucket names).
+        resources: Vec<String>,
     },
 }
 
@@ -175,159 +172,16 @@ impl TopologyEdgeDto {
     /// The edge's endpoints.
     pub fn endpoints(&self) -> (&str, &str) {
         match self {
-            Self::Startup { from, to, .. }
+            Self::Access { from, to, .. }
             | Self::Route { from, to, .. }
-            | Self::Authz { from, to, .. }
-            | Self::Emulated { from, to, .. }
-            | Self::Ingress { from, to, .. } => (from, to),
+            | Self::Authenticates { from, to, .. }
+            | Self::Uses { from, to, .. } => (from, to),
         }
     }
 }
-
-// --- compose fragment parsing --------------------------------------------------------------
-
-/// The slice of a compose fragment the diagram reads. Unknown keys are ignored.
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct Fragment {
-    #[serde(default)]
-    pub(crate) services: BTreeMap<String, FragmentService>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct FragmentService {
-    #[serde(default)]
-    image: Option<String>,
-    #[serde(default)]
-    restart: Option<String>,
-    #[serde(default)]
-    pub(crate) depends_on: DependsOn,
-    #[serde(default)]
-    ports: Vec<serde_yaml::Value>,
-    #[serde(default)]
-    expose: Vec<serde_yaml::Value>,
-    #[serde(default)]
-    volumes: Vec<serde_yaml::Value>,
-}
-
-/// Compose `depends_on`, in either its short (list) or long (map) form.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum DependsOn {
-    List(Vec<String>),
-    Map(BTreeMap<String, DependsEntry>),
-}
-
-impl Default for DependsOn {
-    fn default() -> Self {
-        Self::List(Vec::new())
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct DependsEntry {
-    #[serde(default)]
-    condition: Option<String>,
-}
-
-/// The compose default when `depends_on` names a service without a condition.
-const SERVICE_STARTED: &str = "service_started";
-const SERVICE_COMPLETED: &str = "service_completed_successfully";
-
-impl DependsOn {
-    /// `(service, condition)` pairs, in name order.
-    pub(crate) fn gates(&self) -> Vec<(String, String)> {
-        match self {
-            Self::List(names) => names
-                .iter()
-                .map(|n| (n.clone(), SERVICE_STARTED.to_string()))
-                .collect(),
-            Self::Map(map) => map
-                .iter()
-                .map(|(n, e)| {
-                    let condition = e.condition.as_deref().unwrap_or(SERVICE_STARTED);
-                    (n.clone(), condition.to_string())
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Parse a rendered fragment. An empty fragment (an env-only module) has no services.
-pub(crate) fn parse_fragment(fragment: &str) -> Result<Fragment, serde_yaml::Error> {
-    if fragment.lines().all(|l| {
-        let l = l.trim();
-        l.is_empty() || l.starts_with('#')
-    }) {
-        return Ok(Fragment::default());
-    }
-    serde_yaml::from_str(fragment)
-}
-
-/// Parse one `ports:` entry: short syntax (`"9080:10000"`, `"127.0.0.1:9080:10000/tcp"`) or the
-/// long `{ published, target }` form. A container-only entry (no host side) publishes nothing.
-fn parse_port(value: &serde_yaml::Value) -> Option<PortDto> {
-    match value {
-        serde_yaml::Value::String(s) => {
-            let s = s.split('/').next().unwrap_or(s);
-            let parts: Vec<&str> = s.split(':').collect();
-            if parts.len() < 2 {
-                return None;
-            }
-            let container = parts[parts.len() - 1].parse().ok()?;
-            let host = parts[parts.len() - 2].parse().ok()?;
-            Some(PortDto { host, container })
-        }
-        serde_yaml::Value::Mapping(m) => {
-            let num = |key: &str| -> Option<u16> {
-                match m.get(key)? {
-                    serde_yaml::Value::Number(n) => n.as_u64()?.try_into().ok(),
-                    serde_yaml::Value::String(s) => s.parse().ok(),
-                    _ => None,
-                }
-            };
-            Some(PortDto {
-                host: num("published")?,
-                container: num("target")?,
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Parse one `expose:` entry (`"9000"`, `9000`, or `"9000/tcp"`).
-fn parse_expose(value: &serde_yaml::Value) -> Option<u16> {
-    match value {
-        serde_yaml::Value::Number(n) => n.as_u64()?.try_into().ok(),
-        serde_yaml::Value::String(s) => s.split('/').next()?.parse().ok(),
-        _ => None,
-    }
-}
-
-/// The source of one `volumes:` entry (`"src:dst[:mode]"` or `{ source, … }`).
-fn volume_source(value: &serde_yaml::Value) -> Option<&str> {
-    match value {
-        serde_yaml::Value::String(s) => s.split(':').next(),
-        serde_yaml::Value::Mapping(m) => m.get("source")?.as_str(),
-        _ => None,
-    }
-}
-
-impl FragmentService {
-    /// A one-shot job runs to completion rather than staying up: compose's default restart
-    /// policy (`no`, i.e. the key is absent) or `on-failure`. Long-running services in the
-    /// templates all declare `unless-stopped` / `always`.
-    fn restart_says_job(&self) -> bool {
-        matches!(
-            self.restart.as_deref(),
-            None | Some("no") | Some("on-failure")
-        )
-    }
-}
-
-// --- projection ------------------------------------------------------------------------------
 
 /// Render a [`Placement`] to the display string the UI shows on a node.
-pub(crate) fn placement_str(placement: &Placement) -> String {
+fn placement_str(placement: &Placement) -> String {
     match placement {
         Placement::InProcess => "in_process".to_string(),
         Placement::Host => "host".to_string(),
@@ -335,335 +189,248 @@ pub(crate) fn placement_str(placement: &Placement) -> String {
     }
 }
 
-/// Project a settled [`Plan`] into the diagram [`GraphDto`].
-///
-/// A fragment that fails to parse contributes no services rather than failing the plan — the
-/// planner's own output is valid compose (the golden tests check it), and the diagram should
-/// degrade, not block the editor. The unit tests assert every baseline fragment parses.
+/// The functional name of how a [`Connection`] is spoken. With `full`, the provider's whole
+/// offering (an S3 store that vends scoped credentials offers `S3 + STS`); without, just the
+/// data protocol a consumer speaks to it.
+fn protocol(connection: &Connection, full: bool) -> String {
+    match connection {
+        Connection::ObjectStore { credential, .. } => match credential {
+            // A role to assume means the store vends scoped credentials through its STS API —
+            // part of the object store's contract, however the stack fulfils it.
+            ObjectStoreCredential::S3 {
+                role_arn: Some(_), ..
+            } if full => "S3 + STS".to_string(),
+            ObjectStoreCredential::S3 { .. } => "S3".to_string(),
+            ObjectStoreCredential::AzureBlob { .. } => "Azure Blob".to_string(),
+            _ => "object store".to_string(),
+        },
+        Connection::RelationalDb { url } => match url.split_once("://") {
+            Some(("postgres" | "postgresql", _)) => "PostgreSQL".to_string(),
+            Some((scheme, _)) => scheme.to_string(),
+            None => "SQL".to_string(),
+        },
+        _ => "connection".to_string(),
+    }
+}
+
+/// Project a settled [`Plan`] into the functional [`GraphDto`].
 pub fn graph_dto(plan: &Plan) -> GraphDto {
-    let nodes = module_nodes(plan);
-
-    // Every compose service, keyed by name, with its owning module.
-    let mut compose: BTreeMap<String, (String, FragmentService)> = BTreeMap::new();
-    for include in &plan.head.includes {
-        let Ok(fragment) = parse_fragment(&include.fragment) else {
-            continue;
-        };
-        for (name, svc) in fragment.services {
-            compose.insert(name, (include.module.as_str().to_string(), svc));
-        }
-    }
-
-    let jobs = one_shot_jobs(&compose);
-
-    // Declared roles, by compose service name.
-    let mut roles: BTreeMap<String, String> = BTreeMap::new();
-    for specs in plan.services.values() {
-        for spec in specs {
-            if let Placement::Container { service } = &spec.placement {
-                roles.insert(service.clone(), spec.role.as_str().to_string());
-            }
-        }
-    }
-
-    let mut services: Vec<ServiceNodeDto> = Vec::new();
-    // Container services, in module (dependency) order, then name order within a module.
-    for module in &plan.graph.nodes {
-        let module_id = module.id().as_str();
-        for (name, (owner, svc)) in &compose {
-            if owner != module_id || jobs.contains(name) {
-                continue;
-            }
-            services.push(ServiceNodeDto {
-                id: name.clone(),
-                module: Some(owner.clone()),
-                kind: ServiceKind::Container,
-                role: roles.get(name).cloned(),
-                image: svc.image.clone(),
-                published: svc.ports.iter().filter_map(parse_port).collect(),
-                exposed: svc.expose.iter().filter_map(parse_expose).collect(),
-            });
-        }
-    }
-    // Services a module declares outside compose (host-bound / in-process).
-    for (module_id, specs) in &plan.services {
-        for spec in specs {
-            if matches!(spec.placement, Placement::Container { .. }) {
-                continue;
-            }
-            services.push(ServiceNodeDto {
-                id: spec.name.clone(),
-                module: Some(module_id.as_str().to_string()),
-                kind: ServiceKind::External,
-                role: Some(spec.role.as_str().to_string()),
-                image: None,
-                published: Vec::new(),
-                exposed: Vec::new(),
-            });
-        }
-    }
-
-    let mut edges = startup_edges(&compose, &jobs);
-    let gateway_service = gateway_service(plan, &compose, &jobs);
-    if let Some(gw) = &gateway_service {
-        edges.extend(gateway_edges(&plan.gateway, gw, &compose, &jobs));
-    }
-    let ingress = ingress_edges(&services);
-    if !ingress.is_empty() {
-        services.insert(
-            0,
-            ServiceNodeDto {
-                id: HOST_NODE_ID.to_string(),
-                module: None,
-                kind: ServiceKind::Host,
-                role: None,
-                image: None,
-                published: Vec::new(),
-                exposed: Vec::new(),
-            },
-        );
-        edges.extend(ingress);
-    }
-
-    GraphDto {
-        nodes,
-        services,
-        edges,
-    }
-}
-
-/// The module list, each enriched with its primary service's role and placement.
-fn module_nodes(plan: &Plan) -> Vec<GraphNodeDto> {
-    plan.graph
-        .nodes
+    let primary = |id: &str| {
+        plan.services
+            .iter()
+            .find(|(mid, _)| mid.as_str() == id)
+            .and_then(|(_, specs)| specs.first())
+    };
+    let gateway_module: Option<String> = plan
+        .services
         .iter()
-        .map(|m: &std::sync::Arc<dyn Module>| {
-            let id = m.id().as_str().to_string();
-            let svc = plan
-                .services
+        .find(|(_, specs)| specs.iter().any(|s| s.role == Role::gateway()))
+        .map(|(id, _)| id.as_str().to_string());
+    let module_of_service = |service: &str| -> Option<String> {
+        plan.services.iter().find_map(|(id, specs)| {
+            specs
                 .iter()
-                .find(|(mid, _)| mid.as_str() == id)
-                .and_then(|(_, specs)| specs.first());
-            GraphNodeDto {
-                display_name: m.display_name().map(str::to_string),
-                summary: m.summary().map(str::to_string),
-                category: m.category().map(str::to_string),
-                role: svc.map(|s| s.role.as_str().to_string()),
-                placement: svc.map(|s| placement_str(&s.placement)),
-                id,
-            }
+                .any(|s| s.name == service)
+                .then(|| id.as_str().to_string())
         })
-        .collect()
-}
+    };
 
-/// The compose services that are one-shot jobs: those whose restart policy says so, plus any
-/// another service waits on with `service_completed_successfully` (only a job can complete).
-fn one_shot_jobs(compose: &BTreeMap<String, (String, FragmentService)>) -> BTreeSet<String> {
-    let mut jobs: BTreeSet<String> = compose
-        .iter()
-        .filter(|(_, (_, svc))| svc.restart_says_job())
-        .map(|(name, _)| name.clone())
-        .collect();
-    for (_, svc) in compose.values() {
-        for (dep, condition) in svc.depends_on.gates() {
-            if condition == SERVICE_COMPLETED && compose.contains_key(&dep) {
-                jobs.insert(dep);
-            }
-        }
-    }
-    jobs
-}
-
-/// The effective startup gates of a service: its own `depends_on`, with any gate on a dropped
-/// job replaced by the job's own (recursively) gates. Gates on services missing from compose
-/// are dropped.
-fn effective_gates(
-    name: &str,
-    compose: &BTreeMap<String, (String, FragmentService)>,
-    jobs: &BTreeSet<String>,
-) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    let mut stack: Vec<(String, String)> = compose
-        .get(name)
-        .map(|(_, svc)| svc.depends_on.gates())
-        .unwrap_or_default();
-    stack.reverse();
-    // Direct gates take precedence over one collapsed through a job onto the same service.
-    let direct: BTreeSet<String> = stack
-        .iter()
-        .filter(|(d, _)| !jobs.contains(d))
-        .map(|(d, _)| d.clone())
-        .collect();
-    while let Some((dep, condition)) = stack.pop() {
-        if !seen.insert(dep.clone()) || dep == name {
-            continue;
-        }
-        if jobs.contains(&dep) {
-            if let Some((_, job)) = compose.get(&dep) {
-                let mut inner = job.depends_on.gates();
-                inner.reverse();
-                stack.extend(inner.into_iter().filter(|(d, _)| !direct.contains(d)));
-            }
-        } else if compose.contains_key(&dep) {
-            out.push((dep, condition));
-        }
-    }
-    out
-}
-
-/// One [`TopologyEdgeDto::Startup`] edge per effective gate of every long-running service.
-fn startup_edges(
-    compose: &BTreeMap<String, (String, FragmentService)>,
-    jobs: &BTreeSet<String>,
-) -> Vec<TopologyEdgeDto> {
-    let mut edges = Vec::new();
-    for name in compose.keys() {
-        if jobs.contains(name) {
-            continue;
-        }
-        for (to, condition) in effective_gates(name, compose, jobs) {
-            edges.push(TopologyEdgeDto::Startup {
-                from: name.clone(),
-                to,
-                condition,
-            });
-        }
-    }
-    edges
-}
-
-/// The compose service filling the `gateway` role, if any.
-fn gateway_service(
-    plan: &Plan,
-    compose: &BTreeMap<String, (String, FragmentService)>,
-    jobs: &BTreeSet<String>,
-) -> Option<String> {
-    plan.services
-        .values()
-        .flatten()
-        .filter(|s| s.role == olai_stack_topology::Role::gateway())
-        .find_map(|s| match &s.placement {
-            Placement::Container { service }
-                if compose.contains_key(service) && !jobs.contains(service) =>
-            {
-                Some(service.clone())
-            }
-            _ => None,
-        })
-}
-
-/// Route, auth and emulated-hostname edges out of the gateway, from the structured
-/// [`GatewayConfig`]. A cluster's `host` is the upstream's compose DNS name, i.e. its service.
-fn gateway_edges(
-    gateway: &GatewayConfig,
-    gw: &str,
-    compose: &BTreeMap<String, (String, FragmentService)>,
-    jobs: &BTreeSet<String>,
-) -> Vec<TopologyEdgeDto> {
-    let live = |svc: &str| compose.contains_key(svc) && !jobs.contains(svc);
-    let host_of = |cluster: &str| -> Option<&str> {
-        gateway
+    let auth = plan.gateway.auth.as_ref();
+    let auth_module = auth.and_then(|a| {
+        let host = plan
+            .gateway
             .clusters
             .iter()
-            .find(|c| c.name == cluster)
-            .map(|c| c.host.as_str())
-    };
-    let auth_host = gateway.auth.as_ref().and_then(|a| host_of(&a.cluster));
+            .find(|c| c.name == a.cluster)
+            .map_or(a.cluster.as_str(), |c| c.host.as_str());
+        module_of_service(host)
+    });
+    // The shared listener is the first; its routes are the ones forward-auth gates.
+    let shared_port = plan.gateway.listeners.first().map(|l| l.host_port);
 
-    let mut edges = Vec::new();
-
-    // Routes, aggregated per upstream service (first-seen order). The auth provider's portal
-    // route is folded into the `Authz` edge instead.
-    let mut routes: Vec<(String, Vec<RouteRefDto>)> = Vec::new();
-    for (i, listener) in gateway.listeners.iter().enumerate() {
-        for route in &listener.routes {
-            let Some(host) = host_of(&route.cluster) else {
-                continue;
-            };
-            if !live(host) || Some(host) == auth_host {
-                continue;
-            }
-            let r = RouteRefDto {
-                prefix: route.prefix.clone(),
-                host_port: listener.host_port,
-                rewrite: route.rewrite.clone(),
-                // Mirrors the Envoy renderer: only the shared (first) listener is gated.
-                gated: i == 0 && gateway.auth.is_some(),
-            };
-            match routes.iter_mut().find(|(h, _)| h == host) {
-                Some((_, rs)) => rs.push(r),
-                None => routes.push((host.to_string(), vec![r])),
-            }
-        }
-    }
-    for (to, routes) in routes {
-        edges.push(TopologyEdgeDto::Route {
-            from: gw.to_string(),
-            to,
-            routes,
-        });
-    }
-
-    if let (Some(auth), Some(host)) = (&gateway.auth, auth_host)
-        && live(host)
-    {
-        edges.push(TopologyEdgeDto::Authz {
-            from: gw.to_string(),
-            to: host.to_string(),
-            portal_prefix: auth.portal_prefix.clone(),
-        });
-    }
-
-    if let Some(tls) = &gateway.tls {
-        // Clients: every service mounting the gateway's CA volume calls the emulated hostnames.
-        // (The gateway mounts it too, to serve the certificate — it is not its own client.)
-        for (name, (_, svc)) in compose {
-            if name == gw || jobs.contains(name) {
-                continue;
-            }
-            if svc
-                .volumes
-                .iter()
-                .any(|v| volume_source(v) == Some(tls.trust.volume.as_str()))
-            {
-                edges.push(TopologyEdgeDto::Emulated {
-                    from: name.clone(),
-                    to: gw.to_string(),
-                    hosts: tls.hosts.clone(),
-                    port: tls.port,
+    // The gateway's exposed surface, per backend, in dependency order.
+    let mut exposes: Vec<ExposedDto> = Vec::new();
+    for module in &plan.graph.nodes {
+        let id = module.id().as_str();
+        for spec in plan.services.get(module.id()).into_iter().flatten() {
+            for endpoint in &spec.endpoints {
+                let kind = match endpoint.intent {
+                    RouteIntent::Internal => continue,
+                    RouteIntent::Api => ExposedKind::Api,
+                    RouteIntent::UiPrefixable | RouteIntent::UiFixed => ExposedKind::Ui,
+                    RouteIntent::Gatewayed => ExposedKind::Service,
+                };
+                let Some(route) = plan.routes.get(&spec.name, &endpoint.id) else {
+                    continue;
+                };
+                let (host_port, shared) = match route.listener {
+                    Listener::Shared => (shared_port.unwrap_or_default(), true),
+                    Listener::Dedicated { port } => (port, false),
+                };
+                exposes.push(ExposedDto {
+                    module: id.to_string(),
+                    endpoint: endpoint.id.clone(),
+                    kind,
+                    prefix: route.prefix.clone(),
+                    host_port,
+                    gated: shared && auth.is_some(),
                 });
             }
         }
-        // Upstreams: one hop per virtual host.
-        for vhost in &tls.virtual_hosts {
-            let Some(host) = host_of(&vhost.cluster) else {
+        // The identity provider's login portal is routed by the planner, not declared as an
+        // endpoint; it is open so a logged-out user can reach it.
+        if let (Some(a), Some(auth_id)) = (auth, &auth_module)
+            && auth_id == id
+        {
+            exposes.push(ExposedDto {
+                module: id.to_string(),
+                endpoint: "portal".to_string(),
+                kind: ExposedKind::Ui,
+                prefix: a.portal_prefix.clone(),
+                host_port: shared_port.unwrap_or_default(),
+                gated: false,
+            });
+        }
+    }
+
+    // What each component uses: one edge per (consumer, provider, capability), from the
+    // demands and the provider the planner chose for each.
+    let mut uses: Vec<TopologyEdgeDto> = Vec::new();
+    let mut provisions: BTreeMap<String, Vec<ProvisionedDto>> = BTreeMap::new();
+    for module in &plan.graph.nodes {
+        for (idx, demand) in module.needs().iter().enumerate() {
+            let Some(provider) = plan.graph.edges.iter().find_map(|e| {
+                (e.from == *module.id())
+                    .then(|| plan.graph.module(&e.to))
+                    .flatten()
+                    .filter(|p| p.provides().resource_kinds.contains_key(&demand.resource))
+            }) else {
                 continue;
             };
-            if live(host) {
-                edges.push(TopologyEdgeDto::Emulated {
-                    from: gw.to_string(),
-                    to: host.to_string(),
-                    hosts: vhost.hosts.clone(),
-                    port: tls.port,
+            let Some(connection) = plan.connections.get(&(module.id().clone(), idx)) else {
+                continue;
+            };
+            let (from, to) = (module.id().as_str(), provider.id().as_str());
+            provisions
+                .entry(to.to_string())
+                .or_default()
+                .push(ProvisionedDto {
+                    resource: demand.resource.clone(),
+                    name: demand.name.clone(),
                 });
+            let existing = uses.iter_mut().find(|e| {
+                matches!(e, TopologyEdgeDto::Uses { from: f, to: t, role, .. }
+                    if f == from && t == to && *role == demand.resource)
+            });
+            match existing {
+                Some(TopologyEdgeDto::Uses { resources, .. }) => {
+                    resources.push(demand.name.clone());
+                }
+                _ => uses.push(TopologyEdgeDto::Uses {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    role: demand.resource.clone(),
+                    protocol: protocol(connection, false),
+                    resources: vec![demand.name.clone()],
+                }),
             }
         }
     }
-    edges
-}
 
-/// One [`TopologyEdgeDto::Ingress`] edge per service that publishes host ports.
-fn ingress_edges(services: &[ServiceNodeDto]) -> Vec<TopologyEdgeDto> {
-    services
-        .iter()
-        .filter(|s| !s.published.is_empty())
-        .map(|s| TopologyEdgeDto::Ingress {
-            from: HOST_NODE_ID.to_string(),
-            to: s.id.clone(),
-            host_ports: s.published.iter().map(|p| p.host).collect(),
-        })
-        .collect()
+    // Components: every module that runs a service. (An env-only contract module contributes
+    // configuration, not a function, so it has no node.)
+    let mut nodes: Vec<GraphNodeDto> = Vec::new();
+    for module in &plan.graph.nodes {
+        let m: &std::sync::Arc<dyn Module> = module;
+        let id = m.id().as_str();
+        let Some(svc) = primary(id) else {
+            continue;
+        };
+        let kind = if gateway_module.as_deref() == Some(id) {
+            NodeKind::Gateway
+        } else if matches!(svc.placement, Placement::Container { .. }) {
+            NodeKind::Component
+        } else {
+            NodeKind::External
+        };
+        nodes.push(GraphNodeDto {
+            id: id.to_string(),
+            kind,
+            display_name: m.display_name().map(str::to_string),
+            summary: m.summary().map(str::to_string),
+            category: m.category().map(str::to_string),
+            role: Some(svc.role.as_str().to_string()),
+            placement: Some(placement_str(&svc.placement)),
+            offers: m
+                .provides()
+                .resource_kinds
+                .values()
+                .map(|t| protocol(&t.0, true))
+                .collect(),
+            exposes: if kind == NodeKind::Gateway {
+                exposes.clone()
+            } else {
+                Vec::new()
+            },
+            provisions: provisions.remove(id).unwrap_or_default(),
+        });
+    }
+
+    let mut edges: Vec<TopologyEdgeDto> = Vec::new();
+    if let Some(gw) = &gateway_module {
+        let host_ports: Vec<u16> = plan.gateway.listeners.iter().map(|l| l.host_port).collect();
+        if !host_ports.is_empty() {
+            nodes.insert(
+                0,
+                GraphNodeDto {
+                    id: CLIENTS_NODE_ID.to_string(),
+                    kind: NodeKind::Clients,
+                    display_name: Some("Clients".to_string()),
+                    summary: Some("Browsers, SDKs and CLIs on the host.".to_string()),
+                    category: None,
+                    role: None,
+                    placement: None,
+                    offers: Vec::new(),
+                    exposes: Vec::new(),
+                    provisions: Vec::new(),
+                },
+            );
+            edges.push(TopologyEdgeDto::Access {
+                from: CLIENTS_NODE_ID.to_string(),
+                to: gw.clone(),
+                host_ports,
+            });
+        }
+        // One route edge per backend, in surface order. The IdP's portal is folded into the
+        // `Authenticates` edge rather than drawn as a second gateway → IdP arrow.
+        let mut routed: Vec<(&str, bool)> = Vec::new();
+        for e in &exposes {
+            if Some(&e.module) == auth_module.as_ref() {
+                continue;
+            }
+            match routed.iter_mut().find(|(m, _)| *m == e.module) {
+                Some((_, gated)) => *gated |= e.gated,
+                None => routed.push((&e.module, e.gated)),
+            }
+        }
+        for (to, gated) in routed {
+            edges.push(TopologyEdgeDto::Route {
+                from: gw.clone(),
+                to: to.to_string(),
+                gated,
+            });
+        }
+        if let (Some(a), Some(idp)) = (auth, &auth_module) {
+            edges.push(TopologyEdgeDto::Authenticates {
+                from: gw.clone(),
+                to: idp.clone(),
+                portal_prefix: a.portal_prefix.clone(),
+            });
+        }
+    }
+    edges.extend(uses);
+
+    GraphDto { nodes, edges }
 }
 
 #[cfg(test)]
@@ -699,222 +466,144 @@ mod tests {
         selection
     }
 
-    fn service_ids(g: &GraphDto) -> Vec<&str> {
-        g.services.iter().map(|s| s.id.as_str()).collect()
+    fn node<'a>(g: &'a GraphDto, id: &str) -> &'a GraphNodeDto {
+        g.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("no node {id}"))
     }
 
-    fn has_startup(g: &GraphDto, from: &str, to: &str) -> bool {
-        g.edges.iter().any(|e| {
-            matches!(e, TopologyEdgeDto::Startup { from: f, to: t, .. } if f == from && t == to)
+    fn uses<'a>(g: &'a GraphDto, from: &str, to: &str) -> Option<(&'a str, &'a [String])> {
+        g.edges.iter().find_map(|e| match e {
+            TopologyEdgeDto::Uses {
+                from: f,
+                to: t,
+                protocol,
+                resources,
+                ..
+            } if f == from && t == to => Some((protocol.as_str(), resources.as_slice())),
+            _ => None,
         })
     }
 
     #[test]
-    fn every_baseline_fragment_parses() {
-        for auth in [false, true] {
-            let p = plan(&lakehouse(auth));
-            for include in &p.head.includes {
-                parse_fragment(&include.fragment).unwrap_or_else(|e| {
-                    panic!("{} fragment does not parse: {e}", include.module.as_str())
-                });
-            }
+    fn nodes_are_functional_components_not_containers() {
+        let g = graph_dto(&plan(&lakehouse(false)));
+        let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids[0], CLIENTS_NODE_ID);
+        for module in ["envoy", "postgres", "rustfs", "unity-catalog", "mlflow"] {
+            assert!(ids.contains(&module), "{module} missing: {ids:?}");
         }
+        // Helper containers are part of their component, never nodes of their own.
+        for helper in [
+            "sts-shim",
+            "rustfs-init",
+            "gateway-certs",
+            "headwaters-migrate",
+            "db",
+        ] {
+            assert!(
+                !ids.contains(&helper),
+                "{helper} should not be a node: {ids:?}"
+            );
+        }
+        assert_eq!(node(&g, "envoy").kind, NodeKind::Gateway);
+        assert_eq!(node(&g, "rustfs").role.as_deref(), Some("object_store"));
     }
 
     #[test]
-    fn one_shot_jobs_are_hidden_and_collapsed() {
+    fn components_use_the_capabilities_they_demand() {
         let g = graph_dto(&plan(&lakehouse(false)));
-        let ids = service_ids(&g);
-        for job in ["rustfs-init", "headwaters-migrate", "gateway-certs"] {
-            assert!(!ids.contains(&job), "job {job} should be hidden: {ids:?}");
-        }
-        // Long-running sidecars stay, inside their module.
-        let shim = g.services.iter().find(|s| s.id == "sts-shim").unwrap();
-        assert_eq!(shim.module.as_deref(), Some("rustfs"));
-        // headwaters → headwaters-migrate → db collapses to headwaters → db.
-        assert!(has_startup(&g, "headwaters", "db"), "{:#?}", g.edges);
-        // mlflow → rustfs-init → rustfs collapses to mlflow → rustfs.
-        assert!(has_startup(&g, "mlflow", "rustfs"), "{:#?}", g.edges);
-        assert!(has_startup(&g, "sts-shim", "rustfs"));
-        // No edge ever references a hidden node.
-        assert_edges_reference_known_services(&g);
-    }
-
-    #[test]
-    fn resolver_requires_edges_are_not_drawn() {
-        let g = graph_dto(&plan(&lakehouse(false)));
-        // mlflow `requires` envoy, but compose has no such gate: it is a route, gateway → mlflow.
-        assert!(!has_startup(&g, "mlflow", "envoy"));
-        let route = g
-            .edges
+        let (proto, dbs) = uses(&g, "mlflow", "postgres").expect("mlflow uses postgres");
+        assert_eq!(proto, "PostgreSQL");
+        assert_eq!(dbs, ["mlflow"]);
+        let (proto, buckets) = uses(&g, "unity-catalog", "rustfs").expect("UC uses rustfs");
+        assert_eq!(proto, "S3");
+        assert_eq!(buckets, ["unity"]);
+        // STS is part of what the object store offers, not a separate shim component.
+        assert_eq!(node(&g, "rustfs").offers, ["S3 + STS"]);
+        assert_eq!(node(&g, "postgres").offers, ["PostgreSQL"]);
+        assert!(uses(&g, "mlflow", "rustfs").is_some());
+        // Providers list what they provision.
+        let names: Vec<&str> = node(&g, "postgres")
+            .provisions
             .iter()
-            .find_map(|e| match e {
-                TopologyEdgeDto::Route { from, to, routes }
-                    if from == "envoy" && to == "mlflow" =>
-                {
-                    Some(routes)
-                }
-                _ => None,
-            })
-            .expect("envoy should route to mlflow");
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(
-            route
-                .iter()
-                .any(|r| r.prefix.starts_with("/api/2.0/mlflow"))
+            names.contains(&"mlflow") && names.contains(&"unitycatalog"),
+            "{names:?}"
         );
-        assert!(route.iter().all(|r| !r.gated), "auth is off");
+        // `requires: [envoy]` is not a use: the gateway routes *to* the component instead.
+        assert!(uses(&g, "mlflow", "envoy").is_none());
     }
 
     #[test]
-    fn auth_provider_is_wired_to_the_gateway() {
+    fn gateway_lists_the_surface_it_stitches_together() {
+        let g = graph_dto(&plan(&lakehouse(false)));
+        let gw = node(&g, "envoy");
+        let find = |module: &str, kind: ExposedKind| {
+            gw.exposes
+                .iter()
+                .filter(|e| e.module == module && e.kind == kind)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            find("unity-catalog", ExposedKind::Api)
+                .iter()
+                .any(|e| e.prefix == "/api/2.1/unity-catalog")
+        );
+        assert!(!find("mlflow", ExposedKind::Api).is_empty());
+        assert!(!find("mlflow", ExposedKind::Ui).is_empty());
+        // The object store is exposed whole, on its own listener.
+        let s3 = find("rustfs", ExposedKind::Service);
+        assert_eq!(s3.len(), 1, "{:?}", gw.exposes);
+        let shared = find("mlflow", ExposedKind::Api)[0].host_port;
+        assert_ne!(s3[0].host_port, shared);
+        // Every backend in the surface gets a route edge; postgres is internal-only.
+        for backend in ["unity-catalog", "mlflow", "jaeger", "rustfs"] {
+            assert!(g.edges.iter().any(|e| matches!(
+                e, TopologyEdgeDto::Route { to, .. } if to == backend
+            )));
+        }
+        assert!(!gw.exposes.iter().any(|e| e.module == "postgres"));
+    }
+
+    #[test]
+    fn identity_provider_is_a_component_the_gateway_delegates_to() {
         let g = graph_dto(&plan(&lakehouse(true)));
-        assert!(has_startup(&g, "envoy", "authelia"), "{:#?}", g.edges);
+        assert_eq!(node(&g, "authelia").role.as_deref(), Some("auth"));
         assert!(g.edges.iter().any(|e| matches!(
             e,
-            TopologyEdgeDto::Authz { from, to, .. } if from == "envoy" && to == "authelia"
+            TopologyEdgeDto::Authenticates { from, to, .. } if from == "envoy" && to == "authelia"
         )));
-        // API/UI routes on the shared listener are gated; dedicated listeners stay open.
-        for e in &g.edges {
-            if let TopologyEdgeDto::Route { to, routes, .. } = e {
-                assert_ne!(to, "authelia", "the portal route folds into the Authz edge");
-                for r in routes {
-                    let shared = r.host_port == PlanCtx::default().gateway_host_port;
-                    assert_eq!(r.gated, shared, "{to} {r:?}");
+        let gw = node(&g, "envoy");
+        // The login portal is exposed and open; API/UI routes are gated; the S3 listener isn't.
+        let portal = gw.exposes.iter().find(|e| e.module == "authelia").unwrap();
+        assert!(!portal.gated);
+        for e in &gw.exposes {
+            match (e.module.as_str(), e.kind) {
+                ("authelia", _) => {}
+                (_, ExposedKind::Service) => assert!(!e.gated, "{e:?}"),
+                _ => assert!(e.gated, "{e:?}"),
+            }
+        }
+        // No separate route edge to the IdP: the portal folds into `Authenticates`.
+        assert!(!g.edges.iter().any(|e| matches!(
+            e, TopologyEdgeDto::Route { to, .. } if to == "authelia"
+        )));
+    }
+
+    #[test]
+    fn every_edge_references_a_node() {
+        for auth in [false, true] {
+            let g = graph_dto(&plan(&lakehouse(auth)));
+            for e in &g.edges {
+                let (from, to) = e.endpoints();
+                for id in [from, to] {
+                    assert!(g.nodes.iter().any(|n| n.id == id), "dangling {e:?}");
                 }
             }
         }
-    }
-
-    #[test]
-    fn emulated_aws_path_goes_through_the_gateway() {
-        let g = graph_dto(&plan(&lakehouse(false)));
-        let emulated: Vec<(&str, &str)> = g
-            .edges
-            .iter()
-            .filter(|e| matches!(e, TopologyEdgeDto::Emulated { .. }))
-            .map(TopologyEdgeDto::endpoints)
-            .collect();
-        // UC mounts the gateway CA and calls the AWS hostnames; MLflow uses an endpoint override.
-        assert!(
-            emulated.contains(&("unitycatalog", "envoy")),
-            "{emulated:?}"
-        );
-        assert!(
-            !emulated.iter().any(|(f, _)| *f == "mlflow"),
-            "{emulated:?}"
-        );
-        assert!(emulated.contains(&("envoy", "sts-shim")), "{emulated:?}");
-        assert!(emulated.contains(&("envoy", "rustfs")), "{emulated:?}");
-    }
-
-    #[test]
-    fn host_ingress_reaches_published_services() {
-        let g = graph_dto(&plan(&lakehouse(false)));
-        assert_eq!(g.services[0].id, HOST_NODE_ID);
-        let ingress_to: Vec<&str> = g
-            .edges
-            .iter()
-            .filter(|e| matches!(e, TopologyEdgeDto::Ingress { .. }))
-            .map(|e| e.endpoints().1)
-            .collect();
-        assert!(ingress_to.contains(&"envoy"), "{ingress_to:?}");
-        let envoy = g.services.iter().find(|s| s.id == "envoy").unwrap();
-        assert!(
-            envoy
-                .published
-                .iter()
-                .any(|p| p.host == PlanCtx::default().gateway_host_port),
-            "{envoy:?}"
-        );
-    }
-
-    /// Drift guard: every compose `depends_on` gate between long-running services is drawn,
-    /// and every drawn gate exists in compose (directly or through a job).
-    #[test]
-    fn startup_edges_match_compose_depends_on() {
-        let p = plan(&lakehouse(true));
-        let g = graph_dto(&p);
-        let mut compose: BTreeMap<String, Fragment> = BTreeMap::new();
-        for include in &p.head.includes {
-            compose.insert(
-                include.module.as_str().to_string(),
-                parse_fragment(&include.fragment).unwrap(),
-            );
-        }
-        let all: BTreeMap<&String, &FragmentService> =
-            compose.values().flat_map(|f| f.services.iter()).collect();
-        let live: BTreeSet<&str> = service_ids(&g).into_iter().collect();
-        for (name, svc) in &all {
-            if !live.contains(name.as_str()) {
-                continue;
-            }
-            for (dep, _) in svc.depends_on.gates() {
-                if live.contains(dep.as_str()) {
-                    assert!(has_startup(&g, name, &dep), "missing {name} → {dep}");
-                }
-            }
-        }
-        for e in &g.edges {
-            if let TopologyEdgeDto::Startup { from, to, .. } = e {
-                let direct = all[from].depends_on.gates().iter().any(|(d, _)| d == to);
-                let via_job = all[from].depends_on.gates().iter().any(|(d, _)| {
-                    !live.contains(d.as_str())
-                        && all
-                            .get(d)
-                            .is_some_and(|j| j.depends_on.gates().iter().any(|(x, _)| x == to))
-                });
-                assert!(direct || via_job, "drawn {from} → {to} is not in compose");
-            }
-        }
-    }
-
-    fn assert_edges_reference_known_services(g: &GraphDto) {
-        let ids: BTreeSet<&str> = service_ids(g).into_iter().collect();
-        for e in &g.edges {
-            let (from, to) = e.endpoints();
-            assert!(
-                ids.contains(from) && ids.contains(to),
-                "dangling edge {e:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn parses_port_and_depends_on_forms() {
-        let f = parse_fragment(
-            "services:\n  a:\n    restart: unless-stopped\n    ports:\n      - \"127.0.0.1:9080:10000/tcp\"\n      - \"5000\"\n      - published: 81\n        target: 80\n    expose: [9000, \"9001/tcp\"]\n    depends_on: [b]\n  b:\n    restart: always\n    depends_on:\n      c: {}\n",
-        )
-        .unwrap();
-        let a = &f.services["a"];
-        let ports: Vec<PortDto> = a.ports.iter().filter_map(parse_port).collect();
-        assert_eq!(
-            ports,
-            vec![
-                PortDto {
-                    host: 9080,
-                    container: 10000
-                },
-                PortDto {
-                    host: 81,
-                    container: 80
-                }
-            ]
-        );
-        let exposed: Vec<u16> = a.expose.iter().filter_map(parse_expose).collect();
-        assert_eq!(exposed, vec![9000, 9001]);
-        assert_eq!(
-            a.depends_on.gates(),
-            vec![("b".into(), SERVICE_STARTED.into())]
-        );
-        assert_eq!(
-            f.services["b"].depends_on.gates(),
-            vec![("c".into(), SERVICE_STARTED.into())]
-        );
-        assert!(
-            parse_fragment("# env-only\n\n")
-                .unwrap()
-                .services
-                .is_empty()
-        );
     }
 }

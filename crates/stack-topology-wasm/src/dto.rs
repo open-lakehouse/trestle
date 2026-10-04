@@ -17,8 +17,8 @@ use olai_stack_topology::{
 use serde::Serialize;
 
 pub use crate::topology::{
-    GraphDto, GraphNodeDto, PortDto, RouteRefDto, ServiceKind, ServiceNodeDto, TopologyEdgeDto,
-    graph_dto,
+    CLIENTS_NODE_ID, ExposedDto, ExposedKind, GraphDto, GraphNodeDto, NodeKind, ProvisionedDto,
+    TopologyEdgeDto, graph_dto,
 };
 
 /// The whole selectable catalog, projected for the picker UI: every module with the metadata a
@@ -59,7 +59,7 @@ pub struct ModuleDto {
 /// services, a projected gateway layout, and the non-sensitive materialized files.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanResultDto {
-    /// The runtime topology (see [`crate::topology`]) — the primary input to the React Flow
+    /// The functional topology (see [`crate::topology`]) — the primary input to the React Flow
     /// "markitecture".
     pub graph: GraphDto,
     /// Each module's resolved services (`ServiceSpec` is `Serialize`), keyed by module id.
@@ -334,14 +334,14 @@ mod tests {
             "graph missing postgres: {node_ids:?}"
         );
 
-        // mlflow's runtime gates reach its backing services (the full topology is pinned in
-        // `topology`'s tests).
+        // mlflow uses its backing capabilities (the full topology is pinned in `topology`'s
+        // tests).
         assert!(
             result.graph.edges.iter().any(|e| matches!(
                 e,
-                TopologyEdgeDto::Startup { from, to, .. } if from == "mlflow" && to == "db"
+                TopologyEdgeDto::Uses { from, to, .. } if from == "mlflow" && to == "postgres"
             )),
-            "expected mlflow to wait on db: {:?}",
+            "expected mlflow to use postgres: {:?}",
             result.graph.edges
         );
 
