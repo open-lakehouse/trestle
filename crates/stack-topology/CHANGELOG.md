@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.3...olai-stack-topology-v0.0.4) - 2026-10-04
+
+### Added
+
+- *(web)* [**breaking**] functional environment topology with the gateway's API surface (#114)
+- [**breaking**] vend UC S3 credentials via RustFS and emulated AWS (#113)
+- *(env)* harden trestle env scenarios, knobs, and Compose secrets (#110)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.2...olai-stack-topology-v0.0.3) - 2026-07-14
 
 ### Added
