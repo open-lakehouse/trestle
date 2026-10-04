@@ -1,0 +1,54 @@
+# RustFS (S3 + STS) + one-shot bucket init + STS policy shim
+services:
+  rustfs:
+    image: rustfs/rustfs:1.0.1
+    restart: unless-stopped
+    env_file:
+      - path: ./modules/rustfs/.env/rustfs.env
+        format: raw
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: ":9000"
+      # Lets RustFS parse virtual-hosted requests (<bucket>.s3.<region>.amazonaws.com) that
+      # reach it through the gateway's emulated AWS hostnames.
+      RUSTFS_SERVER_DOMAINS: s3.us-east-1.amazonaws.com,s3.amazonaws.com
+    expose:
+      - "9000"
+    volumes:
+      # A named volume rather than a `DATA_ROOT` bind mount: RustFS runs as a non-root user,
+      # which can't write a root-owned host directory on Linux.
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:9000/ || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Unity Catalog's AssumeRole session policy uses action wildcards RustFS can't parse, and
+  # the request is SigV4-signed, so the gateway can't rewrite it in flight. This shim expands
+  # the wildcards, drops the KMS statements, and re-signs. The gateway routes the emulated STS
+  # hostnames here.
+  sts-shim:
+    image: python:3.13-alpine
+    restart: unless-stopped
+    command: ["python", "/sts_shim.py"]
+    env_file:
+      - path: ./modules/rustfs/.env/rustfs.env
+        format: raw
+    environment:
+      STS_UPSTREAM: http://rustfs:9000
+      AWS_REGION: us-east-1
+    configs:
+      - source: rustfs_sts_shim
+        target: /sts_shim.py
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  rustfs-data:

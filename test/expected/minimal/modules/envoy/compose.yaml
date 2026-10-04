@@ -7,7 +7,37 @@ services:
       - source: envoy_config
         target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    depends_on:
+      gateway-certs:
+        condition: service_completed_successfully
     ports:
       - "9080:10000"
       - "9100:9100"
       - "9901:9901"
+    volumes:
+      - gateway-certs:/certs:ro
+    networks:
+      default:
+        # In-network clients resolve these public hostnames to the gateway, which terminates
+        # TLS for them with a local CA. Compose DNS has no wildcards: each host is listed.
+        aliases:
+          - s3.amazonaws.com
+          - s3.us-east-1.amazonaws.com
+          - sts.amazonaws.com
+          - sts.us-east-1.amazonaws.com
+
+  # One-shot: mints the local CA and the gateway's certificate for the hostnames above.
+  gateway-certs:
+    image: eclipse-temurin:17-jdk-noble
+    entrypoint: ["bash", "/certs.sh"]
+    environment:
+      CERT_DIR: /certs
+      CERT_HOSTS: "s3.amazonaws.com s3.us-east-1.amazonaws.com sts.amazonaws.com sts.us-east-1.amazonaws.com"
+    configs:
+      - source: gateway_certs_script
+        target: /certs.sh
+    volumes:
+      - gateway-certs:/certs
+
+volumes:
+  gateway-certs:

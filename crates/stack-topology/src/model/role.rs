@@ -131,7 +131,7 @@ impl std::fmt::Display for Role {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceSpec {
     /// The implementation identifier (e.g. `"unity-catalog"`, `"iceberg-rest"`,
-    /// `"seaweedfs"`, `"azurite"`, `"marquez"`). Unique within an environment.
+    /// `"rustfs"`, `"azurite"`, `"marquez"`). Unique within an environment.
     pub name: String,
     /// What this service *is* in the architecture, independent of `name`.
     pub role: Role,

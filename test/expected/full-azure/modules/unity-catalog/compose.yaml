@@ -1,16 +1,16 @@
 # Unity Catalog
 services:
   unitycatalog:
-    image: unitycatalog/unitycatalog:main-2f2e32d
+    image: unitycatalog/unitycatalog:v0.6.0
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
       azurite-init:
         condition: service_completed_successfully
-    env_file:
-      - path: ./modules/unity-catalog/.env/unitycatalog.env
-        format: raw
+    secrets:
+      - source: unitycatalog_server_properties
+        target: /home/unitycatalog/etc/conf/server.properties
     expose:
       - "8080"
     healthcheck:

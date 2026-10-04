@@ -41,7 +41,7 @@
 //! against the typed [`RenderCtx`](crate::RenderCtx), so it reads plan-resolved values directly
 //! (`{{ env.DATA_ROOT }}`, `{{ connections.object_store.0.credential.access_key_id }}`) and
 //! branches on a resolved [`Connection`](crate::Connection) where it must. Plan-time values are
-//! rendered concrete; SeaweedFS's bucket-init lines, for instance, iterate the provisioned
+//! rendered concrete; RustFS's bucket-init lines, for instance, iterate the provisioned
 //! `objects` rather than splicing a planner-filled placeholder.
 
 use std::sync::Arc;
@@ -49,8 +49,8 @@ use std::sync::Arc;
 use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
-    ConnectionBinding, DataModule, Knob, KnobKind, Module, ModuleId, Provides, RenderSpec,
-    ResolvedKnobs, ResourceDemand,
+    ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, Provides,
+    RenderSpec, ResolvedKnobs, ResourceDemand,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -63,8 +63,8 @@ use crate::render::RenderFile;
 /// The well-known [`Provides::extras`](crate::Provides::extras) key by which a
 /// resource provider names the compose service a *consumer* should gate its startup
 /// on, and the condition to wait for — `"<service>:<condition>"`, e.g.
-/// `"db:service_healthy"` (Postgres) or `"seaweedfs-init:service_completed_successfully"`
-/// (SeaweedFS). For each demand, the planner reads the *chosen* provider's value and
+/// `"db:service_healthy"` (Postgres) or `"rustfs-init:service_completed_successfully"`
+/// (RustFS). For each demand, the planner reads the *chosen* provider's value and
 /// resolves it into a typed [`DepGate`](crate::DepGate) it hands the consumer's render via
 /// [`RenderCtx::dependencies`](crate::RenderCtx) — so a consumer never hard-codes which
 /// backend's init it waits for (it follows whichever provider the planner picked).
@@ -90,8 +90,8 @@ pub const DATA_ROOT_DEFAULT: &str = "./.data";
 
 /// The inlined baseline catalog: all common local-Lakehouse modules.
 ///
-/// The `object_store` role has two providers (SeaweedFS and Azurite); the catalog
-/// default is SeaweedFS, so the baseline plans the S3 wiring out of the box. An
+/// The `object_store` role has two providers (RustFS and Azurite); the catalog
+/// default is RustFS, so the baseline plans the S3 wiring out of the box. An
 /// environment that prefers Azurite (e.g. for local UC credential vending) overrides
 /// via [`PlanCtx::provider_preference`](crate::PlanCtx::provider_preference).
 pub fn baseline_catalog() -> Catalog {
@@ -99,7 +99,7 @@ pub fn baseline_catalog() -> Catalog {
         envoy(),
         authelia(),
         postgres(),
-        seaweedfs(),
+        rustfs(),
         azurite(),
         mlflow(),
         unity_catalog(),
@@ -107,7 +107,7 @@ pub fn baseline_catalog() -> Catalog {
         headwaters(),
         databricks_emulator_env(),
     ] as [Arc<dyn Module>; 10])
-    .with_default_provider(Role::OBJECT_STORE, "seaweedfs")
+    .with_default_provider(Role::OBJECT_STORE, "rustfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
     // check.
@@ -118,7 +118,7 @@ pub fn baseline_catalog() -> Catalog {
 /// `always: [envoy]` + default `storage`/`metadata_db` choices. Other modules
 /// (catalog, ml, query engine, observability) are opt-in.
 pub fn baseline_selection() -> crate::plan::Selection {
-    crate::plan::Selection::modules(["envoy", "postgres", "seaweedfs"])
+    crate::plan::Selection::modules(["envoy", "postgres", "rustfs"])
 }
 
 /// Helper: a container-placed service.
@@ -174,6 +174,19 @@ fn secret_file(path: &str, alias: &str, contents: &str) -> RenderFile {
     }
 }
 
+/// A generated, non-secret file declared as a top-level Compose config.
+fn config_file(path: &str, alias: &str, contents: &str) -> RenderFile {
+    RenderFile {
+        path: path.into(),
+        contents: contents.into(),
+        alias: Some(alias.into()),
+        sensitive: false,
+        secret_alias: None,
+        at_root: false,
+        preserve: false,
+    }
+}
+
 /// Helper: a string knob for a container image reference, defaulting to `default`.
 ///
 /// `key` is the public snake_case identifier (typically `"image"` or `"init_image"`);
@@ -208,6 +221,10 @@ pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
 /// [`PlanCtx`](crate::PlanCtx), not as a routed endpoint. Its rendered Envoy bootstrap config
 /// is a planner-emitted artifact, not part of this fragment (which only declares the
 /// container that mounts it).
+///
+/// When a module declares [`impersonated_hosts`](crate::Provides::impersonated_hosts), the
+/// fragment also adds those hosts as network aliases and a one-shot that mints the local CA
+/// the gateway's TLS listener presents.
 ///
 /// Exposes one behavioural knob, [`ENVOY_AUTH`] (`auth`): turning it on fronts every API and
 /// UI route with Authelia forward-auth. The knob's effect is realized in the planner and the
@@ -250,8 +267,23 @@ fn envoy() -> Arc<dyn Module> {
                 aliases: vec![crate::plan::ENVOY_AUTH_KNOB_LEGACY.into()],
             },
             image_knob("image", "Envoy image", images::ENVOY, "ENVOY_IMAGE"),
+            image_knob(
+                "certs_image",
+                "Certificate minting image",
+                images::CERTS,
+                "GATEWAY_CERTS_IMAGE",
+            ),
         ],
-        render: template(include_str!("../../templates/gateway/compose.yaml.jinja")),
+        // The certificate script renders only when the gateway emulates public hostnames
+        // (`tls` is set); otherwise it is empty and dropped.
+        render: template_with_files(
+            include_str!("../../templates/gateway/compose.yaml.jinja"),
+            vec![config_file(
+                "certs.sh",
+                "gateway_certs_script",
+                include_str!("../../templates/gateway/certs.sh.jinja"),
+            )],
+        ),
     })
 }
 
@@ -455,19 +487,27 @@ fn postgres() -> Arc<dyn Module> {
     })
 }
 
-/// `seaweedfs` — the S3-compatible object store. Reached directly by SDKs
-/// at its host port (not multiplexed behind the gateway). Its compose fragment iterates the
-/// buckets it provisions (`objects`) to build the one-shot init.
-fn seaweedfs() -> Arc<dyn Module> {
+/// The RustFS root credentials. Local throwaway keys, used by the bucket init, the STS shim,
+/// and every consumer of the store.
+const RUSTFS_ACCESS_KEY: &str = "rustfs-root";
+const RUSTFS_SECRET_KEY: &str = "rustfs-root-secret";
+
+/// `rustfs` — the S3-compatible object store, with STS. Reached by SDKs through the
+/// gateway's dedicated listener, like any gatewayed store. Its fragment iterates the buckets
+/// it provisions (`objects`) to build the one-shot init.
+///
+/// RustFS also answers the real AWS S3/STS hostnames inside the compose network, through the
+/// gateway's TLS listener ([`Provides::impersonated_hosts`]). That is for clients with no
+/// endpoint override, like the Unity Catalog server: it always calls
+/// `https://sts.<region>.amazonaws.com` to vend credentials, so the store must look like AWS
+/// to it. An STS shim sits in front of RustFS because RustFS rejects the session policies such
+/// clients send (see `templates/modules/rustfs/compose.yaml.jinja`).
+fn rustfs() -> Arc<dyn Module> {
     let mut provides = Provides::default();
-    // No env vars are declared here: ports are written concretely in the fragment, and the S3
-    // credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are
-    // derived from the typed S3 credential below (via `Connection::standard_env`), so they are
-    // stated once and enter `.env` only when SeaweedFS is the chosen object_store — no `AWS_*`
-    // leak under an Azure provider.
-    //
-    // The S3 flavour of the `object_store` role: the role-generic addressing
-    // (`uri`/`bucket`/`endpoint`) plus an S3 credential a consumer may bind explicitly.
+    // No env vars are declared here: the S3 credentials (`AWS_ACCESS_KEY_ID` /
+    // `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are derived from the typed S3 credential
+    // below (via `Connection::standard_env`), so they are stated once and enter `.env` only
+    // when RustFS is the chosen object_store — no `AWS_*` leak under an Azure provider.
     provides.resource_kinds.insert(
         Role::OBJECT_STORE.into(),
         ConnectionTemplate(Connection::ObjectStore {
@@ -476,69 +516,114 @@ fn seaweedfs() -> Arc<dyn Module> {
             // The in-network direct address. Because the `s3` endpoint is `Gatewayed`, the
             // planner rewrites this to the gateway origin (`http://<gateway>:<port>`) after
             // it allocates the store's dedicated listener, so consumers reach it via Envoy.
-            endpoint: "http://seaweedfs:8333".into(),
+            endpoint: "http://rustfs:9000".into(),
             credential: ObjectStoreCredential::S3 {
-                access_key_id: "seaweedfs".into(),
-                secret_access_key: "seaweedfs".into(),
+                access_key_id: RUSTFS_ACCESS_KEY.into(),
+                secret_access_key: RUSTFS_SECRET_KEY.into(),
                 region: "us-east-1".into(),
+                // RustFS ignores the role; any well-formed ARN lets a consumer AssumeRole.
+                role_arn: Some("arn:aws:iam::000000000000:role/local-storage".into()),
             },
+            tls_trust: None,
         }),
     );
     // A consumer that demands `object_store` should wait for the one-shot bucket init to
-    // finish (the buckets it needs exist only after `seaweedfs-init` completes).
+    // finish (the buckets it needs exist only after `rustfs-init` completes).
     provides.extras.insert(
         DEP_GATE_EXTRA.into(),
-        "seaweedfs-init:service_completed_successfully".into(),
+        "rustfs-init:service_completed_successfully".into(),
     );
+    // The AWS hostnames clients without an endpoint override call. Virtual-hosted bucket names
+    // are listed per provisioned bucket (`{name}`).
+    let sts = |host: &str| ImpersonatedHost {
+        host: host.into(),
+        service: "sts-shim".into(),
+        port: 8080,
+    };
+    let s3 = |host: &str| ImpersonatedHost {
+        host: host.into(),
+        service: "rustfs".into(),
+        port: 9000,
+    };
+    provides.impersonated_hosts = vec![
+        sts("sts.amazonaws.com"),
+        sts("sts.us-east-1.amazonaws.com"),
+        s3("s3.amazonaws.com"),
+        s3("s3.us-east-1.amazonaws.com"),
+        s3("{name}.s3.amazonaws.com"),
+        s3("{name}.s3.us-east-1.amazonaws.com"),
+    ];
     Arc::new(DataModule {
-        id: ModuleId::from("seaweedfs"),
-        display_name: Some("SeaweedFS (local S3)".into()),
-        summary: Some("Self-hosted S3-compatible object store.".into()),
+        id: ModuleId::from("rustfs"),
+        display_name: Some("RustFS (local S3 + STS)".into()),
+        summary: Some(
+            "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS \
+             hostnames in-network."
+                .into(),
+        ),
         category: Some("storage".into()),
         provider_of: Some("object_store".into()),
         requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
         service_specs: vec![ServiceSpec {
-            name: "seaweedfs".into(),
+            name: "rustfs".into(),
             role: Role::object_store(),
-            placement: container("seaweedfs"),
+            placement: container("rustfs"),
             // No raw host port: the store is reached through the gateway on its own dedicated
             // listener (Gatewayed), not a direct compose `ports:` publish.
-            endpoints: vec![Endpoint::gatewayed("s3", 8333)],
+            endpoints: vec![Endpoint::gatewayed("s3", 9000)],
             depends_on: vec![],
             base_path: String::new(),
         }],
         provides,
         knobs: vec![
-            image_knob(
-                "image",
-                "SeaweedFS image",
-                images::SEAWEEDFS,
-                "SEAWEEDFS_IMAGE",
-            ),
+            image_knob("image", "RustFS image", images::RUSTFS, "RUSTFS_IMAGE"),
             image_knob(
                 "init_image",
-                "SeaweedFS init image",
-                images::SEAWEEDFS_INIT,
-                "SEAWEEDFS_INIT_IMAGE",
+                "RustFS init image",
+                images::RUSTFS_INIT,
+                "RUSTFS_INIT_IMAGE",
+            ),
+            image_knob(
+                "sts_shim_image",
+                "STS shim image",
+                images::STS_SHIM,
+                "STS_SHIM_IMAGE",
             ),
         ],
         render: template_with_files(
-            include_str!("../../templates/modules/seaweedfs/compose.yaml.jinja"),
-            vec![sensitive_file(
-                ".env/seaweedfs-init.env",
-                include_str!("../../templates/modules/seaweedfs/init.env.jinja"),
-            )],
+            include_str!("../../templates/modules/rustfs/compose.yaml.jinja"),
+            vec![
+                sensitive_file(".env/rustfs.env", &rustfs_env()),
+                config_file(
+                    "sts_shim.py",
+                    "rustfs_sts_shim",
+                    include_str!("../../templates/modules/rustfs/sts_shim.py"),
+                ),
+            ],
         ),
     })
 }
 
+/// The env file every RustFS service loads: the server's root keys, the same keys under the
+/// names the bucket init (AWS CLI) and the STS shim read.
+fn rustfs_env() -> String {
+    format!(
+        "RUSTFS_ACCESS_KEY={RUSTFS_ACCESS_KEY}\n\
+         RUSTFS_SECRET_KEY={RUSTFS_SECRET_KEY}\n\
+         AWS_ACCESS_KEY_ID={RUSTFS_ACCESS_KEY}\n\
+         AWS_SECRET_ACCESS_KEY={RUSTFS_SECRET_KEY}\n\
+         AWS_DEFAULT_REGION=us-east-1\n\
+         STS_ACCESS_KEY={RUSTFS_ACCESS_KEY}\n\
+         STS_SECRET_KEY={RUSTFS_SECRET_KEY}\n"
+    )
+}
+
 /// `azurite` — the Azure Blob flavour of the `object_store` role, an
-/// alternative to SeaweedFS. Preferred in environments that need Azure-shaped storage
-/// (e.g. for local Unity Catalog credential vending). When chosen, it provisions the
-/// demanded containers and vends the Azure connection string as an object_store
-/// coordinate; SeaweedFS is not deployed, so no `AWS_*` keys enter the stack.
+/// alternative to RustFS. Preferred in environments that need Azure-shaped storage. When
+/// chosen, it provisions the demanded containers and vends the Azure connection string as an
+/// object_store coordinate; RustFS is not deployed, so no `AWS_*` keys enter the stack.
 fn azurite() -> Arc<dyn Module> {
     const CONN: &str = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;";
     let mut provides = Provides::default();
@@ -547,7 +632,7 @@ fn azurite() -> Arc<dyn Module> {
     // enters `.env` only when Azurite is the chosen object_store. The blob port is the
     // emulator's fixed 10000, rendered directly in the fragment — no env var.
 
-    // The Azure flavour of `object_store`: the same role-generic addressing as SeaweedFS
+    // The Azure flavour of `object_store`: the same role-generic addressing as RustFS
     // (`uri`/`bucket`/`endpoint`), filled with the `wasbs://` shape, plus an Azure
     // connection-string credential.
     provides.resource_kinds.insert(
@@ -562,6 +647,7 @@ fn azurite() -> Arc<dyn Module> {
             credential: ObjectStoreCredential::AzureBlob {
                 connection_string: CONN.into(),
             },
+            tls_trust: None,
         }),
     );
     // A consumer that demands `object_store` waits for the one-shot container init to finish.
@@ -683,7 +769,7 @@ fn mlflow() -> Arc<dyn Module> {
             // No hand-listed startup edges: MLflow's `depends_on` is demand-driven. The
             // planner injects the chosen relational-db / object-store providers' gates
             // (service + condition) into the fragment, so the wait follows whichever backend
-            // it picked rather than naming `db`/`seaweedfs` here.
+            // it picked rather than naming `db`/`rustfs` here.
             depends_on: vec![],
         }],
         provides,
@@ -708,9 +794,12 @@ fn mlflow() -> Arc<dyn Module> {
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
     let provides = Provides::default();
-    // The image is pinned in the fragment; UC reads its backend URL and object-store endpoint
-    // straight from the typed connections (no `${VAR}` round-trip), so this module injects no
-    // env vars of its own.
+    // UC reads its storage config from a rendered `server.properties` (mounted as a secret: it
+    // carries the store's keys). That file reads the typed object-store connections directly,
+    // so this module injects no env vars of its own. The S3 entries are what you'd write for
+    // real AWS — no endpoint override, which UC doesn't support — so the store must answer the
+    // AWS hostnames itself (see `rustfs`), and the fragment trusts the gateway's local CA when
+    // the connection carries a `tls_trust`.
 
     Arc::new(DataModule {
         id: ModuleId::from("unity-catalog"),
@@ -722,9 +811,10 @@ fn unity_catalog() -> Arc<dyn Module> {
         requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         // The relational store and object store arrive as demands, but nothing is bound into
-        // UC's env: its fragment reads the resolved connections directly
-        // (`connections.relational_db.0.url`, `connections.object_store.0.endpoint`, and the
-        // typed credential), so no role-generic coordinate is round-tripped through `.env`.
+        // UC's env: its `server.properties` reads the resolved object-store connections
+        // directly. The database is provisioned but not yet wired: UC takes its JDBC URL from
+        // `hibernate.properties`, which this module doesn't render, so it runs on its embedded
+        // H2 database.
         needs: vec![
             ResourceDemand {
                 resource: Role::RELATIONAL_DB.into(),
@@ -764,9 +854,10 @@ fn unity_catalog() -> Arc<dyn Module> {
         )],
         render: template_with_files(
             include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
-            vec![sensitive_file(
-                ".env/unitycatalog.env",
-                include_str!("../../templates/modules/unity-catalog/unitycatalog.env.jinja"),
+            vec![secret_file(
+                "secrets/server.properties",
+                "unitycatalog_server_properties",
+                include_str!("../../templates/modules/unity-catalog/server.properties.jinja"),
             )],
         ),
     })

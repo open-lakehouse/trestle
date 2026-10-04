@@ -11,7 +11,8 @@
 //!
 //! Fixtures under `tests/fixtures/default/` were captured by running the real
 //! `trestle new` for the default lakehouse selection (envoy + seaweedfs + postgres +
-//! unity-catalog + mlflow).
+//! unity-catalog + mlflow). RustFS has since replaced SeaweedFS as the S3 store, so the
+//! fixture's include list names `rustfs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +25,7 @@ const COMPOSE_FIXTURE: &str = include_str!("fixtures/default/compose.yaml");
 
 /// The default lakehouse selection used to capture the fixtures.
 fn default_selection() -> Selection {
-    Selection::modules(["envoy", "seaweedfs", "postgres", "unity-catalog", "mlflow"])
+    Selection::modules(["envoy", "rustfs", "postgres", "unity-catalog", "mlflow"])
 }
 
 fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
@@ -343,10 +344,10 @@ fn compose_declares_config_aliases_for_mounted_files() {
 fn unity_catalog_template_branches_on_the_object_store_credential() {
     use olai_stack_topology::ModuleId;
 
-    // UC's fragment is a `RenderSpec`: it branches on the chosen object-store
-    // credential flavour, so the rendered compose differs between an S3 and an Azure backend.
-    // Select UC + its hard `requires` only, letting the object_store demand resolve via the
-    // catalog default / `ctx` preference (so the chosen provider is unambiguous).
+    // UC's storage config is a rendered `server.properties` (mounted as a secret), branching
+    // on the chosen object-store credential flavour. Select UC + its hard `requires` only,
+    // letting the object_store demand resolve via the catalog default / `ctx` preference (so
+    // the chosen provider is unambiguous).
     let uc_render = |ctx: PlanCtx| -> (String, String) {
         let sel = Selection::modules(["unity-catalog"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
@@ -358,69 +359,83 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         // Valid YAML in either branch.
         let _: Value =
             serde_yaml::from_str(&out.fragment).expect("rendered UC fragment must be valid YAML");
-        let env = out
+        let props = out
             .files
             .iter()
-            .find(|file| file.path.ends_with("/.env/unitycatalog.env"))
-            .expect("UC env file")
+            .find(|file| file.path.ends_with("/secrets/server.properties"))
+            .expect("UC server.properties")
             .contents
             .clone();
-        (out.fragment.clone(), env)
+        (out.fragment.clone(), props)
     };
 
-    // Default → SeaweedFS (S3): static AWS keys from the typed credential, a `seaweedfs-init`
-    // dependency, and no `${AWS_*:-}` fallback hack or Azure connection string.
-    let (s3, s3_env) = uc_render(PlanCtx::default());
-    assert!(s3.contains("seaweedfs-init:"), "S3 init dependency: {s3}");
+    // Default → RustFS (S3): the real-AWS per-bucket keys with the store's role (no endpoint
+    // override, which UC lacks), a `rustfs-init` dependency, and the gateway's CA trusted.
+    let (s3, s3_props) = uc_render(PlanCtx::default());
+    let s3_yaml: Value = serde_yaml::from_str(&s3).expect("valid YAML");
+    let uc = &s3_yaml["services"]["unitycatalog"];
     assert!(
-        s3_env.contains("AWS_ACCESS_KEY_ID=seaweedfs"),
-        "S3 keys: {s3_env}"
+        !uc["depends_on"]["rustfs-init"].is_null(),
+        "S3 init dependency: {s3}"
+    );
+    assert_eq!(
+        uc["depends_on"]["gateway-certs"]["condition"].as_str(),
+        Some("service_completed_successfully"),
+        "UC waits for the CA it trusts: {s3}"
     );
     assert!(
-        !s3.contains("${AWS_ACCESS_KEY_ID:-"),
-        "no fallback hack: {s3}"
+        uc["environment"]["JAVA_TOOL_OPTIONS"]
+            .as_str()
+            .is_some_and(|o| o.contains("-Djavax.net.ssl.trustStore=/certs/truststore.p12")),
+        "JVM trusts the gateway CA: {s3}"
+    );
+    assert_eq!(
+        uc["volumes"][0].as_str(),
+        Some("gateway-certs:/certs:ro"),
+        "CA volume mounted read-only: {s3}"
+    );
+    assert_eq!(
+        uc["secrets"][0]["target"].as_str(),
+        Some("/home/unitycatalog/etc/conf/server.properties")
     );
     assert!(
-        !s3.contains("AZURE_STORAGE_CONNECTION_STRING"),
-        "no Azure leak: {s3}"
-    );
-    // The fragment is rendered whole from the render context — no compose `${VAR}` left to
-    // resolve at run time (the database URL itself carries `${POSTGRES_*}` defaults, so scope
-    // the check to the lines that used to be `${VAR}` indirections).
-    assert!(
-        s3.contains("image: unitycatalog/unitycatalog:main-2f2e32d"),
-        "image pinned inline, not via ${{UC_IMAGE}}: {s3}"
+        s3.contains("image: unitycatalog/unitycatalog:v0.6.0"),
+        "official image pinned inline, not via ${{UC_IMAGE}}: {s3}"
     );
     assert!(
-        !s3.contains("${UC_IMAGE")
-            && !s3.contains("${S3_ENDPOINT")
-            && !s3.contains("${UC_DATABASE_URL"),
-        "UC no longer round-trips coordinates through compose ${{VAR}} refs: {s3}"
+        !s3.contains("rustfs-root"),
+        "keys stay out of the fragment: {s3}"
     );
+    for line in [
+        "s3.bucketPath.0=s3://unity",
+        "s3.region.0=us-east-1",
+        "s3.awsRoleArn.0=arn:aws:iam::000000000000:role/local-storage",
+        "s3.accessKey.0=rustfs-root",
+        "s3.secretKey.0=rustfs-root-secret",
+    ] {
+        assert!(
+            s3_props.lines().any(|l| l == line),
+            "missing `{line}`: {s3_props}"
+        );
+    }
     assert!(
-        s3_env.contains("S3_ENDPOINT=http://envoy:9100"),
-        "S3_ENDPOINT comes from the resolved object_store endpoint: {s3_env}"
-    );
-    assert!(
-        s3_env
+        !s3_props
             .lines()
-            .any(|line| line.starts_with("DATABASE_URL=postgresql://")
-                && line.ends_with("@db:5432/unitycatalog")),
-        "DATABASE_URL comes from the resolved relational_db url: {s3_env}"
+            .any(|l| !l.starts_with('#') && l.to_lowercase().contains("endpoint")),
+        "no endpoint override: {s3_props}"
     );
 
-    // Azurite-preferred → the Azure branch: a connection string, an `azurite-init`
-    // dependency, and no AWS keys.
+    // Azurite-preferred → no S3 entries (UC's adls.* config needs a service principal), an
+    // `azurite-init` dependency, and no CA trust (nothing is emulated over TLS).
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+        vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
     );
-    let (azure, azure_env) = uc_render(PlanCtx {
+    let (azure, azure_props) = uc_render(PlanCtx {
         provider_preference: preference,
         ..Default::default()
     });
-    // Assert on the rendered compose body, not the header comment (which names both inits).
     let azure_yaml: Value = serde_yaml::from_str(&azure).expect("valid YAML");
     let uc = &azure_yaml["services"]["unitycatalog"];
     assert!(
@@ -428,17 +443,17 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         "Azure init dependency: {azure}"
     );
     assert!(
-        uc["depends_on"]["seaweedfs-init"].is_null(),
-        "no S3 init under Azure: {azure}"
+        uc["depends_on"]["rustfs-init"].is_null() && uc["depends_on"]["gateway-certs"].is_null(),
+        "no S3 init or CA under Azure: {azure}"
     );
     assert!(
-        azure_env.starts_with("DATABASE_URL=")
-            && azure_env.contains("\nAZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol="),
-        "Azure connection string from the typed credential: {azure_env}"
+        uc["environment"].is_null(),
+        "no JVM truststore under Azure: {azure}"
     );
+    assert!(azure_props.contains("server.authorization=disable"));
     assert!(
-        !azure_env.contains("AWS_ACCESS_KEY_ID"),
-        "no AWS keys under Azure: {azure_env}"
+        !azure_props.contains("s3.") && !azure_props.contains("AccountKey"),
+        "no S3 entries or Azure keys: {azure_props}"
     );
 }
 
@@ -470,7 +485,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
         (out.fragment.clone(), env)
     };
 
-    // Default → SeaweedFS (S3).
+    // Default → RustFS (S3).
     let (s3, s3_env) = mlflow_render(PlanCtx::default());
     let s3_yaml: Value = serde_yaml::from_str(&s3).unwrap();
     let svc = &s3_yaml["services"]["mlflow"];
@@ -495,18 +510,18 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     );
 
     // S3 branch: static AWS keys from the typed credential (no `:-` fallback), no Azure leak.
-    assert!(s3_env.contains("AWS_ACCESS_KEY_ID=seaweedfs"));
+    assert!(s3_env.contains("AWS_ACCESS_KEY_ID=rustfs"));
     assert!(
         !s3.contains("${AWS_ACCESS_KEY_ID:-"),
         "no fallback hack: {s3}"
     );
     assert!(!s3_env.contains("AZURE_STORAGE_CONNECTION_STRING"));
 
-    // depends_on follows the chosen providers: db healthy + seaweedfs-init completed.
+    // depends_on follows the chosen providers: db healthy + rustfs-init completed.
     let dep = &svc["depends_on"];
     assert_eq!(dep["db"]["condition"].as_str(), Some("service_healthy"));
     assert_eq!(
-        dep["seaweedfs-init"]["condition"].as_str(),
+        dep["rustfs-init"]["condition"].as_str(),
         Some("service_completed_successfully")
     );
     assert!(dep["azurite-init"].is_null(), "no Azure init under S3");
@@ -515,7 +530,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+        vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
     );
     let (azure, azure_env) = mlflow_render(PlanCtx {
         provider_preference: preference,
@@ -536,7 +551,7 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
         "Azure init dependency: {azure}"
     );
     assert!(
-        svc["depends_on"]["seaweedfs-init"].is_null(),
+        svc["depends_on"]["rustfs-init"].is_null(),
         "no S3 init under Azure"
     );
 }
@@ -552,7 +567,7 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
     let mut preference = BTreeMap::new();
     preference.insert(
         "object_store".to_string(),
-        vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+        vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
     );
     let sel = Selection::modules(["mlflow"]);
     let p = baseline_catalog()
@@ -638,7 +653,7 @@ fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
         "dedicated object-store listener present: {ports:?}"
     );
 
-    // The dedicated listener fronts the seaweedfs cluster at `/` (origin, no prefix/rewrite).
+    // The dedicated listener fronts the rustfs cluster at `/` (origin, no prefix/rewrite).
     let dedicated = listeners
         .iter()
         .find(|l| l["address"]["socket_address"]["port_value"].as_u64() == Some(9100))
@@ -646,21 +661,21 @@ fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
     let route = &dedicated["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
         [0]["routes"][0];
     assert_eq!(route["match"]["prefix"].as_str(), Some("/"));
-    assert_eq!(route["route"]["cluster"].as_str(), Some("seaweedfs"));
+    assert_eq!(route["route"]["cluster"].as_str(), Some("rustfs"));
     assert!(
         route["route"]["regex_rewrite"].is_null(),
         "no rewrite — the store is served at its origin"
     );
 
-    // The seaweedfs cluster still targets the upstream's real port (8333), not the listener.
+    // The rustfs cluster still targets the upstream's real port (9000), not the listener.
     let clusters = doc["static_resources"]["clusters"].as_sequence().unwrap();
     let sw = clusters
         .iter()
-        .find(|c| c["name"].as_str() == Some("seaweedfs"))
+        .find(|c| c["name"].as_str() == Some("rustfs"))
         .unwrap();
     let sock = &sw["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]["socket_address"];
-    assert_eq!(sock["address"].as_str(), Some("seaweedfs"));
-    assert_eq!(sock["port_value"].as_u64(), Some(8333));
+    assert_eq!(sock["address"].as_str(), Some("rustfs"));
+    assert_eq!(sock["port_value"].as_u64(), Some(9000));
 
     // The gateway compose fragment publishes the dedicated port on the host.
     let p = baseline_catalog()
@@ -693,7 +708,7 @@ fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
 #[test]
 fn adding_jaeger_aggregates_its_routes() {
     // A variant selection exercises route/cluster aggregation beyond the default set.
-    let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "jaeger"]);
+    let sel = Selection::modules(["envoy", "rustfs", "postgres", "mlflow", "jaeger"]);
     let arts = render(&sel);
     let (routes, order, clusters) = parse_envoy(&arts.envoy);
 
@@ -1031,7 +1046,7 @@ fn extra_resources_are_created_by_the_provider_init_jobs() {
     );
     assert!(
         p.s3_buckets.contains(&"exports".to_string()),
-        "extra bucket is provisioned on seaweedfs: {:?}",
+        "extra bucket is provisioned on rustfs: {:?}",
         p.s3_buckets
     );
 
@@ -1041,7 +1056,7 @@ fn extra_resources_are_created_by_the_provider_init_jobs() {
             .iter()
             .find(|(m, _)| m == &ModuleId::from(id))
             .map(|(_, out)| {
-                // Postgres init lives in a mounted file; seaweedfs init is in the fragment.
+                // Postgres init lives in a mounted file; rustfs init is in the fragment.
                 out.files
                     .iter()
                     .find(|f| f.alias.as_deref() == Some("postgres_init"))
@@ -1055,8 +1070,8 @@ fn extra_resources_are_created_by_the_provider_init_jobs() {
         "the extra database is created in the postgres init script"
     );
     assert!(
-        render_of("seaweedfs").contains("exports"),
-        "the extra bucket is created in the seaweedfs init job"
+        render_of("rustfs").contains("exports"),
+        "the extra bucket is created in the rustfs init job"
     );
 }
 
@@ -1172,7 +1187,7 @@ fn data_root_is_injected_and_relocatable() {
     let p = baseline_catalog()
         .plan(&default_selection(), &PlanCtx::default())
         .unwrap();
-    for module in ["postgres", "seaweedfs", "unity-catalog", "mlflow", "envoy"] {
+    for module in ["postgres", "rustfs", "unity-catalog", "mlflow", "envoy"] {
         assert_eq!(
             p.injected
                 .get(&ModuleId::from(module))
@@ -1185,7 +1200,9 @@ fn data_root_is_injected_and_relocatable() {
     // Persisting fragments mount under it by convention, with the default root baked in: a
     // Static fragment via `${DATA_ROOT}` substitution, a Template fragment via `{{ env.DATA_ROOT }}`.
     assert!(frag(&p, "postgres").contains("./.data/postgres:/var/lib/postgresql/data"));
-    assert!(frag(&p, "seaweedfs").contains("./.data/seaweedfs:/data"));
+    // RustFS is the exception: it runs as a non-root user, so it persists to a named volume
+    // rather than a root-owned bind mount.
+    assert!(frag(&p, "rustfs").contains("- rustfs-data:/data"));
 
     // Azurite is a Template fragment: it bakes the same default root via `{{ env.DATA_ROOT }}`.
     // Prefer it as the object_store so a consumer (mlflow) pulls it in and its fragment renders.
@@ -1195,7 +1212,7 @@ fn data_root_is_injected_and_relocatable() {
             &PlanCtx {
                 provider_preference: BTreeMap::from([(
                     "object_store".to_string(),
-                    vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+                    vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
                 )]),
                 ..Default::default()
             },
@@ -1219,7 +1236,6 @@ fn data_root_is_injected_and_relocatable() {
         )
         .unwrap();
     assert!(frag(&relocated, "postgres").contains("/var/lib/mystack/postgres:"));
-    assert!(frag(&relocated, "seaweedfs").contains("/var/lib/mystack/seaweedfs:"));
     assert_eq!(
         relocated.env.get(DATA_ROOT_VAR),
         None,
@@ -1238,7 +1254,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
         .plan(
             &Selection::modules([
                 "envoy",
-                "seaweedfs",
+                "rustfs",
                 "postgres",
                 "unity-catalog",
                 "mlflow",
@@ -1271,7 +1287,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
             .filter(|l| !l.trim_start().starts_with('#'))
             .collect()
     };
-    for id in ["postgres", "seaweedfs", "jaeger", "unity-catalog", "mlflow"] {
+    for id in ["postgres", "rustfs", "jaeger", "unity-catalog", "mlflow"] {
         let f = frag(id);
         assert!(
             !body(&f).contains("${"),
@@ -1284,7 +1300,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     // Backends are network-only: they `expose:` their ports to the compose network (and the
     // gateway) but never `ports:`-publish to the host, so two stacks rendered on one host don't
     // collide. The Envoy gateway is the sole host-facing surface.
-    for id in ["postgres", "seaweedfs", "jaeger"] {
+    for id in ["postgres", "rustfs", "jaeger"] {
         assert!(
             !frag(id).contains("ports:"),
             "{id} must not publish host ports (network-only): {}",
@@ -1294,8 +1310,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     assert!(frag("postgres").contains("expose:"));
     assert!(frag("postgres").contains("\"5432\""));
     assert!(frag("postgres").contains("\"8081\""));
-    assert!(frag("seaweedfs").contains("\"9333\""));
-    assert!(frag("seaweedfs").contains("\"8333\""));
+    assert!(frag("rustfs").contains("\"9000\""));
     assert!(frag("jaeger").contains("\"16686\""));
 
     // Postgres credentials live in ignored files, not the committed fragment.
@@ -1310,32 +1325,35 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
             })
     );
 
-    // seaweedfs-init reads its S3 credential from the typed connection (the resolved
-    // `seaweedfs`/`us-east-1` values), with no `${AWS_*:-…}` fallback, and iterates the
-    // provisioned buckets directly.
-    let sw = frag("seaweedfs");
-    let sw_env = rendered_file("seaweedfs", "/.env/seaweedfs-init.env");
-    assert!(sw_env.contains("AWS_ACCESS_KEY_ID=seaweedfs"));
+    // RustFS's services read the root keys from an ignored env file, with no `${AWS_*:-…}`
+    // fallback, and the init iterates the provisioned buckets directly.
+    let sw = frag("rustfs");
+    let sw_env = rendered_file("rustfs", "/.env/rustfs.env");
+    assert!(sw_env.contains("AWS_ACCESS_KEY_ID=rustfs-root"));
+    assert!(sw_env.contains("RUSTFS_SECRET_KEY=rustfs-root-secret"));
     assert!(sw_env.contains("AWS_DEFAULT_REGION=us-east-1"));
+    assert!(
+        !sw.contains("rustfs-root"),
+        "keys stay out of the fragment: {sw}"
+    );
     assert!(sw.contains("s3 mb s3://unity"));
     assert!(sw.contains("s3 mb s3://mlflow"));
 
-    // Edge case: seaweedfs selected with no object_store consumer → it provisions no buckets,
+    // Edge case: rustfs selected with no object_store consumer → it provisions no buckets,
     // so its own connection isn't in the render context. The init service (which reads that
     // credential) must be skipped rather than failing to render.
     let p_bare = baseline_catalog()
-        .plan(&Selection::modules(["seaweedfs"]), &PlanCtx::default())
-        .expect("seaweedfs alone should plan");
+        .plan(&Selection::modules(["rustfs"]), &PlanCtx::default())
+        .expect("rustfs alone should plan");
     let sw_bare = p_bare
         .renders
         .iter()
-        .find(|(m, _)| m == &ModuleId::from("seaweedfs"))
+        .find(|(m, _)| m == &ModuleId::from("rustfs"))
         .map(|(_, out)| out.fragment.clone())
         .unwrap();
-    let _: Value =
-        serde_yaml::from_str(&sw_bare).expect("bare seaweedfs fragment must be valid YAML");
+    let _: Value = serde_yaml::from_str(&sw_bare).expect("bare rustfs fragment must be valid YAML");
     assert!(
-        !sw_bare.contains("seaweedfs-init"),
+        !sw_bare.contains("rustfs-init"),
         "no buckets → no init service: {sw_bare}"
     );
 
@@ -1348,7 +1366,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
             &PlanCtx {
                 provider_preference: BTreeMap::from([(
                     "object_store".to_string(),
-                    vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+                    vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
                 )]),
                 ..Default::default()
             },
@@ -1374,7 +1392,7 @@ mod auth {
     use olai_stack_topology::ModuleId;
     use std::collections::BTreeMap;
 
-    /// A selection mixing a gatewayed object store (seaweedfs → dedicated listener), an API
+    /// A selection mixing a gatewayed object store (rustfs → dedicated listener), an API
     /// surface (mlflow), and a UI surface (headwaters), with the gateway's `auth` knob
     /// set to `on`. Exercises the protect/exempt boundary: API/UI on the shared listener get
     /// gated, the object store on its dedicated listener does not.
@@ -1387,7 +1405,7 @@ mod auth {
         Selection {
             modules: vec![
                 "envoy".into(),
-                "seaweedfs".into(),
+                "rustfs".into(),
                 "postgres".into(),
                 "mlflow".into(),
                 "headwaters".into(),
@@ -1618,7 +1636,7 @@ mod auth {
     #[test]
     fn auth_off_by_default_emits_no_filter_no_cluster_no_module() {
         // Same selection, knob left at its default (off).
-        let sel = Selection::modules(["envoy", "seaweedfs", "postgres", "mlflow", "headwaters"]);
+        let sel = Selection::modules(["envoy", "rustfs", "postgres", "mlflow", "headwaters"]);
         let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
         let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
@@ -1659,4 +1677,139 @@ mod auth {
             arts.compose
         );
     }
+}
+
+#[test]
+fn rustfs_answers_the_aws_hostnames_through_the_gateway_tls_listener() {
+    use olai_stack_topology::ModuleId;
+
+    let p = baseline_catalog()
+        .plan(&default_selection(), &PlanCtx::default())
+        .unwrap();
+    let tls = p
+        .gateway
+        .tls
+        .as_ref()
+        .expect("RustFS emulates AWS hostnames");
+    assert_eq!(tls.port, 443);
+    // Fixed STS/S3 hosts plus one virtual-hosted name per provisioned bucket and region form.
+    for host in [
+        "sts.amazonaws.com",
+        "sts.us-east-1.amazonaws.com",
+        "s3.us-east-1.amazonaws.com",
+        "unity.s3.amazonaws.com",
+        "unity.s3.us-east-1.amazonaws.com",
+        "mlflow.s3.us-east-1.amazonaws.com",
+    ] {
+        assert!(
+            tls.hosts.iter().any(|h| h == host),
+            "missing {host}: {tls:?}"
+        );
+    }
+
+    // Envoy: a TLS listener routing STS to the shim and S3 to RustFS, both real clusters.
+    let envoy: Value = serde_yaml::from_str(&render_all(&p).envoy).expect("valid YAML");
+    let listener = envoy["static_resources"]["listeners"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|l| l["name"] == "emulated_tls")
+        .expect("TLS listener");
+    let chain = &listener["filter_chains"][0];
+    assert_eq!(
+        chain["transport_socket"]["typed_config"]["common_tls_context"]["tls_certificates"][0]
+            ["certificate_chain"]["filename"]
+            .as_str(),
+        Some("/certs/leaf.pem")
+    );
+    let vhosts = chain["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
+        .as_sequence()
+        .unwrap();
+    let vhost = |cluster: &str| {
+        vhosts
+            .iter()
+            .find(|v| v["routes"][0]["route"]["cluster"] == cluster)
+            .unwrap_or_else(|| panic!("no vhost for {cluster}"))
+    };
+    let domains = |cluster: &str| -> Vec<String> {
+        vhost(cluster)["domains"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|d| d.as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(domains("sts-shim").contains(&"sts.us-east-1.amazonaws.com:443".to_string()));
+    assert!(domains("rustfs").contains(&"unity.s3.us-east-1.amazonaws.com".to_string()));
+    let clusters = parse_envoy(&render_all(&p).envoy).2;
+    assert_eq!(
+        clusters.get("sts-shim").map(String::as_str),
+        Some("sts-shim:8080")
+    );
+    assert_eq!(
+        clusters.get("rustfs").map(String::as_str),
+        Some("rustfs:9000")
+    );
+
+    // The gateway fragment holds the hosts as aliases and mints the CA first.
+    let render = |id: &str| {
+        p.renders
+            .iter()
+            .find(|(m, _)| m == &ModuleId::from(id))
+            .map(|(_, out)| out.clone())
+            .unwrap()
+    };
+    let gw = render("envoy");
+    let gw_yaml: Value = serde_yaml::from_str(&gw.fragment).expect("valid YAML");
+    let aliases = gw_yaml["services"]["envoy"]["networks"]["default"]["aliases"]
+        .as_sequence()
+        .unwrap();
+    assert!(
+        aliases
+            .iter()
+            .any(|a| a == "unity.s3.us-east-1.amazonaws.com")
+    );
+    assert_eq!(
+        gw_yaml["services"]["envoy"]["depends_on"]["gateway-certs"]["condition"].as_str(),
+        Some("service_completed_successfully")
+    );
+    assert!(!gw_yaml["services"]["gateway-certs"].is_null());
+    // A bare `gateway-certs:` volume declaration parses as a null value, so check the key.
+    assert!(gw_yaml["volumes"].get("gateway-certs").is_some());
+    let certs = gw
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("/certs.sh"))
+        .expect("certificate script");
+    assert_eq!(certs.alias.as_deref(), Some("gateway_certs_script"));
+    assert!(certs.contents.starts_with("#!/usr/bin/env bash"));
+    for alias in ["gateway_certs_script", "rustfs_sts_shim"] {
+        assert!(
+            p.head.configs.iter().any(|c| c.alias == alias),
+            "{alias} declared at the head"
+        );
+    }
+
+    // Without an emulating store, the gateway stays as it was: no TLS, no aliases, no script.
+    let az = baseline_catalog()
+        .plan(
+            &Selection::modules(["envoy", "mlflow"]),
+            &PlanCtx {
+                provider_preference: BTreeMap::from([(
+                    "object_store".to_string(),
+                    vec![ModuleId::from("azurite")],
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let (_, gw) = az
+        .renders
+        .iter()
+        .find(|(m, _)| m == &ModuleId::from("envoy"))
+        .unwrap();
+    assert!(az.gateway.tls.is_none());
+    assert!(gw.files.is_empty(), "empty certificate script is dropped");
+    assert!(!gw.fragment.contains("aliases:") && !gw.fragment.contains("gateway-certs"));
+    assert!(!render_all(&az).envoy.contains("emulated_tls"));
 }

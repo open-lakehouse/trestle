@@ -40,7 +40,7 @@ cargo install olai-trestle   # or: cargo install --git https://github.com/open-l
 | Template | Description |
 |----------|-------------|
 | `databricks-app-rust` | Axum service + optional React/Vite frontend + Databricks Apps deploy + proto codegen |
-| `open-lakehouse-lab` | Envoy + Postgres + SeaweedFS + MLflow + Unity Catalog + Marimo, emulating Databricks URLs |
+| `open-lakehouse-lab` | Envoy + Postgres + RustFS + MLflow + Unity Catalog + Marimo, emulating Databricks URLs |
 
 ```bash
 trestle list-templates

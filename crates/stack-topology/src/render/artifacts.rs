@@ -42,6 +42,24 @@ struct EnvoyCtx<'a> {
     /// Forward-auth config, present only when the gateway's `auth` knob is on. When set,
     /// the listener(s) flagged `ext_authz` (the shared one only) gate every route behind it.
     auth: Option<AuthCtx<'a>>,
+    /// The TLS listener for emulated public hostnames, when any module declares them.
+    tls: Option<TlsCtx<'a>>,
+}
+
+/// The TLS listener's template context: its port, the certificate it presents, and one
+/// virtual host per upstream cluster.
+#[derive(Serialize)]
+struct TlsCtx<'a> {
+    port: u16,
+    cert_chain: String,
+    private_key: String,
+    virtual_hosts: Vec<TlsVhostCtx<'a>>,
+}
+
+#[derive(Serialize)]
+struct TlsVhostCtx<'a> {
+    cluster: &'a str,
+    hosts: &'a [String],
 }
 
 /// The forward-auth template context: the `ext_authz` upstream and the trusted identity
@@ -153,6 +171,19 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
             path_prefix: &a.path_prefix,
             portal_prefix: &a.portal_prefix,
             identity_headers: &a.identity_headers,
+        }),
+        tls: gateway.tls.as_ref().map(|t| TlsCtx {
+            port: t.port,
+            cert_chain: format!("{}/leaf.pem", t.trust.mount_path),
+            private_key: format!("{}/leaf-key.pem", t.trust.mount_path),
+            virtual_hosts: t
+                .virtual_hosts
+                .iter()
+                .map(|v| TlsVhostCtx {
+                    cluster: &v.cluster,
+                    hosts: &v.hosts,
+                })
+                .collect(),
         }),
     };
 

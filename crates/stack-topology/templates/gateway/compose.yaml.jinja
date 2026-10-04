@@ -7,12 +7,46 @@ services:
       - source: envoy_config
         target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
-{%- if knobs.auth == "true" %}
+{%- if knobs.auth == "true" or tls %}
     depends_on:
+{%- if knobs.auth == "true" %}
       authelia:
         condition: service_healthy
+{%- endif %}
+{%- if tls %}
+      {{ tls.mint_service }}:
+        condition: service_completed_successfully
+{%- endif %}
 {%- endif %}
     ports:
 {%- for p in published_ports %}
       - "{{ p.host }}:{{ p.container }}"
 {%- endfor %}
+{%- if tls %}
+    volumes:
+      - {{ tls.trust.volume }}:{{ tls.trust.mount_path }}:ro
+    networks:
+      default:
+        # In-network clients resolve these public hostnames to the gateway, which terminates
+        # TLS for them with a local CA. Compose DNS has no wildcards: each host is listed.
+        aliases:
+{%- for h in tls.hosts %}
+          - {{ h }}
+{%- endfor %}
+
+  # One-shot: mints the local CA and the gateway's certificate for the hostnames above.
+  {{ tls.mint_service }}:
+    image: {{ knobs.certs_image }}
+    entrypoint: ["bash", "/certs.sh"]
+    environment:
+      CERT_DIR: {{ tls.trust.mount_path }}
+      CERT_HOSTS: "{{ tls.hosts | join(' ') }}"
+    configs:
+      - source: gateway_certs_script
+        target: /certs.sh
+    volumes:
+      - {{ tls.trust.volume }}:{{ tls.trust.mount_path }}
+
+volumes:
+  {{ tls.trust.volume }}:
+{%- endif %}

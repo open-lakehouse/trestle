@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn baseline_has_the_default_lakehouse_modules() {
         let cat = baseline_catalog();
-        for id in ["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"] {
+        for id in ["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"] {
             assert!(cat.get(&id.into()).is_some(), "baseline missing {id}");
         }
     }

@@ -82,7 +82,7 @@ pub mod report;
 
 // --- model: the vocabulary types ---
 pub use model::connection::{
-    Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
+    Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
 };
 pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
 pub use model::placement::{Placement, Vantage};
@@ -90,9 +90,9 @@ pub use model::role::{Role, ServiceSpec};
 
 // --- catalog: the module set + how a module is defined ---
 pub use catalog::module::{
-    ConnectionBinding, DataModule, DepGate, DependsCondition, ExtraResource, Knob, KnobKind,
-    Module, ModuleId, PortDecl, PortMapping, Provides, RenderCtx, RenderError, RenderSpec,
-    ResolvedKnobs, ResourceDemand,
+    ConnectionBinding, DataModule, DepGate, DependsCondition, ExtraResource, GatewayTls,
+    ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl, PortMapping, Provides, RenderCtx,
+    RenderError, RenderSpec, ResolvedKnobs, ResourceDemand,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
@@ -104,7 +104,8 @@ pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB,
     ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, HeadFile,
-    ListenerConfig, Plan, PlanCtx, PlanError, SecretDecl, Selection,
+    ListenerConfig, Plan, PlanCtx, PlanError, SecretDecl, Selection, TlsListenerConfig,
+    TlsVirtualHost,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---

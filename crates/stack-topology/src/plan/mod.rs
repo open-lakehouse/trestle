@@ -18,6 +18,11 @@
 //! 4. renders every module to a [`RenderOutput`] and assembles a consolidated
 //!    [`HeadFile`] (config mounts + injected env at the head, then `include:`s).
 //!
+//! When a module declares [`impersonated_hosts`](crate::Provides::impersonated_hosts), the
+//! planner also gives the gateway a TLS listener for them ([`TlsListenerConfig`]): the
+//! gateway holds each host as a network alias, and every connection vended by that module
+//! carries the [`TlsTrust`](crate::TlsTrust) a consumer needs to trust the local CA.
+//!
 //! # How a prefix is derived (the crux)
 //!
 //! Prefixes are derived from *declared semantic facts*, never invented from names:
@@ -159,7 +164,7 @@ pub struct PlanCtx {
     pub dedicated_listener_port_base: u16,
     /// Ordered provider preference per resource role — the environment's say in which
     /// implementation satisfies an abstract demand (e.g. `object_store` →
-    /// `["azurite", "seaweedfs"]` for an env that prefers Azurite). The planner picks the first
+    /// `["azurite", "rustfs"]` for an env that prefers Azurite). The planner picks the first
     /// preferred provider present in the catalog; an empty/absent entry falls back to
     /// uniqueness then the catalog default. A demand's own `provider` pin still wins over this.
     #[serde(default)]
@@ -374,6 +379,17 @@ pub enum PlanError {
         /// What specifically is missing.
         reason: String,
     },
+    /// Two modules declared the same [`impersonated_hosts`](crate::Provides::impersonated_hosts)
+    /// hostname. The gateway can only forward a host to one upstream.
+    #[error("impersonated host `{host}` is declared by both `{first}` and `{second}`")]
+    ImpersonatedHostCollision {
+        /// The hostname both modules claim.
+        host: String,
+        /// The module that declared it first (in dependency order).
+        first: ModuleId,
+        /// The module that declared it again.
+        second: ModuleId,
+    },
     /// The app upstream ([`PlanCtx::app`]) collides with a selected module: either a module
     /// already claimed the `/` route the app catch-all needs, or a module contributes a service
     /// named `app` (the cluster name the app upstream reserves). The fix is to drop the app
@@ -511,6 +527,63 @@ pub struct GatewayConfig {
     /// Forward-auth configuration, present only when the gateway's `ENVOY_AUTH` knob is on.
     /// When set, the Envoy renderer gates the shared listener behind `ext_authz`.
     pub auth: Option<AuthConfig>,
+    /// The TLS listener emulating public hostnames, present only when some selected module
+    /// declares [`impersonated_hosts`](crate::Provides::impersonated_hosts).
+    pub tls: Option<TlsListenerConfig>,
+}
+
+/// The gateway's in-network TLS listener for emulated public hostnames.
+///
+/// Internal only: it is never host-published. In-network clients reach it because the
+/// gateway holds every [`hosts`](Self::hosts) entry as a compose network alias; host-side
+/// clients keep using the plain dedicated listeners via an endpoint override.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlsListenerConfig {
+    /// The port the listener binds inside the compose network ([`GATEWAY_TLS_PORT`]).
+    pub port: u16,
+    /// One virtual host per upstream cluster, in dependency order.
+    pub virtual_hosts: Vec<TlsVirtualHost>,
+    /// Every emulated hostname, sorted and deduplicated.
+    pub hosts: Vec<String>,
+    /// Where the CA and the listener's certificate live.
+    pub trust: crate::model::connection::TlsTrust,
+    /// The compose one-shot service that mints the certificates.
+    pub mint_service: String,
+}
+
+/// The hostnames one upstream cluster answers on the [`TlsListenerConfig`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlsVirtualHost {
+    /// The upstream cluster (an entry in [`GatewayConfig::clusters`]).
+    pub cluster: String,
+    /// The exact hostnames routed to [`cluster`](Self::cluster), without ports.
+    pub hosts: Vec<String>,
+}
+
+/// The in-network port the gateway's TLS listener binds (see [`TlsListenerConfig`]). Fixed at
+/// the HTTPS default because emulated clients call the bare public hostname.
+pub const GATEWAY_TLS_PORT: u16 = 443;
+
+/// The compose named volume the gateway's CA material lives in.
+const GATEWAY_CERTS_VOLUME: &str = "gateway-certs";
+
+/// Where the gateway and its consumers mount [`GATEWAY_CERTS_VOLUME`].
+const GATEWAY_CERTS_MOUNT: &str = "/certs";
+
+/// The one-shot service that mints the gateway's CA material, defined by the gateway
+/// module's fragment.
+const GATEWAY_CERTS_SERVICE: &str = "gateway-certs";
+
+/// The [`TlsTrust`](crate::TlsTrust) for the gateway's minted CA.
+fn gateway_tls_trust() -> crate::model::connection::TlsTrust {
+    crate::model::connection::TlsTrust {
+        volume: GATEWAY_CERTS_VOLUME.into(),
+        mount_path: GATEWAY_CERTS_MOUNT.into(),
+        ca_pem: format!("{GATEWAY_CERTS_MOUNT}/ca.pem"),
+        jvm_truststore: format!("{GATEWAY_CERTS_MOUNT}/truststore.p12"),
+        // The JDK's default truststore password; the truststore holds only public certs.
+        jvm_truststore_password: "changeit".into(),
+    }
 }
 
 /// A compose `include:` entry contributed by a module.
@@ -616,7 +689,7 @@ pub struct Plan {
     /// also reach the postgres provider's render as `RenderCtx.objects`, which its init-script
     /// `RenderFile` iterates; this field is the same list exposed for consumers.
     pub postgres_databases: Vec<String>,
-    /// Object-store buckets provisioned on SeaweedFS (when it is the chosen object-store
+    /// Object-store buckets provisioned on RustFS (when it is the chosen object-store
     /// provider), deduplicated in dependency order.
     pub s3_buckets: Vec<String>,
     /// Object-store containers provisioned on Azurite (when it is the chosen object-store
@@ -779,7 +852,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
 
     // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
     // order). Grouping by provider — not by abstract role — is what lets one object-store
-    // demand land on SeaweedFS and another on Azurite, each provisioning on its own init.
+    // demand land on RustFS and another on Azurite, each provisioning on its own init.
     // Walk modules in graph (dependency) order so the grouped names stay deterministic.
     let mut provisioned_by: BTreeMap<ModuleId, Vec<String>> = BTreeMap::new();
     for module in &graph.nodes {
@@ -811,7 +884,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     };
     // Convenience views for the artifact renderers (single-provider roles today).
     let postgres_databases = provisioned_for("postgres");
-    let s3_buckets = provisioned_for("seaweedfs");
+    let s3_buckets = provisioned_for("rustfs");
     let azure_containers = provisioned_for("azurite");
 
     // Allocate dedicated listener host ports up front, in graph order, for every endpoint
@@ -865,6 +938,24 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         admin_port: ctx.gateway_admin_port,
         ..GatewayConfig::default()
     };
+    // Emulated public hostnames: give the gateway a TLS listener for them, and mark every
+    // connection those providers vend with the trust a consumer needs for the local CA.
+    gateway.tls = plan_impersonation(&graph, &provisioned_by, &mut gateway)?;
+    if let Some(tls) = &gateway.tls {
+        let emulating: BTreeSet<&ModuleId> = graph
+            .nodes
+            .iter()
+            .filter(|m| !m.provides().impersonated_hosts.is_empty())
+            .map(|m| m.id())
+            .collect();
+        for resolved in chosen.values_mut() {
+            if emulating.contains(&resolved.provider)
+                && let Connection::ObjectStore { tls_trust, .. } = &mut resolved.connection
+            {
+                *tls_trust = Some(Box::new(tls.trust.clone()));
+            }
+        }
+    }
     let mut injected: BTreeMap<ModuleId, InjectedEnv> = BTreeMap::new();
 
     let mut shared_routes: Vec<GatewayRoute> = Vec::new();
@@ -1153,6 +1244,26 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                 dependencies.push(gate);
             }
         }
+        // A consumer that trusts the gateway's CA must not start before it is minted (a JVM
+        // reads its truststore once, at startup).
+        if let Some(tls) = &gateway.tls {
+            let trusts = connections.values().flatten().any(|c| {
+                matches!(
+                    c,
+                    Connection::ObjectStore {
+                        tls_trust: Some(_),
+                        ..
+                    }
+                )
+            });
+            if trusts {
+                dependencies.push(crate::catalog::module::DepGate {
+                    service: tls.mint_service.clone(),
+                    condition:
+                        crate::catalog::module::DependsCondition::ServiceCompletedSuccessfully,
+                });
+            }
+        }
         // A *provider* renders against its own role too: the names it provisions (`objects`,
         // for an init block to iterate) plus its own connection resolved for each — so its
         // fragment reads e.g. `connections.object_store.0.credential` rather than a `${VAR}`.
@@ -1166,10 +1277,18 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         // The gateway module publishes every listener's host port: its fragment iterates
         // `published_ports` to render compose `ports:`, so dedicated listeners (object stores)
         // are reachable from the host without the fragment hard-coding a port list.
-        let published_ports = if services_of[module.id()]
+        let is_gateway = services_of[module.id()]
             .iter()
-            .any(|s| s.role == Role::gateway())
-        {
+            .any(|s| s.role == Role::gateway());
+        let tls = match &gateway.tls {
+            Some(t) if is_gateway => Some(crate::catalog::module::GatewayTls {
+                hosts: t.hosts.clone(),
+                trust: t.trust.clone(),
+                mint_service: t.mint_service.clone(),
+            }),
+            _ => None,
+        };
+        let published_ports = if is_gateway {
             gateway
                 .listeners
                 .iter()
@@ -1194,6 +1313,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             dependencies,
             objects,
             published_ports,
+            tls,
         };
         let mut out = module
             .render()
@@ -1367,7 +1487,7 @@ fn resolve_with_demands(
         // Environment-level extra resources have no consuming module, so they add their
         // provider to the selection (becoming a graph node) but contribute no dependency
         // edge — nothing gates on these names at startup, and the providers
-        // (postgres/seaweedfs/azurite) carry no `requires` of their own. This is what lets
+        // (postgres/rustfs/azurite) carry no `requires` of their own. This is what lets
         // an extra bucket pull in an object-store provider even when no module demands one.
         for extra in &selection.extra_resources {
             let provider =
@@ -1615,7 +1735,7 @@ fn resolve_demand_providers(
 /// `choose_provider` already selects exactly one provider per demand, so a same-role clash
 /// only arises when a *second* provider is in the graph for an unrelated reason — directly
 /// selected, or pulled in by `requires`. That is the case this rejects (with
-/// [`PlanError::ConflictingRoleProviders`]): selecting both SeaweedFS and Azurite with no
+/// [`PlanError::ConflictingRoleProviders`]): selecting both RustFS and Azurite with no
 /// pins is ambiguous, and the planner will not silently drop one. The exception is the
 /// deliberate multi-store shape — a consumer that pins each demand's provider, or an
 /// environment-level [`ExtraResource`] that pins one — where every provider beyond the first is
@@ -1728,29 +1848,99 @@ fn ensure_cluster(
     service: &ServiceSpec,
     endpoint: &Endpoint,
 ) -> Result<(), PlanError> {
-    let port = endpoint.internal_port;
-    if let Some(existing) = gateway.clusters.iter().find(|c| c.name == service.name) {
-        if existing.port != port {
-            return Err(PlanError::ClusterPortConflict {
-                service: service.name.clone(),
-                first: existing.port,
-                second: port,
-            });
-        }
-        return Ok(());
-    }
     let host = match &service.placement {
         Placement::Container { service } => service.clone(),
         // Host/in-process services are reached via the host gateway DNS from a
         // container; the gateway cluster targets that.
         _ => "host.docker.internal".to_string(),
     };
+    ensure_named_cluster(gateway, &service.name, host, endpoint.internal_port)
+}
+
+/// Add the cluster `name` → `host:port` unless it already exists. An existing cluster of the
+/// same name on a different port is a [`PlanError::ClusterPortConflict`].
+fn ensure_named_cluster(
+    gateway: &mut GatewayConfig,
+    name: &str,
+    host: String,
+    port: u16,
+) -> Result<(), PlanError> {
+    if let Some(existing) = gateway.clusters.iter().find(|c| c.name == name) {
+        if existing.port != port {
+            return Err(PlanError::ClusterPortConflict {
+                service: name.to_string(),
+                first: existing.port,
+                second: port,
+            });
+        }
+        return Ok(());
+    }
     gateway.clusters.push(ClusterConfig {
-        name: service.name.clone(),
+        name: name.to_string(),
         host,
         port,
     });
     Ok(())
+}
+
+/// Plan the gateway's TLS listener from every module's
+/// [`impersonated_hosts`](crate::Provides::impersonated_hosts), or `None` if no module
+/// declares any.
+///
+/// Walks modules in dependency order, expanding a `{name}` host once per resource the module
+/// provisions, and adds a cluster per declared upstream. A host declared by two modules is a
+/// [`PlanError::ImpersonatedHostCollision`].
+fn plan_impersonation(
+    graph: &ResolvedGraph,
+    provisioned_by: &BTreeMap<ModuleId, Vec<String>>,
+    gateway: &mut GatewayConfig,
+) -> Result<Option<TlsListenerConfig>, PlanError> {
+    let mut owner: BTreeMap<String, ModuleId> = BTreeMap::new();
+    let mut virtual_hosts: Vec<TlsVirtualHost> = Vec::new();
+    for module in &graph.nodes {
+        let objects = provisioned_by
+            .get(module.id())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for decl in &module.provides().impersonated_hosts {
+            ensure_named_cluster(gateway, &decl.service, decl.service.clone(), decl.port)?;
+            let hosts: Vec<String> = if decl.host.contains("{name}") {
+                objects
+                    .iter()
+                    .map(|name| decl.host.replace("{name}", name))
+                    .collect()
+            } else {
+                vec![decl.host.clone()]
+            };
+            for host in hosts {
+                if let Some(first) = owner.get(&host) {
+                    return Err(PlanError::ImpersonatedHostCollision {
+                        host,
+                        first: first.clone(),
+                        second: module.id().clone(),
+                    });
+                }
+                owner.insert(host.clone(), module.id().clone());
+                match virtual_hosts.iter_mut().find(|v| v.cluster == decl.service) {
+                    Some(vhost) => vhost.hosts.push(host),
+                    None => virtual_hosts.push(TlsVirtualHost {
+                        cluster: decl.service.clone(),
+                        hosts: vec![host],
+                    }),
+                }
+            }
+        }
+    }
+    if owner.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(TlsListenerConfig {
+        port: GATEWAY_TLS_PORT,
+        virtual_hosts,
+        hosts: owner.into_keys().collect(),
+        trust: gateway_tls_trust(),
+        mint_service: GATEWAY_CERTS_SERVICE.into(),
+    }))
 }
 
 /// Rewrite every gatewayed object store's resolved connection so its `endpoint` (and the
@@ -1846,7 +2036,7 @@ fn swap_origin(url: &str, new_origin: &str) -> String {
 ///
 /// The provider declares the gate as a single `"<service>:<condition>"`
 /// [`DEP_GATE_EXTRA`] value (e.g. `"db:service_healthy"`,
-/// `"seaweedfs-init:service_completed_successfully"`); this parses it into a typed
+/// `"rustfs-init:service_completed_successfully"`); this parses it into a typed
 /// [`DepGate`](crate::catalog::module::DepGate) the planner hands the consumer's render. An
 /// unrecognized or missing condition defaults to
 /// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
@@ -1910,7 +2100,7 @@ mod tests {
     use crate::catalog::baseline_catalog;
 
     fn default_selection() -> Selection {
-        Selection::modules(["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"])
+        Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"])
     }
 
     fn shared_routes(plan: &Plan) -> &[GatewayRoute] {
@@ -2250,7 +2440,7 @@ mod tests {
         // chosen provider's declared gate into the typed `dependencies` its fragment iterates.
         // Asserting on the rendered fragment is the real contract.
 
-        // Default (SeaweedFS): db healthy + seaweedfs-init completed.
+        // Default (RustFS): db healthy + rustfs-init completed.
         let s3 = plan_env(
             &Selection::modules(["mlflow"]),
             &baseline_catalog(),
@@ -2270,7 +2460,7 @@ mod tests {
         assert!(
             mlflow
                 .fragment
-                .contains("seaweedfs-init:\n        condition: service_completed_successfully")
+                .contains("rustfs-init:\n        condition: service_completed_successfully")
         );
         assert!(!mlflow.fragment.contains("azurite-init"));
 
@@ -2278,7 +2468,7 @@ mod tests {
         let mut preference = BTreeMap::new();
         preference.insert(
             "object_store".to_string(),
-            vec![ModuleId::from("azurite"), ModuleId::from("seaweedfs")],
+            vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
         );
         let az = plan_env(
             &Selection::modules(["mlflow"]),
@@ -2299,7 +2489,7 @@ mod tests {
                 .fragment
                 .contains("azurite-init:\n        condition: service_completed_successfully")
         );
-        assert!(!mlflow_az.fragment.contains("seaweedfs-init"));
+        assert!(!mlflow_az.fragment.contains("rustfs-init"));
     }
 
     #[test]
@@ -2362,8 +2552,8 @@ mod tests {
             ..Default::default()
         };
         let p = plan_env(&sel, &baseline_catalog(), &PlanCtx::default()).unwrap();
-        // mlflow + its transitive requires (postgres, seaweedfs, envoy).
-        for id in ["mlflow", "postgres", "seaweedfs", "envoy"] {
+        // mlflow + its transitive requires (postgres, rustfs, envoy).
+        for id in ["mlflow", "postgres", "rustfs", "envoy"] {
             assert!(p.graph.module(&id.into()).is_some(), "missing {id}");
         }
     }
@@ -2384,7 +2574,7 @@ mod tests {
         let cat = baseline_catalog();
         let a = plan_env(&default_selection(), &cat, &PlanCtx::default()).unwrap();
         let reversed =
-            Selection::modules(["unity-catalog", "mlflow", "seaweedfs", "postgres", "envoy"]);
+            Selection::modules(["unity-catalog", "mlflow", "rustfs", "postgres", "envoy"]);
         let b = plan_env(&reversed, &cat, &PlanCtx::default()).unwrap();
         // `Plan` is not `Eq` (its graph holds trait objects); compare the
         // observable, contracted-deterministic artifacts instead.

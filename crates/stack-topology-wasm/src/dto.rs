@@ -322,7 +322,7 @@ mod tests {
         let dto = catalog_dto();
         // The baseline ships the common lakehouse modules.
         let ids: Vec<&str> = dto.modules.iter().map(|m| m.id.as_str()).collect();
-        for expected in ["envoy", "postgres", "seaweedfs", "mlflow", "unity-catalog"] {
+        for expected in ["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"] {
             assert!(
                 ids.contains(&expected),
                 "catalog missing {expected}: {ids:?}"
@@ -411,7 +411,7 @@ mod tests {
         let selection = Selection::modules([
             "envoy",
             "postgres",
-            "seaweedfs",
+            "rustfs",
             "unity-catalog",
             "mlflow",
             "jaeger",

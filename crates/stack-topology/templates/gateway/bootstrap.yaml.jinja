@@ -16,6 +16,20 @@ static_resources:
                 codec_type: AUTO
                 stat_prefix: ingress_http
                 use_remote_address: true
+{%- if loop.first %}
+                # One line per request, `<host> <method> <path> -> <cluster> <status>`: the
+                # quickest way to see where a request went. Anchored here (Envoy rejects
+                # unknown top-level keys) and reused by every other listener.
+                access_log: &access_log
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "%REQ(:AUTHORITY)% %REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% -> %UPSTREAM_CLUSTER% %RESPONSE_CODE%\n"
+{%- else %}
+                access_log: *access_log
+{%- endif %}
                 upgrade_configs:
                   - upgrade_type: websocket
                 route_config:
@@ -102,6 +116,48 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 {%- endfor %}
+{%- if tls %}
+    # Emulated public hostnames, in-network only: the gateway holds each as a compose network
+    # alias and terminates TLS with a locally minted CA. Host headers pass through unchanged
+    # (they are part of a SigV4 signature).
+    - name: emulated_tls
+      address:
+        socket_address: { address: 0.0.0.0, port_value: {{ tls.port }} }
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: {{ tls.cert_chain }} }
+                    private_key: { filename: {{ tls.private_key }} }
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: emulated_tls
+                access_log: *access_log
+                route_config:
+                  name: emulated_tls_route
+                  virtual_hosts:
+{%- for v in tls.virtual_hosts %}
+                    - name: {{ v.cluster }}
+                      domains:
+{%- for h in v.hosts %}
+                        - "{{ h }}"
+                        - "{{ h }}:{{ tls.port }}"
+{%- endfor %}
+                      routes:
+                        - match: { prefix: "/" }
+                          # No timeout: object uploads and downloads can be long-lived.
+                          route: { cluster: {{ v.cluster }}, timeout: 0s }
+{%- endfor %}
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+{%- endif %}
   clusters:
 {%- for c in clusters %}
     - name: {{ c.name }}

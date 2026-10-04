@@ -138,6 +138,10 @@ env-down SCENARIO:
   [[ -f "$dir/compose.yaml" ]] || { echo "nothing to tear down for {{ SCENARIO }}" >&2; exit 0; }
   docker compose -f "$dir/compose.yaml" --project-directory "$dir" down -v
 
+# Check UC S3 credential vending against a running scenario with unity-catalog + rustfs.
+env-smoke-s3:
+  AWS_ENDPOINT_URL=http://localhost:9100 AWS_ALLOW_HTTP=true uv run test/smoke/uc_s3_vending.py
+
 # Re-render every scenario and refresh test/expected/ golden fixtures.
 env-golden-refresh:
   #!/usr/bin/env bash

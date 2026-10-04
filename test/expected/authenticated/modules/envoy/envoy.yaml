@@ -15,6 +15,16 @@ static_resources:
                 codec_type: AUTO
                 stat_prefix: ingress_http
                 use_remote_address: true
+                # One line per request, `<host> <method> <path> -> <cluster> <status>`: the
+                # quickest way to see where a request went. Anchored here (Envoy rejects
+                # unknown top-level keys) and reused by every other listener.
+                access_log: &access_log
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "%REQ(:AUTHORITY)% %REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% -> %UPSTREAM_CLUSTER% %RESPONSE_CODE%\n"
                 upgrade_configs:
                   - upgrade_type: websocket
                 route_config:
@@ -115,6 +125,7 @@ static_resources:
                 codec_type: AUTO
                 stat_prefix: ingress_http
                 use_remote_address: true
+                access_log: *access_log
                 upgrade_configs:
                   - upgrade_type: websocket
                 route_config:
@@ -125,7 +136,63 @@ static_resources:
                       routes:
                         - match: { prefix: "/" }
                           route:
-                            cluster: seaweedfs
+                            cluster: rustfs
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+    # Emulated public hostnames, in-network only: the gateway holds each as a compose network
+    # alias and terminates TLS with a locally minted CA. Host headers pass through unchanged
+    # (they are part of a SigV4 signature).
+    - name: emulated_tls
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 443 }
+      filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: /certs/leaf.pem }
+                    private_key: { filename: /certs/leaf-key.pem }
+          filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: emulated_tls
+                access_log: *access_log
+                route_config:
+                  name: emulated_tls_route
+                  virtual_hosts:
+                    - name: sts-shim
+                      domains:
+                        - "sts.amazonaws.com"
+                        - "sts.amazonaws.com:443"
+                        - "sts.us-east-1.amazonaws.com"
+                        - "sts.us-east-1.amazonaws.com:443"
+                      routes:
+                        - match: { prefix: "/" }
+                          # No timeout: object uploads and downloads can be long-lived.
+                          route: { cluster: sts-shim, timeout: 0s }
+                    - name: rustfs
+                      domains:
+                        - "s3.amazonaws.com"
+                        - "s3.amazonaws.com:443"
+                        - "s3.us-east-1.amazonaws.com"
+                        - "s3.us-east-1.amazonaws.com:443"
+                        - "unity.s3.amazonaws.com"
+                        - "unity.s3.amazonaws.com:443"
+                        - "mlflow.s3.amazonaws.com"
+                        - "mlflow.s3.amazonaws.com:443"
+                        - "unity.s3.us-east-1.amazonaws.com"
+                        - "unity.s3.us-east-1.amazonaws.com:443"
+                        - "mlflow.s3.us-east-1.amazonaws.com"
+                        - "mlflow.s3.us-east-1.amazonaws.com:443"
+                      routes:
+                        - match: { prefix: "/" }
+                          # No timeout: object uploads and downloads can be long-lived.
+                          route: { cluster: rustfs, timeout: 0s }
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:
@@ -155,18 +222,30 @@ static_resources:
                     socket_address:
                       address: mlflow
                       port_value: 5000
-    - name: seaweedfs
+    - name: rustfs
       type: STRICT_DNS
       connect_timeout: 2s
       load_assignment:
-        cluster_name: seaweedfs
+        cluster_name: rustfs
         endpoints:
           - lb_endpoints:
               - endpoint:
                   address:
                     socket_address:
-                      address: seaweedfs
-                      port_value: 8333
+                      address: rustfs
+                      port_value: 9000
+    - name: sts-shim
+      type: STRICT_DNS
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: sts-shim
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: sts-shim
+                      port_value: 8080
     - name: unitycatalog
       type: STRICT_DNS
       connect_timeout: 2s
