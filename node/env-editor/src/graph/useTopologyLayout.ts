@@ -6,9 +6,9 @@
 // UI uses).
 //
 // Services are the leaf nodes. A module that runs more than one long-running
-// service (postgres: db + pgweb; rustfs: rustfs + sts-shim) becomes a compound
-// group around them; a single-service module is just its one node, so the
-// canvas stays as compact as a module graph.
+// service (rustfs: rustfs + sts-shim) becomes a compound group around them; a
+// single-service module is just its one node, so the canvas stays as compact
+// as a module graph.
 //
 // The hook is async — ELK resolves to positioned ReactFlow nodes + edges. Until
 // it resolves it keeps the previous layout, so the canvas never flashes

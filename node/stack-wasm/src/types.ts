@@ -85,7 +85,7 @@ export interface ServiceNodeDto {
   /** Owning module id; null only for the host node. */
   module?: string | null;
   kind: ServiceKind;
-  /** Declared role; null for a fragment-only sidecar (e.g. pgweb, sts-shim). */
+  /** Declared role; null for a fragment-only sidecar (e.g. sts-shim). */
   role?: string | null;
   image?: string | null;
   /** Host-published ports. */

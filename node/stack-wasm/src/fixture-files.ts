@@ -34,7 +34,7 @@ export const FIXTURE_FILES: OutputFile[] = [
   {
     path: "modules/postgres/compose.yaml",
     contents:
-      '# Postgres + pgweb — contributed by the `postgres` module.\nservices:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    env_file:\n      - path: ./modules/postgres/.env/db.env\n        format: raw\n    secrets:\n      - postgres_password\n    expose:\n      - "5432"\n    volumes:\n      - ./.data/postgres:/var/lib/postgresql/data\n    configs:\n      - source: postgres_init\n        target: /docker-entrypoint-initdb.d/init-databases.sh\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U postgres"]\n      interval: 5s\n      timeout: 5s\n      retries: 5\n\n  pgweb:\n    image: sosedoff/pgweb:latest\n    restart: unless-stopped\n    profiles: [svc, full]\n    depends_on:\n      db:\n        condition: service_healthy\n    env_file:\n      - path: ./modules/postgres/.env/pgweb.env\n        format: raw\n    expose:\n      - "8081"',
+      '# Postgres — contributed by the `postgres` module.\nservices:\n  db:\n    image: postgres:16\n    restart: unless-stopped\n    env_file:\n      - path: ./modules/postgres/.env/db.env\n        format: raw\n    secrets:\n      - postgres_password\n    expose:\n      - "5432"\n    volumes:\n      - ./.data/postgres:/var/lib/postgresql/data\n    configs:\n      - source: postgres_init\n        target: /docker-entrypoint-initdb.d/init-databases.sh\n    healthcheck:\n      test: ["CMD-SHELL", "pg_isready -U postgres"]\n      interval: 5s\n      timeout: 5s\n      retries: 5\n',
   },
   {
     path: "modules/postgres/init-databases.sh",

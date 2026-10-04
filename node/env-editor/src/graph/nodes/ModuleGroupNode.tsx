@@ -10,8 +10,8 @@ export interface ModuleGroupNodeData {
 }
 
 /**
- * A module that runs several long-running services (e.g. postgres: db +
- * pgweb), drawn as a frame around them. Its size comes from ELK; the header
+ * A module that runs several long-running services (e.g. rustfs: rustfs +
+ * sts-shim), drawn as a frame around them. Its size comes from ELK; the header
  * band's height MUST match GROUP_HEADER in `useTopologyLayout`.
  */
 export function ModuleGroupNode({ data, selected }: NodeProps) {

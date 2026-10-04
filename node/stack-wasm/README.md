@@ -33,7 +33,7 @@ render true output (do not hand-edit). Two ignored tests in
 `crates/stack-topology-wasm/src/dto.rs` print the JSON to paste back:
 
 ```bash
-# FIXTURE_PLAN's graph / services / gateway
+# FIXTURE_CATALOG, plus FIXTURE_PLAN's graph / services / gateway
 cargo test -p stack-topology-wasm dump_fixture_plan_json -- --ignored --nocapture
 # FIXTURE_FILES (src/fixture-files.ts)
 cargo test -p stack-topology-wasm dump_fixture_files_json -- --ignored --nocapture
