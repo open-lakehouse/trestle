@@ -2892,6 +2892,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "serde_yaml",
  "wasm-bindgen",
 ]
 
