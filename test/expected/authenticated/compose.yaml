@@ -25,6 +25,8 @@ secrets:
     file: ./modules/authelia/secrets/storage_encryption_key
   postgres_password:
     file: ./modules/postgres/secrets/postgres_password
+  unitycatalog_hibernate_properties:
+    file: ./modules/unity-catalog/secrets/hibernate.properties
   unitycatalog_server_properties:
     file: ./modules/unity-catalog/secrets/server.properties
 

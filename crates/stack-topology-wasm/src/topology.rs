@@ -235,7 +235,7 @@ fn protocol(connection: &Connection, full: bool) -> String {
             ObjectStoreCredential::AzureBlob { .. } => "Azure Blob".to_string(),
             _ => "object store".to_string(),
         },
-        Connection::RelationalDb { url } => match url.split_once("://") {
+        Connection::RelationalDb { url, .. } => match url.split_once("://") {
             Some(("postgres" | "postgresql", _)) => "PostgreSQL".to_string(),
             Some((scheme, _)) => scheme.to_string(),
             None => "SQL".to_string(),

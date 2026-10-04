@@ -4,7 +4,8 @@
 //! the only thing that has to be negotiated is *how to connect*: a URL/endpoint plus a
 //! credential. The credential shape is closed per flavour — an S3 store needs an access
 //! key id and secret (plus region); an Azure Blob store needs a connection string; a
-//! relational store folds auth into its URL. There are only a handful, so they are a
+//! relational store carries its coordinates and credential both as one URL and as typed
+//! parts. There are only a handful, so they are a
 //! **typed enum** the compiler enforces, not an open string→value map.
 //!
 //! This is the deliberate trade the crate makes: a new resource *flavour* (a message
@@ -32,7 +33,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// `#[non_exhaustive]`: a future flavour (a message queue, GCS, …) can be added without
 /// breaking downstream `match`es.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` is **hand-written to redact** the relational password and the URL that embeds it
+/// (the object-store credential redacts itself), so a connection never leaks a secret through
+/// `{:?}`, `tracing`, or a panic message.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 #[non_exhaustive]
 pub enum Connection {
@@ -57,12 +62,60 @@ pub enum Connection {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tls_trust: Option<Box<TlsTrust>>,
     },
-    /// A relational database. The credential is embedded in the connection URL (matching
-    /// how Postgres-style clients consume it), so there is no separate credential field.
+    /// A relational database, as one URL (with the credential embedded, as libpq-style clients
+    /// take it) and as typed parts for clients that take them separately (a JDBC URL plus a
+    /// username and password, e.g. Hibernate). Build one with [`Connection::postgres`], which
+    /// derives the URL from the parts so the two never disagree.
     RelationalDb {
         /// The full connection URL, e.g. `postgresql://user:pass@db:5432/{name}`.
         url: String,
+        /// The server's host (its compose DNS name, e.g. `db`).
+        host: String,
+        /// The server's port.
+        port: u16,
+        /// The database name (typically `{name}` in a template).
+        database: String,
+        /// The role to connect as.
+        username: String,
+        /// The role's password.
+        password: String,
     },
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Connection::ObjectStore {
+                uri,
+                bucket,
+                endpoint,
+                credential,
+                tls_trust,
+            } => f
+                .debug_struct("ObjectStore")
+                .field("uri", uri)
+                .field("bucket", bucket)
+                .field("endpoint", endpoint)
+                .field("credential", credential)
+                .field("tls_trust", tls_trust)
+                .finish(),
+            Connection::RelationalDb {
+                host,
+                port,
+                database,
+                username,
+                ..
+            } => f
+                .debug_struct("RelationalDb")
+                .field("url", &"<redacted>")
+                .field("host", host)
+                .field("port", port)
+                .field("database", database)
+                .field("username", username)
+                .field("password", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 /// The credential for an [`ObjectStore`](Connection::ObjectStore) — closed per flavour.
@@ -173,7 +226,21 @@ impl ConnectionTemplate {
                 credential: credential.resolve(name),
                 tls_trust: tls_trust.clone(),
             },
-            Connection::RelationalDb { url } => Connection::RelationalDb { url: sub(url) },
+            Connection::RelationalDb {
+                url,
+                host,
+                port,
+                database,
+                username,
+                password,
+            } => Connection::RelationalDb {
+                url: sub(url),
+                host: sub(host),
+                port: *port,
+                database: sub(database),
+                username: sub(username),
+                password: sub(password),
+            },
         }
     }
 }
@@ -269,6 +336,32 @@ pub enum ConnectionField {
 }
 
 impl Connection {
+    /// A PostgreSQL [`RelationalDb`](Connection::RelationalDb) from its parts, with the URL
+    /// derived as `postgresql://{username}:{password}@{host}:{port}/{database}`. Any part may
+    /// hold the `{name}` placeholder when building a [`ConnectionTemplate`].
+    pub fn postgres(
+        host: impl Into<String>,
+        port: u16,
+        database: impl Into<String>,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Connection {
+        let (host, database, username, password) = (
+            host.into(),
+            database.into(),
+            username.into(),
+            password.into(),
+        );
+        Connection::RelationalDb {
+            url: format!("postgresql://{username}:{password}@{host}:{port}/{database}"),
+            host,
+            port,
+            database,
+            username,
+            password,
+        }
+    }
+
     /// The value of one typed [`ConnectionField`], if this connection variant has it.
     ///
     /// Returns `None` for a field absent from the variant (e.g.
@@ -281,7 +374,7 @@ impl Connection {
             (Connection::ObjectStore { bucket, .. }, F::Bucket) => Some(bucket),
             (Connection::ObjectStore { endpoint, .. }, F::Endpoint) => Some(endpoint),
             (Connection::ObjectStore { credential, .. }, _) => credential.field(field),
-            (Connection::RelationalDb { url }, F::Url) => Some(url),
+            (Connection::RelationalDb { url, .. }, F::Url) => Some(url),
             _ => None,
         }
     }
@@ -289,8 +382,8 @@ impl Connection {
     /// The conventional `(env-var, value)` pairs a provider of this connection contributes
     /// to `.env` so an SDK can authenticate — the object store's
     /// [`ObjectStoreCredential::standard_env`]. A [`RelationalDb`](Connection::RelationalDb)
-    /// has none: its credential is embedded in the URL a consumer binds, not a stack-wide
-    /// env var.
+    /// has none: its credential travels with the connection a consumer binds, not a
+    /// stack-wide env var.
     pub fn standard_env(&self) -> Vec<(&'static str, String)> {
         match self {
             Connection::ObjectStore { credential, .. } => credential.standard_env(),
@@ -328,15 +421,36 @@ mod tests {
 
     #[test]
     fn relational_template_substitutes_name_into_concrete_url() {
-        let t = ConnectionTemplate(Connection::RelationalDb {
-            url: "postgresql://postgres:postgres@db:5432/{name}".into(),
-        });
+        let t = ConnectionTemplate(Connection::postgres(
+            "db", 5432, "{name}", "postgres", "postgres",
+        ));
         let c = t.resolve("appdb");
         assert_eq!(
             c.field(ConnectionField::Url),
             Some("postgresql://postgres:postgres@db:5432/appdb"),
             "{{name}} is substituted into an otherwise-concrete URL"
         );
+        // The typed parts resolve in lock-step with the URL.
+        match c {
+            Connection::RelationalDb {
+                host,
+                port,
+                database,
+                username,
+                password,
+                ..
+            } => {
+                assert_eq!(
+                    (host.as_str(), port, database.as_str()),
+                    ("db", 5432, "appdb")
+                );
+                assert_eq!(
+                    (username.as_str(), password.as_str()),
+                    ("postgres", "postgres")
+                );
+            }
+            other => panic!("expected a relational connection, got {other:?}"),
+        }
     }
 
     #[test]
@@ -433,10 +547,19 @@ mod tests {
 
         // A relational connection contributes no provider-side env vars (its credential is
         // embedded in the URL a consumer binds).
-        let db = Connection::RelationalDb {
-            url: "postgresql://db/x".into(),
-        };
+        let db = Connection::postgres("db", 5432, "x", "u", "p");
         assert!(db.standard_env().is_empty());
+    }
+
+    #[test]
+    fn debug_redacts_the_relational_password_and_url() {
+        let db = Connection::postgres("db", 5432, "app", "admin", "hunter2");
+        let rendered = format!("{db:?}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        assert!(
+            rendered.contains("<redacted>") && rendered.contains("admin"),
+            "{rendered}"
+        );
     }
 
     #[test]
