@@ -4,11 +4,14 @@ import { Lock } from "lucide-react";
 import type { ExposedDto, GraphNodeDto, SurfaceDto } from "../../types";
 import { roleStyle } from "../roleTheme";
 import {
+  GATEWAY_ENDPOINT_LINE,
   GATEWAY_HEADER,
-  GATEWAY_ROW,
+  GATEWAY_ROW_PAD,
+  GATEWAY_ROW_TITLE,
   GATEWAY_SECTION_HEADER,
   GATEWAY_WIDTH,
   type GatewaySection,
+  gatewayRowHeight,
   routeHandle,
   surfaceHandle,
 } from "../useTopologyLayout";
@@ -50,8 +53,8 @@ const SURFACE_HINT: Record<SurfaceDto["kind"], string> = {
  * prefixes), then each service endpoint (e.g. an S3-compatible store) that
  * needs its own origin. Locally each surface is a host port; in a hosted
  * deployment, each would be its own subdomain. Clients enter each section
- * through its own handle, and each backend row has its own outbound handle,
- * with a lock on gated routes. Geometry MUST match GATEWAY_* in
+ * through its own handle, and each backend row — its endpoints one per line —
+ * has its own outbound handle, with a lock on gated routes. Geometry MUST match GATEWAY_* in
  * `useTopologyLayout` (ELK places the ports there).
  */
 export function GatewayNode({ data, selected }: NodeProps) {
@@ -110,27 +113,34 @@ export function GatewayNode({ data, selected }: NodeProps) {
           {rows.map((row) => (
             <div
               key={row.module}
-              className="relative flex flex-col justify-center px-3"
-              style={{ height: GATEWAY_ROW }}
+              className="relative flex flex-col px-3"
+              style={{
+                height: gatewayRowHeight(row),
+                paddingTop: GATEWAY_ROW_PAD,
+                paddingBottom: GATEWAY_ROW_PAD,
+              }}
             >
-              <div className="truncate text-xs font-medium">
+              <div
+                className="flex items-center truncate text-xs font-medium"
+                style={{ height: GATEWAY_ROW_TITLE }}
+              >
                 {names[row.module] ?? row.module}
               </div>
-              <div className="flex items-center gap-1 truncate font-mono text-[10px] text-muted-foreground">
-                {row.exposes.map((e) => (
-                  <span
-                    key={`${e.endpoint}:${e.prefix}`}
-                    className="flex items-center gap-0.5"
-                    title={`${KIND_LABEL[e.kind]} ${e.prefix}${e.gated ? " (requires sign-in)" : ""}`}
-                  >
-                    <span className="rounded bg-muted px-1 text-[9px] font-semibold">
-                      {KIND_LABEL[e.kind]}
-                    </span>
-                    {e.prefix}
-                    {e.gated && <Lock className="h-2.5 w-2.5" />}
+              {/* One endpoint per line: the row lists what this backend exposes. */}
+              {row.exposes.map((e) => (
+                <div
+                  key={`${e.endpoint}:${e.prefix}`}
+                  className="flex items-center gap-1 truncate font-mono text-[10px] text-muted-foreground"
+                  style={{ height: GATEWAY_ENDPOINT_LINE }}
+                  title={`${KIND_LABEL[e.kind]} ${e.prefix}${e.gated ? " (requires sign-in)" : ""}`}
+                >
+                  <span className="w-7 shrink-0 rounded bg-muted text-center text-[9px] font-semibold">
+                    {KIND_LABEL[e.kind]}
                   </span>
-                ))}
-              </div>
+                  <span className="truncate">{e.prefix}</span>
+                  {e.gated && <Lock className="h-2.5 w-2.5 shrink-0" />}
+                </div>
+              ))}
               <Handle
                 id={routeHandle(surface.host_port, row.module)}
                 type="source"

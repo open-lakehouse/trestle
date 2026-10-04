@@ -43,7 +43,11 @@ export const CLIENTS_SIZE = { width: 160, height: 64 };
 export const GATEWAY_WIDTH = 300;
 export const GATEWAY_HEADER = 44;
 export const GATEWAY_SECTION_HEADER = 28;
-export const GATEWAY_ROW = 44;
+// A backend row: its title, then one line per exposed endpoint, so its height
+// grows with the endpoint count (see `gatewayRowHeight`).
+export const GATEWAY_ROW_PAD = 6;
+export const GATEWAY_ROW_TITLE = 18;
+export const GATEWAY_ENDPOINT_LINE = 16;
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
@@ -69,6 +73,13 @@ export interface GatewaySection {
   surface: SurfaceDto;
   rows: GatewayRow[];
 }
+
+/** A backend row's height: padding, title, and one line per endpoint. MUST be
+ *  what `GatewayNode` renders, since ELK places the row's port from it. */
+export const gatewayRowHeight = (row: GatewayRow) =>
+  2 * GATEWAY_ROW_PAD +
+  GATEWAY_ROW_TITLE +
+  row.exposes.length * GATEWAY_ENDPOINT_LINE;
 
 /** The handle / ELK port id where clients enter the surface on `port`. */
 export const surfaceHandle = (port: number) => `surface:${port}`;
@@ -121,11 +132,11 @@ function gatewayPorts(id: string, sections: GatewaySection[]) {
       ports.push({
         id: `${id}:${routeHandle(surface.host_port, row.module)}`,
         x: GATEWAY_WIDTH,
-        y: y + GATEWAY_ROW / 2,
+        y: y + gatewayRowHeight(row) / 2,
         width: 1,
         height: 1,
       });
-      y += GATEWAY_ROW;
+      y += gatewayRowHeight(row);
     }
   }
   return { ports, height: y };
