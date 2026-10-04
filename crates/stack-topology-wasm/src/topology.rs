@@ -80,7 +80,7 @@ pub struct ServiceNodeDto {
     /// What this node stands for.
     pub kind: ServiceKind,
     /// The service's declared role when it is one of the module's `ServiceSpec`s; `None` for a
-    /// sidecar the fragment adds on its own (e.g. `pgweb`, `sts-shim`).
+    /// sidecar the fragment adds on its own (e.g. `sts-shim`).
     pub role: Option<String>,
     /// The container image, as rendered.
     pub image: Option<String>,
@@ -729,10 +729,8 @@ mod tests {
             assert!(!ids.contains(&job), "job {job} should be hidden: {ids:?}");
         }
         // Long-running sidecars stay, inside their module.
-        for (svc, module) in [("pgweb", "postgres"), ("sts-shim", "rustfs")] {
-            let node = g.services.iter().find(|s| s.id == svc).unwrap();
-            assert_eq!(node.module.as_deref(), Some(module));
-        }
+        let shim = g.services.iter().find(|s| s.id == "sts-shim").unwrap();
+        assert_eq!(shim.module.as_deref(), Some("rustfs"));
         // headwaters → headwaters-migrate → db collapses to headwaters → db.
         assert!(has_startup(&g, "headwaters", "db"), "{:#?}", g.edges);
         // mlflow → rustfs-init → rustfs collapses to mlflow → rustfs.

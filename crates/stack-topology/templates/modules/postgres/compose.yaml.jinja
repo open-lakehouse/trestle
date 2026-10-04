@@ -1,4 +1,4 @@
-# Postgres + pgweb — contributed by the `postgres` module.
+# Postgres — contributed by the `postgres` module.
 services:
   db:
     image: {{ knobs.image }}
@@ -21,15 +21,3 @@ services:
       timeout: 5s
       retries: 5
 
-  pgweb:
-    image: {{ knobs.pgweb_image }}
-    restart: unless-stopped
-    profiles: [svc, full]
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - path: ./modules/postgres/.env/pgweb.env
-        format: raw
-    expose:
-      - "8081"

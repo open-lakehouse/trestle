@@ -398,7 +398,7 @@ fn postgres() -> Arc<dyn Module> {
     // (Ports are written concretely in the fragment, so no `*_PORT` var is needed.)
     //
     // These are the *fixed* local-dev credentials, not an override surface: the connection URL
-    // below bakes `postgres:postgres` concretely, and consumers (MLflow, UC, pgweb) embed that
+    // below bakes `postgres:postgres` concretely, and consumers (MLflow, UC) embed that
     // resolved URL. Editing `POSTGRES_USER`/`POSTGRES_PASSWORD` in `.env` would re-credential the
     // container but NOT repoint those consumers, so they must move together. (A typed, mutable
     // relational credential on the connection is the future home for making this configurable.)
@@ -442,15 +442,12 @@ fn postgres() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![
-            image_knob(
-                "image",
-                "Postgres image",
-                images::POSTGRES,
-                "POSTGRES_IMAGE",
-            ),
-            image_knob("pgweb_image", "pgweb image", images::PGWEB, "PGWEB_IMAGE"),
-        ],
+        knobs: vec![image_knob(
+            "image",
+            "Postgres image",
+            images::POSTGRES,
+            "POSTGRES_IMAGE",
+        )],
         render: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
             vec![
@@ -472,10 +469,6 @@ fn postgres() -> Arc<dyn Module> {
                 sensitive_file(
                     ".env/db.env",
                     include_str!("../../templates/modules/postgres/db.env.jinja"),
-                ),
-                sensitive_file(
-                    ".env/pgweb.env",
-                    include_str!("../../templates/modules/postgres/pgweb.env.jinja"),
                 ),
                 secret_file(
                     "secrets/postgres_password",

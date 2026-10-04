@@ -1309,7 +1309,6 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     }
     assert!(frag("postgres").contains("expose:"));
     assert!(frag("postgres").contains("\"5432\""));
-    assert!(frag("postgres").contains("\"8081\""));
     assert!(frag("rustfs").contains("\"9000\""));
     assert!(frag("jaeger").contains("\"16686\""));
 
@@ -1317,13 +1316,6 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     let pg = frag("postgres");
     assert!(!pg.contains("postgres:postgres@"));
     assert!(rendered_file("postgres", "/.env/db.env").contains("POSTGRES_USER=postgres"));
-    assert!(
-        rendered_file("postgres", "/.env/pgweb.env")
-            .lines()
-            .any(|line| {
-                line.starts_with("DATABASE_URL=postgres://") && line.contains("@db:5432/postgres")
-            })
-    );
 
     // RustFS's services read the root keys from an ignored env file, with no `${AWS_*:-…}`
     // fallback, and the init iterates the provisioned buckets directly.

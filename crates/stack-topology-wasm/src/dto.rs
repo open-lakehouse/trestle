@@ -401,17 +401,27 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual: regenerate node/stack-wasm FIXTURE_PLAN (graph/services/gateway)"]
+    #[ignore = "manual: regenerate node/stack-wasm FIXTURE_CATALOG + FIXTURE_PLAN"]
     fn dump_fixture_plan_json() {
+        // A borrowing struct, not `serde_json::json!`: `json!` sorts keys, while this keeps
+        // the DTOs' declaration order (what the wasm build emits).
+        #[derive(Serialize)]
+        struct Dump<'a> {
+            catalog: CatalogDto,
+            graph: &'a GraphDto,
+            services: &'a BTreeMap<String, Vec<ServiceSpec>>,
+            gateway: &'a GatewayDto,
+        }
         let result = plan_result(&fixture_selection()).expect("plan should succeed");
-        let json = serde_json::json!({
-            "graph": result.graph,
-            "services": result.services,
-            "gateway": result.gateway,
-        });
+        let dump = Dump {
+            catalog: catalog_dto(),
+            graph: &result.graph,
+            services: &result.services,
+            gateway: &result.gateway,
+        };
         eprintln!(
             "{}",
-            serde_json::to_string_pretty(&json).expect("serialize plan")
+            serde_json::to_string_pretty(&dump).expect("serialize plan")
         );
     }
 
