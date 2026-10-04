@@ -595,6 +595,17 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_identity_provider_is_connected_to_the_gateway() {
+        // Enabling the IdP module alone (gateway `auth` knob untouched) must not leave it as an
+        // unconnected node.
+        let g = graph_dto(&plan(&Selection::modules(["envoy", "authelia", "mlflow"])));
+        assert!(g.edges.iter().any(|e| matches!(
+            e,
+            TopologyEdgeDto::Authenticates { from, to, .. } if from == "envoy" && to == "authelia"
+        )));
+    }
+
+    #[test]
     fn every_edge_references_a_node() {
         for auth in [false, true] {
             let g = graph_dto(&plan(&lakehouse(auth)));
