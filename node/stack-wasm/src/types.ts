@@ -56,8 +56,13 @@ export interface CatalogDto {
 /** What a diagram node stands for (mirrors `NodeKind`). */
 export type NodeKind = "clients" | "gateway" | "component" | "external";
 
-/** What kind of surface the gateway exposes (mirrors `ExposedKind`). */
+/** What kind of endpoint the gateway exposes (mirrors `ExposedKind`). */
 export type ExposedKind = "api" | "ui" | "service";
+
+/** What a gateway surface is for (mirrors `SurfaceKind`): the shared
+ *  platform API/UI surface, or a dedicated service endpoint (e.g. S3) whose
+ *  clients need their own origin. */
+export type SurfaceKind = "platform" | "service";
 
 /** One endpoint the gateway exposes to clients (mirrors `ExposedDto`). */
 export interface ExposedDto {
@@ -67,9 +72,19 @@ export interface ExposedDto {
   kind: ExposedKind;
   /** Client-facing prefix (`/` for a whole-service listener). */
   prefix: string;
-  host_port: number;
   /** Behind forward-auth. */
   gated: boolean;
+}
+
+/** One gateway listener — locally a host port, hosted its own subdomain
+ *  (mirrors `SurfaceDto`). */
+export interface SurfaceDto {
+  host_port: number;
+  kind: SurfaceKind;
+  /** For a service surface: the protocols it speaks (e.g. "S3 + STS"). */
+  protocols: string[];
+  /** The endpoints it exposes, grouped by backend. */
+  exposes: ExposedDto[];
 }
 
 /** A resource a provider provisions for a consumer (mirrors `ProvisionedDto`). */
@@ -95,8 +110,8 @@ export interface GraphNodeDto {
   placement?: string | null;
   /** For a provider: the APIs it offers (e.g. "S3 + STS"). */
   offers: string[];
-  /** For the gateway: everything it exposes, grouped by backend. */
-  exposes: ExposedDto[];
+  /** For the gateway: one surface per listener, platform first. */
+  surfaces: SurfaceDto[];
   /** For a provider: the databases / buckets it provisions. */
   provisions: ProvisionedDto[];
 }
@@ -104,9 +119,21 @@ export interface GraphNodeDto {
 /** A typed, request-direction edge: `from` calls `to` (mirrors
  *  `TopologyEdgeDto`, serde tag "kind"). */
 export type TopologyEdgeDto =
-  | { kind: "access"; from: string; to: string; host_ports: number[] }
-  | { kind: "route"; from: string; to: string; gated: boolean }
-  | { kind: "authenticates"; from: string; to: string; portal_prefix: string }
+  | { kind: "access"; from: string; to: string; host_port: number }
+  | {
+      kind: "route";
+      from: string;
+      to: string;
+      host_port: number;
+      gated: boolean;
+    }
+  | {
+      kind: "authenticates";
+      from: string;
+      to: string;
+      host_port: number;
+      portal_prefix: string;
+    }
   | {
       kind: "uses";
       from: string;

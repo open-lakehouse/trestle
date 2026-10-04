@@ -35,6 +35,8 @@ export type {
   RouteDto,
   Selection,
   ServiceSpec,
+  SurfaceDto,
+  SurfaceKind,
   TlsDto,
   TopologyEdgeDto,
   TopologyEdgeKind,

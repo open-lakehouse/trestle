@@ -5,10 +5,12 @@
 // left-to-right with ELK's `layered` algorithm (the same engine + tuning the
 // sibling headwaters lineage UI uses).
 //
-// The gateway is drawn as a card listing its exposed surface, one row per
-// backend. Each row is an ELK port at a fixed position, so the route to a
-// backend leaves from its row and ELK orders the backends to match. Edges are
-// drawn along ELK's own orthogonal routes (`ElkEdge`).
+// The gateway is drawn as a card with one section per surface (listener): the
+// platform's Lakehouse API, then each service endpoint (e.g. S3) — locally
+// separate ports, hosted separate subdomains. Clients enter each section
+// through its own port, and each backend row leaves through its own port, all
+// at fixed ELK positions so routes start at their row and ELK orders backends
+// to match. Edges are drawn along ELK's own orthogonal routes (`ElkEdge`).
 //
 // The hook is async — ELK resolves to positioned ReactFlow nodes + edges. Until
 // it resolves it keeps the previous layout, so the canvas never flashes
@@ -22,6 +24,7 @@ import type {
   ExposedDto,
   GraphDto,
   GraphNodeDto,
+  SurfaceDto,
   TopologyEdgeDto,
 } from "../types";
 import type { Point } from "./edges/ElkEdge";
@@ -38,7 +41,8 @@ const elk = new ELK();
 export const COMPONENT_SIZE = { width: 240, height: 92 };
 export const CLIENTS_SIZE = { width: 160, height: 64 };
 export const GATEWAY_WIDTH = 300;
-export const GATEWAY_HEADER = 52;
+export const GATEWAY_HEADER = 44;
+export const GATEWAY_SECTION_HEADER = 28;
 export const GATEWAY_ROW = 44;
 
 const LAYOUT_OPTIONS: Record<string, string> = {
@@ -54,14 +58,24 @@ const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.layered.spacing.edgeNodeBetweenLayers": "40",
 };
 
-/** The gateway's exposed surface for one backend. */
+/** One backend's endpoints within a gateway surface. */
 export interface GatewayRow {
   module: string;
   exposes: ExposedDto[];
 }
 
-/** The handle / ELK port id of the gateway row for `module`. */
-export const routeHandle = (module: string) => `route:${module}`;
+/** One gateway surface (listener) and its rows, one per backend. */
+export interface GatewaySection {
+  surface: SurfaceDto;
+  rows: GatewayRow[];
+}
+
+/** The handle / ELK port id where clients enter the surface on `port`. */
+export const surfaceHandle = (port: number) => `surface:${port}`;
+
+/** The handle / ELK port id of the row for `module` on the surface on `port`. */
+export const routeHandle = (port: number, module: string) =>
+  `route:${port}:${module}`;
 
 /** The `data` a visual edge carries. */
 export interface TopologyEdgeData {
@@ -76,28 +90,64 @@ export interface TopologyFlow {
   edges: Edge<TopologyEdgeData>[];
 }
 
-/** Group the gateway's surface into one row per backend, in surface order. */
-export function gatewayRows(gateway: GraphNodeDto): GatewayRow[] {
-  const rows: GatewayRow[] = [];
-  for (const e of gateway.exposes) {
-    const row = rows.find((r) => r.module === e.module);
-    if (row) row.exposes.push(e);
-    else rows.push({ module: e.module, exposes: [e] });
-  }
-  return rows;
+/** Group each gateway surface into one row per backend, in surface order. */
+export function gatewaySections(gateway: GraphNodeDto): GatewaySection[] {
+  return gateway.surfaces.map((surface) => {
+    const rows: GatewayRow[] = [];
+    for (const e of surface.exposes) {
+      const row = rows.find((r) => r.module === e.module);
+      if (row) row.exposes.push(e);
+      else rows.push({ module: e.module, exposes: [e] });
+    }
+    return { surface, rows };
+  });
 }
 
-const gatewayHeight = (rows: GatewayRow[]) =>
-  GATEWAY_HEADER + rows.length * GATEWAY_ROW;
+/** The gateway's ELK ports, at the same offsets `GatewayNode` renders: one
+ *  inbound port per section header (left), one outbound per row (right). */
+function gatewayPorts(id: string, sections: GatewaySection[]) {
+  const ports: { id: string; x: number; y: number; width: 1; height: 1 }[] = [];
+  let y = GATEWAY_HEADER;
+  for (const { surface, rows } of sections) {
+    ports.push({
+      id: `${id}:${surfaceHandle(surface.host_port)}`,
+      x: 0,
+      y: y + GATEWAY_SECTION_HEADER / 2,
+      width: 1,
+      height: 1,
+    });
+    y += GATEWAY_SECTION_HEADER;
+    for (const row of rows) {
+      ports.push({
+        id: `${id}:${routeHandle(surface.host_port, row.module)}`,
+        x: GATEWAY_WIDTH,
+        y: y + GATEWAY_ROW / 2,
+        width: 1,
+        height: 1,
+      });
+      y += GATEWAY_ROW;
+    }
+  }
+  return { ports, height: y };
+}
 
-/** Edges leaving the gateway toward a backend leave from that backend's row. */
-function sourceHandle(
+/** The gateway handles an edge attaches to, if it touches a gateway: routes
+ *  leave from their backend's row, and access enters its surface's header. */
+function gatewayHandles(
   e: TopologyEdgeDto,
-  rowsOf: Map<string, GatewayRow[]>,
-): string | undefined {
-  if (e.kind !== "route" && e.kind !== "authenticates") return undefined;
-  const rows = rowsOf.get(e.from);
-  return rows?.some((r) => r.module === e.to) ? routeHandle(e.to) : undefined;
+  gateways: Set<string>,
+): { source?: string; target?: string } {
+  switch (e.kind) {
+    case "route":
+    case "authenticates":
+      return gateways.has(e.from)
+        ? { source: routeHandle(e.host_port, e.to) }
+        : {};
+    case "access":
+      return gateways.has(e.to) ? { target: surfaceHandle(e.host_port) } : {};
+    default:
+      return {};
+  }
 }
 
 /**
@@ -116,33 +166,23 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
       return;
     }
 
-    const rowsOf = new Map<string, GatewayRow[]>(
+    const sectionsOf = new Map<string, GatewaySection[]>(
       graph.nodes
         .filter((n) => n.kind === "gateway")
-        .map((n) => [n.id, gatewayRows(n)]),
+        .map((n) => [n.id, gatewaySections(n)]),
     );
+    const gateways = new Set(sectionsOf.keys());
 
     const children: ElkNode[] = graph.nodes.map((n) => {
-      const rows = rowsOf.get(n.id);
-      if (rows) {
-        // One fixed port per row (right edge, row center) plus the inbound
-        // side, so ELK orders the backends like the rows.
-        const height = gatewayHeight(rows);
+      const sections = sectionsOf.get(n.id);
+      if (sections) {
+        const { ports, height } = gatewayPorts(n.id, sections);
         return {
           id: n.id,
           width: GATEWAY_WIDTH,
           height,
           layoutOptions: { "elk.portConstraints": "FIXED_POS" },
-          ports: [
-            { id: `${n.id}:in`, x: 0, y: height / 2, width: 1, height: 1 },
-            ...rows.map((r, i) => ({
-              id: `${n.id}:${routeHandle(r.module)}`,
-              x: GATEWAY_WIDTH,
-              y: GATEWAY_HEADER + i * GATEWAY_ROW + GATEWAY_ROW / 2,
-              width: 1,
-              height: 1,
-            })),
-          ],
+          ports,
         };
       }
       return {
@@ -156,12 +196,11 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
       layoutOptions: LAYOUT_OPTIONS,
       children,
       edges: graph.edges.map((e, i) => {
-        const handle = sourceHandle(e, rowsOf);
-        const toGateway = rowsOf.has(e.to);
+        const { source, target } = gatewayHandles(e, gateways);
         return {
           id: `e${i}`,
-          sources: [handle ? `${e.from}:${handle}` : e.from],
-          targets: [toGateway ? `${e.to}:in` : e.to],
+          sources: [source ? `${e.from}:${source}` : e.from],
+          targets: [target ? `${e.to}:${target}` : e.to],
         };
       }),
     };
@@ -192,13 +231,13 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
         );
         const nodes: Node[] = graph.nodes.map((n) => {
           const position = positioned.get(n.id) ?? { x: 0, y: 0 };
-          const rows = rowsOf.get(n.id);
-          if (rows) {
+          const sections = sectionsOf.get(n.id);
+          if (sections) {
             return {
               id: n.id,
               type: "gateway",
               position,
-              data: { node: n, rows, names } satisfies GatewayNodeData,
+              data: { node: n, sections, names } satisfies GatewayNodeData,
             };
           }
           return {
@@ -208,14 +247,18 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
             data: { node: n } satisfies ComponentNodeData,
           };
         });
-        const edges: Edge<TopologyEdgeData>[] = graph.edges.map((e, i) => ({
-          id: `e${i}`,
-          source: e.from,
-          target: e.to,
-          sourceHandle: sourceHandle(e, rowsOf),
-          type: "elk",
-          data: { edge: e, points: routes.get(`e${i}`) },
-        }));
+        const edges: Edge<TopologyEdgeData>[] = graph.edges.map((e, i) => {
+          const { source, target } = gatewayHandles(e, gateways);
+          return {
+            id: `e${i}`,
+            source: e.from,
+            target: e.to,
+            sourceHandle: source,
+            targetHandle: target,
+            type: "elk",
+            data: { edge: e, points: routes.get(`e${i}`) },
+          };
+        });
         setFlow({ nodes, edges });
       })
       .catch(() => {

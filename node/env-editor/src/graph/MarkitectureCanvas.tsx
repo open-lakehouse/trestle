@@ -86,7 +86,7 @@ const EDGE_STYLE: Record<
 function edgeLabel(e: TopologyEdgeDto): string | undefined {
   switch (e.kind) {
     case "access":
-      return e.host_ports.map((p) => `:${p}`).join(" ");
+      return `:${e.host_port}`;
     case "route":
       return undefined;
     case "authenticates":
@@ -100,9 +100,9 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
 function edgeTitle(e: TopologyEdgeDto): string {
   switch (e.kind) {
     case "access":
-      return `Clients reach the gateway on ${e.host_ports.join(", ")}`;
+      return `Clients reach the gateway's surface on :${e.host_port}`;
     case "route":
-      return `The gateway exposes ${e.to}${e.gated ? " (requires sign-in)" : ""}`;
+      return `The gateway exposes ${e.to} on :${e.host_port}${e.gated ? " (requires sign-in)" : ""}`;
     case "authenticates":
       return `The gateway delegates sign-in to ${e.to}; login portal at ${e.portal_prefix}`;
     case "uses":
