@@ -1,14 +1,14 @@
 // ELK-driven layout for the environment "markitecture". The graph is the
-// plan's *runtime* topology (compose services + gateway wiring, see
-// `crates/stack-topology-wasm/src/topology.rs`), read in request direction:
-// host → gateway → apps → backing stores, laid out left-to-right with ELK's
-// `layered` algorithm (the same engine + tuning the sibling headwaters lineage
-// UI uses).
+// plan's *functional* topology (see `crates/stack-topology-wasm/src/topology.rs`):
+// one node per component, read in request direction — clients → gateway →
+// the components it exposes → the capabilities they use — laid out
+// left-to-right with ELK's `layered` algorithm (the same engine + tuning the
+// sibling headwaters lineage UI uses).
 //
-// Services are the leaf nodes. A module that runs more than one long-running
-// service (rustfs: rustfs + sts-shim) becomes a compound group around them; a
-// single-service module is just its one node, so the canvas stays as compact
-// as a module graph.
+// The gateway is drawn as a card listing its exposed surface, one row per
+// backend. Each row is an ELK port at a fixed position, so the route to a
+// backend leaves from its row and ELK orders the backends to match. Edges are
+// drawn along ELK's own orthogonal routes (`ElkEdge`).
 //
 // The hook is async — ELK resolves to positioned ReactFlow nodes + edges. Until
 // it resolves it keeps the previous layout, so the canvas never flashes
@@ -19,68 +19,55 @@ import type { Edge, Node } from "@xyflow/react";
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import { useEffect, useRef, useState } from "react";
 import type {
+  ExposedDto,
   GraphDto,
   GraphNodeDto,
-  ServiceNodeDto,
   TopologyEdgeDto,
-  TopologyEdgeKind,
 } from "../types";
-import type { ModuleGroupNodeData } from "./nodes/ModuleGroupNode";
-import type { ServiceNodeData } from "./nodes/ServiceNode";
+import type { Point } from "./edges/ElkEdge";
+import type { ComponentNodeData } from "./nodes/ComponentNode";
+import type { GatewayNodeData } from "./nodes/GatewayNode";
 
 const elk = new ELK();
 
-/** The id of the synthetic host/browser node (Rust `HOST_NODE_ID`). */
-export const HOST_NODE_ID = "@host";
-
-// Fixed node boxes. MUST match the components' size classes (`ServiceNode`:
-// `h-[92px] w-[240px]`, `HostNode`: `h-[64px] w-[160px]`): ELK positions by
-// these sizes and ReactFlow anchors handles at the real box center, so a
-// mismatch bends same-row edges.
-export const SERVICE_SIZE = { width: 240, height: 92 };
-export const HOST_SIZE = { width: 160, height: 64 };
-// A group's header band (MUST match `ModuleGroupNode`'s header height) plus
-// the inner padding around its children.
-export const GROUP_HEADER = 36;
-const GROUP_PAD = 16;
+// Fixed node boxes. MUST match the components' size classes (`ComponentNode`:
+// `h-[92px] w-[240px]`, `ClientsNode`: `h-[64px] w-[160px]`) and the
+// `GatewayNode` geometry: ELK positions by these sizes (and places the
+// gateway's row ports from them), and ReactFlow anchors handles at the real
+// boxes, so a mismatch bends edges.
+export const COMPONENT_SIZE = { width: 240, height: 92 };
+export const CLIENTS_SIZE = { width: 160, height: 64 };
+export const GATEWAY_WIDTH = 300;
+export const GATEWAY_HEADER = 52;
+export const GATEWAY_ROW = 44;
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
   "elk.direction": "RIGHT",
-  "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-  "elk.layered.spacing.nodeNodeBetweenLayers": "140",
-  "elk.spacing.nodeNode": "40",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "120",
+  "elk.spacing.nodeNode": "36",
   "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-  "elk.layered.edgeRouting": "SPLINES",
+  // Orthogonal routes are drawn as-is by `ElkEdge`, so they avoid nodes and
+  // keep ELK's channels rather than being re-routed by ReactFlow.
+  "elk.layered.edgeRouting": "ORTHOGONAL",
+  "elk.layered.spacing.edgeEdgeBetweenLayers": "14",
   "elk.layered.spacing.edgeNodeBetweenLayers": "40",
 };
 
-const GROUP_OPTIONS: Record<string, string> = {
-  "elk.padding": `[top=${GROUP_HEADER + GROUP_PAD},left=${GROUP_PAD},bottom=${GROUP_PAD},right=${GROUP_PAD}]`,
-  "elk.spacing.nodeNode": "24",
-};
+/** The gateway's exposed surface for one backend. */
+export interface GatewayRow {
+  module: string;
+  exposes: ExposedDto[];
+}
 
-/**
- * Which kind wins when several typed edges join the same pair of services:
- * the visual edge takes the style of the most significant one and lists every
- * label. E.g. envoy → authelia is both a startup gate and the auth check.
- */
-const KIND_PRIORITY: TopologyEdgeKind[] = [
-  "authz",
-  "route",
-  "emulated",
-  "ingress",
-  "startup",
-];
+/** The handle / ELK port id of the gateway row for `module`. */
+export const routeHandle = (module: string) => `route:${module}`;
 
-/** The `data` a visual edge carries: every typed edge it stands for. */
+/** The `data` a visual edge carries. */
 export interface TopologyEdgeData {
-  /** The most significant kind among `edges` (drives the style). */
-  kind: TopologyEdgeKind;
-  edges: TopologyEdgeDto[];
-  /** Edges in the opposite direction folded onto this one (a client calling
-   *  back into the gateway that routes to it), drawn as a second arrowhead. */
-  back: TopologyEdgeDto[];
+  edge: TopologyEdgeDto;
+  /** ELK's route (start, bends, end) in flow coordinates. */
+  points?: Point[];
   [key: string]: unknown;
 }
 
@@ -89,192 +76,152 @@ export interface TopologyFlow {
   edges: Edge<TopologyEdgeData>[];
 }
 
-/** The id of a module's group node (distinct from any service id). */
-const groupId = (moduleId: string) => `module:${moduleId}`;
+/** Group the gateway's surface into one row per backend, in surface order. */
+export function gatewayRows(gateway: GraphNodeDto): GatewayRow[] {
+  const rows: GatewayRow[] = [];
+  for (const e of gateway.exposes) {
+    const row = rows.find((r) => r.module === e.module);
+    if (row) row.exposes.push(e);
+    else rows.push({ module: e.module, exposes: [e] });
+  }
+  return rows;
+}
 
-/**
- * Merge the typed edges between each (from, to) pair into one visual edge,
- * styled by the most significant kind. Startup edges are optional:
- * `showStartup = false` drops pairs that are *only* startup gates.
- *
- * A client calling back into a gateway that routes to it (UC → envoy for the
- * emulated AWS hostnames) closes a cycle with that route. Drawn separately it
- * loops around the canvas and its label collides with the route's; ELK's cycle
- * breaker may also flip the route. So such a back-edge is folded onto the
- * route as `back` (a second arrowhead + label) and never shapes the layers.
- */
-export function mergeEdges(
-  edges: TopologyEdgeDto[],
-  showStartup: boolean,
-): { from: string; to: string; data: TopologyEdgeData }[] {
-  const pairKey = (from: string, to: string) => `${from}\u0000${to}`;
-  const routed = new Set(
-    edges.filter((e) => e.kind === "route").map((e) => pairKey(e.from, e.to)),
-  );
-  const byPair = new Map<string, TopologyEdgeDto[]>();
-  const backs = new Map<string, TopologyEdgeDto[]>();
-  for (const e of edges) {
-    const reverse = pairKey(e.to, e.from);
-    if (e.kind !== "startup" && routed.has(reverse)) {
-      const list = backs.get(reverse);
-      if (list) list.push(e);
-      else backs.set(reverse, [e]);
-      continue;
-    }
-    const key = pairKey(e.from, e.to);
-    const list = byPair.get(key);
-    if (list) list.push(e);
-    else byPair.set(key, [e]);
-  }
-  const merged: { from: string; to: string; data: TopologyEdgeData }[] = [];
-  for (const [key, list] of byPair) {
-    const kind =
-      KIND_PRIORITY.find((k) => list.some((e) => e.kind === k)) ?? "startup";
-    if (kind === "startup" && !showStartup) continue;
-    merged.push({
-      from: list[0].from,
-      to: list[0].to,
-      data: { kind, edges: list, back: backs.get(key) ?? [] },
-    });
-  }
-  return merged;
+const gatewayHeight = (rows: GatewayRow[]) =>
+  GATEWAY_HEADER + rows.length * GATEWAY_ROW;
+
+/** Edges leaving the gateway toward a backend leave from that backend's row. */
+function sourceHandle(
+  e: TopologyEdgeDto,
+  rowsOf: Map<string, GatewayRow[]>,
+): string | undefined {
+  if (e.kind !== "route" && e.kind !== "authenticates") return undefined;
+  const rows = rowsOf.get(e.from);
+  return rows?.some((r) => r.module === e.to) ? routeHandle(e.to) : undefined;
 }
 
 /**
- * Compute a positioned ReactFlow graph from a plan's runtime `GraphDto`. Edges
- * point from caller to callee (`from → to`), so requests flow left→right.
+ * Compute a positioned ReactFlow graph from a plan's functional `GraphDto`.
+ * Edges point from caller to callee (`from → to`), so requests flow
+ * left→right.
  */
-export function useTopologyLayout(
-  graph: GraphDto | undefined,
-  showStartup = true,
-): TopologyFlow {
+export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
   const [flow, setFlow] = useState<TopologyFlow>({ nodes: [], edges: [] });
   const runRef = useRef(0);
 
   useEffect(() => {
     const run = ++runRef.current;
-    if (!graph || graph.services.length === 0) {
+    if (!graph || graph.nodes.length === 0) {
       setFlow({ nodes: [], edges: [] });
       return;
     }
 
-    const modules = new Map<string, GraphNodeDto>(
-      graph.nodes.map((m) => [m.id, m]),
-    );
-    const byModule = new Map<string, ServiceNodeDto[]>();
-    for (const s of graph.services) {
-      if (!s.module) continue;
-      const list = byModule.get(s.module);
-      if (list) list.push(s);
-      else byModule.set(s.module, [s]);
-    }
-    const grouped = new Set(
-      [...byModule].filter(([, list]) => list.length > 1).map(([id]) => id),
+    const rowsOf = new Map<string, GatewayRow[]>(
+      graph.nodes
+        .filter((n) => n.kind === "gateway")
+        .map((n) => [n.id, gatewayRows(n)]),
     );
 
-    const leaf = (s: ServiceNodeDto): ElkNode => ({
-      id: s.id,
-      ...(s.kind === "host" ? HOST_SIZE : SERVICE_SIZE),
+    const children: ElkNode[] = graph.nodes.map((n) => {
+      const rows = rowsOf.get(n.id);
+      if (rows) {
+        // One fixed port per row (right edge, row center) plus the inbound
+        // side, so ELK orders the backends like the rows.
+        const height = gatewayHeight(rows);
+        return {
+          id: n.id,
+          width: GATEWAY_WIDTH,
+          height,
+          layoutOptions: { "elk.portConstraints": "FIXED_POS" },
+          ports: [
+            { id: `${n.id}:in`, x: 0, y: height / 2, width: 1, height: 1 },
+            ...rows.map((r, i) => ({
+              id: `${n.id}:${routeHandle(r.module)}`,
+              x: GATEWAY_WIDTH,
+              y: GATEWAY_HEADER + i * GATEWAY_ROW + GATEWAY_ROW / 2,
+              width: 1,
+              height: 1,
+            })),
+          ],
+        };
+      }
+      return {
+        id: n.id,
+        ...(n.kind === "clients" ? CLIENTS_SIZE : COMPONENT_SIZE),
+      };
     });
 
-    // Top level: ungrouped services in plan order, with each group inserted at
-    // its first service's position.
-    const children: ElkNode[] = [];
-    const placedGroups = new Set<string>();
-    for (const s of graph.services) {
-      if (s.module && grouped.has(s.module)) {
-        if (placedGroups.has(s.module)) continue;
-        placedGroups.add(s.module);
-        children.push({
-          id: groupId(s.module),
-          layoutOptions: GROUP_OPTIONS,
-          children: (byModule.get(s.module) ?? []).map(leaf),
-        });
-      } else {
-        children.push(leaf(s));
-      }
-    }
-
-    const merged = mergeEdges(graph.edges, showStartup);
     const elkGraph: ElkNode = {
       id: "root",
       layoutOptions: LAYOUT_OPTIONS,
       children,
-      edges: merged.map((e, i) => ({
-        id: `e${i}`,
-        sources: [e.from],
-        targets: [e.to],
-      })),
+      edges: graph.edges.map((e, i) => {
+        const handle = sourceHandle(e, rowsOf);
+        const toGateway = rowsOf.has(e.to);
+        return {
+          id: `e${i}`,
+          sources: [handle ? `${e.from}:${handle}` : e.from],
+          targets: [toGateway ? `${e.to}:in` : e.to],
+        };
+      }),
     };
 
     elk
       .layout(elkGraph)
       .then((laidOut) => {
         if (run !== runRef.current) return; // superseded
-        const nodes: Node[] = [];
-        const services = new Map(graph.services.map((s) => [s.id, s]));
-        // ReactFlow needs a parent before its children; ELK child coordinates
-        // are already relative to their parent, matching `parentId` semantics.
+        const positioned = new Map<string, { x: number; y: number }>();
         for (const child of laidOut.children ?? []) {
-          const position = { x: child.x ?? 0, y: child.y ?? 0 };
-          if (child.children) {
-            const moduleId = child.id.slice("module:".length);
-            const module = modules.get(moduleId);
-            if (!module) continue;
-            nodes.push({
-              id: child.id,
-              type: "moduleGroup",
-              position,
-              width: child.width,
-              height: child.height,
-              data: { module } satisfies ModuleGroupNodeData,
-            });
-            for (const grandchild of child.children) {
-              const service = services.get(grandchild.id);
-              if (!service) continue;
-              nodes.push({
-                id: service.id,
-                type: "service",
-                parentId: child.id,
-                extent: "parent",
-                position: { x: grandchild.x ?? 0, y: grandchild.y ?? 0 },
-                data: {
-                  service,
-                  module,
-                  inGroup: true,
-                } satisfies ServiceNodeData,
-              });
-            }
-          } else {
-            const service = services.get(child.id);
-            if (!service) continue;
-            nodes.push({
-              id: service.id,
-              type: service.kind === "host" ? "host" : "service",
-              position,
-              data: {
-                service,
-                module: service.module
-                  ? modules.get(service.module)
-                  : undefined,
-                inGroup: false,
-              } satisfies ServiceNodeData,
-            });
+          positioned.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
+        }
+        // Flat graph: every edge lives on the root, so its sections are already
+        // in root (= flow) coordinates.
+        const routes = new Map<string, Point[]>();
+        for (const e of laidOut.edges ?? []) {
+          const section = e.sections?.[0];
+          if (section) {
+            routes.set(e.id, [
+              section.startPoint,
+              ...(section.bendPoints ?? []),
+              section.endPoint,
+            ]);
           }
         }
-        const edges: Edge<TopologyEdgeData>[] = merged.map((e, i) => ({
+        const names: Record<string, string> = Object.fromEntries(
+          graph.nodes.map((n) => [n.id, n.display_name ?? n.id]),
+        );
+        const nodes: Node[] = graph.nodes.map((n) => {
+          const position = positioned.get(n.id) ?? { x: 0, y: 0 };
+          const rows = rowsOf.get(n.id);
+          if (rows) {
+            return {
+              id: n.id,
+              type: "gateway",
+              position,
+              data: { node: n, rows, names } satisfies GatewayNodeData,
+            };
+          }
+          return {
+            id: n.id,
+            type: n.kind === "clients" ? "clients" : "component",
+            position,
+            data: { node: n } satisfies ComponentNodeData,
+          };
+        });
+        const edges: Edge<TopologyEdgeData>[] = graph.edges.map((e, i) => ({
           id: `e${i}`,
           source: e.from,
           target: e.to,
-          type: "smoothstep",
-          data: e.data,
+          sourceHandle: sourceHandle(e, rowsOf),
+          type: "elk",
+          data: { edge: e, points: routes.get(`e${i}`) },
         }));
         setFlow({ nodes, edges });
       })
       .catch(() => {
         if (run === runRef.current) setFlow({ nodes: [], edges: [] });
       });
-  }, [graph, showStartup]);
+  }, [graph]);
 
   return flow;
 }

@@ -53,78 +53,75 @@ export interface CatalogDto {
   default_selection: Selection;
 }
 
-/** One module in the diagram (mirrors `GraphNodeDto`). Services point at it
- *  through `ServiceNodeDto.module`; it is what selection and the config panel
- *  key on. */
-export interface GraphNodeDto {
-  id: string;
-  display_name?: string | null;
-  summary?: string | null;
-  category?: string | null;
-  /** Role of the module's primary service (e.g. "object_store", "gateway"). */
-  role?: string | null;
-  /** "in_process" | "host" | "container:<service>". */
-  placement?: string | null;
-}
+/** What a diagram node stands for (mirrors `NodeKind`). */
+export type NodeKind = "clients" | "gateway" | "component" | "external";
 
-/** What a service node stands for (mirrors `ServiceKind`). */
-export type ServiceKind = "container" | "external" | "host";
+/** What kind of surface the gateway exposes (mirrors `ExposedKind`). */
+export type ExposedKind = "api" | "ui" | "service";
 
-/** A host-published port mapping (mirrors `PortDto`). */
-export interface PortDto {
-  host: number;
-  container: number;
-}
-
-/** One runtime service in the diagram (mirrors `ServiceNodeDto`). One-shot
- *  jobs (init/migrate/cert-mint) are never included. */
-export interface ServiceNodeDto {
-  /** Compose service name, or `"@host"` (Rust `HOST_NODE_ID`) for the
-   *  synthetic host/browser node. */
-  id: string;
-  /** Owning module id; null only for the host node. */
-  module?: string | null;
-  kind: ServiceKind;
-  /** Declared role; null for a fragment-only sidecar (e.g. sts-shim). */
-  role?: string | null;
-  image?: string | null;
-  /** Host-published ports. */
-  published: PortDto[];
-  /** In-network ports. */
-  exposed: number[];
-}
-
-/** One gateway route aggregated onto a `route` edge (mirrors `RouteRefDto`). */
-export interface RouteRefDto {
+/** One endpoint the gateway exposes to clients (mirrors `ExposedDto`). */
+export interface ExposedDto {
+  /** The backend component serving it. */
+  module: string;
+  endpoint: string;
+  kind: ExposedKind;
+  /** Client-facing prefix (`/` for a whole-service listener). */
   prefix: string;
   host_port: number;
-  rewrite?: string | null;
-  /** Behind the forward-auth check. */
+  /** Behind forward-auth. */
   gated: boolean;
 }
 
-/** A typed, request-direction edge: `from` calls / waits on `to` (mirrors
+/** A resource a provider provisions for a consumer (mirrors `ProvisionedDto`). */
+export interface ProvisionedDto {
+  resource: string;
+  name: string;
+}
+
+/** One functional component (a module), or the clients node (mirrors
+ *  `GraphNodeDto`). Helper containers (STS shim, init jobs, …) are part of
+ *  their component and never appear on their own. */
+export interface GraphNodeDto {
+  /** Module id, or `"@clients"` (Rust `CLIENTS_NODE_ID`). */
+  id: string;
+  kind: NodeKind;
+  /** The implementation's name (e.g. "RustFS (local S3 + STS)"). */
+  display_name?: string | null;
+  summary?: string | null;
+  category?: string | null;
+  /** The function it fills (e.g. "object_store", "auth"). */
+  role?: string | null;
+  /** "in_process" | "host" | "container:<service>". */
+  placement?: string | null;
+  /** For a provider: the APIs it offers (e.g. "S3 + STS"). */
+  offers: string[];
+  /** For the gateway: everything it exposes, grouped by backend. */
+  exposes: ExposedDto[];
+  /** For a provider: the databases / buckets it provisions. */
+  provisions: ProvisionedDto[];
+}
+
+/** A typed, request-direction edge: `from` calls `to` (mirrors
  *  `TopologyEdgeDto`, serde tag "kind"). */
 export type TopologyEdgeDto =
-  | { kind: "startup"; from: string; to: string; condition: string }
-  | { kind: "route"; from: string; to: string; routes: RouteRefDto[] }
-  | { kind: "authz"; from: string; to: string; portal_prefix: string }
+  | { kind: "access"; from: string; to: string; host_ports: number[] }
+  | { kind: "route"; from: string; to: string; gated: boolean }
+  | { kind: "authenticates"; from: string; to: string; portal_prefix: string }
   | {
-      kind: "emulated";
+      kind: "uses";
       from: string;
       to: string;
-      hosts: string[];
-      port: number;
-    }
-  | { kind: "ingress"; from: string; to: string; host_ports: number[] };
+      role: string;
+      protocol: string;
+      resources: string[];
+    };
 
 /** The edge kinds, for legends and filters. */
 export type TopologyEdgeKind = TopologyEdgeDto["kind"];
 
-/** The runtime topology (mirrors `GraphDto`). */
+/** The functional topology (mirrors `GraphDto`). */
 export interface GraphDto {
   nodes: GraphNodeDto[];
-  services: ServiceNodeDto[];
   edges: TopologyEdgeDto[];
 }
 

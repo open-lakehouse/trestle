@@ -3,6 +3,7 @@ import {
   type ColorMode,
   Controls,
   type Edge,
+  type EdgeTypes,
   MarkerType,
   type Node,
   type NodeTypes,
@@ -11,39 +12,35 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import {
-  type CSSProperties,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo } from "react";
 import type {
   GraphDto,
   GraphNodeDto,
   TopologyEdgeDto,
   TopologyEdgeKind,
 } from "../types";
-import { HostNode } from "./nodes/HostNode";
-import {
-  ModuleGroupNode,
-  type ModuleGroupNodeData,
-} from "./nodes/ModuleGroupNode";
-import { ServiceNode, type ServiceNodeData } from "./nodes/ServiceNode";
+import { ElkEdge } from "./edges/ElkEdge";
+import { ClientsNode } from "./nodes/ClientsNode";
+import { ComponentNode } from "./nodes/ComponentNode";
+import { GatewayNode } from "./nodes/GatewayNode";
 import { type TopologyEdgeData, useTopologyLayout } from "./useTopologyLayout";
 
 const nodeTypes: NodeTypes = {
-  service: ServiceNode,
-  host: HostNode,
-  moduleGroup: ModuleGroupNode,
+  clients: ClientsNode,
+  component: ComponentNode,
+  gateway: GatewayNode,
+};
+
+const edgeTypes: EdgeTypes = {
+  elk: ElkEdge,
 };
 
 export interface MarkitectureCanvasProps {
-  /** The plan's runtime topology. */
+  /** The plan's functional topology. */
   graph: GraphDto | undefined;
-  /** Currently-selected module id, highlighted in the canvas. */
+  /** Currently-selected component (module) id, highlighted in the canvas. */
   selectedId?: string;
-  /** Called when a module (a service node or a module group) is clicked. */
+  /** Called when a component (or the gateway) is clicked. */
   onSelect?: (node: GraphNodeDto) => void;
   /**
    * Drives ReactFlow's built-in canvas/Controls/Background colors. Defaults to
@@ -55,92 +52,70 @@ export interface MarkitectureCanvasProps {
 
 /**
  * Per-kind edge look. Strokes reference the raw HSL-component tokens (authored
- * on the host's :root/.dark), which are theme-reactive.
+ * on the host's :root/.dark), which are theme-reactive. An animated edge is
+ * drawn by ReactFlow as moving 5px dashes.
  */
 const EDGE_STYLE: Record<
   TopologyEdgeKind,
   { label: string; stroke: string; dash?: string; animated: boolean }
 > = {
-  ingress: {
-    label: "Host ports",
+  access: {
+    label: "Client access",
     stroke: "hsl(var(--muted-foreground))",
     animated: true,
   },
   route: {
-    label: "Gateway route",
+    label: "Exposed via gateway",
     stroke: "hsl(var(--primary))",
     animated: true,
   },
-  authz: {
-    label: "Auth check",
+  authenticates: {
+    label: "Authenticates users",
     stroke: "hsl(var(--status-blocked))",
-    animated: true,
-  },
-  emulated: {
-    label: "Emulated cloud host (TLS)",
-    stroke: "hsl(var(--status-ready))",
     dash: "6 4",
     animated: false,
   },
-  startup: {
-    label: "Waits on (startup)",
+  uses: {
+    label: "Uses",
     stroke: "hsl(var(--muted-foreground))",
-    dash: "2 4",
     animated: false,
   },
 };
 
-const CONDITION_LABEL: Record<string, string> = {
-  service_started: "started",
-  service_healthy: "healthy",
-  service_completed_successfully: "completed",
-};
-
-/** A short label for one typed edge. */
+/** A short label for an edge (the gateway rows already detail routes). */
 function edgeLabel(e: TopologyEdgeDto): string | undefined {
   switch (e.kind) {
-    case "ingress":
+    case "access":
       return e.host_ports.map((p) => `:${p}`).join(" ");
-    case "route": {
-      const [first, ...rest] = e.routes;
-      const gated = e.routes.some((r) => r.gated) ? " · auth" : "";
-      return `${first?.prefix ?? ""}${rest.length ? ` +${rest.length}` : ""}${gated}`;
-    }
-    case "authz":
-      return "ext_authz";
-    case "emulated":
-      return `TLS :${e.port}`;
-    case "startup":
+    case "route":
       return undefined;
+    case "authenticates":
+      return "sign-in";
+    case "uses":
+      return `${e.protocol} · ${e.resources.join(", ")}`;
   }
 }
 
-/** The full detail of one typed edge, for the edge's accessible label. */
+/** The full detail of an edge, for its accessible label. */
 function edgeTitle(e: TopologyEdgeDto): string {
   switch (e.kind) {
-    case "ingress":
-      return `Published on host: ${e.host_ports.join(", ")}`;
+    case "access":
+      return `Clients reach the gateway on ${e.host_ports.join(", ")}`;
     case "route":
-      return e.routes
-        .map(
-          (r) =>
-            `${r.prefix} (:${r.host_port})${r.rewrite ? ` → ${r.rewrite}` : ""}${r.gated ? " [auth]" : ""}`,
-        )
-        .join("\n");
-    case "authz":
-      return `Forward-auth check; login portal at ${e.portal_prefix}`;
-    case "emulated":
-      return `TLS :${e.port}\n${e.hosts.join("\n")}`;
-    case "startup":
-      return `Starts after ${e.to} is ${CONDITION_LABEL[e.condition] ?? e.condition}`;
+      return `The gateway exposes ${e.to}${e.gated ? " (requires sign-in)" : ""}`;
+    case "authenticates":
+      return `The gateway delegates sign-in to ${e.to}; login portal at ${e.portal_prefix}`;
+    case "uses":
+      return `${e.from} uses ${e.to} (${e.protocol}) for ${e.resources.join(", ")}`;
   }
 }
 
 /**
- * Render a planned environment's runtime topology as a left-to-right
- * "markitecture": host → gateway → apps → backing stores. Purely
- * presentational: the app feeds it a live plan graph and Storybook feeds it a
- * fixture — same component, no planner coupling.
+ * Render a planned environment's functional topology as a left-to-right
+ * "markitecture": clients → the gateway's exposed surface → the components
+ * behind it → the capabilities they use. Purely presentational: the app feeds
+ * it a live plan graph and Storybook feeds it a fixture — same component, no
+ * planner coupling.
  */
 export function MarkitectureCanvas(props: MarkitectureCanvasProps) {
   // useReactFlow requires a provider ancestor, so the flow lives inside one.
@@ -151,9 +126,10 @@ export function MarkitectureCanvas(props: MarkitectureCanvasProps) {
   );
 }
 
-/** The module a node stands for (a service's owner, or a group's module). */
-function nodeModule(node: Node): GraphNodeDto | undefined {
-  return (node.data as Partial<ServiceNodeData & ModuleGroupNodeData>).module;
+/** The component a node stands for (absent for the clients node). */
+function nodeComponent(node: Node): GraphNodeDto | undefined {
+  const dto = (node.data as { node?: GraphNodeDto }).node;
+  return dto && dto.kind !== "clients" ? dto : undefined;
 }
 
 function MarkitectureFlow({
@@ -162,80 +138,49 @@ function MarkitectureFlow({
   onSelect,
   colorMode = "system",
 }: MarkitectureCanvasProps) {
-  const [showStartup, setShowStartup] = useState(true);
-  const { nodes, edges } = useTopologyLayout(graph, showStartup);
+  const { nodes, edges } = useTopologyLayout(graph);
   const { fitView } = useReactFlow();
 
-  // Selection is by module: highlight its group and every service it runs.
   const decoratedNodes = useMemo(
-    () =>
-      nodes.map((n) => ({
-        ...n,
-        selected: !!selectedId && nodeModule(n)?.id === selectedId,
-      })),
+    () => nodes.map((n) => ({ ...n, selected: n.id === selectedId })),
     [nodes, selectedId],
   );
-  const selectedServices = useMemo(
-    () =>
-      new Set(
-        decoratedNodes
-          .filter((n) => n.selected && n.type !== "moduleGroup")
-          .map((n) => n.id),
-      ),
-    [decoratedNodes],
-  );
 
-  // Each kind has its own stroke/dash; selecting a module emphasizes edges
-  // incident to its services and dims the rest.
+  // Each kind has its own stroke/dash; selecting a component emphasizes its
+  // incident edges and dims the rest.
   const decoratedEdges = useMemo<Edge[]>(
     () =>
       edges.map((e) => {
-        const data = e.data as TopologyEdgeData;
-        const look = EDGE_STYLE[data.kind];
+        const { edge } = e.data as TopologyEdgeData;
+        const look = EDGE_STYLE[edge.kind];
         const incident =
-          selectedServices.has(e.source) || selectedServices.has(e.target);
-        const dimmed = selectedServices.size > 0 && !incident;
-        const label = [
-          ...data.edges.map(edgeLabel),
-          ...data.back.map((b) => {
-            const l = edgeLabel(b);
-            return l ? `↩ ${l}` : undefined;
-          }),
-        ]
-          .filter((l): l is string => !!l)
-          .join(" · ");
-        const marker = (color: string) => ({
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color,
-        });
+          !!selectedId && (e.source === selectedId || e.target === selectedId);
+        const dimmed = !!selectedId && !incident;
         const style: CSSProperties = {
           stroke: look.stroke,
-          strokeWidth: incident ? 2.5 : data.kind === "startup" ? 1 : 1.5,
+          strokeWidth: incident ? 2.5 : 1.5,
           strokeDasharray: look.dash,
           opacity: dimmed ? 0.25 : incident ? 1 : 0.85,
           transition: "opacity 150ms ease",
         };
         return {
           ...e,
-          animated: look.animated && !look.dash,
-          label: label || undefined,
-          ariaLabel: [...data.edges, ...data.back].map(edgeTitle).join("\n"),
+          animated: look.animated,
+          label: edgeLabel(edge),
+          ariaLabel: edgeTitle(edge),
           labelStyle: { fontSize: 10, fill: "hsl(var(--muted-foreground))" },
           labelBgStyle: { fill: "hsl(var(--background))", fillOpacity: 0.85 },
           labelBgPadding: [4, 2] as [number, number],
-          markerEnd: marker(look.stroke),
-          // A folded back-edge (client → gateway) gets the reverse arrowhead in
-          // its own kind's color.
-          markerStart:
-            data.back.length > 0
-              ? marker(EDGE_STYLE[data.back[0].kind].stroke)
-              : undefined,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            width: 14,
+            height: 14,
+            color: look.stroke,
+          },
           style,
         };
       }),
-    [edges, selectedServices],
+    [edges, selectedId],
   );
 
   // ELK resolves asynchronously, so nodes arrive after ReactFlow's initial mount
@@ -253,8 +198,8 @@ function MarkitectureFlow({
 
   const handleNodeClick = useCallback(
     (_: unknown, node: Node) => {
-      const module = nodeModule(node);
-      if (module && onSelect) onSelect(module);
+      const component = nodeComponent(node);
+      if (component && onSelect) onSelect(component);
     },
     [onSelect],
   );
@@ -269,6 +214,7 @@ function MarkitectureFlow({
       nodes={decoratedNodes}
       edges={decoratedEdges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       onNodeClick={handleNodeClick}
       colorMode={colorMode}
       fitView
@@ -278,32 +224,19 @@ function MarkitectureFlow({
       <Background />
       <Controls showInteractive={false} />
       <Panel position="top-right">
-        <Legend
-          kinds={kinds}
-          showStartup={showStartup}
-          onToggleStartup={() => setShowStartup((v) => !v)}
-        />
+        <Legend kinds={kinds} />
       </Panel>
     </ReactFlow>
   );
 }
 
 /** A compact key for the edge kinds present in the graph. */
-function Legend({
-  kinds,
-  showStartup,
-  onToggleStartup,
-}: {
-  kinds: Set<TopologyEdgeKind>;
-  showStartup: boolean;
-  onToggleStartup: () => void;
-}) {
+function Legend({ kinds }: { kinds: Set<TopologyEdgeKind> }) {
   const order: TopologyEdgeKind[] = [
-    "ingress",
+    "access",
     "route",
-    "authz",
-    "emulated",
-    "startup",
+    "authenticates",
+    "uses",
   ];
   return (
     <div className="rounded-md border border-border bg-card/90 px-3 py-2 text-[11px] text-muted-foreground shadow-sm">
@@ -321,25 +254,12 @@ function Legend({
                   y2="4"
                   stroke={look.stroke}
                   strokeWidth="2"
-                  // ReactFlow draws an animated edge as moving 5px dashes.
                   strokeDasharray={
                     look.dash ?? (look.animated ? "5" : undefined)
                   }
                 />
               </svg>
-              {k === "startup" ? (
-                <label className="flex cursor-pointer items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={showStartup}
-                    onChange={onToggleStartup}
-                    className="h-3 w-3"
-                  />
-                  {look.label}
-                </label>
-              ) : (
-                look.label
-              )}
+              {look.label}
             </div>
           );
         })}
