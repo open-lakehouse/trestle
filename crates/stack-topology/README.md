@@ -52,15 +52,53 @@ The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O. Render
 also pure — it produces artifact strings and relative filenames in memory; the consumer
 owns disk I/O — so it is always available and compiles to `wasm32`.
 
+## Client environment
+
+Besides the stack itself, every render writes what a *client* (an app, notebook, or
+engine) loads to reach it: `client/host.env` for callers on the host and
+`client/container.env` for callers on the compose network. Each module contributes
+entries through `Provides::client_env`, resolved against the settled routes from the
+caller's vantage, so ports, gateway prefixes and base-path rewrites are always the ones
+the stack serves:
+
+| Module | Variables |
+| --- | --- |
+| `unity-catalog` | `UNITY_CATALOG_URL` |
+| `mlflow` | `MLFLOW_TRACKING_URI` |
+| `headwaters` | `OPENLINEAGE_URL`, `OPENLINEAGE_ENDPOINT` |
+| `jaeger` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` |
+| `rustfs` | `AWS_ENDPOINT_URL_S3`, `AWS_REGION` |
+| `databricks-emulator-env` | `DATABRICKS_HOST`, `DATABRICKS_APP_URL`, forwarded-user contract |
+
+The files hold **no credentials**. Clients authenticate through the gateway and read or
+write object storage with the temporary credentials Unity Catalog vends. The root `.env`
+is different: it only carries values the compose files substitute.
+
+## Gateway authentication and authorization
+
+- **Authentication**: the gateway's `auth` knob (`--set envoy.auth=true`) fronts every
+  API and UI route on the shared listener with Authelia forward-auth. Authelia's
+  asserted identity reaches upstreams as `Remote-User` / `Remote-Email` / `Remote-Name` /
+  `Remote-Groups`. Client-supplied copies are stripped before any check runs. Accounts
+  live in `users.yml` beside `compose.yaml`.
+- **Authorization**: selecting the `opa` module adds an Open Policy Agent check after
+  authentication (Envoy gRPC `ext_authz`, failing closed), and also turns auth on. The
+  policy is `policies/authz.rego`, written once and then yours to edit. By default any
+  signed-in user may read and the `writers` or `admins` group may write. Check changes with
+  `opa test policies/`, and roll them out with `--set opa.dry_run=true` first: every
+  request is allowed and each decision is logged (`docker compose logs opa`).
+
+Resource backends on dedicated listeners (object stores) are never gated.
+
 ## Seeing the rendered output
 
 To materialize and print every artifact a selection produces (the Envoy gateway config,
 `compose.yaml`, `.env`, the Postgres init script, and each module's compose fragment):
 
 ```bash
-cargo run -p olai-stack-topology --example render_stack
+cargo run -p olai-stack-topology --features std-io --example render_stack
 # choose modules (by their short ids):
-cargo run -p olai-stack-topology --example render_stack -- envoy postgres rustfs jaeger
+cargo run -p olai-stack-topology --features std-io --example render_stack -- envoy postgres rustfs jaeger
 # prefer Azurite over RustFS for the object_store role:
-cargo run -p olai-stack-topology --example render_stack -- --azurite
+cargo run -p olai-stack-topology --features std-io --example render_stack -- --azurite
 ```
