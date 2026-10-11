@@ -68,7 +68,7 @@ static_resources:
                             regex_rewrite:
                               pattern:
                                 google_re2: {}
-                                regex: "^{{ r.prefix }}(.*)$"
+                                regex: "^{{ r.prefix_regex }}(.*)$"
                               substitution: "{{ r.rewrite }}\\1"
 {%- endif %}
 {%- endfor %}

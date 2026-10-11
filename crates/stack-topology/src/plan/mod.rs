@@ -56,7 +56,7 @@ pub mod routing;
 
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
-use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR};
+use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, GATEWAY_URL_VAR};
 use crate::catalog::module::{ExtraResource, ModuleId};
 use crate::model::connection::Connection;
 use crate::model::endpoint::RouteIntent;
@@ -777,6 +777,13 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     let mut claimed: BTreeMap<String, String> = BTreeMap::new();
 
     // Walk modules in dependency order so emitted routes/clusters are deterministic.
+    let gateway_facts = GatewayFacts {
+        service: ctx.gateway_service.clone(),
+        internal_port: ctx.gateway_internal_port,
+        host_port: ctx.gateway_host_port,
+    };
+    // What a host-side browser reaches the shared listener at (see `GATEWAY_URL_VAR`).
+    let gateway_url = format!("http://localhost:{}", ctx.gateway_host_port);
     for module in &graph.nodes {
         let mut module_env = InjectedEnv::new();
         // The stack's root data directory, available to every fragment as a render-only value
@@ -784,6 +791,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         // `{{ env.DATA_ROOT }}/<module>` rather than hard-coding a `./.data/...` path, so the
         // whole stack's persistence relocates via the one `PlanCtx::data_root` knob.
         module_env.set(DATA_ROOT_VAR, &ctx.data_root);
+        module_env.set(GATEWAY_URL_VAR, &gateway_url);
         // Seed each module's render env with its declared env vars.
         for (k, v) in module.provides().env_vars.iter() {
             module_env.set(k, v);
@@ -1158,11 +1166,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         s3_buckets,
         azure_containers,
         env,
-        gateway_facts: GatewayFacts {
-            service: ctx.gateway_service.clone(),
-            internal_port: ctx.gateway_internal_port,
-            host_port: ctx.gateway_host_port,
-        },
+        gateway_facts,
         client_env_host: InjectedEnv::new(),
         client_env_container: InjectedEnv::new(),
     };

@@ -83,6 +83,12 @@ pub const DEP_GATE_EXTRA: &str = "dep_gate";
 /// [`BASE_PATH`]: crate::InjectedEnv
 pub const DATA_ROOT_VAR: &str = "DATA_ROOT";
 
+/// The render-only variable carrying the gateway's public origin as a host-side browser
+/// reaches it (`http://localhost:<gateway_host_port>`), so a module that must know its own
+/// public URL (e.g. an auth portal's redirect target) follows the configured gateway port
+/// instead of hard-coding one. Baked at plan time, like [`DATA_ROOT_VAR`].
+pub const GATEWAY_URL_VAR: &str = "GATEWAY_URL";
+
 /// The default value injected for [`DATA_ROOT_VAR`]: `./.data`, relative to the compose
 /// file's directory — matching where the fragments persisted data before the root was
 /// centralized.

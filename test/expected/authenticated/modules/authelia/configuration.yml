@@ -32,9 +32,9 @@ access_control:
 session:
   name: authelia_session
   # The portal URL Authelia redirects logged-out browsers to, and the cookie domain it issues
-  # sessions for. Points at the gateway origin + the `/authelia` portal route. This assumes the
-  # default local gateway host:port (localhost:9080); change both if the gateway is published
-  # elsewhere (e.g. a non-default ENVOY_PORT or a real hostname).
+  # sessions for: the planned gateway origin + the `/authelia` portal route. (Cookies are
+  # scoped by host, not port, so the domain is just the host.) Re-render after changing the
+  # gateway port; edit both for a real hostname.
   cookies:
     - domain: localhost
       authelia_url: http://localhost:9080/authelia

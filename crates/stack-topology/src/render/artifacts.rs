@@ -90,8 +90,27 @@ struct ListenerCtx<'a> {
 #[derive(Serialize)]
 struct RouteCtx<'a> {
     prefix: &'a str,
+    /// [`prefix`](Self::prefix) as a literal RE2 pattern, for the `regex_rewrite` match.
+    prefix_regex: String,
     cluster: &'a str,
     rewrite: Option<&'a str>,
+}
+
+/// Escape `literal` so RE2 matches it verbatim, in a form that is also valid inside a YAML
+/// double-quoted scalar: path-safe characters pass through, anything else becomes a
+/// `\\x{HH}` escape (YAML turns the doubled backslash into the single one RE2 reads). A prefix
+/// like `/api/2.1/unity-catalog` would otherwise let its `.` match any character.
+fn re2_literal(literal: &str) -> String {
+    literal
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '~') {
+                c.to_string()
+            } else {
+                format!("\\\\x{{{:X}}}", c as u32)
+            }
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -131,6 +150,7 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
                 .iter()
                 .map(|r| RouteCtx {
                     prefix: &r.prefix,
+                    prefix_regex: re2_literal(&r.prefix),
                     cluster: &r.cluster,
                     rewrite: r.rewrite.as_deref(),
                 })
