@@ -16,9 +16,9 @@
 //!   Every endpoint comes from the [`RoutePlan`](olai_stack_topology::RoutePlan), attributed to
 //!   the backend it reaches, and flagged when forward-auth gates it.
 //! - **Edges** — clients reaching each surface, the gateway routing to each backend, the gateway
-//!   delegating authentication to the identity provider, and each component *using* the
-//!   capability it demanded (a relational DB, an object store) from the provider the planner
-//!   chose.
+//!   delegating authentication to the identity provider and authorization to the policy engine,
+//!   and each component *using* the capability it demanded (a relational DB, an object store)
+//!   from the provider the planner chose.
 
 use std::collections::BTreeMap;
 
@@ -184,6 +184,16 @@ pub enum TopologyEdgeDto {
         /// Where the provider's login portal is exposed (never gated).
         portal_prefix: String,
     },
+    /// The gateway asks the policy engine to authorize each gated request, after the identity
+    /// provider has authenticated it.
+    Authorizes {
+        /// The gateway component.
+        from: String,
+        /// The policy engine.
+        to: String,
+        /// The surface whose requests are checked (its listener's host port).
+        host_port: u16,
+    },
     /// A component uses a capability another component provides.
     Uses {
         /// The consumer.
@@ -206,6 +216,7 @@ impl TopologyEdgeDto {
             Self::Access { from, to, .. }
             | Self::Route { from, to, .. }
             | Self::Authenticates { from, to, .. }
+            | Self::Authorizes { from, to, .. }
             | Self::Uses { from, to, .. } => (from, to),
         }
     }
@@ -266,16 +277,24 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         })
     };
 
-    let auth = plan.gateway.auth.as_ref();
-    let auth_module = auth.and_then(|a| {
+    // The module behind a gateway upstream cluster (the cluster's host is a service name).
+    let module_of_cluster = |cluster: &str| -> Option<String> {
         let host = plan
             .gateway
             .clusters
             .iter()
-            .find(|c| c.name == a.cluster)
-            .map_or(a.cluster.as_str(), |c| c.host.as_str());
+            .find(|c| c.name == cluster)
+            .map_or(cluster, |c| c.host.as_str());
         module_of_service(host)
-    });
+    };
+
+    let auth = plan.gateway.auth.as_ref();
+    let auth_module = auth.and_then(|a| module_of_cluster(&a.cluster));
+    let policy_module = plan
+        .gateway
+        .policy
+        .as_ref()
+        .and_then(|p| module_of_cluster(&p.cluster));
     // The shared listener is the first; its routes are the ones forward-auth gates.
     let shared_port = plan.gateway.listeners.first().map(|l| l.host_port);
 
@@ -515,6 +534,14 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 portal_prefix: a.portal_prefix.clone(),
             });
         }
+        // The policy check runs on the shared listener, after forward-auth.
+        if let Some(engine) = &policy_module {
+            edges.push(TopologyEdgeDto::Authorizes {
+                from: gw.clone(),
+                to: engine.clone(),
+                host_port: shared_port.unwrap_or_default(),
+            });
+        }
     }
     edges.extend(uses);
 
@@ -732,9 +759,39 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_policy_engine_authorizes_gateway_requests() {
+        // The policy engine exposes nothing (its only endpoint is the internal gRPC check), so
+        // the gateway's authorization check is its only connection.
+        let g = graph_dto(&plan(&Selection::modules([
+            "envoy", "authelia", "opa", "mlflow",
+        ])));
+        assert_eq!(node(&g, "opa").role.as_deref(), Some("policy"));
+        let gateway_port = PlanCtx::default().gateway_host_port;
+        assert!(g.edges.iter().any(|e| matches!(
+            e,
+            TopologyEdgeDto::Authorizes { from, to, host_port }
+                if from == "envoy" && to == "opa" && *host_port == gateway_port
+        )));
+        // Authorization comes on top of sign-in, not instead of it.
+        assert!(g.edges.iter().any(|e| matches!(
+            e,
+            TopologyEdgeDto::Authenticates { to, .. } if to == "authelia"
+        )));
+        // Without a policy engine there is no authorization check.
+        let g = graph_dto(&plan(&lakehouse(true)));
+        assert!(
+            !g.edges
+                .iter()
+                .any(|e| matches!(e, TopologyEdgeDto::Authorizes { .. }))
+        );
+    }
+
+    #[test]
     fn every_edge_references_a_node() {
-        for auth in [false, true] {
-            let g = graph_dto(&plan(&lakehouse(auth)));
+        let mut authorized = lakehouse(false);
+        authorized.modules.extend(["authelia".into(), "opa".into()]);
+        for selection in [lakehouse(false), lakehouse(true), authorized] {
+            let g = graph_dto(&plan(&selection));
             for e in &g.edges {
                 let (from, to) = e.endpoints();
                 for id in [from, to] {

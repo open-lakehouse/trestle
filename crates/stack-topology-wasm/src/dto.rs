@@ -94,6 +94,8 @@ pub struct GatewayDto {
     /// The in-network TLS listener for emulated public hostnames, present only when a module
     /// declares impersonated hosts.
     pub tls: Option<TlsDto>,
+    /// The authorization policy check, present only when a policy engine is selected.
+    pub policy: Option<PolicyDto>,
 }
 
 /// The gateway's forward-auth wiring, projected from [`AuthConfig`](olai_stack_topology::AuthConfig).
@@ -103,6 +105,14 @@ pub struct AuthDto {
     pub cluster: String,
     /// The client-facing prefix of the provider's login portal (not gated).
     pub portal_prefix: String,
+}
+
+/// The gateway's authorization-policy wiring, projected from
+/// [`PolicyConfig`](olai_stack_topology::PolicyConfig).
+#[derive(Debug, Clone, Serialize)]
+pub struct PolicyDto {
+    /// The upstream cluster the gRPC `ext_authz` check calls.
+    pub cluster: String,
 }
 
 /// The gateway's emulated-hostname TLS listener, projected from
@@ -236,6 +246,9 @@ fn gateway_dto(gateway: &GatewayConfig) -> GatewayDto {
                 })
                 .collect(),
         }),
+        policy: gateway.policy.as_ref().map(|p| PolicyDto {
+            cluster: p.cluster.clone(),
+        }),
     }
 }
 
@@ -283,6 +296,7 @@ pub const KNOWN_ROLES: &[&str] = &[
     Role::TRACING,
     Role::LINEAGE,
     Role::AUTH,
+    Role::POLICY,
 ];
 
 #[cfg(test)]
@@ -381,6 +395,8 @@ mod tests {
     fn fixture_selection() -> Selection {
         Selection::modules([
             "envoy",
+            "authelia",
+            "opa",
             "postgres",
             "rustfs",
             "unity-catalog",

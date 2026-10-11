@@ -273,9 +273,52 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
     },
     {
+      id: "opa",
+      display_name: "Open Policy Agent",
+      summary: "Rego authorization for every gateway request, after sign-on.",
+      category: "gateway",
+      provider_of: "policy",
+      requires: [],
+      conflicts_with: [],
+      knobs: [
+        {
+          key: "image",
+          title: "OPA image",
+          kind: {
+            kind: "string",
+          },
+          default: "openpolicyagent/opa:1.21.1-envoy-static",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["OPA_IMAGE"],
+        },
+        {
+          key: "dry_run",
+          title: "Dry run",
+          kind: {
+            kind: "bool",
+          },
+          default: "false",
+          required: false,
+          help: "Allow every request and only log the policy's decision — for rolling out a policy change safely.",
+        },
+        {
+          key: "log_level",
+          title: "Log level",
+          kind: {
+            kind: "enum",
+            options: ["debug", "info", "warn", "error"],
+          },
+          default: "info",
+          required: false,
+        },
+      ],
+    },
+    {
       id: "databricks-emulator-env",
       display_name: "Databricks app runtime contract",
-      summary: "DATABRICKS_HOST / TOKEN / forwarded-user env vars apps expect.",
+      summary:
+        "DATABRICKS_HOST / app URL / forwarded-user env vars apps expect.",
       category: "app_runtime",
       provider_of: "databricks_apps_contract",
       requires: [],
@@ -307,6 +350,18 @@ export const FIXTURE_PLAN: PlanResult = {
         provisions: [],
       },
       {
+        id: "authelia",
+        kind: "component",
+        display_name: "Authelia",
+        summary: "Forward-auth single-sign-on for the gateway (file-based).",
+        category: "gateway",
+        role: "auth",
+        placement: "container:authelia",
+        surfaces: [],
+        offers: [],
+        provisions: [],
+      },
+      {
         id: "envoy",
         kind: "gateway",
         display_name: "Envoy gateway",
@@ -321,46 +376,60 @@ export const FIXTURE_PLAN: PlanResult = {
             protocols: [],
             exposes: [
               {
+                module: "authelia",
+                endpoint: "portal",
+                kind: "ui",
+                prefix: "/authelia",
+                gated: false,
+              },
+              {
                 module: "jaeger",
                 endpoint: "ui",
                 kind: "ui",
                 prefix: "/jaeger",
-                gated: false,
+                gated: true,
+              },
+              {
+                module: "jaeger",
+                endpoint: "otlp_http",
+                kind: "api",
+                prefix: "/v1/traces",
+                gated: true,
               },
               {
                 module: "unity-catalog",
                 endpoint: "rest",
                 kind: "api",
                 prefix: "/api/2.1/unity-catalog",
-                gated: false,
+                gated: true,
               },
               {
                 module: "unity-catalog",
                 endpoint: "rest_alias",
                 kind: "api",
                 prefix: "/unity-catalog",
-                gated: false,
+                gated: true,
               },
               {
                 module: "mlflow",
                 endpoint: "tracking",
                 kind: "api",
                 prefix: "/api/2.0/mlflow",
-                gated: false,
+                gated: true,
               },
               {
                 module: "mlflow",
                 endpoint: "otel",
                 kind: "api",
                 prefix: "/api/2.0/otel",
-                gated: false,
+                gated: true,
               },
               {
                 module: "mlflow",
                 endpoint: "ui",
                 kind: "ui",
                 prefix: "/mlflow",
-                gated: false,
+                gated: true,
               },
             ],
           },
@@ -390,6 +459,18 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "observability",
         role: "tracing",
         placement: "container:jaeger",
+        surfaces: [],
+        offers: [],
+        provisions: [],
+      },
+      {
+        id: "opa",
+        kind: "component",
+        display_name: "Open Policy Agent",
+        summary: "Rego authorization for every gateway request, after sign-on.",
+        category: "gateway",
+        role: "policy",
+        placement: "container:opa",
         surfaces: [],
         offers: [],
         provisions: [],
@@ -480,21 +561,21 @@ export const FIXTURE_PLAN: PlanResult = {
         from: "envoy",
         to: "jaeger",
         host_port: 9080,
-        gated: false,
+        gated: true,
       },
       {
         kind: "route",
         from: "envoy",
         to: "unity-catalog",
         host_port: 9080,
-        gated: false,
+        gated: true,
       },
       {
         kind: "route",
         from: "envoy",
         to: "mlflow",
         host_port: 9080,
-        gated: false,
+        gated: true,
       },
       {
         kind: "route",
@@ -502,6 +583,19 @@ export const FIXTURE_PLAN: PlanResult = {
         to: "rustfs",
         host_port: 9100,
         gated: false,
+      },
+      {
+        kind: "authenticates",
+        from: "envoy",
+        to: "authelia",
+        host_port: 9080,
+        portal_prefix: "/authelia",
+      },
+      {
+        kind: "authorizes",
+        from: "envoy",
+        to: "opa",
+        host_port: 9080,
       },
       {
         kind: "uses",
@@ -538,6 +632,28 @@ export const FIXTURE_PLAN: PlanResult = {
     ],
   },
   services: {
+    authelia: [
+      {
+        name: "authelia",
+        role: "auth",
+        placement: {
+          kind: "container",
+          service: "authelia",
+        },
+        endpoints: [
+          {
+            id: "http",
+            scheme: "http",
+            internal_port: 9091,
+            intent: {
+              kind: "internal",
+            },
+            rewrite: "inherit",
+          },
+        ],
+        depends_on: [],
+      },
+    ],
     envoy: [
       {
         name: "envoy",
@@ -590,6 +706,16 @@ export const FIXTURE_PLAN: PlanResult = {
             },
             rewrite: "inherit",
           },
+          {
+            id: "otlp_http",
+            scheme: "http",
+            internal_port: 4318,
+            intent: {
+              kind: "api",
+            },
+            mount_prefix: "/v1/traces",
+            rewrite: "passthrough",
+          },
         ],
         depends_on: [],
         base_path: "/jaeger",
@@ -636,6 +762,28 @@ export const FIXTURE_PLAN: PlanResult = {
         ],
         depends_on: [],
         base_path: "/mlflow",
+      },
+    ],
+    opa: [
+      {
+        name: "opa",
+        role: "policy",
+        placement: {
+          kind: "container",
+          service: "opa",
+        },
+        endpoints: [
+          {
+            id: "grpc",
+            scheme: "grpc",
+            internal_port: 9191,
+            intent: {
+              kind: "internal",
+            },
+            rewrite: "inherit",
+          },
+        ],
+        depends_on: [],
       },
     ],
     postgres: [
@@ -743,6 +891,11 @@ export const FIXTURE_PLAN: PlanResult = {
             rewrite: null,
           },
           {
+            prefix: "/v1/traces",
+            cluster: "jaeger_otlp_http",
+            rewrite: null,
+          },
+          {
             prefix: "/jaeger",
             cluster: "jaeger",
             rewrite: null,
@@ -767,14 +920,29 @@ export const FIXTURE_PLAN: PlanResult = {
     ],
     clusters: [
       {
+        name: "authelia",
+        host: "authelia",
+        port: 9091,
+      },
+      {
         name: "jaeger",
         host: "jaeger",
         port: 16686,
       },
       {
+        name: "jaeger_otlp_http",
+        host: "jaeger",
+        port: 4318,
+      },
+      {
         name: "mlflow",
         host: "mlflow",
         port: 5000,
+      },
+      {
+        name: "opa",
+        host: "opa",
+        port: 9191,
       },
       {
         name: "rustfs",
@@ -793,7 +961,10 @@ export const FIXTURE_PLAN: PlanResult = {
       },
     ],
     admin_port: 9901,
-    auth: null,
+    auth: {
+      cluster: "authelia",
+      portal_prefix: "/authelia",
+    },
     tls: {
       port: 443,
       hosts: [
@@ -823,6 +994,9 @@ export const FIXTURE_PLAN: PlanResult = {
           ],
         },
       ],
+    },
+    policy: {
+      cluster: "opa",
     },
   },
   files: FIXTURE_FILES,

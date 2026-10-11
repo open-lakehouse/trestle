@@ -10,6 +10,7 @@ import {
   HardDrive,
   type LucideIcon,
   Network,
+  Scale,
   Server,
   ShieldCheck,
   Workflow,
@@ -62,6 +63,11 @@ const ROLE_STYLES: Record<string, RoleStyle> = {
   auth: {
     label: "Identity provider",
     icon: ShieldCheck,
+    accent: "text-[hsl(var(--status-blocked))]",
+  },
+  policy: {
+    label: "Policy engine",
+    icon: Scale,
     accent: "text-[hsl(var(--status-blocked))]",
   },
 };

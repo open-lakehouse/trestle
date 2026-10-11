@@ -39,6 +39,7 @@ export type {
   OutputFile,
   Planner,
   PlanResult,
+  PolicyDto,
   ProvisionedDto,
   RouteDto,
   Selection,

@@ -75,6 +75,12 @@ const EDGE_STYLE: Record<
     dash: "6 4",
     animated: false,
   },
+  authorizes: {
+    label: "Authorizes requests",
+    stroke: "hsl(var(--status-blocked))",
+    dash: "2 4",
+    animated: false,
+  },
   uses: {
     label: "Uses",
     stroke: "hsl(var(--muted-foreground))",
@@ -91,6 +97,8 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
       return undefined;
     case "authenticates":
       return "sign-in";
+    case "authorizes":
+      return "policy";
     case "uses":
       return `${e.protocol} · ${e.resources.join(", ")}`;
   }
@@ -105,6 +113,8 @@ function edgeTitle(e: TopologyEdgeDto): string {
       return `The gateway exposes ${e.to} on :${e.host_port}${e.gated ? " (requires sign-in)" : ""}`;
     case "authenticates":
       return `The gateway delegates sign-in to ${e.to}; login portal at ${e.portal_prefix}`;
+    case "authorizes":
+      return `The gateway asks ${e.to} to authorize each signed-in request on :${e.host_port}`;
     case "uses":
       return `${e.from} uses ${e.to} (${e.protocol}) for ${e.resources.join(", ")}`;
   }
@@ -236,6 +246,7 @@ function Legend({ kinds }: { kinds: Set<TopologyEdgeKind> }) {
     "access",
     "route",
     "authenticates",
+    "authorizes",
     "uses",
   ];
   return (

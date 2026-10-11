@@ -134,6 +134,7 @@ export type TopologyEdgeDto =
       host_port: number;
       portal_prefix: string;
     }
+  | { kind: "authorizes"; from: string; to: string; host_port: number }
   | {
       kind: "uses";
       from: string;
@@ -178,6 +179,11 @@ export interface AuthDto {
   portal_prefix: string;
 }
 
+/** Authorization-policy wiring (mirrors `PolicyDto`). */
+export interface PolicyDto {
+  cluster: string;
+}
+
 /** The hostnames one cluster answers on the TLS listener (mirrors
  *  `VirtualHostDto`). */
 export interface VirtualHostDto {
@@ -199,6 +205,7 @@ export interface GatewayDto {
   admin_port: number;
   auth?: AuthDto | null;
   tls?: TlsDto | null;
+  policy?: PolicyDto | null;
 }
 
 /** One materialized file from a plan (mirrors `OutputFileDto`). */
