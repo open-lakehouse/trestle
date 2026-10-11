@@ -44,6 +44,14 @@ struct EnvoyCtx<'a> {
     auth: Option<AuthCtx<'a>>,
     /// The TLS listener for emulated public hostnames, when any module declares them.
     tls: Option<TlsCtx<'a>>,
+    /// The authorization policy engine's cluster, when a policy module is selected. Checked
+    /// after forward-auth on the listener(s) flagged `ext_authz`.
+    policy: Option<PolicyCtx<'a>>,
+}
+
+#[derive(Serialize)]
+struct PolicyCtx<'a> {
+    cluster: &'a str,
 }
 
 /// The TLS listener's template context: its port, the certificate it presents, and one
@@ -118,6 +126,7 @@ struct ClusterCtx<'a> {
     name: &'a str,
     host: &'a str,
     port: u16,
+    http2: bool,
 }
 
 /// Render the Envoy bootstrap config for the plan's gateway.
@@ -178,6 +187,7 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
             name: &c.name,
             host: &c.host,
             port: c.port,
+            http2: c.http2,
         })
         .collect();
 
@@ -191,6 +201,9 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
             path_prefix: &a.path_prefix,
             portal_prefix: &a.portal_prefix,
             identity_headers: &a.identity_headers,
+        }),
+        policy: gateway.policy.as_ref().map(|p| PolicyCtx {
+            cluster: &p.cluster,
         }),
         tls: gateway.tls.as_ref().map(|t| TlsCtx {
             port: t.port,

@@ -111,8 +111,9 @@ pub fn baseline_catalog() -> Catalog {
         unity_catalog(),
         jaeger(),
         headwaters(),
+        opa(),
         databricks_emulator_env(),
-    ] as [Arc<dyn Module>; 10])
+    ] as [Arc<dyn Module>; 11])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
@@ -197,6 +198,16 @@ fn config_file(path: &str, alias: &str, contents: &str) -> RenderFile {
 ///
 /// `key` is the public snake_case identifier (typically `"image"` or `"init_image"`);
 /// `legacy` is the old SCREAMING_SNAKE env-var-style name accepted as an override alias.
+/// An operator-owned config file: written beside `compose.yaml` on first render and never
+/// overwritten (`preserve`), so local edits survive re-renders.
+fn operator_file(path: &str, alias: &str, contents: &str) -> RenderFile {
+    RenderFile {
+        at_root: true,
+        preserve: true,
+        ..config_file(path, alias, contents)
+    }
+}
+
 fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
     Knob {
         key: key.into(),
@@ -1136,6 +1147,88 @@ impl Module for Headwaters {
 
 fn headwaters() -> Arc<dyn Module> {
     Arc::new(Headwaters::new())
+}
+
+/// `opa` — Open Policy Agent as the gateway's authorization engine.
+///
+/// Selecting it adds a gRPC `ext_authz` check to the gateway's shared listener, *after*
+/// forward-auth, so the policy decides on the identity the auth provider asserted (the
+/// `Remote-User` / `Remote-Groups` headers). Selecting it turns gateway auth on; with auth
+/// explicitly off the plan is a [`PlanError::PolicyRequiresAuth`](crate::PlanError).
+///
+/// The policy is operator-owned: `policies/authz.rego` (plus its tests) is written beside
+/// `compose.yaml` once and never overwritten.
+fn opa() -> Arc<dyn Module> {
+    Arc::new(DataModule {
+        id: ModuleId::from("opa"),
+        display_name: Some("Open Policy Agent".into()),
+        summary: Some("Rego authorization for every gateway request, after sign-on.".into()),
+        category: Some("gateway".into()),
+        provider_of: Some(Role::POLICY.into()),
+        // Like Authelia, located by role: Envoy depends on it at runtime, not the reverse.
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "opa".into(),
+            role: Role::policy(),
+            placement: container("opa"),
+            // The ext_authz gRPC port; the planner builds the gateway's HTTP/2 cluster from it.
+            endpoints: vec![Endpoint::internal("grpc", Scheme::Grpc, 9191, None)],
+            depends_on: vec![],
+            base_path: String::new(),
+        }],
+        provides: Provides::default(),
+        knobs: vec![
+            image_knob("image", "OPA image", images::OPA, "OPA_IMAGE"),
+            Knob {
+                key: "dry_run".into(),
+                title: Some("Dry run".into()),
+                kind: KnobKind::Bool,
+                default: Some("false".into()),
+                required: false,
+                help: Some(
+                    "Allow every request and only log the policy's decision — for rolling out \
+                     a policy change safely."
+                        .into(),
+                ),
+                aliases: vec![],
+            },
+            Knob {
+                key: "log_level".into(),
+                title: Some("Log level".into()),
+                kind: KnobKind::Enum {
+                    options: ["debug", "info", "warn", "error"]
+                        .map(String::from)
+                        .to_vec(),
+                },
+                default: Some("info".into()),
+                required: false,
+                help: None,
+                aliases: vec![],
+            },
+        ],
+        render: template_with_files(
+            include_str!("../../templates/modules/opa/compose.yaml.jinja"),
+            vec![
+                config_file(
+                    "config.yaml",
+                    "opa_config",
+                    include_str!("../../templates/modules/opa/config.yaml.jinja"),
+                ),
+                operator_file(
+                    "policies/authz.rego",
+                    "opa_policy",
+                    include_str!("../../templates/modules/opa/authz.rego"),
+                ),
+                operator_file(
+                    "policies/authz_test.rego",
+                    "opa_policy_test",
+                    include_str!("../../templates/modules/opa/authz_test.rego"),
+                ),
+            ],
+        ),
+    })
 }
 
 /// `databricks-emulator-env` — env-only module: the `DATABRICKS_*` contract Databricks

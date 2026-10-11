@@ -36,7 +36,13 @@ pub(super) fn plan_impersonation(
             .map(Vec::as_slice)
             .unwrap_or_default();
         for decl in &module.provides().impersonated_hosts {
-            ensure_named_cluster(gateway, &decl.service, decl.service.clone(), decl.port)?;
+            ensure_named_cluster(
+                gateway,
+                &decl.service,
+                decl.service.clone(),
+                decl.port,
+                false,
+            )?;
             let hosts: Vec<String> = if decl.host.contains("{name}") {
                 objects
                     .iter()

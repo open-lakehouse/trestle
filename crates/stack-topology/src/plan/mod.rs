@@ -73,12 +73,13 @@ use demands::{
 };
 pub use gateway::{
     AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
-    GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, TlsListenerConfig,
+    GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, PolicyConfig, TlsListenerConfig,
     TlsVirtualHost,
 };
 use gateway::{
     allocate_dedicated_ports, api_rewrite, claim, ensure_cluster, gateway_auth_enabled,
-    require_prefix, selected_auth_provider, wire_app_upstream, wire_auth,
+    require_prefix, selected_auth_provider, selected_policy_provider, wire_app_upstream, wire_auth,
+    wire_policy,
 };
 use impersonation::{plan_impersonation, rewrite_gatewayed_object_store_endpoints};
 use knobs::resolve_module_knobs;
@@ -412,6 +413,26 @@ pub enum PlanError {
         #[source]
         source: AddressError,
     },
+    /// A `policy`-role module was selected but gateway auth is off (the `auth` knob is
+    /// explicitly `false`, or the catalog has no auth provider). The policy engine decides on
+    /// the identity the auth provider asserts, so without auth it could only deny everything.
+    #[error(
+        "policy engine `{module}` needs gateway auth to assert an identity; turn the gateway's \
+         `auth` knob on"
+    )]
+    PolicyRequiresAuth {
+        /// The selected policy-role module.
+        module: ModuleId,
+    },
+    /// The selected `policy`-role provider does not declare what the gateway needs to wire its
+    /// gRPC `ext_authz` check.
+    #[error("policy provider `{module}` is misconfigured: {reason}")]
+    PolicyProviderMisconfigured {
+        /// The policy-role provider module.
+        module: ModuleId,
+        /// What specifically is missing.
+        reason: String,
+    },
     /// Two modules declared the same [`impersonated_hosts`](crate::Provides::impersonated_hosts)
     /// hostname. The gateway can only forward a host to one upstream.
     #[error("impersonated host `{host}` is declared by both `{first}` and `{second}`")]
@@ -669,6 +690,13 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     } else {
         None
     };
+    // A policy engine authorizes the identity forward-auth asserts, so it needs auth on.
+    let policy_provider = selected_policy_provider(selection, catalog);
+    if let (Some(module), None) = (&policy_provider, &auth_provider) {
+        return Err(PlanError::PolicyRequiresAuth {
+            module: module.clone(),
+        });
+    }
     let augmented;
     let selection = if let Some(provider) = &auth_provider {
         let mut s = selection.clone();
@@ -943,6 +971,11 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // it because the auth endpoint is `Internal` (no route).
     if let Some(provider) = &auth_provider {
         wire_auth(provider, &services_of, catalog, &mut gateway)?;
+    }
+    // Authorization: a selected policy engine checks every request on the shared listener after
+    // forward-auth (validated above to be on).
+    if let Some(provider) = &policy_provider {
+        wire_policy(provider, &services_of, &mut gateway)?;
     }
 
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));

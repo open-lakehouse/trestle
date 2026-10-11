@@ -1,0 +1,13 @@
+# OPA configuration — rendered by the `opa` module.
+plugins:
+  # The Envoy ext_authz gRPC server. Each request's decision is `data.envoy.authz.allow`
+  # (see `policies/authz.rego`).
+  envoy_ext_authz_grpc:
+    addr: ":9191"
+    path: envoy/authz/allow
+    # With dry-run on, every request is allowed and the decision is only logged: roll a
+    # policy change out by watching the decision log first.
+    dry-run: false
+# One JSON line per decision on the container's stdout (`docker compose logs opa`).
+decision_logs:
+  console: true

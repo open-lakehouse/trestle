@@ -8,7 +8,7 @@ use super::resolve::ResolvedGraph;
 use super::{AppUpstream, PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
 use crate::catalog::module::ModuleId;
-use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent};
+use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
 
@@ -21,6 +21,8 @@ pub struct ClusterConfig {
     pub host: String,
     /// The upstream port (the endpoint's internal port).
     pub port: u16,
+    /// Whether the upstream speaks HTTP/2 (a gRPC endpoint), so Envoy must too.
+    pub http2: bool,
 }
 
 /// One route on a gateway listener.
@@ -101,6 +103,28 @@ pub(super) fn selected_auth_provider(selection: &Selection, catalog: &Catalog) -
 /// Explicitly selecting an identity provider (see [`selected_auth_provider`]) turns auth on
 /// unless the knob is explicitly overridden: an auth provider the gateway never consults would
 /// run as an orphan — up, but authenticating nothing.
+/// The `policy`-role provider the selection names (by module id or by the `policy`
+/// capability), if any. Selecting one is what puts the gateway's authorization check in place.
+pub(super) fn selected_policy_provider(
+    selection: &Selection,
+    catalog: &Catalog,
+) -> Option<ModuleId> {
+    let providers = catalog.providers_of(Role::POLICY);
+    selection
+        .modules
+        .iter()
+        .find(|m| providers.contains(m))
+        .cloned()
+        .or_else(|| {
+            selection
+                .capabilities
+                .iter()
+                .any(|c| c == Role::POLICY)
+                .then(|| providers.first().map(|p| (*p).clone()))
+                .flatten()
+        })
+}
+
 pub(super) fn gateway_auth_enabled(
     selection: &Selection,
     catalog: &Catalog,
@@ -116,7 +140,12 @@ pub(super) fn gateway_auth_enabled(
         let explicit = overrides.is_some_and(|o| {
             o.contains_key(&knob.key) || knob.aliases.iter().any(|a| o.contains_key(a))
         });
-        if !explicit && selected_auth_provider(selection, catalog).is_some() {
+        // Selecting an auth provider — or a policy engine, which authorizes the identity the
+        // auth provider asserts — turns auth on unless the knob says otherwise.
+        if !explicit
+            && (selected_auth_provider(selection, catalog).is_some()
+                || selected_policy_provider(selection, catalog).is_some())
+        {
             return Ok(true);
         }
         if let Some(value) = resolve_knob(gateway_id, knob, overrides)? {
@@ -170,6 +199,17 @@ pub struct GatewayConfig {
     /// The TLS listener emulating public hostnames, present only when some selected module
     /// declares [`impersonated_hosts`](crate::Provides::impersonated_hosts).
     pub tls: Option<TlsListenerConfig>,
+    /// The authorization policy engine, present only when a `policy`-role module is selected.
+    /// When set, the Envoy renderer adds a gRPC `ext_authz` check *after* forward-auth on the
+    /// shared listener, so the policy decides on the identity the auth provider asserted.
+    pub policy: Option<PolicyConfig>,
+}
+
+/// The gateway's authorization-policy wiring (see [`GatewayConfig::policy`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyConfig {
+    /// The upstream (HTTP/2) cluster the gRPC `ext_authz` check calls.
+    pub cluster: String,
 }
 
 /// The gateway's in-network TLS listener for emulated public hostnames.
@@ -282,7 +322,7 @@ pub(super) fn ensure_cluster(
         Some(existing) if existing.port != port => format!("{}_{}", service.name, endpoint.id),
         _ => service.name.clone(),
     };
-    ensure_named_cluster(gateway, &name, host, port)?;
+    ensure_named_cluster(gateway, &name, host, port, endpoint.scheme == Scheme::Grpc)?;
     Ok(name)
 }
 
@@ -293,6 +333,7 @@ pub(super) fn ensure_named_cluster(
     name: &str,
     host: String,
     port: u16,
+    http2: bool,
 ) -> Result<(), PlanError> {
     if let Some(existing) = gateway.clusters.iter().find(|c| c.name == name) {
         if existing.port != port {
@@ -308,6 +349,7 @@ pub(super) fn ensure_named_cluster(
         name: name.to_string(),
         host,
         port,
+        http2,
     });
     Ok(())
 }
@@ -420,6 +462,7 @@ pub(super) fn wire_app_upstream(
         name: "app".into(),
         host: app.service.clone(),
         port: app.port,
+        http2: false,
     });
     shared_routes.push(GatewayRoute {
         prefix: "/".into(),
@@ -480,5 +523,30 @@ pub(super) fn wire_auth(
             .map(|h| (*h).to_string())
             .collect(),
     });
+    Ok(())
+}
+
+/// Wire the authorization policy engine onto the gateway: an HTTP/2 cluster for the provider's
+/// gRPC [`Internal`](RouteIntent::Internal) endpoint, and the [`PolicyConfig`] the Envoy
+/// renderer turns into a gRPC `ext_authz` check after forward-auth.
+pub(super) fn wire_policy(
+    provider: &ModuleId,
+    services_of: &BTreeMap<ModuleId, Vec<ServiceSpec>>,
+    gateway: &mut GatewayConfig,
+) -> Result<(), PlanError> {
+    let misconfigured = |reason: &str| PlanError::PolicyProviderMisconfigured {
+        module: provider.clone(),
+        reason: reason.into(),
+    };
+    let service = services_of[provider]
+        .first()
+        .ok_or_else(|| misconfigured("declares no service"))?;
+    let endpoint = service
+        .endpoints
+        .iter()
+        .find(|e| e.intent == RouteIntent::Internal && e.scheme == Scheme::Grpc)
+        .ok_or_else(|| misconfigured("service has no Internal gRPC endpoint"))?;
+    let cluster = ensure_cluster(gateway, service, endpoint)?;
+    gateway.policy = Some(PolicyConfig { cluster });
     Ok(())
 }

@@ -1,0 +1,23 @@
+# Open Policy Agent — the gateway's authorization policy engine (Envoy ext_authz over gRPC).
+# Envoy consults it for every request on the shared listener after Authelia authenticates it.
+services:
+  opa:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+    # The REST API stays on loopback; only the ext_authz gRPC port is reachable in-network.
+    command:
+      - "run"
+      - "--server"
+      - "--addr=localhost:8181"
+      - "--config-file=/config/config.yaml"
+      - "--log-level={{ knobs.log_level }}"
+      - "/policies"
+    configs:
+      - source: opa_config
+        target: /config/config.yaml
+      - source: opa_policy
+        target: /policies/authz.rego
+      - source: opa_policy_test
+        target: /policies/authz_test.rego
+    expose:
+      - "9191"

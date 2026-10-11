@@ -61,6 +61,8 @@ impl Role {
     pub const APP_RUNTIME: &'static str = "app_runtime";
     /// `auth` — a forward-auth / single-sign-on provider for the gateway.
     pub const AUTH: &'static str = "auth";
+    /// `policy` — an authorization policy engine the gateway consults per request.
+    pub const POLICY: &'static str = "policy";
 
     /// The `object_store` role.
     pub fn object_store() -> Role {
@@ -101,6 +103,10 @@ impl Role {
     /// The `auth` role.
     pub fn auth() -> Role {
         Role::new(Self::AUTH)
+    }
+    /// The `policy` role.
+    pub fn policy() -> Role {
+        Role::new(Self::POLICY)
     }
 }
 

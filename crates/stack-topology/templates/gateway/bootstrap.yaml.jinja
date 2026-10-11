@@ -49,6 +49,11 @@ static_resources:
                             envoy.filters.http.ext_authz:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
                               disabled: true
+{%- if policy %}
+                            envoy.filters.http.ext_authz.policy:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute
+                              disabled: true
+{%- endif %}
 {%- endif %}
 {%- for r in l.routes %}
                         - match: { prefix: "{{ r.prefix }}" }
@@ -114,6 +119,21 @@ static_resources:
                               - exact: set-cookie
                               - exact: location
                       failure_mode_allow: false
+{%- if policy %}
+                  # Authorization: once forward-auth has asserted the caller's identity (the
+                  # Remote-* headers it added above), the policy engine decides whether this
+                  # request may proceed. Fails closed: if the engine is unreachable, deny.
+                  - name: envoy.filters.http.ext_authz.policy
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      stat_prefix: policy
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: {{ policy.cluster }}
+                        timeout: 0.5s
+                      failure_mode_allow: false
+{%- endif %}
 {%- endif %}
                   - name: envoy.filters.http.router
                     typed_config:
@@ -166,6 +186,13 @@ static_resources:
     - name: {{ c.name }}
       type: STRICT_DNS
       connect_timeout: 2s
+{%- if c.http2 %}
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+{%- endif %}
       load_assignment:
         cluster_name: {{ c.name }}
         endpoints:

@@ -30,5 +30,7 @@ pub const MLFLOW: &str = "ghcr.io/mlflow/mlflow:v3.10.1-full";
 pub const UNITY_CATALOG: &str = "unitycatalog/unitycatalog:v0.6.0";
 /// Jaeger all-in-one tracing backend.
 pub const JAEGER: &str = "cr.jaegertracing.io/jaegertracing/jaeger:2.14.1";
+/// Open Policy Agent with the Envoy ext_authz plugin (the multi-arch `-static` build).
+pub const OPA: &str = "openpolicyagent/opa:1.21.1-envoy-static";
 /// Headwaters lineage service (migrate + serve).
 pub const HEADWATERS: &str = "ghcr.io/open-lakehouse/headwaters:0.0.7";
