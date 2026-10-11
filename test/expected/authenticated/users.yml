@@ -13,7 +13,7 @@ users:
     disabled: false
     displayname: "Demo User"
     # argon2id hash of "authelia".
-    password: "$argon2id$v=19$m=65536,t=3,p=4$BpLnfgDsc2WD8F2q$o/vzA4myCqZZ36bUGsDY//8mKUYNZZaR0t4MFFSs+iM"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$XCKcxtAdG1X6latuw5zk4Q$//euoAq/Szo7Way1u8XW0ypbIOxJtOEdAZZ+rAUW96c"
     email: demo@example.com
     groups:
       - admins

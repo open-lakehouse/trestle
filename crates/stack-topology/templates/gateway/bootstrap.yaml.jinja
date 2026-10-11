@@ -37,16 +37,6 @@ static_resources:
                   virtual_hosts:
                     - name: all
                       domains: ["*"]
-{%- if l.ext_authz and auth is not none %}
-                      # Anti-spoofing: strip any client-supplied identity headers on ingress so
-                      # they can only ever come from the auth provider. The ext_authz filter
-                      # below re-adds them from the authorization response, so the upstream's
-                      # Remote-* values are always auth-asserted, never forged by a caller.
-                      request_headers_to_remove:
-{%- for h in auth.identity_headers %}
-                        - "{{ h }}"
-{%- endfor %}
-{%- endif %}
                       routes:
 {%- if l.ext_authz and auth is not none %}
                         # The auth provider's own login portal: routed to its cluster with
@@ -74,6 +64,18 @@ static_resources:
 {%- endfor %}
                 http_filters:
 {%- if l.ext_authz and auth is not none %}
+                  # Anti-spoofing: strip any client-supplied identity headers on ingress, before
+                  # any check runs, so they can only ever come from the auth provider. (A route's
+                  # `request_headers_to_remove` would run at forward time and strip the
+                  # provider's asserted identity too.)
+                  - name: envoy.filters.http.header_mutation
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+                      mutations:
+                        request_mutations:
+{%- for h in auth.identity_headers %}
+                          - remove: "{{ h }}"
+{%- endfor %}
                   # Forward-auth: every request on this (shared) listener is checked with the
                   # auth provider first. Both browser sessions (cookie) and API clients
                   # (Authorization / Proxy-Authorization header) are supported — the provider
@@ -101,10 +103,11 @@ static_resources:
                             - { key: X-Forwarded-Proto, value: "%REQ(:SCHEME)%" }
                             - { key: X-Forwarded-Host, value: "%REQ(:AUTHORITY)%" }
                         authorization_response:
+                          # Envoy lowercases header names, so match case-insensitively.
                           allowed_upstream_headers:
                             patterns:
 {%- for h in auth.identity_headers %}
-                              - exact: "{{ h }}"
+                              - { exact: "{{ h }}", ignore_case: true }
 {%- endfor %}
                           allowed_client_headers:
                             patterns:

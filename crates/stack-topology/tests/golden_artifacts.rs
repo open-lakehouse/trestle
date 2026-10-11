@@ -1480,12 +1480,13 @@ mod auth {
         let arts = render_all(&p);
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
-        // The shared listener runs ext_authz before the router.
+        // The shared listener strips spoofed identity, runs ext_authz, then routes.
         let shared = shared_listener(&doc);
         let filters = http_filter_names(shared);
         assert_eq!(
             filters,
             vec![
+                "envoy.filters.http.header_mutation".to_string(),
                 "envoy.filters.http.ext_authz".to_string(),
                 "envoy.filters.http.router".to_string(),
             ],
@@ -1504,9 +1505,10 @@ mod auth {
             }
         }
 
-        // The ext_authz filter targets the authelia cluster at its documented path.
+        // The ext_authz filter (after the anti-spoof strip) targets the authelia cluster at its
+        // documented path.
         let ext_authz = &shared["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"]
-            [0]["typed_config"];
+            [1]["typed_config"];
         let http_service = &ext_authz["http_service"];
         assert_eq!(
             http_service["server_uri"]["cluster"].as_str(),
@@ -1559,15 +1561,16 @@ mod auth {
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
         let shared = shared_listener(&doc);
 
-        // Ingress: the shared virtual host strips client-supplied identity headers (anti-spoof).
-        let vh = &shared["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"]
-            [0];
-        let stripped: BTreeSet<String> = vh["request_headers_to_remove"]
-            .as_sequence()
-            .expect("identity headers are stripped on ingress")
-            .iter()
-            .map(|h| h.as_str().unwrap().to_string())
-            .collect();
+        // Ingress: the first filter strips client-supplied identity headers (anti-spoof) —
+        // before ext_authz, so the provider's asserted identity is never stripped with them.
+        let filters = &shared["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"];
+        let stripped: BTreeSet<String> =
+            filters[0]["typed_config"]["mutations"]["request_mutations"]
+                .as_sequence()
+                .expect("identity headers are stripped on ingress")
+                .iter()
+                .map(|m| m["remove"].as_str().unwrap().to_string())
+                .collect();
         for h in [
             "Remote-User",
             "Remote-Email",
@@ -1579,17 +1582,27 @@ mod auth {
                 "{h} is stripped on ingress: {stripped:?}"
             );
         }
+        assert!(
+            shared["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]
+                ["virtual_hosts"][0]["request_headers_to_remove"]
+                .is_null(),
+            "a route-level strip would run after ext_authz and drop the asserted identity"
+        );
 
         // Response: the same headers are allowed upstream (now sourced from Authelia). The
         // request/response policy lives under `http_service` on the ext_authz typed config.
-        let http_service = &shared["filter_chains"][0]["filters"][0]["typed_config"]["http_filters"]
-            [0]["typed_config"]["http_service"];
+        let http_service = &filters[1]["typed_config"]["http_service"];
         let allowed: BTreeSet<String> =
             http_service["authorization_response"]["allowed_upstream_headers"]["patterns"]
                 .as_sequence()
                 .unwrap()
                 .iter()
-                .map(|p| p["exact"].as_str().unwrap().to_string())
+                .map(|p| {
+                    // Envoy lowercases header names: an exact, case-sensitive match on
+                    // `Remote-User` would never forward anything.
+                    assert_eq!(p["ignore_case"].as_bool(), Some(true), "{p:?}");
+                    p["exact"].as_str().unwrap().to_string()
+                })
                 .collect();
         for h in [
             "Remote-User",
