@@ -301,7 +301,7 @@ mod tests {
     fn host_catalog(port: u16) -> ServiceSpec {
         ServiceSpec {
             name: "unity-catalog".into(),
-            role: Role::new("data_catalog"),
+            role: Role::data_catalog(),
             placement: Placement::Host,
             endpoints: vec![Endpoint {
                 id: "rest".into(),
@@ -322,7 +322,7 @@ mod tests {
     fn container_postgres() -> ServiceSpec {
         ServiceSpec {
             name: "postgres".into(),
-            role: Role::new("relational_db"),
+            role: Role::relational_db(),
             placement: Placement::Container {
                 service: "db".into(),
             },
@@ -336,14 +336,14 @@ mod tests {
     fn container_marquez() -> ServiceSpec {
         ServiceSpec {
             name: "marquez".into(),
-            role: Role::new("lineage"),
+            role: Role::lineage(),
             placement: Placement::Container {
                 service: "marquez-api".into(),
             },
             endpoints: vec![Endpoint::api(
                 "lineage",
                 5000,
-                "/api/2.1/lineage",
+                "/api/v1/lineage",
                 crate::model::endpoint::Rewrite::Inherit,
             )],
             depends_on: vec![],
@@ -356,7 +356,7 @@ mod tests {
     fn container_mlflow_ui() -> ServiceSpec {
         ServiceSpec {
             name: "mlflow".into(),
-            role: Role::new("experiment_tracking"),
+            role: Role::experiment_tracking(),
             placement: Placement::Container {
                 service: "mlflow".into(),
             },

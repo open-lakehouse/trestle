@@ -239,7 +239,7 @@ fn envoy() -> Arc<dyn Module> {
         display_name: Some("Envoy gateway".into()),
         summary: Some("Single-port gateway, Databricks-shaped URL rewrites.".into()),
         category: Some("gateway".into()),
-        provider_of: Some("gateway".into()),
+        provider_of: Some(Role::GATEWAY.into()),
         requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
@@ -314,7 +314,7 @@ fn authelia() -> Arc<dyn Module> {
         display_name: Some("Authelia".into()),
         summary: Some("Forward-auth single-sign-on for the gateway (file-based).".into()),
         category: Some("gateway".into()),
-        provider_of: Some("auth".into()),
+        provider_of: Some(Role::AUTH.into()),
         // No `requires`: the gateway is located by role, not id, so an id edge would break a
         // catalog with a differently-named gateway. Runtime ordering is the gateway fragment's
         // `depends_on: authelia` (Envoy waits on auth), which is the real dependency direction.
@@ -429,7 +429,7 @@ fn postgres() -> Arc<dyn Module> {
         display_name: Some("Postgres".into()),
         summary: Some("Postgres 16; auto-creates DBs other modules declare.".into()),
         category: Some("metadata_db".into()),
-        provider_of: Some("relational_db".into()),
+        provider_of: Some(Role::RELATIONAL_DB.into()),
         requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
@@ -555,7 +555,7 @@ fn rustfs() -> Arc<dyn Module> {
                 .into(),
         ),
         category: Some("storage".into()),
-        provider_of: Some("object_store".into()),
+        provider_of: Some(Role::OBJECT_STORE.into()),
         requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
@@ -654,7 +654,7 @@ fn azurite() -> Arc<dyn Module> {
         display_name: Some("Azurite (local Azure Blob)".into()),
         summary: Some("Azure Blob emulator; object store with Azure-shaped wiring.".into()),
         category: Some("storage".into()),
-        provider_of: Some("object_store".into()),
+        provider_of: Some(Role::OBJECT_STORE.into()),
         requires: vec![],
         // Same-role exclusivity is enforced by the planner (two unpinned object_store
         // providers in one environment is a `ConflictingRoleProviders` error), so no
@@ -714,7 +714,7 @@ fn mlflow() -> Arc<dyn Module> {
         display_name: Some("MLflow tracking".into()),
         summary: Some("Experiment + model tracking; Databricks-shaped URLs.".into()),
         category: Some("ml".into()),
-        provider_of: Some("experiment_tracking".into()),
+        provider_of: Some(Role::EXPERIMENT_TRACKING.into()),
         // Only the gateway is a hard module dependency; the relational store and
         // object store arrive via resource demands (auto-provisioned).
         requires: vec![ModuleId::from("envoy")],
@@ -800,7 +800,7 @@ fn unity_catalog() -> Arc<dyn Module> {
         display_name: Some("Unity Catalog".into()),
         summary: Some("Databricks UC server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
-        provider_of: Some("data_catalog".into()),
+        provider_of: Some(Role::DATA_CATALOG.into()),
         // Only the gateway is a hard module dependency; Postgres + S3 arrive as demands.
         requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
@@ -880,7 +880,7 @@ fn jaeger() -> Arc<dyn Module> {
         display_name: Some("Jaeger tracing".into()),
         summary: Some("All-in-one OTLP tracing backend with the Jaeger UI.".into()),
         category: Some("observability".into()),
-        provider_of: Some("tracing".into()),
+        provider_of: Some(Role::TRACING.into()),
         requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         needs: vec![],
@@ -1039,7 +1039,7 @@ impl Module for Headwaters {
         Some("observability")
     }
     fn provider_of(&self) -> Option<&str> {
-        Some("lineage")
+        Some(Role::LINEAGE)
     }
     fn requires(&self) -> &[ModuleId] {
         &self.requires
