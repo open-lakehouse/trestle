@@ -68,6 +68,7 @@ export function ElkEdge({
   labelStyle,
   labelBgStyle,
   labelBgPadding,
+  labelBgBorderRadius,
   interactionWidth,
 }: EdgeProps) {
   const routed = (data as { points?: Point[] } | undefined)?.points;
@@ -91,6 +92,7 @@ export function ElkEdge({
       labelShowBg
       labelBgStyle={labelBgStyle}
       labelBgPadding={labelBgPadding}
+      labelBgBorderRadius={labelBgBorderRadius}
       interactionWidth={interactionWidth}
     />
   );
