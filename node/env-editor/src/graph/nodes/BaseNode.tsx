@@ -1,41 +1,43 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { Handle, Position } from "@xyflow/react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+
+/** A small, quiet connection dot: edges carry the meaning, not the handles. */
+export const HANDLE_CLASS =
+  "!h-1.5 !w-1.5 !min-h-0 !min-w-0 !border-0 !bg-muted-foreground/50";
+
+/** The card surface every component and gateway node shares. */
+export function cardClass(selected: boolean | undefined) {
+  return cn(
+    "cursor-pointer overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm transition-shadow hover:shadow-md",
+    selected ? "border-primary ring-2 ring-primary/30" : "border-border",
+  );
+}
 
 export interface BaseNodeProps {
   selected?: boolean;
   className?: string;
+  style?: CSSProperties;
   children: ReactNode;
 }
 
-/**
- * Shared chrome for every module node: a bordered card with left (target) and
- * right (source) handles for the LEFT→RIGHT dependency layout. Node components
- * supply only their content; click handling lives on the ReactFlow canvas
- * (`onNodeClick`). Adapted from the headwaters lineage `BaseNode`.
- */
-export function BaseNode({ selected, className, children }: BaseNodeProps) {
+export function BaseNode({
+  selected,
+  className,
+  style,
+  children,
+}: BaseNodeProps) {
   return (
     <div
-      className={cn(
-        // flex-col + justify-center vertically centers content within the fixed
-        // node height, so same-row node centers line up and edges stay straight
-        // (the box size must match SIZE in useTopologyLayout).
-        "flex cursor-pointer flex-col justify-center overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm transition-shadow hover:shadow-md",
-        selected ? "border-primary ring-2 ring-primary/30" : "border-border",
-        className,
-      )}
+      className={cn("flex flex-col", cardClass(selected), className)}
+      style={style}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!border-border !bg-muted-foreground"
-      />
+      <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
       {children}
       <Handle
         type="source"
         position={Position.Right}
-        className="!border-border !bg-muted-foreground"
+        className={HANDLE_CLASS}
       />
     </div>
   );

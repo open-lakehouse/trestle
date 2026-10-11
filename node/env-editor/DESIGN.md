@@ -64,6 +64,9 @@ Two host responsibilities (not this package's):
   `@open-lakehouse/stack-wasm/types`. The seam is the only coupling to an engine.
 - **No hardcoded colors.** New node/status colors go through a ui-kit token, added
   to that contract first.
+- **Project logos are monochrome.** `graph/projectIcons.tsx` vendors each logo as
+  inline path data filled with `currentColor` (tinted by the role accent), never
+  in brand colors. A module without one falls back to its role's lucide icon.
 - **The diagram is presentational.** `MarkitectureCanvas` takes a graph and
   renders it; data (a `PlanResult`) comes from the seam, never a fetch inside the
   canvas.

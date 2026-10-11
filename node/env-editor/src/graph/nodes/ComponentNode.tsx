@@ -1,73 +1,55 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import type { NodeProps } from "@xyflow/react";
 import type { GraphNodeDto } from "../../types";
-import { roleStyle } from "../roleTheme";
+import {
+  COMPONENT_WIDTH,
+  componentFacts,
+  componentHeight,
+  FACT_LINE,
+} from "../useTopologyLayout";
 import { BaseNode } from "./BaseNode";
+import { NodeHeader } from "./NodeHeader";
 
-/** The `data` payload a component node carries (set in `useTopologyLayout`). */
 export interface ComponentNodeData {
   node: GraphNodeDto;
   [key: string]: unknown;
 }
 
 /**
- * One functional component: headlined by the function it fills (e.g.
- * "Object store", "Identity provider"), with the implementation as the title
- * and what it offers / provisions underneath. Helper containers are part of
- * the component, so they never get a node. An `external` component (run
- * outside the stack) gets a dashed border. Fixed size (240×92) — MUST match
- * COMPONENT_SIZE in `useTopologyLayout`.
+ * A functional component: the shared header, then a labeled line per fact
+ * (what it offers, what it provisions). Its size is `componentHeight` ×
+ * COMPONENT_WIDTH, the box ELK lays out; the body centers its lines, so the
+ * card border never pushes them out of that box.
  */
 export function ComponentNode({ data, selected }: NodeProps) {
   const { node } = data as ComponentNodeData;
-  const style = roleStyle(node.role);
-  const Icon = style.icon;
-  const title = node.display_name ?? node.id;
-  const detail = [
-    node.offers.join(", "),
-    node.provisions.map((p) => p.name).join(", "),
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const facts = componentFacts(node);
 
   return (
     <BaseNode
       selected={selected}
-      className={cn(
-        "h-[92px] w-[240px]",
-        node.kind === "external" && "border-dashed",
-      )}
+      className={cn(node.kind === "external" && "border-dashed")}
+      style={{ width: COMPONENT_WIDTH, height: componentHeight(node) }}
     >
-      <div
-        className={cn(
-          "flex items-center gap-2 px-3 pt-2 text-xs font-medium",
-          style.accent,
-        )}
-      >
-        <Icon className="h-3.5 w-3.5" />
-        {style.label.toUpperCase()}
-        {node.kind === "external" && (
-          <span className="ml-auto text-[10px] text-muted-foreground">
-            EXTERNAL
-          </span>
-        )}
-      </div>
-      <div className="px-3 pb-1 pt-0.5">
-        <div
-          className="truncate text-sm font-semibold text-card-foreground"
-          title={node.summary ?? title}
-        >
-          {title}
+      <NodeHeader node={node} />
+      {facts.length > 0 && (
+        <div className="flex min-h-0 flex-1 flex-col justify-center border-t border-border px-3">
+          {facts.map((f) => (
+            <div
+              key={f.label}
+              className="flex items-center gap-2 text-[11px]"
+              style={{ height: FACT_LINE }}
+            >
+              <span className="w-[68px] shrink-0 text-muted-foreground">
+                {f.label}
+              </span>
+              <span className="truncate font-medium" title={f.value}>
+                {f.value}
+              </span>
+            </div>
+          ))}
         </div>
-        {detail && (
-          <div
-            className="truncate text-[11px] text-muted-foreground"
-            title={detail}
-          >
-            {detail}
-          </div>
-        )}
-      </div>
+      )}
     </BaseNode>
   );
 }
