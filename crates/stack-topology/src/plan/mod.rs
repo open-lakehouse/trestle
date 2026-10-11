@@ -798,6 +798,12 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             bind_connection(&mut module_env, module.id(), demand, connection)?;
         }
         for service in &services_of[module.id()] {
+            // A service that relocates its surface under a base path is told it at render
+            // time (e.g. via a `[ui].base_path` config line), whichever endpoint intents it
+            // routes the prefix with.
+            if !service.base_path.is_empty() {
+                module_env.set("BASE_PATH", &service.base_path);
+            }
             for endpoint in &service.endpoints {
                 match &endpoint.intent {
                     RouteIntent::Internal => {} // no route
@@ -842,8 +848,6 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                             cluster: cluster.clone(),
                             rewrite: None,
                         });
-                        // Feed the chosen base path back to the module's render.
-                        module_env.set("BASE_PATH", &base);
                         routes.assign(
                             &service.name,
                             &endpoint.id,

@@ -961,28 +961,26 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
         config.contents
     );
     assert!(
-        !config.contents.contains("base_path"),
-        "no base_path line when the UI is off: {}",
+        config.contents.contains("base_path = \"/lineage\""),
+        "the surface stays under its base path with the UI off: {}",
         config.contents
     );
 
-    // With the UI off, there is no UI to relocate: Headwaters serves only its static
-    // Databricks-style API path at root, so the gateway matches `/api/v1/lineage` and forwards
-    // it unchanged. The prefixable-UI handshake drops away — no `BASE_PATH` is injected, the
-    // `AssignedRoute` carries no `base_path`, and there is no `/lineage` route at all.
+    // With the UI off, the whole surface is still served under `/lineage` — fronted as an API
+    // passthrough, so a custom UI reaches the read API and ConnectRPC service — and ingest is
+    // still matched at its static path and rewritten under the base path.
+    let surface = p
+        .routes
+        .get("headwaters", "surface")
+        .expect("the headwaters surface is routed with the UI off");
+    assert_eq!(surface.prefix, "/lineage");
+    assert_eq!(surface.rewrite, None, "the prefix is forwarded unchanged");
     let route = p
         .routes
         .get("headwaters", "api")
         .expect("headwaters api endpoint is routed");
     assert_eq!(route.prefix, "/api/v1/lineage");
-    assert_eq!(
-        route.rewrite, None,
-        "API served at its static path, forwarded unchanged"
-    );
-    assert_eq!(
-        route.base_path, None,
-        "no prefixable-UI base path when the UI is off"
-    );
+    assert_eq!(route.rewrite.as_deref(), Some("/lineage/api/v1/lineage"));
     assert!(
         matches!(route.listener, olai_stack_topology::Listener::Shared),
         "the API stays on the shared listener"
@@ -995,21 +993,20 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
         p.injected
             .get(&ModuleId::from("headwaters"))
             .and_then(|e| e.get("BASE_PATH")),
-        None,
-        "BASE_PATH is not injected when the UI is off"
+        Some("/lineage"),
+        "the base path reaches the render with the UI off too"
     );
 
-    // The gateway route table fronts the static API path (and no `/lineage` route).
     let arts = render_all(&p);
     let (routes, _, _) = parse_envoy(&arts.envoy);
     let (cluster, rewrite) = routes
         .get("/api/v1/lineage")
-        .expect("the API path is fronted with the UI off");
+        .expect("the ingest path is fronted with the UI off");
     assert_eq!(cluster, "headwaters");
-    assert_eq!(*rewrite, None);
+    assert_eq!(rewrite.as_deref(), Some("/lineage/api/v1/lineage\\1"));
     assert!(
-        !routes.contains_key("/lineage"),
-        "no UI route when the UI is off"
+        routes.contains_key("/lineage"),
+        "the surface prefix is fronted with the UI off"
     );
 }
 
