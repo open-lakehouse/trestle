@@ -8,7 +8,7 @@
 //! colliding. Given a
 //! [`Selection`] and a [`Catalog`], it:
 //!
-//! 1. resolves the dependency graph ([`resolve`](fn@resolve)) — transitive `requires`,
+//! 1. resolves the dependency graph ([`resolve`](fn@crate::resolve)) — transitive `requires`,
 //!    conflicts, topological order;
 //! 2. derives a non-colliding gateway route for every surface endpoint, **erroring
 //!    loudly on a real collision** rather than silently shadowing one route with
@@ -28,11 +28,10 @@
 //! Prefixes are derived from *declared semantic facts*, never invented from names:
 //!
 //! - An [`Api`](RouteIntent::Api) endpoint's prefix is its declared client mount
-//!   (the `api_prefix:<endpoint_id>` extra; the endpoint's own `path` stays empty so
-//!   the resolver does not double it). Its upstream rewrite is the service's
-//!   `base_path` joined with that prefix — unless the module declares an explicit
-//!   `rewrite:<prefix>` override (the rare exception, e.g. an OTel ingest path that
-//!   must strip to root).
+//!   ([`Endpoint::mount_prefix`](crate::Endpoint::mount_prefix); the endpoint's own `path`
+//!   stays empty so the resolver does not double it). Its upstream rewrite follows the
+//!   endpoint's typed [`Rewrite`](crate::Rewrite): `Inherit` joins the service's `base_path`
+//!   with the prefix, `To` rewrites to a literal path, `Passthrough` forwards unchanged.
 //! - A [`UiPrefixable`](RouteIntent::UiPrefixable) endpoint's prefix and chosen
 //!   `base_path` are the module's declared `base_path` (e.g. `/mlflow`).
 //! - A [`UiFixed`](RouteIntent::UiFixed) endpoint is given its own dedicated listener
@@ -47,20 +46,39 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+mod demands;
+mod gateway;
+mod impersonation;
+mod knobs;
 pub mod resolve;
 pub mod routing;
 
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
-use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, DEP_GATE_EXTRA};
-use crate::catalog::module::{ExtraResource, ModuleId, ResolvedKnobs};
+use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR};
+use crate::catalog::module::{ExtraResource, ModuleId};
 use crate::model::connection::Connection;
-use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent};
-use crate::model::placement::Placement;
+use crate::model::endpoint::RouteIntent;
 use crate::model::role::{Role, ServiceSpec};
-use crate::plan::resolve::{ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
+use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 use crate::render::{InjectedEnv, RenderOutput};
+
+use demands::{
+    bind_connection, check_role_exclusivity, provider_dep_gate, provisioned_by_provider,
+    resolve_demand_providers, resolve_with_demands,
+};
+pub use gateway::{
+    AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
+    GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, TlsListenerConfig,
+    TlsVirtualHost,
+};
+use gateway::{
+    allocate_dedicated_ports, api_rewrite, claim, ensure_cluster, gateway_auth_enabled,
+    require_prefix, selected_auth_provider, wire_app_upstream, wire_auth,
+};
+use impersonation::{plan_impersonation, rewrite_gatewayed_object_store_endpoints};
+use knobs::resolve_module_knobs;
 
 /// What modules an environment should contain.
 ///
@@ -79,7 +97,7 @@ pub struct Selection {
     /// here wins over the knob's declared [`default`](crate::Knob::default); a knob
     /// absent from this map falls back to its default. The value is available to the
     /// module's template as `{{ knobs.key }}` (and to [`Module::services`] via
-    /// [`ResolvedKnobs`]).
+    /// [`ResolvedKnobs`](crate::catalog::module::ResolvedKnobs)).
     ///
     /// This is the channel a config UI feeds: it surfaces a module's knobs from the
     /// catalog, lets the user tune them, and hands the chosen values back here.
@@ -404,217 +422,6 @@ pub enum PlanError {
     },
 }
 
-/// An upstream cluster the gateway forwards to — one per surface service.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClusterConfig {
-    /// The cluster's logical name (the service name).
-    pub name: String,
-    /// The upstream host (the service's compose DNS name).
-    pub host: String,
-    /// The upstream port (the endpoint's internal port).
-    pub port: u16,
-}
-
-/// One route on a gateway listener.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GatewayRoute {
-    /// The client-facing prefix the listener matches.
-    pub prefix: String,
-    /// The upstream cluster name to forward to.
-    pub cluster: String,
-    /// The upstream rewrite, if the path is changed before forwarding. `None`
-    /// forwards the matched path unchanged (no rewrite emitted); `Some(path)`
-    /// rewrites the matched prefix to `path`.
-    pub rewrite: Option<String>,
-}
-
-/// A gateway listener: a host port and the routes it serves.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ListenerConfig {
-    /// The host-published port this listener binds.
-    pub host_port: u16,
-    /// The listener's internal port inside the compose network.
-    pub internal_port: u16,
-    /// The routes on this listener, most-specific-first (Envoy match priority).
-    pub routes: Vec<GatewayRoute>,
-}
-
-/// The gateway knob key that turns on forward-auth. A bool knob with this key, declared on
-/// the module filling the `gateway` role and resolving truthy, makes the planner pull in the
-/// `auth`-role provider and gate the shared listener (see [`AuthConfig`]). The contract lives
-/// here (the planner owns the wiring); the baseline catalog's `envoy` module declares the knob
-/// under this same key.
-pub const ENVOY_AUTH_KNOB: &str = "auth";
-
-/// Legacy override key accepted as an alias of [`ENVOY_AUTH_KNOB`].
-pub const ENVOY_AUTH_KNOB_LEGACY: &str = "ENVOY_AUTH";
-
-/// The [`Provides::extras`](crate::Provides::extras) key by which the `auth`-role provider declares the HTTP `ext_authz`
-/// endpoint path prefix the gateway posts authorization checks to. Provider-specific (Authelia
-/// uses `/api/authz/ext-authz/`, other forward-auth proxies differ), so it lives in catalog data
-/// rather than as a planner constant — keeping implementation names out of the planner.
-pub const EXT_AUTHZ_PATH_EXTRA: &str = "ext_authz_path";
-
-/// The trusted identity headers the gateway strips on ingress and re-adds from the auth
-/// response — so the upstream always reads an auth-provider-asserted value, never a forged one.
-/// These are the forward-auth convention (shared across providers, not implementation-specific),
-/// so the planner supplies them as the default for any `auth`-role provider.
-const AUTH_IDENTITY_HEADERS: [&str; 4] = [
-    "Remote-User",
-    "Remote-Email",
-    "Remote-Name",
-    "Remote-Groups",
-];
-
-/// The `auth`-role provider the selection picks *explicitly* — by module id, or through the
-/// `auth` capability (its first provider) — if any.
-fn selected_auth_provider(selection: &Selection, catalog: &Catalog) -> Option<ModuleId> {
-    let providers = catalog.providers_of(Role::AUTH);
-    selection
-        .modules
-        .iter()
-        .find(|m| providers.contains(m))
-        .cloned()
-        .or_else(|| {
-            selection
-                .capabilities
-                .iter()
-                .any(|c| c == Role::AUTH)
-                .then(|| providers.first().map(|p| (*p).clone()))
-                .flatten()
-        })
-}
-
-/// Whether the gateway's forward-auth knob ([`ENVOY_AUTH_KNOB`]) resolves on for this
-/// selection. Reads the bool knob off whichever catalog module fills the `gateway` role,
-/// honouring a [`Selection::knob_overrides`] value over the knob's default. Returns `Ok(false)`
-/// when there is no gateway module or it declares no such knob.
-///
-/// Explicitly selecting an identity provider (see [`selected_auth_provider`]) turns auth on
-/// unless the knob is explicitly overridden: an auth provider the gateway never consults would
-/// run as an orphan — up, but authenticating nothing.
-fn gateway_auth_enabled(selection: &Selection, catalog: &Catalog) -> Result<bool, PlanError> {
-    for gateway_id in catalog.providers_of(Role::GATEWAY) {
-        let Some(module) = catalog.get(gateway_id) else {
-            continue;
-        };
-        let Some(knob) = module.knobs().iter().find(|k| k.key == ENVOY_AUTH_KNOB) else {
-            continue;
-        };
-        let overrides = selection.knob_overrides.get(gateway_id);
-        let explicit = overrides.is_some_and(|o| {
-            o.contains_key(&knob.key) || knob.aliases.iter().any(|a| o.contains_key(a))
-        });
-        if !explicit && selected_auth_provider(selection, catalog).is_some() {
-            return Ok(true);
-        }
-        if let Some(value) = resolve_knob(gateway_id, knob, overrides)? {
-            return Ok(value == "true");
-        }
-    }
-    Ok(false)
-}
-
-/// Forward-auth (single-sign-on) configuration for the gateway: present only when the
-/// gateway's `auth` knob is on. It tells the Envoy renderer to gate the shared
-/// listener (API + UI routes) behind an `ext_authz` HTTP filter pointed at the auth
-/// provider, and which identity headers to treat as trusted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AuthConfig {
-    /// The upstream cluster the `ext_authz` filter calls (an entry in
-    /// [`GatewayConfig::clusters`]). The bundled provider is `authelia`.
-    pub cluster: String,
-    /// The auth provider's port (the `server_uri` authority for the `ext_authz` filter).
-    pub port: u16,
-    /// The auth endpoint path prefix the filter posts to (Authelia's
-    /// `/api/authz/ext-authz/`).
-    pub path_prefix: String,
-    /// The client-facing path prefix the auth provider's **login portal** is served at, routed
-    /// through the gateway to the provider's cluster with `ext_authz` disabled on that route (so
-    /// a logged-out user can actually reach the login page the deny-redirect sends them to). The
-    /// provider's `authelia_url` / session config must point here. Defaults to `/authelia`.
-    pub portal_prefix: String,
-    /// The trusted identity headers the gateway both **strips on ingress** (so a client
-    /// cannot forge them) and **allows upstream** from the auth response (so the app reads
-    /// an auth-provider-asserted value). E.g. `Remote-User` / `Remote-Email` / `Remote-Name`
-    /// / `Remote-Groups`.
-    pub identity_headers: Vec<String>,
-}
-
-/// The structured gateway configuration the planner emits — what a consumer turns
-/// into an Envoy (or other) config, replacing hand-authored route/cluster lists.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GatewayConfig {
-    /// The listeners (the shared one plus any dedicated for fixed-path UIs).
-    pub listeners: Vec<ListenerConfig>,
-    /// The upstream clusters, deduplicated by name.
-    pub clusters: Vec<ClusterConfig>,
-    /// The Envoy admin port (bound on both sides). Set from
-    /// [`PlanCtx::gateway_admin_port`]; the `Default` of `0` is only ever a transient
-    /// accumulator value the planner overwrites.
-    pub admin_port: u16,
-    /// Forward-auth configuration, present only when the gateway's `ENVOY_AUTH` knob is on.
-    /// When set, the Envoy renderer gates the shared listener behind `ext_authz`.
-    pub auth: Option<AuthConfig>,
-    /// The TLS listener emulating public hostnames, present only when some selected module
-    /// declares [`impersonated_hosts`](crate::Provides::impersonated_hosts).
-    pub tls: Option<TlsListenerConfig>,
-}
-
-/// The gateway's in-network TLS listener for emulated public hostnames.
-///
-/// Internal only: it is never host-published. In-network clients reach it because the
-/// gateway holds every [`hosts`](Self::hosts) entry as a compose network alias; host-side
-/// clients keep using the plain dedicated listeners via an endpoint override.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TlsListenerConfig {
-    /// The port the listener binds inside the compose network ([`GATEWAY_TLS_PORT`]).
-    pub port: u16,
-    /// One virtual host per upstream cluster, in dependency order.
-    pub virtual_hosts: Vec<TlsVirtualHost>,
-    /// Every emulated hostname, sorted and deduplicated.
-    pub hosts: Vec<String>,
-    /// Where the CA and the listener's certificate live.
-    pub trust: crate::model::connection::TlsTrust,
-    /// The compose one-shot service that mints the certificates.
-    pub mint_service: String,
-}
-
-/// The hostnames one upstream cluster answers on the [`TlsListenerConfig`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TlsVirtualHost {
-    /// The upstream cluster (an entry in [`GatewayConfig::clusters`]).
-    pub cluster: String,
-    /// The exact hostnames routed to [`cluster`](Self::cluster), without ports.
-    pub hosts: Vec<String>,
-}
-
-/// The in-network port the gateway's TLS listener binds (see [`TlsListenerConfig`]). Fixed at
-/// the HTTPS default because emulated clients call the bare public hostname.
-pub const GATEWAY_TLS_PORT: u16 = 443;
-
-/// The compose named volume the gateway's CA material lives in.
-const GATEWAY_CERTS_VOLUME: &str = "gateway-certs";
-
-/// Where the gateway and its consumers mount [`GATEWAY_CERTS_VOLUME`].
-const GATEWAY_CERTS_MOUNT: &str = "/certs";
-
-/// The one-shot service that mints the gateway's CA material, defined by the gateway
-/// module's fragment.
-const GATEWAY_CERTS_SERVICE: &str = "gateway-certs";
-
-/// The [`TlsTrust`](crate::TlsTrust) for the gateway's minted CA.
-fn gateway_tls_trust() -> crate::model::connection::TlsTrust {
-    crate::model::connection::TlsTrust {
-        volume: GATEWAY_CERTS_VOLUME.into(),
-        mount_path: GATEWAY_CERTS_MOUNT.into(),
-        ca_pem: format!("{GATEWAY_CERTS_MOUNT}/ca.pem"),
-        jvm_truststore: format!("{GATEWAY_CERTS_MOUNT}/truststore.p12"),
-        // The JDK's default truststore password; the truststore holds only public certs.
-        jvm_truststore_password: "changeit".into(),
-    }
-}
-
 /// A compose `include:` entry contributed by a module.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposeInclude {
@@ -860,17 +667,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // selection overrides (never on services), so there is no circularity: the services a
     // module emits may *vary* with its knobs, but the knobs are settled first. Every later
     // pass reads these caches instead of re-resolving or re-deriving.
-    let mut resolved_knobs: BTreeMap<ModuleId, ResolvedKnobs> = BTreeMap::new();
-    for module in &graph.nodes {
-        let overrides = selection.knob_overrides.get(module.id());
-        let mut knobs = ResolvedKnobs::new();
-        for knob in module.knobs() {
-            if let Some(value) = resolve_knob(module.id(), knob, overrides)? {
-                knobs.set(&knob.key, value);
-            }
-        }
-        resolved_knobs.insert(module.id().clone(), knobs);
-    }
+    let resolved_knobs = resolve_module_knobs(&graph, selection)?;
     let services_of: BTreeMap<ModuleId, Vec<ServiceSpec>> = graph
         .nodes
         .iter()
@@ -882,32 +679,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         })
         .collect();
 
-    // Resources to provision, grouped by the *chosen provider* (deduped, in dependency
-    // order). Grouping by provider — not by abstract role — is what lets one object-store
-    // demand land on RustFS and another on Azurite, each provisioning on its own init.
-    // Walk modules in graph (dependency) order so the grouped names stay deterministic.
-    let mut provisioned_by: BTreeMap<ModuleId, Vec<String>> = BTreeMap::new();
-    for module in &graph.nodes {
-        for (idx, demand) in module.needs().iter().enumerate() {
-            let provider = chosen[&(module.id().clone(), idx)].provider.clone();
-            let names = provisioned_by.entry(provider).or_default();
-            if !names.contains(&demand.name) {
-                names.push(demand.name.clone());
-            }
-        }
-    }
-    // Fold in the environment-level extra resources, on the same provider grouping so the
-    // chosen provider's existing init job creates them (the names reach its render as
-    // `RenderCtx.objects`). Appended after the module-demanded names, deduped against a name a
-    // module already demands — so an extra naming an already-provisioned resource is a no-op.
-    for extra in &selection.extra_resources {
-        let provider =
-            choose_provider(ctx, catalog, &extra.resource, extra.provider.as_ref(), None)?;
-        let names = provisioned_by.entry(provider).or_default();
-        if !names.contains(&extra.name) {
-            names.push(extra.name.clone());
-        }
-    }
+    let provisioned_by = provisioned_by_provider(&graph, &chosen, selection, catalog, ctx)?;
     let provisioned_for = |id: &str| -> Vec<String> {
         provisioned_by
             .get(&ModuleId::from(id))
@@ -919,38 +691,10 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     let s3_buckets = provisioned_for("rustfs");
     let azure_containers = provisioned_for("azurite");
 
-    // Allocate dedicated listener host ports up front, in graph order, for every endpoint
-    // that needs its own listener ([`UiFixed`] / [`Gatewayed`]). Doing this before the main
-    // routing loop lets us rewrite a gatewayed object store's connection `endpoint` to the
-    // gateway *before* consumers bind it (a provider is ordered before its consumers, but we
-    // bind a consumer's connection earlier in its own iteration than we'd reach the
-    // provider's route). Host ports come from the explicit `dedicated_listener_ports` first,
-    // then auto-allocated from `dedicated_listener_port_base`.
-    let mut dedicated_ports: BTreeMap<(String, String), u16> = BTreeMap::new();
-    {
-        let mut explicit = ctx.dedicated_listener_ports.iter().copied();
-        let mut next_auto = ctx.dedicated_listener_port_base;
-        let mut alloc = || {
-            explicit.next().unwrap_or_else(|| {
-                let p = next_auto;
-                next_auto = next_auto.saturating_add(1);
-                p
-            })
-        };
-        for module in &graph.nodes {
-            for service in &services_of[module.id()] {
-                for endpoint in &service.endpoints {
-                    if matches!(
-                        endpoint.intent,
-                        RouteIntent::UiFixed | RouteIntent::Gatewayed
-                    ) {
-                        dedicated_ports
-                            .insert((service.name.clone(), endpoint.id.clone()), alloc());
-                    }
-                }
-            }
-        }
-    }
+    // Allocate dedicated listener ports up front, before the routing loop, so a gatewayed
+    // object store's connection `endpoint` can be rewritten to the gateway *before* consumers
+    // bind it.
+    let dedicated_ports = allocate_dedicated_ports(&graph, &services_of, ctx);
 
     // Rewrite each gatewayed object store's resolved `endpoint` (and the `BlobEndpoint=` inside
     // an Azure connection string) to the gateway origin, so consumers reach the store through
@@ -1123,34 +867,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // the same collision checks every module route gets (rather than blindly injecting), so an
     // app-vs-module conflict fails loudly here instead of as an Envoy config error at launch.
     if let Some(app) = &ctx.app {
-        // A module that already claimed `/` (an Api `mount_prefix: "/"` or a UiPrefixable
-        // `base_path: "/"`) would be silently shadowed by the catch-all; reject instead.
-        if let Some(first) = claimed.get("/") {
-            return Err(PlanError::AppUpstreamCollision {
-                conflict: first.clone(),
-                reason: "it already claims the `/` route the app catch-all needs".into(),
-            });
-        }
-        // `app` is the reserved cluster name for the upstream; a module service named `app`
-        // would produce a duplicate Envoy cluster.
-        if let Some(c) = gateway.clusters.iter().find(|c| c.name == "app") {
-            return Err(PlanError::AppUpstreamCollision {
-                conflict: c.name.clone(),
-                reason: "a module contributes a service named `app`, the cluster name the app \
-                         upstream reserves"
-                    .into(),
-            });
-        }
-        gateway.clusters.push(ClusterConfig {
-            name: "app".into(),
-            host: app.service.clone(),
-            port: app.port,
-        });
-        shared_routes.push(GatewayRoute {
-            prefix: "/".into(),
-            cluster: "app".into(),
-            rewrite: None,
-        });
+        wire_app_upstream(app, &claimed, &mut gateway, &mut shared_routes)?;
     }
 
     // Order shared-listener routes most-specific-first (longer prefix wins), stable
@@ -1178,45 +895,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // the routing loop uses) for dedup + port-conflict detection; the routing loop itself skips
     // it because the auth endpoint is `Internal` (no route).
     if let Some(provider) = &auth_provider {
-        let service =
-            services_of[provider]
-                .first()
-                .ok_or_else(|| PlanError::AuthProviderMisconfigured {
-                    module: provider.clone(),
-                    reason: "declares no service".into(),
-                })?;
-        let endpoint = service
-            .endpoints
-            .iter()
-            .find(|e| e.intent == RouteIntent::Internal)
-            .ok_or_else(|| PlanError::AuthProviderMisconfigured {
-                module: provider.clone(),
-                reason: "service has no Internal endpoint".into(),
-            })?;
-        let path_prefix = catalog
-            .get(provider)
-            .and_then(|m| m.provides().extras.get(EXT_AUTHZ_PATH_EXTRA))
-            .ok_or_else(|| PlanError::AuthProviderMisconfigured {
-                module: provider.clone(),
-                reason: format!("does not declare the `{EXT_AUTHZ_PATH_EXTRA}` extra"),
-            })?
-            .clone();
-        ensure_cluster(&mut gateway, service, endpoint)?;
-        // The login portal is routed through the gateway at `/<service>` (a generic, provider-
-        // agnostic path — `/authelia` for the bundled provider), so the deny-redirect a
-        // logged-out browser follows actually resolves. The provider's session config must point
-        // its `authelia_url` here.
-        let portal_prefix = format!("/{}", service.name);
-        gateway.auth = Some(AuthConfig {
-            cluster: service.name.clone(),
-            port: endpoint.internal_port,
-            path_prefix,
-            portal_prefix,
-            identity_headers: AUTH_IDENTITY_HEADERS
-                .iter()
-                .map(|h| (*h).to_string())
-                .collect(),
-        });
+        wire_auth(provider, &services_of, catalog, &mut gateway)?;
     }
 
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1448,688 +1127,13 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     })
 }
 
-/// Resolve a selection into a flat list of directly-selected module ids (capabilities
-/// mapped through the catalog's provider index), preserving order and deduplicating.
-fn resolve_selection(selection: &Selection, catalog: &Catalog) -> Result<Vec<ModuleId>, PlanError> {
-    let mut out: Vec<ModuleId> = Vec::new();
-    let push = |id: ModuleId, out: &mut Vec<ModuleId>| {
-        if !out.contains(&id) {
-            out.push(id);
-        }
-    };
-    for id in &selection.modules {
-        push(id.clone(), &mut out);
-    }
-    for cap in &selection.capabilities {
-        let providers = catalog.providers_of(cap);
-        if providers.is_empty() {
-            return Err(PlanError::UnknownCapability(cap.clone()));
-        }
-        for id in providers {
-            push(id.clone(), &mut out);
-        }
-    }
-    Ok(out)
-}
-
-/// Resolve a selection, growing it until every resource demand is satisfied.
-///
-/// A module's [`ResourceDemand`] names a resource *kind*; the planner finds the catalog
-/// module that provisions it and adds it to the selection if absent. Because a
-/// just-added provider may itself `require` or `need` more, this is a fixed point:
-/// resolve → scan demands → add missing providers → re-resolve, until a pass adds
-/// nothing. The `requires` closure / topo-sort / cycle detection all live in
-/// [`resolve`]; this only decides *which* modules to feed it.
-fn resolve_with_demands(
-    selection: &Selection,
-    catalog: &Catalog,
-    ctx: &PlanCtx,
-) -> Result<ResolvedGraph, PlanError> {
-    // Each consuming module's demanded providers, recorded as it is discovered, so the
-    // final resolve can treat "needs a resource from X" as a dependency edge on X
-    // (provider ordered before consumer, like a `requires`). These are passed to `resolve`
-    // as `extra_edges` rather than folded into any module — a module is never mutated.
-    let mut demand_edges: ExtraEdges = ExtraEdges::new();
-    let mut selected = resolve_selection(selection, catalog)?;
-
-    // Fixed point: resolve → scan demands → add missing providers → repeat. Bounded by
-    // the catalog size (each iteration adds ≥1 module).
-    for _ in 0..=catalog.modules().len() {
-        let graph = resolve(&selected, catalog.modules())?;
-        let mut added = false;
-        for module in &graph.nodes {
-            for demand in module.needs() {
-                let provider = choose_provider(
-                    ctx,
-                    catalog,
-                    &demand.resource,
-                    demand.provider.as_ref(),
-                    Some(module.id()),
-                )?;
-                let edges = demand_edges.entry(module.id().clone()).or_default();
-                if !edges.contains(&provider) {
-                    edges.push(provider.clone());
-                }
-                if !selected.contains(&provider) {
-                    selected.push(provider);
-                    added = true;
-                }
-            }
-        }
-        // Environment-level extra resources have no consuming module, so they add their
-        // provider to the selection (becoming a graph node) but contribute no dependency
-        // edge — nothing gates on these names at startup, and the providers
-        // (postgres/rustfs/azurite) carry no `requires` of their own. This is what lets
-        // an extra bucket pull in an object-store provider even when no module demands one.
-        for extra in &selection.extra_resources {
-            let provider =
-                choose_provider(ctx, catalog, &extra.resource, extra.provider.as_ref(), None)?;
-            if !selected.contains(&provider) {
-                selected.push(provider);
-                added = true;
-            }
-        }
-        if !added {
-            // Final resolve with the demand edges threaded in, so providers start before
-            // the consumers that demand their resources.
-            return resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into);
-        }
-    }
-    // Unreachable in practice (the loop bound exceeds the max modules addable).
-    resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into)
-}
-
-/// Choose the provider module that satisfies a demand, in priority order:
-/// 1. the demand's explicit [`provider`](crate::ResourceDemand::provider) pin;
-/// 2. the first [`PlanCtx::provider_preference`] entry for the role present in the catalog;
-/// 3. the sole provider, if the role has exactly one;
-/// 4. the catalog's declared default provider for the role.
-///
-/// Errors with [`PlanError::UnsatisfiedDemand`] if no module provides the role, or
-/// [`PlanError::AmbiguousProvider`] if several do and none of the above selects one.
-/// `consumer` (when known) labels an `UnsatisfiedDemand`.
-///
-/// Takes the role and optional pin directly (not a [`ResourceDemand`]) so it can satisfy both a
-/// module's demand and an environment-level [`ExtraResource`], which has no consumer to bind.
-fn choose_provider(
-    ctx: &PlanCtx,
-    catalog: &Catalog,
-    role: &str,
-    pin: Option<&ModuleId>,
-    consumer: Option<&ModuleId>,
-) -> Result<ModuleId, PlanError> {
-    let candidates = catalog.providers_for(role);
-    if candidates.is_empty() {
-        return Err(PlanError::UnsatisfiedDemand {
-            module: consumer.map(|m| m.0.clone()).unwrap_or_default(),
-            resource: role.to_string(),
-        });
-    }
-    let provides_role = |id: &ModuleId| candidates.contains(&id);
-
-    // 1. Explicit pin.
-    if let Some(pin) = pin {
-        if provides_role(pin) {
-            return Ok(pin.clone());
-        }
-        // A pin that doesn't provide the role is unsatisfiable for this demand.
-        return Err(PlanError::UnsatisfiedDemand {
-            module: consumer.map(|m| m.0.clone()).unwrap_or_default(),
-            resource: role.to_string(),
-        });
-    }
-    // 2. Environment preference.
-    if let Some(order) = ctx.provider_preference.get(role)
-        && let Some(pref) = order.iter().find(|id| provides_role(id))
-    {
-        return Ok(pref.clone());
-    }
-    // 3. Unique provider.
-    if candidates.len() == 1 {
-        return Ok(candidates[0].clone());
-    }
-    // 4. Catalog default.
-    if let Some(def) = catalog.default_provider_for(role)
-        && provides_role(def)
-    {
-        return Ok(def.clone());
-    }
-    // Otherwise genuinely ambiguous.
-    let mut providers: Vec<ModuleId> = candidates.into_iter().cloned().collect();
-    providers.sort();
-    Err(PlanError::AmbiguousProvider {
-        resource: role.to_string(),
-        providers,
-    })
-}
-
-/// Bind a demand's resolved [`Connection`] into `env` by typed field, per the demand's
-/// [`ConnectionBinding`](crate::ConnectionBinding).
-///
-/// Each `(field, key)` pair sets `key` to the connection's value for `field`. A field the
-/// connection variant does not carry is a [`PlanError::UnboundConnectionField`].
-fn bind_connection(
-    env: &mut InjectedEnv,
-    consumer: &ModuleId,
-    demand: &crate::catalog::module::ResourceDemand,
-    connection: &Connection,
-) -> Result<(), PlanError> {
-    for (field, key) in &demand.bind.bind {
-        let value = connection
-            .field(*field)
-            .ok_or_else(|| PlanError::UnboundConnectionField {
-                module: consumer.0.clone(),
-                resource: demand.resource.clone(),
-                field: *field,
-            })?;
-        env.set(key, value);
-    }
-    Ok(())
-}
-
-/// Resolve a knob to its canonical value, **validated and coerced against its
-/// [`KnobKind`]**: an override (from [`Selection::knob_overrides`]) wins — matching the
-/// canonical [`key`](crate::Knob::key) first, then any [`aliases`](crate::Knob::aliases) —
-/// then the knob's declared [`default`](crate::Knob::default); a [`required`](crate::Knob::required)
-/// knob with neither is a [`PlanError::MissingRequiredKnob`]. A non-required knob with no
-/// value resolves to `None`.
-///
-/// The chosen value is checked against the knob's `kind` and canonicalized so what templates
-/// read via `{{ knobs.key }}` is always a valid literal (e.g. a `Bool` is the bare
-/// `"true"`/`"false"`, never `"True"` or `"yes"`). A value the kind cannot accept is a
-/// plan-time [`PlanError::InvalidKnobValue`] rather than a malformed config that fails only
-/// when the container starts.
-fn resolve_knob(
-    module: &ModuleId,
-    knob: &crate::catalog::module::Knob,
-    overrides: Option<&BTreeMap<String, String>>,
-) -> Result<Option<String>, PlanError> {
-    let raw = overrides
-        .and_then(|o| {
-            o.get(&knob.key)
-                .or_else(|| knob.aliases.iter().find_map(|alias| o.get(alias)))
-        })
-        .map(String::as_str)
-        .or(knob.default.as_deref());
-    let Some(raw) = raw else {
-        if knob.required {
-            return Err(PlanError::MissingRequiredKnob {
-                module: module.clone(),
-                key: knob.key.clone(),
-            });
-        }
-        return Ok(None);
-    };
-    coerce_knob(raw, &knob.kind)
-        .map(Some)
-        .ok_or_else(|| PlanError::InvalidKnobValue {
-            module: module.clone(),
-            key: knob.key.clone(),
-            value: raw.to_string(),
-            kind: knob.kind.clone(),
-        })
-}
-
-/// Validate `raw` against `kind` and return its canonical injected form, or `None` if the
-/// value is not a valid member of the kind (the caller turns that into a
-/// [`PlanError::InvalidKnobValue`]).
-///
-/// Coercions are deliberately liberal on input, strict on output: a `Bool` accepts the usual
-/// truthy/falsey spellings but always emits the bare `true`/`false`; an `Integer`/`Port`
-/// parses and range-checks but re-emits the canonical decimal; a `String` passes through; an
-/// `Enum` must match one of its options exactly.
-fn coerce_knob(raw: &str, kind: &crate::catalog::module::KnobKind) -> Option<String> {
-    use crate::catalog::module::KnobKind;
-    match kind {
-        KnobKind::String => Some(raw.to_string()),
-        KnobKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" | "on" => Some("true".to_string()),
-            "false" | "0" | "no" | "off" => Some("false".to_string()),
-            _ => None,
-        },
-        KnobKind::Enum { options } => options.iter().find(|o| *o == raw).cloned(),
-        KnobKind::Integer { min, max } => {
-            let n: i64 = raw.trim().parse().ok()?;
-            if min.is_some_and(|lo| n < lo) || max.is_some_and(|hi| n > hi) {
-                return None;
-            }
-            Some(n.to_string())
-        }
-        KnobKind::Port => {
-            let n: u16 = raw.trim().parse().ok()?;
-            (n != 0).then(|| n.to_string())
-        }
-    }
-}
-
-/// The provider chosen for a demand and the typed connection it resolves to.
-#[derive(Clone)]
-struct ResolvedDemand {
-    /// The provider module chosen to satisfy the demand.
-    provider: ModuleId,
-    /// The provider's connection template, resolved for the demanded resource name.
-    connection: Connection,
-}
-
-/// The resolved provider + connection for each demand, keyed by `(demanding module id,
-/// demand index)`.
-///
-/// Computed once by [`resolve_demand_providers`] and shared by the planner's passes so each
-/// demand's provider is selected — and its connection resolved — a single time (rather than
-/// re-running [`choose_provider`] and re-substituting `{name}` at every consumer).
-type ChosenProviders = BTreeMap<(ModuleId, usize), ResolvedDemand>;
-
-/// Resolve the provider and typed connection for every demand in the graph, once.
-///
-/// A connection variant's fields are all mandatory, so a chosen provider cannot render an
-/// incomplete connection — completeness is a compile-time guarantee, replacing the old
-/// runtime role-contract validation.
-fn resolve_demand_providers(
-    graph: &ResolvedGraph,
-    catalog: &Catalog,
-    ctx: &PlanCtx,
-) -> Result<ChosenProviders, PlanError> {
-    let mut chosen = ChosenProviders::new();
-    for module in &graph.nodes {
-        for (idx, demand) in module.needs().iter().enumerate() {
-            let provider_id = choose_provider(
-                ctx,
-                catalog,
-                &demand.resource,
-                demand.provider.as_ref(),
-                Some(module.id()),
-            )?;
-            let provider = catalog
-                .get(&provider_id)
-                .expect("provider id is in catalog");
-            let template = provider
-                .provides()
-                .resource_kinds
-                .get(&demand.resource)
-                .expect("chosen provider provisions the demanded role");
-            let connection = template.resolve(&demand.name);
-            chosen.insert(
-                (module.id().clone(), idx),
-                ResolvedDemand {
-                    provider: provider_id,
-                    connection,
-                },
-            );
-        }
-    }
-    Ok(chosen)
-}
-
-/// Reject an environment that contains two or more providers of the same resource role,
-/// unless every extra provider was reached by an explicit per-demand
-/// [`provider`](crate::ResourceDemand::provider) pin.
-///
-/// `choose_provider` already selects exactly one provider per demand, so a same-role clash
-/// only arises when a *second* provider is in the graph for an unrelated reason — directly
-/// selected, or pulled in by `requires`. That is the case this rejects (with
-/// [`PlanError::ConflictingRoleProviders`]): selecting both RustFS and Azurite with no
-/// pins is ambiguous, and the planner will not silently drop one. The exception is the
-/// deliberate multi-store shape — a consumer that pins each demand's provider, or an
-/// environment-level [`ExtraResource`] that pins one — where every provider beyond the first is
-/// accounted for by a pin.
-fn check_role_exclusivity(graph: &ResolvedGraph, selection: &Selection) -> Result<(), PlanError> {
-    // The (role, provider) pairs a demand or an extra resource explicitly pinned — sanctioned.
-    let mut pinned: BTreeSet<(String, ModuleId)> = BTreeSet::new();
-    for module in &graph.nodes {
-        for demand in module.needs() {
-            if let Some(p) = &demand.provider {
-                pinned.insert((demand.resource.clone(), p.clone()));
-            }
-        }
-    }
-    for extra in &selection.extra_resources {
-        if let Some(p) = &extra.provider {
-            pinned.insert((extra.resource.clone(), p.clone()));
-        }
-    }
-
-    // Providers of each role present in the resolved graph (a node provides a role if it
-    // declares it under `resource_kinds`, or its `provider_of` capability names it).
-    let mut by_role: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
-    for module in &graph.nodes {
-        let mut roles: BTreeSet<&str> = module
-            .provides()
-            .resource_kinds
-            .keys()
-            .map(String::as_str)
-            .collect();
-        if let Some(cap) = module.provider_of() {
-            roles.insert(cap);
-        }
-        for role in roles {
-            by_role
-                .entry(role.to_string())
-                .or_default()
-                .push(module.id().clone());
-        }
-    }
-
-    for (role, mut providers) in by_role {
-        if providers.len() < 2 {
-            continue;
-        }
-        // Allow it only if at most one provider is unpinned: every other was a deliberate pin.
-        let unpinned = providers
-            .iter()
-            .filter(|id| !pinned.contains(&(role.clone(), (*id).clone())))
-            .count();
-        if unpinned > 1 {
-            // Ignore a role that no demand actually targets (e.g. a `provider_of` capability
-            // with no matching `resource_kinds` demand): it is not a provisioning clash.
-            let demanded = graph
-                .nodes
-                .iter()
-                .flat_map(|m| m.needs())
-                .any(|d| d.resource == role);
-            if !demanded {
-                continue;
-            }
-            providers.sort();
-            return Err(PlanError::ConflictingRoleProviders { role, providers });
-        }
-    }
-    Ok(())
-}
-
-/// Claim `prefix` for `service.endpoint`, erroring if another endpoint already did.
-fn claim(
-    claimed: &mut BTreeMap<String, String>,
-    prefix: &str,
-    service: &ServiceSpec,
-    endpoint_id: &str,
-) -> Result<(), PlanError> {
-    let who = format!("{}.{}", service.name, endpoint_id);
-    if let Some(first) = claimed.get(prefix) {
-        return Err(PlanError::PrefixCollision {
-            prefix: prefix.to_string(),
-            first: first.clone(),
-            second: who,
-        });
-    }
-    claimed.insert(prefix.to_string(), who);
-    Ok(())
-}
-
-/// Reject an empty mount prefix — it would become a `/` catch-all that shadows every
-/// other route.
-fn require_prefix(prefix: &str, service: &ServiceSpec, endpoint_id: &str) -> Result<(), PlanError> {
-    if prefix.is_empty() {
-        return Err(PlanError::MissingPrefix(format!(
-            "{}.{}",
-            service.name, endpoint_id
-        )));
-    }
-    Ok(())
-}
-
-/// Ensure the gateway has a cluster (named for `service`) targeting `endpoint`.
-///
-/// The cluster port comes from the **routed endpoint** — not the service's first
-/// endpoint, which may listen elsewhere. Routes reference the cluster by service name,
-/// so a service exposes exactly one gateway cluster; if two of its surface endpoints
-/// disagree on the upstream port, that is a modeling error the planner reports
-/// ([`PlanError::ClusterPortConflict`]) rather than silently forwarding to the wrong
-/// one.
-fn ensure_cluster(
-    gateway: &mut GatewayConfig,
-    service: &ServiceSpec,
-    endpoint: &Endpoint,
-) -> Result<(), PlanError> {
-    let host = match &service.placement {
-        Placement::Container { service } => service.clone(),
-        // Host/in-process services are reached via the host gateway DNS from a
-        // container; the gateway cluster targets that.
-        _ => "host.docker.internal".to_string(),
-    };
-    ensure_named_cluster(gateway, &service.name, host, endpoint.internal_port)
-}
-
-/// Add the cluster `name` → `host:port` unless it already exists. An existing cluster of the
-/// same name on a different port is a [`PlanError::ClusterPortConflict`].
-fn ensure_named_cluster(
-    gateway: &mut GatewayConfig,
-    name: &str,
-    host: String,
-    port: u16,
-) -> Result<(), PlanError> {
-    if let Some(existing) = gateway.clusters.iter().find(|c| c.name == name) {
-        if existing.port != port {
-            return Err(PlanError::ClusterPortConflict {
-                service: name.to_string(),
-                first: existing.port,
-                second: port,
-            });
-        }
-        return Ok(());
-    }
-    gateway.clusters.push(ClusterConfig {
-        name: name.to_string(),
-        host,
-        port,
-    });
-    Ok(())
-}
-
-/// Plan the gateway's TLS listener from every module's
-/// [`impersonated_hosts`](crate::Provides::impersonated_hosts), or `None` if no module
-/// declares any.
-///
-/// Walks modules in dependency order, expanding a `{name}` host once per resource the module
-/// provisions, and adds a cluster per declared upstream. A host declared by two modules is a
-/// [`PlanError::ImpersonatedHostCollision`].
-fn plan_impersonation(
-    graph: &ResolvedGraph,
-    provisioned_by: &BTreeMap<ModuleId, Vec<String>>,
-    gateway: &mut GatewayConfig,
-) -> Result<Option<TlsListenerConfig>, PlanError> {
-    let mut owner: BTreeMap<String, ModuleId> = BTreeMap::new();
-    let mut virtual_hosts: Vec<TlsVirtualHost> = Vec::new();
-    for module in &graph.nodes {
-        let objects = provisioned_by
-            .get(module.id())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        for decl in &module.provides().impersonated_hosts {
-            ensure_named_cluster(gateway, &decl.service, decl.service.clone(), decl.port)?;
-            let hosts: Vec<String> = if decl.host.contains("{name}") {
-                objects
-                    .iter()
-                    .map(|name| decl.host.replace("{name}", name))
-                    .collect()
-            } else {
-                vec![decl.host.clone()]
-            };
-            for host in hosts {
-                if let Some(first) = owner.get(&host) {
-                    return Err(PlanError::ImpersonatedHostCollision {
-                        host,
-                        first: first.clone(),
-                        second: module.id().clone(),
-                    });
-                }
-                owner.insert(host.clone(), module.id().clone());
-                match virtual_hosts.iter_mut().find(|v| v.cluster == decl.service) {
-                    Some(vhost) => vhost.hosts.push(host),
-                    None => virtual_hosts.push(TlsVirtualHost {
-                        cluster: decl.service.clone(),
-                        hosts: vec![host],
-                    }),
-                }
-            }
-        }
-    }
-    if owner.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(TlsListenerConfig {
-        port: GATEWAY_TLS_PORT,
-        virtual_hosts,
-        hosts: owner.into_keys().collect(),
-        trust: gateway_tls_trust(),
-        mint_service: GATEWAY_CERTS_SERVICE.into(),
-    }))
-}
-
-/// Rewrite every gatewayed object store's resolved connection so its `endpoint` (and the
-/// `BlobEndpoint=` inside an Azure connection string) points at the gateway's dedicated
-/// listener instead of the provider's in-network address.
-///
-/// An object-store provider advertises a [`Gatewayed`](RouteIntent::Gatewayed) endpoint;
-/// `dedicated_ports` carries the listener host port assigned to it. For each such provider we
-/// derive the in-network gateway origin `http://<gateway_service>:<port>` and swap it in for
-/// the original origin in every `chosen` connection vended by that provider — keeping any path
-/// the original endpoint carried (e.g. Azure's `/devstoreaccount1`). This is what makes
-/// consumers (and the provider's own fragment) reach the store through Envoy.
-fn rewrite_gatewayed_object_store_endpoints(
-    chosen: &mut ChosenProviders,
-    services_of: &BTreeMap<ModuleId, Vec<ServiceSpec>>,
-    graph: &ResolvedGraph,
-    ctx: &PlanCtx,
-    dedicated_ports: &BTreeMap<(String, String), u16>,
-) {
-    // provider module id → the in-network gateway origin its store is now reached at.
-    let mut provider_origin: BTreeMap<ModuleId, String> = BTreeMap::new();
-    for module in &graph.nodes {
-        for service in &services_of[module.id()] {
-            for endpoint in &service.endpoints {
-                if endpoint.intent == RouteIntent::Gatewayed
-                    && let Some(port) =
-                        dedicated_ports.get(&(service.name.clone(), endpoint.id.clone()))
-                {
-                    provider_origin.insert(
-                        module.id().clone(),
-                        format!("http://{}:{}", ctx.gateway_service, port),
-                    );
-                }
-            }
-        }
-    }
-    if provider_origin.is_empty() {
-        return;
-    }
-    for resolved in chosen.values_mut() {
-        if let Some(new_origin) = provider_origin.get(&resolved.provider) {
-            rewrite_object_store_origin(&mut resolved.connection, new_origin);
-        }
-    }
-}
-
-/// Swap the origin (`scheme://host:port`) of an object-store connection's `endpoint` — and the
-/// `BlobEndpoint=` segment of an Azure connection string — to `new_origin`, preserving any
-/// path. A no-op for non-object-store connections.
-fn rewrite_object_store_origin(connection: &mut Connection, new_origin: &str) {
-    let Connection::ObjectStore {
-        endpoint,
-        credential,
-        ..
-    } = connection
-    else {
-        return;
-    };
-    *endpoint = swap_origin(endpoint, new_origin);
-    if let crate::model::connection::ObjectStoreCredential::AzureBlob { connection_string } =
-        credential
-    {
-        // The connection string embeds `BlobEndpoint=<url>;`; rewrite that URL's origin too.
-        *connection_string = connection_string
-            .split(';')
-            .map(|seg| match seg.strip_prefix("BlobEndpoint=") {
-                Some(url) => format!("BlobEndpoint={}", swap_origin(url, new_origin)),
-                None => seg.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join(";");
-    }
-}
-
-/// Replace the `scheme://host[:port]` origin of `url` with `new_origin`, keeping the path.
-/// `new_origin` is itself an origin (no trailing path). If `url` has no `://`, it is returned
-/// unchanged.
-fn swap_origin(url: &str, new_origin: &str) -> String {
-    match url.split_once("://") {
-        Some((_scheme, rest)) => {
-            // The path is everything from the first '/' after the authority.
-            match rest.find('/') {
-                Some(slash) => format!("{}{}", new_origin, &rest[slash..]),
-                None => new_origin.to_string(),
-            }
-        }
-        None => url.to_string(),
-    }
-}
-
-/// The typed `depends_on` gate a chosen `provider` advertises for its consumers, or `None`
-/// if it declares no startup gate (nothing to wait for).
-///
-/// The provider declares the gate as a single `"<service>:<condition>"`
-/// [`DEP_GATE_EXTRA`] value (e.g. `"db:service_healthy"`,
-/// `"rustfs-init:service_completed_successfully"`); this parses it into a typed
-/// [`DepGate`](crate::catalog::module::DepGate) the planner hands the consumer's render. An
-/// unrecognized or missing condition defaults to
-/// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
-fn provider_dep_gate(
-    catalog: &Catalog,
-    provider: &ModuleId,
-) -> Option<crate::catalog::module::DepGate> {
-    let module = catalog.get(provider)?;
-    let gate = module.provides().extras.get(DEP_GATE_EXTRA)?;
-    let (service, condition) = match gate.split_once(':') {
-        Some((s, c)) => (s, crate::catalog::module::DependsCondition::parse(c)),
-        None => (gate.as_str(), None),
-    };
-    Some(crate::catalog::module::DepGate {
-        service: service.to_string(),
-        condition: condition.unwrap_or(crate::catalog::module::DependsCondition::ServiceStarted),
-    })
-}
-
-/// The gateway rewrite for an API route, for the structured [`GatewayConfig`], from the
-/// endpoint's typed [`Rewrite`] and its service's `base_path`.
-///
-/// Tri-state result: `None` means forward the path unchanged (no rewrite emitted);
-/// `Some(path)` means rewrite the matched prefix to `path`.
-///
-/// - [`Rewrite::Passthrough`] forwards unchanged (`None`).
-/// - [`Rewrite::To`] rewrites to the literal path.
-/// - [`Rewrite::Inherit`] joins the service's `base_path` with the client `prefix`; a
-///   service serving at root (empty base path) needs no rewrite (`None`).
-fn api_rewrite(rewrite: &Rewrite, base_path: &str, prefix: &str) -> Option<String> {
-    match rewrite {
-        Rewrite::Passthrough => None,
-        Rewrite::To(path) => Some(path.clone()),
-        Rewrite::Inherit => {
-            if base_path.is_empty() {
-                None
-            } else {
-                Some(join_path(base_path, prefix))
-            }
-        }
-    }
-}
-
-/// Join two path segments with exactly one slash at the seam, no trailing slash
-/// duplication.
-fn join_path(a: &str, b: &str) -> String {
-    let a = a.trim_end_matches('/');
-    let b = b.trim_start_matches('/');
-    if b.is_empty() {
-        a.to_string()
-    } else if a.is_empty() {
-        format!("/{b}")
-    } else {
-        format!("{a}/{b}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalog::baseline_catalog;
+    use crate::model::endpoint::{Endpoint, Rewrite};
+    use crate::model::placement::Placement;
+    use knobs::resolve_knob;
 
     fn default_selection() -> Selection {
         Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"])
