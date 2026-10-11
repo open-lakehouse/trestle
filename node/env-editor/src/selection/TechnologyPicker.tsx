@@ -1,5 +1,6 @@
 import { Badge, Card, cn, Switch } from "@open-lakehouse/ui-kit";
-import { Boxes } from "lucide-react";
+import { ModuleIcon } from "../graph/projectIcons";
+import { roleStyle } from "../graph/roleTheme";
 import { KnobField } from "../knobs/KnobField";
 import type { CatalogDto, ModuleDto } from "../types";
 
@@ -74,7 +75,16 @@ export function TechnologyPicker({
                   )}
                 >
                   <div className="flex items-start gap-3 p-3">
-                    <Boxes className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <ModuleIcon
+                      moduleId={m.id}
+                      role={m.provider_of}
+                      className={cn(
+                        "mt-0.5 h-4 w-4 shrink-0",
+                        isSelected
+                          ? roleStyle(m.provider_of).accent
+                          : "text-muted-foreground",
+                      )}
+                    />
                     <div className="min-w-0 flex-1">
                       <label
                         htmlFor={toggleId}

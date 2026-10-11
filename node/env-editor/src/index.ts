@@ -13,6 +13,12 @@ export {
   MarkitectureCanvas,
   type MarkitectureCanvasProps,
 } from "./graph/MarkitectureCanvas";
+export {
+  type IconProps,
+  ModuleIcon,
+  type ModuleIconProps,
+  projectIcon,
+} from "./graph/projectIcons";
 export { roleStyle } from "./graph/roleTheme";
 export { KnobsStep } from "./knobs/KnobsStep";
 export {
