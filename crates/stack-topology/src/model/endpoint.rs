@@ -120,6 +120,30 @@ pub enum Rewrite {
     To(String),
 }
 
+/// How the gateway treats the requests it forwards to an endpoint, beyond where they go.
+///
+/// Both options default off, so an endpoint that doesn't ask for them is routed exactly as
+/// before. They apply wherever the endpoint is fronted (its shared-listener route).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteOptions {
+    /// The endpoint holds requests open (server-sent events, streamed model output, long
+    /// polls), so the gateway must not apply its default per-request timeout to the route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub streaming: bool,
+    /// The upstream authenticates to *its* upstream with credentials it holds itself (e.g. a
+    /// model gateway with stored provider keys), so the gateway drops any caller-supplied
+    /// `Authorization` / `x-api-key` before forwarding rather than letting it shadow them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strip_client_credentials: bool,
+}
+
+impl RouteOptions {
+    /// Whether every option is at its default (so serializing it can be skipped).
+    pub fn is_default(&self) -> bool {
+        self == &RouteOptions::default()
+    }
+}
+
 /// A single network endpoint a service offers.
 ///
 /// Carries both the **internal port** (what the service listens on, used for
@@ -166,6 +190,10 @@ pub struct Endpoint {
     /// [`Api`](RouteIntent::Api) endpoint; defaults to [`Inherit`](Rewrite::Inherit).
     #[serde(default)]
     pub rewrite: Rewrite,
+    /// How the gateway treats requests on this endpoint's route (timeouts, caller
+    /// credentials). Defaults to plain request/response routing.
+    #[serde(default, skip_serializing_if = "RouteOptions::is_default")]
+    pub route: RouteOptions,
 }
 
 impl Endpoint {
@@ -186,6 +214,7 @@ impl Endpoint {
             path: String::new(),
             mount_prefix: None,
             rewrite: Rewrite::Inherit,
+            route: RouteOptions::default(),
         }
     }
 
@@ -206,6 +235,7 @@ impl Endpoint {
             path: String::new(),
             mount_prefix: Some(mount_prefix.into()),
             rewrite,
+            route: RouteOptions::default(),
         }
     }
 
@@ -221,6 +251,7 @@ impl Endpoint {
             path: String::new(),
             mount_prefix: None,
             rewrite: Rewrite::Inherit,
+            route: RouteOptions::default(),
         }
     }
 
@@ -236,6 +267,7 @@ impl Endpoint {
             path: String::new(),
             mount_prefix: None,
             rewrite: Rewrite::Inherit,
+            route: RouteOptions::default(),
         }
     }
 }

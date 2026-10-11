@@ -606,6 +606,18 @@ fn render_template(
         .map_err(|e| RenderError(e.to_string()))
 }
 
+/// Stack-wide facts a module's topology may depend on beyond its own knobs, settled by the
+/// planner before any module's services are computed (see [`Module::services_in`]).
+///
+/// The same facts reach every fragment as render-only variables (e.g. `GATEWAY_AUTH`), so a
+/// module's services and its rendered compose can't disagree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StackFacts {
+    /// Whether the gateway authenticates the requests it fronts (its forward-auth knob is on
+    /// and an auth provider is wired).
+    pub gateway_auth: bool,
+}
+
 /// A module's knobs resolved to their canonical, coerced values — the input a module's
 /// [`services`](Module::services) reads to decide its knob-driven topology, and the
 /// `knobs` map a template reads as `{{ knobs.key }}`.
@@ -744,6 +756,14 @@ pub trait Module: Send + Sync {
     /// against the module's chosen `knobs`. Pure and deterministic. A data module returns its
     /// static services verbatim; a logic module may branch on `knobs`.
     fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec>;
+    /// The topology services this module contributes to a stack with the given
+    /// [`StackFacts`] — what the planner calls. Defaults to [`services`](Module::services); a
+    /// module overrides it only when a stack-wide fact (e.g. whether the gateway authenticates)
+    /// changes which services it runs.
+    fn services_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ServiceSpec> {
+        let _ = stack;
+        self.services(knobs)
+    }
     /// Look up one of this module's services by `name`, given the resolved knobs.
     fn service(&self, name: &str, knobs: &ResolvedKnobs) -> Option<ServiceSpec> {
         self.services(knobs).into_iter().find(|s| s.name == name)

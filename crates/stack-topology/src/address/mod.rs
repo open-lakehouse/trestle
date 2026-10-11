@@ -326,6 +326,7 @@ mod tests {
                 path: "/api/2.1/unity-catalog/".into(),
                 mount_prefix: None,
                 rewrite: crate::model::endpoint::Rewrite::Inherit,
+                route: Default::default(),
             }],
             depends_on: vec![],
             base_path: String::new(),

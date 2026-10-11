@@ -8,7 +8,7 @@ use super::resolve::ResolvedGraph;
 use super::{AppUpstream, PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
 use crate::catalog::module::ModuleId;
-use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
+use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent, RouteOptions, Scheme};
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
 
@@ -36,6 +36,9 @@ pub struct GatewayRoute {
     /// forwards the matched path unchanged (no rewrite emitted); `Some(path)`
     /// rewrites the matched prefix to `path`.
     pub rewrite: Option<String>,
+    /// How the gateway treats requests on this route, carried from the fronted endpoint's
+    /// [`Endpoint::route`](crate::Endpoint::route).
+    pub options: RouteOptions,
 }
 
 /// A gateway listener: a host port and the routes it serves.
@@ -468,6 +471,7 @@ pub(super) fn wire_app_upstream(
         prefix: "/".into(),
         cluster: "app".into(),
         rewrite: None,
+        options: RouteOptions::default(),
     });
     Ok(())
 }

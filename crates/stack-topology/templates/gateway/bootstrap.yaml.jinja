@@ -59,12 +59,21 @@ static_resources:
                         - match: { prefix: "{{ r.prefix }}" }
                           route:
                             cluster: {{ r.cluster }}
+{%- if r.streaming %}
+                            # No timeout: the upstream holds requests open (SSE, streamed output).
+                            timeout: 0s
+{%- endif %}
 {%- if r.rewrite is not none %}
                             regex_rewrite:
                               pattern:
                                 google_re2: {}
                                 regex: "^{{ r.prefix_regex }}(.*)$"
                               substitution: "{{ r.rewrite }}\\1"
+{%- endif %}
+{%- if r.strip_client_credentials %}
+                          # The upstream authenticates with credentials it holds itself: drop the
+                          # caller's at forward time (after any auth check) so they can't shadow them.
+                          request_headers_to_remove: ["authorization", "x-api-key"]
 {%- endif %}
 {%- endfor %}
                 http_filters:

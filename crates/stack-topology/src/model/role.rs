@@ -63,6 +63,9 @@ impl Role {
     pub const AUTH: &'static str = "auth";
     /// `policy` — an authorization policy engine the gateway consults per request.
     pub const POLICY: &'static str = "policy";
+    /// `agent_platform` — an AI-agent runtime: a coordinating server plus the hosts its agents
+    /// run on.
+    pub const AGENT_PLATFORM: &'static str = "agent_platform";
 
     /// The `object_store` role.
     pub fn object_store() -> Role {
@@ -95,6 +98,10 @@ impl Role {
     /// The `lineage` role.
     pub fn lineage() -> Role {
         Role::new(Self::LINEAGE)
+    }
+    /// The `agent_platform` role.
+    pub fn agent_platform() -> Role {
+        Role::new(Self::AGENT_PLATFORM)
     }
     /// The `app_runtime` role.
     pub fn app_runtime() -> Role {

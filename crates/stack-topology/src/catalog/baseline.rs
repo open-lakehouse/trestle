@@ -89,6 +89,25 @@ pub const DATA_ROOT_VAR: &str = "DATA_ROOT";
 /// instead of hard-coding one. Baked at plan time, like [`DATA_ROOT_VAR`].
 pub const GATEWAY_URL_VAR: &str = "GATEWAY_URL";
 
+/// The render-only variable carrying the gateway's origin as an in-network caller reaches it
+/// (`http://<gateway_service>:<gateway_internal_port>`): the container-vantage counterpart of
+/// [`GATEWAY_URL_VAR`], e.g. for a service that must accept the `Host` its in-network callers
+/// send. Baked at plan time, like [`DATA_ROOT_VAR`].
+pub const GATEWAY_INTERNAL_URL_VAR: &str = "GATEWAY_INTERNAL_URL";
+
+/// The render-only variable saying whether the gateway authenticates the requests it fronts:
+/// `"true"` when its forward-auth knob is on and an auth provider is wired, else `"false"`.
+/// A fragment branches on it to trust the identity the gateway asserts (e.g. `Remote-Email`)
+/// or to run single-user. It mirrors [`StackFacts::gateway_auth`](crate::StackFacts), which
+/// the module's [`services_in`](crate::Module::services_in) sees, so both agree.
+pub const GATEWAY_AUTH_VAR: &str = "GATEWAY_AUTH";
+
+/// The render-only variable listing every client-environment key the stack defines (the
+/// selected modules' [`Provides::client_env`](crate::Provides::client_env) keys, sorted and
+/// comma-joined), so a module that launches client processes (an agent runner) can forward
+/// exactly the stack's contract to them without naming other modules' variables.
+pub const CLIENT_ENV_KEYS_VAR: &str = "CLIENT_ENV_KEYS";
+
 /// The default value injected for [`DATA_ROOT_VAR`]: `./.data`, relative to the compose
 /// file's directory — matching where the fragments persisted data before the root was
 /// centralized.

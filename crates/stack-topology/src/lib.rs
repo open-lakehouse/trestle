@@ -84,7 +84,7 @@ pub mod report;
 pub use model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
 };
-pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
+pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, RouteOptions, Scheme};
 pub use model::placement::{Placement, Vantage};
 pub use model::role::{Role, ServiceSpec};
 
@@ -92,7 +92,8 @@ pub use model::role::{Role, ServiceSpec};
 pub use catalog::module::{
     ClientValue, ConnectionBinding, DataModule, DepGate, DependsCondition, ExtraResource,
     GatewayTls, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl, PortMapping,
-    Provides, RenderCtx, RenderError, RenderSpec, ResolvedKnobs, ResourceDemand, UrlPart,
+    Provides, RenderCtx, RenderError, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts,
+    UrlPart,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,

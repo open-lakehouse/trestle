@@ -102,6 +102,10 @@ struct RouteCtx<'a> {
     prefix_regex: String,
     cluster: &'a str,
     rewrite: Option<&'a str>,
+    /// Hold the request open with no route timeout (SSE, streamed model output).
+    streaming: bool,
+    /// Drop caller credentials before forwarding (the upstream holds its own).
+    strip_client_credentials: bool,
 }
 
 /// Escape `literal` so RE2 matches it verbatim, in a form that is also valid inside a YAML
@@ -162,6 +166,8 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
                     prefix_regex: re2_literal(&r.prefix),
                     cluster: &r.cluster,
                     rewrite: r.rewrite.as_deref(),
+                    streaming: r.options.streaming,
+                    strip_client_credentials: r.options.strip_client_credentials,
                 })
                 .collect(),
             // Only the shared listener is gated: it carries the API/UI routes. Dedicated
