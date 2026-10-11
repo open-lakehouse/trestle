@@ -216,7 +216,7 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
     }
 
     write_env(&plan, &selection, &ctx, &out_dir)?;
-    report_written(&out_dir);
+    report_written(&plan, &out_dir);
     Ok(())
 }
 
@@ -240,12 +240,46 @@ fn write_env(
     Ok(())
 }
 
-fn report_written(dir: &std::path::Path) {
+fn report_written(plan: &olai_stack_topology::Plan, dir: &std::path::Path) {
+    print!("{}", next_steps(plan, dir));
+}
+
+/// What to do after rendering: start the stack, where it is reachable, and the generated
+/// files a user is expected to read or edit.
+fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String {
+    use std::fmt::Write as _;
+
     let dir = dir.display();
-    println!("Wrote composed environment to {dir}");
-    println!("Next steps:");
-    println!("  cd {dir}");
-    println!("  docker compose up");
+    let mut out = format!("Wrote composed environment to {dir}\n\nNext steps:\n");
+    let _ = writeln!(out, "  cd {dir} && docker compose up -d --wait");
+    let _ = writeln!(
+        out,
+        "  Gateway:   http://localhost:{}  (routes: LAYOUT.md)",
+        plan.gateway_host_port()
+    );
+    if plan.gateway.auth.is_some() {
+        let _ = writeln!(
+            out,
+            "  Sign in:   demo / authelia by default  (accounts: users.yml; APIs take basic auth)"
+        );
+    }
+    if plan.gateway.policy.is_some() {
+        let _ = writeln!(
+            out,
+            "  Policy:    policies/authz.rego  (yours to edit; check with `opa test policies/`)"
+        );
+    }
+    let _ = writeln!(
+        out,
+        "  Clients:   {} (host) or {} (in-network): endpoints only, no credentials",
+        olai_stack_topology::CLIENT_HOST_ENV_PATH,
+        olai_stack_topology::CLIENT_CONTAINER_ENV_PATH,
+    );
+    let _ = writeln!(
+        out,
+        "  Re-render: edit env.toml, then `trestle env render {dir}`"
+    );
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +309,7 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
     plan.materialize()
         .write_to(&out_dir)
         .map_err(|e| Error::io_at(&out_dir, e))?;
-    report_written(&out_dir);
+    report_written(&plan, &out_dir);
     Ok(())
 }
 
@@ -564,5 +598,43 @@ mod wizard {
         } else {
             Some(value)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use olai_stack_topology::{PlanCtx, Selection, baseline_catalog};
+
+    use super::next_steps;
+
+    #[test]
+    fn next_steps_point_at_the_files_a_user_needs() {
+        let plain = baseline_catalog()
+            .plan(
+                &Selection::modules(["envoy", "postgres", "mlflow"]),
+                &PlanCtx {
+                    gateway_host_port: 9090,
+                    ..PlanCtx::default()
+                },
+            )
+            .unwrap();
+        let text = next_steps(&plain, std::path::Path::new("lh"));
+        assert!(text.contains("http://localhost:9090"), "{text}");
+        assert!(text.contains("client/host.env"), "{text}");
+        assert!(text.contains("trestle env render lh"), "{text}");
+        assert!(
+            !text.contains("Sign in") && !text.contains("Policy"),
+            "{text}"
+        );
+
+        let guarded = baseline_catalog()
+            .plan(
+                &Selection::modules(["envoy", "postgres", "mlflow", "opa"]),
+                &PlanCtx::default(),
+            )
+            .unwrap();
+        let text = next_steps(&guarded, std::path::Path::new("lh"));
+        assert!(text.contains("users.yml"), "{text}");
+        assert!(text.contains("policies/authz.rego"), "{text}");
     }
 }
