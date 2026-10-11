@@ -395,6 +395,9 @@ impl RenderSpec {
     pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, RenderError> {
         let RenderSpec { fragment, files } = self;
         let mut env = minijinja::Environment::new();
+        // Rendered files are text files: keep the template's final newline (MiniJinja strips
+        // it by default), so appending to e.g. an operator-owned `users.yml` stays valid.
+        env.set_keep_trailing_newline(true);
         let mut rendered = Vec::with_capacity(files.len());
         for f in files {
             let contents = render_template(&mut env, &f.contents, ctx)?;

@@ -221,6 +221,7 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
     };
 
     let mut env = minijinja::Environment::new();
+    env.set_keep_trailing_newline(true);
     env.add_template("envoy", ENVOY_TEMPLATE)
         .expect("the embedded Envoy template is valid");
     env.get_template("envoy")
