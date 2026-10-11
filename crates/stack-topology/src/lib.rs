@@ -90,9 +90,9 @@ pub use model::role::{Role, ServiceSpec};
 
 // --- catalog: the module set + how a module is defined ---
 pub use catalog::module::{
-    ConnectionBinding, DataModule, DepGate, DependsCondition, ExtraResource, GatewayTls,
-    ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl, PortMapping, Provides, RenderCtx,
-    RenderError, RenderSpec, ResolvedKnobs, ResourceDemand,
+    ClientValue, ConnectionBinding, DataModule, DepGate, DependsCondition, ExtraResource,
+    GatewayTls, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl, PortMapping,
+    Provides, RenderCtx, RenderError, RenderSpec, ResolvedKnobs, ResourceDemand, UrlPart,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
@@ -110,7 +110,9 @@ pub use plan::{
 
 // --- render: the planner↔template handshake + the stack artifacts ---
 pub use render::artifacts::{Artifacts, render_all, render_compose, render_envoy};
-pub use render::output::{MaterializedOutput, OutputFile};
+pub use render::output::{
+    CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
+};
 pub use render::{InjectedEnv, RenderFile, RenderOutput};
 
 // --- address: the addressing resolver ---

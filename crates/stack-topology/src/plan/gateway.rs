@@ -261,26 +261,29 @@ pub(super) fn require_prefix(
     Ok(())
 }
 
-/// Ensure the gateway has a cluster (named for `service`) targeting `endpoint`.
+/// Ensure the gateway has a cluster for `service`'s `endpoint` and return its name.
 ///
-/// The cluster port comes from the **routed endpoint** — not the service's first
-/// endpoint, which may listen elsewhere. Routes reference the cluster by service name,
-/// so a service exposes exactly one gateway cluster; if two of its surface endpoints
-/// disagree on the upstream port, that is a modeling error the planner reports
-/// ([`PlanError::ClusterPortConflict`]) rather than silently forwarding to the wrong
-/// one.
+/// A service's first gateway-facing port gets the service-named cluster; an endpoint on a
+/// *different* port of the same service (e.g. a UI and an ingest port) gets its own
+/// `<service>_<endpoint>` cluster, so one service can expose several ports at the gateway.
 pub(super) fn ensure_cluster(
     gateway: &mut GatewayConfig,
     service: &ServiceSpec,
     endpoint: &Endpoint,
-) -> Result<(), PlanError> {
+) -> Result<String, PlanError> {
     let host = match &service.placement {
         Placement::Container { service } => service.clone(),
         // Host/in-process services are reached via the host gateway DNS from a
         // container; the gateway cluster targets that.
         _ => "host.docker.internal".to_string(),
     };
-    ensure_named_cluster(gateway, &service.name, host, endpoint.internal_port)
+    let port = endpoint.internal_port;
+    let name = match gateway.clusters.iter().find(|c| c.name == service.name) {
+        Some(existing) if existing.port != port => format!("{}_{}", service.name, endpoint.id),
+        _ => service.name.clone(),
+    };
+    ensure_named_cluster(gateway, &name, host, port)?;
+    Ok(name)
 }
 
 /// Add the cluster `name` → `host:port` unless it already exists. An existing cluster of the
@@ -461,14 +464,14 @@ pub(super) fn wire_auth(
             reason: format!("does not declare the `{EXT_AUTHZ_PATH_EXTRA}` extra"),
         })?
         .clone();
-    ensure_cluster(gateway, service, endpoint)?;
+    let cluster = ensure_cluster(gateway, service, endpoint)?;
     // The login portal is routed through the gateway at `/<service>` (a generic, provider-
     // agnostic path — `/authelia` for the bundled provider), so the deny-redirect a
     // logged-out browser follows actually resolves. The provider's session config must point
     // its `authelia_url` here.
     let portal_prefix = format!("/{}", service.name);
     gateway.auth = Some(AuthConfig {
-        cluster: service.name.clone(),
+        cluster,
         port: endpoint.internal_port,
         path_prefix,
         portal_prefix,

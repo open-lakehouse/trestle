@@ -58,6 +58,9 @@ static_resources:
                         - match: { prefix: "/api/2.0/otel" }
                           route:
                             cluster: mlflow
+                        - match: { prefix: "/v1/traces" }
+                          route:
+                            cluster: jaeger_otlp_http
                         - match: { prefix: "/lineage" }
                           route:
                             cluster: headwaters
@@ -135,6 +138,18 @@ static_resources:
                     socket_address:
                       address: jaeger
                       port_value: 16686
+    - name: jaeger_otlp_http
+      type: STRICT_DNS
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: jaeger_otlp_http
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: jaeger
+                      port_value: 4318
     - name: mlflow
       type: STRICT_DNS
       connect_timeout: 2s

@@ -250,15 +250,37 @@ fn render_env(env: &InjectedEnv, referenced: &BTreeSet<String>) -> String {
     push_lines(
         &mut out,
         &[
-            "# Local environment overlay. Copy to `.env.local` and adjust as needed.",
-            "# The variables below mirror the env vars Databricks Apps inject, so app code",
-            "# reads the same names locally and on Databricks.",
+            "# Compose substitution overlay: only variables some rendered file references as",
+            "# `${VAR}`. Clients (apps, notebooks, engines) load `client/host.env` or",
+            "# `client/container.env` instead.",
         ],
     );
     for (k, v) in env.iter() {
         if referenced.contains(k) {
             let _ = writeln!(out, "{k}={v}");
         }
+    }
+    out
+}
+
+/// Render a client environment file (see [`Plan::client_env`](crate::Plan::client_env)):
+/// `KEY=value` lines in key order under a header naming the vantage the addresses are for.
+pub(crate) fn render_client_env(env: &InjectedEnv, vantage: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Client environment for callers {vantage}. Generated; re-render to update."
+    );
+    push_lines(
+        &mut out,
+        &[
+            "# Load it into an app, notebook, or engine to reach this stack. It holds no",
+            "# credentials: authenticate through the gateway, and read/write object storage",
+            "# with the temporary credentials Unity Catalog vends.",
+        ],
+    );
+    for (k, v) in env.iter() {
+        let _ = writeln!(out, "{k}={v}");
     }
     out
 }

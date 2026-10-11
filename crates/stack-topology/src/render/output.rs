@@ -14,8 +14,15 @@
 //! them is the one I/O step, behind [`write_to`](MaterializedOutput::write_to) and the
 //! non-default `std-io` feature, so the default build stays WASM-clean.
 
+use crate::model::placement::Vantage;
 use crate::plan::Plan;
-use crate::render::artifacts::{ENVOY_CONFIG_PATH, render_all};
+use crate::render::artifacts::{ENVOY_CONFIG_PATH, render_all, render_client_env};
+
+/// Where the host-vantage client environment is written (see
+/// [`Plan::client_env`](crate::Plan::client_env)).
+pub const CLIENT_HOST_ENV_PATH: &str = "client/host.env";
+/// Where the in-network (container-vantage) client environment is written.
+pub const CLIENT_CONTAINER_ENV_PATH: &str = "client/container.env";
 
 /// One file in a [`MaterializedOutput`]: a path relative to the project root and its contents.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,7 +39,8 @@ pub struct OutputFile {
 }
 
 /// Every file a [`Plan`] produces, flattened to write-ready `(path, contents)` pairs in a
-/// fixed layout: the top-level `compose.yaml`, `.env`, and a human-readable `LAYOUT.md` summary
+/// fixed layout: the top-level `compose.yaml`, `.env`, the per-vantage client environments
+/// (`client/host.env`, `client/container.env`), and a human-readable `LAYOUT.md` summary
 /// (see [`layout_report`](crate::layout_report)), the Envoy bootstrap at
 /// `modules/envoy/envoy.yaml`, and each module's `modules/<id>/compose.yaml` fragment plus its
 /// mounted config files (already rooted under `modules/<id>/`).
@@ -66,6 +74,26 @@ pub(crate) fn materialize(plan: &Plan) -> MaterializedOutput {
         OutputFile {
             path: ".gitignore".into(),
             contents: artifacts.gitignore,
+            sensitive: false,
+            preserve: false,
+        },
+        // What a client loads to reach the stack, per vantage. Credential-free, so not
+        // sensitive: it is meant to be shared (e.g. sourced by an app's dev environment).
+        OutputFile {
+            path: CLIENT_HOST_ENV_PATH.into(),
+            contents: render_client_env(
+                plan.client_env(Vantage::Host),
+                "on the host (localhost addresses)",
+            ),
+            sensitive: false,
+            preserve: false,
+        },
+        OutputFile {
+            path: CLIENT_CONTAINER_ENV_PATH.into(),
+            contents: render_client_env(
+                plan.client_env(Vantage::Container),
+                "inside the compose network",
+            ),
             sensitive: false,
             preserve: false,
         },

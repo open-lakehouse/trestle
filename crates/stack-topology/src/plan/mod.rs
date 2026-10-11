@@ -46,6 +46,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+mod client_env;
 mod demands;
 mod gateway;
 mod impersonation;
@@ -59,11 +60,13 @@ use crate::catalog::baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR};
 use crate::catalog::module::{ExtraResource, ModuleId};
 use crate::model::connection::Connection;
 use crate::model::endpoint::RouteIntent;
+use crate::model::placement::Vantage;
 use crate::model::role::{Role, ServiceSpec};
 use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
 use crate::render::{InjectedEnv, RenderOutput};
 
+use client_env::resolve_client_env;
 use demands::{
     bind_connection, check_role_exclusivity, provider_dep_gate, provisioned_by_provider,
     resolve_demand_providers, resolve_with_demands,
@@ -272,9 +275,9 @@ pub enum PlanError {
     /// prefixable UI needs a non-empty `base_path`.
     #[error("surface endpoint `{0}` has no mount prefix (would be a catch-all `/`)")]
     MissingPrefix(String),
-    /// Two surface endpoints on one service declare different upstream ports, so a
-    /// single service-named gateway cluster cannot serve both.
-    #[error("service `{service}` has surface endpoints on conflicting ports {first} and {second}")]
+    /// Two upstreams claim the same gateway cluster name on different ports (e.g. two
+    /// modules' emulated hostnames forwarding to one service on different ports).
+    #[error("cluster `{service}` is claimed on conflicting ports {first} and {second}")]
     ClusterPortConflict {
         /// The service with conflicting endpoint ports.
         service: String,
@@ -396,6 +399,18 @@ pub enum PlanError {
         module: ModuleId,
         /// What specifically is missing.
         reason: String,
+    },
+    /// A module's [`client_env`](crate::Provides::client_env) entry could not be resolved —
+    /// it names a service or endpoint the module does not have.
+    #[error("client env `{key}` of module `{module}`: {source}")]
+    ClientEnv {
+        /// The contributing module.
+        module: ModuleId,
+        /// The env-var name.
+        key: String,
+        /// Why the value did not resolve.
+        #[source]
+        source: AddressError,
     },
     /// Two modules declared the same [`impersonated_hosts`](crate::Provides::impersonated_hosts)
     /// hostname. The gateway can only forward a host to one upstream.
@@ -534,6 +549,11 @@ pub struct Plan {
     /// The stack's aggregated environment variables (drives the `.env` artifact),
     /// last-writer-wins in dependency order.
     pub env: InjectedEnv,
+    /// The client environment resolved from the host (see [`Plan::client_env`]).
+    pub client_env_host: InjectedEnv,
+    /// The client environment resolved from inside the compose network (see
+    /// [`Plan::client_env`]).
+    pub client_env_container: InjectedEnv,
     /// The gateway facts the address resolver reads (captured from [`PlanCtx`]). Private:
     /// callers reach addressing through [`Plan::service`] → [`ServiceRef::address`], never
     /// by reconstructing this.
@@ -586,6 +606,21 @@ impl Plan {
                     services,
                 })
             }
+        }
+    }
+
+    /// The **client environment** from `from`: every variable a client (an app, notebook, or
+    /// engine) loads to reach this stack — catalog, tracking, lineage and tracing endpoints,
+    /// object-store coordinates — aggregated from each module's
+    /// [`client_env`](crate::Provides::client_env) and resolved against this plan's routes.
+    ///
+    /// Credential-free by construction: clients authenticate separately. A host or in-process
+    /// caller gets `localhost` addresses; a container on the compose network gets in-network
+    /// ones.
+    pub fn client_env(&self, from: Vantage) -> &InjectedEnv {
+        match from {
+            Vantage::Container => &self.client_env_container,
+            Vantage::Host | Vantage::InProcess => &self.client_env_host,
         }
     }
 
@@ -774,10 +809,10 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                         require_prefix(&prefix, service, &endpoint.id)?;
                         claim(&mut claimed, &prefix, service, &endpoint.id)?;
                         let rewrite = api_rewrite(&endpoint.rewrite, &service.base_path, &prefix);
-                        ensure_cluster(&mut gateway, service, endpoint)?;
+                        let cluster = ensure_cluster(&mut gateway, service, endpoint)?;
                         shared_routes.push(GatewayRoute {
                             prefix: prefix.clone(),
-                            cluster: service.name.clone(),
+                            cluster: cluster.clone(),
                             rewrite: rewrite.clone(),
                         });
                         // One rewrite value feeds both the gateway config and the
@@ -801,10 +836,10 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                         // `UiFixed` with its own listener instead.
                         require_prefix(&base, service, &endpoint.id)?;
                         claim(&mut claimed, &base, service, &endpoint.id)?;
-                        ensure_cluster(&mut gateway, service, endpoint)?;
+                        let cluster = ensure_cluster(&mut gateway, service, endpoint)?;
                         shared_routes.push(GatewayRoute {
                             prefix: base.clone(),
-                            cluster: service.name.clone(),
+                            cluster: cluster.clone(),
                             rewrite: None,
                         });
                         // Feed the chosen base path back to the module's render.
@@ -826,7 +861,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                     // its own URLs unprefixed.
                     RouteIntent::UiFixed | RouteIntent::Gatewayed => {
                         let port = dedicated_ports[&(service.name.clone(), endpoint.id.clone())];
-                        ensure_cluster(&mut gateway, service, endpoint)?;
+                        let cluster = ensure_cluster(&mut gateway, service, endpoint)?;
                         // The dedicated listener binds the allocated port on *both* sides:
                         // Envoy listens on it inside the compose network (so an in-network
                         // consumer reaches `envoy:<port>`) and compose publishes it 1:1 to the
@@ -837,7 +872,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                             internal_port: port,
                             routes: vec![GatewayRoute {
                                 prefix: "/".into(),
-                                cluster: service.name.clone(),
+                                cluster: cluster.clone(),
                                 rewrite: None,
                             }],
                         });
@@ -1106,7 +1141,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         .map(|(key, c)| (key, c.connection))
         .collect();
 
-    Ok(Plan {
+    let mut plan = Plan {
         graph,
         routes,
         injected,
@@ -1124,7 +1159,14 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             internal_port: ctx.gateway_internal_port,
             host_port: ctx.gateway_host_port,
         },
-    })
+        client_env_host: InjectedEnv::new(),
+        client_env_container: InjectedEnv::new(),
+    };
+    // Resolved last: client addresses read the settled routes through the plan's own
+    // addressing API.
+    plan.client_env_host = resolve_client_env(&plan, Vantage::Host)?;
+    plan.client_env_container = resolve_client_env(&plan, Vantage::Container)?;
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -1441,10 +1483,10 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_endpoint_ports_on_one_service_error() {
-        // Two API endpoints on the same service but different ports can't share one
-        // service-named cluster. Each `Api` endpoint carries its own `mount_prefix`
-        // (`/a`, `/b`) via the `ep` helper, so they don't collide on prefix — only on port.
+    fn endpoints_on_different_ports_of_one_service_get_their_own_clusters() {
+        // Two API endpoints on the same service but different ports: the first port keeps the
+        // service-named cluster, the second gets `<service>_<endpoint>`, and each route
+        // forwards to the cluster for its own port.
         let m = module_with(
             "svc",
             vec![
@@ -1453,20 +1495,24 @@ mod tests {
             ],
             Default::default(),
         );
-        let err = plan_env(
+        let p = plan_env(
             &Selection::modules(["svc"]),
             &Catalog::from_modules([arc(m)]),
             &PlanCtx::default(),
         )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            PlanError::ClusterPortConflict {
-                service: "svc".into(),
-                first: 8080,
-                second: 9090,
-            }
-        );
+        .expect("plan should succeed");
+        let port_of = |name: &str| {
+            p.gateway
+                .clusters
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("no cluster {name}"))
+                .port
+        };
+        assert_eq!(port_of("svc"), 8080);
+        assert_eq!(port_of("svc_b"), 9090);
+        assert_eq!(route_for(&p, "/a").cluster, "svc");
+        assert_eq!(route_for(&p, "/b").cluster, "svc_b");
     }
 
     #[test]

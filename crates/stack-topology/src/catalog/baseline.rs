@@ -49,8 +49,8 @@ use std::sync::Arc;
 use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
-    ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, Provides,
-    RenderSpec, ResolvedKnobs, ResourceDemand,
+    ClientValue, ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind, Module, ModuleId,
+    Provides, RenderSpec, ResolvedKnobs, ResourceDemand, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -232,8 +232,7 @@ pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
 /// this module's own static services — the gateway's listeners are computed from *other*
 /// modules' endpoints, so there is nothing knob-dependent in its `ServiceSpec`.
 fn envoy() -> Arc<dyn Module> {
-    let mut provides = Provides::default();
-    provides.env_vars.insert("ENVOY_PORT".into(), "9080".into());
+    let provides = Provides::default();
     Arc::new(DataModule {
         id: ModuleId::from("envoy"),
         display_name: Some("Envoy gateway".into()),
@@ -526,6 +525,15 @@ fn rustfs() -> Arc<dyn Module> {
         DEP_GATE_EXTRA.into(),
         "rustfs-init:service_completed_successfully".into(),
     );
+    // Clients get the store's coordinates only — never its root keys. They read and write
+    // with temporary credentials Unity Catalog vends for a table or volume.
+    provides.client_env.insert(
+        "AWS_ENDPOINT_URL_S3".into(),
+        ClientValue::endpoint("rustfs", "s3", UrlPart::Full),
+    );
+    provides
+        .client_env
+        .insert("AWS_REGION".into(), ClientValue::literal("us-east-1"));
     // The AWS hostnames clients without an endpoint override call. Virtual-hosted bucket names
     // are listed per provisioned bucket (`{name}`).
     let sts = |host: &str| ImpersonatedHost {
@@ -699,15 +707,13 @@ fn mlflow() -> Arc<dyn Module> {
     // `MLFLOW_S3_ENDPOINT_URL` and the AWS_* credentials are no longer declared here — they
     // are injected from the object_store provider's coordinates (see `needs` below), so they
     // follow whichever provider the planner chose and carry the in-network endpoint.
-    for (k, v) in [
-        (
-            "MLFLOW_TRACKING_URI",
-            "http://localhost:${ENVOY_PORT:-9080}",
-        ),
-        ("MLFLOW_EXPERIMENT_NAME", "local-dev"),
-    ] {
-        provides.env_vars.insert(k.into(), v.into());
-    }
+    //
+    // The tracking API is Databricks-shaped (`/api/2.0/mlflow` at the gateway root), so a
+    // client's tracking URI is the gateway origin; the MLflow client appends the API path.
+    provides.client_env.insert(
+        "MLFLOW_TRACKING_URI".into(),
+        ClientValue::endpoint("mlflow", "tracking", UrlPart::Origin),
+    );
 
     Arc::new(DataModule {
         id: ModuleId::from("mlflow"),
@@ -786,7 +792,11 @@ fn mlflow() -> Arc<dyn Module> {
 /// Databricks-shaped path at root, so `/api/2.1/unity-catalog` fronts with no rewrite;
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
-    let provides = Provides::default();
+    let mut provides = Provides::default();
+    provides.client_env.insert(
+        "UNITY_CATALOG_URL".into(),
+        ClientValue::endpoint("unitycatalog", "rest", UrlPart::Full),
+    );
     // UC reads its storage config from a rendered `server.properties` and its metadata-store
     // config from a rendered `hibernate.properties` (both mounted as secrets: they carry keys
     // and a password). They read the typed connections directly, so this module injects no env
@@ -871,9 +881,17 @@ fn unity_catalog() -> Arc<dyn Module> {
 /// `jaeger` — all-in-one OTLP tracing backend, UI fronted at `/jaeger`.
 fn jaeger() -> Arc<dyn Module> {
     let mut provides = Provides::default();
-    provides.env_vars.insert(
+    // Clients export traces over OTLP/HTTP through the gateway (`/v1/traces` on the shared
+    // listener), so host-side apps reach Jaeger without it publishing a port. The
+    // signal-specific variable is used as-is by OTel SDKs; the generic
+    // `OTEL_EXPORTER_OTLP_ENDPOINT` would also send metrics and logs, which Jaeger rejects.
+    provides.client_env.insert(
         "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT".into(),
-        "http://localhost:4317".into(),
+        ClientValue::endpoint("jaeger", "otlp_http", UrlPart::Full),
+    );
+    provides.client_env.insert(
+        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL".into(),
+        ClientValue::literal("http/protobuf"),
     );
     Arc::new(DataModule {
         id: ModuleId::from("jaeger"),
@@ -892,8 +910,11 @@ fn jaeger() -> Arc<dyn Module> {
             base_path: "/jaeger".into(),
             endpoints: vec![
                 Endpoint::ui_prefixable("ui", 16686, Some(16686)),
-                // OTLP/gRPC ingest, reached directly (not gatewayed).
+                // OTLP/gRPC ingest, reached directly in-network (not gatewayed).
                 Endpoint::internal("otlp_grpc", Scheme::Grpc, 4317, Some(4317)),
+                // OTLP/HTTP trace ingest, fronted at the OTLP-standard path: the client-facing
+                // export endpoint (see `client_env` above).
+                Endpoint::api("otlp_http", 4318, "/v1/traces", Rewrite::Passthrough),
             ],
             depends_on: vec![],
         }],
@@ -991,7 +1012,24 @@ impl Headwaters {
                     "HEADWATERS_IMAGE",
                 ),
             ],
-            provides: Provides::default(),
+            // The OpenLineage client contract (`OPENLINEAGE_URL` + `OPENLINEAGE_ENDPOINT`), as
+            // read by e.g. `datafusion-openlineage`. The ingest path is the static API prefix
+            // at the gateway regardless of the UI knob; the gateway applies any base-path
+            // rewrite, so clients never see it.
+            provides: Provides {
+                client_env: [
+                    (
+                        "OPENLINEAGE_URL".to_string(),
+                        ClientValue::endpoint("headwaters", "api", UrlPart::Origin),
+                    ),
+                    (
+                        "OPENLINEAGE_ENDPOINT".to_string(),
+                        ClientValue::endpoint("headwaters", "api", UrlPart::Path),
+                    ),
+                ]
+                .into(),
+                ..Provides::default()
+            },
             // The service config is rendered to a mounted `config.toml` (so an environment's
             // effective Headwaters config is inspectable on disk) rather than threaded as
             // individual env vars; the DSN stays in `DATABASE_URL`, which Headwaters overlays
@@ -1109,23 +1147,30 @@ fn headwaters() -> Arc<dyn Module> {
 /// Apps inject, so app code reads the same names locally. No services, no fragment.
 fn databricks_emulator_env() -> Arc<dyn Module> {
     let mut provides = Provides::default();
+    // The workspace and app URLs are the gateway origin, resolved per client vantage. No
+    // `DATABRICKS_TOKEN`: the client env is credential-free, and with gateway auth on a token
+    // is the user's own to supply.
+    for k in ["DATABRICKS_HOST", "DATABRICKS_APP_URL"] {
+        provides
+            .client_env
+            .insert(k.into(), ClientValue::GatewayOrigin);
+    }
     for (k, v) in [
         ("LOCAL_DEV", "1"),
-        ("DATABRICKS_HOST", "http://localhost:${ENVOY_PORT:-9080}"),
-        ("DATABRICKS_TOKEN", "local-dev-token-do-not-use-in-prod"),
         ("DATABRICKS_CLIENT_ID", "local-dev"),
         ("DATABRICKS_WORKSPACE_ID", "local"),
-        ("DATABRICKS_APP_URL", "http://localhost:${ENVOY_PORT:-9080}"),
         ("DATABRICKS_APP_PORT", "8080"),
         ("DATABRICKS_FORWARDED_USER", "local-developer@example.com"),
         ("DATABRICKS_FORWARDED_EMAIL", "local-developer@example.com"),
     ] {
-        provides.env_vars.insert(k.into(), v.into());
+        provides
+            .client_env
+            .insert(k.into(), ClientValue::literal(v));
     }
     Arc::new(DataModule {
         id: ModuleId::from("databricks-emulator-env"),
         display_name: Some("Databricks app runtime contract".into()),
-        summary: Some("DATABRICKS_HOST / TOKEN / forwarded-user env vars apps expect.".into()),
+        summary: Some("DATABRICKS_HOST / app URL / forwarded-user env vars apps expect.".into()),
         category: Some("app_runtime".into()),
         provider_of: Some("databricks_apps_contract".into()),
         requires: vec![],

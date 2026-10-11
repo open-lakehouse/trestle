@@ -47,6 +47,9 @@ pub enum AddressError {
     /// The named endpoint is not on the callee service.
     #[error("service `{service}` has no endpoint `{endpoint}`")]
     UnknownEndpoint { service: String, endpoint: String },
+    /// The named service is not one of the module's resolved services.
+    #[error("module `{module}` has no service `{service}`")]
+    UnknownService { module: String, service: String },
     /// A host-vantage caller needs the callee's host-published port, but the
     /// endpoint declares none.
     #[error(
@@ -147,6 +150,17 @@ fn finish(scheme: Scheme, target: Target) -> Result<Url, AddressError> {
     let (host, port, path) = target;
     build_url(scheme, &host, port, &path)
         .ok_or_else(|| AddressError::InvalidUrl(format!("{host}:{port}{path}")))
+}
+
+/// The gateway's shared-listener origin (`http://host:port`) as reached from `from`: the
+/// gateway's compose service on its internal port from a container, `localhost` on the
+/// host-published port otherwise.
+pub(crate) fn gateway_origin(from: Vantage, facts: &GatewayFacts) -> Result<Url, AddressError> {
+    let (host, port) = match from {
+        Vantage::Container => (facts.service.clone(), facts.internal_port),
+        Vantage::Host | Vantage::InProcess => ("localhost".to_string(), facts.host_port),
+    };
+    finish(Scheme::Http, (host, port, String::new()))
 }
 
 /// The (host, port, path) for a direct reach — straight to the callee.

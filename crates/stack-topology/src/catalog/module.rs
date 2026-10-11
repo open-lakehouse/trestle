@@ -115,6 +115,77 @@ pub struct Provides {
     /// [`TlsTrust`](crate::TlsTrust) so consumers can trust that CA.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub impersonated_hosts: Vec<ImpersonatedHost>,
+    /// The variables a *client* of this module (an app, notebook, or engine) loads to reach
+    /// it — keyed by env-var name. Each value is resolved per caller [`Vantage`](crate::Vantage)
+    /// against the settled plan, so ports, gateway prefixes and base-path rewrites are always
+    /// the ones the stack actually serves. Aggregated into
+    /// [`Plan::client_env`](crate::Plan::client_env).
+    ///
+    /// Never put a credential here: the client environment is written unredacted and is meant
+    /// to be shared. Clients authenticate separately (a gateway login, or temporary
+    /// credentials vended by the catalog).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub client_env: BTreeMap<String, ClientValue>,
+}
+
+/// One value a module contributes to the client environment (see [`Provides::client_env`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ClientValue {
+    /// A fixed value, identical from every vantage.
+    Literal {
+        /// The value.
+        value: String,
+    },
+    /// The address of one of this module's endpoints, as seen from the client's vantage —
+    /// through the gateway when the endpoint is routed (see
+    /// [`ServiceRef::address`](crate::ServiceRef::address)).
+    Endpoint {
+        /// The module's service hosting the endpoint.
+        service: String,
+        /// The endpoint id on that service.
+        endpoint: String,
+        /// Which part of the resolved URL to emit.
+        #[serde(default)]
+        part: UrlPart,
+    },
+    /// The gateway's shared-listener origin (`scheme://host:port`) from the client's vantage.
+    GatewayOrigin,
+}
+
+impl ClientValue {
+    /// A [`Literal`](ClientValue::Literal) value.
+    pub fn literal(value: impl Into<String>) -> Self {
+        ClientValue::Literal {
+            value: value.into(),
+        }
+    }
+
+    /// An [`Endpoint`](ClientValue::Endpoint) value emitting `part` of the resolved URL.
+    pub fn endpoint(
+        service: impl Into<String>,
+        endpoint: impl Into<String>,
+        part: UrlPart,
+    ) -> Self {
+        ClientValue::Endpoint {
+            service: service.into(),
+            endpoint: endpoint.into(),
+            part,
+        }
+    }
+}
+
+/// Which part of a resolved endpoint URL a [`ClientValue::Endpoint`] emits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UrlPart {
+    /// The whole URL (`http://localhost:9080/api/2.1/unity-catalog`).
+    #[default]
+    Full,
+    /// Only `scheme://host:port`, for clients that append their own API path.
+    Origin,
+    /// Only the path (`/api/v1/lineage`), paired with an [`Origin`](UrlPart::Origin) value.
+    Path,
 }
 
 /// One public hostname a module answers in-network (see
