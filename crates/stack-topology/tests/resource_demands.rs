@@ -447,7 +447,7 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
         "needs-store",
         vec![ResourceDemand {
             resource: "object_store".into(),
-            name: "x".into(),
+            name: "data".into(),
             provider: None,
             bind: ConnectionBinding::default(),
         }],
@@ -469,7 +469,7 @@ fn ambiguous_object_store_without_default_or_preference_errors() {
             "needs-store",
             vec![ResourceDemand {
                 resource: "object_store".into(),
-                name: "x".into(),
+                name: "data".into(),
                 provider: None,
                 bind: ConnectionBinding::default(),
             }],
@@ -697,6 +697,33 @@ fn pinned_extra_resource_sanctions_a_second_provider() {
         "the extra bucket is provisioned on the pinned azurite: {:?}",
         p.azure_containers
     );
+}
+
+/// Extra resource names reach the providers' init jobs (SQL, shell) verbatim, so the planner
+/// rejects any that aren't valid for their role — regardless of which front end built them.
+#[test]
+fn unsafe_extra_resource_names_are_rejected() {
+    for (role, name) in [
+        (Role::RELATIONAL_DB, "x\"; DROP DATABASE mlflow; --"),
+        (Role::RELATIONAL_DB, "Analytics"),
+        (Role::OBJECT_STORE, "x; rm -rf /"),
+        (Role::OBJECT_STORE, "$(id)"),
+        (Role::OBJECT_STORE, "ab"),
+    ] {
+        let mut sel = Selection::modules(["envoy", "postgres", "rustfs"]);
+        sel.extra_resources = vec![ExtraResource {
+            resource: role.into(),
+            name: name.into(),
+            provider: None,
+        }];
+        let err = baseline_catalog()
+            .plan(&sel, &PlanCtx::default())
+            .unwrap_err();
+        assert!(
+            matches!(err, PlanError::InvalidResourceName { name: ref n, .. } if n == name),
+            "{role} `{name}`: expected InvalidResourceName, got {err:?}"
+        );
+    }
 }
 
 /// A module answering `host` in-network, forwarding to its own service on port 80.
