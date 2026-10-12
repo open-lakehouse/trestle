@@ -125,8 +125,8 @@ fn envoy_routes_and_clusters_match_trestle_semantically() {
         "rendered Envoy routes must be longest-prefix-first"
     );
 
-    // The OTel route specifically passes through unchanged (no rewrite).
-    assert_eq!(got["/api/2.0/otel"].1, None);
+    // The OTel route rewrites onto MLflow's OTLP path under its base path.
+    assert_eq!(got["/api/2.0/otel"].1.as_deref(), Some("/mlflow\\1"));
     // The MLflow tracking API rewrites under the service base path.
     assert_eq!(
         got["/api/2.0/mlflow"].1.as_deref(),

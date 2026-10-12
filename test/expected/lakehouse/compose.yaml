@@ -7,6 +7,8 @@ configs:
     file: ./modules/envoy/envoy.yaml
   gateway_certs_script:
     file: ./modules/envoy/certs.sh
+  mlflow_seed_gateway:
+    file: ./modules/mlflow/seed_gateway.py
   postgres_init:
     file: ./modules/postgres/init-databases.sh
   rustfs_sts_shim:

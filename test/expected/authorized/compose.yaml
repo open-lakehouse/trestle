@@ -13,6 +13,8 @@ configs:
     file: ./modules/envoy/certs.sh
   headwaters_config:
     file: ./modules/headwaters/config.toml
+  mlflow_seed_gateway:
+    file: ./modules/mlflow/seed_gateway.py
   opa_config:
     file: ./modules/opa/config.yaml
   opa_policy:

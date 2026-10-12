@@ -7,6 +7,8 @@ configs:
     file: ./modules/envoy/envoy.yaml
   headwaters_config:
     file: ./modules/headwaters/config.toml
+  mlflow_seed_gateway:
+    file: ./modules/mlflow/seed_gateway.py
   postgres_init:
     file: ./modules/postgres/init-databases.sh
 

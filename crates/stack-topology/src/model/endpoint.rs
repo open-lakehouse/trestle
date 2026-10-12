@@ -270,4 +270,17 @@ impl Endpoint {
             route: RouteOptions::default(),
         }
     }
+
+    /// This endpoint with [`RouteOptions::streaming`] set: its route carries no request timeout.
+    pub(crate) fn streaming(mut self) -> Endpoint {
+        self.route.streaming = true;
+        self
+    }
+
+    /// This endpoint with [`RouteOptions::strip_client_credentials`] set: the gateway drops
+    /// caller credentials on its route.
+    pub(crate) fn strip_client_credentials(mut self) -> Endpoint {
+        self.route.strip_client_credentials = true;
+        self
+    }
 }

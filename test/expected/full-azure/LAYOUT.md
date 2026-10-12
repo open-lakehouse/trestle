@@ -8,7 +8,8 @@
 | shared :9080 | `/api/2.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/2.0/mlflow |
 | shared :9080 | `/api/v1/lineage` | `headwaters` | headwaters:8091 | /lineage/api/v1/lineage |
 | shared :9080 | `/unity-catalog` | `unitycatalog` | unitycatalog:8080 | — |
-| shared :9080 | `/api/2.0/otel` | `mlflow` | mlflow:5000 | — |
+| shared :9080 | `/api/2.0/otel` | `mlflow` | mlflow:5000 | /mlflow |
+| shared :9080 | `/ai-gateway` | `mlflow` | mlflow:5000 | /mlflow/gateway |
 | shared :9080 | `/v1/traces` | `jaeger_otlp_http` | jaeger:4318 | — |
 | shared :9080 | `/lineage` | `headwaters` | headwaters:8091 | — |
 | shared :9080 | `/jaeger` | `jaeger` | jaeger:16686 | — |
@@ -23,6 +24,6 @@
 | `envoy` | `envoy` | `gateway` | container `envoy` | http:10000 |
 | `headwaters` | `headwaters` | `lineage` | container `headwaters` | ui:8091, api:8091 |
 | `jaeger` | `jaeger` | `tracing` | container `jaeger` | ui:16686, otlp_grpc:4317, otlp_http:4318 |
-| `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, otel:5000, ui:5000 |
+| `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, otel:5000, ai_gateway:5000, ui:5000 |
 | `postgres` | `db` | `relational_db` | container `db` | sql:5432 |
 | `unity-catalog` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |

@@ -64,7 +64,7 @@ the stack serves:
 | Module | Variables |
 | --- | --- |
 | `unity-catalog` | `UNITY_CATALOG_URL` |
-| `mlflow` | `MLFLOW_TRACKING_URI` |
+| `mlflow` | `MLFLOW_TRACKING_URI`, `MLFLOW_AI_GATEWAY_URL` |
 | `headwaters` | `OPENLINEAGE_URL`, `OPENLINEAGE_ENDPOINT` |
 | `jaeger` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` |
 | `rustfs` | `AWS_ENDPOINT_URL_S3`, `AWS_REGION` |
@@ -73,6 +73,36 @@ the stack serves:
 The files hold **no credentials**. Clients authenticate through the gateway and read or
 write object storage with the temporary credentials Unity Catalog vends. The root `.env`
 is different: it only carries values the compose files substitute.
+
+## AI Gateway (MLflow)
+
+The `mlflow` module also serves MLflow's built-in AI Gateway, fronted at `/ai-gateway`
+(`MLFLOW_AI_GATEWAY_URL`). Clients pick the provider surface they speak below it:
+
+| Surface | Path | Speaks |
+| --- | --- | --- |
+| Anthropic | `/ai-gateway/anthropic/v1/messages` | Anthropic Messages (e.g. Claude Code via `ANTHROPIC_BASE_URL=$MLFLOW_AI_GATEWAY_URL/anthropic`) |
+| OpenAI | `/ai-gateway/openai/v1/{responses,chat/completions}` | OpenAI Responses / Chat Completions |
+| Unified | `/ai-gateway/mlflow/v1/chat/completions` | OpenAI-compatible, any configured provider |
+
+The `model` a client sends is the name of a gateway endpoint. On every `docker compose up`, a
+one-shot `mlflow-gateway-init` creates one endpoint per entry in the `mlflow.ai_gateway_models`
+knob (`provider:model` pairs, default the current Claude models), each named after the model id
+and with usage tracking on. It stores the provider key from the shell that runs `up`:
+
+```bash
+export ANTHROPIC_API_KEY=...   # OPENAI_API_KEY / GEMINI_API_KEY for those providers
+docker compose up -d
+```
+
+Keys are encrypted in MLflow's database and never written into the rendered stack. Clients send
+no key of their own. The gateway route drops caller credentials, so MLflow always uses the key
+it stores. Endpoints already present are left alone, so changes made in the MLflow UI
+(`/mlflow/#/gateway`) survive re-runs.
+
+Upgrading a stack created with an older MLflow image: MLflow refuses an out-of-date schema. Back up
+`.data/`, then run `docker compose run --rm mlflow sh -c 'mlflow db upgrade "$MLFLOW_BACKEND_STORE_URI"'`
+once (or start from an empty `.data/`).
 
 ## Gateway authentication and authorization
 

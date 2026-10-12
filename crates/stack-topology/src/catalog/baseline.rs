@@ -20,7 +20,11 @@
 //!   mount prefix (the endpoint's own `path` stays empty so the resolver does not double it).
 //! - [`Endpoint::rewrite`](crate::Endpoint::rewrite) — the [`Rewrite`](crate::Rewrite)
 //!   policy: `Inherit` (derive from `base_path`), `Passthrough` (forward unchanged, e.g.
-//!   MLflow's `/api/2.0/otel`), or `To(path)` (an explicit upstream path).
+//!   Jaeger's `/v1/traces`), or `To(path)` (an explicit upstream path, e.g. MLflow's
+//!   Databricks-shaped `/api/2.0/otel` onto its `/mlflow/v1/traces`).
+//! - [`Endpoint::route`](crate::Endpoint::route) — [`RouteOptions`](crate::RouteOptions) for
+//!   how the gateway treats requests on the route: `streaming` (no request timeout) and
+//!   `strip_client_credentials` (e.g. MLflow's AI Gateway, which holds the provider keys).
 //!
 //! Most modules need no logic and are built as [`DataModule`](crate::DataModule)s (their
 //! static services are returned verbatim). A module that varies its topology with a knob —
@@ -734,10 +738,17 @@ fn azurite() -> Arc<dyn Module> {
     })
 }
 
-/// `mlflow` — experiment tracking.
-/// the Databricks-shaped tracking API, the OTel ingest path, and the UI. It serves
-/// itself under `/mlflow`, so the tracking API rewrites under that base; the OTel path
-/// is the override exception (passes through unchanged).
+/// The default models [`mlflow`]'s AI Gateway is seeded with: `provider:model` pairs, each
+/// becoming an endpoint named the model id (so clients asking for the model by its usual id
+/// reach it unchanged).
+pub const MLFLOW_AI_GATEWAY_MODELS_DEFAULT: &str =
+    "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5";
+
+/// `mlflow` — experiment tracking and its built-in AI Gateway.
+/// the Databricks-shaped tracking API, the OTel ingest path, the AI Gateway, and the UI. It
+/// serves its whole surface under `/mlflow`, so the tracking API rewrites under that base, and
+/// the Databricks-shaped OTel (`/api/2.0/otel`) and AI Gateway (`/ai-gateway`) mounts rewrite
+/// onto the paths MLflow serves them at under it.
 fn mlflow() -> Arc<dyn Module> {
     let mut provides = Provides::default();
     // `MLFLOW_S3_ENDPOINT_URL` and the AWS_* credentials are no longer declared here — they
@@ -750,11 +761,19 @@ fn mlflow() -> Arc<dyn Module> {
         "MLFLOW_TRACKING_URI".into(),
         ClientValue::endpoint("mlflow", "tracking", UrlPart::Origin),
     );
+    // The AI Gateway's base: a client appends the provider surface it speaks, e.g.
+    // `/anthropic` (Claude Code's `ANTHROPIC_BASE_URL`) or `/openai/v1`.
+    provides.client_env.insert(
+        "MLFLOW_AI_GATEWAY_URL".into(),
+        ClientValue::endpoint("mlflow", "ai_gateway", UrlPart::Full),
+    );
 
     Arc::new(DataModule {
         id: ModuleId::from("mlflow"),
         display_name: Some("MLflow tracking".into()),
-        summary: Some("Experiment + model tracking; Databricks-shaped URLs.".into()),
+        summary: Some(
+            "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.".into(),
+        ),
         category: Some("ml".into()),
         provider_of: Some(Role::EXPERIMENT_TRACKING.into()),
         // Only the gateway is a hard module dependency; the relational store and
@@ -792,13 +811,25 @@ fn mlflow() -> Arc<dyn Module> {
             name: "mlflow".into(),
             role: Role::experiment_tracking(),
             placement: container("mlflow"),
-            // It serves itself under `/mlflow`: the tracking API rewrites under that base
-            // (`Inherit`), while the OTel ingest path passes through unchanged
-            // (`Passthrough`), and the UI is fronted at the base path.
+            // It serves its whole surface under `/mlflow`: the tracking API rewrites under that
+            // base (`Inherit`), and the UI is fronted at the base path. OTLP ingest
+            // (`/mlflow/v1/traces`) is mounted Databricks-style at `/api/2.0/otel`, and the AI
+            // Gateway (`/mlflow/gateway/{anthropic,openai,mlflow}/…`) at `/ai-gateway`. The
+            // gateway route streams model output and drops caller credentials, so MLflow
+            // authenticates upstream with the provider key it stores rather than a client's
+            // placeholder (it forwards a CLI's own key when one is present).
             base_path: "/mlflow".into(),
             endpoints: vec![
                 Endpoint::api("tracking", 5000, "/api/2.0/mlflow", Rewrite::Inherit),
-                Endpoint::api("otel", 5000, "/api/2.0/otel", Rewrite::Passthrough),
+                Endpoint::api("otel", 5000, "/api/2.0/otel", Rewrite::To("/mlflow".into())),
+                Endpoint::api(
+                    "ai_gateway",
+                    5000,
+                    "/ai-gateway",
+                    Rewrite::To("/mlflow/gateway".into()),
+                )
+                .streaming()
+                .strip_client_credentials(),
                 Endpoint::ui_prefixable("ui", 5000, None),
             ],
             // No hand-listed startup edges: MLflow's `depends_on` is demand-driven. The
@@ -808,18 +839,36 @@ fn mlflow() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![image_knob(
-            "image",
-            "MLflow image",
-            images::MLFLOW,
-            "MLFLOW_IMAGE",
-        )],
+        knobs: vec![
+            image_knob("image", "MLflow image", images::MLFLOW, "MLFLOW_IMAGE"),
+            Knob {
+                key: "ai_gateway_models".into(),
+                title: Some("AI Gateway models".into()),
+                kind: KnobKind::String,
+                default: Some(MLFLOW_AI_GATEWAY_MODELS_DEFAULT.into()),
+                required: false,
+                help: Some(
+                    "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each \
+                     named the model id. A pair is seeded only when its provider key (e.g. \
+                     ANTHROPIC_API_KEY) is exported before `docker compose up`."
+                        .into(),
+                ),
+                aliases: vec![],
+            },
+        ],
         render: template_with_files(
             include_str!("../../templates/modules/mlflow/compose.yaml.jinja"),
-            vec![sensitive_file(
-                ".env/mlflow.env",
-                include_str!("../../templates/modules/mlflow/mlflow.env.jinja"),
-            )],
+            vec![
+                sensitive_file(
+                    ".env/mlflow.env",
+                    include_str!("../../templates/modules/mlflow/mlflow.env.jinja"),
+                ),
+                config_file(
+                    "seed_gateway.py",
+                    "mlflow_seed_gateway",
+                    include_str!("../../templates/modules/mlflow/seed_gateway.py"),
+                ),
+            ],
         ),
     })
 }

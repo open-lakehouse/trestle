@@ -175,7 +175,8 @@ export const FIXTURE_CATALOG: CatalogDto = {
     {
       id: "mlflow",
       display_name: "MLflow tracking",
-      summary: "Experiment + model tracking; Databricks-shaped URLs.",
+      summary:
+        "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
       category: "ml",
       provider_of: "experiment_tracking",
       requires: ["envoy"],
@@ -187,10 +188,21 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/mlflow/mlflow:v3.10.1-full",
+          default: "ghcr.io/mlflow/mlflow:v3.17.0-full",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["MLFLOW_IMAGE"],
+        },
+        {
+          key: "ai_gateway_models",
+          title: "AI Gateway models",
+          kind: {
+            kind: "string",
+          },
+          default:
+            "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5",
+          required: false,
+          help: "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A pair is seeded only when its provider key (e.g. ANTHROPIC_API_KEY) is exported before `docker compose up`.",
         },
       ],
     },
@@ -426,6 +438,13 @@ export const FIXTURE_PLAN: PlanResult = {
               },
               {
                 module: "mlflow",
+                endpoint: "ai_gateway",
+                kind: "api",
+                prefix: "/ai-gateway",
+                gated: true,
+              },
+              {
+                module: "mlflow",
                 endpoint: "ui",
                 kind: "ui",
                 prefix: "/mlflow",
@@ -534,7 +553,8 @@ export const FIXTURE_PLAN: PlanResult = {
         id: "mlflow",
         kind: "component",
         display_name: "MLflow tracking",
-        summary: "Experiment + model tracking; Databricks-shaped URLs.",
+        summary:
+          "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
         category: "ml",
         role: "experiment_tracking",
         placement: "container:mlflow",
@@ -748,7 +768,25 @@ export const FIXTURE_PLAN: PlanResult = {
               kind: "api",
             },
             mount_prefix: "/api/2.0/otel",
-            rewrite: "passthrough",
+            rewrite: {
+              to: "/mlflow",
+            },
+          },
+          {
+            id: "ai_gateway",
+            scheme: "http",
+            internal_port: 5000,
+            intent: {
+              kind: "api",
+            },
+            mount_prefix: "/ai-gateway",
+            rewrite: {
+              to: "/mlflow/gateway",
+            },
+            route: {
+              streaming: true,
+              strip_client_credentials: true,
+            },
           },
           {
             id: "ui",
@@ -888,7 +926,12 @@ export const FIXTURE_PLAN: PlanResult = {
           {
             prefix: "/api/2.0/otel",
             cluster: "mlflow",
-            rewrite: null,
+            rewrite: "/mlflow",
+          },
+          {
+            prefix: "/ai-gateway",
+            cluster: "mlflow",
+            rewrite: "/mlflow/gateway",
           },
           {
             prefix: "/v1/traces",

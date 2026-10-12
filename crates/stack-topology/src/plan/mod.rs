@@ -1606,10 +1606,17 @@ mod tests {
         assert_eq!(mlflow.cluster, "mlflow");
         assert_eq!(mlflow.rewrite.as_deref(), Some("/mlflow/api/2.0/mlflow"));
 
-        // MLflow OTel route is the override exception: it passes through unchanged
-        // (the empty override forces no rewrite), unlike the tracking API.
+        // MLflow OTLP ingest is mounted Databricks-style and rewritten onto the path MLflow
+        // serves it at under its base (`/mlflow/v1/traces`).
         let otel = route_for(&p, "/api/2.0/otel");
-        assert_eq!(otel.rewrite, None);
+        assert_eq!(otel.rewrite.as_deref(), Some("/mlflow"));
+
+        // The AI Gateway is mounted at `/ai-gateway`, rewritten onto MLflow's gateway router,
+        // and routed for streaming with caller credentials dropped.
+        let ai = route_for(&p, "/ai-gateway");
+        assert_eq!(ai.cluster, "mlflow");
+        assert_eq!(ai.rewrite.as_deref(), Some("/mlflow/gateway"));
+        assert!(ai.options.streaming && ai.options.strip_client_credentials);
 
         // MLflow UI fronts at its base path, no rewrite.
         let ui = route_for(&p, "/mlflow");

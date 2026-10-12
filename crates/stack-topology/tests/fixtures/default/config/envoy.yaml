@@ -41,6 +41,21 @@ static_resources:
                         - match: { prefix: "/api/2.0/otel" }
                           route:
                             cluster: mlflow
+                            regex_rewrite:
+                              pattern:
+                                google_re2: {}
+                                regex: "^/api/2.0/otel(.*)$"
+                              substitution: "/mlflow\\1"
+                        - match: { prefix: "/ai-gateway" }
+                          route:
+                            cluster: mlflow
+                            timeout: 0s
+                            regex_rewrite:
+                              pattern:
+                                google_re2: {}
+                                regex: "^/ai-gateway(.*)$"
+                              substitution: "/mlflow/gateway\\1"
+                          request_headers_to_remove: ["authorization", "x-api-key"]
                         - match: { prefix: "/mlflow" }
                           route:
                             cluster: mlflow
