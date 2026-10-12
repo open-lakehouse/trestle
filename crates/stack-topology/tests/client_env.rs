@@ -23,6 +23,7 @@ fn full_stack() -> Selection {
         "jaeger",
         "headwaters",
         "databricks-emulator-env",
+        "omnigent",
     ])
 }
 
@@ -46,6 +47,11 @@ fn host_addresses_follow_the_gateway_port_and_routes() {
     assert_eq!(get("OPENLINEAGE_URL"), "http://localhost:9090");
     assert_eq!(get("OPENLINEAGE_ENDPOINT"), "/api/v1/lineage");
     assert_eq!(
+        get("MLFLOW_AI_GATEWAY_URL"),
+        "http://localhost:9090/ai-gateway"
+    );
+    assert_eq!(get("OMNIGENT_URL"), "http://localhost:9090/omnigent");
+    assert_eq!(
         get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
         "http://localhost:9090/v1/traces"
     );
@@ -64,6 +70,11 @@ fn container_addresses_stay_in_network() {
     let get = |k: &str| env.get(k).unwrap_or_else(|| panic!("missing {k}"));
     assert_eq!(get("DATABRICKS_HOST"), "http://envoy:10000");
     assert_eq!(get("OPENLINEAGE_URL"), "http://envoy:10000");
+    assert_eq!(
+        get("MLFLOW_AI_GATEWAY_URL"),
+        "http://envoy:10000/ai-gateway"
+    );
+    assert_eq!(get("OMNIGENT_URL"), "http://envoy:10000/omnigent");
     assert_eq!(
         get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
         "http://envoy:10000/v1/traces"

@@ -1,0 +1,60 @@
+# MLflow tracking server, with its built-in AI Gateway
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.0-full
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+      gateway-certs:
+        condition: service_completed_successfully
+    command:
+      - "mlflow"
+      - "server"
+      - "--serve-artifacts"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "5000"
+      - "--static-prefix"
+      - "/mlflow"
+    env_file:
+      - path: ./modules/mlflow/.env/mlflow.env
+        format: raw
+    environment:
+      # The Host headers MLflow accepts: browsers on localhost, in-network callers through the
+      # gateway, and the gateway-init job calling it directly.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,envoy:10000,mlflow:5000"
+    expose:
+      - "5000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/mlflow/health')\""
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Seeds the AI Gateway with one endpoint per configured model, storing the provider keys
+  # exported in your shell. Idempotent: re-runs on every `up` and leaves existing endpoints alone.
+  mlflow-gateway-init:
+    image: ghcr.io/mlflow/mlflow:v3.17.0-full
+    restart: "no"
+    command: ["python", "/seed_gateway.py"]
+    environment:
+      MLFLOW_URL: http://mlflow:5000/mlflow
+      MLFLOW_GATEWAY_MODELS: "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5"
+      # Provider keys, passed through from the shell running `docker compose up` (a bare name
+      # takes the caller's value, or stays unset): never written into the rendered stack.
+      ANTHROPIC_API_KEY:
+      OPENAI_API_KEY:
+      GEMINI_API_KEY:
+    configs:
+      - source: mlflow_seed_gateway
+        target: /seed_gateway.py
+    depends_on:
+      mlflow:
+        condition: service_healthy

@@ -1,9 +1,10 @@
 //! The inlined baseline catalog, built purely in Rust (no I/O, no YAML).
 //!
 //! These are the common local-Lakehouse modules — a gateway, a relational store, an
-//! object store, experiment tracking, a data catalog, a query engine, tracing,
-//! and the Databricks app-runtime contract — transcribed from trestle's
-//! `local-stack-*` components. They are the corpus the planner is validated against:
+//! object store, experiment tracking (with an AI Gateway), a data catalog, a query engine,
+//! tracing, an agent platform, and the Databricks app-runtime contract — most of them
+//! transcribed from trestle's `local-stack-*` components. They are the corpus the planner
+//! is validated against:
 //! planning the default selection must re-derive the routes and materialize the
 //! artifacts these components ship today (see the crate's golden tests).
 //!
@@ -54,7 +55,7 @@ use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
     ClientValue, ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind, Module, ModuleId,
-    Provides, RenderSpec, ResolvedKnobs, ResourceDemand, UrlPart,
+    Provides, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -134,9 +135,10 @@ pub fn baseline_catalog() -> Catalog {
         unity_catalog(),
         jaeger(),
         headwaters(),
+        omnigent(),
         opa(),
         databricks_emulator_env(),
-    ] as [Arc<dyn Module>; 11])
+    ] as [Arc<dyn Module>; 12])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
@@ -1215,6 +1217,187 @@ impl Module for Headwaters {
 
 fn headwaters() -> Arc<dyn Module> {
     Arc::new(Headwaters::new())
+}
+
+/// The [`omnigent`] knob for running an agent host inside the stack.
+const OMNIGENT_HOST_KNOB: &str = "host";
+/// Where Omnigent serves its whole surface (web UI, `/v1` API, WebSockets, SSE) at the gateway.
+const OMNIGENT_BASE_PATH: &str = "/omnigent";
+/// The port Omnigent's server image listens on.
+const OMNIGENT_PORT: u16 = 8000;
+
+/// `omnigent` — the Omnigent agent platform: a coordinating server (web UI + API) behind the
+/// gateway, and an agent host in the stack that runs the agents.
+///
+/// The host is what makes agents part of the environment. It loads the stack's
+/// container-vantage client env (every selected module's address, through the gateway) and
+/// forwards it to each agent. It gets its models from [`mlflow`]'s AI Gateway, which holds
+/// the provider keys, so the host carries none.
+///
+/// The host runs only while the gateway is open. Under forward-auth the server trusts the
+/// gateway-asserted `Remote-Email`, and a host can't present that identity, so it is dropped;
+/// browsers and laptop hosts still reach the server through the gateway.
+struct Omnigent {
+    id: ModuleId,
+    requires: Vec<ModuleId>,
+    needs: Vec<ResourceDemand>,
+    knobs: Vec<Knob>,
+    provides: Provides,
+    render: RenderSpec,
+}
+
+impl Omnigent {
+    fn new() -> Self {
+        let string_knob = |key: &str, title: &str, default: &str, help: &str| Knob {
+            key: key.into(),
+            title: Some(title.into()),
+            kind: KnobKind::String,
+            default: Some(default.into()),
+            required: false,
+            help: Some(help.into()),
+            aliases: vec![],
+        };
+        Omnigent {
+            id: ModuleId::from("omnigent"),
+            // The gateway fronts the server; MLflow's AI Gateway serves the agents' models (and
+            // brings its own relational store and object store through its demands).
+            requires: vec![ModuleId::from("envoy"), ModuleId::from("mlflow")],
+            // The server's state (sessions, agents, hosts) lives in the stack's relational store;
+            // the fragment reads the DSN straight from the resolved connection.
+            needs: vec![ResourceDemand {
+                resource: Role::RELATIONAL_DB.into(),
+                name: "omnigent".into(),
+                provider: None,
+                bind: ConnectionBinding::default(),
+            }],
+            knobs: vec![
+                Knob {
+                    key: OMNIGENT_HOST_KNOB.into(),
+                    title: Some("Run an agent host in the stack".into()),
+                    kind: KnobKind::Bool,
+                    default: Some("true".into()),
+                    required: false,
+                    help: Some(
+                        "Run agents in a host container on the stack's network, with the \
+                         lakehouse's client env and models from MLflow's AI Gateway. Off: \
+                         attach your own host with `omnigent host $OMNIGENT_URL`. Always off \
+                         while the gateway authenticates."
+                            .into(),
+                    ),
+                    aliases: vec![],
+                },
+                string_knob(
+                    "model",
+                    "Agent model",
+                    "claude-opus-5-5",
+                    "The model agents use by default: an AI Gateway endpoint name (see \
+                     mlflow.ai_gateway_models).",
+                ),
+                string_knob(
+                    "fast_model",
+                    "Background model",
+                    "claude-haiku-5-5",
+                    "The model harnesses use for quick background calls: an AI Gateway \
+                     endpoint name.",
+                ),
+                image_knob(
+                    "image",
+                    "Omnigent server image",
+                    images::OMNIGENT_SERVER,
+                    "OMNIGENT_IMAGE",
+                ),
+                image_knob(
+                    "host_image",
+                    "Omnigent host image",
+                    images::OMNIGENT_HOST,
+                    "OMNIGENT_HOST_IMAGE",
+                ),
+            ],
+            // Where a client (`omnigent run --server`, `omnigent host`) reaches the server: its
+            // whole surface sits under the base path.
+            provides: Provides {
+                client_env: [(
+                    "OMNIGENT_URL".to_string(),
+                    ClientValue::endpoint("omnigent", "ui", UrlPart::Full),
+                )]
+                .into(),
+                ..Provides::default()
+            },
+            render: template_with_files(
+                include_str!("../../templates/modules/omnigent/compose.yaml.jinja"),
+                vec![sensitive_file(
+                    ".env/omnigent.env",
+                    include_str!("../../templates/modules/omnigent/omnigent.env.jinja"),
+                )],
+            ),
+        }
+    }
+}
+
+impl Module for Omnigent {
+    fn id(&self) -> &ModuleId {
+        &self.id
+    }
+    fn display_name(&self) -> Option<&str> {
+        Some("Omnigent")
+    }
+    fn summary(&self) -> Option<&str> {
+        Some("AI-agent platform; agents run in the stack, models via MLflow's AI Gateway.")
+    }
+    fn category(&self) -> Option<&str> {
+        Some("agents")
+    }
+    fn provider_of(&self) -> Option<&str> {
+        Some(Role::AGENT_PLATFORM)
+    }
+    fn requires(&self) -> &[ModuleId] {
+        &self.requires
+    }
+    fn needs(&self) -> &[ResourceDemand] {
+        &self.needs
+    }
+    fn knobs(&self) -> &[Knob] {
+        &self.knobs
+    }
+    fn provides(&self) -> &Provides {
+        &self.provides
+    }
+    fn render(&self) -> &RenderSpec {
+        &self.render
+    }
+    fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
+        self.services_in(knobs, &StackFacts::default())
+    }
+    fn services_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ServiceSpec> {
+        // The server relocates its whole surface under the base path (told via
+        // `OMNIGENT_WEB_BASE_PATH`), so one prefixable endpoint fronts the UI, the `/v1` API and
+        // its WebSockets. Session views stream over SSE, so the route carries no timeout.
+        let mut services = vec![ServiceSpec {
+            name: "omnigent".into(),
+            role: Role::agent_platform(),
+            placement: container("omnigent"),
+            base_path: OMNIGENT_BASE_PATH.into(),
+            endpoints: vec![Endpoint::ui_prefixable("ui", OMNIGENT_PORT, None).streaming()],
+            // Demand-driven: the planner injects the chosen relational-db provider's gate.
+            depends_on: vec![],
+        }];
+        if knobs.bool(OMNIGENT_HOST_KNOB, true) && !stack.gateway_auth {
+            // The host dials the server directly on the compose network (it serves nothing).
+            services.push(ServiceSpec {
+                name: "omnigent-host".into(),
+                role: Role::agent_platform(),
+                placement: container("omnigent-host"),
+                base_path: String::new(),
+                endpoints: vec![],
+                depends_on: vec!["omnigent".into()],
+            });
+        }
+        services
+    }
+}
+
+fn omnigent() -> Arc<dyn Module> {
+    Arc::new(Omnigent::new())
 }
 
 /// `opa` — Open Policy Agent as the gateway's authorization engine.

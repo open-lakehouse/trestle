@@ -35,3 +35,7 @@ pub const JAEGER: &str = "cr.jaegertracing.io/jaegertracing/jaeger:2.14.1";
 pub const OPA: &str = "openpolicyagent/opa:1.21.1-envoy-static";
 /// Headwaters lineage service (migrate + serve).
 pub const HEADWATERS: &str = "ghcr.io/open-lakehouse/headwaters:0.0.7";
+/// Omnigent agent-platform server (the coordinator: web UI, REST + WebSocket API).
+pub const OMNIGENT_SERVER: &str = "ghcr.io/omnigent-ai/omnigent-server:v0.17.0";
+/// Omnigent agent host (runs agents; ships the claude / codex / pi harness CLIs).
+pub const OMNIGENT_HOST: &str = "ghcr.io/omnigent-ai/omnigent-host:v0.17.0";

@@ -1,0 +1,76 @@
+# Omnigent agent platform: the coordinating server, and the host its agents run on
+services:
+  omnigent:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+    depends_on:
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: {{ dep.condition }}
+{%- endfor %}
+    env_file:
+      - path: ./modules/omnigent/.env/omnigent.env
+        format: raw
+    environment:
+      # The whole surface (web UI, /v1 API, WebSockets, SSE) moves under the gateway prefix.
+      OMNIGENT_WEB_BASE_PATH: "{{ env.BASE_PATH }}"
+      ARTIFACT_DIR: /data/artifacts
+      # Anchors the server's data dir (admin roster, artifacts) on the mounted volume.
+      OMNIGENT_ADMIN_CREDENTIALS_PATH: /data/admin-credentials
+{%- if env.GATEWAY_AUTH == "true" %}
+      # The gateway authenticates every request and strips client-supplied identity headers,
+      # so the email it asserts is trusted as the Omnigent user.
+      OMNIGENT_AUTH_PROVIDER: header
+      OMNIGENT_AUTH_HEADER: Remote-Email
+{%- else %}
+      # The gateway is open, like the rest of the stack: single-user, every request is the
+      # `local` user. The server is reachable only through the gateway and the compose network.
+      OMNIGENT_AUTH_ENABLED: "0"
+{%- endif %}
+    volumes:
+      - {{ env.DATA_ROOT }}/omnigent/server:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      # First boot runs the schema migrations.
+      start_period: 60s
+{%- if knobs.host == "true" and env.GATEWAY_AUTH != "true" %}
+
+  # Runs the agents, on the stack's network: it loads the stack's in-network client env (every
+  # module's address) and forwards it to each agent, and points the harnesses at MLflow's AI
+  # Gateway, which holds the provider keys.
+  omnigent-host:
+    image: {{ knobs.host_image }}
+    restart: unless-stopped
+    depends_on:
+      omnigent:
+        condition: service_healthy
+    env_file:
+      - path: ./client/container.env
+        format: raw
+    environment:
+      # Placeholders: the CLIs want a key, and the gateway drops it on the AI Gateway route so
+      # MLflow authenticates with the key it stores.
+      ANTHROPIC_API_KEY: via-mlflow-ai-gateway
+      OPENAI_API_KEY: via-mlflow-ai-gateway
+      # AI Gateway endpoint names, so requests use models the gateway serves.
+      ANTHROPIC_MODEL: "{{ knobs.model }}"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{ knobs.fast_model }}"
+      # The host forwards only its own allowlist to agents; add the stack's client contract.
+      OMNIGENT_RUNNER_ENV_PASSTHROUGH: "{{ env.CLIENT_ENV_KEYS }},ANTHROPIC_DEFAULT_HAIKU_MODEL"
+    command:
+      - sh
+      - -c
+      - >-
+        export ANTHROPIC_BASE_URL="$$MLFLOW_AI_GATEWAY_URL/anthropic"
+        OPENAI_BASE_URL="$$MLFLOW_AI_GATEWAY_URL/openai/v1"
+        && exec omnigent host --server http://omnigent:8000 --non-interactive --no-open
+    working_dir: /workspace
+    volumes:
+      - {{ env.DATA_ROOT }}/omnigent/host:/root/.omnigent
+      - {{ env.DATA_ROOT }}/omnigent/workspace:/workspace
+{%- endif %}

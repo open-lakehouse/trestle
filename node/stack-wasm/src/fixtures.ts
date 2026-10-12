@@ -285,6 +285,70 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
     },
     {
+      id: "omnigent",
+      display_name: "Omnigent",
+      summary:
+        "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway.",
+      category: "agents",
+      provider_of: "agent_platform",
+      requires: ["envoy", "mlflow"],
+      conflicts_with: [],
+      knobs: [
+        {
+          key: "host",
+          title: "Run an agent host in the stack",
+          kind: {
+            kind: "bool",
+          },
+          default: "true",
+          required: false,
+          help: "Run agents in a host container on the stack's network, with the lakehouse's client env and models from MLflow's AI Gateway. Off: attach your own host with `omnigent host $OMNIGENT_URL`. Always off while the gateway authenticates.",
+        },
+        {
+          key: "model",
+          title: "Agent model",
+          kind: {
+            kind: "string",
+          },
+          default: "claude-opus-5-5",
+          required: false,
+          help: "The model agents use by default: an AI Gateway endpoint name (see mlflow.ai_gateway_models).",
+        },
+        {
+          key: "fast_model",
+          title: "Background model",
+          kind: {
+            kind: "string",
+          },
+          default: "claude-haiku-5-5",
+          required: false,
+          help: "The model harnesses use for quick background calls: an AI Gateway endpoint name.",
+        },
+        {
+          key: "image",
+          title: "Omnigent server image",
+          kind: {
+            kind: "string",
+          },
+          default: "ghcr.io/omnigent-ai/omnigent-server:v0.17.0",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["OMNIGENT_IMAGE"],
+        },
+        {
+          key: "host_image",
+          title: "Omnigent host image",
+          kind: {
+            kind: "string",
+          },
+          default: "ghcr.io/omnigent-ai/omnigent-host:v0.17.0",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["OMNIGENT_HOST_IMAGE"],
+        },
+      ],
+    },
+    {
       id: "opa",
       display_name: "Open Policy Agent",
       summary: "Rego authorization for every gateway request, after sign-on.",
