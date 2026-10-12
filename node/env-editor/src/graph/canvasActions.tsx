@@ -19,6 +19,10 @@ export interface CanvasActions {
   configure: (id: string) => void;
   remove: (id: string) => void;
   swap: (fromId: string, toId: string) => void;
+  /** Open the provider's resources to add a database / bucket. */
+  addResource: (providerId: string) => void;
+  /** Drop a resource the user added (one no component consumes). */
+  removeResource: (kind: string, name: string) => void;
 }
 
 export interface CanvasContextValue {

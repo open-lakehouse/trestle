@@ -37,6 +37,10 @@ export interface EnvironmentState {
   toggleModule: (moduleId: string) => void;
   toggleCapability: (capability: string) => void;
   setKnob: (moduleId: string, key: string, value: string) => void;
+  /** Provision an extra database / bucket on `provider`. */
+  addResource: (provider: string, resource: string, name: string) => void;
+  /** Drop an extra resource from the selection. */
+  removeResource: (resource: string, name: string) => void;
   /** Replace the selection with the catalog's default. */
   applyDefault: () => void;
   undo: () => void;
@@ -237,6 +241,40 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
     [],
   );
 
+  const addResource = useCallback(
+    (provider: string, resource: string, name: string) => {
+      dispatch({
+        type: "edit",
+        next: (s) => {
+          const extras = s.extra_resources ?? [];
+          if (extras.some((e) => e.resource === resource && e.name === name)) {
+            return s;
+          }
+          return {
+            ...s,
+            extra_resources: [...extras, { resource, name, provider }],
+          };
+        },
+      });
+    },
+    [],
+  );
+
+  const removeResource = useCallback((resource: string, name: string) => {
+    dispatch({
+      type: "edit",
+      next: (s) => {
+        const extras = s.extra_resources ?? [];
+        const kept = extras.filter(
+          (e) => !(e.resource === resource && e.name === name),
+        );
+        return kept.length === extras.length
+          ? s
+          : { ...s, extra_resources: kept };
+      },
+    });
+  }, []);
+
   const applyDefault = useCallback(() => {
     if (!catalog) return;
     dispatch({
@@ -260,6 +298,8 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
     toggleModule,
     toggleCapability,
     setKnob,
+    addResource,
+    removeResource,
     applyDefault,
     undo,
     redo,
@@ -269,7 +309,11 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
 }
 
 export function isEmptySelection(selection: Selection): boolean {
-  return selection.modules.length === 0 && selection.capabilities.length === 0;
+  return (
+    selection.modules.length === 0 &&
+    selection.capabilities.length === 0 &&
+    (selection.extra_resources?.length ?? 0) === 0
+  );
 }
 
 function cloneSelection(selection: Selection): Selection {
@@ -277,6 +321,7 @@ function cloneSelection(selection: Selection): Selection {
     modules: [...selection.modules],
     capabilities: [...selection.capabilities],
     knob_overrides: { ...selection.knob_overrides },
+    extra_resources: [...(selection.extra_resources ?? [])],
   };
 }
 

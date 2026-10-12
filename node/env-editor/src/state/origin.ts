@@ -41,6 +41,18 @@ export function componentOrigin(
   if (provides && selection.capabilities.includes(provides)) {
     requiredBy.add(`the ${capabilityLabel(provides)} capability`);
   }
+  // Extra resources the user asked it to provision.
+  const kinds = catalog?.modules.find((m) => m.id === id)?.resource_kinds ?? [];
+  const extras = (selection.extra_resources ?? []).filter(
+    (e) => e.provider === id || (!e.provider && kinds.includes(e.resource)),
+  );
+  if (extras.length > 0) {
+    requiredBy.add(
+      extras.length === 1
+        ? `your extra resource ${extras[0]?.name}`
+        : `your ${extras.length} extra resources`,
+    );
+  }
   requiredBy.delete(name(id));
   return { kind: "auto", requiredBy: [...requiredBy] };
 }

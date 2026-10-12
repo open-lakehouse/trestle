@@ -58,6 +58,13 @@ another component's requirement or demand, or a selected capability; see
 `state/origin.ts`). Only explicit components can be removed; auto ones carry an
 "Auto" chip and say what needs them.
 
+A provider's card lists what it provisions, one section per resource kind
+(Databases, Buckets) with a row per resource. Each row has its own handle, so a
+component's `uses` edge is split per resource and lands on the database or
+bucket it uses. Extra resources (`Selection.extra_resources`, pinned to the
+provider) are added from the section's `+` or the inspector, validated per
+kind, and removable; resources a component demands are not.
+
 `MarkitectureCanvas` is editable only when given `actions` (a `CanvasActions`);
 without them it renders the same diagram read-only. The actions reach the nodes
 through context, never node `data`, so changing them doesn't re-run the ELK

@@ -1,14 +1,30 @@
 import {
   Button,
   cn,
+  Input,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@open-lakehouse/ui-kit";
-import { ArrowLeft, ArrowRight, FileText, Lock, Trash2, X } from "lucide-react";
-import { type ReactNode, type Ref, useEffect, useRef } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  FileText,
+  Lock,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  type FormEvent,
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ModuleIcon } from "../graph/projectIcons";
 import { roleStyle } from "../graph/roleTheme";
 import { KnobField } from "../knobs/KnobField";
@@ -17,6 +33,7 @@ import type {
   CatalogDto,
   ModuleDto,
   PlanResult,
+  ProvisionedDto,
   TopologyEdgeDto,
 } from "../types";
 
@@ -31,6 +48,12 @@ export interface InspectorPanelProps {
   alternatives: ModuleDto[];
   /** Bump to scroll the settings into view (the "configure" action). */
   settingsSeq: number;
+  /** Bump to scroll the resources into view and focus the add field. */
+  resourcesSeq: number;
+  /** Provision an extra database / bucket of `kind` on this component. */
+  onAddResource: (moduleId: string, kind: string, name: string) => void;
+  /** Drop an extra resource. */
+  onRemoveResource: (kind: string, name: string) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
   onRemove: (moduleId: string) => void;
   onSwap: (fromId: string, toId: string) => void;
@@ -55,6 +78,9 @@ export function InspectorPanel({
   origin,
   alternatives,
   settingsSeq,
+  resourcesSeq,
+  onAddResource,
+  onRemoveResource,
   onSetKnob,
   onRemove,
   onSwap,
@@ -74,6 +100,8 @@ export function InspectorPanel({
   const connections = (plan?.graph.edges ?? []).flatMap((e) =>
     describeConnection(e, moduleId, (id) => names.get(id) ?? id),
   );
+  const resourceKinds = module?.resource_kinds ?? [];
+  const provisions = node?.provisions ?? [];
   const files = (plan?.files ?? []).filter((f) =>
     f.path.startsWith(`modules/${moduleId}/`),
   );
@@ -143,6 +171,18 @@ export function InspectorPanel({
             </div>
           )}
         </Section>
+
+        {resourceKinds.map((kind) => (
+          <ResourcesSection
+            key={kind}
+            kind={kind}
+            items={provisions.filter((p) => p.resource === kind)}
+            names={names}
+            focusSeq={kind === resourceKinds[0] ? resourcesSeq : 0}
+            onAdd={(name) => onAddResource(moduleId, kind, name)}
+            onRemove={(name) => onRemoveResource(kind, name)}
+          />
+        ))}
 
         {connections.length > 0 && (
           <Section title="Connections">
@@ -224,6 +264,140 @@ export function InspectorPanel({
         )}
       </div>
     </aside>
+  );
+}
+
+/** What a resource kind is called, and what a valid name looks like. */
+const RESOURCE_KIND: Record<
+  string,
+  { plural: string; singular: string; pattern: RegExp; rule: string }
+> = {
+  relational_db: {
+    plural: "Databases",
+    singular: "database",
+    pattern: /^[a-z_][a-z0-9_]{0,62}$/,
+    rule: "lowercase letters, digits and _, starting with a letter or _",
+  },
+  object_store: {
+    plural: "Buckets",
+    singular: "bucket",
+    pattern: /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/,
+    rule: "3–63 lowercase letters, digits and -, starting and ending alphanumeric",
+  },
+};
+const FALLBACK_KIND = {
+  plural: "Resources",
+  singular: "resource",
+  pattern: /^[a-z0-9][a-z0-9_-]{0,62}$/,
+  rule: "lowercase letters, digits, _ and -",
+};
+
+/** One resource kind the component provisions: what's there and who uses
+ *  it, with a field to add another. */
+function ResourcesSection({
+  kind,
+  items,
+  names,
+  focusSeq,
+  onAdd,
+  onRemove,
+}: {
+  kind: string;
+  items: ProvisionedDto[];
+  names: Map<string, string>;
+  focusSeq: number;
+  onAdd: (name: string) => void;
+  onRemove: (name: string) => void;
+}) {
+  const meta = RESOURCE_KIND[kind] ?? FALLBACK_KIND;
+  const [draft, setDraft] = useState("");
+  const sectionRef = useRef<HTMLElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focusSeq > 0) {
+      sectionRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      inputRef.current?.focus();
+    }
+  }, [focusSeq]);
+
+  const name = draft.trim();
+  const problem =
+    name === ""
+      ? null
+      : items.some((i) => i.name === name)
+        ? `This ${meta.singular} already exists.`
+        : meta.pattern.test(name)
+          ? null
+          : `Use ${meta.rule}.`;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (name === "" || problem) return;
+    onAdd(name);
+    setDraft("");
+  };
+
+  return (
+    <Section ref={sectionRef} title={meta.plural}>
+      {items.length > 0 && (
+        <ul className="mb-2 flex flex-col">
+          {items.map((item) => (
+            <li
+              key={item.name}
+              className="group flex items-center gap-2 rounded-sm px-1 py-1 text-xs"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono">
+                {item.name}
+              </span>
+              <span className="truncate text-[11px] text-muted-foreground">
+                {item.consumers.length > 0
+                  ? `Used by ${item.consumers.map((c) => names.get(c) ?? c).join(", ")}`
+                  : "Added by you"}
+              </span>
+              {item.consumers.length === 0 && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${item.name}`}
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => onRemove(item.name)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={submit} className="flex flex-col gap-1">
+        <div className="flex gap-2">
+          <Input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={`New ${meta.singular} name`}
+            aria-label={`New ${meta.singular} name`}
+            aria-invalid={!!problem}
+            className="h-8 font-mono text-xs"
+          />
+          <Button
+            type="submit"
+            size="sm"
+            variant="outline"
+            className="h-8"
+            disabled={name === "" || !!problem}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </Button>
+        </div>
+        {problem && <p className="text-[11px] text-destructive">{problem}</p>}
+        <p className="text-[11px] text-muted-foreground">
+          Created by the init job, for use outside the stack.
+        </p>
+      </form>
+    </Section>
   );
 }
 

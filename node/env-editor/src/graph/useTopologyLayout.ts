@@ -11,8 +11,10 @@
 // the request checks it delegates (sign-in, then authorization). Clients enter
 // each surface section through its own port, and each backend row and check
 // row leaves through its own port, all at fixed ELK positions so edges start at
-// their row and ELK orders the targets to match. Edges are drawn along ELK's
-// own orthogonal routes (`ElkEdge`).
+// their row and ELK orders the targets to match. A provider's card lists what
+// it provisions, one row per database / bucket, and a consumer's edge enters
+// the row of each resource it uses. Edges are drawn along ELK's own orthogonal
+// routes (`ElkEdge`).
 //
 // The hook is async — ELK resolves to positioned ReactFlow nodes + edges. Until
 // it resolves it keeps the previous layout, so the canvas never flashes
@@ -26,6 +28,7 @@ import type {
   ExposedDto,
   GraphDto,
   GraphNodeDto,
+  ProvisionedDto,
   SurfaceDto,
   TopologyEdgeDto,
 } from "../types";
@@ -47,6 +50,11 @@ export const NODE_HEADER = 52;
 export const COMPONENT_WIDTH = 240;
 export const FACT_PAD = 8;
 export const FACT_LINE = 18;
+// A provider lists what it provisions in one section per resource kind: a
+// header, then one row per database / bucket, each with its own port so a
+// consumer's edge lands on the resource it uses.
+export const RESOURCE_SECTION_HEADER = 24;
+export const RESOURCE_ROW = 24;
 export const GATEWAY_WIDTH = 300;
 export const GATEWAY_SECTION_HEADER = 28;
 // A backend row: its title, then one line per exposed endpoint, so its height
@@ -97,39 +105,92 @@ export interface Fact {
   value: string;
 }
 
-const PROVISION_LABEL: Record<string, string> = {
+/** The section title for each resource kind a provider provisions. */
+export const PROVISION_LABEL: Record<string, string> = {
   relational_db: "Databases",
   object_store: "Buckets",
 };
 
-/** What a component card lists under its header: the APIs it offers, then
- *  what it provisions, one line per resource kind. Shared by `ComponentNode`
- *  and the layout, so the card's height is the one ELK reserves. */
-export function componentFacts(node: GraphNodeDto): Fact[] {
-  const facts: Fact[] = [];
-  if (node.offers.length > 0) {
-    facts.push({ label: "Offers", value: node.offers.join(", ") });
-  }
-  const byKind = new Map<string, Set<string>>();
-  for (const p of node.provisions) {
-    const names = byKind.get(p.resource) ?? new Set<string>();
-    names.add(p.name);
-    byKind.set(p.resource, names);
-  }
-  for (const [kind, names] of byKind) {
-    facts.push({
-      label: PROVISION_LABEL[kind] ?? "Provisions",
-      value: [...names].join(" · "),
-    });
-  }
-  return facts;
+/** One resource kind a provider provisions, and its resources in init order. */
+export interface ResourceSection {
+  kind: string;
+  items: ProvisionedDto[];
 }
 
-/** A component card's height: the header, plus padded fact lines if any. */
-export const componentHeight = (node: GraphNodeDto) => {
+/** What a component card lists under its header: the APIs it offers. Shared
+ *  by `ComponentNode` and the layout, so the card's height is the one ELK
+ *  reserves. */
+export function componentFacts(node: GraphNodeDto): Fact[] {
+  return node.offers.length > 0
+    ? [{ label: "Offers", value: node.offers.join(", ") }]
+    : [];
+}
+
+/** A provider's resources, one section per kind, in first-provisioned order. */
+export function resourceSections(node: GraphNodeDto): ResourceSection[] {
+  const sections: ResourceSection[] = [];
+  for (const p of node.provisions) {
+    const section = sections.find((s) => s.kind === p.resource);
+    if (section) {
+      if (!section.items.some((i) => i.name === p.name)) section.items.push(p);
+    } else {
+      sections.push({ kind: p.resource, items: [p] });
+    }
+  }
+  return sections;
+}
+
+/** The height of a component card's facts block (0 without facts). */
+export const factsHeight = (node: GraphNodeDto) => {
   const facts = componentFacts(node).length;
-  return NODE_HEADER + (facts > 0 ? 2 * FACT_PAD + facts * FACT_LINE : 0);
+  return facts > 0 ? 2 * FACT_PAD + facts * FACT_LINE : 0;
 };
+
+/** A component card's height: the header, its facts, then its resource
+ *  sections. MUST be what `ComponentNode` renders. */
+export const componentHeight = (node: GraphNodeDto) =>
+  NODE_HEADER +
+  factsHeight(node) +
+  resourceSections(node).reduce(
+    (h, s) => h + RESOURCE_SECTION_HEADER + s.items.length * RESOURCE_ROW,
+    0,
+  );
+
+/** A component card's ELK ports, at the offsets `ComponentNode` renders: the
+ *  generic in/out ports level with the header, and one inbound port per
+ *  resource row. */
+function componentPorts(node: GraphNodeDto) {
+  const port = (handle: string, x: number, y: number) => ({
+    id: `${node.id}:${handle}`,
+    x,
+    y,
+    width: 1 as const,
+    height: 1 as const,
+  });
+  const ports = [
+    port(COMPONENT_IN, 0, NODE_HEADER / 2),
+    port(COMPONENT_OUT, COMPONENT_WIDTH, NODE_HEADER / 2),
+  ];
+  let y = NODE_HEADER + factsHeight(node);
+  for (const section of resourceSections(node)) {
+    y += RESOURCE_SECTION_HEADER;
+    for (const item of section.items) {
+      ports.push(
+        port(resourceHandle(section.kind, item.name), 0, y + RESOURCE_ROW / 2),
+      );
+      y += RESOURCE_ROW;
+    }
+  }
+  return ports;
+}
+
+/** A component card's generic inbound / outbound handles (level with its header). */
+export const COMPONENT_IN = "in";
+export const COMPONENT_OUT = "out";
+
+/** The handle / ELK port id of a provider's row for resource `name` of `kind`. */
+export const resourceHandle = (kind: string, name: string) =>
+  `res:${kind}:${name}`;
 
 /** A backend row's height: padding, title, and one line per endpoint. MUST be
  *  what `GatewayNode` renders, since ELK places the row's port from it. */
@@ -151,6 +212,8 @@ export const checkHandle = (kind: AccessCheckKind) => `check:${kind}`;
 /** The `data` a visual edge carries. */
 export interface TopologyEdgeData {
   edge: TopologyEdgeDto;
+  /** For a `uses` edge split per resource: the database / bucket it lands on. */
+  resource?: string;
   /** ELK's route (start, bends, end) in flow coordinates. */
   points?: Point[];
   [key: string]: unknown;
@@ -242,26 +305,68 @@ function gatewayPorts(
   return { ports, height: y };
 }
 
-/** The gateway handles an edge attaches to, if it touches a gateway: routes
- *  leave from their backend's row, checks from their access-control row, and
- *  access enters its surface's header. */
-function gatewayHandles(
+/** The handles an edge attaches to. At the gateway, routes leave from their
+ *  backend's row, checks from their access-control row, and access enters its
+ *  surface's header. At a component, edges leave from its out handle and
+ *  enter its in handle, unless `resource` names the provider row it uses. */
+function edgeHandles(
   e: TopologyEdgeDto,
   gateways: Set<string>,
+  components: Set<string>,
+  resource?: string,
 ): { source?: string; target?: string } {
-  switch (e.kind) {
-    case "route":
-      return gateways.has(e.from)
-        ? { source: routeHandle(e.host_port, e.to) }
-        : {};
-    case "authenticates":
-    case "authorizes":
-      return gateways.has(e.from) ? { source: checkHandle(e.kind) } : {};
-    case "access":
-      return gateways.has(e.to) ? { target: surfaceHandle(e.host_port) } : {};
-    default:
-      return {};
+  const handles: { source?: string; target?: string } = {};
+  if (gateways.has(e.from)) {
+    if (e.kind === "route") handles.source = routeHandle(e.host_port, e.to);
+    else if (e.kind === "authenticates" || e.kind === "authorizes") {
+      handles.source = checkHandle(e.kind);
+    }
+  } else if (components.has(e.from)) {
+    handles.source = COMPONENT_OUT;
   }
+  if (gateways.has(e.to)) {
+    if (e.kind === "access") handles.target = surfaceHandle(e.host_port);
+  } else if (components.has(e.to)) {
+    handles.target =
+      e.kind === "uses" && resource
+        ? resourceHandle(e.role, resource)
+        : COMPONENT_IN;
+  }
+  return handles;
+}
+
+/** One drawn edge: a topology edge, or one resource of a `uses` edge whose
+ *  provider lists that resource in its card. */
+interface VisualEdge {
+  id: string;
+  edge: TopologyEdgeDto;
+  resource?: string;
+}
+
+/** Split each `uses` edge into one edge per resource the provider's card
+ *  lists, so each lands on its row; everything else is drawn as-is. */
+function visualEdges(graph: GraphDto): VisualEdge[] {
+  const listed = new Map<string, Set<string>>(
+    graph.nodes.map((n) => [
+      n.id,
+      new Set(n.provisions.map((p) => `${p.resource}:${p.name}`)),
+    ]),
+  );
+  return graph.edges.flatMap((edge, i): VisualEdge[] => {
+    if (edge.kind === "uses") {
+      const rows = edge.resources.filter((r) =>
+        listed.get(edge.to)?.has(`${edge.role}:${r}`),
+      );
+      if (rows.length > 0) {
+        return rows.map((resource) => ({
+          id: `e${i}:${resource}`,
+          edge,
+          resource,
+        }));
+      }
+    }
+    return [{ id: `e${i}`, edge }];
+  });
 }
 
 /**
@@ -286,6 +391,12 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
         .map((n) => [n.id, gatewaySections(n)]),
     );
     const gateways = new Set(sectionsOf.keys());
+    const components = new Set(
+      graph.nodes
+        .filter((n) => n.kind === "component" || n.kind === "external")
+        .map((n) => n.id),
+    );
+    const drawn = visualEdges(graph);
     const checksOf = new Map<string, AccessCheck[]>(
       [...gateways].map((id) => [id, gatewayChecks(id, graph.edges)]),
     );
@@ -306,11 +417,13 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
           ports,
         };
       }
+      if (n.kind === "clients") return { id: n.id, ...CLIENTS_SIZE };
       return {
         id: n.id,
-        ...(n.kind === "clients"
-          ? CLIENTS_SIZE
-          : { width: COMPONENT_WIDTH, height: componentHeight(n) }),
+        width: COMPONENT_WIDTH,
+        height: componentHeight(n),
+        layoutOptions: { "elk.portConstraints": "FIXED_POS" },
+        ports: componentPorts(n),
       };
     });
 
@@ -318,10 +431,15 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
       id: "root",
       layoutOptions: LAYOUT_OPTIONS,
       children,
-      edges: graph.edges.map((e, i) => {
-        const { source, target } = gatewayHandles(e, gateways);
+      edges: drawn.map(({ id, edge: e, resource }) => {
+        const { source, target } = edgeHandles(
+          e,
+          gateways,
+          components,
+          resource,
+        );
         return {
-          id: `e${i}`,
+          id,
           sources: [source ? `${e.from}:${source}` : e.from],
           targets: [target ? `${e.to}:${target}` : e.to],
         };
@@ -384,21 +502,28 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
             id: n.id,
             type: n.kind === "clients" ? "clients" : "component",
             position,
-            data: { node: n } satisfies ComponentNodeData,
+            data: { node: n, names } satisfies ComponentNodeData,
           };
         });
-        const edges: Edge<TopologyEdgeData>[] = graph.edges.map((e, i) => {
-          const { source, target } = gatewayHandles(e, gateways);
-          return {
-            id: `e${i}`,
-            source: e.from,
-            target: e.to,
-            sourceHandle: source,
-            targetHandle: target,
-            type: "elk",
-            data: { edge: e, points: routes.get(`e${i}`) },
-          };
-        });
+        const edges: Edge<TopologyEdgeData>[] = drawn.map(
+          ({ id, edge: e, resource }) => {
+            const { source, target } = edgeHandles(
+              e,
+              gateways,
+              components,
+              resource,
+            );
+            return {
+              id,
+              source: e.from,
+              target: e.to,
+              sourceHandle: source,
+              targetHandle: target,
+              type: "elk",
+              data: { edge: e, resource, points: routes.get(id) },
+            };
+          },
+        );
         setFlow({ nodes, edges });
       })
       .catch(() => {

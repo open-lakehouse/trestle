@@ -76,6 +76,7 @@ function EditorBody({
   const [tab, setTab] = useState<WorkspaceTab>("canvas");
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [settingsSeq, setSettingsSeq] = useState(0);
+  const [resourcesSeq, setResourcesSeq] = useState(0);
   const [focus, setFocus] = useState<{ id: string; seq: number }>();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [filePath, setFilePath] = useState<string | undefined>();
@@ -146,6 +147,11 @@ function EditorBody({
     [env.add],
   );
 
+  const manageResources = useCallback((id: string) => {
+    setSelectedId(id);
+    setResourcesSeq((n) => n + 1);
+  }, []);
+
   /** Select a component and pan the canvas to it. */
   const goTo = useCallback((id: string) => {
     setSelectedId(id);
@@ -165,6 +171,8 @@ function EditorBody({
       configure,
       remove: removeComponent,
       swap: swapComponent,
+      addResource: manageResources,
+      removeResource: env.removeResource,
     }),
     [
       originOf,
@@ -173,6 +181,8 @@ function EditorBody({
       configure,
       removeComponent,
       swapComponent,
+      manageResources,
+      env.removeResource,
     ],
   );
 
@@ -328,6 +338,11 @@ function EditorBody({
                   origin={originOf(inspected)}
                   alternatives={alternativesOf(inspected)}
                   settingsSeq={settingsSeq}
+                  resourcesSeq={resourcesSeq}
+                  onAddResource={(provider, kind, name) =>
+                    env.addResource(provider, kind, name)
+                  }
+                  onRemoveResource={env.removeResource}
                   onSetKnob={env.setKnob}
                   onRemove={removeComponent}
                   onSwap={swapComponent}

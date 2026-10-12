@@ -232,7 +232,7 @@ function MarkitectureFlow({
   const decoratedEdges = useMemo<Edge[]>(
     () =>
       edges.map((e) => {
-        const { edge } = e.data as TopologyEdgeData;
+        const { edge, resource } = e.data as TopologyEdgeData;
         const look = EDGE_STYLE[edge.kind];
         const incident =
           !!selectedId && (e.source === selectedId || e.target === selectedId);
@@ -247,8 +247,11 @@ function MarkitectureFlow({
         return {
           ...e,
           animated: look.animated,
-          label: edgeLabel(edge),
-          ariaLabel: edgeTitle(edge),
+          // An edge landing on a resource row needs no label: the row names it.
+          label: resource ? undefined : edgeLabel(edge),
+          ariaLabel: resource
+            ? `${edge.from} uses ${resource} on ${edge.to}`
+            : edgeTitle(edge),
           labelStyle: {
             fontSize: 10,
             fontWeight: 500,

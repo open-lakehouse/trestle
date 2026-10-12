@@ -1,6 +1,7 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { Handle, Position } from "@xyflow/react";
 import type { CSSProperties, ReactNode } from "react";
+import { COMPONENT_IN, COMPONENT_OUT, NODE_HEADER } from "../useTopologyLayout";
 
 /** A small, quiet connection dot: edges carry the meaning, not the handles. */
 export const HANDLE_CLASS =
@@ -29,15 +30,24 @@ export function BaseNode({
 }: BaseNodeProps) {
   return (
     <div
-      className={cn("flex flex-col", cardClass(selected), className)}
+      className={cn("relative flex flex-col", cardClass(selected), className)}
       style={style}
     >
-      <Handle type="target" position={Position.Left} className={HANDLE_CLASS} />
+      {/* Level with the header: the ports ELK places (see `componentPorts`). */}
+      <Handle
+        id={COMPONENT_IN}
+        type="target"
+        position={Position.Left}
+        className={HANDLE_CLASS}
+        style={{ top: NODE_HEADER / 2 }}
+      />
       {children}
       <Handle
+        id={COMPONENT_OUT}
         type="source"
         position={Position.Right}
         className={HANDLE_CLASS}
+        style={{ top: NODE_HEADER / 2 }}
       />
     </div>
   );
