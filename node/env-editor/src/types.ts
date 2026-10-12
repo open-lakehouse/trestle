@@ -25,6 +25,7 @@ export type {
   PlanResult,
   PolicyDto,
   ProvisionedDto,
+  ResourceNounDto,
   RouteDto,
   Selection,
   ServiceSpec,

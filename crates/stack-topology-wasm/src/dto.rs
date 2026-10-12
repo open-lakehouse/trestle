@@ -18,7 +18,7 @@ use serde::Serialize;
 
 pub use crate::topology::{
     CLIENTS_NODE_ID, ExposedDto, ExposedKind, GraphDto, GraphNodeDto, NodeKind, ProvisionedDto,
-    SurfaceDto, SurfaceKind, TopologyEdgeDto, graph_dto,
+    ResourceNounDto, SurfaceDto, SurfaceKind, TopologyEdgeDto, graph_dto, resource_nouns,
 };
 
 /// The whole selectable catalog, projected for the picker UI: every module with the metadata a
@@ -53,6 +53,9 @@ pub struct ModuleDto {
     /// The resource kinds this module provisions on request (e.g. `"relational_db"` for a
     /// database server), so the UI can offer to add an extra database or bucket to it.
     pub resource_kinds: Vec<String>,
+    /// What this module calls each kind of resource it provisions (databases, buckets,
+    /// containers), for labels.
+    pub resource_nouns: Vec<ResourceNounDto>,
     /// The user-tunable config knobs this module exposes. `Knob` already derives `Serialize`, so
     /// it is reused verbatim.
     pub knobs: Vec<Knob>,
@@ -196,6 +199,7 @@ pub fn catalog_dto() -> CatalogDto {
                 .map(|c| c.as_str().to_string())
                 .collect(),
             resource_kinds: m.provides().resource_kinds.keys().cloned().collect(),
+            resource_nouns: resource_nouns(m.as_ref()),
             knobs: m.knobs().to_vec(),
         })
         .collect();
@@ -451,6 +455,32 @@ mod tests {
             "{}",
             serde_json::to_string_pretty(&dump).expect("serialize plan")
         );
+    }
+
+    #[test]
+    fn providers_name_their_resources_by_connection() {
+        let catalog = catalog_dto();
+        let nouns = |id: &str| -> Vec<(String, String)> {
+            catalog
+                .modules
+                .iter()
+                .find(|m| m.id == id)
+                .expect("module in catalog")
+                .resource_nouns
+                .iter()
+                .map(|n| (n.kind.clone(), n.plural.clone()))
+                .collect()
+        };
+        assert_eq!(
+            nouns("azurite"),
+            [("object_store".into(), "containers".into())]
+        );
+        assert_eq!(nouns("rustfs"), [("object_store".into(), "buckets".into())]);
+        assert_eq!(
+            nouns("postgres"),
+            [("relational_db".into(), "databases".into())]
+        );
+        assert!(nouns("mlflow").is_empty());
     }
 
     #[test]

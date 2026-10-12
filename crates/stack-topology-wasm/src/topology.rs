@@ -82,6 +82,8 @@ pub struct GraphNodeDto {
     /// For a provider: every resource it provisions (databases, buckets), in the order its
     /// init job creates them — consumers' demands first, then the selection's extra resources.
     pub provisions: Vec<ProvisionedDto>,
+    /// For a provider: what it calls each kind of resource it provisions.
+    pub resource_nouns: Vec<ResourceNounDto>,
 }
 
 /// What a [`SurfaceDto`] is for.
@@ -134,6 +136,44 @@ pub struct ExposedDto {
     pub prefix: String,
     /// Whether forward-auth gates it.
     pub gated: bool,
+}
+
+/// What a provider calls the resources of one kind it provisions — a database, a bucket, an
+/// Azure container — so the UI can label them in the provider's own terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ResourceNounDto {
+    /// The resource kind (e.g. `"object_store"`).
+    pub kind: String,
+    /// One resource (e.g. `"container"`).
+    pub singular: String,
+    /// Several resources (e.g. `"containers"`).
+    pub plural: String,
+}
+
+/// The [`ResourceNounDto`] for every resource kind `module` provisions, named after the
+/// connection it hands out (an Azure Blob store provisions containers, an S3 store buckets).
+pub fn resource_nouns(module: &dyn Module) -> Vec<ResourceNounDto> {
+    module
+        .provides()
+        .resource_kinds
+        .iter()
+        .map(|(kind, template)| {
+            let (singular, plural) = match &template.0 {
+                Connection::ObjectStore {
+                    credential: ObjectStoreCredential::AzureBlob { .. },
+                    ..
+                } => ("container", "containers"),
+                Connection::ObjectStore { .. } => ("bucket", "buckets"),
+                Connection::RelationalDb { .. } => ("database", "databases"),
+                _ => ("resource", "resources"),
+            };
+            ResourceNounDto {
+                kind: kind.clone(),
+                singular: singular.to_string(),
+                plural: plural.to_string(),
+            }
+        })
+        .collect()
 }
 
 /// A resource a provider provisions.
@@ -532,6 +572,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 Vec::new()
             },
             provisions: provisions.remove(id).unwrap_or_default(),
+            resource_nouns: resource_nouns(m.as_ref()),
         });
     }
 
@@ -551,6 +592,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     offers: Vec::new(),
                     surfaces: Vec::new(),
                     provisions: Vec::new(),
+                    resource_nouns: Vec::new(),
                 },
             );
             for surface in &surfaces {

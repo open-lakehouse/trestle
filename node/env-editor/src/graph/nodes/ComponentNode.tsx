@@ -10,7 +10,7 @@ import {
   componentHeight,
   FACT_LINE,
   factsHeight,
-  PROVISION_LABEL,
+  provisionLabel,
   RESOURCE_ROW,
   RESOURCE_SECTION_HEADER,
   type ResourceSection,
@@ -73,6 +73,7 @@ export function ComponentNode({ data, selected }: NodeProps) {
         <ResourceList
           key={section.kind}
           providerId={node.id}
+          label={provisionLabel(node, section.kind)}
           section={section}
           names={names}
         />
@@ -83,15 +84,16 @@ export function ComponentNode({ data, selected }: NodeProps) {
 
 function ResourceList({
   providerId,
+  label,
   section,
   names,
 }: {
   providerId: string;
+  label: string;
   section: ResourceSection;
   names: Record<string, string>;
 }) {
   const actions = useCanvasContext()?.actions;
-  const label = PROVISION_LABEL[section.kind] ?? "Resources";
   const Icon = section.kind === "relational_db" ? Database : Box;
   return (
     <div className="shrink-0">

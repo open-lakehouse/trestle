@@ -34,6 +34,7 @@ import type {
   ModuleDto,
   PlanResult,
   ProvisionedDto,
+  ResourceNounDto,
   TopologyEdgeDto,
 } from "../types";
 
@@ -176,6 +177,7 @@ export function InspectorPanel({
           <ResourcesSection
             key={kind}
             kind={kind}
+            noun={module?.resource_nouns.find((n) => n.kind === kind)}
             items={provisions.filter((p) => p.resource === kind)}
             names={names}
             focusSeq={kind === resourceKinds[0] ? resourcesSeq : 0}
@@ -281,8 +283,8 @@ const RESOURCE_KIND: Record<
   object_store: {
     plural: "Buckets",
     singular: "bucket",
-    pattern: /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/,
-    rule: "3–63 lowercase letters, digits and -, starting and ending alphanumeric",
+    pattern: /^(?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/,
+    rule: "3–63 lowercase letters, digits and -, starting and ending alphanumeric, with no consecutive -",
   },
 };
 const FALLBACK_KIND = {
@@ -296,6 +298,7 @@ const FALLBACK_KIND = {
  *  it, with a field to add another. */
 function ResourcesSection({
   kind,
+  noun,
   items,
   names,
   focusSeq,
@@ -303,13 +306,22 @@ function ResourcesSection({
   onRemove,
 }: {
   kind: string;
+  /** The provider's own name for this kind (e.g. Azurite's containers). */
+  noun?: ResourceNounDto;
   items: ProvisionedDto[];
   names: Map<string, string>;
   focusSeq: number;
   onAdd: (name: string) => void;
   onRemove: (name: string) => void;
 }) {
-  const meta = RESOURCE_KIND[kind] ?? FALLBACK_KIND;
+  const base = RESOURCE_KIND[kind] ?? FALLBACK_KIND;
+  const meta = noun
+    ? {
+        ...base,
+        singular: noun.singular,
+        plural: noun.plural.charAt(0).toUpperCase() + noun.plural.slice(1),
+      }
+    : base;
   const [draft, setDraft] = useState("");
   const sectionRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);

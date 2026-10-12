@@ -36,6 +36,8 @@ export interface ModuleDto {
   conflicts_with: string[];
   /** The resource kinds it provisions on request (e.g. "relational_db"). */
   resource_kinds: string[];
+  /** What it calls each kind it provisions (e.g. Azurite's "containers"). */
+  resource_nouns: ResourceNounDto[];
   knobs: Knob[];
 }
 
@@ -100,6 +102,14 @@ export interface SurfaceDto {
   exposes: ExposedDto[];
 }
 
+/** What a provider calls one kind of resource it provisions (mirrors
+ *  `ResourceNounDto`). */
+export interface ResourceNounDto {
+  kind: string;
+  singular: string;
+  plural: string;
+}
+
 /** A resource a provider provisions (mirrors `ProvisionedDto`). */
 export interface ProvisionedDto {
   resource: string;
@@ -129,6 +139,8 @@ export interface GraphNodeDto {
   surfaces: SurfaceDto[];
   /** For a provider: the databases / buckets it provisions. */
   provisions: ProvisionedDto[];
+  /** For a provider: what it calls each kind of resource it provisions. */
+  resource_nouns: ResourceNounDto[];
 }
 
 /** A typed, request-direction edge: `from` calls `to` (mirrors

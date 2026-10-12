@@ -105,11 +105,21 @@ export interface Fact {
   value: string;
 }
 
-/** The section title for each resource kind a provider provisions. */
+/** The section title for each resource kind a provider provisions, when the
+ *  provider doesn't name it. */
 export const PROVISION_LABEL: Record<string, string> = {
   relational_db: "Databases",
   object_store: "Buckets",
 };
+
+/** The section title for a resource kind, in the provider's own terms (Azurite
+ *  provisions "Containers", not "Buckets"). */
+export function provisionLabel(node: GraphNodeDto, kind: string): string {
+  const plural = node.resource_nouns.find((n) => n.kind === kind)?.plural;
+  return plural
+    ? plural.charAt(0).toUpperCase() + plural.slice(1)
+    : (PROVISION_LABEL[kind] ?? "Resources");
+}
 
 /** One resource kind a provider provisions, and its resources in init order. */
 export interface ResourceSection {

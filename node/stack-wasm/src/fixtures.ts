@@ -15,6 +15,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "auth",
@@ -60,6 +61,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "image",
@@ -83,6 +85,13 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: ["relational_db"],
+      resource_nouns: [
+        {
+          kind: "relational_db",
+          singular: "database",
+          plural: "databases",
+        },
+      ],
       knobs: [
         {
           key: "image",
@@ -107,6 +116,13 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: ["object_store"],
+      resource_nouns: [
+        {
+          kind: "object_store",
+          singular: "bucket",
+          plural: "buckets",
+        },
+      ],
       knobs: [
         {
           key: "image",
@@ -152,6 +168,13 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: ["object_store"],
+      resource_nouns: [
+        {
+          kind: "object_store",
+          singular: "container",
+          plural: "containers",
+        },
+      ],
       knobs: [
         {
           key: "image",
@@ -187,6 +210,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: ["envoy"],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "image",
@@ -221,6 +245,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: ["envoy"],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "image",
@@ -244,6 +269,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: ["envoy"],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "image",
@@ -268,6 +294,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: ["envoy"],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "serve_ui",
@@ -303,6 +330,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: ["envoy", "mlflow"],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "host",
@@ -367,6 +395,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [
         {
           key: "image",
@@ -387,7 +416,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           },
           default: "false",
           required: false,
-          help: "Allow every request and only log the policy's decision — for rolling out a policy change safely.",
+          help: "Allow every request and only log the policy's decision \u2014 for rolling out a policy change safely.",
         },
         {
           key: "log_level",
@@ -411,6 +440,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       requires: [],
       conflicts_with: [],
       resource_kinds: [],
+      resource_nouns: [],
       knobs: [],
     },
   ],
@@ -436,6 +466,7 @@ export const FIXTURE_PLAN: PlanResult = {
         surfaces: [],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
       {
         id: "authelia",
@@ -448,6 +479,7 @@ export const FIXTURE_PLAN: PlanResult = {
         surfaces: [],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
       {
         id: "envoy",
@@ -545,6 +577,7 @@ export const FIXTURE_PLAN: PlanResult = {
         ],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
       {
         id: "jaeger",
@@ -557,6 +590,7 @@ export const FIXTURE_PLAN: PlanResult = {
         surfaces: [],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
       {
         id: "opa",
@@ -569,6 +603,7 @@ export const FIXTURE_PLAN: PlanResult = {
         surfaces: [],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
       {
         id: "postgres",
@@ -590,6 +625,13 @@ export const FIXTURE_PLAN: PlanResult = {
             resource: "relational_db",
             name: "mlflow",
             consumers: ["mlflow"],
+          },
+        ],
+        resource_nouns: [
+          {
+            kind: "relational_db",
+            singular: "database",
+            plural: "databases",
           },
         ],
       },
@@ -616,6 +658,13 @@ export const FIXTURE_PLAN: PlanResult = {
             consumers: ["mlflow"],
           },
         ],
+        resource_nouns: [
+          {
+            kind: "object_store",
+            singular: "bucket",
+            plural: "buckets",
+          },
+        ],
       },
       {
         id: "unity-catalog",
@@ -628,6 +677,7 @@ export const FIXTURE_PLAN: PlanResult = {
         surfaces: [],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
       {
         id: "mlflow",
@@ -641,6 +691,7 @@ export const FIXTURE_PLAN: PlanResult = {
         surfaces: [],
         offers: [],
         provisions: [],
+        resource_nouns: [],
       },
     ],
     edges: [
