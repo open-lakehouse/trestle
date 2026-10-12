@@ -11,8 +11,8 @@
 use std::collections::BTreeMap;
 
 use olai_stack_topology::{
-    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, PlanCtx, PlanError,
-    Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
+    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, ModuleId, PlanCtx,
+    PlanError, Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
 };
 use serde::Serialize;
 
@@ -201,6 +201,26 @@ pub fn catalog_dto() -> CatalogDto {
     }
 }
 
+/// Prefer the providers the user selected: for every resource kind a selected module provides,
+/// that module (in selection order). Without it, picking a non-default provider (e.g. Azurite
+/// for object storage) would still pull in the catalog default to satisfy other modules'
+/// demands, and the two would clash.
+fn selected_provider_preference(
+    catalog: &Catalog,
+    selection: &Selection,
+) -> BTreeMap<String, Vec<ModuleId>> {
+    let mut preference: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
+    for id in &selection.modules {
+        let Some(module) = catalog.get(id) else {
+            continue;
+        };
+        for kind in module.provides().resource_kinds.keys() {
+            preference.entry(kind.clone()).or_default().push(id.clone());
+        }
+    }
+    preference
+}
+
 /// Project a [`GatewayConfig`] into a [`GatewayDto`].
 fn gateway_dto(gateway: &GatewayConfig) -> GatewayDto {
     GatewayDto {
@@ -255,11 +275,15 @@ fn gateway_dto(gateway: &GatewayConfig) -> GatewayDto {
 /// Plan a selection against the baseline catalog and project the whole result into a
 /// [`PlanResultDto`]. Pure — no I/O — so it runs identically native and on wasm32.
 ///
-/// Uses [`PlanCtx::default`] for the environment context (gateway service/ports, data root); a
-/// future revision can accept a partial `PlanCtx` from the caller.
+/// Uses [`PlanCtx::default`] for the environment context (gateway service/ports, data root),
+/// with a provider preference taken from the selection (see [`selected_provider_preference`]);
+/// a future revision can accept a partial `PlanCtx` from the caller.
 pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanError> {
     let catalog: Catalog = baseline_catalog();
-    let ctx = PlanCtx::default();
+    let ctx = PlanCtx {
+        provider_preference: selected_provider_preference(&catalog, selection),
+        ..PlanCtx::default()
+    };
     let plan = catalog.plan(selection, &ctx)?;
     let materialized = plan.materialize();
     // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
@@ -447,6 +471,15 @@ mod tests {
             "{}",
             serde_json::to_string_pretty(&dump).expect("serialize plan")
         );
+    }
+
+    #[test]
+    fn a_selected_provider_replaces_the_default() {
+        let selection = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog"]);
+        let result = plan_result(&selection).expect("plan should succeed");
+        let ids: Vec<&str> = result.graph.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"azurite"), "{ids:?}");
+        assert!(!ids.contains(&"rustfs"), "{ids:?}");
     }
 
     #[test]
