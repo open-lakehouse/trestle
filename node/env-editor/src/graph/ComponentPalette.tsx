@@ -12,6 +12,7 @@ import {
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
@@ -118,6 +119,17 @@ export function ComponentPalette({
   const current = Math.min(active ?? fallback, pickable.length - 1);
   const activeKey = pickable[current]?.key;
 
+  // Keep the highlighted row in view as the arrow keys move it. Only for the
+  // keyboard: scrolling a half-visible row under the pointer would jitter.
+  const listRef = useRef<HTMLDivElement>(null);
+  const movedByKey = useRef(false);
+  useEffect(() => {
+    if (!activeKey || !movedByKey.current) return;
+    listRef.current
+      ?.querySelector(`[data-key="${CSS.escape(activeKey)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeKey]);
+
   const pick = (row: Row) => {
     const { action } = row;
     if (action.kind === "unavailable") return;
@@ -132,6 +144,7 @@ export function ComponentPalette({
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
+      movedByKey.current = true;
       const step = e.key === "ArrowDown" ? 1 : -1;
       setActive(
         pickable.length === 0
@@ -149,7 +162,9 @@ export function ComponentPalette({
 
   const hover = (row: Row) => {
     const i = pickable.indexOf(row);
-    if (i >= 0) setActive(i);
+    if (i < 0 || i === current) return;
+    movedByKey.current = false;
+    setActive(i);
   };
 
   const empty = groups.modules.length === 0 && groups.capabilities.length === 0;
@@ -176,7 +191,7 @@ export function ComponentPalette({
             className="h-11 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
         </div>
-        <div className="max-h-[60vh] overflow-y-auto p-1">
+        <div ref={listRef} className="max-h-[60vh] overflow-y-auto p-1">
           {empty && (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
               Nothing matches “{query}”.
@@ -274,16 +289,27 @@ function PaletteRow({
   return (
     <button
       type="button"
+      data-key={row.key}
+      aria-current={active || undefined}
       disabled={unavailable}
       onClick={onPick}
       onMouseMove={onHover}
       className={cn(
-        "flex w-full items-center gap-3 rounded-md px-2 py-2 text-left",
-        active && "bg-muted",
+        // The top scroll margin keeps a group's title visible when scrolling
+        // up onto its first row.
+        "flex w-full scroll-mb-1 scroll-mt-8 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors",
+        active
+          ? "bg-primary/[0.07] ring-1 ring-inset ring-primary/25"
+          : !unavailable && "hover:bg-muted/60",
         unavailable && "cursor-default opacity-55",
       )}
     >
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
+      <div
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
+          active ? "bg-background" : "bg-muted",
+        )}
+      >
         {icon}
       </div>
       <div className="min-w-0 flex-1">
