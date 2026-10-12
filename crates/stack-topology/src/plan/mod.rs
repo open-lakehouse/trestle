@@ -560,6 +560,12 @@ pub struct Plan {
     pub head: HeadFile,
     /// The structured gateway config.
     pub gateway: GatewayConfig,
+    /// Every resource each provider provisions, keyed by the chosen provider: the databases,
+    /// buckets or containers its consumers demand, then the selection's
+    /// [`extra_resources`](Selection::extra_resources) that landed on it, deduplicated in
+    /// dependency order. This is exactly what each provider's init job creates (its
+    /// `RenderCtx.objects`); the per-provider fields below are convenience views of it.
+    pub provisioned: BTreeMap<ModuleId, Vec<String>>,
     /// Postgres databases the selected modules need, deduplicated in dependency order. These
     /// also reach the postgres provider's render as `RenderCtx.objects`, which its init-script
     /// `RenderFile` iterates; this field is the same list exposed for consumers.
@@ -1230,6 +1236,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         renders,
         head,
         gateway,
+        provisioned: provisioned_by,
         postgres_databases,
         s3_buckets,
         azure_containers,
