@@ -73,7 +73,7 @@ use crate::render::{InjectedEnv, RenderOutput};
 use client_env::resolve_client_env;
 use demands::{
     bind_connection, check_role_exclusivity, provider_dep_gate, provisioned_by_provider,
-    resolve_demand_providers, resolve_with_demands,
+    resolve_demand_providers, resolve_with_demands, with_selected_providers,
 };
 pub use gateway::{
     AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
@@ -730,6 +730,15 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         &augmented
     } else {
         selection
+    };
+
+    // A provider the user picked satisfies its role's demands ahead of the catalog default.
+    let preferred;
+    let ctx = if let Some(c) = with_selected_providers(ctx, selection, catalog) {
+        preferred = c;
+        &preferred
+    } else {
+        ctx
     };
 
     // Resolve the selection, auto-provisioning a provider for every resource demand

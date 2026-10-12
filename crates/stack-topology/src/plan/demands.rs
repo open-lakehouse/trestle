@@ -105,9 +105,43 @@ pub(super) fn resolve_with_demands(
     resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into)
 }
 
+/// `ctx` with the providers the user selected appended to its
+/// [`provider_preference`](PlanCtx::provider_preference), or `None` if that adds nothing.
+///
+/// Every resource kind a directly-selected module provides gets that module as a preference
+/// (in selection order), after any the environment already prefers. Without this, selecting a
+/// non-default provider (e.g. Azurite for object storage) would still pull in the catalog
+/// default to satisfy other modules' demands, and the two would clash.
+pub(super) fn with_selected_providers(
+    ctx: &PlanCtx,
+    selection: &Selection,
+    catalog: &Catalog,
+) -> Option<PlanCtx> {
+    let mut preference = ctx.provider_preference.clone();
+    let mut added = false;
+    for id in &selection.modules {
+        let Some(module) = catalog.get(id) else {
+            continue;
+        };
+        for kind in module.provides().resource_kinds.keys() {
+            let order = preference.entry(kind.clone()).or_default();
+            if !order.contains(id) {
+                order.push(id.clone());
+                added = true;
+            }
+        }
+    }
+    added.then(|| PlanCtx {
+        provider_preference: preference,
+        ..ctx.clone()
+    })
+}
+
 /// Choose the provider module that satisfies a demand, in priority order:
 /// 1. the demand's explicit [`provider`](crate::ResourceDemand::provider) pin;
-/// 2. the first [`PlanCtx::provider_preference`] entry for the role present in the catalog;
+/// 2. the first [`PlanCtx::provider_preference`] entry for the role present in the catalog
+///    (the planner appends the directly-selected providers here, see
+///    [`with_selected_providers`]);
 /// 3. the sole provider, if the role has exactly one;
 /// 4. the catalog's declared default provider for the role.
 ///
