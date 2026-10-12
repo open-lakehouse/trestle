@@ -20,12 +20,12 @@ import {
   conflictsWith,
   groupByCategory,
 } from "../selection/catalogIndex";
-import { formatList, type Origin } from "../state/origin";
+import { describeOrigin, formatList, type Origin } from "../state/origin";
 import type { CatalogDto, ModuleDto, Selection } from "../types";
 import { ModuleIcon } from "./projectIcons";
 import { roleStyle } from "./roleTheme";
 
-export interface AddComponentPaletteProps {
+export interface ComponentPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   catalog: CatalogDto | undefined;
@@ -34,13 +34,16 @@ export interface AddComponentPaletteProps {
   planned: Set<string>;
   originOf: (id: string) => Origin;
   onAdd: (moduleId: string) => void;
+  onRemove: (moduleId: string) => void;
   onSwap: (fromId: string, toId: string) => void;
-  onAddCapability: (capability: string) => void;
+  /** Add a capability, or remove a selected one. */
+  onToggleCapability: (capability: string) => void;
 }
 
 /** What picking a palette row does, or why it can't be picked. */
 type RowAction =
   | { kind: "add" }
+  | { kind: "remove" }
   | { kind: "replace"; fromId: string; fromName: string }
   | { kind: "unavailable"; reason: string };
 
@@ -63,10 +66,12 @@ type Row = ModuleRow | CapabilityRow;
 
 /**
  * A searchable command palette over the catalog: add a module, replace a
- * conflicting one, or ask for a capability and let the planner pick its
- * provider. Arrow keys move, Enter picks.
+ * conflicting one, remove one you added, or ask for a capability and let the
+ * planner pick its provider. Browsing lists what's in the environment first;
+ * a query starting with "remove" narrows to what can be removed. Arrow keys
+ * move, Enter picks.
  */
-export function AddComponentPalette({
+export function ComponentPalette({
   open,
   onOpenChange,
   catalog,
@@ -74,16 +79,18 @@ export function AddComponentPalette({
   planned,
   originOf,
   onAdd,
+  onRemove,
   onSwap,
-  onAddCapability,
-}: AddComponentPaletteProps) {
+  onToggleCapability,
+}: ComponentPaletteProps) {
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
+  /** The highlighted pickable row; `null` follows the default. */
+  const [active, setActive] = useState<number | null>(null);
 
   useEffect(() => {
     if (open) {
       setQuery("");
-      setActive(0);
+      setActive(null);
     }
   }, [open]);
 
@@ -102,26 +109,34 @@ export function AddComponentPalette({
       ].filter((r) => r.action.kind !== "unavailable"),
     [groups],
   );
-  const activeKey = pickable[Math.min(active, pickable.length - 1)]?.key;
+  // Enter on a fresh palette adds, never removes: the default highlight skips
+  // removals unless the query asks for them.
+  const fallback = Math.max(
+    0,
+    pickable.findIndex((r) => r.action.kind !== "remove"),
+  );
+  const current = Math.min(active ?? fallback, pickable.length - 1);
+  const activeKey = pickable[current]?.key;
 
   const pick = (row: Row) => {
-    if (row.action.kind === "unavailable") return;
-    if (row.type === "capability") onAddCapability(row.capability);
-    else if (row.action.kind === "replace")
-      onSwap(row.action.fromId, row.module.id);
+    const { action } = row;
+    if (action.kind === "unavailable") return;
+    if (row.type === "capability") onToggleCapability(row.capability);
+    else if (action.kind === "replace") onSwap(action.fromId, row.module.id);
+    else if (action.kind === "remove") onRemove(row.module.id);
     else onAdd(row.module.id);
-    onOpenChange(false);
+    // Stay open after a removal, so several can go in a row.
+    if (action.kind !== "remove") onOpenChange(false);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive((i) =>
+      setActive(
         pickable.length === 0
-          ? 0
-          : (Math.min(i, pickable.length - 1) + step + pickable.length) %
-            pickable.length,
+          ? null
+          : (current + step + pickable.length) % pickable.length,
       );
     } else if (e.key === "Enter") {
       const row = pickable.find((r) => r.key === activeKey);
@@ -142,9 +157,10 @@ export function AddComponentPalette({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[15%] max-w-lg translate-y-0 gap-0 overflow-hidden">
-        <DialogTitle className="sr-only">Add a component</DialogTitle>
+        <DialogTitle className="sr-only">Add or remove components</DialogTitle>
         <DialogDescription className="sr-only">
-          Search the catalog and add a module or capability to the environment.
+          Search the catalog to add a module or capability to the environment,
+          or remove one you added.
         </DialogDescription>
         <div className="flex items-center gap-2 border-b border-border px-3">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -153,17 +169,17 @@ export function AddComponentPalette({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              setActive(0);
+              setActive(null);
             }}
             onKeyDown={onKeyDown}
-            placeholder="Add a component or capability…"
+            placeholder="Add or remove a component or capability…"
             className="h-11 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
         </div>
         <div className="max-h-[60vh] overflow-y-auto p-1">
           {empty && (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              Nothing in the catalog matches “{query}”.
+              Nothing matches “{query}”.
             </p>
           )}
           {groups.modules.map(([category, rows]) => (
@@ -210,7 +226,8 @@ export function AddComponentPalette({
         </div>
         <div className="flex items-center gap-3 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
           <span>↑↓ to move</span>
-          <span>↵ to add</span>
+          <span>↵ to pick</span>
+          <span>“remove …” to remove</span>
           <span>esc to close</span>
         </div>
       </DialogContent>
@@ -281,11 +298,16 @@ function PaletteRow({
       </div>
       <span
         className={cn(
-          "shrink-0 text-[11px]",
-          action.kind === "replace" ? "text-primary" : "text-muted-foreground",
+          "max-w-[45%] shrink-0 truncate text-[11px]",
+          action.kind === "replace"
+            ? "text-primary"
+            : action.kind === "remove"
+              ? "text-destructive"
+              : "text-muted-foreground",
         )}
       >
         {action.kind === "add" && (active ? "Add ↵" : "")}
+        {action.kind === "remove" && (active ? "Remove ↵" : "Remove")}
         {action.kind === "replace" && `Replace ${action.fromName}`}
         {action.kind === "unavailable" && action.reason}
       </span>
@@ -301,7 +323,10 @@ function paletteRows(
   originOf: (id: string) => Origin,
   query: string,
 ): { modules: [string, ModuleRow[]][]; capabilities: CapabilityRow[] } {
-  const q = query.trim().toLowerCase();
+  // "remove <name>" (or "rm <name>") narrows to what can be removed.
+  const raw = query.trim().toLowerCase();
+  const removal = /^(remove|rm)(\s+|$)/.exec(raw);
+  const q = removal ? raw.slice(removal[0].length) : raw;
   const matches = (...fields: (string | null | undefined)[]) =>
     q === "" || fields.some((f) => f?.toLowerCase().includes(q));
   const present = new Set([...planned, ...selection.modules]);
@@ -312,10 +337,9 @@ function paletteRows(
   const moduleAction = (m: ModuleDto): RowAction => {
     if (present.has(m.id)) {
       const origin = originOf(m.id);
-      return {
-        kind: "unavailable",
-        reason: origin.kind === "explicit" ? "Added" : "Included",
-      };
+      return origin.kind === "explicit"
+        ? { kind: "remove" }
+        : { kind: "unavailable", reason: describeOrigin(origin) };
     }
     const blockers = conflicts.get(m.id) ?? [];
     if (blockers.length === 0) return { kind: "add" };
@@ -336,27 +360,36 @@ function paletteRows(
     module,
     action: moduleAction(module),
   });
-  const found = catalog.modules.filter((m) =>
-    matches(m.display_name, m.id, m.summary, m.category, m.provider_of),
-  );
-  // Browsing groups by category; a search ranks name matches first in one list.
-  const modules: [string, ModuleRow[]][] =
-    q === ""
-      ? groupByCategory(found).map(([category, list]) => [
-          category,
-          list.map(toRow),
-        ])
-      : found.length > 0
-        ? [
-            [
-              "results",
-              found
-                .map((m) => ({ m, rank: matchRank(m, q) }))
-                .sort((a, b) => a.rank - b.rank)
-                .map(({ m }) => toRow(m)),
-            ],
-          ]
-        : [];
+  const keep = (row: { action: RowAction }) =>
+    !removal || row.action.kind === "remove";
+  const found = catalog.modules
+    .filter((m) =>
+      matches(m.display_name, m.id, m.summary, m.category, m.provider_of),
+    )
+    .map(toRow)
+    .filter(keep);
+  // Browsing lists the environment first, then the catalog by category; a
+  // search ranks name matches first in one list.
+  const modules: [string, ModuleRow[]][] = [];
+  if (q === "") {
+    const inEnv = found.filter((r) => present.has(r.module.id));
+    if (inEnv.length > 0) modules.push(["in this environment", inEnv]);
+    const rest = found.filter((r) => !present.has(r.module.id));
+    for (const [category, list] of groupByCategory(rest.map((r) => r.module))) {
+      modules.push([
+        category,
+        list.flatMap((m) => rest.filter((r) => r.module === m)),
+      ]);
+    }
+  } else if (found.length > 0) {
+    modules.push([
+      "results",
+      found
+        .map((row) => ({ row, rank: matchRank(row.module, q) }))
+        .sort((a, b) => a.rank - b.rank)
+        .map(({ row }) => row),
+    ]);
+  }
 
   const capabilities = capabilityIndex(catalog)
     .filter(([capability, providers]) =>
@@ -368,22 +401,23 @@ function paletteRows(
     )
     .map(([capability, providers]): CapabilityRow => {
       const provided = providers.find((p) => present.has(p.id));
+      const action: RowAction = selection.capabilities.includes(capability)
+        ? { kind: "remove" }
+        : provided
+          ? {
+              kind: "unavailable",
+              reason: `Via ${provided.display_name ?? provided.id}`,
+            }
+          : { kind: "add" };
       return {
         type: "capability",
         key: `c:${capability}`,
         capability,
         providers,
-        action:
-          provided || selection.capabilities.includes(capability)
-            ? {
-                kind: "unavailable",
-                reason: provided
-                  ? `Via ${provided.display_name ?? provided.id}`
-                  : "Added",
-              }
-            : { kind: "add" },
+        action,
       };
-    });
+    })
+    .filter(keep);
 
   return { modules, capabilities };
 }

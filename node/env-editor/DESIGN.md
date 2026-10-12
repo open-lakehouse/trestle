@@ -49,7 +49,10 @@ keeps the last good one on screen next to the error.
   `⌘Z`, redo `⇧⌘Z`, planner status), a hover action bar on each node
   (configure · swap · remove), and a docked inspector for the selected node
   (settings, connections, rendered files, swap/remove). `Delete` removes the
-  selected component, `Esc` deselects.
+  selected component, `Esc` deselects. The component palette (`⌘K`) adds
+  modules and capabilities and removes the ones you added: browsing lists the
+  environment first, and a query starting with `remove` narrows to what can
+  be removed.
 - **Components** — the same selection as a toggle list with inline knobs.
 - **Files** — the rendered artifacts.
 

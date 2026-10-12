@@ -11,15 +11,15 @@ export {
   type EnvironmentEditorProps,
 } from "./EnvironmentEditor";
 export {
-  AddComponentPalette,
-  type AddComponentPaletteProps,
-} from "./graph/AddComponentPalette";
-export {
   CanvasNotice,
   type CanvasNoticeProps,
   CanvasToolbar,
   type CanvasToolbarProps,
 } from "./graph/CanvasToolbar";
+export {
+  ComponentPalette,
+  type ComponentPaletteProps,
+} from "./graph/ComponentPalette";
 export type { CanvasActions } from "./graph/canvasActions";
 export {
   MarkitectureCanvas,

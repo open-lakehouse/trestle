@@ -1,4 +1,4 @@
-// Catalog lookups shared by the pickers, the add palette and the canvas.
+// Catalog lookups shared by the pickers, the component palette and the canvas.
 
 import type { CatalogDto, ModuleDto } from "../types";
 

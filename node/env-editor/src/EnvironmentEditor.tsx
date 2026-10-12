@@ -11,8 +11,8 @@ import type { ColorMode } from "@xyflow/react";
 import { AlertTriangle, Loader2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilesPanel } from "./artifacts/FilesPanel";
-import { AddComponentPalette } from "./graph/AddComponentPalette";
 import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar";
+import { ComponentPalette } from "./graph/ComponentPalette";
 import type { CanvasActions } from "./graph/canvasActions";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
 import { InspectorPanel } from "./inspector/InspectorPanel";
@@ -222,7 +222,7 @@ function EditorBody({
     }
   }, [selectedId, planned, selection]);
 
-  // Canvas shortcuts: ⌘K or / opens the palette, ⌘Z / ⇧⌘Z undo and redo,
+  // Canvas shortcuts: ⌘K or / opens the component palette, ⌘Z / ⇧⌘Z undo and redo,
   // Delete removes the selected component, Esc deselects.
   useEffect(() => {
     if (tab !== "canvas") return;
@@ -352,7 +352,7 @@ function EditorBody({
                 />
               )}
             </Card>
-            <AddComponentPalette
+            <ComponentPalette
               open={paletteOpen}
               onOpenChange={setPaletteOpen}
               catalog={catalog}
@@ -360,8 +360,9 @@ function EditorBody({
               planned={planned}
               originOf={originOf}
               onAdd={addComponent}
+              onRemove={removeComponent}
               onSwap={swapComponent}
-              onAddCapability={env.toggleCapability}
+              onToggleCapability={env.toggleCapability}
             />
           </TabsContent>
 
