@@ -1,16 +1,20 @@
 import { cn } from "@open-lakehouse/ui-kit";
+import { describeOrigin } from "../../state/origin";
 import type { GraphNodeDto } from "../../types";
+import { useCanvasContext } from "../canvasActions";
 import { ModuleIcon } from "../projectIcons";
 import { roleStyle } from "../roleTheme";
 import { NODE_HEADER } from "../useTopologyLayout";
 
 /**
  * The heading every card opens with: the project's logo on a tile tinted by
- * the role accent, the implementation's name, and the function it fills.
+ * the role accent, the implementation's name, and the function it fills. On
+ * an editable canvas, a component the planner pulled in carries an "Auto" chip.
  * Fixed height (NODE_HEADER) — the layout reserves exactly this.
  */
 export function NodeHeader({ node }: { node: GraphNodeDto }) {
   const style = roleStyle(node.role);
+  const origin = useCanvasContext()?.actions.originOf(node.id);
   const title = node.display_name ?? node.id;
   return (
     <div
@@ -34,11 +38,21 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
           {style.label}
         </div>
       </div>
-      {node.kind === "external" && (
-        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-          External
-        </span>
+      {node.kind === "external" && <Chip>External</Chip>}
+      {origin?.kind === "auto" && (
+        <Chip title={describeOrigin(origin)}>Auto</Chip>
       )}
     </div>
+  );
+}
+
+function Chip({ title, children }: { title?: string; children: string }) {
+  return (
+    <span
+      className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground"
+      title={title}
+    >
+      {children}
+    </span>
   );
 }

@@ -21,6 +21,7 @@ import {
   surfaceHandle,
 } from "../useTopologyLayout";
 import { cardClass, HANDLE_CLASS } from "./BaseNode";
+import { NodeActions } from "./NodeActions";
 import { NodeHeader } from "./NodeHeader";
 
 /** The `data` payload the gateway node carries (set in `useTopologyLayout`). */
@@ -114,6 +115,7 @@ export function GatewayNode({ data, selected }: NodeProps) {
 
   return (
     <div className={cardClass(selected)} style={{ width: GATEWAY_WIDTH }}>
+      <NodeActions id={node.id} selected={selected} />
       <NodeHeader node={node} />
       {sections.map(({ surface, rows }) => (
         <div key={surface.host_port}>

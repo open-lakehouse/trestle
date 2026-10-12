@@ -10,8 +10,8 @@ export interface ConfigPanelProps {
 }
 
 /**
- * Technology/capability selection and inline knobs. Planning runs when leaving
- * the Configure tab for Topology or Files.
+ * Technology/capability selection and inline knobs: the list view of the same
+ * selection the canvas edits. Every change replans live.
  */
 export function ConfigPanel({
   catalog,

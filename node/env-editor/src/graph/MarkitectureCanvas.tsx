@@ -13,13 +13,26 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from "@xyflow/react";
-import { type CSSProperties, useCallback, useEffect, useMemo } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   GraphDto,
   GraphNodeDto,
   TopologyEdgeDto,
   TopologyEdgeKind,
 } from "../types";
+import {
+  type CanvasActions,
+  CanvasContext,
+  type CanvasContextValue,
+} from "./canvasActions";
 import { ElkEdge } from "./edges/ElkEdge";
 import { ClientsNode } from "./nodes/ClientsNode";
 import { ComponentNode } from "./nodes/ComponentNode";
@@ -50,7 +63,24 @@ export interface MarkitectureCanvasProps {
    * theme so the canvas tracks the rest of the app.
    */
   colorMode?: ColorMode;
+  /**
+   * Editing actions. When given, nodes show a hover action bar (configure /
+   * swap / remove) and double-clicking a node configures it; without them the
+   * canvas is a read-only diagram.
+   */
+  actions?: CanvasActions;
+  /** Called when the empty canvas is clicked. */
+  onDeselect?: () => void;
+  /** Pan to a node; bump `seq` to pan again to the same one. */
+  focus?: { id: string; seq: number };
+  /** Overlays rendered inside the flow (e.g. `<Panel>`s); they may use `useReactFlow`. */
+  children?: ReactNode;
 }
+
+/** How long the pointer may travel from a node onto its action bar. */
+const HOVER_GRACE_MS = 200;
+/** How long a newly planned node stays highlighted. */
+const FRESH_MS = 1600;
 
 /**
  * Per-kind edge look. Strokes reference the raw HSL-component tokens (authored
@@ -131,9 +161,10 @@ function edgeTitle(e: TopologyEdgeDto): string {
 /**
  * Render a planned environment's functional topology as a left-to-right
  * "markitecture": clients → the gateway's exposed surface → the components
- * behind it → the capabilities they use. Purely presentational: the app feeds
- * it a live plan graph and Storybook feeds it a fixture — same component, no
- * planner coupling.
+ * behind it → the capabilities they use. Presentational: the app feeds it a
+ * live plan graph and Storybook feeds it a fixture — same component, no
+ * planner coupling. Editing is opt-in through `actions`, which the host
+ * implements.
  */
 export function MarkitectureCanvas(props: MarkitectureCanvasProps) {
   // useReactFlow requires a provider ancestor, so the flow lives inside one.
@@ -155,13 +186,45 @@ function MarkitectureFlow({
   selectedId,
   onSelect,
   colorMode = "system",
+  actions,
+  onDeselect,
+  focus,
+  children,
 }: MarkitectureCanvasProps) {
   const { nodes, edges } = useTopologyLayout(graph);
-  const { fitView } = useReactFlow();
+  const { fitView, getNode, getZoom, setCenter } = useReactFlow();
+  const [hoveredId, setHoveredId] = useState<string | undefined>();
+  const leaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const fresh = useFreshNodes(nodes);
+
+  const hover = useCallback((id: string) => {
+    clearTimeout(leaveTimer.current);
+    setHoveredId(id);
+  }, []);
+  const leave = useCallback(() => {
+    clearTimeout(leaveTimer.current);
+    leaveTimer.current = setTimeout(
+      () => setHoveredId(undefined),
+      HOVER_GRACE_MS,
+    );
+  }, []);
+  useEffect(() => () => clearTimeout(leaveTimer.current), []);
+
+  const context = useMemo<CanvasContextValue | null>(
+    () => (actions ? { actions, hoveredId, hover, leave } : null),
+    [actions, hoveredId, hover, leave],
+  );
 
   const decoratedNodes = useMemo(
-    () => nodes.map((n) => ({ ...n, selected: n.id === selectedId })),
-    [nodes, selectedId],
+    () =>
+      nodes.map((n) => ({
+        ...n,
+        selected: n.id === selectedId,
+        className: fresh.has(n.id)
+          ? "rounded-lg ring-4 ring-primary/40 animate-pulse"
+          : undefined,
+      })),
+    [nodes, selectedId, fresh],
   );
 
   // Each kind has its own stroke/dash; selecting a component emphasizes its
@@ -223,6 +286,21 @@ function MarkitectureFlow({
     return () => cancelAnimationFrame(raf);
   }, [nodeKey, fitView]);
 
+  // Pan to a requested node at the current zoom.
+  const focusSeq = focus?.seq;
+  const focusId = focus?.id;
+  useEffect(() => {
+    if (focusSeq === undefined || !focusId) return;
+    const node = getNode(focusId);
+    if (!node) return;
+    const width = node.measured?.width ?? 0;
+    const height = node.measured?.height ?? 0;
+    void setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+      zoom: getZoom(),
+      duration: 300,
+    });
+  }, [focusSeq, focusId, getNode, getZoom, setCenter]);
+
   const handleNodeClick = useCallback(
     (_: unknown, node: Node) => {
       const component = nodeComponent(node);
@@ -231,35 +309,88 @@ function MarkitectureFlow({
     [onSelect],
   );
 
+  const handleNodeDoubleClick = useCallback(
+    (_: unknown, node: Node) => {
+      const component = nodeComponent(node);
+      if (component && actions) actions.configure(component.id);
+    },
+    [actions],
+  );
+
+  const handleNodeEnter = useCallback(
+    (_: unknown, node: Node) => {
+      if (nodeComponent(node)) hover(node.id);
+    },
+    [hover],
+  );
+
   const kinds = useMemo(
     () => new Set(graph?.edges.map((e) => e.kind) ?? []),
     [graph],
   );
 
   return (
-    <ReactFlow
-      nodes={decoratedNodes}
-      edges={decoratedEdges}
-      nodeTypes={nodeTypes}
-      edgeTypes={edgeTypes}
-      onNodeClick={handleNodeClick}
-      colorMode={colorMode}
-      fitView
-      proOptions={{ hideAttribution: true }}
-      minZoom={0.1}
-    >
-      <Background
-        variant={BackgroundVariant.Dots}
-        gap={20}
-        size={1}
-        color="hsl(var(--muted-foreground) / 0.35)"
-      />
-      <Controls showInteractive={false} />
-      <Panel position="top-right">
-        <Legend kinds={kinds} />
-      </Panel>
-    </ReactFlow>
+    <CanvasContext.Provider value={context}>
+      <ReactFlow
+        nodes={decoratedNodes}
+        edges={decoratedEdges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
+        onNodeMouseEnter={actions ? handleNodeEnter : undefined}
+        onNodeMouseLeave={actions ? leave : undefined}
+        onPaneClick={onDeselect}
+        // Removal goes through the editor's actions, not React Flow's own
+        // delete handling.
+        deleteKeyCode={null}
+        zoomOnDoubleClick={false}
+        colorMode={colorMode}
+        fitView
+        proOptions={{ hideAttribution: true }}
+        minZoom={0.1}
+      >
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={1}
+          color="hsl(var(--muted-foreground) / 0.35)"
+        />
+        <Controls showInteractive={false} />
+        <Panel position="top-right">
+          <Legend kinds={kinds} />
+        </Panel>
+        {children}
+      </ReactFlow>
+    </CanvasContext.Provider>
   );
+}
+
+/**
+ * The ids of nodes that just appeared in the layout (not on the first
+ * layout), cleared after FRESH_MS, so a newly added component stands out.
+ */
+function useFreshNodes(nodes: Node[]): Set<string> {
+  const [fresh, setFresh] = useState<Set<string>>(() => new Set());
+  const seen = useRef<Set<string> | null>(null);
+
+  useEffect(() => {
+    if (nodes.length === 0) return;
+    const ids = new Set(nodes.map((n) => n.id));
+    const previous = seen.current;
+    seen.current = ids;
+    if (!previous) return;
+    const added = [...ids].filter((id) => !previous.has(id));
+    if (added.length > 0) setFresh(new Set(added));
+  }, [nodes]);
+
+  useEffect(() => {
+    if (fresh.size === 0) return;
+    const timer = setTimeout(() => setFresh(new Set()), FRESH_MS);
+    return () => clearTimeout(timer);
+  }, [fresh]);
+
+  return fresh;
 }
 
 /** A compact key for the edge kinds present in the graph. */

@@ -1,5 +1,6 @@
 // Public surface of `@open-lakehouse/env-editor`: the headless environment
-// editor plus its planner seam, diagram canvas, and step components — so a host
+// editor plus its planner seam, state hook, diagram canvas and its editing
+// pieces, and step components — so a host
 // can use the whole editor or compose the pieces. All planning flows through the
 // injected `Planner` (see ./planner and DESIGN.md); this package has no runtime
 // dependency on the wasm engine.
@@ -9,6 +10,17 @@ export {
   EnvironmentEditor,
   type EnvironmentEditorProps,
 } from "./EnvironmentEditor";
+export {
+  AddComponentPalette,
+  type AddComponentPaletteProps,
+} from "./graph/AddComponentPalette";
+export {
+  CanvasNotice,
+  type CanvasNoticeProps,
+  CanvasToolbar,
+  type CanvasToolbarProps,
+} from "./graph/CanvasToolbar";
+export type { CanvasActions } from "./graph/canvasActions";
 export {
   MarkitectureCanvas,
   type MarkitectureCanvasProps,
@@ -20,6 +32,10 @@ export {
   projectIcon,
 } from "./graph/projectIcons";
 export { roleStyle } from "./graph/roleTheme";
+export {
+  InspectorPanel,
+  type InspectorPanelProps,
+} from "./inspector/InspectorPanel";
 export { KnobsStep } from "./knobs/KnobsStep";
 export {
   PlannerProvider,
@@ -27,6 +43,15 @@ export {
   usePlanner,
 } from "./planner";
 export { SelectionStep } from "./selection/SelectionStep";
+export {
+  componentOrigin,
+  describeOrigin,
+  type Origin,
+} from "./state/origin";
+export {
+  type EnvironmentState,
+  useEnvironment,
+} from "./state/useEnvironment";
 export type {
   AuthDto,
   CatalogDto,

@@ -1,6 +1,7 @@
 import { Badge, Card, cn } from "@open-lakehouse/ui-kit";
 import { Sparkles } from "lucide-react";
 import type { CatalogDto } from "../types";
+import { capabilityIndex, capabilityLabel } from "./catalogIndex";
 
 export interface CapabilityPickerProps {
   catalog: CatalogDto;
@@ -8,18 +9,6 @@ export interface CapabilityPickerProps {
   selected: string[];
   /** Toggle a capability in/out of the selection. */
   onToggle: (capability: string) => void;
-}
-
-/** Build the capability → providing modules index from the catalog. */
-function capabilityIndex(catalog: CatalogDto): Map<string, string[]> {
-  const index = new Map<string, string[]>();
-  for (const m of catalog.modules) {
-    if (!m.provider_of) continue;
-    const providers = index.get(m.provider_of) ?? [];
-    providers.push(m.display_name ?? m.id);
-    index.set(m.provider_of, providers);
-  }
-  return index;
 }
 
 /**
@@ -33,9 +22,7 @@ export function CapabilityPicker({
   onToggle,
 }: CapabilityPickerProps) {
   const selectedSet = new Set(selected);
-  const capabilities = [...capabilityIndex(catalog).entries()].sort(
-    ([a], [b]) => a.localeCompare(b),
-  );
+  const capabilities = capabilityIndex(catalog);
 
   if (capabilities.length === 0) {
     return (
@@ -71,12 +58,12 @@ export function CapabilityPicker({
               <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-semibold text-card-foreground">
-                  {capability.replace(/_/g, " ")}
+                  {capabilityLabel(capability)}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {providers.map((p) => (
-                    <Badge key={p} variant="outline">
-                      {p}
+                    <Badge key={p.id} variant="outline">
+                      {p.display_name ?? p.id}
                     </Badge>
                   ))}
                 </div>

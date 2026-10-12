@@ -8,6 +8,7 @@ import {
   FACT_LINE,
 } from "../useTopologyLayout";
 import { BaseNode } from "./BaseNode";
+import { NodeActions } from "./NodeActions";
 import { NodeHeader } from "./NodeHeader";
 
 export interface ComponentNodeData {
@@ -31,6 +32,7 @@ export function ComponentNode({ data, selected }: NodeProps) {
       className={cn(node.kind === "external" && "border-dashed")}
       style={{ width: COMPONENT_WIDTH, height: componentHeight(node) }}
     >
+      <NodeActions id={node.id} selected={selected} />
       <NodeHeader node={node} />
       {facts.length > 0 && (
         <div className="flex min-h-0 flex-1 flex-col justify-center border-t border-border px-3">

@@ -2,7 +2,8 @@ import { Badge, Card, cn, Switch } from "@open-lakehouse/ui-kit";
 import { ModuleIcon } from "../graph/projectIcons";
 import { roleStyle } from "../graph/roleTheme";
 import { KnobField } from "../knobs/KnobField";
-import type { CatalogDto, ModuleDto } from "../types";
+import type { CatalogDto } from "../types";
+import { conflictsWith, groupByCategory } from "./catalogIndex";
 
 export interface TechnologyPickerProps {
   catalog: CatalogDto;
@@ -14,20 +15,6 @@ export interface TechnologyPickerProps {
   onToggle: (moduleId: string) => void;
   /** Set one knob override. */
   onSetKnob: (moduleId: string, key: string, value: string) => void;
-}
-
-/** Group modules by their `category` (uncategorized last), preserving order. */
-function groupByCategory(modules: ModuleDto[]): [string, ModuleDto[]][] {
-  const groups = new Map<string, ModuleDto[]>();
-  for (const m of modules) {
-    const key = m.category ?? "other";
-    const list = groups.get(key) ?? [];
-    list.push(m);
-    groups.set(key, list);
-  }
-  return [...groups.entries()].sort(([a], [b]) =>
-    a === "other" ? 1 : b === "other" ? -1 : a.localeCompare(b),
-  );
 }
 
 /**
@@ -42,16 +29,8 @@ export function TechnologyPicker({
   onSetKnob,
 }: TechnologyPickerProps) {
   const selectedSet = new Set(selected);
-  // A module conflicts if any currently-selected module lists it (or it lists a
-  // selected one) in conflicts_with.
-  const conflicting = new Set<string>();
-  for (const m of catalog.modules) {
-    if (!selectedSet.has(m.id)) continue;
-    for (const c of m.conflicts_with) conflicting.add(c);
-  }
-  for (const m of catalog.modules) {
-    if (m.conflicts_with.some((c) => selectedSet.has(c))) conflicting.add(m.id);
-  }
+  // A module conflicts if it can't coexist with a currently-selected one.
+  const conflicting = conflictsWith(catalog, selectedSet);
 
   return (
     <div className="flex flex-col gap-6">

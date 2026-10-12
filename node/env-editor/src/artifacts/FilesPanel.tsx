@@ -10,6 +10,8 @@ import {
 
 export interface FilesPanelProps {
   plan: PlanResult | null;
+  /** The file to open first, if the plan has it (e.g. picked in the inspector). */
+  initialPath?: string;
 }
 
 // A stable identity so the default-selection effect doesn't re-run every render
@@ -128,10 +130,12 @@ function FileTreeItem({
  * Browse every non-sensitive file the planner materialized: tree on the left,
  * read-only content viewer on the right.
  */
-export function FilesPanel({ plan }: FilesPanelProps) {
+export function FilesPanel({ plan, initialPath }: FilesPanelProps) {
   const files = plan?.files ?? EMPTY_FILES;
   const tree = useMemo(() => buildFileTree(files), [files]);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(
+    initialPath ?? null,
+  );
 
   useEffect(() => {
     const next = defaultFilePath(files);
@@ -146,7 +150,7 @@ export function FilesPanel({ plan }: FilesPanelProps) {
   if (!plan) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-        Generate an environment to inspect the rendered files.
+        Add components to the environment to inspect the rendered files.
       </div>
     );
   }

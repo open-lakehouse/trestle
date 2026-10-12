@@ -7,7 +7,8 @@ import { EnvironmentEditor } from "./EnvironmentEditor";
 import type { Planner } from "./types";
 
 // A fixture planner: the real captured catalog, and a representative plan for
-// any non-empty selection. Lets the editor render end-to-end with no wasm.
+// any non-empty selection. Lets the editor render end-to-end with no wasm; the
+// canvas's add/swap/remove actions run, but the fixture plan doesn't change.
 const fixturePlanner: Planner = {
   async catalog() {
     return FIXTURE_CATALOG;
