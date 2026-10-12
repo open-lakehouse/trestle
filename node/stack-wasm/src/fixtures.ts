@@ -14,6 +14,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "gateway",
       requires: [],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "auth",
@@ -58,6 +59,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "auth",
       requires: [],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "image",
@@ -80,6 +82,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "relational_db",
       requires: [],
       conflicts_with: [],
+      resource_kinds: ["relational_db"],
       knobs: [
         {
           key: "image",
@@ -103,6 +106,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "object_store",
       requires: [],
       conflicts_with: [],
+      resource_kinds: ["object_store"],
       knobs: [
         {
           key: "image",
@@ -147,6 +151,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "object_store",
       requires: [],
       conflicts_with: [],
+      resource_kinds: ["object_store"],
       knobs: [
         {
           key: "image",
@@ -181,6 +186,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "experiment_tracking",
       requires: ["envoy"],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "image",
@@ -214,6 +220,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "data_catalog",
       requires: ["envoy"],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "image",
@@ -236,6 +243,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "tracing",
       requires: ["envoy"],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "image",
@@ -259,6 +267,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "lineage",
       requires: ["envoy"],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "serve_ui",
@@ -293,6 +302,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "agent_platform",
       requires: ["envoy", "mlflow"],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "host",
@@ -356,6 +366,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "policy",
       requires: [],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [
         {
           key: "image",
@@ -399,6 +410,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       provider_of: "databricks_apps_contract",
       requires: [],
       conflicts_with: [],
+      resource_kinds: [],
       knobs: [],
     },
   ],
@@ -572,10 +584,12 @@ export const FIXTURE_PLAN: PlanResult = {
           {
             resource: "relational_db",
             name: "unitycatalog",
+            consumers: ["unity-catalog"],
           },
           {
             resource: "relational_db",
             name: "mlflow",
+            consumers: ["mlflow"],
           },
         ],
       },
@@ -594,10 +608,12 @@ export const FIXTURE_PLAN: PlanResult = {
           {
             resource: "object_store",
             name: "unity",
+            consumers: ["unity-catalog"],
           },
           {
             resource: "object_store",
             name: "mlflow",
+            consumers: ["mlflow"],
           },
         ],
       },

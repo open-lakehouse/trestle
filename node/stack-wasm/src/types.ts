@@ -34,6 +34,8 @@ export interface ModuleDto {
   provider_of?: string | null;
   requires: string[];
   conflicts_with: string[];
+  /** The resource kinds it provisions on request (e.g. "relational_db"). */
+  resource_kinds: string[];
   knobs: Knob[];
 }
 
@@ -44,7 +46,18 @@ export interface Selection {
   capabilities: string[];
   /** module id -> (knob key -> value); values are always strings. */
   knob_overrides: Record<string, Record<string, string>>;
-  extra_resources?: unknown[];
+  /** Environment-level resources no module consumes (extra databases, buckets). */
+  extra_resources?: ExtraResource[];
+}
+
+/** An extra resource to provision (mirrors the Rust `ExtraResource`). */
+export interface ExtraResource {
+  /** The resource kind (e.g. "relational_db", "object_store"). */
+  resource: string;
+  /** The database / bucket name. */
+  name: string;
+  /** Pin the provider module; otherwise the planner chooses. */
+  provider?: string | null;
 }
 
 /** The selectable catalog (mirrors `CatalogDto`). */
@@ -87,10 +100,12 @@ export interface SurfaceDto {
   exposes: ExposedDto[];
 }
 
-/** A resource a provider provisions for a consumer (mirrors `ProvisionedDto`). */
+/** A resource a provider provisions (mirrors `ProvisionedDto`). */
 export interface ProvisionedDto {
   resource: string;
   name: string;
+  /** The components that use it; empty for an extra resource. */
+  consumers: string[];
 }
 
 /** One functional component (a module), or the clients node (mirrors

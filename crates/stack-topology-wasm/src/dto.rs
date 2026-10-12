@@ -50,6 +50,9 @@ pub struct ModuleDto {
     pub requires: Vec<String>,
     /// Ids of modules this one cannot coexist with (selecting both is a plan error).
     pub conflicts_with: Vec<String>,
+    /// The resource kinds this module provisions on request (e.g. `"relational_db"` for a
+    /// database server), so the UI can offer to add an extra database or bucket to it.
+    pub resource_kinds: Vec<String>,
     /// The user-tunable config knobs this module exposes. `Knob` already derives `Serialize`, so
     /// it is reused verbatim.
     pub knobs: Vec<Knob>,
@@ -192,6 +195,7 @@ pub fn catalog_dto() -> CatalogDto {
                 .iter()
                 .map(|c| c.as_str().to_string())
                 .collect(),
+            resource_kinds: m.provides().resource_kinds.keys().cloned().collect(),
             knobs: m.knobs().to_vec(),
         })
         .collect();

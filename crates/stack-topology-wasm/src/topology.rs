@@ -79,8 +79,8 @@ pub struct GraphNodeDto {
     pub surfaces: Vec<SurfaceDto>,
     /// For a provider: the APIs it offers its consumers (e.g. `"PostgreSQL"`, `"S3 + STS"`).
     pub offers: Vec<String>,
-    /// For a provider: the resources it provisions for its consumers (databases, buckets), in
-    /// first-demand order.
+    /// For a provider: every resource it provisions (databases, buckets), in the order its
+    /// init job creates them — consumers' demands first, then the selection's extra resources.
     pub provisions: Vec<ProvisionedDto>,
 }
 
@@ -136,13 +136,16 @@ pub struct ExposedDto {
     pub gated: bool,
 }
 
-/// A resource a provider provisions for a consumer.
+/// A resource a provider provisions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProvisionedDto {
     /// The resource kind (the demanded role, e.g. `"relational_db"`, `"object_store"`).
     pub resource: String,
     /// The resource's name (a database, a bucket).
     pub name: String,
+    /// The components that use it, in dependency order. Empty for an environment-level extra
+    /// resource, which is provisioned for something outside the stack.
+    pub consumers: Vec<String>,
 }
 
 /// A typed, request-direction edge (`from` calls `to`).
@@ -350,7 +353,8 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
     // What each component uses: one edge per (consumer, provider, capability), from the
     // demands and the provider the planner chose for each.
     let mut uses: Vec<TopologyEdgeDto> = Vec::new();
-    let mut provisions: BTreeMap<String, Vec<ProvisionedDto>> = BTreeMap::new();
+    // (provider, resource name) → (kind, consumers), from the demands.
+    let mut consumers_of: BTreeMap<(String, String), (String, Vec<String>)> = BTreeMap::new();
     for module in &plan.graph.nodes {
         for (idx, demand) in module.needs().iter().enumerate() {
             let Some(provider) = plan.graph.edges.iter().find_map(|e| {
@@ -365,13 +369,11 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 continue;
             };
             let (from, to) = (module.id().as_str(), provider.id().as_str());
-            provisions
-                .entry(to.to_string())
-                .or_default()
-                .push(ProvisionedDto {
-                    resource: demand.resource.clone(),
-                    name: demand.name.clone(),
-                });
+            consumers_of
+                .entry((to.to_string(), demand.name.clone()))
+                .or_insert_with(|| (demand.resource.clone(), Vec::new()))
+                .1
+                .push(from.to_string());
             let existing = uses.iter_mut().find(|e| {
                 matches!(e, TopologyEdgeDto::Uses { from: f, to: t, role, .. }
                     if f == from && t == to && *role == demand.resource)
@@ -388,6 +390,29 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     resources: vec![demand.name.clone()],
                 }),
             }
+        }
+    }
+
+    // What each provider provisions, in its init job's order. A name no demand accounts for is
+    // an extra resource: it has no consumers, and its kind is the provider's resource kind.
+    let mut provisions: BTreeMap<String, Vec<ProvisionedDto>> = BTreeMap::new();
+    for (provider, names) in &plan.provisioned {
+        let Some(module) = plan.graph.module(provider) else {
+            continue;
+        };
+        let own_kind = module.provides().resource_kinds.keys().next().cloned();
+        let list = provisions.entry(provider.as_str().to_string()).or_default();
+        for name in names {
+            let (resource, consumers) =
+                match consumers_of.get(&(provider.as_str().to_string(), name.clone())) {
+                    Some((kind, consumers)) => (kind.clone(), consumers.clone()),
+                    None => (own_kind.clone().unwrap_or_default(), Vec::new()),
+                };
+            list.push(ProvisionedDto {
+                resource,
+                name: name.clone(),
+                consumers,
+            });
         }
     }
 
@@ -582,7 +607,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
 
 #[cfg(test)]
 mod tests {
-    use olai_stack_topology::{Catalog, PlanCtx, Selection, baseline_catalog};
+    use olai_stack_topology::{Catalog, ExtraResource, PlanCtx, Selection, baseline_catalog};
 
     use super::*;
 
@@ -683,6 +708,45 @@ mod tests {
         );
         // `requires: [envoy]` is not a use: the gateway routes *to* the component instead.
         assert!(uses(&g, "mlflow", "envoy").is_none());
+    }
+
+    #[test]
+    fn provisions_name_their_consumers_and_include_extras() {
+        let mut selection = lakehouse(false);
+        selection.extra_resources = vec![
+            ExtraResource {
+                resource: "relational_db".into(),
+                name: "analytics".into(),
+                provider: Some("postgres".into()),
+            },
+            ExtraResource {
+                resource: "object_store".into(),
+                name: "exports".into(),
+                provider: None,
+            },
+        ];
+        let g = graph_dto(&plan(&selection));
+        let postgres = &node(&g, "postgres").provisions;
+        let uc_db = postgres
+            .iter()
+            .find(|p| p.name == "unitycatalog")
+            .expect("UC's database");
+        assert_eq!(uc_db.resource, "relational_db");
+        assert_eq!(uc_db.consumers, ["unity-catalog"]);
+        // An extra resource comes last, with the provider's kind and no consumers.
+        let extra = postgres.last().expect("provisions");
+        assert_eq!(
+            (extra.name.as_str(), extra.resource.as_str()),
+            ("analytics", "relational_db")
+        );
+        assert!(extra.consumers.is_empty());
+        let bucket = node(&g, "rustfs")
+            .provisions
+            .iter()
+            .find(|p| p.name == "exports")
+            .expect("the extra bucket lands on the object store");
+        assert_eq!(bucket.resource, "object_store");
+        assert!(bucket.consumers.is_empty());
     }
 
     /// Every exposed endpoint across the gateway's surfaces, with its surface.
