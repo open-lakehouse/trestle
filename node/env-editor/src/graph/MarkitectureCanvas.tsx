@@ -24,6 +24,7 @@ import { ElkEdge } from "./edges/ElkEdge";
 import { ClientsNode } from "./nodes/ClientsNode";
 import { ComponentNode } from "./nodes/ComponentNode";
 import { GatewayNode } from "./nodes/GatewayNode";
+import { roleStyle } from "./roleTheme";
 import { type TopologyEdgeData, useTopologyLayout } from "./useTopologyLayout";
 
 const nodeTypes: NodeTypes = {
@@ -102,7 +103,10 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
     case "authorizes":
       return "policy";
     case "uses":
-      return e.resources.join(", ");
+      // A hard requirement names no resources: label it with the capability used.
+      return e.resources.length > 0
+        ? e.resources.join(", ")
+        : roleStyle(e.role).label;
   }
 }
 
@@ -118,7 +122,9 @@ function edgeTitle(e: TopologyEdgeDto): string {
     case "authorizes":
       return `The gateway asks ${e.to} to authorize each signed-in request on :${e.host_port}`;
     case "uses":
-      return `${e.from} uses ${e.to} (${e.protocol}) for ${e.resources.join(", ")}`;
+      return e.resources.length > 0
+        ? `${e.from} uses ${e.to} (${e.protocol}) for ${e.resources.join(", ")}`
+        : `${e.from} uses ${e.to} (${e.protocol}) as its ${roleStyle(e.role).label.toLowerCase()}`;
   }
 }
 

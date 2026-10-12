@@ -3,6 +3,7 @@
 // DESIGN.md token contract (never hardcoded hex), so nodes re-theme with the host.
 
 import {
+  Bot,
   Boxes,
   Database,
   DoorOpen,
@@ -69,6 +70,11 @@ const ROLE_STYLES: Record<string, RoleStyle> = {
     label: "Policy engine",
     icon: Scale,
     accent: "text-[hsl(var(--status-blocked))]",
+  },
+  agent_platform: {
+    label: "Agent platform",
+    icon: Bot,
+    accent: "text-primary",
   },
 };
 

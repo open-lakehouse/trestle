@@ -391,6 +391,38 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         }
     }
 
+    // What each component uses by hard requirement rather than by demand (e.g. an agent
+    // platform that gets its models from the experiment tracker's AI gateway): one edge per
+    // required module, labelled with the capability that module provides. The gateway and its
+    // auth/policy providers are skipped — their own edges already connect them.
+    let infrastructure = [&gateway_module, &auth_module, &policy_module];
+    for module in &plan.graph.nodes {
+        let from = module.id().as_str();
+        for required in module.requires() {
+            let to = required.as_str();
+            if infrastructure.iter().any(|m| m.as_deref() == Some(to))
+                || uses.iter().any(|e| e.endpoints() == (from, to))
+            {
+                continue;
+            }
+            let Some(provider) = plan.graph.module(required) else {
+                continue;
+            };
+            let role = provider
+                .provider_of()
+                .map(str::to_string)
+                .or_else(|| primary(to).map(|s| s.role.as_str().to_string()))
+                .unwrap_or_default();
+            uses.push(TopologyEdgeDto::Uses {
+                from: from.to_string(),
+                to: to.to_string(),
+                role,
+                protocol: "HTTP".to_string(),
+                resources: Vec::new(),
+            });
+        }
+    }
+
     // The gateway's surfaces, one per listener in listener order (the shared one first). A
     // service surface names the protocols its backends offer.
     let offers_of = |id: &str| -> Vec<String> {
@@ -784,6 +816,34 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TopologyEdgeDto::Authorizes { .. }))
         );
+    }
+
+    #[test]
+    fn a_hard_requirement_draws_a_uses_edge() {
+        // Omnigent requires MLflow (its agents' models come from MLflow's AI Gateway), not by a
+        // resource demand: the graph still shows the dependency, labelled with what MLflow
+        // provides. Its requirement on the gateway is not drawn twice.
+        let g = graph_dto(&plan(&Selection::modules(["envoy", "omnigent"])));
+        assert_eq!(node(&g, "omnigent").role.as_deref(), Some("agent_platform"));
+        let uses = |from: &str, to: &str| {
+            g.edges
+                .iter()
+                .filter(|e| {
+                    matches!(e, TopologyEdgeDto::Uses { from: f, to: t, .. } if f == from && t == to)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(matches!(
+            uses("omnigent", "mlflow").as_slice(),
+            [TopologyEdgeDto::Uses { role, protocol, resources, .. }]
+                if role == "experiment_tracking" && protocol == "HTTP" && resources.is_empty()
+        ));
+        assert!(uses("omnigent", "envoy").is_empty());
+        // The demanded relational store keeps its demand edge.
+        assert!(matches!(
+            uses("omnigent", "postgres").as_slice(),
+            [TopologyEdgeDto::Uses { role, .. }] if role == "relational_db"
+        ));
     }
 
     #[test]
