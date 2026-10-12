@@ -403,7 +403,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
   ],
   default_selection: {
-    modules: ["envoy", "postgres", "rustfs"],
+    modules: ["envoy", "postgres", "rustfs", "unity-catalog"],
     capabilities: [],
     knob_overrides: {},
     extra_resources: [],

@@ -145,12 +145,13 @@ pub fn baseline_catalog() -> Catalog {
     // check.
 }
 
-/// The default lakehouse selection: the always-on gateway plus the default category
+/// The default lakehouse selection: the always-on gateway, the default category
 /// picks (a relational store and an object store), mirroring trestle's base
-/// `always: [envoy]` + default `storage`/`metadata_db` choices. Other modules
-/// (catalog, ml, query engine, observability) are opt-in.
+/// `always: [envoy]` + default `storage`/`metadata_db` choices, and Unity Catalog as
+/// the lakehouse's data catalog. Other modules (ml, query engine, observability, ...)
+/// are opt-in.
 pub fn baseline_selection() -> crate::plan::Selection {
-    crate::plan::Selection::modules(["envoy", "postgres", "rustfs"])
+    crate::plan::Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog"])
 }
 
 /// Helper: a container-placed service.
