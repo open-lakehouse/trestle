@@ -40,6 +40,7 @@ export type {
   ServiceSpec,
   SurfaceDto,
   SurfaceKind,
+  TargetDto,
   TlsDto,
   TopologyEdgeDto,
   TopologyEdgeKind,
@@ -68,11 +69,11 @@ export function createWasmPlanner(): Planner {
       await ensureReady();
       return catalog() as CatalogDto;
     },
-    async plan(selection: Selection): Promise<PlanResult> {
+    async plan(selection: Selection, target?: string): Promise<PlanResult> {
       await ensureReady();
       // The wasm `plan` throws (rejects) with a string message on a plan error;
       // let it propagate so the UI can render it inline.
-      return plan(JSON.stringify(selection)) as PlanResult;
+      return plan(JSON.stringify(selection), target) as PlanResult;
     },
   };
 }

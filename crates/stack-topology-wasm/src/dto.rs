@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 
 use olai_stack_topology::{
     Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, PlanCtx, PlanError,
-    RenderError, Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
+    RenderError, Role, Selection, ServiceSpec, TargetId, baseline_catalog, baseline_selection,
+    builtin_targets,
 };
 use serde::Serialize;
 
@@ -30,6 +31,17 @@ pub struct CatalogDto {
     pub modules: Vec<ModuleDto>,
     /// A sensible starting selection (the baseline lakehouse), so the UI can open pre-populated.
     pub default_selection: Selection,
+    /// The deploy targets an environment can run on, the default (Docker Compose) first.
+    pub targets: Vec<TargetDto>,
+}
+
+/// One deploy target an environment can run on.
+#[derive(Debug, Clone, Serialize)]
+pub struct TargetDto {
+    /// Stable target id (e.g. `"compose"`), what [`plan_result`] takes.
+    pub id: String,
+    /// Human-readable name (e.g. `"Docker Compose"`).
+    pub display_name: String,
 }
 
 /// One selectable module, projected from the [`Module`] trait (which is not `Serialize`).
@@ -206,6 +218,13 @@ pub fn catalog_dto() -> CatalogDto {
     CatalogDto {
         modules,
         default_selection: baseline_selection(),
+        targets: builtin_targets()
+            .iter()
+            .map(|t| TargetDto {
+                id: t.id().0,
+                display_name: t.display_name().to_string(),
+            })
+            .collect(),
     }
 }
 
@@ -274,12 +293,20 @@ pub enum PlanResultError {
 /// Plan a selection against the baseline catalog and project the whole result into a
 /// [`PlanResultDto`]. Pure — no I/O — so it runs identically native and on wasm32.
 ///
-/// Uses [`PlanCtx::default`] for the environment context (gateway service/ports, data root);
-/// the planner itself prefers the providers the selection names. A future revision can accept
-/// a partial `PlanCtx` from the caller.
-pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanResultError> {
+/// Plans for the deploy target `target` (Docker Compose when `None`) and otherwise uses
+/// [`PlanCtx::default`] for the environment context (gateway service/ports, data root); the
+/// planner itself prefers the providers the selection names. A future revision can accept a
+/// partial `PlanCtx` from the caller.
+pub fn plan_result(
+    selection: &Selection,
+    target: Option<&str>,
+) -> Result<PlanResultDto, PlanResultError> {
     let catalog: Catalog = baseline_catalog();
-    let plan = catalog.plan(selection, &PlanCtx::default())?;
+    let ctx = PlanCtx {
+        target: target.map(TargetId::from).unwrap_or_default(),
+        ..PlanCtx::default()
+    };
+    let plan = catalog.plan(selection, &ctx)?;
     let materialized = plan.materialize()?;
     // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
     let files = materialized
@@ -363,7 +390,7 @@ mod tests {
     fn plan_result_projects_graph_edges_and_files() {
         // Selecting mlflow pulls in its transitive requires (postgres, an object store, envoy).
         let selection = Selection::modules(["mlflow"]);
-        let result = plan_result(&selection).expect("plan should succeed");
+        let result = plan_result(&selection, None).expect("plan should succeed");
 
         let node_ids: Vec<&str> = result.graph.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(
@@ -436,7 +463,7 @@ mod tests {
     #[ignore = "manual: regenerate node/stack-wasm fixture files"]
     fn dump_fixture_files_json() {
         let selection = fixture_selection();
-        let result = plan_result(&selection).expect("plan should succeed");
+        let result = plan_result(&selection, None).expect("plan should succeed");
         eprintln!(
             "{}",
             serde_json::to_string_pretty(&result.files).expect("serialize files")
@@ -455,7 +482,7 @@ mod tests {
             services: &'a BTreeMap<String, Vec<ServiceSpec>>,
             gateway: &'a GatewayDto,
         }
-        let result = plan_result(&fixture_selection()).expect("plan should succeed");
+        let result = plan_result(&fixture_selection(), None).expect("plan should succeed");
         let dump = Dump {
             catalog: catalog_dto(),
             graph: &result.graph,
@@ -497,10 +524,23 @@ mod tests {
     #[test]
     fn a_selected_provider_replaces_the_default() {
         let selection = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog"]);
-        let result = plan_result(&selection).expect("plan should succeed");
+        let result = plan_result(&selection, None).expect("plan should succeed");
         let ids: Vec<&str> = result.graph.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains(&"azurite"), "{ids:?}");
         assert!(!ids.contains(&"rustfs"), "{ids:?}");
+    }
+
+    #[test]
+    fn catalog_lists_compose_as_the_default_target() {
+        let targets = catalog_dto().targets;
+        assert_eq!(targets[0].id, "compose");
+        assert_eq!(targets[0].display_name, "Docker Compose");
+        // Planning on it explicitly is the same as the default.
+        let selection = Selection::modules(["mlflow"]);
+        let explicit = plan_result(&selection, Some("compose")).unwrap();
+        let default = plan_result(&selection, None).unwrap();
+        assert_eq!(explicit.files.len(), default.files.len());
+        assert!(plan_result(&selection, Some("helm")).is_err());
     }
 
     #[test]
@@ -509,7 +549,7 @@ mod tests {
         // error path the JS wrapper turns into a rejected promise / inline error.
         let selection = Selection::modules(["not-a-real-module"]);
         assert!(
-            plan_result(&selection).is_err(),
+            plan_result(&selection, None).is_err(),
             "an unknown module should be a plan error"
         );
     }

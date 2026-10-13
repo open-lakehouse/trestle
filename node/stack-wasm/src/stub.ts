@@ -36,6 +36,7 @@ export type {
   ServiceSpec,
   SurfaceDto,
   SurfaceKind,
+  TargetDto,
   TlsDto,
   TopologyEdgeDto,
   TopologyEdgeKind,

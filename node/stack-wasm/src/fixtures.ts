@@ -450,6 +450,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
     knob_overrides: {},
     extra_resources: [],
   },
+  targets: [
+    {
+      id: "compose",
+      display_name: "Docker Compose",
+    },
+  ],
 };
 
 export const FIXTURE_PLAN: PlanResult = {

@@ -22,7 +22,8 @@ declare module "stack-topology-wasm-pkg" {
   /** The selectable catalog as a plain JS object (see `CatalogDto`). */
   export function catalog(): unknown;
 
-  /** Plan a JSON-serialized `Selection`; returns a `PlanResult` object or
-   *  throws a string message on a deserialization / plan error. */
-  export function plan(selectionJson: string): unknown;
+  /** Plan a JSON-serialized `Selection` for a deploy target (Docker Compose
+   *  when omitted); returns a `PlanResult` object or throws a string message on
+   *  a deserialization / plan error. */
+  export function plan(selectionJson: string, target?: string | null): unknown;
 }

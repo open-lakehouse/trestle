@@ -30,13 +30,15 @@ pub fn catalog() -> Result<JsValue, JsValue> {
 /// types).
 ///
 /// `selection_json` is a JSON-serialized `Selection` (`{ modules, capabilities, knob_overrides,
-/// extra_resources }`). A deserialization failure or a [`PlanError`](olai_stack_topology::PlanError)
+/// extra_resources }`); `target` is a deploy-target id from the catalog's `targets` (Docker
+/// Compose when omitted). A deserialization failure or a [`PlanError`](olai_stack_topology::PlanError)
 /// (unknown/conflicting/cyclic modules, prefix collisions, …) is returned as a rejected `Err`
 /// carrying the message string, which the JS wrapper surfaces to the UI.
 #[wasm_bindgen]
-pub fn plan(selection_json: &str) -> Result<JsValue, JsValue> {
+pub fn plan(selection_json: &str, target: Option<String>) -> Result<JsValue, JsValue> {
     let selection: Selection = serde_json::from_str(selection_json)
         .map_err(|e| JsValue::from_str(&format!("invalid selection JSON: {e}")))?;
-    let result = dto::plan_result(&selection).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = dto::plan_result(&selection, target.as_deref())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }

@@ -63,9 +63,18 @@ export interface ExtraResource {
 }
 
 /** The selectable catalog (mirrors `CatalogDto`). */
+/** A deploy target an environment can run on (mirrors `TargetDto`). */
+export interface TargetDto {
+  /** Stable id (e.g. "compose"), what `Planner.plan` takes. */
+  id: string;
+  display_name: string;
+}
+
 export interface CatalogDto {
   modules: ModuleDto[];
   default_selection: Selection;
+  /** The deploy targets, the default (Docker Compose) first. */
+  targets: TargetDto[];
 }
 
 /** What a diagram node stands for (mirrors `NodeKind`). */
@@ -277,6 +286,7 @@ export interface PlanResult {
 export interface Planner {
   /** The selectable catalog for the picker. */
   catalog(): Promise<CatalogDto>;
-  /** Plan a selection into a full result, or reject with a `PlanError` message. */
-  plan(selection: Selection): Promise<PlanResult>;
+  /** Plan a selection for a deploy target (default: Docker Compose) into a full
+   *  result, or reject with a `PlanError` message. */
+  plan(selection: Selection, target?: string): Promise<PlanResult>;
 }
