@@ -64,6 +64,7 @@ use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
 use crate::render::RenderFile;
+use crate::target::TargetId;
 
 /// The render-env key carrying the stack's root data directory, injected into *every*
 /// module's render env (see [`PlanCtx::data_root`](crate::PlanCtx::data_root)).
@@ -317,14 +318,15 @@ fn envoy() -> Arc<dyn Module> {
         ],
         // The certificate script renders only when the gateway emulates public hostnames
         // (`tls` is set); otherwise it is empty and dropped.
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/gateway/compose.yaml.jinja"),
             vec![config_file(
                 "certs.sh",
                 "gateway_certs_script",
                 include_str!("../../templates/gateway/certs.sh.jinja"),
             )],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -380,7 +382,7 @@ fn authelia() -> Arc<dyn Module> {
             images::AUTHELIA,
             "AUTHELIA_IMAGE",
         )],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/gateway/authelia.compose.yaml.jinja"),
             vec![
                 RenderFile {
@@ -427,7 +429,8 @@ fn authelia() -> Arc<dyn Module> {
                     "insecure_jwt_secret_change_me\n",
                 ),
             ],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -490,7 +493,7 @@ fn postgres() -> Arc<dyn Module> {
             images::POSTGRES,
             "POSTGRES_IMAGE",
         )],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
             vec![
                 RenderFile {
@@ -518,7 +521,8 @@ fn postgres() -> Arc<dyn Module> {
                     "postgres\n",
                 ),
             ],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -636,7 +640,7 @@ fn rustfs() -> Arc<dyn Module> {
                 "STS_SHIM_IMAGE",
             ),
         ],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/modules/rustfs/compose.yaml.jinja"),
             vec![
                 sensitive_file(".env/rustfs.env", &rustfs_env()),
@@ -646,7 +650,8 @@ fn rustfs() -> Arc<dyn Module> {
                     include_str!("../../templates/modules/rustfs/sts_shim.py"),
                 ),
             ],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -731,13 +736,14 @@ fn azurite() -> Arc<dyn Module> {
                 "AZURITE_INIT_IMAGE",
             ),
         ],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/modules/azurite/compose.yaml.jinja"),
             vec![sensitive_file(
                 ".env/azurite-init.env",
                 include_str!("../../templates/modules/azurite/init.env.jinja"),
             )],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -859,7 +865,7 @@ fn mlflow() -> Arc<dyn Module> {
                 aliases: vec![],
             },
         ],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/modules/mlflow/compose.yaml.jinja"),
             vec![
                 sensitive_file(
@@ -872,7 +878,8 @@ fn mlflow() -> Arc<dyn Module> {
                     include_str!("../../templates/modules/mlflow/seed_gateway.py"),
                 ),
             ],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -944,7 +951,7 @@ fn unity_catalog() -> Arc<dyn Module> {
             images::UNITY_CATALOG,
             "UC_IMAGE",
         )],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
             vec![
                 secret_file(
@@ -962,7 +969,8 @@ fn unity_catalog() -> Arc<dyn Module> {
                     ),
                 ),
             ],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -1013,9 +1021,10 @@ fn jaeger() -> Arc<dyn Module> {
             images::JAEGER,
             "JAEGER_IMAGE",
         )],
-        render: template(include_str!(
+        renders: template(include_str!(
             "../../templates/modules/jaeger/compose.yaml.jinja"
-        )),
+        ))
+        .for_compose(),
     })
 }
 
@@ -1176,8 +1185,8 @@ impl Module for Headwaters {
     fn provides(&self) -> &Provides {
         &self.provides
     }
-    fn render(&self) -> &RenderSpec {
-        &self.render
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        (target.as_str() == TargetId::COMPOSE).then_some(&self.render)
     }
     fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
         // The server always relocates its whole surface (UI, REST read API, ConnectRPC,
@@ -1363,8 +1372,8 @@ impl Module for Omnigent {
     fn provides(&self) -> &Provides {
         &self.provides
     }
-    fn render(&self) -> &RenderSpec {
-        &self.render
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        (target.as_str() == TargetId::COMPOSE).then_some(&self.render)
     }
     fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
         self.services_in(knobs, &StackFacts::default())
@@ -1460,7 +1469,7 @@ fn opa() -> Arc<dyn Module> {
                 aliases: vec![],
             },
         ],
-        render: template_with_files(
+        renders: template_with_files(
             include_str!("../../templates/modules/opa/compose.yaml.jinja"),
             vec![
                 config_file(
@@ -1479,7 +1488,8 @@ fn opa() -> Arc<dyn Module> {
                     include_str!("../../templates/modules/opa/authz_test.rego"),
                 ),
             ],
-        ),
+        )
+        .for_compose(),
     })
 }
 
@@ -1519,7 +1529,7 @@ fn databricks_emulator_env() -> Arc<dyn Module> {
         service_specs: vec![],
         provides,
         knobs: vec![],
-        render: RenderSpec::default(),
+        renders: RenderSpec::default().for_compose(),
     })
 }
 

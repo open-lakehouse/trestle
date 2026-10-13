@@ -140,7 +140,7 @@ fn real_prefix_collision_fails_loudly() {
             }],
             provides: Provides::default(),
             knobs: vec![],
-            render: RenderSpec::default(),
+            renders: RenderSpec::default().for_compose(),
         })
     }
 
@@ -189,7 +189,7 @@ fn svc_module(id: &str, service_name: &str, mount_prefix: &str) -> Arc<dyn Modul
         }],
         provides: Provides::default(),
         knobs: vec![],
-        render: RenderSpec::default(),
+        renders: RenderSpec::default().for_compose(),
     })
 }
 

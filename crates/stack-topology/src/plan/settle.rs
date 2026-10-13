@@ -46,6 +46,21 @@ pub(super) fn settle(
     // (a demanded relational store, object store, …) before anything else runs.
     let graph = resolve_with_demands(selection, catalog, ctx)?;
 
+    // Every module — selected or auto-provisioned — must be able to run on the target.
+    if crate::target::builtin(&ctx.target).is_none() {
+        return Err(PlanError::UnknownTarget(ctx.target.clone()));
+    }
+    if let Some(module) = graph
+        .nodes
+        .iter()
+        .find(|m| m.render_for(&ctx.target).is_none())
+    {
+        return Err(PlanError::UnsupportedOnTarget {
+            module: module.id().clone(),
+            target: ctx.target.clone(),
+        });
+    }
+
     // Every name the plan provisions reaches a provider's init job verbatim, so check them all
     // (module demands and environment-level extras alike) before anything renders.
     for module in &graph.nodes {

@@ -337,12 +337,13 @@ fn probe_module() -> std::sync::Arc<dyn olai_stack_topology::Module> {
         }],
         provides,
         knobs: vec![],
-        render: RenderSpec {
+        renders: RenderSpec {
             fragment: "auth={{ env.GATEWAY_AUTH }} internal={{ env.GATEWAY_INTERNAL_URL }} \
                        keys={{ env.CLIENT_ENV_KEYS }}"
                 .into(),
             files: vec![],
-        },
+        }
+        .for_compose(),
     })
 }
 

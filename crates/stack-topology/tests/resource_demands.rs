@@ -48,7 +48,7 @@ fn provider_with_needs(
         }],
         provides,
         knobs: vec![],
-        render: RenderSpec::default(),
+        renders: RenderSpec::default().for_compose(),
     })
 }
 
@@ -104,7 +104,7 @@ fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Arc<dyn Module> {
         }],
         provides: Provides::default(),
         knobs: vec![],
-        render: RenderSpec::default(),
+        renders: RenderSpec::default().for_compose(),
     })
 }
 
@@ -844,7 +844,7 @@ fn emulator(id: &str, host: &str) -> Arc<dyn Module> {
         service_specs: vec![],
         provides,
         knobs: vec![],
-        render: RenderSpec::default(),
+        renders: RenderSpec::default().for_compose(),
     })
 }
 

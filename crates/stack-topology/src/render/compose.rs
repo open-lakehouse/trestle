@@ -23,6 +23,7 @@ use crate::render::output::{
     render_client_env,
 };
 use crate::render::{InjectedEnv, RenderError, RenderOutput};
+use crate::target::TargetId;
 
 /// A compose `include:` entry contributed by a module.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,14 +95,18 @@ pub fn render_modules(
     for module in &plan.graph.nodes {
         let id = module.id();
         let render_ctx = plan.bindings[id].render_ctx(&plan.injected[id]);
-        let mut out =
-            module
-                .render()
-                .render(&render_ctx)
-                .map_err(|source| RenderError::Template {
-                    module: id.clone(),
-                    source,
-                })?;
+        let spec = module.render_for(&TargetId::compose()).ok_or_else(|| {
+            RenderError::UnsupportedOnTarget {
+                module: id.clone(),
+                target: TargetId::compose(),
+            }
+        })?;
+        let mut out = spec
+            .render(&render_ctx)
+            .map_err(|source| RenderError::Template {
+                module: id.clone(),
+                source,
+            })?;
         // Root each emitted file under the module's own directory (`modules/<id>/<path>`),
         // unless the module marked it `at_root` (operator-facing files live beside
         // `compose.yaml`). The rewritten path is the single source of truth the consumer

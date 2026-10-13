@@ -147,6 +147,15 @@ pub enum RenderError {
         #[source]
         source: TemplateError,
     },
+    /// A module has no rendering for the target being rendered (the plan was made for a
+    /// different target).
+    #[error("module `{module}` has no rendering for deploy target `{target}`")]
+    UnsupportedOnTarget {
+        /// The module without a rendering for `target`.
+        module: ModuleId,
+        /// The target being rendered.
+        target: crate::target::TargetId,
+    },
     /// A module emitted a file declaring both a config alias and a secret alias.
     #[error("module `{module}` renders `{path}` as both a config and a secret")]
     ConfigAndSecret {

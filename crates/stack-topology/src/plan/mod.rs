@@ -70,6 +70,7 @@ use crate::model::role::{Role, ServiceSpec};
 use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
 use crate::render::InjectedEnv;
+use crate::target::TargetId;
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;
@@ -151,6 +152,10 @@ pub struct PlanCtx {
     /// The compose project / environment name (used as the head file's `name:`).
     #[serde(default = "PlanCtx::default_env_name")]
     pub env_name: String,
+    /// The deploy target the environment runs on (see [`target`](crate::target)). Defaults to
+    /// Docker Compose. Every selected module must have a rendering for it.
+    #[serde(default)]
+    pub target: TargetId,
     /// The gateway's compose service / DNS name (e.g. `"envoy"`).
     #[serde(default = "PlanCtx::default_gateway_service")]
     pub gateway_service: String,
@@ -231,6 +236,7 @@ impl Default for PlanCtx {
     fn default() -> Self {
         PlanCtx {
             env_name: PlanCtx::default_env_name(),
+            target: TargetId::default(),
             gateway_service: PlanCtx::default_gateway_service(),
             gateway_internal_port: PlanCtx::default_gateway_internal_port(),
             gateway_host_port: PlanCtx::default_gateway_host_port(),
@@ -250,6 +256,18 @@ pub enum PlanError {
     /// Resolving the module graph failed (unknown id, conflict, or cycle).
     #[error(transparent)]
     Resolve(#[from] ResolveError),
+    /// The environment's deploy target is not a known target.
+    #[error("unknown deploy target `{0}`")]
+    UnknownTarget(TargetId),
+    /// A selected (or auto-provisioned) module has no rendering for the environment's deploy
+    /// target, so it can't run there. Pick another provider or target.
+    #[error("module `{module}` cannot run on deploy target `{target}`")]
+    UnsupportedOnTarget {
+        /// The module without a rendering for `target`.
+        module: ModuleId,
+        /// The environment's deploy target.
+        target: TargetId,
+    },
     /// A requested capability has no provider module in the catalog.
     #[error("no module in the catalog provides capability `{0}`")]
     UnknownCapability(String),
@@ -497,6 +515,9 @@ impl GatewayFacts {
 pub struct Plan {
     /// The environment's name (the compose project name; see [`PlanCtx::env_name`]).
     pub env_name: String,
+    /// The deploy target the plan was made for (see [`PlanCtx::target`]); every module in the
+    /// graph has a rendering for it.
+    pub target: TargetId,
     /// The resolved, ordered module graph.
     pub graph: ResolvedGraph,
     /// The per-endpoint route assignments the [`address`](crate::address) resolver
@@ -542,18 +563,30 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Render this plan for Docker Compose and flatten the result — the stack artifacts plus
-    /// every module fragment and config file — into one write-ready
-    /// [`MaterializedOutput`](crate::MaterializedOutput) in the project's on-disk layout. Pure
+    /// Render this plan on its own deploy [`target`](Self::target) and flatten the result —
+    /// the stack artifacts plus every module's rendered files — into one write-ready
+    /// [`MaterializedOutput`](crate::MaterializedOutput) in that target's on-disk layout. Pure
     /// (no I/O); with the `std-io` feature,
     /// [`MaterializedOutput::write_to`](crate::MaterializedOutput::write_to) writes it to disk.
     ///
     /// Errors with a [`RenderError`](crate::RenderError) when a module's template fails or two
-    /// modules declare the same config alias.
+    /// modules declare the same config alias. Use
+    /// [`materialize_with`](Self::materialize_with) for a target that isn't built in.
     pub fn materialize(
         &self,
     ) -> Result<crate::render::output::MaterializedOutput, crate::render::RenderError> {
-        crate::render::compose::materialize(self)
+        // The planner only accepts a built-in target, so the lookup cannot miss.
+        let target =
+            crate::target::builtin(&self.target).expect("the planner validated the plan's target");
+        target.materialize(self)
+    }
+
+    /// Render this plan with `target` (see [`materialize`](Self::materialize)).
+    pub fn materialize_with(
+        &self,
+        target: &dyn crate::target::DeployTarget,
+    ) -> Result<crate::render::output::MaterializedOutput, crate::render::RenderError> {
+        target.materialize(self)
     }
 
     /// A handle to address the module `module`'s first service. Most modules contribute a
@@ -685,6 +718,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
 
     let mut plan = Plan {
         env_name: ctx.env_name.clone(),
+        target: ctx.target.clone(),
         graph: settled.graph,
         routes: routed.routes,
         injected: bound.injected,
@@ -764,7 +798,7 @@ mod tests {
             }],
             provides,
             knobs: vec![],
-            render: Default::default(),
+            renders: crate::RenderSpec::default().for_compose(),
         }
     }
 
@@ -928,6 +962,75 @@ mod tests {
     }
 
     #[test]
+    fn a_module_with_no_rendering_for_the_target_is_rejected() {
+        // A module that can't run on the environment's target must fail planning loudly
+        // rather than silently drop out of the rendered stack.
+        let mut m = module_with("svc", vec![], Default::default());
+        m.renders.clear();
+        let err = plan_env(
+            &Selection::modules(["svc"]),
+            &Catalog::from_modules([arc(m)]),
+            &PlanCtx::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            PlanError::UnsupportedOnTarget {
+                module: ModuleId::from("svc"),
+                target: TargetId::compose(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_target_is_rejected() {
+        let ctx = PlanCtx {
+            target: TargetId::from("helm"),
+            ..PlanCtx::default()
+        };
+        let err = plan_env(&default_selection(), &baseline_catalog(), &ctx).unwrap_err();
+        assert_eq!(err, PlanError::UnknownTarget(TargetId::from("helm")));
+    }
+
+    #[test]
+    fn materialize_with_renders_through_the_given_target() {
+        // A target outside the crate plugs in through the trait: here one that wraps Compose
+        // and adds a marker file.
+        struct Marked;
+        impl crate::target::DeployTarget for Marked {
+            fn id(&self) -> TargetId {
+                TargetId::from("marked")
+            }
+            fn display_name(&self) -> &str {
+                "Marked compose"
+            }
+            fn materialize(
+                &self,
+                plan: &Plan,
+            ) -> Result<crate::MaterializedOutput, crate::RenderError> {
+                let mut out = crate::target::Compose.materialize(plan)?;
+                out.files.push(crate::OutputFile {
+                    path: "MARKER".into(),
+                    contents: String::new(),
+                    sensitive: false,
+                    preserve: false,
+                });
+                Ok(out)
+            }
+        }
+        let p = plan_env(
+            &default_selection(),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        let default = p.materialize().unwrap();
+        let marked = p.materialize_with(&Marked).unwrap();
+        assert_eq!(marked.files.len(), default.files.len() + 1);
+        assert!(marked.files.iter().any(|f| f.path == "MARKER"));
+    }
+
+    #[test]
     fn empty_ui_base_path_is_rejected_not_a_catch_all() {
         // A UiPrefixable with no base_path would mount at `/` and shadow everything.
         let m = module_with(
@@ -954,7 +1057,7 @@ mod tests {
         // silently shadow the other.
         let with_alias = |id: &str| {
             let mut m = module_with(id, vec![], Default::default());
-            m.render = RenderSpec {
+            m.renders = RenderSpec {
                 fragment: format!("services:\n  {id}: {{}}\n"),
                 files: vec![RenderFile {
                     path: "conf.yaml".into(),
@@ -965,7 +1068,8 @@ mod tests {
                     at_root: false,
                     preserve: false,
                 }],
-            };
+            }
+            .for_compose();
             arc(m)
         };
         // Planning is target-neutral and succeeds; rendering for compose is what rejects it.
@@ -993,7 +1097,7 @@ mod tests {
         // A single aliased file is rooted under its module dir and surfaces as one `configs:`
         // declaration on the head.
         let mut m = module_with("svc", vec![], Default::default());
-        m.render = RenderSpec {
+        m.renders = RenderSpec {
             fragment: "services:\n  svc: {}\n".into(),
             files: vec![RenderFile {
                 path: "app.toml".into(),
@@ -1004,7 +1108,8 @@ mod tests {
                 at_root: false,
                 preserve: false,
             }],
-        };
+        }
+        .for_compose();
         let p = plan_env(
             &Selection::modules(["svc"]),
             &Catalog::from_modules([arc(m)]),

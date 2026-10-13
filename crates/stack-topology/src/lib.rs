@@ -45,6 +45,8 @@
 //!   fully-assigned, target-neutral environment (no rendered text).
 //! - [`mod@render`] — pure string rendering of a plan: the Docker Compose target
 //!   ([`render::compose`]), the shared Envoy bootstrap, and the write-ready output.
+//! - [`mod@target`] — the [`DeployTarget`]s an environment can run on (Docker Compose today),
+//!   each turning a plan into its own files.
 //! - [`mod@address`] — resolving the URL to reach a service from a given [`Vantage`].
 //!
 //! # Purity: rendering is pure, only I/O lives in the consumer
@@ -80,6 +82,7 @@ pub mod model;
 pub mod plan;
 pub mod render;
 pub mod report;
+pub mod target;
 
 // --- model: the vocabulary types ---
 pub use model::connection::{
@@ -119,6 +122,9 @@ pub use render::output::{
     CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
 };
 pub use render::{InjectedEnv, RenderError, RenderFile, RenderOutput};
+
+// --- target: what an environment deploys to ---
+pub use target::{Compose, DeployTarget, TargetId, builtin_targets};
 
 // --- address: the addressing resolver ---
 pub use address::{AddressError, ServiceRef};

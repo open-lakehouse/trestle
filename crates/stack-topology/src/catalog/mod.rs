@@ -207,7 +207,7 @@ mod tests {
             service_specs: vec![],
             provides: Default::default(),
             knobs: vec![],
-            render: Default::default(),
+            renders: crate::RenderSpec::default().for_compose(),
         };
         let cat =
             baseline_catalog().merge(Catalog::from_modules(

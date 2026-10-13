@@ -276,7 +276,7 @@ mod tests {
             service_specs: Vec::new(),
             provides: Default::default(),
             knobs: Vec::new(),
-            render: Default::default(),
+            renders: crate::RenderSpec::default().for_compose(),
         })
     }
 

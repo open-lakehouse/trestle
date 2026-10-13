@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::connection::{ConnectionField, ConnectionTemplate};
 use crate::model::role::ServiceSpec;
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
+use crate::target::TargetId;
 
 /// A module's stable identifier within a catalog (e.g. `"mlflow"`).
 ///
@@ -382,6 +383,12 @@ pub struct RenderSpec {
 }
 
 impl RenderSpec {
+    /// This spec as a module's only rendering — for the Docker Compose target. The shape
+    /// [`DataModule::renders`] takes.
+    pub fn for_compose(self) -> BTreeMap<TargetId, RenderSpec> {
+        BTreeMap::from([(TargetId::compose(), self)])
+    }
+
     /// Produce the [`RenderOutput`] for this spec given the planner's render context.
     ///
     /// The source is rendered with MiniJinja against the full [`RenderCtx`] — so a fragment
@@ -741,8 +748,10 @@ pub trait Module: Send + Sync {
     /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
     /// extras).
     fn provides(&self) -> &Provides;
-    /// How this module produces its compose fragment and mountable files.
-    fn render(&self) -> &RenderSpec;
+    /// How this module renders on the deploy target `target` (its fragment and mountable
+    /// files in that target's format), or `None` if the module can't run on it — the planner
+    /// then rejects it with [`PlanError::UnsupportedOnTarget`](crate::PlanError::UnsupportedOnTarget).
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec>;
     /// The topology services this module contributes, with their routing facts resolved
     /// against the module's chosen `knobs`. Pure and deterministic. A data module returns its
     /// static services verbatim; a logic module may branch on `knobs`.
@@ -811,9 +820,10 @@ pub struct DataModule {
     /// User-tunable config knobs this module exposes.
     #[serde(default)]
     pub knobs: Vec<Knob>,
-    /// How this module produces its compose fragment and mountable files.
+    /// How this module renders, per deploy target (see [`Module::render_for`]). A target with
+    /// no entry is one the module can't run on.
     #[serde(default)]
-    pub render: RenderSpec,
+    pub renders: BTreeMap<TargetId, RenderSpec>,
 }
 
 impl Module for DataModule {
@@ -847,8 +857,8 @@ impl Module for DataModule {
     fn provides(&self) -> &Provides {
         &self.provides
     }
-    fn render(&self) -> &RenderSpec {
-        &self.render
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        self.renders.get(target)
     }
     fn services(&self, _knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
         self.service_specs.clone()
@@ -1038,7 +1048,7 @@ mod tests {
             service_specs: vec![svc.clone()],
             provides: Provides::default(),
             knobs: vec![],
-            render: RenderSpec::default(),
+            renders: RenderSpec::default().for_compose(),
         };
         let mut knobs = ResolvedKnobs::new();
         knobs.set("ANYTHING", "true");
