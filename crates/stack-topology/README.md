@@ -52,6 +52,26 @@ The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O. Render
 also pure — it produces artifact strings and relative filenames in memory; the consumer
 owns disk I/O — so it is always available and compiles to `wasm32`.
 
+## Deploy targets
+
+Planning is target-neutral: a `Plan` holds each module's typed `ModuleBinding` (knobs,
+connections, readiness gates, provisioned objects), never rendered text. A `DeployTarget`
+turns it into files:
+
+```rust
+let plan = baseline_catalog().plan(&selection, &PlanCtx::default())?; // target: compose
+let files = plan.materialize()?;             // render on the plan's own target
+let files = plan.materialize_with(&MyTarget)?; // or any `impl DeployTarget`
+```
+
+The environment picks its target with `PlanCtx::target` (`[context] target` in `env.toml`,
+`trestle env new --target`); Docker Compose (`compose`) is the default and the only
+built-in today. A module renders per target — `Module::render_for(&TargetId)`, or a
+`DataModule`'s `renders: {compose: …}` map — and the planner rejects a module with no
+rendering for the environment's target (`PlanError::UnsupportedOnTarget`) instead of
+silently dropping it. The Envoy bootstrap (`render::envoy`) is shared by every target: Envoy
+is the gateway implementation, not the deploy target.
+
 ## Client environment
 
 Besides the stack itself, every render writes what a *client* (an app, notebook, or
