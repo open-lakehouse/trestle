@@ -124,8 +124,21 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     }
 
     // The named resources are provisioned.
-    assert!(p.postgres_databases.contains(&"unitycatalog".to_string()));
-    assert!(p.s3_buckets.contains(&"unity".to_string()));
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .contains(&"unitycatalog".to_string())
+    );
+    assert!(
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"unity".to_string())
+    );
+    // The same names, looked up by resource role rather than provider id.
+    assert!(
+        p.provisioned_for_role("relational_db")
+            .contains(&"unitycatalog")
+    );
+    assert!(p.provisioned_for_role("object_store").contains(&"unity"));
+    assert!(p.provisioned_for_role("message_queue").is_empty());
 
     // Providers are ordered before the consumer (compose startup order).
     let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
@@ -186,7 +199,10 @@ fn an_app_module_demanding_postgres_gets_a_provider_and_its_url() {
         .unwrap();
 
     assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
-    assert!(p.postgres_databases.contains(&"appdb".to_string()));
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .contains(&"appdb".to_string())
+    );
     let app_env = p.injected.get(&ModuleId::from("my-app")).unwrap();
     assert_eq!(
         app_env.get("APP_DATABASE_URL"),
@@ -228,8 +244,14 @@ fn two_consumers_share_one_provider_and_each_get_their_db() {
             .count(),
         1
     );
-    assert!(p.postgres_databases.contains(&"a_db".to_string()));
-    assert!(p.postgres_databases.contains(&"b_db".to_string()));
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .contains(&"a_db".to_string())
+    );
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .contains(&"b_db".to_string())
+    );
 }
 
 #[test]
@@ -351,8 +373,11 @@ fn default_object_store_is_rustfs() {
         .unwrap();
     assert!(p.graph.module(&ModuleId::from("rustfs")).is_some());
     assert!(p.graph.module(&ModuleId::from("azurite")).is_none());
-    assert!(p.s3_buckets.contains(&"mlflow".to_string()));
-    assert!(p.azure_containers.is_empty());
+    assert!(
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"mlflow".to_string())
+    );
+    assert!(p.provisioned_by(&"azurite".into()).is_empty());
     assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), Some("rustfs-root"));
     assert_eq!(p.env.get("AZURE_STORAGE_CONNECTION_STRING"), None);
 }
@@ -368,8 +393,11 @@ fn preference_selects_azurite_and_drops_aws() {
     assert!(p.graph.module(&ModuleId::from("azurite")).is_some());
     assert!(p.graph.module(&ModuleId::from("rustfs")).is_none());
     // The container (not an S3 bucket) is provisioned on Azurite.
-    assert!(p.azure_containers.contains(&"mlflow".to_string()));
-    assert!(p.s3_buckets.is_empty());
+    assert!(
+        p.provisioned_by(&"azurite".into())
+            .contains(&"mlflow".to_string())
+    );
+    assert!(p.provisioned_by(&"rustfs".into()).is_empty());
     // Azure creds present; no AWS_* leak (RustFS isn't in the graph).
     assert!(p.env.get("AZURE_STORAGE_CONNECTION_STRING").is_some());
     assert_eq!(p.env.get("AWS_ACCESS_KEY_ID"), None);
@@ -507,8 +535,14 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
         .unwrap();
 
     // Both stores are provisioned in the one chosen provider (RustFS by default).
-    assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
-    assert!(p.s3_buckets.contains(&"uc-external".to_string()));
+    assert!(
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"uc-managed".to_string())
+    );
+    assert!(
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"uc-external".to_string())
+    );
 
     // Each demand binds its own field under its own key — no collision.
     let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
@@ -557,8 +591,14 @@ fn same_role_demands_can_pin_different_providers() {
         .unwrap();
 
     // Managed went to RustFS (s3://), external to Azurite (wasbs://).
-    assert!(p.s3_buckets.contains(&"uc-managed".to_string()));
-    assert!(p.azure_containers.contains(&"uc-external".to_string()));
+    assert!(
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"uc-managed".to_string())
+    );
+    assert!(
+        p.provisioned_by(&"azurite".into())
+            .contains(&"uc-external".to_string())
+    );
     let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
     assert_eq!(env.get("UC_MANAGED_URI"), Some("s3://uc-managed"));
     assert_eq!(
@@ -623,7 +663,7 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
 
 /// An extra bucket with no object_store-demanding module still pulls in a provider and is
 /// provisioned: nothing in the selection needs an object store, yet rustfs joins the graph
-/// and the bucket lands in `s3_buckets`.
+/// and the bucket lands on `rustfs`.
 #[test]
 fn extra_resource_pulls_in_a_provider_with_no_consumer() {
     let mut sel = Selection::modules(["envoy"]);
@@ -637,10 +677,13 @@ fn extra_resource_pulls_in_a_provider_with_no_consumer() {
         p.services.contains_key(&ModuleId::from("rustfs")),
         "the object_store provider is pulled into the graph"
     );
-    assert_eq!(p.s3_buckets, vec!["exports".to_string()]);
+    assert_eq!(
+        p.provisioned_by(&"rustfs".into()),
+        vec!["exports".to_string()]
+    );
 }
 
-/// An extra database is provisioned on postgres and surfaces in `postgres_databases`.
+/// An extra database is provisioned on postgres and is provisioned by `postgres`.
 #[test]
 fn extra_database_is_provisioned_on_postgres() {
     let mut sel = Selection::modules(["envoy", "postgres"]);
@@ -650,7 +693,10 @@ fn extra_database_is_provisioned_on_postgres() {
         provider: None,
     }];
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
-    assert!(p.postgres_databases.contains(&"analytics".to_string()));
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .contains(&"analytics".to_string())
+    );
 }
 
 /// An extra naming a resource a module already demands is deduped — the name appears once.
@@ -665,11 +711,16 @@ fn extra_resource_dedups_against_a_module_demand() {
     }];
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
     let count = p
-        .postgres_databases
+        .provisioned_by(&"postgres".into())
         .iter()
         .filter(|n| *n == "mlflow")
         .count();
-    assert_eq!(count, 1, "deduped: {:?}", p.postgres_databases);
+    assert_eq!(
+        count,
+        1,
+        "deduped: {:?}",
+        p.provisioned_by(&"postgres".into())
+    );
 }
 
 /// A pinned extra resource lands on the pinned provider, and a pin introducing a *second*
@@ -693,9 +744,10 @@ fn pinned_extra_resource_sanctions_a_second_provider() {
         "the pinned provider is deployed"
     );
     assert!(
-        p.azure_containers.contains(&"exports".to_string()),
+        p.provisioned_by(&"azurite".into())
+            .contains(&"exports".to_string()),
         "the extra bucket is provisioned on the pinned azurite: {:?}",
-        p.azure_containers
+        p.provisioned_by(&"azurite".into())
     );
 }
 
@@ -713,7 +765,10 @@ fn a_selected_provider_satisfies_its_role_without_a_preference() {
         !p.services.contains_key(&ModuleId::from("rustfs")),
         "the catalog default isn't pulled in"
     );
-    assert!(p.azure_containers.contains(&"mlflow".to_string()));
+    assert!(
+        p.provisioned_by(&"azurite".into())
+            .contains(&"mlflow".to_string())
+    );
 }
 
 /// An explicit environment preference still wins over a selected provider.

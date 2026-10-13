@@ -386,7 +386,11 @@ fn unity_catalog_keeps_its_metadata_in_the_relational_db_provider() {
         "{targets:?}"
     );
     // The database UC points at is the one the provider creates on first boot.
-    assert!(p.postgres_databases.iter().any(|d| d == "unitycatalog"));
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .iter()
+            .any(|d| d == "unitycatalog")
+    );
 }
 
 #[test]
@@ -815,7 +819,10 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
     // The planner provisioned the demanded `lineage` database on Postgres.
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
     assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
-    assert!(p.postgres_databases.contains(&"lineage".to_string()));
+    assert!(
+        p.provisioned_by(&"postgres".into())
+            .contains(&"lineage".to_string())
+    );
 
     // The chosen base path is injected back for the module's render.
     assert_eq!(
@@ -1086,14 +1093,16 @@ fn extra_resources_are_created_by_the_provider_init_jobs() {
 
     // The extra names join the provider-provisioned sets the plan exposes.
     assert!(
-        p.postgres_databases.contains(&"analytics".to_string()),
+        p.provisioned_by(&"postgres".into())
+            .contains(&"analytics".to_string()),
         "extra database is provisioned on postgres: {:?}",
-        p.postgres_databases
+        p.provisioned_by(&"postgres".into())
     );
     assert!(
-        p.s3_buckets.contains(&"exports".to_string()),
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"exports".to_string()),
         "extra bucket is provisioned on rustfs: {:?}",
-        p.s3_buckets
+        p.provisioned_by(&"rustfs".into())
     );
 
     // ...and reach each provider's existing init job (which iterates `RenderCtx.objects`).

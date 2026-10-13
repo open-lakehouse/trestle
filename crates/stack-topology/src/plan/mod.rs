@@ -607,18 +607,9 @@ pub struct Plan {
     /// buckets or containers its consumers demand, then the selection's
     /// [`extra_resources`](Selection::extra_resources) that landed on it, deduplicated in
     /// dependency order. This is exactly what each provider's init job creates (its
-    /// `RenderCtx.objects`); the per-provider fields below are convenience views of it.
+    /// `RenderCtx.objects`). Read one provider's list with [`Plan::provisioned_by`], or every
+    /// provider of a resource role's with [`Plan::provisioned_for_role`].
     pub provisioned: BTreeMap<ModuleId, Vec<String>>,
-    /// Postgres databases the selected modules need, deduplicated in dependency order. These
-    /// also reach the postgres provider's render as `RenderCtx.objects`, which its init-script
-    /// `RenderFile` iterates; this field is the same list exposed for consumers.
-    pub postgres_databases: Vec<String>,
-    /// Object-store buckets provisioned on RustFS (when it is the chosen object-store
-    /// provider), deduplicated in dependency order.
-    pub s3_buckets: Vec<String>,
-    /// Object-store containers provisioned on Azurite (when it is the chosen object-store
-    /// provider), deduplicated in dependency order.
-    pub azure_containers: Vec<String>,
     /// The stack's aggregated environment variables (drives the `.env` artifact),
     /// last-writer-wins in dependency order.
     pub env: InjectedEnv,
@@ -680,6 +671,26 @@ impl Plan {
                 })
             }
         }
+    }
+
+    /// The resource names provider `module` provisions (its databases, buckets, …), in
+    /// dependency order. Empty when `module` provisions nothing or isn't in the plan.
+    pub fn provisioned_by(&self, module: &ModuleId) -> &[String] {
+        self.provisioned.get(module).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every resource name provisioned for the resource role `role` (e.g.
+    /// `"relational_db"`), across all of the plan's providers of that role, in plan
+    /// (dependency) order. Usually one provider fills a role; a consumer that pins two
+    /// same-role providers gets both lists, concatenated.
+    pub fn provisioned_for_role(&self, role: &str) -> Vec<&str> {
+        self.graph
+            .nodes
+            .iter()
+            .filter(|m| m.provides().resource_kinds.contains_key(role))
+            .flat_map(|m| self.provisioned_by(m.id()))
+            .map(String::as_str)
+            .collect()
     }
 
     /// The **client environment** from `from`: every variable a client (an app, notebook, or
@@ -853,16 +864,6 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         .collect();
 
     let provisioned_by = provisioned_by_provider(&graph, &chosen, selection, catalog, ctx)?;
-    let provisioned_for = |id: &str| -> Vec<String> {
-        provisioned_by
-            .get(&ModuleId::from(id))
-            .cloned()
-            .unwrap_or_default()
-    };
-    // Convenience views for the artifact renderers (single-provider roles today).
-    let postgres_databases = provisioned_for("postgres");
-    let s3_buckets = provisioned_for("rustfs");
-    let azure_containers = provisioned_for("azurite");
 
     // Allocate dedicated listener ports up front, before the routing loop, so a gatewayed
     // object store's connection `endpoint` can be rewritten to the gateway *before* consumers
@@ -1334,9 +1335,6 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         head,
         gateway,
         provisioned: provisioned_by,
-        postgres_databases,
-        s3_buckets,
-        azure_containers,
         env,
         gateway_facts,
         client_env_host: InjectedEnv::new(),
