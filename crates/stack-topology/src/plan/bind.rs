@@ -87,6 +87,7 @@ pub(super) fn bind(
         stack_facts,
         services: services_of,
         provisioned,
+        externals,
     } = settled;
     let gateway = &routed.gateway;
 
@@ -164,7 +165,7 @@ pub(super) fn bind(
         // credential so it is stated once. Only an in-graph (i.e. chosen) provider reaches
         // here, so an unselected backend's credentials never leak into `.env`. The values
         // are name-independent, so the template's credential is read directly.
-        for template in module.provides().resource_kinds.values() {
+        for template in provider_templates(module.as_ref(), externals) {
             for (k, v) in template.0.standard_env() {
                 env.set(k, v);
             }
@@ -189,6 +190,10 @@ pub(super) fn bind(
                 .entry(demand.resource.clone())
                 .or_default()
                 .push(resolved.connection.clone());
+            // An external provider is already running: nothing to wait for.
+            if externals.contains(&resolved.provider) {
+                continue;
+            }
             if let Some(gate) = provider_ready_gate(catalog, &resolved.provider) {
                 dependencies.push(gate);
             }
@@ -216,7 +221,12 @@ pub(super) fn bind(
         // for an init block to iterate) plus its own connection resolved for each — so its
         // template reads e.g. `connections.object_store.0.credential` rather than a `${VAR}`.
         let objects = provisioned.get(module.id()).cloned().unwrap_or_default();
-        for (role, template) in module.provides().resource_kinds.iter() {
+        for (role, template) in module
+            .provides()
+            .resource_kinds
+            .keys()
+            .zip(provider_templates(module.as_ref(), externals))
+        {
             let role_conns = connections.entry(role.clone()).or_default();
             for name in &objects {
                 role_conns.push(template.resolve(name));
@@ -251,6 +261,23 @@ pub(super) fn bind(
         bindings,
         env,
     })
+}
+
+/// A provider's connection template per role it provisions, in role order: the external
+/// connection for each role an external provider serves, its own template otherwise.
+fn provider_templates<'a>(
+    module: &'a dyn crate::Module,
+    externals: &'a super::external::Externals,
+) -> impl Iterator<Item = &'a crate::ConnectionTemplate> {
+    let external = externals.modules.get(module.id());
+    module
+        .provides()
+        .resource_kinds
+        .values()
+        .map(move |own| match external {
+            Some(e) if e.template.0.same_kind(&own.0) => &e.template,
+            _ => own,
+        })
 }
 
 /// The gateway's published `host:container` mappings: every routing listener, then the Envoy

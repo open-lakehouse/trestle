@@ -115,6 +115,9 @@ impl<'a> ServiceRef<'a> {
     /// [`address_direct`](Self::address_direct).
     pub fn address(&self, from: Vantage, endpoint_id: &str) -> Result<Url, AddressError> {
         let endpoint = lookup(self.spec, endpoint_id)?;
+        if let Placement::External { origin } = &self.spec.placement {
+            return external_url(origin, endpoint);
+        }
         match self.routes.get(&self.spec.name, endpoint_id) {
             Some(route) => {
                 let (scheme, target) = gateway_target(from, route, endpoint, self.facts);
@@ -129,6 +132,9 @@ impl<'a> ServiceRef<'a> {
     /// the gateway-by-default posture of [`address`](Self::address).
     pub fn address_direct(&self, from: Vantage, endpoint_id: &str) -> Result<Url, AddressError> {
         let endpoint = lookup(self.spec, endpoint_id)?;
+        if let Placement::External { origin } = &self.spec.placement {
+            return external_url(origin, endpoint);
+        }
         let target = direct_target(from, self.spec, endpoint)?;
         finish(endpoint.scheme, target)
     }
@@ -160,7 +166,18 @@ pub(crate) fn gateway_origin(from: Vantage, facts: &GatewayFacts) -> Result<Url,
     finish(scheme, (host, port, String::new()))
 }
 
-/// The (host, port, path) for a direct reach — straight to the callee.
+/// The address of an [`External`](Placement::External) service's `endpoint`: its origin plus
+/// the endpoint's path, identical from every vantage.
+fn external_url(origin: &str, endpoint: &Endpoint) -> Result<Url, AddressError> {
+    let mut url = Url::parse(origin).map_err(|_| AddressError::InvalidUrl(origin.to_string()))?;
+    if !endpoint.path.is_empty() {
+        url.set_path(&endpoint.path);
+    }
+    Ok(url)
+}
+
+/// The (host, port, path) for a direct reach — straight to the callee. Never called for an
+/// [`External`](Placement::External) service (see [`external_url`]).
 fn direct_target(
     from: Vantage,
     to: &ServiceSpec,
@@ -186,6 +203,9 @@ fn direct_target(
         (Vantage::Host | Vantage::InProcess, Placement::Host | Placement::InProcess) => {
             "127.0.0.1".to_string()
         }
+        (_, Placement::External { origin }) => {
+            return Err(AddressError::InvalidUrl(origin.clone()));
+        }
     };
 
     // Port: a container-internal target uses its internal port; everything that
@@ -195,7 +215,7 @@ fn direct_target(
         // A host/in-process service's bound port is its host port; fall back to
         // the internal port when none is declared separately (they coincide for a
         // host-bound sidecar).
-        (_, Placement::Host | Placement::InProcess) => {
+        (_, Placement::Host | Placement::InProcess | Placement::External { .. }) => {
             endpoint.host_port.unwrap_or(endpoint.internal_port)
         }
         // Reaching a container from the host requires its host-published port.

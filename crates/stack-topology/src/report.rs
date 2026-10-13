@@ -72,6 +72,7 @@ pub fn layout_report(plan: &Plan) -> String {
                 Placement::InProcess => "in-process".to_string(),
                 Placement::Host => "host".to_string(),
                 Placement::Container { service } => format!("container `{service}`"),
+                Placement::External { origin } => format!("external `{origin}`"),
             };
             let endpoints = svc
                 .endpoints
@@ -91,6 +92,56 @@ pub fn layout_report(plan: &Plan) -> String {
                 } else {
                     endpoints
                 },
+            );
+        }
+    }
+
+    // --- External resources ---
+    if !plan.external.is_empty() {
+        out.push_str("\n## External resources\n\n");
+        out.push_str(
+            "Provided outside the stack: create the listed resources before starting it, and set\n",
+        );
+        out.push_str("the secrets in the environment `trestle env render` runs in.\n\n");
+        out.push_str("| Module | Cloud | Reached at | Must exist | Secrets |\n");
+        out.push_str("| --- | --- | --- | --- | --- |\n");
+        for (module, resource) in &plan.external {
+            let origin = plan
+                .services
+                .get(module)
+                .and_then(|s| s.first())
+                .and_then(|s| match &s.placement {
+                    Placement::External { origin } => Some(origin.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("—");
+            let list = |items: Vec<String>| {
+                if items.is_empty() {
+                    "—".to_string()
+                } else {
+                    items.join(", ")
+                }
+            };
+            let _ = writeln!(
+                out,
+                "| `{}` | {} | `{}` | {} | {} |",
+                module,
+                resource.cloud.as_deref().unwrap_or("—"),
+                origin,
+                list(
+                    plan.provisioned_by(module)
+                        .iter()
+                        .map(|n| format!("`{n}`"))
+                        .collect()
+                ),
+                list(
+                    resource
+                        .connection
+                        .secret_refs()
+                        .into_iter()
+                        .map(|v| format!("`{v}`"))
+                        .collect()
+                ),
             );
         }
     }

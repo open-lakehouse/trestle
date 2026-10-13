@@ -50,6 +50,7 @@ mod augment;
 mod bind;
 mod client_env;
 mod demands;
+pub mod external;
 mod gateway;
 mod impersonation;
 mod knobs;
@@ -74,6 +75,8 @@ use crate::target::TargetId;
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;
+use external::SecretValues;
+pub use external::{ExternalConnection, ExternalResource, Secrets};
 pub use gateway::{
     AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
     GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, PolicyConfig, SecureOrigin,
@@ -111,6 +114,12 @@ pub struct Selection {
     /// demands the role) but never bound into any module's env. See [`ExtraResource`].
     #[serde(default)]
     pub extra_resources: Vec<ExtraResource>,
+    /// Resource providers the environment uses but does not run — a managed cloud database or
+    /// object store — keyed by provider module id (e.g. `postgres`, `rustfs`). Each joins the
+    /// graph like a selected module (so the topology still shows it) but is reached at its
+    /// [`ExternalResource::connection`] instead of being deployed. See [`external`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub external: BTreeMap<ModuleId, ExternalResource>,
 }
 
 impl Selection {
@@ -206,6 +215,12 @@ pub struct PlanCtx {
     /// structural fact about the gateway, not a render-time decoration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<AppUpstream>,
+    /// The values `${VAR}` references in [`external`](Selection::external) connections resolve
+    /// against — supplied at plan time by the consumer (e.g. from the process environment),
+    /// never persisted. `None` (a preview) leaves the references verbatim; `Some` requires every
+    /// one to resolve ([`PlanError::UnresolvedSecrets`]).
+    #[serde(skip)]
+    pub secrets: Option<Secrets>,
 }
 
 impl PlanCtx {
@@ -246,6 +261,7 @@ impl Default for PlanCtx {
             provider_preference: BTreeMap::new(),
             data_root: PlanCtx::default_data_root(),
             app: None,
+            secrets: None,
         }
     }
 }
@@ -256,6 +272,22 @@ pub enum PlanError {
     /// Resolving the module graph failed (unknown id, conflict, or cycle).
     #[error(transparent)]
     Resolve(#[from] ResolveError),
+    /// An [`external`](Selection::external) connection references secrets (`${VAR}`) that
+    /// [`PlanCtx::secrets`] does not supply.
+    #[error("external resources reference unset secrets: {}", vars.join(", "))]
+    UnresolvedSecrets {
+        /// The unset secret names, sorted.
+        vars: Vec<String>,
+    },
+    /// An [`external`](Selection::external) entry is unusable: the module provisions no
+    /// resource of the connection's kind, or the connection is incomplete.
+    #[error("external module `{module}`: {reason}")]
+    InvalidExternal {
+        /// The module marked external.
+        module: ModuleId,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// The environment's deploy target is not a known target.
     #[error("unknown deploy target `{0}`")]
     UnknownTarget(TargetId),
@@ -534,6 +566,12 @@ pub struct Plan {
     /// today, exposed in typed form so a consumer can make explicit per-flavour rendering
     /// decisions (e.g. branch on S3 vs Azure credentials) without re-parsing strings.
     pub connections: BTreeMap<(ModuleId, usize), Connection>,
+    /// The provider modules the environment uses but does not run (see
+    /// [`Selection::external`]), with how they are reached. A deploy target renders nothing for
+    /// them; the resources [`provisioned`](Self::provisioned) on them must already exist.
+    pub external: BTreeMap<ModuleId, ExternalResource>,
+    /// The secret values substituted into external connections (for sensitivity marking).
+    pub(crate) secret_values: SecretValues,
     /// Each module's typed render data — its knobs, connections, readiness gates, provisioned
     /// objects and (for the gateway) published ports and TLS. Together with
     /// [`injected`](Self::injected) this is everything a deploy target renders a module from
@@ -730,6 +768,8 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             .into_iter()
             .map(|(key, c)| (key, c.connection))
             .collect(),
+        external: selection.external.clone(),
+        secret_values: std::mem::take(&mut settled.externals.secret_values),
         bindings: bound.bindings,
         gateway: routed.gateway,
         provisioned: settled.provisioned,

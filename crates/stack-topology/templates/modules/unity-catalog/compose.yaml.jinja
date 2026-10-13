@@ -3,11 +3,13 @@ services:
   unitycatalog:
     image: {{ knobs.image }}
     restart: unless-stopped
+{%- if dependencies %}
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: service_{{ dep.readiness }}
 {%- endfor %}
+{%- endif %}
     secrets:
       - source: unitycatalog_server_properties
         target: /home/unitycatalog/etc/conf/server.properties

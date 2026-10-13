@@ -8,11 +8,13 @@ services:
     image: {{ knobs.image }}
     restart: "no"
     command: ["migrate", "--config", "/etc/headwaters/config.toml"]
+{%- if dependencies %}
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: service_{{ dep.readiness }}
 {%- endfor %}
+{%- endif %}
     env_file:
       - path: ./modules/headwaters/.env/headwaters-migrate.env
         format: raw

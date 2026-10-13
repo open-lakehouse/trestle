@@ -3,11 +3,13 @@ services:
   omnigent:
     image: {{ knobs.image }}
     restart: unless-stopped
+{%- if dependencies %}
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: service_{{ dep.readiness }}
 {%- endfor %}
+{%- endif %}
     env_file:
       - path: ./modules/omnigent/.env/omnigent.env
         format: raw

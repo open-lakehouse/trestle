@@ -2,7 +2,8 @@
 //! before the graph is resolved.
 //!
 //! Forward-auth is a gateway knob, not a separately-selected module, so when it resolves on the
-//! auth provider joins the selection here (adding a module changes the graph, so this must run
+//! auth provider joins the selection here — as does every
+//! [`external`](super::Selection::external) provider (adding a module changes the graph, so this must run
 //! before resolution). A provider the user picked directly also becomes the preferred provider
 //! of its role, so it satisfies that role's demands ahead of the catalog default.
 
@@ -17,7 +18,8 @@ use crate::model::role::Role;
 /// The selection and context the rest of the planner runs against, plus the auth / policy
 /// providers to wire into the gateway.
 pub(super) struct Augmented<'a> {
-    /// The selection, with the auth provider added when forward-auth is on.
+    /// The selection, with the auth provider (when forward-auth is on) and the external
+    /// providers added.
     pub selection: Cow<'a, Selection>,
     /// The context, with directly-selected providers preferred for their roles.
     pub ctx: Cow<'a, PlanCtx>,
@@ -61,13 +63,24 @@ pub(super) fn augment<'a>(
         });
     }
 
-    let selection = match &auth_provider {
-        Some(provider) if !selection.modules.contains(provider) => {
-            let mut s = selection.clone();
-            s.modules.push(provider.clone());
-            Cow::Owned(s)
+    // The auth provider and every external provider join the selection like any directly
+    // selected module (an external provider stays in the graph: it still satisfies its role's
+    // demands and appears in the topology; it is just not deployed).
+    let implied: Vec<&ModuleId> = auth_provider
+        .iter()
+        .chain(selection.external.keys())
+        .filter(|m| !selection.modules.contains(m))
+        .collect();
+    let selection = if implied.is_empty() {
+        Cow::Borrowed(selection)
+    } else {
+        let mut s = selection.clone();
+        for module in implied {
+            if !s.modules.contains(module) {
+                s.modules.push(module.clone());
+            }
         }
-        _ => Cow::Borrowed(selection),
+        Cow::Owned(s)
     };
     let ctx = match with_selected_providers(ctx, &selection, catalog) {
         Some(preferred) => Cow::Owned(preferred),

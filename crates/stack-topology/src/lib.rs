@@ -107,9 +107,9 @@ pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, 
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY,
-    EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, ListenerConfig, ModuleBinding, Plan,
-    PlanCtx, PlanError, PolicyConfig, SecureOrigin, Selection, TlsListenerConfig, TlsVirtualHost,
-    is_valid_resource_name, resource_name_rule,
+    EXT_AUTHZ_PATH_EXTRA, ExternalConnection, ExternalResource, GatewayConfig, GatewayRoute,
+    ListenerConfig, ModuleBinding, Plan, PlanCtx, PlanError, PolicyConfig, Secrets, SecureOrigin,
+    Selection, TlsListenerConfig, TlsVirtualHost, is_valid_resource_name, resource_name_rule,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---

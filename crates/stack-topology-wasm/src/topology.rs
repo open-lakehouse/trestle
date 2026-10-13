@@ -271,6 +271,7 @@ fn placement_str(placement: &Placement) -> String {
         Placement::InProcess => "in_process".to_string(),
         Placement::Host => "host".to_string(),
         Placement::Container { service } => format!("container:{service}"),
+        Placement::External { origin } => format!("external:{origin}"),
     }
 }
 

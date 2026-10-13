@@ -35,6 +35,15 @@ pub enum Placement {
         /// The service / DNS name (e.g. `"db"`, `"mlflow"`, `"marquez-api"`).
         service: String,
     },
+    /// Provided outside the stack — a managed cloud service (a hosted database, a cloud object
+    /// store) the environment uses but does not run. Reached directly at its `origin` from
+    /// every vantage; the gateway never fronts it.
+    External {
+        /// The service's origin, `scheme://host[:port]` (e.g.
+        /// `https://s3.us-east-1.amazonaws.com`, `tcp://db.example.com:5432`). An endpoint's
+        /// address is this origin plus the endpoint's path; its declared ports don't apply.
+        origin: String,
+    },
 }
 
 /// Where the *caller* sits. The same callee resolves to different addresses

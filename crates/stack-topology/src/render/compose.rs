@@ -92,7 +92,13 @@ pub fn render_modules(
     // The module each alias was first seen on, so a second module reusing an alias is rejected
     // rather than silently shadowing.
     let mut alias_owner: BTreeMap<String, ModuleId> = BTreeMap::new();
-    for module in &plan.graph.nodes {
+    // An external provider runs outside the stack: nothing to render for it.
+    for module in plan
+        .graph
+        .nodes
+        .iter()
+        .filter(|m| !plan.external.contains_key(m.id()))
+    {
         let id = module.id();
         let render_ctx = plan.bindings[id].render_ctx(&plan.injected[id]);
         let spec = module.render_for(&TargetId::compose()).ok_or_else(|| {
@@ -115,6 +121,8 @@ pub fn render_modules(
             if !f.at_root {
                 f.path = format!("modules/{}/{}", id.as_str(), f.path);
             }
+            // A file an external resource's secret was resolved into holds a credential.
+            f.sensitive |= plan.secret_values.appear_in(&f.contents);
             if f.alias.is_some() && f.secret_alias.is_some() {
                 return Err(RenderError::ConfigAndSecret {
                     module: id.clone(),
@@ -360,11 +368,46 @@ pub fn render_all(plan: &Plan) -> Result<Artifacts, RenderError> {
     Ok(Artifacts {
         env: render_env(&plan.env, &referenced),
         compose: render_compose(&head),
-        gitignore: ".data/\n.env\nmodules/*/.env/\nmodules/*/secrets/\n".into(),
+        gitignore: render_gitignore(plan, &modules),
         envoy,
         modules,
         head,
     })
+}
+
+/// The `.gitignore`: runtime data and the generated credential-bearing directories, plus every
+/// rendered file an external resource's secret was resolved into (they can sit anywhere a
+/// template writes, e.g. a mounted config file).
+fn render_gitignore(plan: &Plan, modules: &[(ModuleId, RenderOutput)]) -> String {
+    let mut out = String::from(".data/\n.env\nsecrets.env\nmodules/*/.env/\nmodules/*/secrets/\n");
+    let mut secret_files: Vec<String> = Vec::new();
+    for (id, render) in modules {
+        if plan.secret_values.appear_in(&render.fragment) {
+            secret_files.push(format!("modules/{id}/compose.yaml"));
+        }
+        secret_files.extend(
+            render
+                .files
+                .iter()
+                .filter(|f| plan.secret_values.appear_in(&f.contents))
+                .map(|f| f.path.clone()),
+        );
+    }
+    // Skip what the patterns above already cover (`modules/<id>/{.env,secrets}/…`).
+    secret_files.retain(|path| {
+        let mut parts = path.split('/');
+        !matches!(
+            (parts.next(), parts.next(), parts.next()),
+            (Some("modules"), Some(_), Some(".env" | "secrets"))
+        )
+    });
+    if !secret_files.is_empty() {
+        out.push_str("# Rendered with external-resource secrets:\n");
+        for path in secret_files {
+            let _ = writeln!(out, "{path}");
+        }
+    }
+    out
 }
 
 /// Whether the plan has a gateway. Detected by the `gateway` role on a resolved service, not a
@@ -450,7 +493,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             files.push(OutputFile {
                 path: format!("modules/{module}/compose.yaml"),
                 contents: out.fragment.clone(),
-                sensitive: false,
+                sensitive: plan.secret_values.appear_in(&out.fragment),
                 preserve: false,
             });
         }
