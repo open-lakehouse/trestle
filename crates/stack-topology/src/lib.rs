@@ -42,8 +42,9 @@
 //!   [`Placement`], [`Connection`], …): pure data, no logic.
 //! - [`mod@catalog`] — the [`Catalog`] of selectable [`Module`]s.
 //! - [`mod@plan`] — the producer: a [`Selection`] against a [`Catalog`] resolves to a
-//!   fully-assigned environment.
-//! - [`mod@render`] — pure string rendering of the compose / Envoy / `.env` artifacts.
+//!   fully-assigned, target-neutral environment (no rendered text).
+//! - [`mod@render`] — pure string rendering of a plan: the Docker Compose target
+//!   ([`render::compose`]), the shared Envoy bootstrap, and the write-ready output.
 //! - [`mod@address`] — resolving the URL to reach a service from a given [`Vantage`].
 //!
 //! # Purity: rendering is pure, only I/O lives in the consumer
@@ -92,7 +93,7 @@ pub use model::role::{Role, ServiceSpec};
 pub use catalog::module::{
     ClientValue, ConnectionBinding, DataModule, DepGate, DependsCondition, ExtraResource,
     GatewayTls, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl, PortMapping,
-    Provides, RenderCtx, RenderError, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts,
+    Provides, RenderCtx, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, TemplateError,
     UrlPart,
 };
 pub use catalog::{
@@ -103,18 +104,22 @@ pub use catalog::{
 pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
-    AppUpstream, AuthConfig, ClusterConfig, ComposeInclude, ConfigDecl, ENVOY_AUTH_KNOB,
-    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, HeadFile,
-    ListenerConfig, Plan, PlanCtx, PlanError, PolicyConfig, SecretDecl, SecureOrigin, Selection,
-    TlsListenerConfig, TlsVirtualHost, is_valid_resource_name, resource_name_rule,
+    AppUpstream, AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY,
+    EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, ListenerConfig, ModuleBinding, Plan,
+    PlanCtx, PlanError, PolicyConfig, SecureOrigin, Selection, TlsListenerConfig, TlsVirtualHost,
+    is_valid_resource_name, resource_name_rule,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---
-pub use render::artifacts::{Artifacts, render_all, render_compose, render_envoy};
+pub use render::compose::{
+    Artifacts, ComposeInclude, ConfigDecl, HeadFile, SecretDecl, render_all, render_compose,
+    render_modules,
+};
+pub use render::envoy::render_envoy;
 pub use render::output::{
     CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
 };
-pub use render::{InjectedEnv, RenderFile, RenderOutput};
+pub use render::{InjectedEnv, RenderError, RenderFile, RenderOutput};
 
 // --- address: the addressing resolver ---
 pub use address::{AddressError, ServiceRef};

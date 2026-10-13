@@ -286,8 +286,8 @@ mod tests {
     fn plan_is_deterministic_across_replans() {
         let manifest = sample_manifest();
         let catalog = baseline_catalog();
-        let a = crate::render_all(&manifest.plan(&catalog).unwrap());
-        let b = crate::render_all(&manifest.plan(&catalog).unwrap());
+        let a = crate::render_all(&manifest.plan(&catalog).unwrap()).unwrap();
+        let b = crate::render_all(&manifest.plan(&catalog).unwrap()).unwrap();
         assert_eq!(a.compose, b.compose);
         assert_eq!(a.envoy, b.envoy);
         assert_eq!(a.env, b.env);

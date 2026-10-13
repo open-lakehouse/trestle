@@ -90,7 +90,13 @@ fn default_lakehouse_rederives_the_working_gateway_routes() {
 
     // The head file includes every module, in dependency order (deps before
     // dependents): postgres/rustfs/envoy precede mlflow and unitycatalog.
-    let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
+    let arts = olai_stack_topology::render_all(&p).unwrap();
+    let order: Vec<&str> = arts
+        .head
+        .includes
+        .iter()
+        .map(|i| i.module.as_str())
+        .collect();
     let pos = |id: &str| order.iter().position(|x| *x == id).unwrap();
     assert!(pos("postgres") < pos("mlflow"));
     assert!(pos("envoy") < pos("unity-catalog"));
@@ -299,10 +305,15 @@ fn plan_is_byte_identical_regardless_of_selection_order() {
     // observable artifacts the planner is contracted to produce deterministically: the
     // gateway config, the routing plan, the head file, and the include order.
     assert_eq!(forward.gateway, reversed.gateway);
-    assert_eq!(forward.head, reversed.head);
+    assert_eq!(
+        olai_stack_topology::render_all(&forward).unwrap().head,
+        olai_stack_topology::render_all(&reversed).unwrap().head
+    );
     assert_eq!(forward.routes, reversed.routes);
     let order = |p: &olai_stack_topology::Plan| {
-        p.head
+        olai_stack_topology::render_all(p)
+            .unwrap()
+            .head
             .includes
             .iter()
             .map(|i| i.module.0.clone())

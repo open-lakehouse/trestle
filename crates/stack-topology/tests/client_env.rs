@@ -182,7 +182,7 @@ fn client_env_carries_no_credentials() {
             }
         }
 
-        let out = p.materialize();
+        let out = p.materialize().unwrap();
         for path in [CLIENT_HOST_ENV_PATH, CLIENT_CONTAINER_ENV_PATH] {
             let f = out
                 .files

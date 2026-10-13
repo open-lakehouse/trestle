@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use olai_stack_topology::{
     Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, PlanCtx, PlanError,
-    Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
+    RenderError, Role, Selection, ServiceSpec, baseline_catalog, baseline_selection,
 };
 use serde::Serialize;
 
@@ -260,16 +260,27 @@ fn gateway_dto(gateway: &GatewayConfig) -> GatewayDto {
     }
 }
 
+/// Why [`plan_result`] failed: the selection didn't plan, or the plan didn't render.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanResultError {
+    /// Planning the selection failed.
+    #[error(transparent)]
+    Plan(#[from] PlanError),
+    /// Rendering the plan's files failed.
+    #[error(transparent)]
+    Render(#[from] RenderError),
+}
+
 /// Plan a selection against the baseline catalog and project the whole result into a
 /// [`PlanResultDto`]. Pure — no I/O — so it runs identically native and on wasm32.
 ///
 /// Uses [`PlanCtx::default`] for the environment context (gateway service/ports, data root);
 /// the planner itself prefers the providers the selection names. A future revision can accept
 /// a partial `PlanCtx` from the caller.
-pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanError> {
+pub fn plan_result(selection: &Selection) -> Result<PlanResultDto, PlanResultError> {
     let catalog: Catalog = baseline_catalog();
     let plan = catalog.plan(selection, &PlanCtx::default())?;
-    let materialized = plan.materialize();
+    let materialized = plan.materialize()?;
     // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
     let files = materialized
         .files

@@ -31,8 +31,10 @@ fn services(p: &Plan) -> Vec<String> {
 }
 
 fn fragment(p: &Plan, id: &str) -> String {
-    p.renders
-        .iter()
+    olai_stack_topology::render_all(p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(module, _)| module.as_str() == id)
         .map(|(_, out)| out.fragment.clone())
         .unwrap_or_else(|| panic!("{id} renders"))

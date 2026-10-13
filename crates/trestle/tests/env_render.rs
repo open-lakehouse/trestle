@@ -17,7 +17,7 @@ use walkdir::WalkDir;
 fn write_env(selection: &Selection, ctx: &PlanCtx, dir: &Path) {
     let catalog = baseline_catalog();
     let plan = catalog.plan(selection, ctx).expect("plan should succeed");
-    plan.materialize().write_to(dir).expect("write_to");
+    plan.materialize().unwrap().write_to(dir).expect("write_to");
     EnvManifest::new(selection.clone(), ctx.clone())
         .write_to(&dir.join("env.toml"))
         .expect("manifest write");
@@ -28,7 +28,7 @@ fn render_manifest(manifest: &EnvManifest, dir: &Path) {
     let plan = manifest
         .plan(&baseline_catalog())
         .expect("plan should succeed");
-    plan.materialize().write_to(dir).expect("write_to");
+    plan.materialize().unwrap().write_to(dir).expect("write_to");
 }
 
 fn repo_root() -> PathBuf {
@@ -478,7 +478,12 @@ fn full_azure_scenario_includes_lineage_and_tracing_routes() {
     let plan = load_scenario("full-azure")
         .plan(&baseline_catalog())
         .expect("plan");
-    let rendered: BTreeSet<ModuleId> = plan.renders.iter().map(|(id, _)| id.clone()).collect();
+    let rendered: BTreeSet<ModuleId> = olai_stack_topology::render_all(&plan)
+        .unwrap()
+        .modules
+        .into_iter()
+        .map(|(id, _)| id.clone())
+        .collect();
     for module in ["jaeger", "headwaters", "azurite"] {
         assert!(
             rendered.contains(&ModuleId::from(module)),

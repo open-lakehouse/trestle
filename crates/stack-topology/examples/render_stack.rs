@@ -140,7 +140,7 @@ fn main() {
     // Flatten the whole plan — stack artifacts plus every module fragment and config file —
     // into the project's on-disk layout, then write it. `materialize()` is pure; `write_to`
     // (behind the `std-io` feature this example requires) is the single I/O step.
-    let output = plan.materialize();
+    let output = plan.materialize().unwrap();
 
     // Write everything into a fresh scratch folder at the repo root. A non-default `--name`
     // gets its own subfolder so two stacks coexist on disk as well as on the host ports.

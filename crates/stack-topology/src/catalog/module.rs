@@ -384,7 +384,7 @@ impl RenderSpec {
     /// can branch on a demand's typed [`Connection`](crate::Connection)
     /// (e.g. `{% if c.credential.flavour == "s3" %}`) and read plan-resolved values directly.
     ///
-    /// Returns [`RenderError`] when the template fails to compile or render — e.g. a
+    /// Returns [`TemplateError`] when the template fails to compile or render — e.g. a
     /// malformed fragment, or a reference to a field absent from the context (a module
     /// authored as an on-disk `module.yaml` is external input, so this is a recoverable
     /// error the planner surfaces, not a panic).
@@ -392,7 +392,7 @@ impl RenderSpec {
     /// A file whose contents render to nothing but whitespace is dropped, so a template can
     /// make a file conditional (`{% if tls %}…{% endif %}`) without leaving an empty file
     /// and an unused `configs:` declaration behind.
-    pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, RenderError> {
+    pub fn render(&self, ctx: &RenderCtx<'_>) -> Result<RenderOutput, TemplateError> {
         let RenderSpec { fragment, files } = self;
         let mut env = minijinja::Environment::new();
         // Rendered files are text files: keep the template's final newline (MiniJinja strips
@@ -429,19 +429,19 @@ impl RenderSpec {
                         preserve: f.preserve,
                     })
                 })
-                .collect::<Result<_, RenderError>>()?,
+                .collect::<Result<_, TemplateError>>()?,
         })
     }
 }
 
-/// A [`RenderSpec`] fragment failed to compile or render.
+/// A [`RenderSpec`] template failed to compile or render.
 ///
 /// Carries the templating engine's message. Surfaced (not panicked) because a module can
 /// be authored as an external on-disk `module.yaml`, so a bad template is recoverable
 /// input, not an internal invariant violation.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("rendering module template failed: {0}")]
-pub struct RenderError(pub String);
+pub struct TemplateError(pub String);
 
 /// A compose `depends_on` condition — *what* readiness state of a dependency a service
 /// waits for before it starts.
@@ -597,16 +597,16 @@ impl<'a> RenderCtx<'a> {
 /// Render one MiniJinja template string against the [`RenderCtx`], reusing `env`.
 ///
 /// Pure and in-memory (no `loader`, no filesystem). A compile or render failure (malformed
-/// source, or a reference to a field absent from `ctx`) is returned as a [`RenderError`]
+/// source, or a reference to a field absent from `ctx`) is returned as a [`TemplateError`]
 /// rather than panicking — a `Template` can come from an external on-disk manifest.
 /// `render_named_str` compiles and renders in one call, so no template name is registered.
 fn render_template(
     env: &mut minijinja::Environment<'_>,
     source: &str,
     ctx: &RenderCtx<'_>,
-) -> Result<String, RenderError> {
+) -> Result<String, TemplateError> {
     env.render_named_str("fragment", source, ctx)
-        .map_err(|e| RenderError(e.to_string()))
+        .map_err(|e| TemplateError(e.to_string()))
 }
 
 /// Stack-wide facts a module's topology may depend on beyond its own knobs, settled by the
@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn malformed_template_is_a_recoverable_error_not_a_panic() {
         // A `Template` can come from an external on-disk manifest, so a bad fragment is a
-        // returned `RenderError`, never a panic.
+        // returned `TemplateError`, never a panic.
         let bad_syntax = RenderSpec {
             fragment: "{% if %}".into(), // unparsable
             files: vec![],

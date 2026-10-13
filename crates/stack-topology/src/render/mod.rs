@@ -1,8 +1,10 @@
 //! The render phase: the planner↔template handshake ([`RenderOutput`], [`InjectedEnv`]) plus
-//! the pure [`artifacts`] and [`output`] renderers.
+//! the pure [`compose`], [`envoy`] and [`output`] renderers.
 //!
 //! Rendering is pure — it produces strings and relative filenames in memory; persisting them
-//! is the consumer's job (see [`output`]). This module itself defines the **data contract** on
+//! is the consumer's job (see [`output`]). The [`Plan`](crate::Plan) is target-neutral; a
+//! deploy target renders it in its own format — today [`compose`], with the Envoy bootstrap
+//! ([`envoy`]) shared by every target. This module itself defines the **data contract** on
 //! both sides of a module's render step, so a module and its template agree on shape:
 //!
 //! - The planner hands a module's render an [`InjectedEnv`] — the values it decided
@@ -26,8 +28,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub mod artifacts;
+pub mod compose;
+pub mod envoy;
 pub mod output;
+
+use crate::catalog::module::{ModuleId, TemplateError};
 
 /// The environment-variable substitutions the planner injects into a module's
 /// render — the values the module could not decide for itself.
@@ -124,6 +129,44 @@ pub struct RenderOutput {
     /// Files the module needs written and mounted alongside its fragment.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<RenderFile>,
+}
+
+/// Rendering a plan's modules failed.
+///
+/// Surfaced (not panicked) because a module can be authored as an external on-disk
+/// `module.yaml`, so a bad template or a clashing alias is recoverable input.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum RenderError {
+    /// A module's template failed to compile or render.
+    #[error("module `{module}` failed to render: {source}")]
+    Template {
+        /// The module whose template failed.
+        module: ModuleId,
+        /// The underlying templating error.
+        #[source]
+        source: TemplateError,
+    },
+    /// A module emitted a file declaring both a config alias and a secret alias.
+    #[error("module `{module}` renders `{path}` as both a config and a secret")]
+    ConfigAndSecret {
+        /// The module that emitted the file.
+        module: ModuleId,
+        /// The file's (rooted) path.
+        path: String,
+    },
+    /// Two modules declared the same top-level config / secret alias. Aliases share one
+    /// namespace, so neither may shadow the other; rename one module's
+    /// [`RenderFile`] alias.
+    #[error("config alias `{alias}` is declared by both `{first}` and `{second}`; rename one")]
+    AliasCollision {
+        /// The colliding alias.
+        alias: String,
+        /// The module that declared it first.
+        first: ModuleId,
+        /// The module that collided with it.
+        second: ModuleId,
+    },
 }
 
 #[cfg(test)]

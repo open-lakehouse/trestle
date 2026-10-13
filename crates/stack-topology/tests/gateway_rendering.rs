@@ -34,9 +34,10 @@ fn authenticated(port: u16) -> olai_stack_topology::Plan {
 #[test]
 fn auth_portal_url_follows_the_gateway_port() {
     let p = authenticated(9090);
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id.as_str() == "authelia")
         .expect("auth pulls in authelia");
     let config = out
@@ -73,7 +74,7 @@ fn auth_serves_the_shared_listener_over_https_and_plain_http() {
     assert_eq!(secure.public_host, "demo.localhost");
     assert_eq!(secure.internal_host, "demo.internal");
 
-    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).envoy).unwrap();
+    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).unwrap().envoy).unwrap();
     let shared = &doc["static_resources"]["listeners"][0];
     assert_eq!(
         shared["listener_filters"][0]["name"].as_str(),
@@ -116,7 +117,7 @@ fn without_auth_the_shared_listener_stays_plain_http() {
             &PlanCtx::default(),
         )
         .expect("plan should succeed");
-    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).envoy).unwrap();
+    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).unwrap().envoy).unwrap();
     let shared = &doc["static_resources"]["listeners"][0];
     assert!(shared.get("listener_filters").is_none());
     assert_eq!(shared["filter_chains"].as_sequence().unwrap().len(), 1);
@@ -125,9 +126,10 @@ fn without_auth_the_shared_listener_stays_plain_http() {
 #[test]
 fn mlflow_accepts_the_secure_gateway_host() {
     let p = authenticated(9080);
-    let (_, mlflow) = p
-        .renders
-        .iter()
+    let (_, mlflow) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id.as_str() == "mlflow")
         .expect("mlflow is selected");
     let doc: serde_yaml::Value = serde_yaml::from_str(&mlflow.fragment).unwrap();
@@ -142,7 +144,7 @@ fn mlflow_accepts_the_secure_gateway_host() {
 
 #[test]
 fn rewrite_patterns_match_prefixes_literally() {
-    let envoy = render_all(&authenticated(9080)).envoy;
+    let envoy = render_all(&authenticated(9080)).unwrap().envoy;
     // `/api/2.0/mlflow` is rewritten under MLflow's base path; its `.` must not be a wildcard.
     assert!(
         envoy.contains(r#"regex: "^/api/2\\x{2E}0/mlflow(.*)$""#),
@@ -181,7 +183,7 @@ fn selecting_opa_checks_every_request_after_forward_auth() {
     assert_eq!((cluster.host.as_str(), cluster.port), ("opa", 9191));
     assert!(cluster.http2, "ext_authz gRPC needs an HTTP/2 upstream");
 
-    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).envoy).unwrap();
+    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).unwrap().envoy).unwrap();
     let shared =
         &doc["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]["typed_config"];
     let filters: Vec<&str> = shared["http_filters"]
@@ -221,7 +223,7 @@ fn selecting_opa_checks_every_request_after_forward_auth() {
     }
 
     // The policy is operator-owned: beside compose.yaml, written once.
-    let out = p.materialize();
+    let out = p.materialize().unwrap();
     for path in ["policies/authz.rego", "policies/authz_test.rego"] {
         let f = out
             .files
@@ -259,9 +261,10 @@ fn opa_dry_run_knob_reaches_the_plugin_config() {
     let p = baseline_catalog()
         .plan(&with_opa(knobs), &PlanCtx::default())
         .unwrap();
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id.as_str() == "opa")
         .unwrap();
     let config = out
@@ -378,7 +381,7 @@ fn route_block<'a>(envoy: &'a str, prefix: &str) -> &'a str {
 
 #[test]
 fn route_options_reach_the_gateway_config() {
-    let envoy = render_all(&plan_with_probe(false)).envoy;
+    let envoy = render_all(&plan_with_probe(false)).unwrap().envoy;
 
     let stream = route_block(&envoy, "/stream");
     assert!(stream.contains("timeout: 0s"), "{stream}");
@@ -396,8 +399,10 @@ fn route_options_reach_the_gateway_config() {
 #[test]
 fn fragments_see_the_stack_wide_render_variables() {
     let fragment = |p: &olai_stack_topology::Plan| {
-        p.renders
-            .iter()
+        olai_stack_topology::render_all(p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id.as_str() == "probe")
             .map(|(_, out)| out.fragment.clone())
             .expect("probe renders")

@@ -15,8 +15,8 @@
 //!    another (the failure mode hand-authored routes invite);
 //! 3. emits a structured [`GatewayConfig`] (listeners + clusters) for the gateway,
 //!    and a [`RoutePlan`] the [`address`](crate::address) resolver consumes unchanged;
-//! 4. renders every module to a [`RenderOutput`] and assembles a consolidated
-//!    [`HeadFile`] (config mounts + injected env at the head, then `include:`s).
+//! 4. binds every module's injected env and typed [`ModuleBinding`] — the target-neutral data a
+//!    deploy target renders it from (today [`render::compose`](crate::render::compose)).
 //!
 //! When a module declares [`impersonated_hosts`](crate::Provides::impersonated_hosts), the
 //! planner also gives the gateway a TLS listener for them ([`TlsListenerConfig`]): the
@@ -54,7 +54,6 @@ mod gateway;
 mod impersonation;
 mod knobs;
 mod names;
-mod render;
 pub mod resolve;
 mod route;
 pub mod routing;
@@ -70,7 +69,7 @@ use crate::model::placement::Vantage;
 use crate::model::role::{Role, ServiceSpec};
 use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
-use crate::render::{InjectedEnv, RenderOutput};
+use crate::render::InjectedEnv;
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;
@@ -327,17 +326,6 @@ pub enum PlanError {
         /// The connection field the variant does not carry.
         field: crate::model::connection::ConnectionField,
     },
-    /// A module's [`RenderSpec`](crate::RenderSpec) fragment failed to compile or
-    /// render — a malformed template or a reference to a field absent from the render
-    /// context. Recoverable because a module can be authored as an external on-disk manifest.
-    #[error("module `{module}` failed to render: {source}")]
-    Render {
-        /// The module whose template failed.
-        module: String,
-        /// The underlying templating error.
-        #[source]
-        source: crate::catalog::module::RenderError,
-    },
     /// Two or more providers of the same resource role are in one environment without an
     /// explicit per-demand pin selecting each. The fix is to pin each demand's provider or
     /// drop one provider from the selection.
@@ -350,21 +338,6 @@ pub enum PlanError {
         role: String,
         /// The provider module ids present for the role (sorted).
         providers: Vec<ModuleId>,
-    },
-    /// Two modules declared the same compose `configs:` alias. Aliases share one
-    /// top-level namespace, so the planner refuses to let one shadow the other; rename
-    /// one module's [`RenderFile`](crate::RenderFile) alias.
-    #[error(
-        "compose config alias `{alias}` is declared by both `{first}` and `{second}`; \
-         rename one"
-    )]
-    ConfigAliasCollision {
-        /// The colliding alias.
-        alias: String,
-        /// The module that declared it first.
-        first: ModuleId,
-        /// The module that collided with it.
-        second: ModuleId,
     },
     /// A module declares a [`required`](crate::Knob::required) knob with no
     /// [`default`](crate::Knob::default), and the [`Selection`] supplied no override for
@@ -467,57 +440,6 @@ pub enum PlanError {
     },
 }
 
-/// A compose `include:` entry contributed by a module.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ComposeInclude {
-    /// The module that contributed this fragment.
-    pub module: ModuleId,
-    /// The fragment text (the module's rendered compose `services:` snippet).
-    pub fragment: String,
-}
-
-/// A top-level compose `configs:` declaration: an alias and the host file it maps to.
-///
-/// The generated compose emits `configs: <alias>: { file: <path> }`, and a service
-/// fragment mounts it by `configs: - source: <alias>`. Each entry comes from a module's
-/// [`RenderFile`](crate::RenderFile) that declared an `alias` (the host `path` is the
-/// per-module-rooted file path).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfigDecl {
-    /// The compose config alias (referenced by `configs: - source: <alias>`).
-    pub alias: String,
-    /// The host file path the alias maps to (e.g. `modules/envoy/envoy.yaml`).
-    pub path: String,
-}
-
-/// A top-level Compose `secrets:` declaration: an alias and its sensitive host file.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SecretDecl {
-    /// The alias mounted by services under `/run/secrets/<alias>`.
-    pub alias: String,
-    /// The host file path supplying the secret.
-    pub path: String,
-}
-
-/// The consolidated top-level compose plan: customization at the head (injected env),
-/// then a plain list of module fragments.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HeadFile {
-    /// The compose project name.
-    pub name: String,
-    /// The environment-wide injected variables, gathered at the head.
-    pub env: InjectedEnv,
-    /// The module fragments to include, in dependency order.
-    pub includes: Vec<ComposeInclude>,
-    /// The top-level `configs:` declarations (alias → host file), sorted by alias for
-    /// deterministic output. Aggregated from every module's aliased
-    /// [`RenderFile`](crate::RenderFile)s plus any synthetic entry the planner adds for a
-    /// dedicated-renderer artifact (e.g. the gateway's envoy bootstrap).
-    pub configs: Vec<ConfigDecl>,
-    /// Top-level Compose secret declarations, sorted by alias.
-    pub secrets: Vec<SecretDecl>,
-}
-
 /// The gateway facts the address resolver needs but cannot derive from the model: the
 /// gateway's compose service name and its internal / host-published ports. Captured from
 /// [`PlanCtx`] at plan time and held on the [`Plan`], so addressing a service
@@ -573,6 +495,8 @@ impl GatewayFacts {
 /// Not `PartialEq`/`Eq`: it embeds the [`ResolvedGraph`], whose modules are trait objects.
 #[derive(Clone, Debug)]
 pub struct Plan {
+    /// The environment's name (the compose project name; see [`PlanCtx::env_name`]).
+    pub env_name: String,
     /// The resolved, ordered module graph.
     pub graph: ResolvedGraph,
     /// The per-endpoint route assignments the [`address`](crate::address) resolver
@@ -589,10 +513,11 @@ pub struct Plan {
     /// today, exposed in typed form so a consumer can make explicit per-flavour rendering
     /// decisions (e.g. branch on S3 vs Azure credentials) without re-parsing strings.
     pub connections: BTreeMap<(ModuleId, usize), Connection>,
-    /// Each module's rendered output (fragment + files).
-    pub renders: Vec<(ModuleId, RenderOutput)>,
-    /// The consolidated head/compose plan.
-    pub head: HeadFile,
+    /// Each module's typed render data — its knobs, connections, readiness gates, provisioned
+    /// objects and (for the gateway) published ports and TLS. Together with
+    /// [`injected`](Self::injected) this is everything a deploy target renders a module from
+    /// (see [`ModuleBinding::render_ctx`]); the plan itself holds no rendered text.
+    pub bindings: BTreeMap<ModuleId, ModuleBinding>,
     /// The structured gateway config.
     pub gateway: GatewayConfig,
     /// Every resource each provider provisions, keyed by the chosen provider: the databases,
@@ -617,13 +542,18 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Flatten this plan's full rendered output — the stack artifacts plus every module
-    /// fragment and config file — into one write-ready
+    /// Render this plan for Docker Compose and flatten the result — the stack artifacts plus
+    /// every module fragment and config file — into one write-ready
     /// [`MaterializedOutput`](crate::MaterializedOutput) in the project's on-disk layout. Pure
     /// (no I/O); with the `std-io` feature,
     /// [`MaterializedOutput::write_to`](crate::MaterializedOutput::write_to) writes it to disk.
-    pub fn materialize(&self) -> crate::render::output::MaterializedOutput {
-        crate::render::output::materialize(self)
+    ///
+    /// Errors with a [`RenderError`](crate::RenderError) when a module's template fails or two
+    /// modules declare the same config alias.
+    pub fn materialize(
+        &self,
+    ) -> Result<crate::render::output::MaterializedOutput, crate::render::RenderError> {
+        crate::render::compose::materialize(self)
     }
 
     /// A handle to address the module `module`'s first service. Most modules contribute a
@@ -719,23 +649,25 @@ impl Catalog {
     /// Resolve `selection` against this catalog under `ctx` into a fully-materialized [`Plan`].
     ///
     /// This is the producer the rest of the crate feeds: it resolves the dependency graph,
-    /// assigns non-colliding gateway routes, resolves knobs and connections, and renders every
-    /// module. See the [module docs](crate::plan) for the prefix-derivation rules. Returns a
+    /// assigns non-colliding gateway routes, and resolves knobs, connections and every module's
+    /// binding. See the [module docs](crate::plan) for the prefix-derivation rules. Returns a
     /// [`Plan`], or a [`PlanError`] (notably [`PlanError::PrefixCollision`]).
     pub fn plan(&self, selection: &Selection, ctx: &PlanCtx) -> Result<Plan, PlanError> {
         plan_env(selection, self, ctx)
     }
 }
 
-/// The planner implementation behind [`Catalog::plan`]: five pure phases, each in its own
+/// The planner implementation behind [`Catalog::plan`]: four pure phases, each in its own
 /// module, run in order.
 ///
 /// 1. [`augment`] — pull in the auth provider and prefer directly-selected providers;
 /// 2. [`settle`] — resolve the graph, each demand's provider and connection, knobs, services,
 ///    and provisioned resources;
 /// 3. [`route`] — assign gateway routes and build the [`GatewayConfig`];
-/// 4. [`bind`] — each module's injected env and typed render data, plus the stack env;
-/// 5. [`render`] — render each module and assemble the compose head.
+/// 4. [`bind`] — each module's injected env and typed render data, plus the stack env.
+///
+/// Rendering is not a planner phase: the plan is target-neutral, and a deploy target renders
+/// it (today [`render::compose`](crate::render::compose)).
 ///
 /// The client environment is resolved last, through the finished plan's own addressing API.
 fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<Plan, PlanError> {
@@ -750,9 +682,9 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         augmented.policy_provider.as_ref(),
     )?;
     let bound = bind::bind(&settled, &routed, catalog, ctx)?;
-    let (renders, head) = render::render(&settled.graph, &bound, ctx)?;
 
     let mut plan = Plan {
+        env_name: ctx.env_name.clone(),
         graph: settled.graph,
         routes: routed.routes,
         injected: bound.injected,
@@ -764,8 +696,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             .into_iter()
             .map(|(key, c)| (key, c.connection))
             .collect(),
-        renders,
-        head,
+        bindings: bound.bindings,
         gateway: routed.gateway,
         provisioned: settled.provisioned,
         env: bound.env,
@@ -1019,7 +950,7 @@ mod tests {
         use crate::render::RenderFile;
 
         // Two modules each declare a `RenderFile` under the same alias. Aliases share one
-        // top-level `configs:` namespace, so the planner must refuse rather than let one
+        // top-level `configs:` namespace, so rendering must refuse rather than let one
         // silently shadow the other.
         let with_alias = |id: &str| {
             let mut m = module_with(id, vec![], Default::default());
@@ -1037,15 +968,16 @@ mod tests {
             };
             arc(m)
         };
-        let err = plan_env(
+        // Planning is target-neutral and succeeds; rendering for compose is what rejects it.
+        let p = plan_env(
             &Selection::modules(["a", "b"]),
             &Catalog::from_modules([with_alias("a"), with_alias("b")]),
             &PlanCtx::default(),
         )
-        .unwrap_err();
+        .expect("plan succeeds");
         assert_eq!(
-            err,
-            PlanError::ConfigAliasCollision {
+            crate::render_all(&p).unwrap_err(),
+            crate::RenderError::AliasCollision {
                 alias: "shared_alias".into(),
                 first: ModuleId::from("a"),
                 second: ModuleId::from("b"),
@@ -1080,16 +1012,17 @@ mod tests {
         )
         .expect("plan succeeds");
         assert_eq!(
-            p.head.configs,
-            vec![ConfigDecl {
+            crate::render_all(&p).unwrap().head.configs,
+            vec![crate::ConfigDecl {
                 alias: "svc_config".into(),
                 path: "modules/svc/app.toml".into(),
             }]
         );
         // The render output's file path is rooted to match.
-        let (_, out) = p
-            .renders
-            .iter()
+        let (_, out) = crate::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id.as_str() == "svc")
             .unwrap();
         assert_eq!(out.files[0].path, "modules/svc/app.toml");
@@ -1180,9 +1113,10 @@ mod tests {
             &PlanCtx::default(),
         )
         .unwrap();
-        let (_, mlflow) = s3
-            .renders
-            .iter()
+        let (_, mlflow) = crate::render_all(&s3)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("mlflow"))
             .unwrap();
         assert!(
@@ -1212,9 +1146,10 @@ mod tests {
             },
         )
         .unwrap();
-        let (_, mlflow_az) = az
-            .renders
-            .iter()
+        let (_, mlflow_az) = crate::render_all(&az)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("mlflow"))
             .unwrap();
         assert!(
@@ -1312,7 +1247,10 @@ mod tests {
         // `Plan` is not `Eq` (its graph holds trait objects); compare the
         // observable, contracted-deterministic artifacts instead.
         assert_eq!(a.gateway, b.gateway);
-        assert_eq!(a.head, b.head);
+        assert_eq!(
+            crate::render_all(&a).unwrap().head,
+            crate::render_all(&b).unwrap().head
+        );
         assert_eq!(a.routes, b.routes);
     }
 

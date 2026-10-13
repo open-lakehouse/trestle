@@ -21,6 +21,7 @@ crate-type = ["cdylib", "rlib"]
 # workspace dependencies (in alphabetical order)
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 # Depend on the pure planner ONLY — `catalog` (serde_yaml) and `std-io` (disk I/O) stay OFF so
 # the dependency tree is wasm32-clean. `baseline_catalog()` is built in Rust and needs neither.
 olai-stack-topology = { path = "../stack-topology", default-features = false }

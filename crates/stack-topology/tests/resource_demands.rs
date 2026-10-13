@@ -141,7 +141,13 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     assert!(p.provisioned_for_role("message_queue").is_empty());
 
     // Providers are ordered before the consumer (compose startup order).
-    let order: Vec<&str> = p.head.includes.iter().map(|i| i.module.as_str()).collect();
+    let arts = olai_stack_topology::render_all(&p).unwrap();
+    let order: Vec<&str> = arts
+        .head
+        .includes
+        .iter()
+        .map(|i| i.module.as_str())
+        .collect();
     let pos = |id: &str| order.iter().position(|x| *x == id);
     assert!(pos("postgres") < pos("unity-catalog"));
     assert!(pos("rustfs") < pos("unity-catalog"));

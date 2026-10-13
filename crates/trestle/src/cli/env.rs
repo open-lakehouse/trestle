@@ -20,8 +20,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use olai_stack_topology::{
-    Catalog, EnvManifest, Knob, KnobKind, ManifestError, ModuleId, PlanCtx, PlanError, Selection,
-    baseline_catalog, baseline_selection, layout_report,
+    Catalog, EnvManifest, Knob, KnobKind, ManifestError, ModuleId, PlanCtx, PlanError, RenderError,
+    Selection, baseline_catalog, baseline_selection, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -230,6 +230,7 @@ fn write_env(
     dir: &std::path::Path,
 ) -> Result<()> {
     plan.materialize()
+        .map_err(map_render_err)?
         .write_to(dir)
         .map_err(|e| Error::io_at(dir, e))?;
     let manifest = EnvManifest::new(selection.clone(), ctx.clone());
@@ -314,6 +315,7 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
 
     println!("{}", layout_report(&plan));
     plan.materialize()
+        .map_err(map_render_err)?
         .write_to(&out_dir)
         .map_err(|e| Error::io_at(&out_dir, e))?;
     report_written(&plan, &out_dir);
@@ -416,6 +418,10 @@ fn ensure_writable_dir(dir: &std::path::Path, force: bool) -> Result<()> {
 fn map_plan_err(e: PlanError) -> Error {
     Error::other(format!("planning the environment failed: {e}"))
         .with_hint("run `trestle env list-modules` to see valid module ids and knobs")
+}
+
+fn map_render_err(e: RenderError) -> Error {
+    Error::other(format!("rendering the environment failed: {e}"))
 }
 
 fn map_manifest_err(e: ManifestError) -> Error {

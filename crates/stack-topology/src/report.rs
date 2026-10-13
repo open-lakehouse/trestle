@@ -26,7 +26,7 @@ pub fn layout_report(plan: &Plan) -> String {
     let _ = writeln!(
         out,
         "# Environment `{}` — gateway {}",
-        plan.head.name,
+        plan.env_name,
         plan.gateway_url(),
     );
 

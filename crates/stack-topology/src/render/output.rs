@@ -1,22 +1,18 @@
-//! The plan's complete rendered output, flattened to write-ready `(path, contents)` pairs
-//! in one documented layout — [`MaterializedOutput`].
+//! The target-neutral, write-ready output of rendering a plan — [`MaterializedOutput`], a flat
+//! list of `(path, contents)` pairs — plus the client environment files every target writes.
 //!
-//! [`render_all`] returns only the stack-aggregated
-//! [`Artifacts`](crate::Artifacts) (the Envoy bootstrap, `.env`, and top-level compose); the
-//! per-module fragments and their
-//! mounted config files live separately on [`Plan::renders`](crate::Plan::renders). Every
-//! consumer that writes a project therefore has to know the same on-disk layout — which
-//! string goes to which path. [`Plan::materialize`](crate::Plan::materialize) encodes that
-//! layout once.
+//! A deploy target (today: [`compose`](crate::render::compose)) owns the on-disk layout and
+//! fills a [`MaterializedOutput`] in it, so every consumer that writes a project shares one
+//! layout instead of re-deriving which string goes to which path.
 //!
 //! Building a [`MaterializedOutput`] is pure (no I/O), so it works in the browser too — a
 //! consumer can iterate [`files`](MaterializedOutput::files) without touching disk. Writing
 //! them is the one I/O step, behind [`write_to`](MaterializedOutput::write_to) and the
 //! non-default `std-io` feature, so the default build stays WASM-clean.
 
-use crate::model::placement::Vantage;
-use crate::plan::Plan;
-use crate::render::artifacts::{ENVOY_CONFIG_PATH, render_all, render_client_env};
+use std::fmt::Write as _;
+
+use crate::render::InjectedEnv;
 
 /// Where the host-vantage client environment is written (see
 /// [`Plan::client_env`](crate::Plan::client_env)).
@@ -38,12 +34,14 @@ pub struct OutputFile {
     pub preserve: bool,
 }
 
-/// Every file a [`Plan`] produces, flattened to write-ready `(path, contents)` pairs in a
-/// fixed layout: the top-level `compose.yaml`, `.env`, the per-vantage client environments
-/// (`client/host.env`, `client/container.env`), and a human-readable `LAYOUT.md` summary
-/// (see [`layout_report`](crate::layout_report)), the Envoy bootstrap at
-/// `modules/envoy/envoy.yaml`, and each module's `modules/<id>/compose.yaml` fragment plus its
-/// mounted config files (already rooted under `modules/<id>/`).
+/// Every file a rendered [`Plan`](crate::Plan) produces, flattened to write-ready
+/// `(path, contents)` pairs in the deploy target's layout. For Docker Compose
+/// ([`compose::materialize`](crate::render::compose::materialize)) that is the top-level
+/// `compose.yaml`, `.env`, the per-vantage client environments (`client/host.env`,
+/// `client/container.env`), a human-readable `LAYOUT.md` summary (see
+/// [`layout_report`](crate::layout_report)), the Envoy bootstrap at `modules/envoy/envoy.yaml`,
+/// and each module's `modules/<id>/compose.yaml` fragment plus its mounted config files
+/// (already rooted under `modules/<id>/`).
 ///
 /// Build one with [`Plan::materialize`](crate::Plan::materialize). Pure and WASM-clean;
 /// [`write_to`](Self::write_to) (behind the `std-io` feature) is the only step that does I/O.
@@ -55,99 +53,26 @@ pub struct MaterializedOutput {
     pub files: Vec<OutputFile>,
 }
 
-/// Flatten a plan's full rendered output into the on-disk layout a consumer writes.
-pub(crate) fn materialize(plan: &Plan) -> MaterializedOutput {
-    let artifacts = render_all(plan);
-    let mut files = vec![
-        OutputFile {
-            path: "compose.yaml".into(),
-            contents: artifacts.compose,
-            sensitive: false,
-            preserve: false,
-        },
-        OutputFile {
-            path: ".env".into(),
-            contents: artifacts.env,
-            sensitive: true,
-            preserve: false,
-        },
-        OutputFile {
-            path: ".gitignore".into(),
-            contents: artifacts.gitignore,
-            sensitive: false,
-            preserve: false,
-        },
-        // What a client loads to reach the stack, per vantage. Credential-free, so not
-        // sensitive: it is meant to be shared (e.g. sourced by an app's dev environment).
-        OutputFile {
-            path: CLIENT_HOST_ENV_PATH.into(),
-            contents: render_client_env(
-                plan.client_env(Vantage::Host),
-                "on the host (localhost addresses)",
-            ),
-            sensitive: false,
-            preserve: false,
-        },
-        OutputFile {
-            path: CLIENT_CONTAINER_ENV_PATH.into(),
-            contents: render_client_env(
-                plan.client_env(Vantage::Container),
-                "inside the compose network",
-            ),
-            sensitive: false,
-            preserve: false,
-        },
-        // A human-readable, at-a-glance summary of the gateway layout (routes → services).
-        // Pure to build (see `report::layout_report`), so it keeps `materialize` pure.
-        OutputFile {
-            path: "LAYOUT.md".into(),
-            contents: crate::report::layout_report(plan),
-            sensitive: false,
-            preserve: false,
-        },
-    ];
-
-    // The Envoy bootstrap is written only when the plan has a gateway — the same condition
-    // under which `render_all` declares the `envoy_config` mount. A gateway-less plan would
-    // otherwise get an orphan `modules/envoy/envoy.yaml` that the top-level compose never
-    // mounts. Detect the gateway by role (not module-id), matching `render_all`.
-    let gateway_present = plan
-        .services
-        .values()
-        .flatten()
-        .any(|s| s.role == crate::Role::gateway());
-    if gateway_present {
-        files.push(OutputFile {
-            path: ENVOY_CONFIG_PATH.into(),
-            contents: artifacts.envoy,
-            sensitive: false,
-            preserve: false,
-        });
+/// Render a client environment file (see [`Plan::client_env`](crate::Plan::client_env)):
+/// `KEY=value` lines in key order under a header naming the vantage the addresses are for.
+pub(crate) fn render_client_env(env: &InjectedEnv, vantage: &str) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Client environment for callers {vantage}. Generated; re-render to update."
+    );
+    for line in [
+        "# Load it into an app, notebook, or engine to reach this stack. It holds no",
+        "# credentials: authenticate through the gateway, and read/write object storage",
+        "# with the temporary credentials Unity Catalog vends.",
+    ] {
+        out.push_str(line);
+        out.push('\n');
     }
-
-    // Each module owns a `modules/<id>/` directory: its compose fragment (skipped when empty)
-    // plus any config files it emits (their `path` is already rooted under that directory,
-    // or at the environment root when marked `at_root`).
-    for (module, out) in &plan.renders {
-        if !out.fragment.trim().is_empty() {
-            files.push(OutputFile {
-                path: format!("modules/{module}/compose.yaml"),
-                contents: out.fragment.clone(),
-                sensitive: false,
-                preserve: false,
-            });
-        }
-        for file in &out.files {
-            files.push(OutputFile {
-                path: file.path.clone(),
-                contents: file.contents.clone(),
-                sensitive: file.sensitive,
-                preserve: file.preserve,
-            });
-        }
+    for (k, v) in env.iter() {
+        let _ = writeln!(out, "{k}={v}");
     }
-
-    MaterializedOutput { files }
+    out
 }
 
 #[cfg(feature = "std-io")]
@@ -192,7 +117,7 @@ mod tests {
                 &PlanCtx::default(),
             )
             .unwrap();
-        let out = plan.materialize();
+        let out = plan.materialize().unwrap();
 
         let dir = std::env::temp_dir().join(format!("stack-topology-write-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -229,7 +154,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let out = plan.materialize();
+        let out = plan.materialize().unwrap();
         assert!(
             out.files
                 .iter()

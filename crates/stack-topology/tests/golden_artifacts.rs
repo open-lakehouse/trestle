@@ -38,7 +38,7 @@ fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
             },
         )
         .expect("plan should succeed");
-    render_all(&p)
+    render_all(&p).unwrap()
 }
 
 /// One parsed Envoy route: prefix → (cluster, optional rewrite substitution).
@@ -150,9 +150,10 @@ fn postgres_init_creates_the_same_databases() {
             },
         )
         .expect("plan should succeed");
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &ModuleId::from("postgres"))
         .expect("postgres is in the render set");
     let init = out
@@ -210,7 +211,7 @@ fn env_file_emits_only_keys_referenced_as_compose_substitutions() {
         )
         .expect("plan should succeed");
     let mut corpus = vec![arts.envoy.clone()];
-    for (_, out) in &p.renders {
+    for (_, out) in &olai_stack_topology::render_all(&p).unwrap().modules {
         corpus.push(out.fragment.clone());
         corpus.extend(out.files.iter().map(|f| f.contents.clone()));
     }
@@ -317,8 +318,10 @@ fn compose_declares_config_aliases_for_mounted_files() {
         .expect("plan should succeed");
     let fragment = |id: &str| -> String {
         use olai_stack_topology::ModuleId;
-        p.renders
-            .iter()
+        olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(m, _)| m == &ModuleId::from(id))
             .map(|(_, out)| out.fragment.clone())
             .unwrap_or_default()
@@ -350,9 +353,10 @@ fn unity_catalog_keeps_its_metadata_in_the_relational_db_provider() {
     let p = baseline_catalog()
         .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
         .expect("plan succeeds");
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
         .expect("UC is in the render set");
     let hibernate = out
@@ -404,9 +408,10 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     let uc_render = |ctx: PlanCtx| -> (String, String) {
         let sel = Selection::modules(["unity-catalog"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
-        let (_, out) = p
-            .renders
-            .iter()
+        let (_, out) = olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
             .expect("UC is in the render set");
         // Valid YAML in either branch.
@@ -521,9 +526,10 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
     let mlflow_render = |ctx: PlanCtx| -> (String, String) {
         let sel = Selection::modules(["mlflow"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
-        let (_, out) = p
-            .renders
-            .iter()
+        let (_, out) = olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("mlflow"))
             .expect("MLflow is in the render set");
         let _: Value = serde_yaml::from_str(&out.fragment)
@@ -632,9 +638,10 @@ fn azurite_fragment_is_rendered_whole_from_typed_context() {
             },
         )
         .expect("plan succeeds");
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &ModuleId::from("azurite"))
         .expect("azurite is the chosen object_store provider");
     let frag = &out.fragment;
@@ -740,9 +747,10 @@ fn object_store_gets_a_dedicated_envoy_listener_fronted_at_root() {
             },
         )
         .expect("plan succeeds");
-    let (_, envoy_frag) = p
-        .renders
-        .iter()
+    let (_, envoy_frag) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &olai_stack_topology::ModuleId::from("envoy"))
         .unwrap();
     let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
@@ -835,9 +843,10 @@ fn adding_headwaters_fronts_its_whole_surface_under_one_prefix() {
     // The rendered fragment keeps the DSN as an env (the secret stays out of the config
     // file), points the container at the mounted `config.toml`, gates on the Postgres
     // healthcheck, and declares its own distroless self-healthcheck — with no leftover ${VAR}.
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &ModuleId::from("headwaters"))
         .expect("headwaters is in the render set");
     let doc: Value =
@@ -952,9 +961,10 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
     };
 
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &ModuleId::from("headwaters"))
         .expect("headwaters is in the render set");
     let config = out
@@ -1004,7 +1014,7 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
         "the base path reaches the render with the UI off too"
     );
 
-    let arts = render_all(&p);
+    let arts = render_all(&p).unwrap();
     let (routes, _, _) = parse_envoy(&arts.envoy);
     let (cluster, rewrite) = routes
         .get("/api/v1/lineage")
@@ -1026,9 +1036,10 @@ fn headwaters_runs_migrations_in_an_init_job_before_serve() {
     // long-running `headwaters` service on it completing successfully.
     let sel = Selection::modules(["envoy", "postgres", "headwaters"]);
     let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
-    let (_, out) = p
-        .renders
-        .iter()
+    let (_, out) = olai_stack_topology::render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(id, _)| id == &ModuleId::from("headwaters"))
         .expect("headwaters is in the render set");
 
@@ -1106,8 +1117,9 @@ fn extra_resources_are_created_by_the_provider_init_jobs() {
     );
 
     // ...and reach each provider's existing init job (which iterates `RenderCtx.objects`).
+    let arts = olai_stack_topology::render_all(&p).unwrap();
     let render_of = |id: &str| -> &str {
-        p.renders
+        arts.modules
             .iter()
             .find(|(m, _)| m == &ModuleId::from(id))
             .map(|(_, out)| {
@@ -1136,14 +1148,14 @@ fn empty_catalog_renders_a_valid_empty_envoy() {
     let p = Catalog::new()
         .plan(&Selection::default(), &PlanCtx::default())
         .unwrap();
-    let arts = render_all(&p);
+    let arts = render_all(&p).unwrap();
     let (routes, _, clusters) = parse_envoy(&arts.envoy);
     assert!(routes.is_empty());
     assert!(clusters.is_empty());
 
     // A gateway-less plan must not materialize an orphan `modules/envoy/envoy.yaml` — nothing
     // mounts it (no `envoy_config` config is declared without a gateway).
-    let materialized = p.materialize();
+    let materialized = p.materialize().unwrap();
     assert!(
         !materialized
             .files
@@ -1160,7 +1172,7 @@ fn materialize_flattens_the_full_layout() {
     let p = baseline_catalog()
         .plan(&default_selection(), &PlanCtx::default())
         .expect("plan should succeed");
-    let out = p.materialize();
+    let out = p.materialize().unwrap();
     let paths: BTreeSet<&str> = out.files.iter().map(|f| f.path.as_str()).collect();
 
     // The stack-level files and the Envoy bootstrap are always present.
@@ -1174,7 +1186,7 @@ fn materialize_flattens_the_full_layout() {
     assert!(paths.contains("modules/postgres/init-databases.sh"));
 
     // The flattened contents match what `render_all` produces for the stack files.
-    let arts = render_all(&p);
+    let arts = render_all(&p).unwrap();
     let by_path = |name: &str| {
         out.files
             .iter()
@@ -1207,7 +1219,7 @@ fn app_upstream_becomes_the_gateway_catch_all() {
         )
         .expect("plan should succeed");
 
-    let arts = render_all(&p);
+    let arts = render_all(&p).unwrap();
     let (routes, order, clusters) = parse_envoy(&arts.envoy);
 
     let (cluster, rewrite) = routes.get("/").expect("the app catch-all is fronted");
@@ -1230,8 +1242,10 @@ fn data_root_is_injected_and_relocatable() {
     use olai_stack_topology::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, ModuleId};
 
     let frag = |p: &olai_stack_topology::Plan, id: &str| {
-        p.renders
-            .iter()
+        olai_stack_topology::render_all(p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(m, _)| m == &ModuleId::from(id))
             .map(|(_, out)| out.fragment.clone())
             .unwrap()
@@ -1319,18 +1333,26 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
         )
         .unwrap();
     let frag = |id: &str| {
-        p.renders
-            .iter()
+        olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(m, _)| m == &ModuleId::from(id))
             .map(|(_, out)| out.fragment.clone())
             .unwrap()
     };
     let rendered_file = |id: &str, suffix: &str| {
-        p.renders
-            .iter()
+        olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(module, _)| module == &ModuleId::from(id))
-            .and_then(|(_, out)| out.files.iter().find(|file| file.path.ends_with(suffix)))
-            .map(|file| file.contents.clone())
+            .and_then(|(_, out)| {
+                out.files
+                    .into_iter()
+                    .find(|file| file.path.ends_with(suffix))
+            })
+            .map(|file| file.contents)
             .unwrap()
     };
 
@@ -1392,9 +1414,10 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
     let p_bare = baseline_catalog()
         .plan(&Selection::modules(["rustfs"]), &PlanCtx::default())
         .expect("rustfs alone should plan");
-    let sw_bare = p_bare
-        .renders
-        .iter()
+    let sw_bare = olai_stack_topology::render_all(&p_bare)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(m, _)| m == &ModuleId::from("rustfs"))
         .map(|(_, out)| out.fragment.clone())
         .unwrap();
@@ -1419,9 +1442,10 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
             },
         )
         .expect("azurite alone should plan (no init service when it provisions nothing)");
-    let az_bare = p_az_bare
-        .renders
-        .iter()
+    let az_bare = olai_stack_topology::render_all(&p_az_bare)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(m, _)| m == &ModuleId::from("azurite"))
         .map(|(_, out)| out.fragment.clone())
         .unwrap();
@@ -1486,7 +1510,7 @@ mod auth {
         let p = baseline_catalog()
             .plan(&auth_on_selection(), &PlanCtx::default())
             .unwrap();
-        let arts = render_all(&p);
+        let arts = render_all(&p).unwrap();
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
         // The shared listener strips spoofed identity, runs ext_authz, then routes.
@@ -1566,7 +1590,7 @@ mod auth {
         let p = baseline_catalog()
             .plan(&auth_on_selection(), &PlanCtx::default())
             .unwrap();
-        let arts = render_all(&p);
+        let arts = render_all(&p).unwrap();
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
         let shared = shared_listener(&doc);
 
@@ -1644,9 +1668,10 @@ mod auth {
             .unwrap();
 
         // The knob pulls authelia into the graph: it renders a fragment and its two config files.
-        let (_, out) = p
-            .renders
-            .iter()
+        let (_, out) = olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("authelia"))
             .expect("authelia is pulled into the render set by the knob");
         let _: Value =
@@ -1666,7 +1691,7 @@ mod auth {
         assert!(users.preserve, "users.yml is operator-owned");
 
         // The top-level compose includes the authelia fragment.
-        let arts = render_all(&p);
+        let arts = render_all(&p).unwrap();
         assert!(
             arts.compose.contains("./modules/authelia/compose.yaml"),
             "compose includes the authelia fragment:\n{}",
@@ -1679,9 +1704,10 @@ mod auth {
         );
 
         // The gateway waits for authelia to be healthy before serving.
-        let (_, envoy_frag) = p
-            .renders
-            .iter()
+        let (_, envoy_frag) = olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("envoy"))
             .unwrap();
         let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
@@ -1752,9 +1778,10 @@ mod auth {
             )
             .unwrap();
         assert!(p.gateway.secure.is_none());
-        let (_, envoy_frag) = p
-            .renders
-            .iter()
+        let (_, envoy_frag) = olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(id, _)| id == &ModuleId::from("envoy"))
             .unwrap();
         let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
@@ -1767,7 +1794,7 @@ mod auth {
         // Same selection, knob left at its default (off).
         let sel = Selection::modules(["envoy", "rustfs", "postgres", "mlflow", "headwaters"]);
         let p = baseline_catalog().plan(&sel, &PlanCtx::default()).unwrap();
-        let arts = render_all(&p);
+        let arts = render_all(&p).unwrap();
         let doc: Value = serde_yaml::from_str(&arts.envoy).expect("valid Envoy YAML");
 
         // No listener is gated, and no identity headers are stripped anywhere.
@@ -1795,7 +1822,9 @@ mod auth {
             "no authelia cluster when auth is off"
         );
         assert!(
-            !p.renders
+            !olai_stack_topology::render_all(&p)
+                .unwrap()
+                .modules
                 .iter()
                 .any(|(id, _)| id == &ModuleId::from("authelia")),
             "authelia is not pulled in when auth is off"
@@ -1837,7 +1866,7 @@ fn rustfs_answers_the_aws_hostnames_through_the_gateway_tls_listener() {
     }
 
     // Envoy: a TLS listener routing STS to the shim and S3 to RustFS, both real clusters.
-    let envoy: Value = serde_yaml::from_str(&render_all(&p).envoy).expect("valid YAML");
+    let envoy: Value = serde_yaml::from_str(&render_all(&p).unwrap().envoy).expect("valid YAML");
     let listener = envoy["static_resources"]["listeners"]
         .as_sequence()
         .unwrap()
@@ -1870,7 +1899,7 @@ fn rustfs_answers_the_aws_hostnames_through_the_gateway_tls_listener() {
     };
     assert!(domains("sts-shim").contains(&"sts.us-east-1.amazonaws.com:443".to_string()));
     assert!(domains("rustfs").contains(&"unity.s3.us-east-1.amazonaws.com".to_string()));
-    let clusters = parse_envoy(&render_all(&p).envoy).2;
+    let clusters = parse_envoy(&render_all(&p).unwrap().envoy).2;
     assert_eq!(
         clusters.get("sts-shim").map(String::as_str),
         Some("sts-shim:8080")
@@ -1882,8 +1911,10 @@ fn rustfs_answers_the_aws_hostnames_through_the_gateway_tls_listener() {
 
     // The gateway fragment holds the hosts as aliases and mints the CA first.
     let render = |id: &str| {
-        p.renders
-            .iter()
+        olai_stack_topology::render_all(&p)
+            .unwrap()
+            .modules
+            .into_iter()
             .find(|(m, _)| m == &ModuleId::from(id))
             .map(|(_, out)| out.clone())
             .unwrap()
@@ -1914,7 +1945,12 @@ fn rustfs_answers_the_aws_hostnames_through_the_gateway_tls_listener() {
     assert!(certs.contents.starts_with("#!/usr/bin/env bash"));
     for alias in ["gateway_certs_script", "rustfs_sts_shim"] {
         assert!(
-            p.head.configs.iter().any(|c| c.alias == alias),
+            olai_stack_topology::render_all(&p)
+                .unwrap()
+                .head
+                .configs
+                .iter()
+                .any(|c| c.alias == alias),
             "{alias} declared at the head"
         );
     }
@@ -1932,13 +1968,14 @@ fn rustfs_answers_the_aws_hostnames_through_the_gateway_tls_listener() {
             },
         )
         .unwrap();
-    let (_, gw) = az
-        .renders
-        .iter()
+    let (_, gw) = olai_stack_topology::render_all(&az)
+        .unwrap()
+        .modules
+        .into_iter()
         .find(|(m, _)| m == &ModuleId::from("envoy"))
         .unwrap();
     assert!(az.gateway.tls.is_none());
     assert!(gw.files.is_empty(), "empty certificate script is dropped");
     assert!(!gw.fragment.contains("aliases:") && !gw.fragment.contains("gateway-certs"));
-    assert!(!render_all(&az).envoy.contains("emulated_tls"));
+    assert!(!render_all(&az).unwrap().envoy.contains("emulated_tls"));
 }
