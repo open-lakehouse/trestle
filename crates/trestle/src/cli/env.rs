@@ -21,7 +21,8 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 use olai_stack_topology::{
     Catalog, EnvManifest, Knob, KnobKind, ManifestError, ModuleId, PlanCtx, PlanError, RenderError,
-    Selection, TargetId, baseline_catalog, baseline_selection, builtin_targets, layout_report,
+    Secrets, Selection, TargetId, baseline_catalog, baseline_selection, builtin_targets,
+    layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -206,7 +207,16 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
     }
 
     // Plan, then materialize + persist. This is the shared core with `env render`.
-    let plan = catalog.plan(&selection, &ctx).map_err(map_plan_err)?;
+    // Secrets are runtime-only (never persisted): resolve them for this render only.
+    let plan = catalog
+        .plan(
+            &selection,
+            &PlanCtx {
+                secrets: Some(load_secrets(&out_dir)?),
+                ..ctx.clone()
+            },
+        )
+        .map_err(map_plan_err)?;
 
     if args.non_interactive {
         println!("{}", layout_report(&plan));
@@ -303,7 +313,7 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
 
 fn run_render(args: EnvRenderArgs) -> Result<()> {
     let manifest_path = args.dir.join("env.toml");
-    let manifest = EnvManifest::read_from(&manifest_path).map_err(|e| {
+    let mut manifest = EnvManifest::read_from(&manifest_path).map_err(|e| {
         map_manifest_err(e).with_hint(format!(
             "expected an `env.toml` in {} — create one with `trestle env new`",
             args.dir.display()
@@ -311,6 +321,7 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
     })?;
 
     let catalog = baseline_catalog();
+    manifest.context.secrets = Some(load_secrets(&args.dir)?);
     let plan = manifest.plan(&catalog).map_err(map_plan_err)?;
 
     let out_dir = args.out_dir.clone().unwrap_or_else(|| args.dir.clone());
@@ -422,8 +433,50 @@ fn ensure_writable_dir(dir: &std::path::Path, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// The file beside `env.toml` that may supply secrets for external resources (git-ignored).
+const SECRETS_FILE: &str = "secrets.env";
+
+/// The secrets `${VAR}` references in external resources resolve against: `KEY=VALUE` lines
+/// from [`SECRETS_FILE`] in `dir` (if present), overridden by the process environment.
+fn load_secrets(dir: &std::path::Path) -> Result<Secrets> {
+    let mut secrets = Secrets::new();
+    let path = dir.join(SECRETS_FILE);
+    if path.is_file() {
+        let text = std::fs::read_to_string(&path).map_err(|e| Error::io_at(&path, e))?;
+        for (name, value) in parse_env_lines(&text) {
+            secrets.insert(name, value);
+        }
+    }
+    for (name, value) in std::env::vars() {
+        secrets.insert(name, value);
+    }
+    Ok(secrets)
+}
+
+/// Parse dotenv-style `KEY=VALUE` lines: blank lines and `#` comments are skipped, an
+/// `export ` prefix is allowed, and one pair of matching surrounding quotes is stripped.
+fn parse_env_lines(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| {
+            let l = l.strip_prefix("export ").unwrap_or(l);
+            let (k, v) = l.split_once('=')?;
+            let v = v.trim();
+            let v = ['"', '\'']
+                .iter()
+                .find_map(|q| v.strip_prefix(*q).and_then(|v| v.strip_suffix(*q)))
+                .unwrap_or(v);
+            Some((k.trim().to_string(), v.to_string()))
+        })
+        .collect()
+}
+
 fn map_plan_err(e: PlanError) -> Error {
     let hint = match &e {
+        PlanError::UnresolvedSecrets { .. } => format!(
+            "export them, or set them in `{SECRETS_FILE}` beside env.toml (it is git-ignored)"
+        ),
         PlanError::UnknownTarget(_) => {
             let targets: Vec<String> = builtin_targets().iter().map(|t| t.id().0).collect();
             format!("valid deploy targets: {}", targets.join(", "))
@@ -631,7 +684,22 @@ mod wizard {
 mod tests {
     use olai_stack_topology::{PlanCtx, Selection, baseline_catalog};
 
-    use super::next_steps;
+    use super::{next_steps, parse_env_lines};
+
+    #[test]
+    fn env_lines_parse_like_dotenv() {
+        let parsed = parse_env_lines(
+            "# comment\n\nPG_PASSWORD=s3cr3t\nexport A = \"quoted value\"\nB='x=y'\nnot a pair\n",
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                ("PG_PASSWORD".to_string(), "s3cr3t".to_string()),
+                ("A".to_string(), "quoted value".to_string()),
+                ("B".to_string(), "x=y".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn next_steps_point_at_the_files_a_user_needs() {
