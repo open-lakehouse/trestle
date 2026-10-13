@@ -170,6 +170,13 @@ mod tests {
     }
 
     #[test]
+    fn env_new_parses_target() {
+        assert_eq!(env_new(&["lakehouse"]).target, None);
+        let args = env_new(&["lakehouse", "--target", "compose"]);
+        assert_eq!(args.target.as_deref(), Some("compose"));
+    }
+
+    #[test]
     fn env_new_parses_select_and_set() {
         let args = env_new(&[
             "lakehouse",

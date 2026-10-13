@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand};
 use olai_stack_topology::{
     Catalog, EnvManifest, Knob, KnobKind, ManifestError, ModuleId, PlanCtx, PlanError, RenderError,
-    Selection, baseline_catalog, baseline_selection, layout_report,
+    Selection, TargetId, baseline_catalog, baseline_selection, builtin_targets, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -61,6 +61,10 @@ pub struct EnvNewArgs {
     /// (e.g. `--prefer object_store=azurite,rustfs`). Repeatable.
     #[clap(long = "prefer", value_name = "ROLE=PROVIDER[,PROVIDER]", value_parser = parse_selection)]
     pub prefer: Vec<(String, Vec<String>)>,
+
+    /// Deploy target the environment runs on (default `compose`, Docker Compose).
+    #[clap(long, value_name = "TARGET")]
+    pub target: Option<String>,
 
     /// Gateway host-published port (default 9080).
     #[clap(long)]
@@ -177,6 +181,9 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         env_name: args.name.clone(),
         ..PlanCtx::default()
     };
+    if let Some(target) = &args.target {
+        ctx.target = TargetId::from(target.as_str());
+    }
     if let Some(port) = args.gateway_host_port {
         ctx.gateway_host_port = port;
     }
@@ -416,8 +423,14 @@ fn ensure_writable_dir(dir: &std::path::Path, force: bool) -> Result<()> {
 }
 
 fn map_plan_err(e: PlanError) -> Error {
-    Error::other(format!("planning the environment failed: {e}"))
-        .with_hint("run `trestle env list-modules` to see valid module ids and knobs")
+    let hint = match &e {
+        PlanError::UnknownTarget(_) => {
+            let targets: Vec<String> = builtin_targets().iter().map(|t| t.id().0).collect();
+            format!("valid deploy targets: {}", targets.join(", "))
+        }
+        _ => "run `trestle env list-modules` to see valid module ids and knobs".to_string(),
+    };
+    Error::other(format!("planning the environment failed: {e}")).with_hint(hint)
 }
 
 fn map_render_err(e: RenderError) -> Error {
