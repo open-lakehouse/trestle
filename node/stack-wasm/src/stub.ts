@@ -18,6 +18,8 @@ export type {
   Endpoint,
   ExposedDto,
   ExposedKind,
+  ExternalConnection,
+  ExternalResource,
   GatewayDto,
   GraphDto,
   GraphNodeDto,

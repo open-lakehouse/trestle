@@ -544,6 +544,49 @@ mod tests {
     }
 
     #[test]
+    fn external_providers_are_external_nodes_grouped_by_cloud() {
+        use olai_stack_topology::{ExternalConnection, ExternalResource};
+        let mut selection = Selection::modules(["envoy", "postgres", "mlflow"]);
+        selection.external.insert(
+            "postgres".into(),
+            ExternalResource {
+                cloud: Some("aws".into()),
+                connection: ExternalConnection::RelationalDb {
+                    host: "db.example.com".into(),
+                    port: 5432,
+                    database: "{name}".into(),
+                    username: "app".into(),
+                    password: "${PG_PASSWORD}".into(),
+                },
+            },
+        );
+        let result = plan_result(&selection, None).expect("plan should succeed");
+        let node = |id: &str| result.graph.nodes.iter().find(|n| n.id == id).unwrap();
+        let pg = node("postgres");
+        assert_eq!(pg.kind, NodeKind::External);
+        assert_eq!(pg.cloud.as_deref(), Some("aws"));
+        assert_eq!(
+            pg.placement.as_deref(),
+            Some("external:tcp://db.example.com:5432")
+        );
+        assert_eq!(node("mlflow").cloud, None);
+        // Its consumers still use it, and nothing is rendered for it.
+        assert!(
+            result
+                .graph
+                .edges
+                .iter()
+                .any(|e| e.endpoints() == ("mlflow", "postgres"))
+        );
+        assert!(
+            !result
+                .files
+                .iter()
+                .any(|f| f.path.starts_with("modules/postgres/"))
+        );
+    }
+
+    #[test]
     fn invalid_selection_surfaces_a_plan_error() {
         // An unknown module id cannot be resolved against the catalog, so planning fails — the
         // error path the JS wrapper turns into a rejected promise / inline error.

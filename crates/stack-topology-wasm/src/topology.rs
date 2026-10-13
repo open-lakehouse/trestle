@@ -51,8 +51,8 @@ pub enum NodeKind {
     Gateway,
     /// A component the stack runs.
     Component,
-    /// A component the plan relies on but does not run in compose (host-bound or in-process),
-    /// e.g. an external identity provider.
+    /// A component the plan relies on but does not run on the deploy target: host-bound,
+    /// in-process, or provided by an external cloud (see [`GraphNodeDto::cloud`]).
     External,
 }
 
@@ -72,8 +72,14 @@ pub struct GraphNodeDto {
     /// The function the component fills (its primary service's role, e.g. `"object_store"`,
     /// `"auth"`). Drives the node's icon, accent and headline.
     pub role: Option<String>,
-    /// Where the component runs (`in_process` / `host` / `container:<service>`).
+    /// Where the component runs (`in_process` / `host` / `container:<service>` /
+    /// `external:<origin>`).
     pub placement: Option<String>,
+    /// For a resource provided by an external cloud environment (see
+    /// [`Selection::external`](olai_stack_topology::Selection::external)): the environment's
+    /// label (e.g. `"aws"`), or `""` when it is unnamed. The UI groups these nodes by it. `None`
+    /// for everything the stack runs.
+    pub cloud: Option<String>,
     /// For the gateway: what it exposes, one surface per listener — the platform surface
     /// first, then each service surface.
     pub surfaces: Vec<SurfaceDto>,
@@ -566,6 +572,10 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             category: m.category().map(str::to_string),
             role: Some(svc.role.as_str().to_string()),
             placement: Some(placement_str(&svc.placement)),
+            cloud: plan
+                .external
+                .get(m.id())
+                .map(|e| e.cloud.clone().unwrap_or_default()),
             offers: offers_of(id),
             surfaces: if kind == NodeKind::Gateway {
                 surfaces.clone()
@@ -590,6 +600,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     category: None,
                     role: None,
                     placement: None,
+                    cloud: None,
                     offers: Vec::new(),
                     surfaces: Vec::new(),
                     provisions: Vec::new(),

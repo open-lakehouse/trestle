@@ -50,7 +50,44 @@ export interface Selection {
   knob_overrides: Record<string, Record<string, string>>;
   /** Environment-level resources no module consumes (extra databases, buckets). */
   extra_resources?: ExtraResource[];
+  /** Providers the environment uses but does not run (a managed cloud database
+   *  or object store), by module id. */
+  external?: Record<string, ExternalResource>;
 }
+
+/** A provider marked external (mirrors the Rust `ExternalResource`). */
+export interface ExternalResource {
+  /** The cloud environment it lives in (e.g. "aws"); groups nodes on the canvas. */
+  cloud?: string | null;
+  connection: ExternalConnection;
+}
+
+/** How consumers reach an external resource (mirrors `ExternalConnection`).
+ *  Strings may hold `{name}` and `${VAR}` secret references. */
+export type ExternalConnection =
+  | {
+      kind: "relational_db";
+      host: string;
+      port?: number;
+      database?: string;
+      username: string;
+      password: string;
+    }
+  | {
+      kind: "object_store";
+      endpoint: string;
+      uri?: string | null;
+      bucket?: string;
+      credential:
+        | {
+            flavour: "s3";
+            access_key_id: string;
+            secret_access_key: string;
+            region: string;
+            role_arn?: string | null;
+          }
+        | { flavour: "azure_blob"; connection_string: string };
+    };
 
 /** An extra resource to provision (mirrors the Rust `ExtraResource`). */
 export interface ExtraResource {
@@ -62,7 +99,6 @@ export interface ExtraResource {
   provider?: string | null;
 }
 
-/** The selectable catalog (mirrors `CatalogDto`). */
 /** A deploy target an environment can run on (mirrors `TargetDto`). */
 export interface TargetDto {
   /** Stable id (e.g. "compose"), what `Planner.plan` takes. */
@@ -70,6 +106,7 @@ export interface TargetDto {
   display_name: string;
 }
 
+/** The selectable catalog (mirrors `CatalogDto`). */
 export interface CatalogDto {
   modules: ModuleDto[];
   default_selection: Selection;
@@ -140,8 +177,11 @@ export interface GraphNodeDto {
   category?: string | null;
   /** The function it fills (e.g. "object_store", "auth"). */
   role?: string | null;
-  /** "in_process" | "host" | "container:<service>". */
+  /** "in_process" | "host" | "container:<service>" | "external:<origin>". */
   placement?: string | null;
+  /** For a resource provided by an external cloud: its environment's label
+   *  (e.g. "aws"; "" when unnamed). External nodes are grouped by it. */
+  cloud?: string | null;
   /** For a provider: the APIs it offers (e.g. "S3 + STS"). */
   offers: string[];
   /** For the gateway: one surface per listener, platform first. */
