@@ -55,7 +55,7 @@ use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
     ClientValue, ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind, Module, ModuleId,
-    Provides, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
+    Provides, Readiness, ReadyGate, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -64,16 +64,6 @@ use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
 use crate::render::RenderFile;
-
-/// The well-known [`Provides::extras`](crate::Provides::extras) key by which a
-/// resource provider names the compose service a *consumer* should gate its startup
-/// on, and the condition to wait for — `"<service>:<condition>"`, e.g.
-/// `"db:service_healthy"` (Postgres) or `"rustfs-init:service_completed_successfully"`
-/// (RustFS). For each demand, the planner reads the *chosen* provider's value and
-/// resolves it into a typed [`DepGate`](crate::DepGate) it hands the consumer's render via
-/// [`RenderCtx::dependencies`](crate::RenderCtx) — so a consumer never hard-codes which
-/// backend's init it waits for (it follows whichever provider the planner picked).
-pub const DEP_GATE_EXTRA: &str = "dep_gate";
 
 /// The render-env key carrying the stack's root data directory, injected into *every*
 /// module's render env (see [`PlanCtx::data_root`](crate::PlanCtx::data_root)).
@@ -472,9 +462,10 @@ fn postgres() -> Arc<dyn Module> {
         )),
     );
     // A consumer that demands `relational_db` should wait for the `db` service to be healthy.
-    provides
-        .extras
-        .insert(DEP_GATE_EXTRA.into(), "db:service_healthy".into());
+    provides.ready_gate = Some(ReadyGate {
+        service: "db".into(),
+        readiness: Readiness::Healthy,
+    });
     Arc::new(DataModule {
         id: ModuleId::from("postgres"),
         display_name: Some("Postgres".into()),
@@ -573,10 +564,10 @@ fn rustfs() -> Arc<dyn Module> {
     );
     // A consumer that demands `object_store` should wait for the one-shot bucket init to
     // finish (the buckets it needs exist only after `rustfs-init` completes).
-    provides.extras.insert(
-        DEP_GATE_EXTRA.into(),
-        "rustfs-init:service_completed_successfully".into(),
-    );
+    provides.ready_gate = Some(ReadyGate {
+        service: "rustfs-init".into(),
+        readiness: Readiness::CompletedSuccessfully,
+    });
     // Clients get the store's coordinates only — never its root keys. They read and write
     // with temporary credentials Unity Catalog vends for a table or volume.
     provides.client_env.insert(
@@ -704,10 +695,10 @@ fn azurite() -> Arc<dyn Module> {
         }),
     );
     // A consumer that demands `object_store` waits for the one-shot container init to finish.
-    provides.extras.insert(
-        DEP_GATE_EXTRA.into(),
-        "azurite-init:service_completed_successfully".into(),
-    );
+    provides.ready_gate = Some(ReadyGate {
+        service: "azurite-init".into(),
+        readiness: Readiness::CompletedSuccessfully,
+    });
 
     Arc::new(DataModule {
         id: ModuleId::from("azurite"),

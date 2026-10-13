@@ -11,7 +11,7 @@ services:
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
-        condition: {{ dep.condition }}
+        condition: service_{{ dep.readiness }}
 {%- endfor %}
     env_file:
       - path: ./modules/headwaters/.env/headwaters-migrate.env
@@ -29,7 +29,7 @@ services:
         condition: service_completed_successfully
 {%- for dep in dependencies %}
       {{ dep.service }}:
-        condition: {{ dep.condition }}
+        condition: service_{{ dep.readiness }}
 {%- endfor %}
     env_file:
       - path: ./modules/headwaters/.env/headwaters.env

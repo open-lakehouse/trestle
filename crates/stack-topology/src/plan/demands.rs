@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::resolve::{ExtraEdges, ResolvedGraph, resolve, resolve_with};
 use super::{PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
-use crate::catalog::baseline::DEP_GATE_EXTRA;
 use crate::catalog::module::ModuleId;
 use crate::model::connection::Connection;
 use crate::render::InjectedEnv;
@@ -364,29 +363,13 @@ pub(super) fn check_role_exclusivity(
     Ok(())
 }
 
-/// The typed `depends_on` gate a chosen `provider` advertises for its consumers, or `None`
-/// if it declares no startup gate (nothing to wait for).
-///
-/// The provider declares the gate as a single `"<service>:<condition>"`
-/// [`DEP_GATE_EXTRA`] value (e.g. `"db:service_healthy"`,
-/// `"rustfs-init:service_completed_successfully"`); this parses it into a typed
-/// [`DepGate`](crate::catalog::module::DepGate) the planner hands the consumer's render. An
-/// unrecognized or missing condition defaults to
-/// [`ServiceStarted`](crate::DependsCondition::ServiceStarted), the weakest compose gate.
-pub(super) fn provider_dep_gate(
+/// The readiness gate a chosen `provider` advertises for its consumers (its
+/// [`Provides::ready_gate`](crate::Provides::ready_gate)), or `None` if it declares none.
+pub(super) fn provider_ready_gate(
     catalog: &Catalog,
     provider: &ModuleId,
-) -> Option<crate::catalog::module::DepGate> {
-    let module = catalog.get(provider)?;
-    let gate = module.provides().extras.get(DEP_GATE_EXTRA)?;
-    let (service, condition) = match gate.split_once(':') {
-        Some((s, c)) => (s, crate::catalog::module::DependsCondition::parse(c)),
-        None => (gate.as_str(), None),
-    };
-    Some(crate::catalog::module::DepGate {
-        service: service.to_string(),
-        condition: condition.unwrap_or(crate::catalog::module::DependsCondition::ServiceStarted),
-    })
+) -> Option<crate::catalog::module::ReadyGate> {
+    catalog.get(provider)?.provides().ready_gate.clone()
 }
 
 /// The resources to provision, grouped by the *chosen provider* (deduped, in dependency

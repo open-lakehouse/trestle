@@ -6,7 +6,7 @@ services:
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
-        condition: {{ dep.condition }}
+        condition: service_{{ dep.readiness }}
 {%- endfor %}
     env_file:
       - path: ./modules/omnigent/.env/omnigent.env

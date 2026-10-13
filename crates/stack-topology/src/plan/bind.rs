@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use super::demands::{bind_connection, provider_dep_gate};
+use super::demands::{bind_connection, provider_ready_gate};
 use super::route::Routed;
 use super::settle::Settled;
 use super::{GatewayConfig, PlanCtx, PlanError};
@@ -20,7 +20,7 @@ use crate::catalog::baseline::{
     GATEWAY_INTERNAL_HOST_VAR, GATEWAY_INTERNAL_URL_VAR, GATEWAY_URL_VAR,
 };
 use crate::catalog::module::{
-    DepGate, DependsCondition, GatewayTls, ModuleId, PortMapping, RenderCtx, ResolvedKnobs,
+    GatewayTls, ModuleId, PortMapping, Readiness, ReadyGate, RenderCtx, ResolvedKnobs,
 };
 use crate::model::connection::Connection;
 use crate::model::placement::Vantage;
@@ -38,7 +38,7 @@ pub struct ModuleBinding {
     /// provider, its own role's connection resolved for each name it provisions.
     pub connections: BTreeMap<String, Vec<Connection>>,
     /// The readiness gates the module waits on before starting, in demand order.
-    pub dependencies: Vec<DepGate>,
+    pub dependencies: Vec<ReadyGate>,
     /// The resource names this module provisions for its own role (empty for a non-provider).
     pub objects: Vec<String>,
     /// The gateway's `host:container` listener mappings (gateway module only).
@@ -182,14 +182,14 @@ pub(super) fn bind(
         // readiness gates — one per demand whose chosen provider advertises a startup gate —
         // so a template iterates them instead of hard-coding which backend it waits on.
         let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
-        let mut dependencies: Vec<DepGate> = Vec::new();
+        let mut dependencies: Vec<ReadyGate> = Vec::new();
         for (idx, demand) in module.needs().iter().enumerate() {
             let resolved = &chosen[&(module.id().clone(), idx)];
             connections
                 .entry(demand.resource.clone())
                 .or_default()
                 .push(resolved.connection.clone());
-            if let Some(gate) = provider_dep_gate(catalog, &resolved.provider) {
+            if let Some(gate) = provider_ready_gate(catalog, &resolved.provider) {
                 dependencies.push(gate);
             }
         }
@@ -206,9 +206,9 @@ pub(super) fn bind(
                 )
             });
             if trusts {
-                dependencies.push(DepGate {
+                dependencies.push(ReadyGate {
                     service: tls.mint_service.clone(),
-                    condition: DependsCondition::ServiceCompletedSuccessfully,
+                    readiness: Readiness::CompletedSuccessfully,
                 });
             }
         }

@@ -6,7 +6,7 @@ services:
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
-        condition: {{ dep.condition }}
+        condition: service_{{ dep.readiness }}
 {%- endfor %}
     secrets:
       - source: unitycatalog_server_properties
