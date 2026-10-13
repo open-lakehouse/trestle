@@ -23,6 +23,7 @@ fn authenticated(port: u16) -> olai_stack_topology::Plan {
         .plan(
             &sel,
             &PlanCtx {
+                env_name: "demo".into(),
                 gateway_host_port: port,
                 ..PlanCtx::default()
             },
@@ -43,13 +44,100 @@ fn auth_portal_url_follows_the_gateway_port() {
         .iter()
         .find(|f| f.path.ends_with("configuration.yml"))
         .expect("authelia renders its configuration");
-    assert!(
-        config
-            .contents
-            .contains("authelia_url: http://localhost:9090/authelia"),
+    // Authelia only issues sessions for a dotted cookie domain on a secure origin.
+    let doc: serde_yaml::Value = serde_yaml::from_str(&config.contents).unwrap();
+    let cookies = &doc["session"]["cookies"];
+    assert_eq!(cookies[0]["domain"].as_str(), Some("demo.localhost"));
+    assert_eq!(
+        cookies[0]["authelia_url"].as_str(),
+        Some("https://demo.localhost:9090/authelia"),
         "{}",
         config.contents
     );
+    // In-network callers reach the gateway at its dotted alias.
+    assert_eq!(cookies[1]["domain"].as_str(), Some("demo.internal"));
+    assert_eq!(
+        cookies[1]["authelia_url"].as_str(),
+        Some("https://demo.internal/authelia")
+    );
+}
+
+#[test]
+fn auth_serves_the_shared_listener_over_https_and_plain_http() {
+    let p = authenticated(9080);
+    let secure = p
+        .gateway
+        .secure
+        .as_ref()
+        .expect("auth makes the origin secure");
+    assert_eq!(secure.public_host, "demo.localhost");
+    assert_eq!(secure.internal_host, "demo.internal");
+
+    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).envoy).unwrap();
+    let shared = &doc["static_resources"]["listeners"][0];
+    assert_eq!(
+        shared["listener_filters"][0]["name"].as_str(),
+        Some("envoy.filters.listener.tls_inspector")
+    );
+    let chains = shared["filter_chains"].as_sequence().unwrap();
+    assert_eq!(chains.len(), 2);
+    // Host-side callers: TLS with the minted certificate.
+    assert_eq!(
+        chains[0]["filter_chain_match"]["transport_protocol"].as_str(),
+        Some("tls")
+    );
+    let tls = &chains[0]["transport_socket"]["typed_config"]["common_tls_context"];
+    assert_eq!(
+        tls["tls_certificates"][0]["certificate_chain"]["filename"].as_str(),
+        Some("/certs/leaf.pem")
+    );
+    // In-network callers: plain HTTP through the very same filters.
+    assert!(chains[1].get("transport_socket").is_none());
+    assert_eq!(chains[1]["filters"], chains[0]["filters"]);
+
+    // The provider is always told the origin is secure, whichever chain the request came in on.
+    let http_filters = chains[0]["filters"][0]["typed_config"]["http_filters"]
+        .as_sequence()
+        .unwrap();
+    let authz = http_filters
+        .iter()
+        .find(|f| f["name"].as_str() == Some("envoy.filters.http.ext_authz"))
+        .expect("forward-auth filter");
+    let added = &authz["typed_config"]["http_service"]["authorization_request"]["headers_to_add"];
+    assert_eq!(added[0]["key"].as_str(), Some("X-Forwarded-Proto"));
+    assert_eq!(added[0]["value"].as_str(), Some("https"));
+}
+
+#[test]
+fn without_auth_the_shared_listener_stays_plain_http() {
+    let p = baseline_catalog()
+        .plan(
+            &Selection::modules(["envoy", "mlflow"]),
+            &PlanCtx::default(),
+        )
+        .expect("plan should succeed");
+    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).envoy).unwrap();
+    let shared = &doc["static_resources"]["listeners"][0];
+    assert!(shared.get("listener_filters").is_none());
+    assert_eq!(shared["filter_chains"].as_sequence().unwrap().len(), 1);
+}
+
+#[test]
+fn mlflow_accepts_the_secure_gateway_host() {
+    let p = authenticated(9080);
+    let (_, mlflow) = p
+        .renders
+        .iter()
+        .find(|(id, _)| id.as_str() == "mlflow")
+        .expect("mlflow is selected");
+    let doc: serde_yaml::Value = serde_yaml::from_str(&mlflow.fragment).unwrap();
+    let hosts = doc["services"]["mlflow"]["environment"]["MLFLOW_SERVER_ALLOWED_HOSTS"]
+        .as_str()
+        .unwrap();
+    let hosts: Vec<&str> = hosts.split(',').collect();
+    for host in ["demo.localhost", "demo.localhost:*", "demo.internal:10000"] {
+        assert!(hosts.contains(&host), "{host} in {hosts:?}");
+    }
 }
 
 #[test]

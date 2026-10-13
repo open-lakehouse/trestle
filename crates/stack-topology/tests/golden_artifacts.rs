@@ -1682,6 +1682,75 @@ mod auth {
             "envoy gates on authelia health when auth is on:\n{}",
             envoy_frag.fragment
         );
+
+        // Auth serves the shared listener over HTTPS, so the gateway mints a certificate for its
+        // `*.localhost` name, mounts it, and answers in-network callers at its dotted alias.
+        let envoy = &envoy_doc["services"]["envoy"];
+        assert_eq!(
+            envoy["depends_on"]["gateway-certs"]["condition"].as_str(),
+            Some("service_completed_successfully"),
+            "{}",
+            envoy_frag.fragment
+        );
+        assert_eq!(
+            envoy["volumes"][0].as_str(),
+            Some("gateway-certs:/certs:ro"),
+            "{}",
+            envoy_frag.fragment
+        );
+        // The same certificate and aliases also cover rustfs's emulated S3 hostnames.
+        let aliases: Vec<&str> = envoy["networks"]["default"]["aliases"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(aliases.contains(&"lakehouse.internal"), "{aliases:?}");
+        assert!(aliases.contains(&"s3.amazonaws.com"), "{aliases:?}");
+        assert!(!aliases.contains(&"lakehouse.localhost"), "{aliases:?}");
+        let cert_hosts: Vec<&str> =
+            envoy_doc["services"]["gateway-certs"]["environment"]["CERT_HOSTS"]
+                .as_str()
+                .unwrap()
+                .split(' ')
+                .collect();
+        assert!(
+            cert_hosts.contains(&"lakehouse.localhost"),
+            "{cert_hosts:?}"
+        );
+        assert!(cert_hosts.contains(&"s3.amazonaws.com"), "{cert_hosts:?}");
+        assert!(
+            !cert_hosts.contains(&"lakehouse.internal"),
+            "{cert_hosts:?}"
+        );
+        assert!(
+            envoy_frag
+                .files
+                .iter()
+                .any(|f| f.alias.as_deref() == Some("gateway_certs_script")
+                    && !f.contents.is_empty()),
+            "the gateway ships its certificate script"
+        );
+    }
+
+    #[test]
+    fn auth_off_serves_the_gateway_without_tls() {
+        // No object store either, so nothing else asks for the gateway's certificate.
+        let p = baseline_catalog()
+            .plan(
+                &Selection::modules(["envoy", "headwaters"]),
+                &PlanCtx::default(),
+            )
+            .unwrap();
+        assert!(p.gateway.secure.is_none());
+        let (_, envoy_frag) = p
+            .renders
+            .iter()
+            .find(|(id, _)| id == &ModuleId::from("envoy"))
+            .unwrap();
+        let envoy_doc: Value = serde_yaml::from_str(&envoy_frag.fragment).unwrap();
+        assert!(envoy_doc["services"].get("gateway-certs").is_none());
+        assert!(envoy_doc["services"]["envoy"].get("volumes").is_none());
     }
 
     #[test]

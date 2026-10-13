@@ -7,8 +7,24 @@ static_resources:
     - name: gateway
       address:
         socket_address: { address: 0.0.0.0, port_value: 10000 }
+      # Under forward-auth the shared listener speaks both HTTPS (host-side callers, on the
+      # `*.localhost` origin the auth provider issues sessions for) and plain HTTP (in-network
+      # callers, on the dotted network alias). The TLS inspector picks the filter chain.
+      listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
       filter_chains:
-        - filters:
+        - filter_chain_match: { transport_protocol: tls }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: /certs/leaf.pem }
+                    private_key: { filename: /certs/leaf-key.pem }
+          filters: &shared_filters
             - name: envoy.filters.network.http_connection_manager
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
@@ -119,7 +135,9 @@ static_resources:
                               - exact: cookie
                               - exact: accept
                           headers_to_add:
-                            - { key: X-Forwarded-Proto, value: "%REQ(:SCHEME)%" }
+                            # Always `https`: the provider only authorizes secure origins, and
+                            # in-network callers reach this listener over plain HTTP.
+                            - { key: X-Forwarded-Proto, value: "https" }
                             - { key: X-Forwarded-Host, value: "%REQ(:AUTHORITY)%" }
                         authorization_response:
                           # Envoy lowercases header names, so match case-insensitively.
@@ -137,6 +155,8 @@ static_resources:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        # Plain HTTP from in-network callers: the same filters, without TLS.
+        - filters: *shared_filters
     - name: dedicated_9100
       address:
         socket_address: { address: 0.0.0.0, port_value: 9100 }

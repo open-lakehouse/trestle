@@ -44,6 +44,8 @@ struct EnvoyCtx<'a> {
     auth: Option<AuthCtx<'a>>,
     /// The TLS listener for emulated public hostnames, when any module declares them.
     tls: Option<TlsCtx<'a>>,
+    /// The shared listener's certificate, when forward-auth serves it over HTTPS.
+    secure: Option<SecureCtx>,
     /// The authorization policy engine's cluster, when a policy module is selected. Checked
     /// after forward-auth on the listener(s) flagged `ext_authz`.
     policy: Option<PolicyCtx<'a>>,
@@ -62,6 +64,13 @@ struct TlsCtx<'a> {
     cert_chain: String,
     private_key: String,
     virtual_hosts: Vec<TlsVhostCtx<'a>>,
+}
+
+/// The certificate the shared listener presents under forward-auth.
+#[derive(Serialize)]
+struct SecureCtx {
+    cert_chain: String,
+    private_key: String,
 }
 
 #[derive(Serialize)]
@@ -210,6 +219,10 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
         }),
         policy: gateway.policy.as_ref().map(|p| PolicyCtx {
             cluster: &p.cluster,
+        }),
+        secure: gateway.secure.as_ref().map(|s| SecureCtx {
+            cert_chain: format!("{}/leaf.pem", s.trust.mount_path),
+            private_key: format!("{}/leaf-key.pem", s.trust.mount_path),
         }),
         tls: gateway.tls.as_ref().map(|t| TlsCtx {
             port: t.port,

@@ -11,7 +11,7 @@ server:
   # login portal, API, and the ext_authz endpoint — under the `/authelia` path. The gateway
   # routes `/authelia` here (ext_authz disabled on that route) so a logged-out browser can reach
   # the login page, and posts authorization checks to `/authelia/api/authz/ext-authz/`. Path-
-  # based (rather than the docs' subdomain) keeps the showcase on a single localhost origin.
+  # based (rather than the docs' subdomain) keeps the showcase on a single gateway origin.
   address: tcp://:9091/authelia
 
 log:
@@ -31,13 +31,20 @@ access_control:
 
 session:
   name: authelia_session
-  # The portal URL Authelia redirects logged-out browsers to, and the cookie domain it issues
-  # sessions for: the planned gateway origin + the `/authelia` portal route. (Cookies are
-  # scoped by host, not port, so the domain is just the host.) Re-render after changing the
-  # gateway port; edit both for a real hostname.
+  # Authelia only authorizes requests for a configured cookie domain, which must be dotted and
+  # served over HTTPS, so the gateway has two names under auth:
   cookies:
-    - domain: localhost
-      authelia_url: http://localhost:9080/authelia
+    # Browsers and host-side clients: the gateway's `*.localhost` origin over TLS, and the
+    # portal route Authelia redirects logged-out browsers to. (Cookies are scoped by host, not
+    # port, so the domain is just the host.) Re-render after changing the gateway port; edit
+    # both for a real hostname.
+    - domain: authenticated.localhost
+      authelia_url: https://authenticated.localhost:9080/authelia
+    # In-network API callers, who reach the gateway over plain HTTP at its dotted network alias
+    # (the gateway reports them as `https`). They send credentials, so no browser ever follows
+    # this portal URL; it only needs to be a valid one.
+    - domain: authenticated.internal
+      authelia_url: https://authenticated.internal/authelia
 
 # Local, on-disk storage (no external database) — persisted via the `/data` volume mount.
 storage:

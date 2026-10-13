@@ -8,8 +8,29 @@ static_resources:
     - name: {{ l.name }}
       address:
         socket_address: { address: 0.0.0.0, port_value: {{ l.internal_port }} }
+{%- if l.ext_authz and secure %}
+      # Under forward-auth the shared listener speaks both HTTPS (host-side callers, on the
+      # `*.localhost` origin the auth provider issues sessions for) and plain HTTP (in-network
+      # callers, on the dotted network alias). The TLS inspector picks the filter chain.
+      listener_filters:
+        - name: envoy.filters.listener.tls_inspector
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+      filter_chains:
+        - filter_chain_match: { transport_protocol: tls }
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain: { filename: {{ secure.cert_chain }} }
+                    private_key: { filename: {{ secure.private_key }} }
+          filters: &shared_filters
+{%- else %}
       filter_chains:
         - filters:
+{%- endif %}
             - name: envoy.filters.network.http_connection_manager
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
@@ -114,7 +135,13 @@ static_resources:
                               - exact: cookie
                               - exact: accept
                           headers_to_add:
+{%- if secure %}
+                            # Always `https`: the provider only authorizes secure origins, and
+                            # in-network callers reach this listener over plain HTTP.
+                            - { key: X-Forwarded-Proto, value: "https" }
+{%- else %}
                             - { key: X-Forwarded-Proto, value: "%REQ(:SCHEME)%" }
+{%- endif %}
                             - { key: X-Forwarded-Host, value: "%REQ(:AUTHORITY)%" }
                         authorization_response:
                           # Envoy lowercases header names, so match case-insensitively.
@@ -147,6 +174,10 @@ static_resources:
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+{%- if l.ext_authz and secure %}
+        # Plain HTTP from in-network callers: the same filters, without TLS.
+        - filters: *shared_filters
+{%- endif %}
 {%- endfor %}
 {%- if tls %}
     # Emulated public hostnames, in-network only: the gateway holds each as a compose network

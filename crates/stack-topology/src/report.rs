@@ -22,12 +22,12 @@ use crate::plan::Plan;
 pub fn layout_report(plan: &Plan) -> String {
     let mut out = String::new();
 
-    // Title: the env name and the stable, host-facing gateway port — the single most useful fact.
+    // Title: the env name and the stable, host-facing gateway origin — the single most useful fact.
     let _ = writeln!(
         out,
-        "# Environment `{}` — gateway http://localhost:{}",
+        "# Environment `{}` — gateway {}",
         plan.head.name,
-        plan.gateway_host_port(),
+        plan.gateway_url(),
     );
 
     // Map a cluster name to a human "service @ host:port", so a route row says what it lands on.

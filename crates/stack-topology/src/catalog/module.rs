@@ -537,21 +537,24 @@ pub struct RenderCtx<'a> {
     /// fragment hard-coding a port list. Empty for every non-gateway module.
     #[serde(default)]
     pub published_ports: Vec<PortMapping>,
-    /// The gateway's TLS emulation of public hostnames, populated only for the gateway
-    /// module and only when some module declares
-    /// [`impersonated_hosts`](Provides::impersonated_hosts). The gateway fragment reads it
-    /// to add the hosts as network aliases and to mint a certificate covering them.
+    /// The gateway's TLS material, populated only for the gateway module and only when some
+    /// module declares [`impersonated_hosts`](Provides::impersonated_hosts) or forward-auth
+    /// serves the shared listener over HTTPS. The gateway fragment reads it to add network
+    /// aliases and to mint a certificate covering its hostnames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<GatewayTls>,
 }
 
-/// What the gateway's render needs to emulate public hostnames over TLS (see
-/// [`RenderCtx::tls`]).
+/// What the gateway's render needs to serve hostnames over TLS (see [`RenderCtx::tls`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayTls {
-    /// Every emulated hostname, sorted and deduplicated: the gateway's network aliases and
-    /// the certificate's subject alternative names.
+    /// The gateway's extra network aliases, sorted and deduplicated: every emulated public
+    /// hostname, plus the secure in-network alias under forward-auth.
     pub hosts: Vec<String>,
+    /// The certificate's subject alternative names, sorted and deduplicated: every emulated
+    /// public hostname, plus the host-side `*.localhost` name under forward-auth.
+    #[serde(default)]
+    pub cert_hosts: Vec<String>,
     /// Where the minted CA material lives and how consumers mount it.
     pub trust: crate::model::connection::TlsTrust,
     /// The compose one-shot service that mints the CA material. The gateway waits for it,

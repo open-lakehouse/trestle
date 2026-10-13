@@ -206,6 +206,63 @@ pub struct GatewayConfig {
     /// When set, the Envoy renderer adds a gRPC `ext_authz` check *after* forward-auth on the
     /// shared listener, so the policy decides on the identity the auth provider asserted.
     pub policy: Option<PolicyConfig>,
+    /// The shared listener's HTTPS origin, present exactly when [`auth`](Self::auth) is.
+    pub secure: Option<SecureOrigin>,
+}
+
+/// The shared listener's origin under forward-auth (see [`GatewayConfig::secure`]).
+///
+/// The auth provider only issues sessions for a secure origin under a dotted cookie domain, so
+/// bare `http://localhost` cannot sign anyone in. With auth on, the host side reaches the shared
+/// listener at `https://<public_host>:<port>` (TLS with the gateway's minted CA), and the
+/// listener keeps accepting plain HTTP from in-network callers, who address it by the dotted
+/// [`internal_host`](Self::internal_host) network alias.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SecureOrigin {
+    /// The host-side hostname, `<env>.localhost`: browsers and most clients resolve every
+    /// `*.localhost` name to the loopback address, so it needs no `/etc/hosts` entry.
+    pub public_host: String,
+    /// The in-network alias, `<env>.internal`. Not a `*.localhost` name, because some clients
+    /// (curl among them) resolve those to loopback without asking DNS.
+    pub internal_host: String,
+    /// Where the CA and the listener's certificate live.
+    pub trust: crate::model::connection::TlsTrust,
+    /// The compose one-shot service that mints the certificate.
+    pub mint_service: String,
+}
+
+impl SecureOrigin {
+    /// The secure origin for an environment named `env_name`.
+    pub(super) fn for_env(env_name: &str) -> Self {
+        let label = dns_label(env_name);
+        SecureOrigin {
+            public_host: format!("{label}.localhost"),
+            internal_host: format!("{label}.internal"),
+            trust: gateway_tls_trust(),
+            mint_service: GATEWAY_CERTS_SERVICE.into(),
+        }
+    }
+}
+
+/// `name` as a DNS label: lowercased, with every character outside `[a-z0-9-]` mapped to `-`,
+/// no leading or trailing `-`, and at most 63 characters. Falls back to `trestle` when nothing
+/// usable remains.
+fn dns_label(name: &str) -> String {
+    let mapped: String = name
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9') => c,
+            _ => '-',
+        })
+        .collect();
+    let mut label = mapped.trim_matches('-').to_string();
+    label.truncate(63);
+    let label = label.trim_end_matches('-');
+    if label.is_empty() {
+        "trestle".into()
+    } else {
+        label.into()
+    }
 }
 
 /// The gateway's authorization-policy wiring (see [`GatewayConfig::policy`]).
@@ -553,4 +610,32 @@ pub(super) fn wire_policy(
     let cluster = ensure_cluster(gateway, service, endpoint)?;
     gateway.policy = Some(PolicyConfig { cluster });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_names_become_dns_labels() {
+        for (name, label) in [
+            ("demo", "demo"),
+            ("My_Stack", "my-stack"),
+            ("-edge-", "edge"),
+            ("___", "trestle"),
+            ("", "trestle"),
+        ] {
+            assert_eq!(dns_label(name), label, "{name:?}");
+        }
+        assert_eq!(dns_label(&"a".repeat(80)).len(), 63);
+        assert_eq!(dns_label(&format!("{}-b", "a".repeat(62))), "a".repeat(62));
+    }
+
+    #[test]
+    fn secure_origin_hosts_follow_the_env_name() {
+        let origin = SecureOrigin::for_env("demo");
+        assert_eq!(origin.public_host, "demo.localhost");
+        assert_eq!(origin.internal_host, "demo.internal");
+        assert_eq!(origin.mint_service, GATEWAY_CERTS_SERVICE);
+    }
 }

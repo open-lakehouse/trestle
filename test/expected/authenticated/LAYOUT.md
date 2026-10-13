@@ -1,4 +1,4 @@
-# Environment `authenticated` — gateway http://localhost:9080
+# Environment `authenticated` — gateway https://authenticated.localhost:9080
 
 ## Gateway routes
 

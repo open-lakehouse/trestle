@@ -14,6 +14,8 @@ land in `scratch/env/<scenario>/` (gitignored).
 | **full-azure** | lakehouse modules on Azurite + jaeger, headwaters | Provider substitution (`object_store=azurite`), tracing, lineage UI |
 
 Gateway URL for every scenario: `http://localhost:9080` (dedicated object-store listener: `:9100`).
+With auth on (**authenticated**, **authorized**) it is `https://<scenario>.localhost:9080` instead,
+signed by the gateway's local CA (`docker compose cp gateway-certs:/certs/ca.pem .`).
 
 ## Manual workflow
 

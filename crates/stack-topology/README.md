@@ -144,6 +144,14 @@ while the gateway authenticates.
   asserted identity reaches upstreams as `Remote-User` / `Remote-Email` / `Remote-Name` /
   `Remote-Groups`. Client-supplied copies are stripped before any check runs. Accounts
   live in `users.yml` beside `compose.yaml`.
+- **HTTPS under auth**: Authelia only issues sessions for a dotted cookie domain on a secure
+  origin, so with auth on the shared listener serves `https://<env>.localhost:<port>` from
+  the host (browsers resolve `*.localhost` to loopback; no `/etc/hosts` entry needed). The
+  certificate comes from the gateway's local CA. Fetch it with
+  `docker compose cp gateway-certs:/certs/ca.pem .` and trust it in your browser, or pass
+  `curl --cacert ca.pem`. In-network callers keep plain HTTP at the gateway's
+  `<env>.internal` network alias. `client/*.env` already points at both. Without auth, the
+  gateway stays on `http://localhost:<port>`.
 - **Authorization**: selecting the `opa` module adds an Open Policy Agent check after
   authentication (Envoy gRPC `ext_authz`, failing closed), and also turns auth on. The
   policy is `policies/authz.rego`, written once and then yours to edit. By default any

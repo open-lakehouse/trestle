@@ -118,11 +118,13 @@ impl<'a> ServiceRef<'a> {
     /// [`address_direct`](Self::address_direct).
     pub fn address(&self, from: Vantage, endpoint_id: &str) -> Result<Url, AddressError> {
         let endpoint = lookup(self.spec, endpoint_id)?;
-        let target = match self.routes.get(&self.spec.name, endpoint_id) {
-            Some(route) => gateway_target(from, route, endpoint, self.facts),
-            None => direct_target(from, self.spec, endpoint)?,
-        };
-        finish(endpoint.scheme, target)
+        match self.routes.get(&self.spec.name, endpoint_id) {
+            Some(route) => {
+                let (scheme, target) = gateway_target(from, route, endpoint, self.facts);
+                finish(scheme, target)
+            }
+            None => finish(endpoint.scheme, direct_target(from, self.spec, endpoint)?),
+        }
     }
 
     /// Resolve the **direct** URL a caller at `from` should use to reach `endpoint_id`,
@@ -152,15 +154,13 @@ fn finish(scheme: Scheme, target: Target) -> Result<Url, AddressError> {
         .ok_or_else(|| AddressError::InvalidUrl(format!("{host}:{port}{path}")))
 }
 
-/// The gateway's shared-listener origin (`http://host:port`) as reached from `from`: the
-/// gateway's compose service on its internal port from a container, `localhost` on the
-/// host-published port otherwise.
+/// The gateway's shared-listener origin (`scheme://host:port`) as reached from `from`: the
+/// gateway's compose service (or its secure in-network alias) on its internal port from a
+/// container, `localhost` (or the secure `*.localhost` host, over HTTPS) on the host-published
+/// port otherwise. See [`GatewayFacts::shared_listener`].
 pub(crate) fn gateway_origin(from: Vantage, facts: &GatewayFacts) -> Result<Url, AddressError> {
-    let (host, port) = match from {
-        Vantage::Container => (facts.service.clone(), facts.internal_port),
-        Vantage::Host | Vantage::InProcess => ("localhost".to_string(), facts.host_port),
-    };
-    finish(Scheme::Http, (host, port, String::new()))
+    let (scheme, host, port) = facts.shared_listener(from);
+    finish(scheme, (host, port, String::new()))
 }
 
 /// The (host, port, path) for a direct reach — straight to the callee.
@@ -213,28 +213,34 @@ fn direct_target(
     Ok((host, port, endpoint.path.clone()))
 }
 
-/// The (host, port, path) for a gateway reach — the gateway listener's address
+/// The scheme and (host, port, path) for a gateway reach — the gateway listener's address
 /// plus the coordinator-assigned prefix. The callee's own placement is irrelevant
-/// here; what matters is the assigned route's [`Listener`].
+/// here; what matters is the assigned route's [`Listener`]. The endpoint's scheme is kept,
+/// except that an HTTP endpoint on a shared listener that serves HTTPS is reached over HTTPS.
 fn gateway_target(
     from: Vantage,
     route: &AssignedRoute,
     endpoint: &Endpoint,
     facts: &GatewayFacts,
-) -> Target {
-    let (host, port) = match (from, &route.listener) {
-        // From inside the compose network, the gateway is just another container.
-        // The shared listener is on its internal port; a dedicated listener listens
-        // on its declared port (we control both ends, so no remap).
-        (Vantage::Container, Listener::Shared) => (facts.service.clone(), facts.internal_port),
-        (Vantage::Container, Listener::Dedicated { port }) => (facts.service.clone(), *port),
-        // From the host or in-process, the gateway is reached on localhost: the
-        // shared listener at its host-published port, a dedicated one at its port.
-        (Vantage::Host | Vantage::InProcess, Listener::Shared) => {
-            ("localhost".to_string(), facts.host_port)
+) -> (Scheme, Target) {
+    let (scheme, host, port) = match (from, &route.listener) {
+        // The shared listener's origin depends on the vantage and on whether it serves HTTPS.
+        (_, Listener::Shared) => {
+            let (listener_scheme, host, port) = facts.shared_listener(from);
+            let scheme = match (endpoint.scheme, listener_scheme) {
+                (Scheme::Http, Scheme::Https) => Scheme::Https,
+                (scheme, _) => scheme,
+            };
+            (scheme, host, port)
         }
+        // From inside the compose network, the gateway is just another container: a
+        // dedicated listener listens on its declared port (we control both ends, so no remap).
+        (Vantage::Container, Listener::Dedicated { port }) => {
+            (endpoint.scheme, facts.service.clone(), *port)
+        }
+        // From the host or in-process, a dedicated listener is reached on localhost.
         (Vantage::Host | Vantage::InProcess, Listener::Dedicated { port }) => {
-            ("localhost".to_string(), *port)
+            (endpoint.scheme, "localhost".to_string(), *port)
         }
     };
 
@@ -246,7 +252,7 @@ fn gateway_target(
     // in `/` meeting a path beginning with `/`) — the `url` crate does not
     // normalize interior `//`, so we do it here to keep the address well-formed.
     let path = join_path(&route.prefix, &endpoint.path);
-    (host, port, path)
+    (scheme, (host, port, path))
 }
 
 /// Join a route prefix and an endpoint path, collapsing a single `/` at the seam
@@ -295,6 +301,7 @@ mod tests {
             service: "envoy".into(),
             internal_port: 10000,
             host_port: 9080,
+            secure: None,
         }
     }
 

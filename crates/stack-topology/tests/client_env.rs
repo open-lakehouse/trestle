@@ -64,6 +64,41 @@ fn host_addresses_follow_the_gateway_port_and_routes() {
 }
 
 #[test]
+fn auth_moves_gateway_addresses_to_the_secure_origin() {
+    let mut selection = full_stack();
+    selection.knob_overrides.insert(
+        "envoy".into(),
+        [("auth".to_string(), "true".to_string())].into(),
+    );
+    let p = plan(
+        selection,
+        PlanCtx {
+            env_name: "demo".into(),
+            ..PlanCtx::default()
+        },
+    );
+    let host = p.client_env(Vantage::Host);
+    let get = |k: &str| host.get(k).unwrap_or_else(|| panic!("missing {k}"));
+    assert_eq!(get("DATABRICKS_HOST"), "https://demo.localhost:9080");
+    assert_eq!(get("MLFLOW_TRACKING_URI"), "https://demo.localhost:9080");
+    assert_eq!(
+        get("MLFLOW_AI_GATEWAY_URL"),
+        "https://demo.localhost:9080/ai-gateway"
+    );
+    // Object stores keep their own, ungated listeners.
+    assert!(get("AWS_ENDPOINT_URL_S3").starts_with("http://localhost:"));
+
+    let container = p.client_env(Vantage::Container);
+    let get = |k: &str| container.get(k).unwrap_or_else(|| panic!("missing {k}"));
+    assert_eq!(get("DATABRICKS_HOST"), "http://demo.internal:10000");
+    assert_eq!(
+        get("MLFLOW_AI_GATEWAY_URL"),
+        "http://demo.internal:10000/ai-gateway"
+    );
+    assert!(get("AWS_ENDPOINT_URL_S3").starts_with("http://envoy:"));
+}
+
+#[test]
 fn container_addresses_stay_in_network() {
     let p = plan(full_stack(), PlanCtx::default());
     let env = p.client_env(Vantage::Container);

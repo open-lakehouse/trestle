@@ -58,12 +58,12 @@ pub mod routing;
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
-    CLIENT_ENV_KEYS_VAR, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, GATEWAY_AUTH_VAR,
-    GATEWAY_INTERNAL_URL_VAR, GATEWAY_URL_VAR,
+    CLIENT_ENV_KEYS_VAR, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, GATEWAY_AUTH_VAR, GATEWAY_HOST_VAR,
+    GATEWAY_INTERNAL_HOST_VAR, GATEWAY_INTERNAL_URL_VAR, GATEWAY_URL_VAR,
 };
 use crate::catalog::module::{ExtraResource, ModuleId, StackFacts};
 use crate::model::connection::Connection;
-use crate::model::endpoint::RouteIntent;
+use crate::model::endpoint::{RouteIntent, Scheme};
 use crate::model::placement::Vantage;
 use crate::model::role::{Role, ServiceSpec};
 use crate::plan::resolve::{ResolveError, ResolvedGraph};
@@ -77,8 +77,8 @@ use demands::{
 };
 pub use gateway::{
     AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
-    GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, PolicyConfig, TlsListenerConfig,
-    TlsVirtualHost,
+    GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, PolicyConfig, SecureOrigin,
+    TlsListenerConfig, TlsVirtualHost,
 };
 use gateway::{
     allocate_dedicated_ports, api_rewrite, claim, ensure_cluster, gateway_auth_enabled,
@@ -538,6 +538,35 @@ pub(crate) struct GatewayFacts {
     pub internal_port: u16,
     /// The gateway's host-published port (e.g. `9080`).
     pub host_port: u16,
+    /// The shared listener's HTTPS origin when forward-auth is on: host-side callers reach it
+    /// at `https://<public_host>`, in-network ones at `http://<internal_host>`. `None` keeps
+    /// `http://localhost` and the gateway's service name.
+    pub secure: Option<SecureOrigin>,
+}
+
+impl GatewayFacts {
+    /// The shared listener's (scheme, host, port) as reached from `from`.
+    pub(crate) fn shared_listener(&self, from: Vantage) -> (Scheme, String, u16) {
+        match (from, &self.secure) {
+            (Vantage::Container, None) => (Scheme::Http, self.service.clone(), self.internal_port),
+            (Vantage::Container, Some(s)) => {
+                (Scheme::Http, s.internal_host.clone(), self.internal_port)
+            }
+            (Vantage::Host | Vantage::InProcess, None) => {
+                (Scheme::Http, "localhost".into(), self.host_port)
+            }
+            (Vantage::Host | Vantage::InProcess, Some(s)) => {
+                (Scheme::Https, s.public_host.clone(), self.host_port)
+            }
+        }
+    }
+
+    /// The shared listener's origin (`scheme://host:port`, no trailing slash) as reached from
+    /// `from`, with its bare host.
+    pub(crate) fn origin(&self, from: Vantage) -> (String, String) {
+        let (scheme, host, port) = self.shared_listener(from);
+        (format!("{}://{host}:{port}", scheme.url_scheme()), host)
+    }
 }
 
 /// A fully-assigned environment: the resolved graph, the routing plan, the rendered
@@ -669,10 +698,17 @@ impl Plan {
     }
 
     /// The gateway's host-published port — what a host-side caller reaches the shared listener
-    /// at (e.g. for printing `http://localhost:<port>`). The full URL to a specific service is
-    /// [`service`](Self::service) → [`ServiceRef::address`].
+    /// at. The full origin is [`gateway_url`](Self::gateway_url); the URL to a specific service
+    /// is [`service`](Self::service) → [`ServiceRef::address`].
     pub fn gateway_host_port(&self) -> u16 {
         self.gateway_facts.host_port
+    }
+
+    /// The shared listener's origin as a host-side caller reaches it: `http://localhost:<port>`,
+    /// or `https://<env>.localhost:<port>` when forward-auth is on (see
+    /// [`GatewayConfig::secure`]).
+    pub fn gateway_url(&self) -> String {
+        self.gateway_facts.origin(Vantage::Host).0
     }
 }
 
@@ -686,6 +722,32 @@ impl Catalog {
     pub fn plan(&self, selection: &Selection, ctx: &PlanCtx) -> Result<Plan, PlanError> {
         plan_env(selection, self, ctx)
     }
+}
+
+/// The gateway module's [`GatewayTls`](crate::GatewayTls) render input: the emulated public
+/// hostnames (as aliases and certificate names) and, under forward-auth, the secure origin's
+/// in-network alias and host-side name. Both draw on the same minted CA, so they share one
+/// mint service and volume. `None` when the gateway serves no TLS at all.
+fn gateway_render_tls(gateway: &GatewayConfig) -> Option<crate::catalog::module::GatewayTls> {
+    let (trust, mint_service) = match (&gateway.tls, &gateway.secure) {
+        (Some(t), _) => (&t.trust, &t.mint_service),
+        (None, Some(s)) => (&s.trust, &s.mint_service),
+        (None, None) => return None,
+    };
+    let emulated = gateway.tls.iter().flat_map(|t| t.hosts.iter().cloned());
+    let hosts: BTreeSet<String> = emulated
+        .clone()
+        .chain(gateway.secure.iter().map(|s| s.internal_host.clone()))
+        .collect();
+    let cert_hosts: BTreeSet<String> = emulated
+        .chain(gateway.secure.iter().map(|s| s.public_host.clone()))
+        .collect();
+    Some(crate::catalog::module::GatewayTls {
+        hosts: hosts.into_iter().collect(),
+        cert_hosts: cert_hosts.into_iter().collect(),
+        trust: trust.clone(),
+        mint_service: mint_service.clone(),
+    })
 }
 
 /// The planner implementation behind [`Catalog::plan`]. Kept as a free function (rather than
@@ -828,6 +890,10 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // Emulated public hostnames: give the gateway a TLS listener for them, and mark every
     // connection those providers vend with the trust a consumer needs for the local CA.
     gateway.tls = plan_impersonation(&graph, &provisioned_by, &mut gateway)?;
+    // Forward-auth needs a secure, dotted origin (see `SecureOrigin`).
+    if stack_facts.gateway_auth {
+        gateway.secure = Some(SecureOrigin::for_env(&ctx.env_name));
+    }
     if let Some(tls) = &gateway.tls {
         let emulating: BTreeSet<&ModuleId> = graph
             .nodes
@@ -857,14 +923,12 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         service: ctx.gateway_service.clone(),
         internal_port: ctx.gateway_internal_port,
         host_port: ctx.gateway_host_port,
+        secure: gateway.secure.clone(),
     };
     // What a host-side browser reaches the shared listener at (see `GATEWAY_URL_VAR`), and
     // what an in-network caller reaches it at (see `GATEWAY_INTERNAL_URL_VAR`).
-    let gateway_url = format!("http://localhost:{}", ctx.gateway_host_port);
-    let gateway_internal_url = format!(
-        "http://{}:{}",
-        ctx.gateway_service, ctx.gateway_internal_port
-    );
+    let (gateway_url, gateway_host) = gateway_facts.origin(Vantage::Host);
+    let (gateway_internal_url, gateway_internal_host) = gateway_facts.origin(Vantage::Container);
     // Every client-environment key the stack defines (see `CLIENT_ENV_KEYS_VAR`).
     let client_env_keys = graph
         .nodes
@@ -882,7 +946,9 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         // whole stack's persistence relocates via the one `PlanCtx::data_root` knob.
         module_env.set(DATA_ROOT_VAR, &ctx.data_root);
         module_env.set(GATEWAY_URL_VAR, &gateway_url);
+        module_env.set(GATEWAY_HOST_VAR, &gateway_host);
         module_env.set(GATEWAY_INTERNAL_URL_VAR, &gateway_internal_url);
+        module_env.set(GATEWAY_INTERNAL_HOST_VAR, &gateway_internal_host);
         module_env.set(
             GATEWAY_AUTH_VAR,
             if stack_facts.gateway_auth {
@@ -1146,13 +1212,10 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         let is_gateway = services_of[module.id()]
             .iter()
             .any(|s| s.role == Role::gateway());
-        let tls = match &gateway.tls {
-            Some(t) if is_gateway => Some(crate::catalog::module::GatewayTls {
-                hosts: t.hosts.clone(),
-                trust: t.trust.clone(),
-                mint_service: t.mint_service.clone(),
-            }),
-            _ => None,
+        let tls = if is_gateway {
+            gateway_render_tls(&gateway)
+        } else {
+            None
         };
         let published_ports = if is_gateway {
             gateway
