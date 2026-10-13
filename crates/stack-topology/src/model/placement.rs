@@ -7,6 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The DNS name a container uses to reach the host machine — the one place the address
+/// resolver and the gateway's cluster wiring cross the container → host boundary.
+///
+/// Docker's convention; the only deploy target today is Docker Compose.
+pub(crate) const HOST_GATEWAY_DNS: &str = "host.docker.internal";
+
 /// Where a service physically runs. This is what a callee carries; the resolver
 /// reads it (against the caller's [`Vantage`]) to decide the host part of an
 /// address.
@@ -19,13 +25,14 @@ pub enum Placement {
     /// A host-bound process outside any container — a sidecar or an
     /// app-level shared service (e.g. a catalog server bound to `127.0.0.1`, a
     /// shared telemetry collector). Reached on `127.0.0.1`/`localhost` from the
-    /// host and across the container boundary via `host.docker.internal`.
+    /// host and across the container boundary via the host-gateway DNS name
+    /// (`host.docker.internal`).
     Host,
-    /// A container on the compose network, addressed by its compose service name
-    /// (its DNS name on that network).
+    /// A container on the stack's network, addressed by its service name — its DNS name on
+    /// that network, whichever deploy target runs it (a Compose service, a Kubernetes
+    /// `Service`, …).
     Container {
-        /// The compose service / DNS name (e.g. `"db"`, `"mlflow"`,
-        /// `"marquez-api"`).
+        /// The service / DNS name (e.g. `"db"`, `"mlflow"`, `"marquez-api"`).
         service: String,
     },
 }
@@ -42,6 +49,6 @@ pub enum Vantage {
     /// `localhost` to the host and reaches containers only via the gateway's
     /// published port.
     Host,
-    /// Calling from inside a container on the compose network.
+    /// Calling from inside a container on the stack's network.
     Container,
 }

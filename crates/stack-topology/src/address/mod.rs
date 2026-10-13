@@ -33,13 +33,10 @@
 use url::Url;
 
 use crate::model::endpoint::{Endpoint, Scheme};
-use crate::model::placement::{Placement, Vantage};
+use crate::model::placement::{HOST_GATEWAY_DNS, Placement, Vantage};
 use crate::model::role::ServiceSpec;
 use crate::plan::GatewayFacts;
 use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};
-
-/// The conventional DNS hostname a container uses to reach the host machine.
-const HOST_GATEWAY_DNS: &str = "host.docker.internal";
 
 /// What can go wrong resolving an address.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -170,8 +167,8 @@ fn direct_target(
     endpoint: &Endpoint,
 ) -> Result<Target, AddressError> {
     let host = match (from, &to.placement) {
-        // Inside the compose network, a container is reached by its DNS name on
-        // its internal port.
+        // Inside the stack's network, a container is reached by its DNS name on its
+        // internal port.
         (Vantage::Container, Placement::Container { service }) => service.clone(),
         // Crossing the boundary toward the host (a host process or the in-process
         // host itself) — the container reaches it via the host-gateway DNS name on

@@ -9,7 +9,7 @@ use super::{AppUpstream, PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
 use crate::catalog::module::ModuleId;
 use crate::model::endpoint::{Endpoint, Rewrite, RouteIntent, RouteOptions, Scheme};
-use crate::model::placement::Placement;
+use crate::model::placement::{HOST_GATEWAY_DNS, Placement};
 use crate::model::role::{Role, ServiceSpec};
 
 /// An upstream cluster the gateway forwards to — one per surface service.
@@ -375,7 +375,7 @@ pub(super) fn ensure_cluster(
         Placement::Container { service } => service.clone(),
         // Host/in-process services are reached via the host gateway DNS from a
         // container; the gateway cluster targets that.
-        _ => "host.docker.internal".to_string(),
+        _ => HOST_GATEWAY_DNS.to_string(),
     };
     let port = endpoint.internal_port;
     let name = match gateway.clusters.iter().find(|c| c.name == service.name) {
