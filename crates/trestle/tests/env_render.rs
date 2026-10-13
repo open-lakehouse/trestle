@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use olai_stack_topology::{EnvManifest, ModuleId, PlanCtx, Selection, baseline_catalog};
+use olai_stack_topology::{EnvManifest, ModuleId, PlanCtx, Secrets, Selection, baseline_catalog};
 use walkdir::WalkDir;
 
 /// Plan + materialize + persist an env.toml to `dir` — the same effect as
@@ -76,7 +76,7 @@ fn collect_files(root: &Path) -> BTreeSet<String> {
 
 /// Sensitive runtime files are generated and tested in temporary output, never committed.
 fn is_sensitive_path(path: &str) -> bool {
-    path == ".env" || path.contains("/.env/") || path.contains("/secrets/")
+    path == ".env" || path == "secrets.env" || path.contains("/.env/") || path.contains("/secrets/")
 }
 
 /// Byte-compare every non-sensitive file under `got` against `want`.
@@ -109,9 +109,22 @@ fn load_scenario(name: &str) -> EnvManifest {
     EnvManifest::read_from(&path).unwrap_or_else(|e| panic!("load scenario {name}: {e}"))
 }
 
+/// A scenario's placeholder secrets (`test/scenarios/<name>/secrets.env`), as `trestle env
+/// render` would load them, when it has any.
+fn scenario_secrets(name: &str) -> Option<Secrets> {
+    let text = fs::read_to_string(scenarios_dir().join(name).join("secrets.env")).ok()?;
+    Some(
+        text.lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .filter_map(|l| l.split_once('='))
+            .collect(),
+    )
+}
+
 /// Render a scenario manifest into a tempdir.
 fn render_scenario(name: &str, dir: &Path) {
-    let manifest = load_scenario(name);
+    let mut manifest = load_scenario(name);
+    manifest.context.secrets = scenario_secrets(name);
     fs::create_dir_all(dir).expect("create temp dir");
     fs::copy(
         scenarios_dir().join(name).join("env.toml"),

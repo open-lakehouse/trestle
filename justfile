@@ -111,6 +111,9 @@ env-render SCENARIO:
   [[ -f "$src" ]] || { echo "unknown scenario: {{ SCENARIO }} (expected $src)" >&2; exit 1; }
   mkdir -p "$dst"
   cp "$src" "$dst/env.toml"
+  # Scenario secrets for external resources (placeholders), when the scenario has any.
+  secrets="test/scenarios/{{ SCENARIO }}/secrets.env"
+  if [[ -f "$secrets" ]]; then cp "$secrets" "$dst/secrets.env"; fi
   cargo run --bin trestle -- env render "$dst" --force
 
 # Validate rendered compose syntax for a scenario.
@@ -162,6 +165,7 @@ env-golden-refresh:
       --exclude='.env' \
       --exclude='.env/' \
       --exclude='secrets/' \
+      --exclude='secrets.env' \
       "scratch/env/$name/" "test/expected/$name/"
   done
   echo ">> golden fixtures refreshed under test/expected/"

@@ -1,0 +1,23 @@
+# Top-level compose entrypoint. Every backing service is pulled in via `include:`.
+# The file list is owned by the planner, not edited by hand.
+name: hybrid
+
+configs:
+  envoy_config:
+    file: ./modules/envoy/envoy.yaml
+  mlflow_seed_gateway:
+    file: ./modules/mlflow/seed_gateway.py
+
+secrets:
+  unitycatalog_hibernate_properties:
+    file: ./modules/unity-catalog/secrets/hibernate.properties
+  unitycatalog_server_properties:
+    file: ./modules/unity-catalog/secrets/server.properties
+
+include:
+  - path: ./modules/envoy/compose.yaml
+    project_directory: .
+  - path: ./modules/unity-catalog/compose.yaml
+    project_directory: .
+  - path: ./modules/mlflow/compose.yaml
+    project_directory: .
