@@ -254,9 +254,16 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
     let _ = writeln!(out, "  cd {dir} && docker compose up -d --wait");
     let _ = writeln!(
         out,
-        "  Gateway:   http://localhost:{}  (routes: LAYOUT.md)",
-        plan.gateway_host_port()
+        "  Gateway:   {}  (routes: LAYOUT.md)",
+        plan.gateway_url()
     );
+    if let Some(secure) = &plan.gateway.secure {
+        let _ = writeln!(
+            out,
+            "  Trust:     docker compose cp {}:{} .  (the gateway's local CA, for your browser or `curl --cacert`)",
+            secure.mint_service, secure.trust.ca_pem
+        );
+    }
     if plan.gateway.auth.is_some() {
         let _ = writeln!(
             out,
@@ -623,7 +630,7 @@ mod tests {
         assert!(text.contains("client/host.env"), "{text}");
         assert!(text.contains("trestle env render lh"), "{text}");
         assert!(
-            !text.contains("Sign in") && !text.contains("Policy"),
+            !text.contains("Sign in") && !text.contains("Policy") && !text.contains("Trust"),
             "{text}"
         );
 
@@ -634,6 +641,11 @@ mod tests {
             )
             .unwrap();
         let text = next_steps(&guarded, std::path::Path::new("lh"));
+        assert!(text.contains("https://lakehouse.localhost:9080"), "{text}");
+        assert!(
+            text.contains("docker compose cp gateway-certs:/certs/ca.pem ."),
+            "{text}"
+        );
         assert!(text.contains("users.yml"), "{text}");
         assert!(text.contains("policies/authz.rego"), "{text}");
     }
