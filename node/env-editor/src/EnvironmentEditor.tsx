@@ -343,6 +343,8 @@ function EditorBody({
                     env.addResource(provider, kind, name)
                   }
                   onRemoveResource={env.removeResource}
+                  external={selection.external?.[inspected]}
+                  onSetExternal={env.setExternal}
                   onSetKnob={env.setKnob}
                   onRemove={removeComponent}
                   onSwap={swapComponent}

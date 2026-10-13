@@ -31,12 +31,14 @@ import { KnobField } from "../knobs/KnobField";
 import { describeOrigin, type Origin } from "../state/origin";
 import type {
   CatalogDto,
+  ExternalResource,
   ModuleDto,
   PlanResult,
   ProvisionedDto,
   ResourceNounDto,
   TopologyEdgeDto,
 } from "../types";
+import { canRunExternally, ExternalSection } from "./ExternalSection";
 
 export interface InspectorPanelProps {
   /** The inspected component's module id. */
@@ -55,6 +57,13 @@ export interface InspectorPanelProps {
   onAddResource: (moduleId: string, kind: string, name: string) => void;
   /** Drop an extra resource. */
   onRemoveResource: (kind: string, name: string) => void;
+  /** How this provider is provided by an external cloud, if it is. */
+  external: ExternalResource | undefined;
+  /** Mark this provider external (or run it in the stack: `undefined`). */
+  onSetExternal: (
+    moduleId: string,
+    external: ExternalResource | undefined,
+  ) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
   onRemove: (moduleId: string) => void;
   onSwap: (fromId: string, toId: string) => void;
@@ -82,6 +91,8 @@ export function InspectorPanel({
   resourcesSeq,
   onAddResource,
   onRemoveResource,
+  external,
+  onSetExternal,
   onSetKnob,
   onRemove,
   onSwap,
@@ -151,6 +162,14 @@ export function InspectorPanel({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {summary && (
           <p className="px-4 pt-3 text-xs text-muted-foreground">{summary}</p>
+        )}
+
+        {module && canRunExternally(module) && (
+          <ExternalSection
+            module={module}
+            external={external}
+            onChange={(next) => onSetExternal(moduleId, next)}
+          />
         )}
 
         <Section ref={settingsRef} title="Settings">

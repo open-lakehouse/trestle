@@ -35,6 +35,7 @@ import {
 } from "./canvasActions";
 import { ElkEdge } from "./edges/ElkEdge";
 import { ClientsNode } from "./nodes/ClientsNode";
+import { CloudGroupNode } from "./nodes/CloudGroupNode";
 import { ComponentNode } from "./nodes/ComponentNode";
 import { GatewayNode } from "./nodes/GatewayNode";
 import { roleStyle } from "./roleTheme";
@@ -42,6 +43,7 @@ import { type TopologyEdgeData, useTopologyLayout } from "./useTopologyLayout";
 
 const nodeTypes: NodeTypes = {
   clients: ClientsNode,
+  cloud: CloudGroupNode,
   component: ComponentNode,
   gateway: GatewayNode,
 };
@@ -192,7 +194,7 @@ function MarkitectureFlow({
   children,
 }: MarkitectureCanvasProps) {
   const { nodes, edges } = useTopologyLayout(graph);
-  const { fitView, getNode, getZoom, setCenter } = useReactFlow();
+  const { fitView, getInternalNode, getZoom, setCenter } = useReactFlow();
   const [hoveredId, setHoveredId] = useState<string | undefined>();
   const leaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fresh = useFreshNodes(nodes);
@@ -294,15 +296,18 @@ function MarkitectureFlow({
   const focusId = focus?.id;
   useEffect(() => {
     if (focusSeq === undefined || !focusId) return;
-    const node = getNode(focusId);
+    const node = getInternalNode(focusId);
     if (!node) return;
     const width = node.measured?.width ?? 0;
     const height = node.measured?.height ?? 0;
-    void setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+    // Absolute: a node inside a group (an external cloud) is positioned
+    // relative to it.
+    const { x, y } = node.internals.positionAbsolute;
+    void setCenter(x + width / 2, y + height / 2, {
       zoom: getZoom(),
       duration: 300,
     });
-  }, [focusSeq, focusId, getNode, getZoom, setCenter]);
+  }, [focusSeq, focusId, getInternalNode, getZoom, setCenter]);
 
   const handleNodeClick = useCallback(
     (_: unknown, node: Node) => {

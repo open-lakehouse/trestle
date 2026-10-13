@@ -5,7 +5,12 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { usePlanner } from "../planner";
-import type { CatalogDto, PlanResult, Selection } from "../types";
+import type {
+  CatalogDto,
+  ExternalResource,
+  PlanResult,
+  Selection,
+} from "../types";
 
 const EMPTY_SELECTION: Selection = {
   modules: [],
@@ -41,6 +46,12 @@ export interface EnvironmentState {
   addResource: (provider: string, resource: string, name: string) => void;
   /** Drop an extra resource from the selection. */
   removeResource: (resource: string, name: string) => void;
+  /** Mark provider `moduleId` as provided by an external cloud (`external`),
+   *  or run it in the stack again (`undefined`). */
+  setExternal: (
+    moduleId: string,
+    external: ExternalResource | undefined,
+  ) => void;
   /** Replace the selection with the catalog's default. */
   applyDefault: () => void;
   undo: () => void;
@@ -188,6 +199,7 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
               ...s,
               modules: s.modules.filter((m) => m !== moduleId),
               knob_overrides: withoutKey(s.knob_overrides, moduleId),
+              external: withoutKey(s.external ?? {}, moduleId),
             }
           : s,
     });
@@ -200,6 +212,7 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
         ...s,
         modules: [...s.modules.filter((m) => m !== fromId && m !== toId), toId],
         knob_overrides: withoutKey(s.knob_overrides, fromId),
+        external: withoutKey(s.external ?? {}, fromId),
       }),
     });
   }, []);
@@ -275,6 +288,33 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
     });
   }, []);
 
+  const setExternal = useCallback(
+    (moduleId: string, external: ExternalResource | undefined) => {
+      dispatch({
+        type: "edit",
+        // Typing into one field of the form is one undo step; toggling is its own.
+        key: external ? `external:${moduleId}` : undefined,
+        next: (s) => {
+          const current = s.external ?? {};
+          if (!external) {
+            return moduleId in current
+              ? { ...s, external: withoutKey(current, moduleId) }
+              : s;
+          }
+          // Marking a provider external selects it (it stays in the graph).
+          return {
+            ...s,
+            modules: s.modules.includes(moduleId)
+              ? s.modules
+              : [...s.modules, moduleId],
+            external: { ...current, [moduleId]: external },
+          };
+        },
+      });
+    },
+    [],
+  );
+
   const applyDefault = useCallback(() => {
     if (!catalog) return;
     dispatch({
@@ -300,6 +340,7 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
     setKnob,
     addResource,
     removeResource,
+    setExternal,
     applyDefault,
     undo,
     redo,
@@ -322,6 +363,7 @@ function cloneSelection(selection: Selection): Selection {
     capabilities: [...selection.capabilities],
     knob_overrides: { ...selection.knob_overrides },
     extra_resources: [...(selection.extra_resources ?? [])],
+    external: { ...(selection.external ?? {}) },
   };
 }
 

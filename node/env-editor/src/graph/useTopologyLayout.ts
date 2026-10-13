@@ -16,6 +16,11 @@
 // the row of each resource it uses. Edges are drawn along ELK's own orthogonal
 // routes (`ElkEdge`).
 //
+// Resources an external cloud provides (a managed database, a cloud object
+// store) are drawn inside one dashed frame per cloud: an ELK compound node laid
+// out with the rest of the graph (hierarchy included), and a ReactFlow parent
+// node whose children are positioned relative to it.
+//
 // The hook is async — ELK resolves to positioned ReactFlow nodes + edges. Until
 // it resolves it keeps the previous layout, so the canvas never flashes
 // unpositioned nodes. A monotonic `runRef` guards against a stale layout
@@ -33,6 +38,7 @@ import type {
   TopologyEdgeDto,
 } from "../types";
 import type { Point } from "./edges/ElkEdge";
+import type { CloudGroupNodeData } from "./nodes/CloudGroupNode";
 import type { ComponentNodeData } from "./nodes/ComponentNode";
 import type { GatewayNodeData } from "./nodes/GatewayNode";
 
@@ -64,6 +70,12 @@ export const GATEWAY_ROW_TITLE = 18;
 export const GATEWAY_ENDPOINT_LINE = 16;
 // An access-control row: the check's provider and what it does.
 export const GATEWAY_CHECK_ROW = 40;
+// An external-cloud frame: its title strip, then padding around its cards.
+export const CLOUD_GROUP_HEADER = 32;
+export const CLOUD_GROUP_PAD = 16;
+
+/** The canvas id of the frame around the external cloud `cloud`'s resources. */
+export const cloudGroupId = (cloud: string) => `@cloud:${cloud}`;
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
@@ -411,7 +423,7 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
       [...gateways].map((id) => [id, gatewayChecks(id, graph.edges)]),
     );
 
-    const children: ElkNode[] = graph.nodes.map((n) => {
+    const elkNode = (n: GraphNodeDto): ElkNode => {
       const sections = sectionsOf.get(n.id);
       if (sections) {
         const { ports, height } = gatewayPorts(
@@ -435,11 +447,37 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
         layoutOptions: { "elk.portConstraints": "FIXED_POS" },
         ports: componentPorts(n),
       };
-    });
+    };
+
+    // External-cloud resources, grouped by cloud, each group one frame.
+    const clouds = new Map<string, GraphNodeDto[]>();
+    for (const n of graph.nodes) {
+      if (n.cloud == null) continue;
+      clouds.set(n.cloud, [...(clouds.get(n.cloud) ?? []), n]);
+    }
+    const children: ElkNode[] = [
+      ...graph.nodes.filter((n) => n.cloud == null).map(elkNode),
+      ...[...clouds].map(([cloud, members]) => ({
+        id: cloudGroupId(cloud),
+        layoutOptions: {
+          "elk.padding": `[top=${CLOUD_GROUP_HEADER + CLOUD_GROUP_PAD / 2},left=${CLOUD_GROUP_PAD},bottom=${CLOUD_GROUP_PAD},right=${CLOUD_GROUP_PAD}]`,
+        },
+        children: members.map(elkNode),
+      })),
+    ];
 
     const elkGraph: ElkNode = {
       id: "root",
-      layoutOptions: LAYOUT_OPTIONS,
+      // With frames, lay out across the hierarchy (edges cross into them) and
+      // report every route in root (= flow) coordinates.
+      layoutOptions:
+        clouds.size > 0
+          ? {
+              ...LAYOUT_OPTIONS,
+              "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+              "elk.json.edgeCoords": "ROOT",
+            }
+          : LAYOUT_OPTIONS,
       children,
       edges: drawn.map(({ id, edge: e, resource }) => {
         const { source, target } = edgeHandles(
@@ -460,12 +498,21 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
       .layout(elkGraph)
       .then((laidOut) => {
         if (run !== runRef.current) return; // superseded
+        // Positions are relative to the parent: the root for most nodes, its
+        // frame for an external-cloud resource (as ReactFlow wants a child's).
         const positioned = new Map<string, { x: number; y: number }>();
+        const frames = new Map<string, ElkNode>();
         for (const child of laidOut.children ?? []) {
           positioned.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
+          if (child.children) {
+            frames.set(child.id, child);
+            for (const member of child.children) {
+              positioned.set(member.id, { x: member.x ?? 0, y: member.y ?? 0 });
+            }
+          }
         }
-        // Flat graph: every edge lives on the root, so its sections are already
-        // in root (= flow) coordinates.
+        // Every edge lives on the root, and with frames ELK reports routes in
+        // root coordinates (`edgeCoords: ROOT`), so they are flow coordinates.
         const routes = new Map<string, Point[]>();
         for (const e of laidOut.edges ?? []) {
           const section = e.sections?.[0];
@@ -482,8 +529,26 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
         );
         const roles: Record<string, string | null | undefined> =
           Object.fromEntries(graph.nodes.map((n) => [n.id, n.role]));
-        const nodes: Node[] = graph.nodes.map((n) => {
+        // Frames first: ReactFlow needs a parent before its children.
+        const frameNodes: Node[] = [...clouds.keys()].map((cloud) => {
+          const id = cloudGroupId(cloud);
+          const frame = frames.get(id);
+          return {
+            id,
+            type: "cloud",
+            position: positioned.get(id) ?? { x: 0, y: 0 },
+            width: frame?.width,
+            height: frame?.height,
+            selectable: false,
+            draggable: false,
+            focusable: false,
+            zIndex: -1,
+            data: { cloud } satisfies CloudGroupNodeData,
+          };
+        });
+        const memberNodes: Node[] = graph.nodes.map((n) => {
           const position = positioned.get(n.id) ?? { x: 0, y: 0 };
+          const parentId = n.cloud == null ? undefined : cloudGroupId(n.cloud);
           const sections = sectionsOf.get(n.id);
           if (sections) {
             // Only rows a route leaves from get a handle (the identity
@@ -512,9 +577,11 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
             id: n.id,
             type: n.kind === "clients" ? "clients" : "component",
             position,
+            parentId,
             data: { node: n, names } satisfies ComponentNodeData,
           };
         });
+        const nodes = [...frameNodes, ...memberNodes];
         const edges: Edge<TopologyEdgeData>[] = drawn.map(
           ({ id, edge: e, resource }) => {
             const { source, target } = edgeHandles(
