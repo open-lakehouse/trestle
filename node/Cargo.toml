@@ -3,6 +3,15 @@
 # crates. release-plz only understands Cargo packages and decides a package has
 # changed from the files `cargo package --list` reports, so this manifest sits
 # at `node/` and `include`s exactly the sources that end up in the npm bundle.
+# It has to sit at a directory that contains all of them: Cargo silently drops
+# `include` patterns that reach outside the package (`../env-editor/**` matches
+# nothing), so moving it into `trestle-diagram/` would stop every env-editor or
+# ui-kit change from releasing the package.
+#
+# It deliberately has no dependency on `stack-topology-wasm`. The diagram only
+# reads the `GraphDto` shape, whose TypeScript mirror (`stack-wasm/src/types.ts`)
+# is included below. A path dependency would make release-plz bump this package
+# on every planner release, with an empty changelog entry.
 #
 # It is never published to crates.io (`publish = false`, and `git_only` in
 # release-plz.toml). Its `version` is the npm package's version: release-plz
