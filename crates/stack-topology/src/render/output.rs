@@ -41,7 +41,9 @@ pub struct OutputFile {
 /// `client/container.env`), a human-readable `LAYOUT.md` summary (see
 /// [`layout_report`](crate::layout_report)), the Envoy bootstrap at `modules/envoy/envoy.yaml`,
 /// and each module's `modules/<id>/compose.yaml` fragment plus its mounted config files
-/// (already rooted under `modules/<id>/`).
+/// (already rooted under `modules/<id>/`). When the selection asks for it, the Python client
+/// workspace follows under `client/` (see
+/// [`python_client_files`](crate::render::python_client::python_client_files)).
 ///
 /// Build one with [`Plan::materialize`](crate::Plan::materialize). Pure and WASM-clean;
 /// [`write_to`](Self::write_to) (behind the `std-io` feature) is the only step that does I/O.

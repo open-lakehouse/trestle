@@ -131,6 +131,44 @@ pub struct Provides {
     /// credentials vended by the catalog).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub client_env: BTreeMap<String, ClientValue>,
+    /// What this module adds to the generated Python client workspace (`client/`): the
+    /// packages a client needs to talk to it, and example notebooks that exercise it. Only
+    /// used when the selection asks for the workspace (see
+    /// [`ClientSelection`](crate::ClientSelection)).
+    #[serde(default, skip_serializing_if = "PythonClient::is_empty")]
+    pub python: PythonClient,
+}
+
+/// A module's contribution to the Python client workspace (see [`Provides::python`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PythonClient {
+    /// PEP 508 requirements (e.g. `"mlflow>=3"`), merged into the workspace's
+    /// `pyproject.toml` across modules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
+    /// Example notebooks, emitted only when the selection asks for examples.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notebooks: Vec<ClientNotebook>,
+}
+
+impl PythonClient {
+    /// Whether the module contributes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.dependencies.is_empty() && self.notebooks.is_empty()
+    }
+}
+
+/// One example notebook a module ships (see [`PythonClient::notebooks`]): a static
+/// [marimo](https://marimo.io) notebook that reads its endpoints from the client environment at
+/// runtime, so it needs no templating and stays valid across re-renders.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientNotebook {
+    /// The file name under `client/notebooks/` (e.g. `mlflow_quickstart.py`).
+    pub file: String,
+    /// A one-line description, listed in the workspace README.
+    pub title: String,
+    /// The notebook source.
+    pub contents: String,
 }
 
 /// One value a module contributes to the client environment (see [`Provides::client_env`]).

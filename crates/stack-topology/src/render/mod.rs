@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 pub mod compose;
 pub mod envoy;
 pub mod output;
+pub mod python_client;
 
 use crate::catalog::module::{ModuleId, TemplateError};
 

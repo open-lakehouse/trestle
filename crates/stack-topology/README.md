@@ -95,6 +95,27 @@ The files hold **no credentials**. Clients authenticate through the gateway and 
 write object storage with the temporary credentials Unity Catalog vends. The root `.env`
 is different: it only carries values the compose files substitute.
 
+### Python client workspace
+
+Set `Selection::client` (`[selection.client]` in `env.toml`, or `trestle env new --client`)
+to also write a [uv](https://docs.astral.sh/uv/) project with [marimo](https://marimo.io)
+notebooks into `client/`:
+
+```bash
+cd client && uv sync && uv run marimo edit notebooks
+```
+
+Notebooks read `host.env` at runtime through marimo's `dotenv` setting, so they are plain
+Python with no templating. Modules contribute through `Provides::python`: PEP 508
+dependencies, merged into `pyproject.toml`, and example notebooks, written only when
+`examples` is set (`--client-examples`). Every workspace gets `00_connect.py`, which checks
+each endpoint answers. `pyproject.toml` is regenerated on every render. Notebooks are
+written once, so local edits survive.
+
+| Module | Dependencies | Example notebook |
+| --- | --- | --- |
+| `mlflow` | `mlflow`, `scikit-learn` | `mlflow_quickstart.py`: train a model, track it in MLflow |
+
 ## AI Gateway (MLflow)
 
 The `mlflow` module also serves MLflow's built-in AI Gateway, fronted at `/ai-gateway`

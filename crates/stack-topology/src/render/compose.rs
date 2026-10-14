@@ -507,5 +507,8 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
         }
     }
 
+    // The Python client workspace, when selected, sits beside the client environments.
+    files.extend(crate::render::python_client::python_client_files(plan));
+
     Ok(MaterializedOutput { files })
 }

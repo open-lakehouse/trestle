@@ -55,6 +55,7 @@ mod gateway;
 mod impersonation;
 mod knobs;
 mod names;
+mod python_client;
 pub mod resolve;
 mod route;
 pub mod routing;
@@ -83,6 +84,8 @@ pub use gateway::{
     TlsListenerConfig, TlsVirtualHost,
 };
 pub use names::{is_valid_resource_name, resource_name_rule};
+use python_client::resolve_python_client;
+pub use python_client::{ClientSelection, PYTHON_CLIENT_BASE_DEPENDENCIES, PythonWorkspace};
 
 /// What modules an environment should contain.
 ///
@@ -120,6 +123,10 @@ pub struct Selection {
     /// [`ExternalResource::connection`] instead of being deployed. See [`external`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub external: BTreeMap<ModuleId, ExternalResource>,
+    /// Whether to generate the Python client workspace under `client/`, and with which
+    /// example notebooks (see [`ClientSelection`]). Off by default.
+    #[serde(default, skip_serializing_if = "ClientSelection::is_default")]
+    pub client: ClientSelection,
 }
 
 impl Selection {
@@ -594,6 +601,9 @@ pub struct Plan {
     /// The client environment resolved from inside the compose network (see
     /// [`Plan::client_env`]).
     pub client_env_container: InjectedEnv,
+    /// The Python client workspace to generate, when the selection asks for one (see
+    /// [`Selection::client`]): the merged dependencies and example notebooks of every module.
+    pub python_client: Option<PythonWorkspace>,
     /// The gateway facts the address resolver reads (captured from [`PlanCtx`]). Private:
     /// callers reach addressing through [`Plan::service`] → [`ServiceRef::address`], never
     /// by reconstructing this.
@@ -777,11 +787,13 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         gateway_facts: routed.facts,
         client_env_host: InjectedEnv::new(),
         client_env_container: InjectedEnv::new(),
+        python_client: None,
     };
     // Resolved last: client addresses read the settled routes through the plan's own
     // addressing API.
     plan.client_env_host = resolve_client_env(&plan, Vantage::Host)?;
     plan.client_env_container = resolve_client_env(&plan, Vantage::Container)?;
+    plan.python_client = resolve_python_client(&plan, selection.client);
     Ok(plan)
 }
 

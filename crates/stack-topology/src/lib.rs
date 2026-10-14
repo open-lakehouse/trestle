@@ -94,9 +94,10 @@ pub use model::role::{Role, ServiceSpec};
 
 // --- catalog: the module set + how a module is defined ---
 pub use catalog::module::{
-    ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls, ImpersonatedHost, Knob,
-    KnobKind, Module, ModuleId, PortDecl, PortMapping, Provides, Readiness, ReadyGate, RenderCtx,
-    RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, TemplateError, UrlPart,
+    ClientNotebook, ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls,
+    ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl, PortMapping, Provides,
+    PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec, ResolvedKnobs, ResourceDemand,
+    StackFacts, TemplateError, UrlPart,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
@@ -106,10 +107,11 @@ pub use catalog::{
 pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
-    AppUpstream, AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY,
-    EXT_AUTHZ_PATH_EXTRA, ExternalConnection, ExternalResource, GatewayConfig, GatewayRoute,
-    ListenerConfig, ModuleBinding, Plan, PlanCtx, PlanError, PolicyConfig, Secrets, SecureOrigin,
-    Selection, TlsListenerConfig, TlsVirtualHost, is_valid_resource_name, resource_name_rule,
+    AppUpstream, AuthConfig, ClientSelection, ClusterConfig, ENVOY_AUTH_KNOB,
+    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, ExternalConnection, ExternalResource,
+    GatewayConfig, GatewayRoute, ListenerConfig, ModuleBinding, PYTHON_CLIENT_BASE_DEPENDENCIES,
+    Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace, Secrets, SecureOrigin, Selection,
+    TlsListenerConfig, TlsVirtualHost, is_valid_resource_name, resource_name_rule,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---
@@ -121,6 +123,7 @@ pub use render::envoy::render_envoy;
 pub use render::output::{
     CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
 };
+pub use render::python_client::{PYTHON_CLIENT_DIR, python_client_files};
 pub use render::{InjectedEnv, RenderError, RenderFile, RenderOutput};
 
 // --- target: what an environment deploys to ---
