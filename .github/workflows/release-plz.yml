@@ -44,9 +44,12 @@ jobs:
         with:
           fetch-depth: 0 # release-plz needs full history to analyze commits
           persist-credentials: false
+      # Stable, not the MSRV: release-plz runs cargo-semver-checks here, which
+      # needs a newer rustc than the MSRV (0.51 requires >= 1.93). The MSRV
+      # job in ci.yml still checks that the crates build on 1.88.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: stable
       - name: Run release-plz (release-pr)
         uses: release-plz/action@8921286633dfa0c4020f7f30bd1c14fe19cbb10e # v0.5.142
         with:
