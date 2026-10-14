@@ -251,6 +251,28 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  # The environment-editor web workspace (node/): lint, typecheck, build the
+  # app against the fixture planner (no wasm), and build the publishable
+  # diagram package, which also checks its bundle's dependency manifest.
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run build:diagram
+
   build-release:
     name: Build / release / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
