@@ -69,6 +69,19 @@ changelog_path = "crates/trestle/CHANGELOG.md"
 name = "olai-stack-topology"
 changelog_path = "crates/stack-topology/CHANGELOG.md"
 
+# The npm package @open-lakehouse/trestle-diagram, through its placeholder crate
+# at node/Cargo.toml. `git_only` takes the previous version from the
+# `trestle-diagram-v*` tags instead of crates.io, and `publish = false` (which
+# git_only requires) skips `cargo publish`. release-plz.yml publishes the npm
+# package when this is released. The crate has no Rust API, so there is
+# nothing for cargo-semver-checks to compare.
+[[package]]
+name = "trestle-diagram"
+git_only = true
+publish = false # required alongside git_only
+semver_check = false
+changelog_path = "node/trestle-diagram/CHANGELOG.md"
+
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
 # Because commits use crate scopes (feat(olai-codegen): ...), each crate's
@@ -93,5 +106,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|trestle-diagram|web)\)', replace = "" },
 ]

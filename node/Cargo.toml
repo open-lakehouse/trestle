@@ -1,0 +1,50 @@
+# A placeholder crate that lets release-plz version and release the npm package
+# `@open-lakehouse/trestle-diagram` (./trestle-diagram) alongside the Rust
+# crates. release-plz only understands Cargo packages and decides a package has
+# changed from the files `cargo package --list` reports, so this manifest sits
+# at `node/` and `include`s exactly the sources that end up in the npm bundle.
+#
+# It is never published to crates.io (`publish = false`, and `git_only` in
+# release-plz.toml). Its `version` is the npm package's version: release-plz
+# bumps it from conventional commits, writes trestle-diagram/CHANGELOG.md, and
+# tags `trestle-diagram-v<version>`; release-plz.yml then stamps that version
+# into package.json and publishes to npmjs.com and GitHub Packages.
+
+[package]
+name = "trestle-diagram"
+version = "0.1.0"
+description = "Release placeholder for the @open-lakehouse/trestle-diagram npm package"
+publish = false
+readme = "trestle-diagram/README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+include = [
+  "Cargo.toml",
+  "trestle-diagram/release.rs",
+  "trestle-diagram/package.json",
+  "trestle-diagram/README.md",
+  "trestle-diagram/*.config.*",
+  "trestle-diagram/rollup.dts.config.mjs",
+  "trestle-diagram/scripts/**",
+  "trestle-diagram/src/**",
+  "env-editor/package.json",
+  "env-editor/src/diagram/**",
+  "env-editor/src/graph/**",
+  "env-editor/src/state/origin.ts",
+  "env-editor/src/types.ts",
+  "ui-kit/package.json",
+  "ui-kit/src/**",
+  "stack-wasm/src/types.ts",
+  "!**/*.stories.tsx",
+  "!**/*.test.ts",
+  "!**/*.test.tsx",
+]
+
+[lib]
+path = "trestle-diagram/release.rs"

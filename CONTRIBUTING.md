@@ -210,6 +210,44 @@ Maintainer setup (one-time, per crate):
   2. From then on the crate releases through `release-plz.yml` like the others;
      never run the bootstrap workflow for it again.
 
+### The `@open-lakehouse/trestle-diagram` npm package
+
+release-plz only versions Cargo packages, so the npm package `node/trestle-diagram`
+is released through a placeholder crate, `trestle-diagram` (`node/Cargo.toml`).
+It has no code and is never published to crates.io (`git_only` and
+`publish = false` in `release-plz.toml`). Its `include` list names the sources
+that end up in the npm bundle, so a commit touching them bumps the package in
+the Release PR and lands in `node/trestle-diagram/CHANGELOG.md`, like a crate.
+Use the `web` scope for these commits (`feat(web): …`).
+
+When the Release PR merges, release-plz tags `trestle-diagram-v<version>` and
+the `publish-trestle-diagram` job (a `workflow_call` into
+`.github/workflows/publish-trestle-diagram.yml`) stamps that version into
+`package.json` (whose own `version` stays `0.0.0`), then publishes the same
+tarball to:
+
+- **npmjs.com**, with trusted publishing (OIDC) and a provenance attestation.
+- **GitHub Packages**, with the job's ephemeral `GITHUB_TOKEN` (it has no OIDC
+  exchange).
+
+Either registry skips a version it already has, so re-running is safe. If you
+add a new source file or directory to the bundle, add it to `include` in
+`node/Cargo.toml` (`cargo package --list -p trestle-diagram` shows the set).
+
+Maintainer setup (one-time). As with crates, npm can't attach a trusted publisher
+to a package that doesn't exist yet:
+
+1. Create the `open-lakehouse` org on npmjs.com, and add an npm token that can
+   publish to it as `NPM_TOKEN` in the `release` environment.
+2. Before merging the first Release PR that includes `trestle-diagram`, run
+   **Publish trestle-diagram** (`workflow_dispatch`) from `main`, first with
+   `dry_run` on, then with `dry_run` off and `npm_bootstrap` on.
+3. On npmjs.com, under the package's **Settings → Trusted Publisher**, add the
+   GitHub repo `open-lakehouse/trestle`, workflow `release-plz.yml` (npm checks
+   the calling workflow), and environment `release`. Delete `NPM_TOKEN`.
+4. In the GitHub package's settings, grant read access to repositories that
+   install it from GitHub Packages.
+
 ### GitHub authentication
 
 The workflow uses the built-in `secrets.GITHUB_TOKEN`. The repo must have

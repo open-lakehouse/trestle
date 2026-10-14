@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = [
+  "crates/*",
+  # Release placeholder for the @open-lakehouse/trestle-diagram npm package
+  # (see node/Cargo.toml); it has no code and is never published.
+  "node",
+]
 exclude = [
   # Templates are scaffolds containing project skeletons (frequently
   # uncompilable in isolation); they must never be picked up by `cargo build`.

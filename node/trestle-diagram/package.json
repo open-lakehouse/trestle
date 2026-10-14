@@ -1,6 +1,6 @@
 {
   "name": "@open-lakehouse/trestle-diagram",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Embed trestle environment diagrams, read-only, from a graph snapshot",
   "license": "Apache-2.0",
   "type": "module",
@@ -11,7 +11,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "sideEffects": [
     "*.css"

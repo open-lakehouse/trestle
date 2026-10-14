@@ -108,5 +108,7 @@ bun run build:diagram   # vite (JS + scoped CSS) → rollup (bundled .d.ts) → 
 
 `vite.config.ts` scopes the stylesheet. `scripts/check-dist.mjs` fails the build
 if `dist/` imports a package that isn't declared in `dependencies`. Releases
-are published to npmjs.com (trusted publishing, OIDC) and GitHub Packages by
-`.github/workflows/publish-trestle-diagram.yml` (tag `trestle-diagram-v<version>`).
+go through release-plz, like the Rust crates. The placeholder crate at
+`node/Cargo.toml` holds the version, and `CHANGELOG.md` is generated. The
+version in `package.json` stays `0.0.0` and is stamped at publish time. See
+"The `@open-lakehouse/trestle-diagram` npm package" in `CONTRIBUTING.md`.

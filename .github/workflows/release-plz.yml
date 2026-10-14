@@ -11,6 +11,12 @@ name: Release-plz
 # actually being released this run — the version + tag come straight from
 # release-plz's `releases` output, so there is no second trigger or re-discovery.
 # See CONTRIBUTING.md for the full flow.
+#
+# The npm package @open-lakehouse/trestle-diagram rides along the same way:
+# release-plz versions it through a placeholder crate (node/Cargo.toml), and
+# when this run releases that crate, `publish-trestle-diagram` (a
+# `workflow_call` into publish-trestle-diagram.yml) publishes it to npmjs.com
+# and GitHub Packages.
 
 on:
   push:
@@ -62,6 +68,8 @@ jobs:
       # — the release-binaries job keys off this.
       cli_version: ${{ steps.cli.outputs.version }}
       cli_tag: ${{ steps.cli.outputs.tag }}
+      # trestle-diagram tag IF this run released it, else empty.
+      diagram_tag: ${{ steps.diagram.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -104,6 +112,23 @@ jobs:
           echo "olai-trestle ${version} released (tag ${tag}) → building CLI binaries."
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # Same for the npm package's placeholder crate.
+      - name: Extract trestle-diagram release
+        id: diagram
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASES:-}" ]; then
+            exit 0
+          fi
+          tag="$(jq -r '[.[] | select(.package_name == "trestle-diagram")][0].tag // empty' <<< "$RELEASES")"
+          if [ -z "$tag" ]; then
+            echo "trestle-diagram not released this run — skipping npm publish."
+            exit 0
+          fi
+          echo "trestle-diagram released (tag ${tag}) → publishing the npm package."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   # --- Build + attach the prebuilt CLI binaries, iff olai-trestle was released ---
   release-binaries:
@@ -119,6 +144,21 @@ jobs:
     uses: ./.github/workflows/release-binaries.yml
     with:
       tag: ${{ needs.release-plz-release.outputs.cli_tag }}
+
+  # --- Publish @open-lakehouse/trestle-diagram, iff it was released this run ---
+  publish-trestle-diagram:
+    name: Publish trestle-diagram
+    needs: release-plz-release
+    if: ${{ needs.release-plz-release.outputs.diagram_tag != '' }}
+    # npm trusted publishing needs `id-token: write` here and in the called
+    # workflow; it validates against this (the calling) workflow's filename.
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    uses: ./.github/workflows/publish-trestle-diagram.yml
+    with:
+      tag: ${{ needs.release-plz-release.outputs.diagram_tag }}
 
   # --- Update the Homebrew formula in open-lakehouse/homebrew-tap, iff the CLI
   #     was released AND its prebuilt binaries were attached this run ---
