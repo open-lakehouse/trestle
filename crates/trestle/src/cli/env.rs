@@ -84,6 +84,17 @@ pub struct EnvNewArgs {
     #[clap(long)]
     pub client_examples: bool,
 
+    /// Skip all prompts and take the recommended defaults: the default lakehouse
+    /// selection (unless `--select` is given) with every knob at its default
+    /// (unless `--set`). Customize later by editing `env.toml`.
+    #[clap(long, short = 'y', conflicts_with = "non_interactive")]
+    pub defaults: bool,
+
+    /// Ask every knob in the wizard, including advanced ones (container images,
+    /// log levels), instead of offering the recommended defaults first.
+    #[clap(long, conflicts_with_all = ["defaults", "non_interactive"])]
+    pub advanced: bool,
+
     /// Skip all prompts. A required knob with no value is an error in this mode.
     #[clap(long)]
     pub non_interactive: bool,
@@ -170,9 +181,13 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
 
     let catalog = baseline_catalog();
 
+    // `--defaults` and `--non-interactive` both skip every prompt; only the
+    // latter is strict about an explicit selection.
+    let interactive = !args.non_interactive && !args.defaults;
+
     // Seed the selection + knob overrides from CLI flags. When nothing was
-    // selected and we're interactive, start from the default lakehouse so the
-    // wizard has sensible pre-checks.
+    // selected, start from the default lakehouse: as the wizard's pre-checks, or
+    // as-is under `--defaults`.
     let mut selection = if args.select.is_empty() && !args.non_interactive {
         baseline_selection()
     } else {
@@ -212,11 +227,13 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         );
     }
 
-    // Interactive: let the wizard pick modules and fill each knob the CLI didn't. The client
-    // workspace is only asked about when no `--client*` flag already decided it.
-    if !args.non_interactive {
+    // Interactive: let the wizard pick modules and fill the knobs the user wants
+    // to change (by default none). The client workspace is only asked about when
+    // no `--client*` flag already decided it.
+    if interactive {
+        let mode = args.advanced.then_some(wizard::Mode::All);
         let ask_client = !(args.client || args.client_examples);
-        wizard::run(&catalog, &mut selection, ask_client)?;
+        wizard::run(&catalog, &mut selection, mode, ask_client)?;
     }
 
     // Plan, then materialize + persist. This is the shared core with `env render`.
@@ -231,9 +248,12 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         )
         .map_err(map_plan_err)?;
 
-    if args.non_interactive {
+    let summary = config_summary(&plan, &selection, &out_dir);
+    if !interactive {
+        println!("{summary}\n");
         println!("{}", layout_report(&plan));
     } else {
+        cliclack::note("Configuration", summary).map_err(io_err)?;
         cliclack::note("Gateway layout", layout_report(&plan)).map_err(io_err)?;
         let proceed = cliclack::confirm("Render this environment?")
             .initial_value(true)
@@ -268,7 +288,106 @@ fn write_env(
     manifest
         .write_to(&manifest_path)
         .map_err(map_manifest_err)?;
+    // Defaults are listed as comments, not written as overrides, so a later
+    // trestle release's defaults (e.g. image bumps) still apply on re-render.
+    let reference = knob_reference(plan, selection);
+    if !reference.is_empty() {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&manifest_path)
+            .and_then(|mut f| f.write_all(reference.as_bytes()))
+            .map_err(|e| Error::io_at(&manifest_path, e))?;
+    }
     Ok(())
+}
+
+/// The knob values `selection` overrides, as `module.key = value` lines.
+fn non_default_knobs(selection: &Selection) -> Vec<String> {
+    selection
+        .knob_overrides
+        .iter()
+        .flat_map(|(module, knobs)| {
+            knobs
+                .iter()
+                .map(move |(key, value)| format!("{module}.{key} = {value}"))
+        })
+        .collect()
+}
+
+/// A short, human summary of what is about to be rendered: the planned modules
+/// and only the knobs that differ from their defaults.
+fn config_summary(
+    plan: &olai_stack_topology::Plan,
+    selection: &Selection,
+    dir: &std::path::Path,
+) -> String {
+    let modules: Vec<String> = plan
+        .graph
+        .nodes
+        .iter()
+        .map(|m| m.id().to_string())
+        .collect();
+    let overrides = non_default_knobs(selection);
+    let settings = if overrides.is_empty() {
+        "all defaults".to_string()
+    } else {
+        format!("\n  {}", overrides.join("\n  "))
+    };
+    format!(
+        "Modules:  {}\nSettings: {settings}\nCustomize later: edit {}/env.toml, then `trestle env render {}`",
+        modules.join(", "),
+        dir.display(),
+        dir.display(),
+    )
+}
+
+/// A commented TOML block for the end of `env.toml` that lists every knob of the
+/// planned modules that `selection` leaves at its default, with that default. It
+/// makes the edit surface discoverable without pinning anything.
+///
+/// A module with no overrides gets a commented table header to uncomment; one
+/// that already has a `[selection.knob_overrides.<id>]` table above only lists
+/// its remaining keys, since TOML forbids defining the same table twice.
+fn knob_reference(plan: &olai_stack_topology::Plan, selection: &Selection) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    for module in &plan.graph.nodes {
+        let id = module.id();
+        let overridden = selection.knob_overrides.get(id);
+        let remaining: Vec<&Knob> = module
+            .knobs()
+            .iter()
+            .filter(|k| overridden.is_none_or(|o| !o.contains_key(&k.key)))
+            .filter(|k| k.default.is_some())
+            .collect();
+        if remaining.is_empty() {
+            continue;
+        }
+        out.push('\n');
+        if overridden.is_some() {
+            let _ = writeln!(out, "# more for [selection.knob_overrides.{id}] above:");
+        } else {
+            let _ = writeln!(out, "# [selection.knob_overrides.{id}]");
+        }
+        for knob in remaining {
+            let default = knob.default.as_deref().unwrap_or_default();
+            let _ = writeln!(out, "# {} = {}", knob.key, toml_string(default));
+        }
+    }
+    if out.is_empty() {
+        return out;
+    }
+    format!(
+        "\n# --- Available knobs (defaults shown; uncomment to override) ---\n\
+         # Values are strings. See `trestle env list-modules --knobs` for what each does.\n{out}"
+    )
+}
+
+/// `value` as a TOML basic string literal.
+fn toml_string(value: &str) -> String {
+    toml::Value::String(value.to_string()).to_string()
 }
 
 fn report_written(plan: &olai_stack_topology::Plan, dir: &std::path::Path) {
@@ -409,6 +528,9 @@ fn fmt_knob(knob: &Knob) -> String {
     if knob.required {
         line.push_str(" [required]");
     }
+    if knob.advanced {
+        line.push_str(" [advanced]");
+    }
     if let Some(default) = &knob.default {
         line.push_str(&format!(" default={default}"));
     }
@@ -531,17 +653,39 @@ mod wizard {
     use super::{Catalog, Knob, KnobKind, ModuleId, Result, Selection, io_err};
     use std::collections::BTreeMap;
 
+    /// How much of the knob surface the wizard asks about.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Mode {
+        /// Ask nothing: every knob the CLI didn't `--set` takes its default.
+        Defaults,
+        /// Ask only the knobs that shape the environment (not [`Knob::advanced`]).
+        Key,
+        /// Ask the key knobs, then offer each module's advanced knobs.
+        All,
+    }
+
     /// Drive the interactive create flow, mutating `selection` in place: pick the
-    /// module set, fill each knob the CLI didn't already set via `--set`, then (when
-    /// `ask_client`) whether to generate the Python client workspace.
-    pub fn run(catalog: &Catalog, selection: &mut Selection, ask_client: bool) -> Result<()> {
+    /// module set, choose how much to configure (unless `mode` is preset), fill the
+    /// knobs that mode covers, then (when `ask_client`) whether to generate the
+    /// Python client workspace.
+    pub fn run(
+        catalog: &Catalog,
+        selection: &mut Selection,
+        mode: Option<Mode>,
+        ask_client: bool,
+    ) -> Result<()> {
         cliclack::intro("trestle env new").map_err(io_err)?;
 
         selection.modules = ask_modules(catalog, &selection.modules)?;
+        let mode = match mode {
+            Some(mode) => mode,
+            None => ask_mode()?,
+        };
         configure_knobs(
             catalog,
             &selection.modules.clone(),
             &mut selection.knob_overrides,
+            mode,
         )?;
         if ask_client {
             ask_client_workspace(catalog, selection)?;
@@ -606,32 +750,74 @@ mod wizard {
         Ok(picked.into_iter().map(ModuleId::from).collect())
     }
 
-    /// For each selected module, prompt every knob it exposes — skipping any the
+    /// Offer the recommended defaults first; customizing is opt-in.
+    fn ask_mode() -> Result<Mode> {
+        cliclack::select("How do you want to configure it?")
+            .item(
+                Mode::Defaults,
+                "Use recommended defaults",
+                "customize later in env.toml",
+            )
+            .item(Mode::Key, "Customize key settings", "auth, UIs, models")
+            .item(
+                Mode::All,
+                "Customize everything",
+                "also images and other advanced knobs",
+            )
+            .initial_value(Mode::Defaults)
+            .interact()
+            .map_err(io_err)
+    }
+
+    /// For each selected module, prompt the knobs `mode` covers — skipping any the
     /// CLI already set via `--set`, so a fully-scripted `--set` run asks nothing.
+    /// Only answers that differ from a knob's default are recorded, so `env.toml`
+    /// pins just what the user changed.
     fn configure_knobs(
         catalog: &Catalog,
         selected: &[ModuleId],
         overrides: &mut BTreeMap<ModuleId, BTreeMap<String, String>>,
+        mode: Mode,
     ) -> Result<()> {
+        if mode == Mode::Defaults {
+            return Ok(());
+        }
         for id in selected {
             let Some(module) = catalog.get(id) else {
                 continue;
             };
-            let knobs = module.knobs();
-            if knobs.is_empty() {
+            let unset = |k: &&Knob| !overrides.get(id).is_some_and(|m| m.contains_key(&k.key));
+            let (key, advanced): (Vec<&Knob>, Vec<&Knob>) = module
+                .knobs()
+                .iter()
+                .filter(unset)
+                .partition(|k| !k.advanced);
+            let offer_advanced = mode == Mode::All && !advanced.is_empty();
+            if key.is_empty() && !offer_advanced {
                 continue;
             }
             cliclack::log::step(format!("Configure {id}")).map_err(io_err)?;
-            for knob in knobs {
-                if overrides.get(id).is_some_and(|m| m.contains_key(&knob.key)) {
-                    cliclack::log::info(format!("  {}.{} → (set via --set)", id, knob.key))
-                        .map_err(io_err)?;
-                    continue;
+            let mut asked = key;
+            if offer_advanced {
+                let keys: Vec<&str> = advanced.iter().map(|k| k.key.as_str()).collect();
+                let tune = cliclack::confirm(format!(
+                    "Change advanced settings for {id}? ({})",
+                    keys.join(", ")
+                ))
+                .initial_value(false)
+                .interact()
+                .map_err(io_err)?;
+                if tune {
+                    asked.extend(advanced);
                 }
+            }
+            for knob in asked {
                 if let Some(help) = &knob.help {
                     cliclack::log::info(format!("  {help}")).map_err(io_err)?;
                 }
-                if let Some(value) = prompt_knob(id, knob)? {
+                if let Some(value) = prompt_knob(id, knob)?
+                    && !is_default(knob, &value)
+                {
                     overrides
                         .entry(id.clone())
                         .or_default()
@@ -640,6 +826,23 @@ mod wizard {
             }
         }
         Ok(())
+    }
+
+    /// Whether a prompted `value` equals the knob's default (integers compared
+    /// numerically; the other kinds are prompted in their canonical form).
+    pub(super) fn is_default(knob: &Knob, value: &str) -> bool {
+        let Some(default) = knob.default.as_deref() else {
+            return false;
+        };
+        match knob.kind {
+            KnobKind::Integer { .. } | KnobKind::Port => {
+                match (default.trim().parse::<i64>(), value.trim().parse::<i64>()) {
+                    (Ok(d), Ok(v)) => d == v,
+                    _ => default == value,
+                }
+            }
+            _ => default == value,
+        }
     }
 
     /// Render the right `cliclack` control for a knob's [`KnobKind`] and return
@@ -743,9 +946,11 @@ mod wizard {
 
 #[cfg(test)]
 mod tests {
-    use olai_stack_topology::{PlanCtx, Selection, baseline_catalog};
+    use olai_stack_topology::{
+        EnvManifest, KnobKind, ModuleId, PlanCtx, Selection, baseline_catalog,
+    };
 
-    use super::{next_steps, parse_env_lines};
+    use super::{config_summary, knob_reference, next_steps, parse_env_lines, wizard};
 
     #[test]
     fn env_lines_parse_like_dotenv() {
@@ -796,5 +1001,136 @@ mod tests {
         );
         assert!(text.contains("users.yml"), "{text}");
         assert!(text.contains("policies/authz.rego"), "{text}");
+    }
+
+    fn lakehouse() -> Selection {
+        Selection::modules(["envoy", "postgres", "mlflow"])
+    }
+
+    #[test]
+    fn every_image_knob_is_advanced() {
+        for module in baseline_catalog().modules() {
+            for knob in module.knobs() {
+                if knob.key == "image" || knob.key.ends_with("_image") {
+                    assert!(
+                        knob.advanced,
+                        "{}.{} should be advanced",
+                        module.id(),
+                        knob.key
+                    );
+                }
+            }
+        }
+        let catalog = baseline_catalog();
+        let envoy = catalog.get(&ModuleId::from("envoy")).unwrap();
+        let auth = envoy.knobs().iter().find(|k| k.key == "auth").unwrap();
+        assert!(!auth.advanced, "envoy.auth is a key setting");
+    }
+
+    #[test]
+    fn summary_lists_only_non_default_knobs() {
+        let plan = |s: &Selection| baseline_catalog().plan(s, &PlanCtx::default()).unwrap();
+        let dir = std::path::Path::new("lh");
+
+        let defaults = lakehouse();
+        let text = config_summary(&plan(&defaults), &defaults, dir);
+        assert!(text.contains("Settings: all defaults"), "{text}");
+        assert!(
+            text.contains("envoy, ") || text.contains(", envoy"),
+            "{text}"
+        );
+        assert!(text.contains("trestle env render lh"), "{text}");
+
+        let mut tuned = lakehouse();
+        tuned
+            .knob_overrides
+            .entry(ModuleId::from("postgres"))
+            .or_default()
+            .insert("image".into(), "postgres:17".into());
+        let text = config_summary(&plan(&tuned), &tuned, dir);
+        assert!(text.contains("postgres.image = postgres:17"), "{text}");
+        assert!(!text.contains("all defaults"), "{text}");
+    }
+
+    #[test]
+    fn knob_reference_comments_out_defaults_and_stays_valid_toml() {
+        let mut selection = lakehouse();
+        selection
+            .knob_overrides
+            .entry(ModuleId::from("envoy"))
+            .or_default()
+            .insert("auth".into(), "true".into());
+        let plan = baseline_catalog()
+            .plan(&selection, &PlanCtx::default())
+            .unwrap();
+        let reference = knob_reference(&plan, &selection);
+
+        // Untouched modules get a commented header; overridden ones only their remaining keys.
+        assert!(
+            reference.contains("# [selection.knob_overrides.postgres]\n# image = \"postgres:16\""),
+            "{reference}"
+        );
+        assert!(
+            !reference.contains("# [selection.knob_overrides.envoy]"),
+            "{reference}"
+        );
+        assert!(
+            reference.contains("# more for [selection.knob_overrides.envoy] above:"),
+            "{reference}"
+        );
+        assert!(!reference.contains("# auth ="), "{reference}");
+        // `auth = true` pulls in authelia; its knobs are listed too.
+        assert!(
+            reference.contains("[selection.knob_overrides.authelia]"),
+            "{reference}"
+        );
+        assert!(
+            reference
+                .lines()
+                .all(|l| l.is_empty() || l.starts_with('#')),
+            "{reference}"
+        );
+
+        // Appended to the manifest it parses back to the same choices.
+        let manifest = EnvManifest::new(selection.clone(), PlanCtx::default());
+        let text = format!("{}{reference}", manifest.to_toml().unwrap());
+        assert_eq!(EnvManifest::from_toml(&text).unwrap(), manifest);
+
+        // Uncommenting a module's block yields a valid override table.
+        let uncommented = reference
+            .lines()
+            .skip_while(|l| *l != "# [selection.knob_overrides.postgres]")
+            .take(2)
+            .map(|l| l.trim_start_matches("# "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let edited =
+            EnvManifest::from_toml(&format!("{}\n{uncommented}\n", manifest.to_toml().unwrap()))
+                .unwrap();
+        assert_eq!(
+            edited.selection.knob_overrides[&ModuleId::from("postgres")]["image"],
+            "postgres:16"
+        );
+    }
+
+    #[test]
+    fn answers_equal_to_the_default_are_not_recorded() {
+        let knob = |kind: KnobKind, default: &str| olai_stack_topology::Knob {
+            key: "k".into(),
+            title: None,
+            kind,
+            default: Some(default.into()),
+            required: false,
+            help: None,
+            aliases: vec![],
+            advanced: false,
+        };
+        assert!(wizard::is_default(&knob(KnobKind::Bool, "true"), "true"));
+        assert!(!wizard::is_default(&knob(KnobKind::Bool, "true"), "false"));
+        assert!(wizard::is_default(&knob(KnobKind::Port, "9080"), " 09080"));
+        assert!(!wizard::is_default(
+            &knob(KnobKind::String, "postgres:16"),
+            "postgres:17"
+        ));
     }
 }

@@ -46,6 +46,7 @@ olai-stack-topology = { path = "../stack-topology", version = "0.0.3", features 
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
