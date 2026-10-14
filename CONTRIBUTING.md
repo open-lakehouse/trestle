@@ -235,21 +235,31 @@ add a new source file or directory to the bundle, add it to `include` in
 `node/Cargo.toml` (`cargo package --list -p trestle-diagram` shows the set).
 
 Maintainer setup (one-time). As with crates, npm can't attach a trusted publisher
-to a package that doesn't exist yet:
+to a package that doesn't exist yet, and the website can't create an empty one.
+The first version is therefore *staged* with a token (`npm stage publish` can
+create a package) and promoted by a maintainer, so the token can't publish on
+its own. A `git_only` package has no tag until its first release, so
+release-plz releases it on the first push to `main` that contains it, without a
+Release PR. That run's npm job fails with a 404 until this is done:
 
-1. Create the `open-lakehouse` org on npmjs.com, and add an npm token that can
-   publish to it as `NPM_TOKEN` in the `release` environment.
-2. Run **Publish trestle-diagram** (`workflow_dispatch`) on the release tag
-   (`gh workflow run publish-trestle-diagram.yml --ref trestle-diagram-v0.1.0
-   -f dry_run=false -f npm_bootstrap=true`; try `dry_run=true` first). A
-   `git_only` package has no tag until its first release, so release-plz
-   releases it on the first push to `main` that contains it, without a Release
-   PR. That run's npm job fails with a 404 until this bootstrap is done.
-   GitHub Packages already has the version, and the rerun skips it.
-3. On npmjs.com, under the package's **Settings → Trusted Publisher**, add the
-   GitHub repo `open-lakehouse/trestle`, workflow `release-plz.yml` (npm checks
-   the calling workflow), and environment `release`. Delete `NPM_TOKEN`.
-4. In the GitHub package's settings, grant read access to repositories that
+1. Create the `open-lakehouse` org on npmjs.com. Add a granular npm token that
+   can stage packages in it as `NPM_TOKEN` in the `release` environment.
+2. From `main`, run **Publish trestle-diagram** for the release tag. It runs
+   with `dry_run` on by default, which checks the staging command:
+   ```bash
+   gh workflow run publish-trestle-diagram.yml -f tag=trestle-diagram-v0.1.0 -f npm_bootstrap=true
+   gh workflow run publish-trestle-diagram.yml -f tag=trestle-diagram-v0.1.0 -f npm_bootstrap=true -f dry_run=false
+   ```
+   GitHub Packages already has the version, and the run skips it.
+3. On npmjs.com, approve the staged version (2FA). Staging a new package also
+   creates a `0.0.0-stage` placeholder version.
+4. Delete `NPM_TOKEN`. Then, shortly before merging the next Release PR that
+   bumps `trestle-diagram`, add the trusted publisher under the package's
+   **Settings → Trusted Publisher**: GitHub repo `open-lakehouse/trestle`,
+   workflow `release-plz.yml` (npm checks the calling workflow), and
+   environment `release`. npm expires a new trusted publisher that hasn't
+   published within 2 days; if that happens, delete it and add it again.
+5. In the GitHub package's settings, grant read access to repositories that
    install it from GitHub Packages.
 
 ### GitHub authentication

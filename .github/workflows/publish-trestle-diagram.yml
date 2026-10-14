@@ -21,13 +21,22 @@ name: Publish trestle-diagram
 # Packages are only ever published from CI, never from a developer machine.
 #
 # Manual runs are for a dry run, or for the one-time npm bootstrap: npm cannot
-# attach a trusted publisher to a package that does not exist yet. Store an
-# npm token that can publish to the @open-lakehouse scope as NPM_TOKEN in the
-# `release` environment, then run this workflow on the release tag (e.g.
-# `trestle-diagram-v0.1.0`) with `dry_run` off and `npm_bootstrap` on. release-plz
-# releases the first version as soon as it reaches `main`, so that release's
-# npm job fails until this is done. Then register the trusted publisher on
-# npmjs.com and delete the token.
+# attach a trusted publisher to a package that does not exist yet, and OIDC
+# cannot create one. The bootstrap *stages* the first version with a token
+# instead (`npm stage publish`, which can create a package), and a maintainer
+# promotes it on npmjs.com with 2FA. So the token can't publish anything on
+# its own:
+#   1. Store an npm token that can stage to the @open-lakehouse scope as
+#      NPM_TOKEN in the `release` environment.
+#   2. From `main`: `gh workflow run publish-trestle-diagram.yml -f
+#      tag=trestle-diagram-v0.1.0 -f npm_bootstrap=true -f dry_run=false`
+#      (the default `dry_run=true` checks it first).
+#   3. Approve the staged version on npmjs.com and delete the token. Shortly
+#      before the next trestle-diagram release, register the trusted publisher
+#      (workflow `release-plz.yml`, environment `release`). npm expires one
+#      that hasn't published within 2 days.
+# release-plz releases a package's first version as soon as it reaches `main`,
+# so that release's npm job fails with a 404 until this is done.
 
 on:
   workflow_call:
@@ -38,13 +47,17 @@ on:
         type: string
   workflow_dispatch:
     inputs:
+      tag:
+        description: "Release tag to build (trestle-diagram-v<version>); default: the selected ref"
+        required: false
+        type: string
       dry_run:
         description: "Pack and run `npm publish --dry-run` only (no upload)"
         required: false
         type: boolean
         default: true
       npm_bootstrap:
-        description: "First npm publish only: authenticate with the NPM_TOKEN secret"
+        description: "First npm release only: stage it with the NPM_TOKEN secret, to promote on npmjs.com"
         required: false
         type: boolean
         default: false
@@ -141,11 +154,19 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-      - name: Check npm supports trusted publishing
+      # `npm stage publish` needs npm >= 11.15.0, newer than Node 24 may bundle.
+      - name: Install an npm that can stage
+        if: ${{ inputs.npm_bootstrap }}
+        # zizmor: ignore[adhoc-packages] — the one-time bootstrap only, pinned
+        # to an exact npm release.
+        run: npm install --global npm@11.21.0
+      - name: Check the npm version
+        env:
+          NEEDS: ${{ inputs.npm_bootstrap && '11.15.0' || '11.5.1' }}
         run: |
           npm_version="$(npm --version)"
-          if [ "$(printf '%s\n' 11.5.1 "$npm_version" | sort -V | head -n1)" != 11.5.1 ]; then
-            echo "::error::npm $npm_version is too old for trusted publishing (needs >= 11.5.1)"
+          if [ "$(printf '%s\n' "$NEEDS" "$npm_version" | sort -V | head -n1)" != "$NEEDS" ]; then
+            echo "::error::npm $npm_version is too old (needs >= $NEEDS)"
             exit 1
           fi
       - name: Skip a version that is already published
@@ -157,16 +178,26 @@ jobs:
           fi
       - name: Publish (dry-run)
         if: ${{ env.DRY_RUN == 'true' }}
-        run: npm publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public --dry-run
+        env:
+          BOOTSTRAP: ${{ inputs.npm_bootstrap }}
+        run: |
+          if [ "$BOOTSTRAP" = true ]; then
+            npm stage publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public --dry-run
+          else
+            npm publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public --dry-run
+          fi
       # npm prefers the OIDC exchange and only falls back to NODE_AUTH_TOKEN
       # when it fails, which is the case before the trusted publisher exists.
-      - name: Publish (bootstrap)
+      - name: Stage (bootstrap)
         if: ${{ env.DRY_RUN != 'true' && inputs.npm_bootstrap && !steps.published.outputs.skip }}
         env:
           # zizmor: ignore[use-trusted-publishing] — creating the package is the
-          # one publish OIDC cannot do; token auth is required here.
+          # one thing OIDC cannot do. The token only stages; a maintainer
+          # promotes the version on npmjs.com with 2FA.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public
+        run: |
+          npm stage publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public --provenance
+          echo "::notice::Staged $PACKAGE@$VERSION. Approve it on npmjs.com, then register the trusted publisher."
       - name: Publish
         if: ${{ env.DRY_RUN != 'true' && !inputs.npm_bootstrap && !steps.published.outputs.skip }}
         run: npm publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public
