@@ -16,7 +16,8 @@ name: Release-plz
 # release-plz versions it through a placeholder crate (node/Cargo.toml), and
 # when this run releases that crate, `publish-trestle-diagram` (a
 # `workflow_call` into publish-trestle-diagram.yml) stages it on npmjs.com (a
-# maintainer approves it there) and publishes it to GitHub Packages.
+# maintainer approves it there), publishes it to GitHub Packages, and attaches
+# the attested tarball to its GitHub Release.
 
 on:
   push:
@@ -155,10 +156,14 @@ jobs:
     if: ${{ needs.release-plz-release.outputs.diagram_tag != '' }}
     # npm trusted publishing needs `id-token: write` here and in the called
     # workflow; it validates against this (the calling) workflow's filename.
+    # A called workflow cannot exceed the caller job's permissions: attaching
+    # the tarball to the release needs `contents: write`, and its attestation
+    # needs `attestations: write`.
     permissions:
-      contents: read
+      contents: write
       id-token: write
       packages: write
+      attestations: write
     uses: ./.github/workflows/publish-trestle-diagram.yml
     with:
       tag: ${{ needs.release-plz-release.outputs.diagram_tag }}

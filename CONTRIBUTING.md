@@ -234,6 +234,11 @@ tarball to:
   trestle-diagram release needs that approval.**
 - **GitHub Packages**, with the job's ephemeral `GITHUB_TOKEN` (it has no OIDC
   exchange).
+- **The `trestle-diagram-v<version>` GitHub Release**, as
+  `open-lakehouse-trestle-diagram-<version>.tgz` plus a `.sha256`, with a
+  build-provenance attestation. It covers the GitHub Packages copy too, which
+  can't carry npm provenance:
+  `gh attestation verify open-lakehouse-trestle-diagram-<version>.tgz --repo open-lakehouse/trestle`.
 
 Either registry skips a version it already has, so re-running is safe. A
 version that is staged but not yet approved is not visible yet, though: a
