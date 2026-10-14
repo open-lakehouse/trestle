@@ -234,6 +234,8 @@ pub enum UrlPart {
     Origin,
     /// Only the path (`/api/v1/lineage`), paired with an [`Origin`](UrlPart::Origin) value.
     Path,
+    /// Only `host:port`, for clients whose drivers take their own scheme (e.g. `bolt://`).
+    Authority,
 }
 
 /// One public hostname a module answers in-network (see

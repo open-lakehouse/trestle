@@ -34,6 +34,7 @@ pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedE
                         UrlPart::Full => url.as_str().trim_end_matches('/').to_string(),
                         UrlPart::Origin => origin(&url),
                         UrlPart::Path => url.path().to_string(),
+                        UrlPart::Authority => authority(&url),
                     }),
             }
             .map_err(|source| PlanError::ClientEnv {
@@ -45,6 +46,15 @@ pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedE
         }
     }
     Ok(env)
+}
+
+/// `host[:port]` of `url`.
+fn authority(url: &url::Url) -> String {
+    let host = url.host_str().unwrap_or_default();
+    match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    }
 }
 
 /// `scheme://host[:port]` of `url`, without a trailing slash. Built by hand rather than via
