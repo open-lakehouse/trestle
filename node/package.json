@@ -6,6 +6,7 @@
     "ui-kit",
     "stack-wasm",
     "env-editor",
+    "env-diagram",
     "env-app"
   ],
   "scripts": {
@@ -15,7 +16,8 @@
     "typecheck": "bun run --filter '*' typecheck",
     "dev": "bun run --filter @open-lakehouse/env-editor-app dev",
     "build": "bun run --filter @open-lakehouse/env-editor-app build",
-    "storybook": "bun run --filter @open-lakehouse/env-editor-app storybook"
+    "storybook": "bun run --filter @open-lakehouse/env-editor-app storybook",
+    "build:diagram": "bun run --filter @open-lakehouse/env-diagram build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",

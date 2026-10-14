@@ -12,6 +12,7 @@ the node-based "markitecture" and rendered artifacts.
 | [`@open-lakehouse/ui-kit`](./ui-kit) | Shared headless Radix + CVA primitives + the design-token contract (`DESIGN.md`). |
 | [`@open-lakehouse/stack-wasm`](./stack-wasm) | The in-browser planner: a TS wrapper over the `stack-topology-wasm` crate, plus a fixture stub. |
 | [`@open-lakehouse/env-editor`](./env-editor) | The headless editor component (selection → knobs → diagram → artifacts) and its planner seam (`DESIGN.md`). |
+| [`@open-lakehouse/env-diagram`](./env-diagram) | The published, read-only diagram embed (a bundle of env-editor's canvas) for blogs and docs; released to GitHub Packages. |
 | [`@open-lakehouse/env-editor-app`](./env-app) | The Vite SPA shell that mounts the editor and supplies the theme. |
 
 The layering mirrors the sibling repos: mangrove (the shadcn-pattern + Tailwind v4
@@ -32,6 +33,9 @@ just ui-dev-wasm     # → http://localhost:3020
 
 # Lint + typecheck:
 just ui-check
+
+# Build the publishable diagram embed (node/env-diagram/dist):
+cd node && bun run build:diagram
 ```
 
 ## How the WASM is wired
