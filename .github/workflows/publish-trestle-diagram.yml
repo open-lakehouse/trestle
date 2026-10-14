@@ -23,10 +23,11 @@ name: Publish trestle-diagram
 # Manual runs are for a dry run, or for the one-time npm bootstrap: npm cannot
 # attach a trusted publisher to a package that does not exist yet. Store an
 # npm token that can publish to the @open-lakehouse scope as NPM_TOKEN in the
-# `release` environment and run this workflow from `main` with `dry_run` off and
-# `npm_bootstrap` on, before merging the first Release PR that includes
-# trestle-diagram. Then register the trusted publisher on npmjs.com and delete
-# the token.
+# `release` environment, then run this workflow on the release tag (e.g.
+# `trestle-diagram-v0.1.0`) with `dry_run` off and `npm_bootstrap` on. release-plz
+# releases the first version as soon as it reaches `main`, so that release's
+# npm job fails until this is done. Then register the trusted publisher on
+# npmjs.com and delete the token.
 
 on:
   workflow_call:

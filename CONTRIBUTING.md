@@ -239,9 +239,13 @@ to a package that doesn't exist yet:
 
 1. Create the `open-lakehouse` org on npmjs.com, and add an npm token that can
    publish to it as `NPM_TOKEN` in the `release` environment.
-2. Before merging the first Release PR that includes `trestle-diagram`, run
-   **Publish trestle-diagram** (`workflow_dispatch`) from `main`, first with
-   `dry_run` on, then with `dry_run` off and `npm_bootstrap` on.
+2. Run **Publish trestle-diagram** (`workflow_dispatch`) on the release tag
+   (`gh workflow run publish-trestle-diagram.yml --ref trestle-diagram-v0.1.0
+   -f dry_run=false -f npm_bootstrap=true`; try `dry_run=true` first). A
+   `git_only` package has no tag until its first release, so release-plz
+   releases it on the first push to `main` that contains it, without a Release
+   PR. That run's npm job fails with a 404 until this bootstrap is done.
+   GitHub Packages already has the version, and the rerun skips it.
 3. On npmjs.com, under the package's **Settings → Trusted Publisher**, add the
    GitHub repo `open-lakehouse/trestle`, workflow `release-plz.yml` (npm checks
    the calling workflow), and environment `release`. Delete `NPM_TOKEN`.
