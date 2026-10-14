@@ -476,6 +476,12 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
             olai_stack_topology::PYTHON_CLIENT_DIR,
         );
     }
+    if let Some(url) = plan.client_env_host.get("PUPPYGRAPH_URL") {
+        let _ = writeln!(
+            out,
+            "  Graph:     {url}  (schema: graphs/puppygraph/schema.json; then `docker compose up puppygraph-schema`)"
+        );
+    }
     let _ = writeln!(
         out,
         "  Re-render: edit env.toml, then `trestle env render {dir}`"
@@ -1098,6 +1104,24 @@ mod tests {
         );
         assert!(text.contains("users.yml"), "{text}");
         assert!(text.contains("policies/authz.rego"), "{text}");
+    }
+
+    #[test]
+    fn next_steps_point_at_the_graph_schema() {
+        let plan = baseline_catalog()
+            .plan(&Selection::modules(["puppygraph"]), &PlanCtx::default())
+            .unwrap();
+        let text = next_steps(&plan, std::path::Path::new("lh"));
+        assert!(text.contains("graphs/puppygraph/schema.json"), "{text}");
+        assert!(
+            !next_steps(
+                &baseline_catalog()
+                    .plan(&lakehouse(), &PlanCtx::default())
+                    .unwrap(),
+                std::path::Path::new("lh")
+            )
+            .contains("Graph:")
+        );
     }
 
     fn lakehouse() -> Selection {
