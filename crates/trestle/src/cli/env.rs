@@ -5,9 +5,11 @@
 //! kept deliberately separate from `trestle new`'s project scaffolding and
 //! `trestle generate`'s codegen. Its three subcommands mirror the engine's phases:
 //!
-//! - [`EnvCommand::New`] — pick modules, set the config knobs each exposes, then
-//!   plan + render into a target directory. Interactive (a [`cliclack`] wizard) or
-//!   fully scripted (`--select` / `--set` / `--prefer`).
+//! - [`EnvCommand::New`] — pick modules and how the gateway guards access, optionally
+//!   tune knobs, then plan + render into a target directory. Interactive (a
+//!   [`cliclack`] wizard) or fully scripted (`--select` / `--auth` / `--policy` /
+//!   `--set` / `--prefer`). Every environment gets the gateway; it is not a module
+//!   to pick.
 //! - [`EnvCommand::Render`] — re-render an existing environment from its persisted
 //!   `env.toml` ([`EnvManifest`]); ports and routes stay stable by construction.
 //! - [`EnvCommand::ListModules`] — enumerate the catalog and the knobs each module
@@ -20,9 +22,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use olai_stack_topology::{
-    Catalog, EnvManifest, Knob, KnobKind, ManifestError, ModuleId, PlanCtx, PlanError, RenderError,
-    Secrets, Selection, TargetId, baseline_catalog, baseline_selection, builtin_targets,
-    layout_report,
+    Catalog, EnvManifest, GatewaySettings, Knob, KnobKind, ManifestError, ModuleId, PlanCtx,
+    PlanError, RenderError, Secrets, Selection, TargetId, baseline_catalog, baseline_selection,
+    builtin_targets, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -47,13 +49,22 @@ pub struct EnvNewArgs {
     #[clap(long, short)]
     pub out_dir: Option<PathBuf>,
 
-    /// Module ids to select, e.g. `--select envoy,postgres,mlflow`. Repeatable
-    /// and comma-separated. When empty in interactive mode the wizard starts
-    /// from the default lakehouse selection.
+    /// Module ids to select, e.g. `--select postgres,mlflow`. Repeatable and
+    /// comma-separated. The gateway is always included. When empty in interactive
+    /// mode the wizard starts from the default lakehouse selection.
     #[clap(long = "select", value_name = "MODULE[,MODULE]", value_delimiter = ',')]
     pub select: Vec<String>,
 
-    /// Knob override, `module.key=value` (e.g. `--set envoy.auth=true`).
+    /// Require sign-in on the gateway's API and UI routes (bundled Authelia).
+    #[clap(long)]
+    pub auth: bool,
+
+    /// Authorize every signed-in request with a Rego policy (bundled OPA).
+    /// Implies `--auth`.
+    #[clap(long)]
+    pub policy: bool,
+
+    /// Knob override, `module.key=value` (e.g. `--set postgres.image=postgres:17`).
     /// Repeatable. A value set here is not asked for again by the wizard.
     #[clap(long = "set", value_name = "MODULE.KEY=VALUE", value_parser = parse_knob_override)]
     pub knobs: Vec<((String, String), String)>,
@@ -193,6 +204,11 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
     } else {
         Selection::modules(args.select.iter().cloned())
     };
+    selection.gateway = GatewaySettings {
+        auth: args.auth,
+        policy: args.policy,
+    };
+    let access_preset = args.auth || args.policy;
     for ((module, knob), value) in &args.knobs {
         selection
             .knob_overrides
@@ -233,7 +249,14 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
     if interactive {
         let mode = args.advanced.then_some(wizard::Mode::All);
         let ask_client = !(args.client || args.client_examples);
-        wizard::run(&catalog, &mut selection, mode, ask_client)?;
+        wizard::run(
+            &catalog,
+            &ctx,
+            &mut selection,
+            access_preset,
+            mode,
+            ask_client,
+        )?;
     }
 
     // Plan, then materialize + persist. This is the shared core with `env render`.
@@ -328,6 +351,13 @@ fn config_summary(
         .iter()
         .map(|m| m.id().to_string())
         .collect();
+    let access = match (&plan.gateway.auth, &plan.gateway.policy) {
+        (None, _) => "open (no sign-in)".to_string(),
+        (Some(auth), None) => format!("sign-in ({})", auth.cluster),
+        (Some(auth), Some(policy)) => {
+            format!("sign-in + policy ({}, {})", auth.cluster, policy.cluster)
+        }
+    };
     let overrides = non_default_knobs(selection);
     let settings = if overrides.is_empty() {
         "all defaults".to_string()
@@ -335,7 +365,7 @@ fn config_summary(
         format!("\n  {}", overrides.join("\n  "))
     };
     format!(
-        "Modules:  {}\nSettings: {settings}\nCustomize later: edit {}/env.toml, then `trestle env render {}`",
+        "Modules:  {}\nGateway:  {access}\nSettings: {settings}\nCustomize later: edit {}/env.toml, then `trestle env render {}`",
         modules.join(", "),
         dir.display(),
         dir.display(),
@@ -497,6 +527,13 @@ fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
         } else {
             "  (+notebooks)"
         };
+        // The planner adds these itself; say how instead of implying `--select`.
+        let category = match module.provider_of() {
+            Some(olai_stack_topology::Role::GATEWAY) => format!("{category} (always included)"),
+            Some(olai_stack_topology::Role::AUTH) => format!("{category} (enabled by --auth)"),
+            Some(olai_stack_topology::Role::POLICY) => format!("{category} (enabled by --policy)"),
+            _ => category,
+        };
         match module.summary() {
             Some(summary) => println!("{id}  {name} — {summary}{category}{notebooks}"),
             None => println!("{id}  {name}{category}{notebooks}"),
@@ -650,7 +687,11 @@ fn io_err(e: std::io::Error) -> Error {
 // ---------------------------------------------------------------------------
 
 mod wizard {
-    use super::{Catalog, Knob, KnobKind, ModuleId, Result, Selection, io_err};
+    use super::{
+        Catalog, GatewaySettings, Knob, KnobKind, ModuleId, PlanCtx, Result, Selection, io_err,
+        map_plan_err,
+    };
+    use olai_stack_topology::{Module, Role};
     use std::collections::BTreeMap;
 
     /// How much of the knob surface the wizard asks about.
@@ -665,28 +706,39 @@ mod wizard {
     }
 
     /// Drive the interactive create flow, mutating `selection` in place: pick the
-    /// module set, choose how much to configure (unless `mode` is preset), fill the
-    /// knobs that mode covers, then (when `ask_client`) whether to generate the
-    /// Python client workspace.
+    /// module set and how the gateway guards access (unless `access_preset`), choose
+    /// how much to configure (unless `mode` is preset), fill the knobs that mode
+    /// covers for every module the plan will run (the gateway included), then (when
+    /// `ask_client`) whether to generate the Python client workspace.
     pub fn run(
         catalog: &Catalog,
+        ctx: &PlanCtx,
         selection: &mut Selection,
+        access_preset: bool,
         mode: Option<Mode>,
         ask_client: bool,
     ) -> Result<()> {
         cliclack::intro("trestle env new").map_err(io_err)?;
 
         selection.modules = ask_modules(catalog, &selection.modules)?;
+        if !access_preset {
+            selection.gateway = ask_access(selection.gateway)?;
+        }
         let mode = match mode {
             Some(mode) => mode,
             None => ask_mode()?,
         };
-        configure_knobs(
-            catalog,
-            &selection.modules.clone(),
-            &mut selection.knob_overrides,
-            mode,
-        )?;
+        if mode != Mode::Defaults {
+            let planned: Vec<ModuleId> = catalog
+                .plan(selection, ctx)
+                .map_err(map_plan_err)?
+                .graph
+                .nodes
+                .iter()
+                .map(|m| m.id().clone())
+                .collect();
+            configure_knobs(catalog, &planned, &mut selection.knob_overrides, mode)?;
+        }
         if ask_client {
             ask_client_workspace(catalog, selection)?;
         }
@@ -726,11 +778,21 @@ mod wizard {
         Ok(())
     }
 
-    /// Multi-select the module set, pre-checking `preselected`.
+    /// Whether `module` is one the planner adds on its own (see [`Role::GATEWAY_MANAGED`]).
+    fn gateway_managed(module: &dyn Module) -> bool {
+        module
+            .provider_of()
+            .is_some_and(|role| Role::GATEWAY_MANAGED.contains(&role))
+    }
+
+    /// Multi-select the module set, pre-checking `preselected`. The gateway and its
+    /// sign-in / policy providers are not offered: the plan adds them itself. A
+    /// preselected one (from `--select`) is kept as-is.
     fn ask_modules(catalog: &Catalog, preselected: &[ModuleId]) -> Result<Vec<ModuleId>> {
         let items: Vec<(String, String, String)> = catalog
             .modules()
             .iter()
+            .filter(|m| !gateway_managed(m.as_ref()))
             .map(|m| {
                 let id = m.id().to_string();
                 let label = m.display_name().unwrap_or(&id).to_string();
@@ -747,7 +809,32 @@ mod wizard {
                 .required(true)
                 .interact()
                 .map_err(io_err)?;
-        Ok(picked.into_iter().map(ModuleId::from).collect())
+        let managed = preselected
+            .iter()
+            .filter(|id| catalog.get(id).is_some_and(|m| gateway_managed(m.as_ref())));
+        Ok(managed
+            .cloned()
+            .chain(picked.into_iter().map(ModuleId::from))
+            .collect())
+    }
+
+    /// How the gateway guards access: open, sign-in, or sign-in plus policy.
+    fn ask_access(current: GatewaySettings) -> Result<GatewaySettings> {
+        cliclack::select("Gateway access?")
+            .item(GatewaySettings::OPEN, "Open", "no sign-in")
+            .item(
+                GatewaySettings::SIGN_IN,
+                "Sign-in",
+                "single-sign-on for APIs and UIs (Authelia)",
+            )
+            .item(
+                GatewaySettings::POLICY,
+                "Sign-in + policy",
+                "also authorize each request with Rego (OPA)",
+            )
+            .initial_value(current)
+            .interact()
+            .map_err(io_err)
     }
 
     /// Offer the recommended defaults first; customizing is opt-in.
@@ -947,7 +1034,7 @@ mod wizard {
 #[cfg(test)]
 mod tests {
     use olai_stack_topology::{
-        EnvManifest, KnobKind, ModuleId, PlanCtx, Selection, baseline_catalog,
+        EnvManifest, GatewaySettings, KnobKind, ModuleId, PlanCtx, Selection, baseline_catalog,
     };
 
     use super::{config_summary, knob_reference, next_steps, parse_env_lines, wizard};
@@ -971,7 +1058,7 @@ mod tests {
     fn next_steps_point_at_the_files_a_user_needs() {
         let plain = baseline_catalog()
             .plan(
-                &Selection::modules(["envoy", "postgres", "mlflow"]),
+                &Selection::modules(["postgres", "mlflow"]),
                 &PlanCtx {
                     gateway_host_port: 9090,
                     ..PlanCtx::default()
@@ -989,7 +1076,10 @@ mod tests {
 
         let guarded = baseline_catalog()
             .plan(
-                &Selection::modules(["envoy", "postgres", "mlflow", "opa"]),
+                &Selection {
+                    gateway: GatewaySettings::POLICY,
+                    ..Selection::modules(["postgres", "mlflow"])
+                },
                 &PlanCtx::default(),
             )
             .unwrap();
@@ -1004,7 +1094,7 @@ mod tests {
     }
 
     fn lakehouse() -> Selection {
-        Selection::modules(["envoy", "postgres", "mlflow"])
+        Selection::modules(["postgres", "mlflow"])
     }
 
     #[test]
@@ -1022,9 +1112,16 @@ mod tests {
             }
         }
         let catalog = baseline_catalog();
+        let headwaters = catalog.get(&ModuleId::from("headwaters")).unwrap();
+        let serve_ui = headwaters
+            .knobs()
+            .iter()
+            .find(|k| k.key == "serve_ui")
+            .unwrap();
+        assert!(!serve_ui.advanced, "headwaters.serve_ui is a key setting");
+        // Sign-in is a gateway setting now, not a knob to tune.
         let envoy = catalog.get(&ModuleId::from("envoy")).unwrap();
-        let auth = envoy.knobs().iter().find(|k| k.key == "auth").unwrap();
-        assert!(!auth.advanced, "envoy.auth is a key setting");
+        assert!(envoy.knobs().iter().all(|k| k.key != "auth"));
     }
 
     #[test]
@@ -1035,6 +1132,7 @@ mod tests {
         let defaults = lakehouse();
         let text = config_summary(&plan(&defaults), &defaults, dir);
         assert!(text.contains("Settings: all defaults"), "{text}");
+        assert!(text.contains("Gateway:  open (no sign-in)"), "{text}");
         assert!(
             text.contains("envoy, ") || text.contains(", envoy"),
             "{text}"
@@ -1047,19 +1145,25 @@ mod tests {
             .entry(ModuleId::from("postgres"))
             .or_default()
             .insert("image".into(), "postgres:17".into());
+        tuned.gateway = GatewaySettings::POLICY;
         let text = config_summary(&plan(&tuned), &tuned, dir);
         assert!(text.contains("postgres.image = postgres:17"), "{text}");
         assert!(!text.contains("all defaults"), "{text}");
+        assert!(
+            text.contains("Gateway:  sign-in + policy (authelia, opa)"),
+            "{text}"
+        );
     }
 
     #[test]
     fn knob_reference_comments_out_defaults_and_stays_valid_toml() {
         let mut selection = lakehouse();
+        selection.gateway = GatewaySettings::SIGN_IN;
         selection
             .knob_overrides
             .entry(ModuleId::from("envoy"))
             .or_default()
-            .insert("auth".into(), "true".into());
+            .insert("image".into(), "envoy:pinned".into());
         let plan = baseline_catalog()
             .plan(&selection, &PlanCtx::default())
             .unwrap();
@@ -1078,8 +1182,9 @@ mod tests {
             reference.contains("# more for [selection.knob_overrides.envoy] above:"),
             "{reference}"
         );
-        assert!(!reference.contains("# auth ="), "{reference}");
-        // `auth = true` pulls in authelia; its knobs are listed too.
+        assert!(!reference.contains("# image = \"envoyproxy"), "{reference}");
+        assert!(reference.contains("# certs_image = "), "{reference}");
+        // Sign-in pulls in authelia; its knobs are listed too.
         assert!(
             reference.contains("[selection.knob_overrides.authelia]"),
             "{reference}"

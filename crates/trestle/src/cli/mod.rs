@@ -181,20 +181,20 @@ mod tests {
         let args = env_new(&[
             "lakehouse",
             "--select",
-            "envoy,postgres",
+            "headwaters,postgres",
             "--set",
-            "envoy.auth=true",
+            "headwaters.serve_ui=false",
         ]);
         assert_eq!(args.name, "lakehouse");
         assert_eq!(
             args.select,
-            vec!["envoy".to_string(), "postgres".to_string()]
+            vec!["headwaters".to_string(), "postgres".to_string()]
         );
         assert_eq!(
             args.knobs,
             vec![(
-                ("envoy".to_string(), "auth".to_string()),
-                "true".to_string()
+                ("headwaters".to_string(), "serve_ui".to_string()),
+                "false".to_string()
             )]
         );
     }
