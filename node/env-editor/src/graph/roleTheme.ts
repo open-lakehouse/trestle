@@ -11,6 +11,7 @@ import {
   HardDrive,
   type LucideIcon,
   Network,
+  NotebookPen,
   Scale,
   Server,
   ShieldCheck,
@@ -75,6 +76,11 @@ const ROLE_STYLES: Record<string, RoleStyle> = {
     label: "Agent platform",
     icon: Bot,
     accent: "text-primary",
+  },
+  notebooks: {
+    label: "Notebooks",
+    icon: NotebookPen,
+    accent: "text-[hsl(var(--status-done))]",
   },
 };
 

@@ -391,6 +391,31 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
     },
     {
+      id: "marimo",
+      display_name: "marimo notebooks",
+      summary: "Hosted marimo editor for the client workspace's notebooks.",
+      category: "notebooks",
+      provider_of: "notebooks",
+      requires: ["envoy"],
+      conflicts_with: [],
+      resource_kinds: [],
+      resource_nouns: [],
+      knobs: [
+        {
+          key: "image",
+          title: "marimo runtime image",
+          kind: {
+            kind: "string",
+          },
+          default: "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["MARIMO_IMAGE"],
+          advanced: true,
+        },
+      ],
+    },
+    {
       id: "opa",
       display_name: "Open Policy Agent",
       summary: "Rego authorization for every gateway request, after sign-on.",
