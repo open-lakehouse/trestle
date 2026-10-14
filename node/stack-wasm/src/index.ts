@@ -16,6 +16,7 @@ import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 export type {
   AuthDto,
   CatalogDto,
+  ClientSelection,
   ClusterDto,
   Endpoint,
   ExposedDto,

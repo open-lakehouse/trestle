@@ -53,6 +53,17 @@ export interface Selection {
   /** Providers the environment uses but does not run (a managed cloud database
    *  or object store), by module id. */
   external?: Record<string, ExternalResource>;
+  /** Whether to generate the Python client workspace (`client/`), and with
+   *  which example notebooks (mirrors `ClientSelection`). Off when omitted. */
+  client?: ClientSelection;
+}
+
+/** Python client workspace options (mirrors the Rust `ClientSelection`). */
+export interface ClientSelection {
+  /** Generate `client/pyproject.toml`, a README and a connection notebook. */
+  python?: boolean;
+  /** Also emit the selected modules' example notebooks; implies `python`. */
+  examples?: boolean;
 }
 
 /** A provider marked external (mirrors the Rust `ExternalResource`). */
