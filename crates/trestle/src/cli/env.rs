@@ -75,6 +75,15 @@ pub struct EnvNewArgs {
     #[clap(long)]
     pub data_root: Option<String>,
 
+    /// Generate a Python client workspace (uv + marimo) under `client/`.
+    #[clap(long)]
+    pub client: bool,
+
+    /// Also add the selected services' example notebooks to the client
+    /// workspace. Implies `--client`.
+    #[clap(long)]
+    pub client_examples: bool,
+
     /// Skip all prompts. A required knob with no value is an error in this mode.
     #[clap(long)]
     pub non_interactive: bool,
@@ -176,6 +185,8 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
             .or_default()
             .insert(knob.clone(), value.clone());
     }
+    selection.client.python = args.client || args.client_examples;
+    selection.client.examples = args.client_examples;
 
     // The context carries the environment-level facts the planner can't derive.
     let mut ctx = PlanCtx {
@@ -201,9 +212,11 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         );
     }
 
-    // Interactive: let the wizard pick modules and fill each knob the CLI didn't.
+    // Interactive: let the wizard pick modules and fill each knob the CLI didn't. The client
+    // workspace is only asked about when no `--client*` flag already decided it.
     if !args.non_interactive {
-        wizard::run(&catalog, &mut selection)?;
+        let ask_client = !(args.client || args.client_examples);
+        wizard::run(&catalog, &mut selection, ask_client)?;
     }
 
     // Plan, then materialize + persist. This is the shared core with `env render`.
@@ -300,6 +313,13 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
         olai_stack_topology::CLIENT_HOST_ENV_PATH,
         olai_stack_topology::CLIENT_CONTAINER_ENV_PATH,
     );
+    if plan.python_client.is_some() {
+        let _ = writeln!(
+            out,
+            "  Notebooks: cd {dir}/{} && uv sync && uv run marimo edit notebooks",
+            olai_stack_topology::PYTHON_CLIENT_DIR,
+        );
+    }
     let _ = writeln!(
         out,
         "  Re-render: edit env.toml, then `trestle env render {dir}`"
@@ -353,9 +373,14 @@ fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
             .category()
             .map(|c| format!("  [{c}]"))
             .unwrap_or_default();
+        let notebooks = if module.provides().python.notebooks.is_empty() {
+            ""
+        } else {
+            "  (+notebooks)"
+        };
         match module.summary() {
-            Some(summary) => println!("{id}  {name} — {summary}{category}"),
-            None => println!("{id}  {name}{category}"),
+            Some(summary) => println!("{id}  {name} — {summary}{category}{notebooks}"),
+            None => println!("{id}  {name}{category}{notebooks}"),
         }
         if args.knobs {
             for knob in module.knobs() {
@@ -507,8 +532,9 @@ mod wizard {
     use std::collections::BTreeMap;
 
     /// Drive the interactive create flow, mutating `selection` in place: pick the
-    /// module set, then fill each knob the CLI didn't already set via `--set`.
-    pub fn run(catalog: &Catalog, selection: &mut Selection) -> Result<()> {
+    /// module set, fill each knob the CLI didn't already set via `--set`, then (when
+    /// `ask_client`) whether to generate the Python client workspace.
+    pub fn run(catalog: &Catalog, selection: &mut Selection, ask_client: bool) -> Result<()> {
         cliclack::intro("trestle env new").map_err(io_err)?;
 
         selection.modules = ask_modules(catalog, &selection.modules)?;
@@ -517,7 +543,42 @@ mod wizard {
             &selection.modules.clone(),
             &mut selection.knob_overrides,
         )?;
+        if ask_client {
+            ask_client_workspace(catalog, selection)?;
+        }
 
+        Ok(())
+    }
+
+    /// Ask whether to generate the Python client workspace and, when any selected module
+    /// ships example notebooks, whether to include them.
+    fn ask_client_workspace(catalog: &Catalog, selection: &mut Selection) -> Result<()> {
+        selection.client.python =
+            cliclack::confirm("Generate a Python client workspace (uv + marimo)?")
+                .initial_value(false)
+                .interact()
+                .map_err(io_err)?;
+        if !selection.client.python {
+            return Ok(());
+        }
+        // Only directly-selected modules are listed; dependencies pulled in by the planner
+        // contribute their notebooks too.
+        let with_examples: Vec<&str> = selection
+            .modules
+            .iter()
+            .filter_map(|id| catalog.get(id))
+            .filter(|m| !m.provides().python.notebooks.is_empty())
+            .map(|m| m.id().as_str())
+            .collect();
+        if !with_examples.is_empty() {
+            selection.client.examples = cliclack::confirm(format!(
+                "Include example notebooks ({})?",
+                with_examples.join(", ")
+            ))
+            .initial_value(true)
+            .interact()
+            .map_err(io_err)?;
+        }
         Ok(())
     }
 

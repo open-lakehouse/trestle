@@ -504,3 +504,41 @@ fn full_azure_scenario_includes_lineage_and_tracing_routes() {
         );
     }
 }
+
+#[test]
+fn client_workspace_survives_a_re_render_with_notebook_edits_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut selection = Selection::modules(["envoy", "postgres", "mlflow", "rustfs"]);
+    selection.client.examples = true;
+    write_env(&selection, &PlanCtx::default(), dir.path());
+
+    let client = dir.path().join("client");
+    for f in [
+        "pyproject.toml",
+        "README.md",
+        ".gitignore",
+        "host.env",
+        "notebooks/00_connect.py",
+        "notebooks/mlflow_quickstart.py",
+    ] {
+        assert!(
+            client.join(f).is_file(),
+            "expected client/{f} to be written"
+        );
+    }
+
+    // A user edits a notebook; the re-render (from the persisted manifest) keeps the edit
+    // and still regenerates the trestle-owned pyproject.toml.
+    let notebook = client.join("notebooks/mlflow_quickstart.py");
+    fs::write(&notebook, "# my edits\n").unwrap();
+    fs::write(client.join("pyproject.toml"), "stale").unwrap();
+    let manifest = EnvManifest::read_from(&dir.path().join("env.toml")).unwrap();
+    assert_eq!(manifest.selection.client, selection.client);
+    render_manifest(&manifest, dir.path());
+    assert_eq!(fs::read_to_string(&notebook).unwrap(), "# my edits\n");
+    assert!(
+        fs::read_to_string(client.join("pyproject.toml"))
+            .unwrap()
+            .contains("mlflow>=3")
+    );
+}
