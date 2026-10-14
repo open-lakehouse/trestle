@@ -227,10 +227,17 @@ the `publish-trestle-diagram` job (a `workflow_call` into
 tarball to:
 
 - **npmjs.com**, with trusted publishing (OIDC) and a provenance attestation.
+  The trusted publisher only allows *staged* publishing, so the job runs
+  `npm stage publish` and the version stays pending until a maintainer
+  approves it with 2FA, on the package's npmjs.com page or with
+  `npm stage approve <stage-id>` (`npm stage list` shows the id). **Every
+  trestle-diagram release needs that approval.**
 - **GitHub Packages**, with the job's ephemeral `GITHUB_TOKEN` (it has no OIDC
   exchange).
 
-Either registry skips a version it already has, so re-running is safe. If you
+Either registry skips a version it already has, so re-running is safe. A
+version that is staged but not yet approved is not visible yet, though: a
+re-run tries to stage it again and fails. Approve the pending version instead. If you
 add a new source file or directory to the bundle, add it to `include` in
 `node/Cargo.toml` (`cargo package --list -p trestle-diagram` shows the set).
 
@@ -257,7 +264,8 @@ Release PR. That run's npm job fails with a 404 until this is done:
    bumps `trestle-diagram`, add the trusted publisher under the package's
    **Settings → Trusted Publisher**: GitHub repo `open-lakehouse/trestle`,
    workflow `release-plz.yml` (npm checks the calling workflow), and
-   environment `release`. npm expires a new trusted publisher that hasn't
+   environment `release`. Allow only **stage publish**; leave direct
+   publishing off, so every release still needs a 2FA approval. npm expires a new trusted publisher that hasn't
    published within 2 days; if that happens, delete it and add it again.
 5. In the GitHub package's settings, grant read access to repositories that
    install it from GitHub Packages.

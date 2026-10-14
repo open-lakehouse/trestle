@@ -15,8 +15,8 @@ name: Release-plz
 # The npm package @open-lakehouse/trestle-diagram rides along the same way:
 # release-plz versions it through a placeholder crate (node/Cargo.toml), and
 # when this run releases that crate, `publish-trestle-diagram` (a
-# `workflow_call` into publish-trestle-diagram.yml) publishes it to npmjs.com
-# and GitHub Packages.
+# `workflow_call` into publish-trestle-diagram.yml) stages it on npmjs.com (a
+# maintainer approves it there) and publishes it to GitHub Packages.
 
 on:
   push:
