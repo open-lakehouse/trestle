@@ -71,7 +71,7 @@ function scopeCss(code: string): string {
 /** Rewrite the extracted stylesheet once Vite has emitted it. */
 function scopedStyles(): Plugin {
   return {
-    name: "env-diagram:scoped-styles",
+    name: "trestle-diagram:scoped-styles",
     enforce: "post",
     generateBundle(_, bundle) {
       for (const file of Object.values(bundle)) {

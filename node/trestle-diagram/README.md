@@ -1,4 +1,4 @@
-# @open-lakehouse/env-diagram
+# @open-lakehouse/trestle-diagram
 
 Embed a trestle environment diagram (the environment editor's canvas) in another
 site, such as a blog post or docs page. It is read-only and drawn from a
@@ -23,7 +23,7 @@ no-JS fallback.
 The package is published to npmjs.com, so it installs like any other package:
 
 ```bash
-bun add @open-lakehouse/env-diagram   # needs react / react-dom 19
+bun add @open-lakehouse/trestle-diagram   # needs react / react-dom 19
 ```
 
 The same versions are also published to GitHub Packages. To install from
@@ -42,8 +42,8 @@ use a token with `read:packages`.
 ## Use
 
 ```tsx
-import { EnvironmentDiagram } from "@open-lakehouse/env-diagram";
-import "@open-lakehouse/env-diagram/styles.css";
+import { EnvironmentDiagram } from "@open-lakehouse/trestle-diagram";
+import "@open-lakehouse/trestle-diagram/styles.css";
 import snapshot from "./lakehouse.trestle-graph.json";
 
 <EnvironmentDiagram snapshot={snapshot} colorMode="dark" />;
@@ -109,4 +109,4 @@ bun run build:diagram   # vite (JS + scoped CSS) → rollup (bundled .d.ts) → 
 `vite.config.ts` scopes the stylesheet. `scripts/check-dist.mjs` fails the build
 if `dist/` imports a package that isn't declared in `dependencies`. Releases
 are published to npmjs.com (trusted publishing, OIDC) and GitHub Packages by
-`.github/workflows/publish-env-diagram.yml` (tag `env-diagram-v<version>`).
+`.github/workflows/publish-trestle-diagram.yml` (tag `trestle-diagram-v<version>`).

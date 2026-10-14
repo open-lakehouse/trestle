@@ -1,7 +1,7 @@
 // The read-only diagram surface (`@open-lakehouse/env-editor/diagram`): embed a
 // planned environment's canvas from a frozen graph snapshot, and export the
 // rendered diagram as an image. Nothing here plans or edits; this entry is what
-// `@open-lakehouse/env-diagram` bundles and publishes.
+// `@open-lakehouse/trestle-diagram` bundles and publishes.
 
 export type {
   ExposedDto,

@@ -33,8 +33,39 @@
         "vite": "^6.0.0",
       },
     },
-    "env-diagram": {
-      "name": "@open-lakehouse/env-diagram",
+    "env-editor": {
+      "name": "@open-lakehouse/env-editor",
+      "version": "0.0.0",
+      "dependencies": {
+        "@open-lakehouse/ui-kit": "workspace:*",
+        "@xyflow/react": "^12.4.0",
+        "elkjs": "^0.11.0",
+        "html-to-image": "^1.11.13",
+        "lucide-react": "^0.475.0",
+      },
+      "devDependencies": {
+        "@open-lakehouse/stack-wasm": "workspace:*",
+        "@storybook/react": "^8.6.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "typescript": "^5.7.0",
+      },
+      "peerDependencies": {
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+    },
+    "stack-wasm": {
+      "name": "@open-lakehouse/stack-wasm",
+      "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "trestle-diagram": {
+      "name": "@open-lakehouse/trestle-diagram",
       "version": "0.1.0",
       "dependencies": {
         "@radix-ui/react-tooltip": "^1.2.8",
@@ -66,37 +97,6 @@
       "peerDependencies": {
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
-      },
-    },
-    "env-editor": {
-      "name": "@open-lakehouse/env-editor",
-      "version": "0.0.0",
-      "dependencies": {
-        "@open-lakehouse/ui-kit": "workspace:*",
-        "@xyflow/react": "^12.4.0",
-        "elkjs": "^0.11.0",
-        "html-to-image": "^1.11.13",
-        "lucide-react": "^0.475.0",
-      },
-      "devDependencies": {
-        "@open-lakehouse/stack-wasm": "workspace:*",
-        "@storybook/react": "^8.6.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-        "typescript": "^5.7.0",
-      },
-      "peerDependencies": {
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-      },
-    },
-    "stack-wasm": {
-      "name": "@open-lakehouse/stack-wasm",
-      "version": "0.0.0",
-      "devDependencies": {
-        "typescript": "^5.7.0",
       },
     },
     "ui-kit": {
@@ -255,13 +255,13 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "https://npm-proxy.cloud.databricks.com/@jridgewell/trace-mapping/-/trace-mapping-0.3.31.tgz", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@open-lakehouse/env-diagram": ["@open-lakehouse/env-diagram@workspace:env-diagram"],
-
     "@open-lakehouse/env-editor": ["@open-lakehouse/env-editor@workspace:env-editor"],
 
     "@open-lakehouse/env-editor-app": ["@open-lakehouse/env-editor-app@workspace:env-app"],
 
     "@open-lakehouse/stack-wasm": ["@open-lakehouse/stack-wasm@workspace:stack-wasm"],
+
+    "@open-lakehouse/trestle-diagram": ["@open-lakehouse/trestle-diagram@workspace:trestle-diagram"],
 
     "@open-lakehouse/ui-kit": ["@open-lakehouse/ui-kit@workspace:ui-kit"],
 

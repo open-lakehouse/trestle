@@ -59,7 +59,7 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
   }
   if (input.version !== GRAPH_SNAPSHOT_VERSION) {
     throw new Error(
-      `graph snapshot: unsupported version ${JSON.stringify(input.version)} (this build reads version ${GRAPH_SNAPSHOT_VERSION}); re-export it or upgrade @open-lakehouse/env-diagram`,
+      `graph snapshot: unsupported version ${JSON.stringify(input.version)} (this build reads version ${GRAPH_SNAPSHOT_VERSION}); re-export it or upgrade @open-lakehouse/trestle-diagram`,
     );
   }
   const { graph } = input;

@@ -55,7 +55,7 @@ export interface EnvironmentDiagramProps {
  * fixed, fitted picture that never captures the page's scroll; the expand
  * button opens a dialog to pan and zoom.
  *
- * Styles ship separately (`@open-lakehouse/env-diagram/styles.css`) and are
+ * Styles ship separately (`@open-lakehouse/trestle-diagram/styles.css`) and are
  * scoped to the `.trestle-diagram` root this renders.
  */
 export function EnvironmentDiagram({

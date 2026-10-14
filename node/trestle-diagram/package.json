@@ -1,5 +1,5 @@
 {
-  "name": "@open-lakehouse/env-diagram",
+  "name": "@open-lakehouse/trestle-diagram",
   "version": "0.1.0",
   "description": "Embed trestle environment diagrams, read-only, from a graph snapshot",
   "license": "Apache-2.0",
@@ -7,7 +7,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/open-lakehouse/trestle.git",
-    "directory": "node/env-diagram"
+    "directory": "node/trestle-diagram"
   },
   "files": [
     "dist",
