@@ -462,7 +462,14 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
         olai_stack_topology::CLIENT_HOST_ENV_PATH,
         olai_stack_topology::CLIENT_CONTAINER_ENV_PATH,
     );
-    if plan.python_client.is_some() {
+    if let Some(url) = plan.client_env_host.get("MARIMO_URL") {
+        // The stack serves the workspace itself (the `marimo` module).
+        let _ = writeln!(
+            out,
+            "  Notebooks: {url}/  (hosted; edits land in {dir}/{})",
+            olai_stack_topology::PYTHON_CLIENT_DIR,
+        );
+    } else if plan.python_client.is_some() {
         let _ = writeln!(
             out,
             "  Notebooks: cd {dir}/{} && uv sync && uv run marimo edit notebooks",
