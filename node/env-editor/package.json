@@ -7,6 +7,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./diagram": {
+      "types": "./src/diagram/index.ts",
+      "import": "./src/diagram/index.ts"
     }
   },
   "scripts": {
@@ -16,6 +20,7 @@
     "@open-lakehouse/ui-kit": "workspace:*",
     "@xyflow/react": "^12.4.0",
     "elkjs": "^0.11.0",
+    "html-to-image": "^1.11.13",
     "lucide-react": "^0.475.0"
   },
   "peerDependencies": {

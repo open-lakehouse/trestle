@@ -314,6 +314,8 @@ function EditorBody({
                     planning={planning}
                     componentCount={planned.size}
                     hasError={!!error}
+                    graph={graph}
+                    onExportError={setNotice}
                   />
                   <CanvasNotice
                     error={catalog ? error : null}

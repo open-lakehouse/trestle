@@ -1,11 +1,26 @@
 // Public surface of `@open-lakehouse/env-editor`: the headless environment
 // editor plus its planner seam, state hook, diagram canvas and its editing
-// pieces, and step components — so a host
+// pieces, step components, and the read-only embeddable diagram — so a host
 // can use the whole editor or compose the pieces. All planning flows through the
 // injected `Planner` (see ./planner and DESIGN.md); this package has no runtime
 // dependency on the wasm engine.
 
 export { FilesPanel } from "./artifacts/FilesPanel";
+export {
+  createGraphSnapshot,
+  type DiagramImageFormat,
+  type DiagramImageOptions,
+  EnvironmentDiagram,
+  type EnvironmentDiagramProps,
+  GRAPH_SNAPSHOT_EXTENSION,
+  GRAPH_SNAPSHOT_FORMAT,
+  GRAPH_SNAPSHOT_VERSION,
+  type GraphSnapshot,
+  parseGraphSnapshot,
+  stringifyGraphSnapshot,
+  useDiagramImage,
+  useDiagramReady,
+} from "./diagram";
 export {
   EnvironmentEditor,
   type EnvironmentEditorProps,

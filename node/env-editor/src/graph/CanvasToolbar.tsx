@@ -8,6 +8,9 @@ import {
 import { Panel } from "@xyflow/react";
 import {
   AlertTriangle,
+  FileImage,
+  FileJson,
+  ImageDown,
   Info,
   Loader2,
   Plus,
@@ -16,6 +19,18 @@ import {
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import {
+  type DiagramImageFormat,
+  downloadText,
+  downloadUrl,
+  useDiagramImage,
+} from "../diagram/exportImage";
+import {
+  createGraphSnapshot,
+  GRAPH_SNAPSHOT_EXTENSION,
+  stringifyGraphSnapshot,
+} from "../diagram/snapshot";
+import type { GraphDto } from "../types";
 
 export interface CanvasToolbarProps {
   onAdd: () => void;
@@ -29,6 +44,12 @@ export interface CanvasToolbarProps {
   componentCount: number;
   /** The latest plan failed. */
   hasError: boolean;
+  /** The planned graph, for the export actions (disabled while absent). */
+  graph?: GraphDto;
+  /** The exported files' base name. Defaults to `"environment"`. */
+  exportName?: string;
+  /** Called with a message when an export fails. */
+  onExportError?: (message: string) => void;
 }
 
 const MOD_KEY =
@@ -37,8 +58,8 @@ const MOD_KEY =
     : "Ctrl+";
 
 /**
- * The canvas's top-left bar: add a component, undo/redo, and the planner's
- * status. Render it as a child of `MarkitectureCanvas`.
+ * The canvas's top-left bar: add a component, undo/redo, export the diagram,
+ * and the planner's status. Render it as a child of `MarkitectureCanvas`.
  */
 export function CanvasToolbar({
   onAdd,
@@ -49,6 +70,9 @@ export function CanvasToolbar({
   planning,
   componentCount,
   hasError,
+  graph,
+  exportName = "environment",
+  onExportError,
 }: CanvasToolbarProps) {
   return (
     <Panel position="top-left">
@@ -76,6 +100,12 @@ export function CanvasToolbar({
           <Redo2 className="h-4 w-4" />
         </IconAction>
         <div className="mx-1 h-5 w-px bg-border" />
+        <ExportActions
+          graph={graph}
+          name={exportName}
+          onError={onExportError}
+        />
+        <div className="mx-1 h-5 w-px bg-border" />
         <span
           className={cn(
             "inline-flex items-center gap-1.5 px-2 text-xs",
@@ -101,6 +131,67 @@ export function CanvasToolbar({
         </span>
       </div>
     </Panel>
+  );
+}
+
+/**
+ * Save the diagram for use elsewhere: a graph snapshot (what an
+ * `EnvironmentDiagram` embed renders) or a static SVG/PNG image.
+ */
+function ExportActions({
+  graph,
+  name,
+  onError,
+}: {
+  graph: GraphDto | undefined;
+  name: string;
+  onError?: (message: string) => void;
+}) {
+  const renderImage = useDiagramImage();
+  const empty = !graph || graph.nodes.length === 0;
+
+  const exportSnapshot = () => {
+    if (!graph) return;
+    downloadText(
+      stringifyGraphSnapshot(createGraphSnapshot(graph)),
+      `${name}${GRAPH_SNAPSHOT_EXTENSION}`,
+    );
+  };
+  const exportImage = (format: DiagramImageFormat) => {
+    renderImage({ format })
+      .then((url) => downloadUrl(url, `${name}.${format}`))
+      .catch((e: unknown) => {
+        const reason = e instanceof Error ? e.message : String(e);
+        onError?.(
+          `Could not export the diagram as ${format.toUpperCase()}: ${reason}`,
+        );
+      });
+  };
+
+  return (
+    <>
+      <IconAction
+        label="Export snapshot (embed in docs)"
+        disabled={empty}
+        onClick={exportSnapshot}
+      >
+        <FileJson className="h-4 w-4" />
+      </IconAction>
+      <IconAction
+        label="Export SVG"
+        disabled={empty}
+        onClick={() => exportImage("svg")}
+      >
+        <FileImage className="h-4 w-4" />
+      </IconAction>
+      <IconAction
+        label="Export PNG"
+        disabled={empty}
+        onClick={() => exportImage("png")}
+      >
+        <ImageDown className="h-4 w-4" />
+      </IconAction>
+    </>
   );
 }
 

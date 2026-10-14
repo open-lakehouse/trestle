@@ -75,6 +75,14 @@ export interface MarkitectureCanvasProps {
   onDeselect?: () => void;
   /** Pan to a node; bump `seq` to pan again to the same one. */
   focus?: { id: string; seq: number };
+  /**
+   * Whether the viewport can be panned and zoomed. Defaults to `true`; an
+   * embed inside a scrolling page passes `false` so the diagram is a fixed,
+   * fitted picture that never captures the page's scroll or drag.
+   */
+  interactive?: boolean;
+  /** Whether to show the connection-kind legend. Defaults to `true`. */
+  legend?: boolean;
   /** Overlays rendered inside the flow (e.g. `<Panel>`s); they may use `useReactFlow`. */
   children?: ReactNode;
 }
@@ -191,6 +199,8 @@ function MarkitectureFlow({
   actions,
   onDeselect,
   focus,
+  interactive = true,
+  legend = true,
   children,
 }: MarkitectureCanvasProps) {
   const { nodes, edges } = useTopologyLayout(graph);
@@ -353,6 +363,11 @@ function MarkitectureFlow({
         // delete handling.
         deleteKeyCode={null}
         zoomOnDoubleClick={false}
+        panOnDrag={interactive}
+        zoomOnScroll={interactive}
+        zoomOnPinch={interactive}
+        preventScrolling={interactive}
+        nodesDraggable={interactive}
         colorMode={colorMode}
         fitView
         proOptions={{ hideAttribution: true }}
@@ -364,10 +379,12 @@ function MarkitectureFlow({
           size={1}
           color="hsl(var(--muted-foreground) / 0.35)"
         />
-        <Controls showInteractive={false} />
-        <Panel position="top-right">
-          <Legend kinds={kinds} />
-        </Panel>
+        {interactive && <Controls showInteractive={false} />}
+        {legend && (
+          <Panel position="top-right">
+            <Legend kinds={kinds} />
+          </Panel>
+        )}
         {children}
       </ReactFlow>
     </CanvasContext.Provider>
@@ -401,8 +418,31 @@ function useFreshNodes(nodes: Node[]): Set<string> {
   return fresh;
 }
 
-/** A compact key for the edge kinds present in the graph. */
-function Legend({ kinds }: { kinds: Set<TopologyEdgeKind> }) {
+/**
+ * A compact key for the edge kinds present in a graph: a stacked card (the
+ * canvas's overlay) or a single wrapping row (under an embedded diagram).
+ */
+export function ConnectionLegend({
+  graph,
+  layout = "card",
+}: {
+  graph: GraphDto | undefined;
+  layout?: "card" | "row";
+}) {
+  const kinds = useMemo(
+    () => new Set(graph?.edges.map((e) => e.kind) ?? []),
+    [graph],
+  );
+  return <Legend kinds={kinds} layout={layout} />;
+}
+
+function Legend({
+  kinds,
+  layout = "card",
+}: {
+  kinds: Set<TopologyEdgeKind>;
+  layout?: "card" | "row";
+}) {
   const order: TopologyEdgeKind[] = [
     "access",
     "route",
@@ -410,9 +450,22 @@ function Legend({ kinds }: { kinds: Set<TopologyEdgeKind> }) {
     "authorizes",
     "uses",
   ];
+  const row = layout === "row";
   return (
-    <div className="rounded-lg border border-border bg-card/95 px-3 py-2 text-[11px] text-muted-foreground shadow-sm">
-      <div className="pb-1 text-[10px] font-semibold uppercase tracking-wide">
+    <div
+      className={
+        row
+          ? "flex flex-wrap items-center gap-x-4 gap-y-1 px-1 py-2 text-[11px] text-muted-foreground"
+          : "rounded-lg border border-border bg-card/95 px-3 py-2 text-[11px] text-muted-foreground shadow-sm"
+      }
+    >
+      <div
+        className={
+          row
+            ? "text-[10px] font-semibold uppercase tracking-wide"
+            : "pb-1 text-[10px] font-semibold uppercase tracking-wide"
+        }
+      >
         Connections
       </div>
       {order
