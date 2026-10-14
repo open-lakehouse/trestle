@@ -54,8 +54,9 @@ use std::sync::Arc;
 use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
-    ClientValue, ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind, Module, ModuleId,
-    Provides, Readiness, ReadyGate, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
+    ClientNotebook, ClientValue, ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind,
+    Module, ModuleId, Provides, PythonClient, Readiness, ReadyGate, RenderSpec, ResolvedKnobs,
+    ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -776,6 +777,14 @@ fn mlflow() -> Arc<dyn Module> {
         "MLFLOW_AI_GATEWAY_URL".into(),
         ClientValue::endpoint("mlflow", "ai_gateway", UrlPart::Full),
     );
+    provides.python = PythonClient {
+        dependencies: vec!["mlflow>=3".into(), "scikit-learn".into()],
+        notebooks: vec![ClientNotebook {
+            file: "mlflow_quickstart.py".into(),
+            title: "train a scikit-learn model and track it in MLflow".into(),
+            contents: include_str!("../../templates/modules/mlflow/notebooks/quickstart.py").into(),
+        }],
+    };
 
     Arc::new(DataModule {
         id: ModuleId::from("mlflow"),
