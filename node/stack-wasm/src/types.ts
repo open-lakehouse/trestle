@@ -22,6 +22,8 @@ export interface Knob {
   required: boolean;
   help?: string | null;
   aliases?: string[];
+  /** A tuning knob with a safe default; UIs hide it unless the user opts in. */
+  advanced?: boolean;
 }
 
 /** One selectable module, projected for the picker (mirrors `ModuleDto`). */

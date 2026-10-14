@@ -248,6 +248,7 @@ fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
                 .into(),
         ),
         aliases: vec![legacy.into()],
+        advanced: true,
     }
 }
 
@@ -308,6 +309,7 @@ fn envoy() -> Arc<dyn Module> {
                         .into(),
                 ),
                 aliases: vec![crate::plan::ENVOY_AUTH_KNOB_LEGACY.into()],
+                advanced: false,
             },
             image_knob("image", "Envoy image", images::ENVOY, "ENVOY_IMAGE"),
             image_knob(
@@ -872,6 +874,7 @@ fn mlflow() -> Arc<dyn Module> {
                         .into(),
                 ),
                 aliases: vec![],
+                advanced: false,
             },
         ],
         renders: template_with_files(
@@ -1107,6 +1110,7 @@ impl Headwaters {
                             .into(),
                     ),
                     aliases: vec![HEADWATERS_SERVE_UI_LEGACY.into()],
+                    advanced: false,
                 },
                 image_knob(
                     "image",
@@ -1275,6 +1279,7 @@ impl Omnigent {
             required: false,
             help: Some(help.into()),
             aliases: vec![],
+            advanced: false,
         };
         Omnigent {
             id: ModuleId::from("omnigent"),
@@ -1304,6 +1309,7 @@ impl Omnigent {
                             .into(),
                     ),
                     aliases: vec![],
+                    advanced: false,
                 },
                 string_knob(
                     "model",
@@ -1463,6 +1469,7 @@ fn opa() -> Arc<dyn Module> {
                         .into(),
                 ),
                 aliases: vec![],
+                advanced: true,
             },
             Knob {
                 key: "log_level".into(),
@@ -1476,6 +1483,7 @@ fn opa() -> Arc<dyn Module> {
                 required: false,
                 help: None,
                 aliases: vec![],
+                advanced: true,
             },
         ],
         renders: template_with_files(

@@ -896,6 +896,7 @@ mod tests {
             required: false,
             help: None,
             aliases: vec![],
+            advanced: false,
         }];
         m
     }
@@ -1424,6 +1425,7 @@ mod tests {
             required: false,
             help: None,
             aliases: vec!["SERVE_UI".into()],
+            advanced: false,
         };
 
         // No override → the declared default.
@@ -1464,6 +1466,7 @@ mod tests {
             required: false,
             help: None,
             aliases: vec![],
+            advanced: false,
         };
         let resolved = |k: &Knob| resolve_knob(&module, k, None).unwrap().unwrap();
 
@@ -1514,6 +1517,7 @@ mod tests {
                 required: false,
                 help: None,
                 aliases: vec![],
+                advanced: false,
             };
             assert_eq!(
                 resolve_knob(&module, &k, None).unwrap_err(),
@@ -1559,6 +1563,7 @@ mod tests {
             required: false,
             help: None,
             aliases: vec![],
+            advanced: false,
         };
 
         // No value + not required → nothing injected (the template owns its own fallback).

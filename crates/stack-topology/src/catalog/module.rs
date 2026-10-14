@@ -397,6 +397,11 @@ pub struct Knob {
     /// The canonical [`key`](Knob::key) always wins if both are present.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// A tuning knob with a safe default (container images, log levels, …). UIs hide it
+    /// unless the user opts into advanced configuration, so a quick-start flow only asks
+    /// the knobs that shape the environment.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub advanced: bool,
 }
 
 /// How a module produces its [`RenderOutput`]: a MiniJinja template the crate renders
