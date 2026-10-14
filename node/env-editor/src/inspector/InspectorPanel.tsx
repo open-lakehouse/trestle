@@ -32,12 +32,14 @@ import { describeOrigin, type Origin } from "../state/origin";
 import type {
   CatalogDto,
   ExternalResource,
+  GatewaySettings,
   ModuleDto,
   PlanResult,
   ProvisionedDto,
   ResourceNounDto,
   TopologyEdgeDto,
 } from "../types";
+import { AccessSection } from "./AccessSection";
 import { canRunExternally, ExternalSection } from "./ExternalSection";
 
 export interface InspectorPanelProps {
@@ -65,6 +67,9 @@ export interface InspectorPanelProps {
     external: ExternalResource | undefined,
   ) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
+  /** How the gateway guards access; shown when the gateway is inspected. */
+  gateway: GatewaySettings | undefined;
+  onSetGateway: (gateway: GatewaySettings) => void;
   onRemove: (moduleId: string) => void;
   onSwap: (fromId: string, toId: string) => void;
   /** Navigate to a connected component. */
@@ -94,6 +99,8 @@ export function InspectorPanel({
   external,
   onSetExternal,
   onSetKnob,
+  gateway,
+  onSetGateway,
   onRemove,
   onSwap,
   onSelect,
@@ -170,6 +177,12 @@ export function InspectorPanel({
             external={external}
             onChange={(next) => onSetExternal(moduleId, next)}
           />
+        )}
+
+        {role === "gateway" && (
+          <Section title="Access">
+            <AccessSection gateway={gateway} onChange={onSetGateway} />
+          </Section>
         )}
 
         <Section ref={settingsRef} title="Settings">
@@ -279,8 +292,12 @@ export function InspectorPanel({
         ) : (
           <p className="flex items-start gap-2 text-xs text-muted-foreground">
             <Lock className="mt-0.5 h-3 w-3 shrink-0" />
-            {describeOrigin(origin)}. It leaves the environment with what needs
-            it.
+            {describeOrigin(origin)}.{" "}
+            {origin.kind === "gateway"
+              ? origin.role === "gateway"
+                ? "It can't be removed."
+                : "Change it in the gateway's Access settings."
+              : "It leaves the environment with what needs it."}
           </p>
         )}
       </div>

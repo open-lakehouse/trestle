@@ -2,13 +2,15 @@
 // pulled it in for something else. Only an explicit pick can be removed — an
 // automatic one leaves when whatever needs it does.
 
-import { capabilityLabel } from "../selection/catalogIndex";
+import { capabilityLabel, isGatewayManaged } from "../selection/catalogIndex";
 import type { CatalogDto, GraphDto, Selection } from "../types";
 
 export type Origin =
   | { kind: "explicit" }
   /** Pulled in by the planner; `requiredBy` names what needs it. */
-  | { kind: "auto"; requiredBy: string[] };
+  | { kind: "auto"; requiredBy: string[] }
+  /** The gateway itself, or a provider its access settings turned on. */
+  | { kind: "gateway"; role: string };
 
 /** Derive a planned component's origin from the selection and the plan graph. */
 export function componentOrigin(
@@ -18,6 +20,10 @@ export function componentOrigin(
   graph: GraphDto | undefined,
 ): Origin {
   if (selection.modules.includes(id)) return { kind: "explicit" };
+  const module = catalog?.modules.find((m) => m.id === id);
+  if (module?.provider_of && isGatewayManaged(module)) {
+    return { kind: "gateway", role: module.provider_of };
+  }
   const nodes = new Map(graph?.nodes.map((n) => [n.id, n]) ?? []);
   const name = (nodeId: string) => nodes.get(nodeId)?.display_name ?? nodeId;
   const requiredBy = new Set<string>();
@@ -60,6 +66,12 @@ export function componentOrigin(
 /** A one-line explanation of an origin, for tooltips and the inspector. */
 export function describeOrigin(origin: Origin): string {
   if (origin.kind === "explicit") return "Added by you";
+  if (origin.kind === "gateway") {
+    if (origin.role === "gateway") return "Every environment has the gateway";
+    return origin.role === "policy"
+      ? "Turned on by the gateway's policy setting"
+      : "Turned on by the gateway's sign-in setting";
+  }
   return origin.requiredBy.length > 0
     ? `Pulled in by ${formatList(origin.requiredBy)}`
     : "Pulled in automatically";

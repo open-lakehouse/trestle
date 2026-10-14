@@ -40,10 +40,32 @@ export function conflictsWith(
   return out;
 }
 
-/** The capability → providing modules index, sorted by capability. */
+/**
+ * The roles the planner fills on its own (mirrors the Rust
+ * `Role::GATEWAY_MANAGED`): the always-on gateway, and the sign-in and policy
+ * providers the gateway's access settings turn on. Pickers don't offer them.
+ */
+export const GATEWAY_MANAGED_ROLES: readonly string[] = [
+  "gateway",
+  "auth",
+  "policy",
+];
+
+/** Whether the planner adds `module` itself (see `GATEWAY_MANAGED_ROLES`). */
+export function isGatewayManaged(module: Pick<ModuleDto, "provider_of">) {
+  return GATEWAY_MANAGED_ROLES.includes(module.provider_of ?? "");
+}
+
+/** The modules a user picks: the catalog without the gateway-managed ones. */
+export function pickableModules(catalog: CatalogDto): ModuleDto[] {
+  return catalog.modules.filter((m) => !isGatewayManaged(m));
+}
+
+/** The pickable capability → providing modules index, sorted by capability.
+ *  Gateway-managed roles are left out: they are gateway settings. */
 export function capabilityIndex(catalog: CatalogDto): [string, ModuleDto[]][] {
   const index = new Map<string, ModuleDto[]>();
-  for (const m of catalog.modules) {
+  for (const m of pickableModules(catalog)) {
     if (!m.provider_of) continue;
     const providers = index.get(m.provider_of) ?? [];
     providers.push(m);

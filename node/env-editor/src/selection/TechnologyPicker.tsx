@@ -3,7 +3,11 @@ import { ModuleIcon } from "../graph/projectIcons";
 import { roleStyle } from "../graph/roleTheme";
 import { KnobField } from "../knobs/KnobField";
 import type { CatalogDto } from "../types";
-import { conflictsWith, groupByCategory } from "./catalogIndex";
+import {
+  conflictsWith,
+  groupByCategory,
+  pickableModules,
+} from "./catalogIndex";
 
 export interface TechnologyPickerProps {
   catalog: CatalogDto;
@@ -19,7 +23,9 @@ export interface TechnologyPickerProps {
 
 /**
  * Pick and configure technologies in a compact list grouped by category. Each
- * row combines the module summary and selection toggle with its knobs.
+ * row combines the module summary and selection toggle with its knobs. The
+ * gateway and its sign-in / policy providers aren't listed: every environment
+ * has the gateway, and its access settings bring in the others.
  */
 export function TechnologyPicker({
   catalog,
@@ -34,7 +40,7 @@ export function TechnologyPicker({
 
   return (
     <div className="flex flex-col gap-6">
-      {groupByCategory(catalog.modules).map(([category, modules]) => (
+      {groupByCategory(pickableModules(catalog)).map(([category, modules]) => (
         <section key={category} className="flex flex-col gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {category}

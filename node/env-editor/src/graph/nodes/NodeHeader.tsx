@@ -39,7 +39,7 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
         </div>
       </div>
       {node.kind === "external" && <Chip>External</Chip>}
-      {origin?.kind === "auto" && (
+      {origin && origin.kind !== "explicit" && (
         <Chip title={describeOrigin(origin)}>Auto</Chip>
       )}
     </div>

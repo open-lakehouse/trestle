@@ -15,6 +15,7 @@ export type {
   ExternalResource,
   ExtraResource,
   GatewayDto,
+  GatewaySettings,
   GraphDto,
   GraphNodeDto,
   Knob,

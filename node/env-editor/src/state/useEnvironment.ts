@@ -8,6 +8,7 @@ import { usePlanner } from "../planner";
 import type {
   CatalogDto,
   ExternalResource,
+  GatewaySettings,
   PlanResult,
   Selection,
 } from "../types";
@@ -52,6 +53,8 @@ export interface EnvironmentState {
     moduleId: string,
     external: ExternalResource | undefined,
   ) => void;
+  /** Set how the gateway guards access (`policy` implies sign-in). */
+  setGateway: (gateway: GatewaySettings) => void;
   /** Replace the selection with the catalog's default. */
   applyDefault: () => void;
   undo: () => void;
@@ -315,6 +318,13 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
     [],
   );
 
+  const setGateway = useCallback((gateway: GatewaySettings) => {
+    dispatch({
+      type: "edit",
+      next: (s) => ({ ...s, gateway: { ...gateway } }),
+    });
+  }, []);
+
   const applyDefault = useCallback(() => {
     if (!catalog) return;
     dispatch({
@@ -341,6 +351,7 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
     addResource,
     removeResource,
     setExternal,
+    setGateway,
     applyDefault,
     undo,
     redo,
@@ -364,6 +375,7 @@ function cloneSelection(selection: Selection): Selection {
     knob_overrides: { ...selection.knob_overrides },
     extra_resources: [...(selection.extra_resources ?? [])],
     external: { ...(selection.external ?? {}) },
+    gateway: selection.gateway && { ...selection.gateway },
   };
 }
 

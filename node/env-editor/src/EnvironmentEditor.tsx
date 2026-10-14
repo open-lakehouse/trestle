@@ -346,6 +346,8 @@ function EditorBody({
                   external={selection.external?.[inspected]}
                   onSetExternal={env.setExternal}
                   onSetKnob={env.setKnob}
+                  gateway={selection.gateway}
+                  onSetGateway={env.setGateway}
                   onRemove={removeComponent}
                   onSwap={swapComponent}
                   onSelect={goTo}
@@ -379,6 +381,7 @@ function EditorBody({
                 onToggleModule={env.toggleModule}
                 onToggleCapability={env.toggleCapability}
                 onSetKnob={env.setKnob}
+                onSetGateway={env.setGateway}
               />
             </Card>
           </TabsContent>

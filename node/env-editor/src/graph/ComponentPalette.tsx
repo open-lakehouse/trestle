@@ -20,6 +20,7 @@ import {
   capabilityLabel,
   conflictsWith,
   groupByCategory,
+  isGatewayManaged,
 } from "../selection/catalogIndex";
 import { describeOrigin, formatList, type Origin } from "../state/origin";
 import type { CatalogDto, ModuleDto, Selection } from "../types";
@@ -388,7 +389,10 @@ function paletteRows(
   });
   const keep = (row: { action: RowAction }) =>
     !removal || row.action.kind === "remove";
+  // Gateway-managed modules show only once they're in the environment: they
+  // come from its access settings, not from picking.
   const found = catalog.modules
+    .filter((m) => present.has(m.id) || !isGatewayManaged(m))
     .filter((m) =>
       matches(m.display_name, m.id, m.summary, m.category, m.provider_of),
     )
