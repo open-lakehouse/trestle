@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.3...olai-stack-topology-v0.0.4) - 2026-10-14
+
+### Added
+
+- hosted marimo editor for the Python client workspace (#131)
+- [**breaking**] always-on gateway with sign-in and policy as gateway settings (#127)
+- defaults-first quick start for `trestle env new` (#125)
+- Python client workspace (uv + marimo notebooks) for trestle env (#126)
+- external (cloud-provided) resources in hybrid environments (#123)
+- [**breaking**] pluggable deploy targets (DeployTarget trait + Compose target) (#122)
+- edit the environment on the topology canvas; databases and buckets in provider cards (#118)
+- [**breaking**] Omnigent agent platform with MLflow 3.17's AI Gateway (#117)
+- client env, OPA authorization, and gateway auth fixes (#115)
+- [**breaking**] functional environment topology with the gateway's API surface (#114)
+- [**breaking**] vend UC S3 credentials via RustFS and emulated AWS (#113)
+- *(env)* harden trestle env scenarios, knobs, and Compose secrets (#110)
+
+### Changed
+
+- [**breaking**] split planning from rendering ahead of pluggable deploy targets (#121)
+
+### Fixed
+
+- serve auth-enabled stacks over HTTPS so Authelia boots (#120)
+- validate resource names and prefer selected providers in the planner; Azurite containers label (#119)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.2...olai-stack-topology-v0.0.3) - 2026-07-14
 
 ### Added
