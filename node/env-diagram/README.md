@@ -20,8 +20,14 @@ no-JS fallback.
 
 ## Install
 
-The package is published to GitHub Packages. Point the `@open-lakehouse` scope
-at it (`.npmrc`):
+The package is published to npmjs.com, so it installs like any other package:
+
+```bash
+bun add @open-lakehouse/env-diagram   # needs react / react-dom 19
+```
+
+The same versions are also published to GitHub Packages. To install from
+there, point the `@open-lakehouse` scope at it in `.npmrc`:
 
 ```ini
 @open-lakehouse:registry=https://npm.pkg.github.com
@@ -32,10 +38,6 @@ GitHub Packages needs a token even to read. In GitHub Actions, the job's
 `GITHUB_TOKEN` works (`permissions: packages: read`) once the consuming
 repository has been granted read access in the package's settings. Elsewhere,
 use a token with `read:packages`.
-
-```bash
-bun add @open-lakehouse/env-diagram   # needs react / react-dom 19
-```
 
 ## Use
 
@@ -106,5 +108,5 @@ bun run build:diagram   # vite (JS + scoped CSS) → rollup (bundled .d.ts) → 
 
 `vite.config.ts` scopes the stylesheet. `scripts/check-dist.mjs` fails the build
 if `dist/` imports a package that isn't declared in `dependencies`. Releases
-are published by `.github/workflows/publish-env-diagram.yml` (tag
-`env-diagram-v<version>`).
+are published to npmjs.com (trusted publishing, OIDC) and GitHub Packages by
+`.github/workflows/publish-env-diagram.yml` (tag `env-diagram-v<version>`).
