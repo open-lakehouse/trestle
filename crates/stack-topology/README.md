@@ -90,6 +90,7 @@ the stack serves:
 | `rustfs` | `AWS_ENDPOINT_URL_S3`, `AWS_REGION` |
 | `databricks-emulator-env` | `DATABRICKS_HOST`, `DATABRICKS_APP_URL`, forwarded-user contract |
 | `omnigent` | `OMNIGENT_URL` |
+| `puppygraph` | `PUPPYGRAPH_URL`, `PUPPYGRAPH_BOLT_ADDRESS`, `PUPPYGRAPH_GREMLIN_ADDRESS` (`host:port`) |
 
 The files hold **no credentials**. Clients authenticate through the gateway and read or
 write object storage with the temporary credentials Unity Catalog vends. The root `.env`
@@ -115,6 +116,7 @@ written once, so local edits survive.
 | Module | Dependencies | Example notebook |
 | --- | --- | --- |
 | `mlflow` | `mlflow`, `scikit-learn` | `mlflow_quickstart.py`: train a model, track it in MLflow |
+| `puppygraph` | `neo4j`, `gremlinpython` | `puppygraph_quickstart.py`: the same graph query in Cypher and Gremlin |
 
 ## AI Gateway (MLflow)
 
@@ -177,6 +179,52 @@ stack. With gateway sign-in on, Omnigent trusts the identity the gateway asserts
 its users are the Authelia users, and with policy on the policy applies (chatting needs `writers` or
 `admins`). An agent host can't present that identity, so the in-stack host is not rendered
 while the gateway authenticates.
+
+## Graph queries (PuppyGraph)
+
+The `puppygraph` module runs [PuppyGraph](https://docs.puppygraph.com), which answers
+openCypher and Gremlin queries over Unity Catalog's Delta tables in place, with no copy into a
+graph store. Selecting it pulls in `unity-catalog` and the stores it needs. PuppyGraph needs
+a lot of memory: give Docker about 8 GB.
+
+- **Schema.** Which tables are nodes and edges lives in `graphs/puppygraph/schema.json`, next
+  to `compose.yaml`. It's yours to edit and is written only once. Point each mapping at catalog
+  `uc` (the Unity Catalog catalog named by the `puppygraph.catalog` knob, default `unity`):
+
+  ```json
+  {
+    "node": [{
+      "label": "person",
+      "dataSourceGroup": {"externalDataSource": {
+        "enabled": true, "catalog": "uc", "schema": "default", "table": "person",
+        "mappedField": [{"sourceFieldName": "id", "targetFieldName": "id"},
+                        {"sourceFieldName": "name", "targetFieldName": "name"}]
+      }},
+      "id": [{"name": "id", "type": "STRING"}],
+      "attribute": [{"name": "name", "type": "STRING"}]
+    }],
+    "edge": []
+  }
+  ```
+
+  On every `up`, the one-shot `puppygraph-schema` merges in the generated connection
+  (`modules/puppygraph/catalog.json`, the UC metastore) and uploads the result. PuppyGraph
+  checks every mapping against the tables before it accepts the schema. While no nodes are mapped it skips the upload, so a
+  schema built in the web UI is kept. After editing, run
+  `docker compose up puppygraph-schema`.
+- **Connections.** PuppyGraph calls Unity Catalog directly on the compose network
+  (`puppygraph.uc_url`), not through the gateway, so gateway sign-in doesn't block it. It reads
+  the Delta files with temporary credentials UC vends, so it holds no storage keys. Those reads
+  go to the AWS S3 hostnames the gateway answers for RustFS, so the container trusts the
+  gateway's local CA, in its JVM and in the OS store its native engine uses. That's why it
+  starts as root (as all of PuppyGraph's processes do). UC vends nothing for Azurite, so the
+  graph can't read table data on an Azure store.
+- **Endpoints.** The web UI has its own gateway listener (`PUPPYGRAPH_URL`), because it only
+  serves at `/`. Bolt (7687) and Gremlin (8182) are published directly. All three use
+  PuppyGraph's login, `puppygraph` / `puppygraph.password` (default `puppygraph123`). Gateway
+  sign-in does not cover them, so set your own password if others can reach those ports.
+  Omnigent's agents get the addresses through `client/container.env`, like every other
+  module's.
 
 ## Gateway authentication and authorization
 

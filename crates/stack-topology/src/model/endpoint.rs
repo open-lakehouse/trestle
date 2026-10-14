@@ -255,6 +255,22 @@ impl Endpoint {
         }
     }
 
+    /// An HTTP [`UiFixed`](RouteIntent::UiFixed) endpoint (a UI that only serves at `/`,
+    /// reached through its own dedicated listener).
+    pub(crate) fn ui_fixed(id: &str, internal_port: u16) -> Endpoint {
+        Endpoint {
+            id: id.into(),
+            scheme: Scheme::Http,
+            internal_port,
+            host_port: None,
+            intent: RouteIntent::UiFixed,
+            path: String::new(),
+            mount_prefix: None,
+            rewrite: Rewrite::Inherit,
+            route: RouteOptions::default(),
+        }
+    }
+
     /// An HTTP [`Gatewayed`](RouteIntent::Gatewayed) endpoint (a whole-service backend, e.g.
     /// an object store, reached through its own dedicated listener serving `/`).
     pub(crate) fn gatewayed(id: &str, internal_port: u16) -> Endpoint {

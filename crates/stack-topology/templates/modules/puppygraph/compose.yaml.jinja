@@ -1,0 +1,77 @@
+# PuppyGraph: graph queries (openCypher over Bolt, Gremlin) over Unity Catalog's tables
+services:
+  puppygraph:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+{%- if dependencies %}
+    depends_on:
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: service_{{ dep.readiness }}
+{%- endfor %}
+{%- endif %}
+{%- set obj = connections.object_store.0 %}
+{%- if obj.tls_trust %}
+    # PuppyGraph reads the Delta files with credentials Unity Catalog vends, at the real AWS S3
+    # hostnames the gateway answers with its local CA. Its JVM and its native data-access engine
+    # (which uses the OS trust store) both need to trust that CA, so the service starts as root
+    # (like every PuppyGraph process) to add it, then hands over to the image's entrypoint.
+    user: root
+    entrypoint:
+      - bash
+      - -c
+      - >-
+        cp {{ obj.tls_trust.ca_pem }} /usr/local/share/ca-certificates/trestle-local-ca.crt
+        && update-ca-certificates >/dev/null
+        && exec bash ./entrypoint.sh
+{%- endif %}
+    env_file:
+      - path: ./modules/puppygraph/.env/puppygraph.env
+        format: raw
+    environment:
+      STORAGE_PATH_ROOT: /data/storage
+{%- if obj.tls_trust %}
+      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore={{ obj.tls_trust.jvm_truststore }} -Djavax.net.ssl.trustStorePassword={{ obj.tls_trust.jvm_truststore_password }}
+{%- endif %}
+    volumes:
+      - {{ env.DATA_ROOT }}/puppygraph:/data/storage
+{%- if obj.tls_trust %}
+      - {{ obj.tls_trust.volume }}:{{ obj.tls_trust.mount_path }}:ro
+{%- endif %}
+    # The web UI is fronted on its own gateway listener; Bolt and Gremlin are published as-is.
+    expose:
+      - "8081"
+    ports:
+      - "7687:7687"
+      - "8182:8182"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8081/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # Uploads the graph schema (graphs/puppygraph/schema.json, with the generated catalog
+  # connection merged in) on every `up`. Skips the upload while the schema maps no nodes.
+  puppygraph-schema:
+    image: {{ knobs.image }}
+    restart: "no"
+    entrypoint: ["python3", "/seed_schema.py"]
+    env_file:
+      - path: ./modules/puppygraph/.env/puppygraph.env
+        format: raw
+    environment:
+      PUPPYGRAPH_SCHEMA_URL: http://puppygraph:8081/schema
+    configs:
+      - source: puppygraph_seed_schema
+        target: /seed_schema.py
+      - source: puppygraph_schema
+        target: /schema.json
+      - source: puppygraph_catalog
+        target: /catalog.json
+    depends_on:
+      puppygraph:
+        condition: service_healthy
+      # The upload resolves the mapped tables through the metastore.
+      unitycatalog:
+        condition: service_healthy

@@ -2,7 +2,7 @@
 //!
 //! These are the common local-Lakehouse modules — a gateway, a relational store, an
 //! object store, experiment tracking (with an AI Gateway), a data catalog, a query engine,
-//! tracing, an agent platform, and the Databricks app-runtime contract — most of them
+//! a graph engine, tracing, an agent platform, and the Databricks app-runtime contract — most of them
 //! transcribed from trestle's `local-stack-*` components. They are the corpus the planner
 //! is validated against:
 //! planning the default selection must re-derive the routes and materialize the
@@ -138,9 +138,10 @@ pub fn baseline_catalog() -> Catalog {
         headwaters(),
         omnigent(),
         marimo(),
+        puppygraph(),
         opa(),
         databricks_emulator_env(),
-    ] as [Arc<dyn Module>; 13])
+    ] as [Arc<dyn Module>; 14])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
@@ -877,6 +878,11 @@ fn mlflow() -> Arc<dyn Module> {
     })
 }
 
+/// Unity Catalog's compose service, and the port its REST API listens on in the container.
+/// Shared with consumers that call UC directly on the compose network (see [`puppygraph`]).
+const UNITY_CATALOG_SERVICE: &str = "unitycatalog";
+const UNITY_CATALOG_PORT: u16 = 8080;
+
 /// `unity-catalog` — the data catalog.
 /// Databricks-shaped path at root, so `/api/2.1/unity-catalog` fronts with no rewrite;
 /// a second `/unity-catalog` alias points at the same service.
@@ -884,7 +890,7 @@ fn unity_catalog() -> Arc<dyn Module> {
     let mut provides = Provides::default();
     provides.client_env.insert(
         "UNITY_CATALOG_URL".into(),
-        ClientValue::endpoint("unitycatalog", "rest", UrlPart::Full),
+        ClientValue::endpoint(UNITY_CATALOG_SERVICE, "rest", UrlPart::Full),
     );
     // UC reads its storage config from a rendered `server.properties` and its metadata-store
     // config from a rendered `hibernate.properties` (both mounted as secrets: they carry keys
@@ -923,16 +929,26 @@ fn unity_catalog() -> Arc<dyn Module> {
             },
         ],
         service_specs: vec![ServiceSpec {
-            name: "unitycatalog".into(),
+            name: UNITY_CATALOG_SERVICE.into(),
             role: Role::data_catalog(),
-            placement: container("unitycatalog"),
+            placement: container(UNITY_CATALOG_SERVICE),
             // UC serves its REST API at root (empty base_path), so each mount `Inherit`s to no
             // rewrite: `/api/2.1/unity-catalog` fronts unchanged, and `/unity-catalog` is a
             // second alias to the same service.
             base_path: String::new(),
             endpoints: vec![
-                Endpoint::api("rest", 8080, "/api/2.1/unity-catalog", Rewrite::Inherit),
-                Endpoint::api("rest_alias", 8080, "/unity-catalog", Rewrite::Inherit),
+                Endpoint::api(
+                    "rest",
+                    UNITY_CATALOG_PORT,
+                    "/api/2.1/unity-catalog",
+                    Rewrite::Inherit,
+                ),
+                Endpoint::api(
+                    "rest_alias",
+                    UNITY_CATALOG_PORT,
+                    "/unity-catalog",
+                    Rewrite::Inherit,
+                ),
             ],
             // Demand-driven, like MLflow: the planner injects the chosen providers' gates
             // (see the fragment's `depends_on`), so nothing is hand-listed here.
@@ -1459,6 +1475,167 @@ fn marimo() -> Arc<dyn Module> {
         renders: template(include_str!(
             "../../templates/modules/marimo/compose.yaml.jinja"
         ))
+        .for_compose(),
+    })
+}
+
+/// The ports PuppyGraph listens on in its container: the web UI + REST API, Gremlin (over
+/// WebSocket), and openCypher over Bolt.
+const PUPPYGRAPH_UI_PORT: u16 = 8081;
+const PUPPYGRAPH_GREMLIN_PORT: u16 = 8182;
+const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
+
+/// `puppygraph` — [PuppyGraph](https://docs.puppygraph.com), a graph query engine (openCypher
+/// over Bolt, Gremlin) that reads the lakehouse's Delta tables in place, with Unity Catalog as
+/// its metastore.
+///
+/// The graph's shape (which tables are nodes and edges) is operator-owned: `graphs/puppygraph/
+/// schema.json` is written beside `compose.yaml` once and never overwritten. The connection
+/// half is generated: a `catalog.json` naming the UC metastore. On every start a one-shot
+/// (`puppygraph-schema`) merges the two and uploads the result to PuppyGraph, unless the schema
+/// maps no nodes yet (so a schema built in the web UI isn't replaced by an empty one).
+///
+/// UC is called directly on the compose network, not through the gateway: with forward-auth on,
+/// an in-network metastore call through the gateway would be rejected. PuppyGraph reads the
+/// Delta files with credentials UC vends, at the real AWS S3 hostnames, which the object store
+/// answers through the gateway's local CA (see `rustfs`). The `object_store` demand (named like
+/// UC's) carries that CA's [`TlsTrust`](crate::TlsTrust) and the store's startup gate; its keys
+/// are not used. UC vends no credentials for an Azure store, so on Azurite the graph can't read
+/// table data.
+///
+/// The web UI only serves at `/`, so it gets a dedicated gateway listener; Bolt and Gremlin are
+/// published on their standard ports. All three use PuppyGraph's own login (the `password`
+/// knob); the dedicated listener is not behind the gateway's sign-in.
+fn puppygraph() -> Arc<dyn Module> {
+    let mut provides = Provides::default();
+    for (key, endpoint, part) in [
+        ("PUPPYGRAPH_URL", "ui", UrlPart::Full),
+        ("PUPPYGRAPH_BOLT_ADDRESS", "bolt", UrlPart::Authority),
+        ("PUPPYGRAPH_GREMLIN_ADDRESS", "gremlin", UrlPart::Authority),
+    ] {
+        provides.client_env.insert(
+            key.into(),
+            ClientValue::endpoint("puppygraph", endpoint, part),
+        );
+    }
+    provides.python = PythonClient {
+        dependencies: vec!["neo4j>=5".into(), "gremlinpython>=3.7".into()],
+        notebooks: vec![ClientNotebook {
+            file: "puppygraph_quickstart.py".into(),
+            title: "query the lakehouse as a graph with PuppyGraph (Cypher and Gremlin)".into(),
+            contents: include_str!("../../templates/modules/puppygraph/notebooks/quickstart.py")
+                .into(),
+        }],
+        ..PythonClient::default()
+    };
+    let string_knob = |key: &str, title: &str, default: &str, help: &str, advanced: bool| Knob {
+        key: key.into(),
+        title: Some(title.into()),
+        kind: KnobKind::String,
+        default: Some(default.into()),
+        required: false,
+        help: Some(help.into()),
+        aliases: vec![],
+        advanced,
+    };
+    let uc_url = format!("http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}");
+    Arc::new(DataModule {
+        id: ModuleId::from("puppygraph"),
+        display_name: Some("PuppyGraph".into()),
+        summary: Some("Graph queries (Cypher, Gremlin) over Unity Catalog tables.".into()),
+        category: Some("graph".into()),
+        provider_of: Some(Role::GRAPH.into()),
+        requires: vec![ModuleId::from("envoy"), ModuleId::from("unity-catalog")],
+        conflicts_with: vec![],
+        // Named like UC's demand, so it resolves to the store UC vends credentials for. Nothing
+        // is bound into env: the fragment reads the connection's CA trust directly.
+        needs: vec![ResourceDemand {
+            resource: Role::OBJECT_STORE.into(),
+            name: "unity".into(),
+            provider: None,
+            bind: ConnectionBinding::default(),
+        }],
+        service_specs: vec![ServiceSpec {
+            name: "puppygraph".into(),
+            role: Role::graph(),
+            placement: container("puppygraph"),
+            base_path: String::new(),
+            endpoints: vec![
+                Endpoint::ui_fixed("ui", PUPPYGRAPH_UI_PORT),
+                Endpoint::internal(
+                    "gremlin",
+                    Scheme::Http,
+                    PUPPYGRAPH_GREMLIN_PORT,
+                    Some(PUPPYGRAPH_GREMLIN_PORT),
+                ),
+                Endpoint::internal(
+                    "bolt",
+                    Scheme::Tcp,
+                    PUPPYGRAPH_BOLT_PORT,
+                    Some(PUPPYGRAPH_BOLT_PORT),
+                ),
+            ],
+            // Demand-driven: the planner injects the object store's gate.
+            depends_on: vec![],
+        }],
+        provides,
+        knobs: vec![
+            string_knob(
+                "catalog",
+                "Unity Catalog catalog",
+                "unity",
+                "The UC catalog whose schemas and tables the graph schema maps.",
+                false,
+            ),
+            string_knob(
+                "uc_url",
+                "Unity Catalog URL",
+                &uc_url,
+                "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose \
+                 network (not through the gateway).",
+                true,
+            ),
+            string_knob(
+                "password",
+                "PuppyGraph password",
+                "puppygraph123",
+                "Password of the `puppygraph` user for the web UI, Bolt and Gremlin. A local \
+                 default; set your own if the ports are reachable by others.",
+                true,
+            ),
+            image_knob(
+                "image",
+                "PuppyGraph image",
+                images::PUPPYGRAPH,
+                "PUPPYGRAPH_IMAGE",
+            ),
+        ],
+        renders: template_with_files(
+            include_str!("../../templates/modules/puppygraph/compose.yaml.jinja"),
+            vec![
+                sensitive_file(
+                    ".env/puppygraph.env",
+                    include_str!("../../templates/modules/puppygraph/puppygraph.env.jinja"),
+                ),
+                // The connection half of the schema (the UC metastore), regenerated on every
+                // render so knob changes flow through.
+                config_file(
+                    "catalog.json",
+                    "puppygraph_catalog",
+                    include_str!("../../templates/modules/puppygraph/catalog.json.jinja"),
+                ),
+                config_file(
+                    "seed_schema.py",
+                    "puppygraph_seed_schema",
+                    include_str!("../../templates/modules/puppygraph/seed_schema.py"),
+                ),
+                operator_file(
+                    "graphs/puppygraph/schema.json",
+                    "puppygraph_schema",
+                    include_str!("../../templates/modules/puppygraph/schema.json"),
+                ),
+            ],
+        )
         .for_compose(),
     })
 }

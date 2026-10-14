@@ -1,0 +1,12 @@
+[
+  {
+    "name": "uc",
+    "type": "deltalake",
+    "metastore": {
+      "type": "unity",
+      "host": "{{ knobs.uc_url }}",
+      "token": "local",
+      "databricksCatalogName": "{{ knobs.catalog }}"
+    }
+  }
+]
