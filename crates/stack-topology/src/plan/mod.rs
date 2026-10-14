@@ -127,6 +127,53 @@ pub struct Selection {
     /// example notebooks (see [`ClientSelection`]). Off by default.
     #[serde(default, skip_serializing_if = "ClientSelection::is_default")]
     pub client: ClientSelection,
+    /// How the gateway guards access. The gateway itself is not a selection: every
+    /// environment has one (the catalog's `gateway`-role provider), so this only says
+    /// whether it requires sign-in and enforces policy. See [`GatewaySettings`].
+    #[serde(default)]
+    pub gateway: GatewaySettings,
+}
+
+/// How the environment's gateway guards access. Each setting pulls in its provider by role,
+/// so no module id appears here: the `auth`-role provider (the bundled Authelia) for sign-in,
+/// the `policy`-role provider (the bundled OPA) for authorization.
+///
+/// Older manifests expressed these through the gateway's `auth` knob override and by
+/// selecting the providers as modules; the planner still honours both (see
+/// [`Selection::normalize_gateway`] to rewrite them into this form).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewaySettings {
+    /// Require single-sign-on for API and UI routes (forward-auth). Resource backends
+    /// (object stores, databases) are never gated.
+    #[serde(default)]
+    pub auth: bool,
+    /// Authorize every signed-in request against a Rego policy. Implies [`auth`](Self::auth):
+    /// the policy decides on the identity sign-in asserts.
+    #[serde(default)]
+    pub policy: bool,
+}
+
+impl GatewaySettings {
+    /// Open: no sign-in, no policy.
+    pub const OPEN: Self = Self {
+        auth: false,
+        policy: false,
+    };
+    /// Sign-in only.
+    pub const SIGN_IN: Self = Self {
+        auth: true,
+        policy: false,
+    };
+    /// Sign-in plus policy.
+    pub const POLICY: Self = Self {
+        auth: true,
+        policy: true,
+    };
+
+    /// Whether sign-in is on, explicitly or because [`policy`](Self::policy) needs it.
+    pub fn auth_enabled(&self) -> bool {
+        self.auth || self.policy
+    }
 }
 
 impl Selection {
@@ -140,6 +187,56 @@ impl Selection {
             modules: ids.into_iter().map(Into::into).collect(),
             ..Default::default()
         }
+    }
+
+    /// Rewrite the legacy ways of configuring the gateway into [`gateway`](Self::gateway):
+    /// the gateway's `auth` knob override, and the gateway, auth and policy providers selected
+    /// as modules or capabilities. The planner adds those providers by role, so listing them is
+    /// redundant. A provider is only dropped when planning would pick that same provider
+    /// anyway, which leaves the plan unchanged.
+    ///
+    /// Errors like [`Catalog::plan`] would on an invalid `auth` override, and with
+    /// [`PlanError::PolicyRequiresAuth`] for a policy engine with sign-in explicitly off (a
+    /// combination the settings cannot express).
+    pub fn normalize_gateway(&mut self, catalog: &Catalog, ctx: &PlanCtx) -> Result<(), PlanError> {
+        let auth = gateway::gateway_auth_enabled(self, catalog)?;
+        let policy = gateway::policy_provider(self, catalog);
+        if let (Some(module), false) = (&policy, auth) {
+            return Err(PlanError::PolicyRequiresAuth {
+                module: module.clone(),
+            });
+        }
+        self.gateway = GatewaySettings {
+            auth,
+            policy: policy.is_some(),
+        };
+
+        for gateway_id in catalog.providers_of(Role::GATEWAY) {
+            if let Some(overrides) = self.knob_overrides.get_mut(gateway_id) {
+                overrides.remove(ENVOY_AUTH_KNOB);
+                overrides.remove(ENVOY_AUTH_KNOB_LEGACY);
+                if overrides.is_empty() {
+                    self.knob_overrides.remove(gateway_id);
+                }
+            }
+        }
+        self.capabilities
+            .retain(|c| c != Role::AUTH && c != Role::POLICY);
+        let first = |role: &str| catalog.providers_of(role).first().map(|p| (*p).clone());
+        let (first_auth, first_policy) = (first(Role::AUTH), first(Role::POLICY));
+        let modules = std::mem::take(&mut self.modules);
+        for module in modules {
+            let implied = if catalog.providers_of(Role::GATEWAY).contains(&&module) {
+                gateway::gateway_provider(self, catalog, ctx).as_ref() == Some(&module)
+            } else {
+                (auth && first_auth.as_ref() == Some(&module))
+                    || (policy.is_some() && first_policy.as_ref() == Some(&module))
+            };
+            if !implied {
+                self.modules.push(module);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -424,7 +521,7 @@ pub enum PlanError {
         /// The kind the value failed to satisfy.
         kind: crate::catalog::module::KnobKind,
     },
-    /// The gateway's `ENVOY_AUTH` knob is on and an `auth`-role provider was selected, but that
+    /// Gateway sign-in is on and an `auth`-role provider was selected, but that
     /// provider does not declare what the gateway needs to wire `ext_authz`: a service with an
     /// [`Internal`](crate::RouteIntent::Internal) endpoint (the upstream the filter calls) and the
     /// [`EXT_AUTHZ_PATH_EXTRA`] extra (the endpoint path). The fix is on the auth provider
@@ -456,8 +553,8 @@ pub enum PlanError {
     /// explicitly `false`, or the catalog has no auth provider). The policy engine decides on
     /// the identity the auth provider asserts, so without auth it could only deny everything.
     #[error(
-        "policy engine `{module}` needs gateway auth to assert an identity; turn the gateway's \
-         `auth` knob on"
+        "policy engine `{module}` needs gateway sign-in to assert an identity; set \
+         `[selection.gateway] policy = true` and drop the gateway's `auth = \"false\"` override"
     )]
     PolicyRequiresAuth {
         /// The selected policy-role module.
@@ -762,7 +859,13 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         augmented.auth_provider.as_ref(),
         augmented.policy_provider.as_ref(),
     )?;
-    let bound = bind::bind(&settled, &routed, catalog, ctx)?;
+    let bound = bind::bind(
+        &settled,
+        &routed,
+        catalog,
+        ctx,
+        augmented.auth_provider.as_ref(),
+    )?;
 
     let mut plan = Plan {
         env_name: ctx.env_name.clone(),
@@ -1580,6 +1683,149 @@ mod tests {
                 module,
                 key: "token".into(),
             }
+        );
+    }
+
+    fn graph_ids(p: &Plan) -> Vec<String> {
+        p.graph.nodes.iter().map(|m| m.id().to_string()).collect()
+    }
+
+    #[test]
+    fn every_environment_gets_the_gateway() {
+        // Postgres declares no dependency on the gateway, yet the stack still needs its front
+        // door: the plan advertises a gateway URL to clients.
+        let p = plan_env(
+            &Selection::modules(["postgres"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        assert!(
+            graph_ids(&p).contains(&"envoy".to_string()),
+            "{:?}",
+            graph_ids(&p)
+        );
+        assert!(p.gateway.auth.is_none() && p.gateway.policy.is_none());
+    }
+
+    #[test]
+    fn gateway_settings_pull_in_sign_in_and_policy() {
+        let catalog = baseline_catalog();
+        let mut selection = Selection::modules(["postgres", "mlflow"]);
+
+        selection.gateway = GatewaySettings::SIGN_IN;
+        let p = plan_env(&selection, &catalog, &PlanCtx::default()).unwrap();
+        let ids = graph_ids(&p);
+        assert!(ids.contains(&"authelia".to_string()) && !ids.contains(&"opa".to_string()));
+        assert_eq!(p.gateway.auth.as_ref().unwrap().cluster, "authelia");
+        assert!(p.gateway.policy.is_none());
+        // The gateway waits for the auth provider it checks every request against.
+        let envoy = &p.bindings[&ModuleId::from("envoy")];
+        assert!(
+            envoy
+                .dependencies
+                .contains(&crate::catalog::module::ReadyGate {
+                    service: "authelia".into(),
+                    readiness: crate::catalog::module::Readiness::Healthy,
+                }),
+            "{:?}",
+            envoy.dependencies
+        );
+
+        // Policy implies sign-in.
+        selection.gateway = GatewaySettings {
+            auth: false,
+            policy: true,
+        };
+        let p = plan_env(&selection, &catalog, &PlanCtx::default()).unwrap();
+        let ids = graph_ids(&p);
+        assert!(ids.contains(&"authelia".to_string()) && ids.contains(&"opa".to_string()));
+        assert!(p.gateway.auth.is_some() && p.gateway.policy.is_some());
+    }
+
+    #[test]
+    fn normalizing_legacy_gateway_selections_keeps_the_plan() {
+        let catalog = baseline_catalog();
+        let ctx = PlanCtx::default();
+        let base = ["envoy", "postgres", "rustfs", "mlflow"];
+        let with_auth_override = |key: &str, value: &str| {
+            let mut s = Selection::modules(base);
+            s.knob_overrides
+                .entry(ModuleId::from("envoy"))
+                .or_default()
+                .insert(key.into(), value.into());
+            s
+        };
+        let cases = [
+            (Selection::modules(base), GatewaySettings::OPEN),
+            (
+                with_auth_override(ENVOY_AUTH_KNOB, "true"),
+                GatewaySettings::SIGN_IN,
+            ),
+            (
+                with_auth_override(ENVOY_AUTH_KNOB_LEGACY, "yes"),
+                GatewaySettings::SIGN_IN,
+            ),
+            (
+                with_auth_override(ENVOY_AUTH_KNOB, "false"),
+                GatewaySettings::OPEN,
+            ),
+            (
+                Selection::modules(["envoy", "authelia", "postgres", "rustfs", "mlflow"]),
+                GatewaySettings::SIGN_IN,
+            ),
+            (
+                Selection {
+                    capabilities: vec![Role::AUTH.into()],
+                    ..Selection::modules(base)
+                },
+                GatewaySettings::SIGN_IN,
+            ),
+            (
+                Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "opa"]),
+                GatewaySettings::POLICY,
+            ),
+        ];
+        for (legacy, want) in cases {
+            let mut normalized = legacy.clone();
+            normalized.normalize_gateway(&catalog, &ctx).unwrap();
+            assert_eq!(normalized.gateway, want, "{legacy:?}");
+            assert_eq!(
+                normalized.modules,
+                ["postgres", "rustfs", "mlflow"].map(ModuleId::from),
+                "{legacy:?}"
+            );
+            assert!(normalized.knob_overrides.is_empty() && normalized.capabilities.is_empty());
+
+            let before = plan_env(&legacy, &catalog, &ctx)
+                .unwrap()
+                .materialize()
+                .unwrap();
+            let after = plan_env(&normalized, &catalog, &ctx)
+                .unwrap()
+                .materialize()
+                .unwrap();
+            assert_eq!(
+                before, after,
+                "{legacy:?} plans differently once normalized"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizing_policy_with_sign_in_off_is_rejected() {
+        let mut selection = Selection::modules(["envoy", "opa", "mlflow"]);
+        selection
+            .knob_overrides
+            .entry(ModuleId::from("envoy"))
+            .or_default()
+            .insert(ENVOY_AUTH_KNOB.into(), "false".into());
+        let err = selection
+            .normalize_gateway(&baseline_catalog(), &PlanCtx::default())
+            .unwrap_err();
+        assert!(
+            matches!(err, PlanError::PolicyRequiresAuth { .. }),
+            "{err:?}"
         );
     }
 }

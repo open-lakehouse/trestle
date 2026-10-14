@@ -40,7 +40,7 @@
 //! under `templates/gateway/` — `compose.yaml.jinja` for the envoy module fragment,
 //! `bootstrap.yaml.jinja` for the aggregated Envoy config rendered by [`crate::render_envoy`],
 //! and the `authelia.*.jinja` faces of the bundled forward-auth provider the gateway's
-//! `ENVOY_AUTH` knob pulls in. Each snippet is embedded via `include_str!` (relative paths
+//! sign-in setting pulls in. Each snippet is embedded via `include_str!` (relative paths
 //! reach out of `src/catalog/` as `../../templates/…`) and carried on the module's
 //! [`RenderSpec`]. The `.jinja` suffix marks a MiniJinja template: every fragment is rendered
 //! against the typed [`RenderCtx`](crate::RenderCtx), so it reads plan-resolved values directly
@@ -146,13 +146,12 @@ pub fn baseline_catalog() -> Catalog {
     // check.
 }
 
-/// The default lakehouse selection: the always-on gateway, the default category
-/// picks (a relational store and an object store), mirroring trestle's base
-/// `always: [envoy]` + default `storage`/`metadata_db` choices, and Unity Catalog as
-/// the lakehouse's data catalog. Other modules (ml, query engine, observability, ...)
+/// The default lakehouse selection: the default category picks (a relational store and
+/// an object store) and Unity Catalog as the lakehouse's data catalog. The gateway is not
+/// listed: every plan includes it. Other modules (ml, query engine, observability, ...)
 /// are opt-in.
 pub fn baseline_selection() -> crate::plan::Selection {
-    crate::plan::Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog"])
+    crate::plan::Selection::modules(["postgres", "rustfs", "unity-catalog"])
 }
 
 /// Helper: a container-placed service.
@@ -252,15 +251,6 @@ fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
     }
 }
 
-/// The gateway knob that fronts API/UI routes with Authelia single-sign-on. When `true` the
-/// planner pulls in the bundled [`authelia`] module, emits its upstream cluster, and wires an
-/// `ext_authz` HTTP filter onto the shared listener (see [`crate::render_envoy`]). Resource
-/// backends (object stores on dedicated listeners, databases with no route) are never gated.
-///
-/// Aliases the planner's [`ENVOY_AUTH_KNOB`](crate::plan::ENVOY_AUTH_KNOB) — the planner
-/// owns the wiring contract, so the key is defined once there.
-pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
-
 /// `envoy` — the single-port gateway. It has no surface endpoints of its
 /// own (it *is* the surface); its listening port is supplied to the planner via
 /// [`PlanCtx`](crate::PlanCtx), not as a routed endpoint. Its rendered Envoy bootstrap config
@@ -271,11 +261,10 @@ pub const ENVOY_AUTH: &str = crate::plan::ENVOY_AUTH_KNOB;
 /// fragment also adds those hosts as network aliases and a one-shot that mints the local CA
 /// the gateway's TLS listener presents.
 ///
-/// Exposes one behavioural knob, [`ENVOY_AUTH`] (`auth`): turning it on fronts every API and
-/// UI route with Authelia forward-auth. The knob's effect is realized in the planner and the
-/// Envoy renderer (it pulls in the `authelia` module and emits the `ext_authz` filter), not in
-/// this module's own static services — the gateway's listeners are computed from *other*
-/// modules' endpoints, so there is nothing knob-dependent in its `ServiceSpec`.
+/// Every environment runs it: the planner adds the `gateway`-role provider whether or not it
+/// was selected. Sign-in and policy are [`GatewaySettings`](crate::GatewaySettings), realized
+/// in the planner and the Envoy renderer (they pull in `authelia` / `opa` and emit the
+/// `ext_authz` filters), so its only knobs are its images.
 fn envoy() -> Arc<dyn Module> {
     let provides = Provides::default();
     Arc::new(DataModule {
@@ -297,20 +286,6 @@ fn envoy() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            Knob {
-                key: ENVOY_AUTH.into(),
-                title: Some("Require authentication".into()),
-                kind: KnobKind::Bool,
-                default: Some("false".into()),
-                required: false,
-                help: Some(
-                    "Front API and UI routes with Authelia single-sign-on (forward-auth). \
-                     Resource backends (object stores, databases) are never gated."
-                        .into(),
-                ),
-                aliases: vec![crate::plan::ENVOY_AUTH_KNOB_LEGACY.into()],
-                advanced: false,
-            },
             image_knob("image", "Envoy image", images::ENVOY, "ENVOY_IMAGE"),
             image_knob(
                 "certs_image",
@@ -333,9 +308,9 @@ fn envoy() -> Arc<dyn Module> {
     })
 }
 
-/// `authelia` — the bundled forward-auth provider, pulled in by the gateway's [`ENVOY_AUTH`]
-/// knob (it is not part of the default selection and rides in only when auth is on; see the
-/// planner's `resolve_with_demands`). Self-contained for the showcase: a file-based user
+/// `authelia` — the bundled forward-auth provider, pulled in by
+/// [`GatewaySettings::auth`](crate::GatewaySettings::auth) (it is not part of the default
+/// selection and rides in only when sign-in is on). The gateway waits for it to be healthy. Self-contained for the showcase: a file-based user
 /// database and local, on-disk storage — no external database.
 ///
 /// Its single endpoint is [`Internal`](crate::model::endpoint::RouteIntent::Internal): Envoy reaches
@@ -355,6 +330,11 @@ fn authelia() -> Arc<dyn Module> {
         crate::plan::EXT_AUTHZ_PATH_EXTRA.into(),
         "/authelia/api/authz/ext-authz/".into(),
     );
+    // The gateway must not accept requests before it can check them.
+    provides.ready_gate = Some(ReadyGate {
+        service: "authelia".into(),
+        readiness: Readiness::Healthy,
+    });
     Arc::new(DataModule {
         id: ModuleId::from("authelia"),
         display_name: Some("Authelia".into()),

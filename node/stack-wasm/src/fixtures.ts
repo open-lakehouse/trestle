@@ -18,17 +18,6 @@ export const FIXTURE_CATALOG: CatalogDto = {
       resource_nouns: [],
       knobs: [
         {
-          key: "auth",
-          title: "Require authentication",
-          kind: {
-            kind: "bool",
-          },
-          default: "false",
-          required: false,
-          help: "Front API and UI routes with Authelia single-sign-on (forward-auth). Resource backends (object stores, databases) are never gated.",
-          aliases: ["ENVOY_AUTH"],
-        },
-        {
           key: "image",
           title: "Envoy image",
           kind: {
@@ -432,7 +421,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           },
           default: "false",
           required: false,
-          help: "Allow every request and only log the policy's decision \u2014 for rolling out a policy change safely.",
+          help: "Allow every request and only log the policy's decision — for rolling out a policy change safely.",
           advanced: true,
         },
         {
@@ -463,10 +452,14 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
   ],
   default_selection: {
-    modules: ["envoy", "postgres", "rustfs", "unity-catalog"],
+    modules: ["postgres", "rustfs", "unity-catalog"],
     capabilities: [],
     knob_overrides: {},
     extra_resources: [],
+    gateway: {
+      auth: false,
+      policy: false,
+    },
   },
   targets: [
     {
@@ -487,6 +480,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: null,
         role: null,
         placement: null,
+        cloud: null,
         surfaces: [],
         offers: [],
         provisions: [],
@@ -500,6 +494,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "gateway",
         role: "auth",
         placement: "container:authelia",
+        cloud: null,
         surfaces: [],
         offers: [],
         provisions: [],
@@ -513,6 +508,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "gateway",
         role: "gateway",
         placement: "container:envoy",
+        cloud: null,
         surfaces: [
           {
             host_port: 9080,
@@ -611,6 +607,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "observability",
         role: "tracing",
         placement: "container:jaeger",
+        cloud: null,
         surfaces: [],
         offers: [],
         provisions: [],
@@ -624,6 +621,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "gateway",
         role: "policy",
         placement: "container:opa",
+        cloud: null,
         surfaces: [],
         offers: [],
         provisions: [],
@@ -637,6 +635,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "metadata_db",
         role: "relational_db",
         placement: "container:db",
+        cloud: null,
         surfaces: [],
         offers: ["PostgreSQL"],
         provisions: [
@@ -668,6 +667,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "storage",
         role: "object_store",
         placement: "container:rustfs",
+        cloud: null,
         surfaces: [],
         offers: ["S3 + STS"],
         provisions: [
@@ -698,6 +698,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "catalog",
         role: "data_catalog",
         placement: "container:unitycatalog",
+        cloud: null,
         surfaces: [],
         offers: [],
         provisions: [],
@@ -712,6 +713,7 @@ export const FIXTURE_PLAN: PlanResult = {
         category: "ml",
         role: "experiment_tracking",
         placement: "container:mlflow",
+        cloud: null,
         surfaces: [],
         offers: [],
         provisions: [],

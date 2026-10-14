@@ -8,9 +8,9 @@ land in `scratch/env/<scenario>/` (gitignored).
 
 | Scenario | Modules | What it exercises |
 | --- | --- | --- |
-| **minimal** | envoy, postgres, rustfs | Baseline gateway + relational DB + S3 object store (with STS) |
+| **minimal** | postgres, rustfs (+ the always-on gateway) | Baseline gateway + relational DB + S3 object store (with STS) |
 | **lakehouse** | minimal + unity-catalog, mlflow | Resource demands (auto-created DBs/buckets), multi-route gateway, UC S3 credential vending |
-| **authenticated** | lakehouse + `envoy.auth=true` | Authelia pulled in automatically; forward-auth on API/UI routes |
+| **authenticated** | lakehouse + `[selection.gateway] auth = true` | Authelia pulled in automatically; forward-auth on API/UI routes |
 | **full-azure** | lakehouse modules on Azurite + jaeger, headwaters | Provider substitution (`object_store=azurite`), tracing, lineage UI |
 | **hybrid** | lakehouse, with `postgres` and `rustfs` marked external (AWS RDS + S3) | External resources: nothing rendered for them, consumers bind the external connection, `${VAR}` secrets resolved from `secrets.env` (placeholders) |
 
@@ -82,14 +82,15 @@ needed). Bump defaults centrally in
 `crates/stack-topology/src/catalog/images.rs`, or override per environment:
 
 ```bash
-trestle env new myenv --select envoy,postgres,rustfs \
+trestle env new myenv --select postgres,rustfs \
   --set postgres.image=postgres:17 \
   --out-dir scratch/env/custom --force
 ```
 
 Knobs persist in `env.toml` under `[selection.knob_overrides.<module>]`.
-Legacy SCREAMING_SNAKE names (`ENVOY_AUTH`, `POSTGRES_IMAGE`, …) are still accepted as
-aliases when resolving overrides.
+Legacy SCREAMING_SNAKE names (`POSTGRES_IMAGE`, …) are still accepted as
+aliases when resolving overrides. Gateway sign-in and policy are not knobs: they live in
+`[selection.gateway]` (`auth`, `policy`).
 
 ## Configurable today vs structural
 

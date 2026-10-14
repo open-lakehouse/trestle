@@ -26,7 +26,7 @@ struct EnvoyCtx<'a> {
     clusters: Vec<ClusterCtx<'a>>,
     /// The Envoy admin port (bound on both sides).
     admin_port: u16,
-    /// Forward-auth config, present only when the gateway's `auth` knob is on. When set,
+    /// Forward-auth config, present only when gateway sign-in is on. When set,
     /// the listener(s) flagged `ext_authz` (the shared one only) gate every route behind it.
     auth: Option<AuthCtx<'a>>,
     /// The TLS listener for emulated public hostnames, when any module declares them.

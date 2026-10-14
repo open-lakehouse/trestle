@@ -79,6 +79,7 @@ pub(super) fn bind(
     routed: &Routed,
     catalog: &Catalog,
     ctx: &PlanCtx,
+    auth_provider: Option<&ModuleId>,
 ) -> Result<Bound, PlanError> {
     let Settled {
         graph,
@@ -239,6 +240,12 @@ pub(super) fn bind(
             .iter()
             .any(|s| s.role == Role::gateway());
         let (published_ports, tls) = if is_gateway {
+            // Under sign-in the gateway gates requests on the auth provider, so it waits for it.
+            if gateway.auth.is_some()
+                && let Some(gate) = auth_provider.and_then(|p| provider_ready_gate(catalog, p))
+            {
+                dependencies.push(gate);
+            }
             (published_ports(gateway, ctx), gateway_render_tls(gateway))
         } else {
             (Vec::new(), None)

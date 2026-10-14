@@ -109,9 +109,10 @@ pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClientSelection, ClusterConfig, ENVOY_AUTH_KNOB,
     ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, ExternalConnection, ExternalResource,
-    GatewayConfig, GatewayRoute, ListenerConfig, ModuleBinding, PYTHON_CLIENT_BASE_DEPENDENCIES,
-    Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace, Secrets, SecureOrigin, Selection,
-    TlsListenerConfig, TlsVirtualHost, is_valid_resource_name, resource_name_rule,
+    GatewayConfig, GatewayRoute, GatewaySettings, ListenerConfig, ModuleBinding,
+    PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace,
+    Secrets, SecureOrigin, Selection, TlsListenerConfig, TlsVirtualHost, is_valid_resource_name,
+    resource_name_rule,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---

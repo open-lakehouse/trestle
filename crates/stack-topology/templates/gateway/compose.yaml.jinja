@@ -7,12 +7,12 @@ services:
       - source: envoy_config
         target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
-{%- if knobs.auth == "true" or tls %}
+{%- if dependencies or tls %}
     depends_on:
-{%- if knobs.auth == "true" %}
-      authelia:
-        condition: service_healthy
-{%- endif %}
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: service_{{ dep.readiness }}
+{%- endfor %}
 {%- if tls %}
       {{ tls.mint_service }}:
         condition: service_completed_successfully

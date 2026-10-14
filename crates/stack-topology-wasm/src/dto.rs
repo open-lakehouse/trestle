@@ -368,11 +368,12 @@ mod tests {
                 "catalog missing {expected}: {ids:?}"
             );
         }
-        // The gateway (envoy) module exposes at least the `auth` knob — proves knobs project.
+        // The gateway (envoy) module exposes its image knob, flagged advanced — proves knobs
+        // project with their tier.
         let envoy = dto.modules.iter().find(|m| m.id == "envoy").unwrap();
         assert!(
-            envoy.knobs.iter().any(|k| k.key == "auth"),
-            "envoy should expose an `auth` knob: {:?}",
+            envoy.knobs.iter().any(|k| k.key == "image" && k.advanced),
+            "envoy should expose an advanced `image` knob: {:?}",
             envoy.knobs
         );
         // The default selection is non-empty (opens the UI pre-populated).
@@ -447,16 +448,10 @@ mod tests {
 
     /// The selection the `node/stack-wasm` fixtures are captured from.
     fn fixture_selection() -> Selection {
-        Selection::modules([
-            "envoy",
-            "authelia",
-            "opa",
-            "postgres",
-            "rustfs",
-            "unity-catalog",
-            "mlflow",
-            "jaeger",
-        ])
+        Selection {
+            gateway: olai_stack_topology::GatewaySettings::POLICY,
+            ..Selection::modules(["postgres", "rustfs", "unity-catalog", "mlflow", "jaeger"])
+        }
     }
 
     #[test]

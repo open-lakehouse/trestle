@@ -1,15 +1,18 @@
 //! Phase 1 — **augment**: fold the selection's implied modules and provider preferences in
 //! before the graph is resolved.
 //!
-//! Forward-auth is a gateway knob, not a separately-selected module, so when it resolves on the
-//! auth provider joins the selection here — as does every
-//! [`external`](super::Selection::external) provider (adding a module changes the graph, so this must run
-//! before resolution). A provider the user picked directly also becomes the preferred provider
+//! Every environment has a gateway, so the `gateway`-role provider joins the selection here
+//! whether or not it was picked. Sign-in and policy are [gateway settings](super::GatewaySettings),
+//! not separately-selected modules, so when they resolve on their providers join too, as does
+//! every [`external`](super::Selection::external) provider (adding a module changes the graph,
+//! so this must run before resolution). A provider the user picked directly also becomes the preferred provider
 //! of its role, so it satisfies that role's demands ahead of the catalog default.
 
 use std::borrow::Cow;
 
-use super::gateway::{gateway_auth_enabled, selected_auth_provider, selected_policy_provider};
+use super::gateway::{
+    gateway_auth_enabled, gateway_provider, policy_provider, selected_auth_provider,
+};
 use super::{PlanCtx, PlanError, Selection, demands::with_selected_providers};
 use crate::catalog::Catalog;
 use crate::catalog::module::ModuleId;
@@ -18,8 +21,8 @@ use crate::model::role::Role;
 /// The selection and context the rest of the planner runs against, plus the auth / policy
 /// providers to wire into the gateway.
 pub(super) struct Augmented<'a> {
-    /// The selection, with the auth provider (when forward-auth is on) and the external
-    /// providers added.
+    /// The selection, with the gateway, the auth and policy providers (when on) and the
+    /// external providers added.
     pub selection: Cow<'a, Selection>,
     /// The context, with directly-selected providers preferred for their roles.
     pub ctx: Cow<'a, PlanCtx>,
@@ -56,18 +59,21 @@ pub(super) fn augment<'a>(
     } else {
         None
     };
-    let policy_provider = selected_policy_provider(selection, catalog);
+    let policy_provider = policy_provider(selection, catalog);
     if let (Some(module), None) = (&policy_provider, &auth_provider) {
         return Err(PlanError::PolicyRequiresAuth {
             module: module.clone(),
         });
     }
 
-    // The auth provider and every external provider join the selection like any directly
-    // selected module (an external provider stays in the graph: it still satisfies its role's
-    // demands and appears in the topology; it is just not deployed).
-    let implied: Vec<&ModuleId> = auth_provider
+    // The gateway, the auth and policy providers, and every external provider join the
+    // selection like any directly selected module (an external provider stays in the graph: it
+    // still satisfies its role's demands and appears in the topology; it is just not deployed).
+    let gateway = gateway_provider(selection, catalog, ctx);
+    let implied: Vec<&ModuleId> = gateway
         .iter()
+        .chain(&auth_provider)
+        .chain(&policy_provider)
         .chain(selection.external.keys())
         .filter(|m| !selection.modules.contains(m))
         .collect();

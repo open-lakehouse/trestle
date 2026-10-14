@@ -67,6 +67,13 @@ impl Role {
     /// run on.
     pub const AGENT_PLATFORM: &'static str = "agent_platform";
 
+    /// The roles the planner fills from the environment itself rather than the module
+    /// selection: the always-on [`GATEWAY`](Self::GATEWAY) and the
+    /// [`AUTH`](Self::AUTH) / [`POLICY`](Self::POLICY) providers that
+    /// [`GatewaySettings`](crate::GatewaySettings) turn on. UIs should not offer their
+    /// providers as modules to pick.
+    pub const GATEWAY_MANAGED: [&'static str; 3] = [Self::GATEWAY, Self::AUTH, Self::POLICY];
+
     /// The `object_store` role.
     pub fn object_store() -> Role {
         Role::new(Self::OBJECT_STORE)

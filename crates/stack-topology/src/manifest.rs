@@ -50,6 +50,17 @@ pub enum ManifestError {
     /// Parsing the manifest from TOML failed (malformed file or unknown shape).
     #[error("parsing the environment manifest from TOML failed: {0}")]
     Deserialize(#[from] toml::de::Error),
+    /// The manifest was written by a newer version than this one understands.
+    #[error(
+        "environment manifest version {found} is newer than this version supports ({supported}); \
+         upgrade trestle"
+    )]
+    UnsupportedVersion {
+        /// The file's `version`.
+        found: u32,
+        /// The newest version this crate reads.
+        supported: u32,
+    },
     /// Reading or writing the manifest file failed (only the `std-io` helpers).
     #[cfg(feature = "std-io")]
     #[error("reading/writing the environment manifest file failed: {0}")]
@@ -77,9 +88,12 @@ pub struct EnvManifest {
 }
 
 impl EnvManifest {
-    /// The current manifest schema version.
+    /// The current manifest schema version. Version 2 added
+    /// [`Selection::gateway`](crate::Selection::gateway); a version-1 file still reads (the
+    /// planner honours its legacy gateway forms, see
+    /// [`normalize_gateway`](Self::normalize_gateway)).
     pub fn current_version() -> u32 {
-        1
+        2
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -98,8 +112,27 @@ impl EnvManifest {
 
     /// Parse a manifest from a TOML string. Pure and WASM-clean. Fields the file omits fall back
     /// to their defaults (e.g. an absent `[context]` uses [`PlanCtx::default`]).
+    ///
+    /// Errors with [`ManifestError::UnsupportedVersion`] for a file newer than this crate: it
+    /// may carry settings this version would silently drop (such as gateway sign-in).
     pub fn from_toml(s: &str) -> Result<Self, ManifestError> {
-        Ok(toml::from_str(s)?)
+        let manifest: Self = toml::from_str(s)?;
+        if manifest.version > Self::current_version() {
+            return Err(ManifestError::UnsupportedVersion {
+                found: manifest.version,
+                supported: Self::current_version(),
+            });
+        }
+        Ok(manifest)
+    }
+
+    /// Rewrite the selection's legacy gateway forms into
+    /// [`Selection::gateway`](crate::Selection::gateway) and stamp the current version; see
+    /// [`Selection::normalize_gateway`]. Plans the same before and after.
+    pub fn normalize_gateway(&mut self, catalog: &Catalog) -> Result<(), PlanError> {
+        self.selection.normalize_gateway(catalog, &self.context)?;
+        self.version = Self::current_version();
+        Ok(())
     }
 
     /// Resolve this manifest into a [`Plan`] — the single "manifest → environment" entry point.
@@ -367,6 +400,41 @@ mod tests {
         assert_eq!(m.selection.capabilities.len(), 1);
         m.remove_capability("experiment_tracking");
         assert!(m.selection.capabilities.is_empty());
+    }
+
+    #[test]
+    fn a_newer_manifest_is_rejected_rather_than_half_read() {
+        let text = format!("version = {}\n", EnvManifest::current_version() + 1);
+        assert!(matches!(
+            EnvManifest::from_toml(&text),
+            Err(ManifestError::UnsupportedVersion { .. })
+        ));
+        // Version-1 files (no `[selection.gateway]`) still read.
+        let v1 =
+            EnvManifest::from_toml("version = 1\n[selection]\nmodules = [\"envoy\"]\n").unwrap();
+        assert_eq!(v1.selection.gateway, crate::GatewaySettings::OPEN);
+    }
+
+    #[test]
+    fn normalizing_a_v1_manifest_moves_auth_into_gateway_settings() {
+        let mut m = EnvManifest::from_toml(
+            "version = 1\n[selection]\nmodules = [\"envoy\", \"mlflow\"]\n\
+             [selection.knob_overrides.envoy]\nauth = \"true\"\nimage = \"envoy:pinned\"\n",
+        )
+        .unwrap();
+        m.normalize_gateway(&baseline_catalog()).unwrap();
+        assert_eq!(m.version, EnvManifest::current_version());
+        assert_eq!(m.selection.gateway, crate::GatewaySettings::SIGN_IN);
+        assert_eq!(m.selection.modules, vec![ModuleId::from("mlflow")]);
+        // Only the legacy key moves; the gateway's other knobs stay.
+        let envoy = &m.selection.knob_overrides[&ModuleId::from("envoy")];
+        assert_eq!(envoy.len(), 1);
+        assert_eq!(envoy["image"], "envoy:pinned");
+        assert!(
+            m.to_toml()
+                .unwrap()
+                .contains("[selection.gateway]\nauth = true\npolicy = false")
+        );
     }
 }
 

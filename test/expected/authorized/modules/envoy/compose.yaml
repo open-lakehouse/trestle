@@ -8,6 +8,8 @@ services:
         target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
     depends_on:
+      authelia:
+        condition: service_healthy
       gateway-certs:
         condition: service_completed_successfully
     ports:

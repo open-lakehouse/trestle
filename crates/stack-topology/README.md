@@ -173,14 +173,28 @@ relational and object stores they need.
   `client/host.env` loaded.
 
 **Auth.** With the gateway open (the default), Omnigent runs single-user, like the rest of the
-stack. With `envoy.auth=true`, Omnigent trusts the identity the gateway asserts (`Remote-Email`):
-its users are the Authelia users, and with `opa` the policy applies (chatting needs `writers` or
+stack. With gateway sign-in on, Omnigent trusts the identity the gateway asserts (`Remote-Email`):
+its users are the Authelia users, and with policy on the policy applies (chatting needs `writers` or
 `admins`). An agent host can't present that identity, so the in-stack host is not rendered
 while the gateway authenticates.
 
 ## Gateway authentication and authorization
 
-- **Authentication**: the gateway's `auth` knob (`--set envoy.auth=true`) fronts every
+Every environment has the gateway: the planner adds the `gateway`-role provider (Envoy)
+whether or not it was selected. How it guards access is a setting of the environment, not
+a module to pick:
+
+```toml
+[selection.gateway]
+auth = true     # sign-in (the `auth`-role provider, Authelia)
+policy = true   # authorization (the `policy`-role provider, OPA); implies auth
+```
+
+`trestle env new --auth` / `--policy` set these, and the wizard asks for them. Manifests
+from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `authelia` /
+`opa` in `modules`) still plan the same; `Selection::normalize_gateway` rewrites them.
+
+- **Authentication**: `auth = true` fronts every
   API and UI route on the shared listener with Authelia forward-auth. Authelia's
   asserted identity reaches upstreams as `Remote-User` / `Remote-Email` / `Remote-Name` /
   `Remote-Groups`. Client-supplied copies are stripped before any check runs. Accounts
@@ -193,7 +207,7 @@ while the gateway authenticates.
   `curl --cacert ca.pem`. In-network callers keep plain HTTP at the gateway's
   `<env>.internal` network alias. `client/*.env` already points at both. Without auth, the
   gateway stays on `http://localhost:<port>`.
-- **Authorization**: selecting the `opa` module adds an Open Policy Agent check after
+- **Authorization**: `policy = true` adds an Open Policy Agent check after
   authentication (Envoy gRPC `ext_authz`, failing closed), and also turns auth on. The
   policy is `policies/authz.rego`, written once and then yours to edit. By default any
   signed-in user may read and the `writers` or `admins` group may write. Check changes with

@@ -58,6 +58,9 @@ export interface Selection {
   /** Whether to generate the Python client workspace (`client/`), and with
    *  which example notebooks (mirrors `ClientSelection`). Off when omitted. */
   client?: ClientSelection;
+  /** How the always-on gateway guards access (mirrors `GatewaySettings`).
+   *  Omitted means open. */
+  gateway?: GatewaySettings;
 }
 
 /** Python client workspace options (mirrors the Rust `ClientSelection`). */
@@ -66,6 +69,15 @@ export interface ClientSelection {
   python?: boolean;
   /** Also emit the selected modules' example notebooks; implies `python`. */
   examples?: boolean;
+}
+
+/** Gateway access (mirrors the Rust `GatewaySettings`). Each setting pulls in
+ *  its provider by role; `policy` implies `auth`. */
+export interface GatewaySettings {
+  /** Require sign-in (the `auth`-role provider, Authelia). */
+  auth: boolean;
+  /** Authorize each signed-in request (the `policy`-role provider, OPA). */
+  policy: boolean;
 }
 
 /** A provider marked external (mirrors the Rust `ExternalResource`). */

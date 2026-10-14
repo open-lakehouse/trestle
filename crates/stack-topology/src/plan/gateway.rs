@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use super::knobs::resolve_knob;
+use super::knobs::{coerce_knob, resolve_knob};
 use super::resolve::ResolvedGraph;
 use super::{AppUpstream, PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
@@ -98,14 +98,6 @@ pub(super) fn selected_auth_provider(selection: &Selection, catalog: &Catalog) -
         })
 }
 
-/// Whether the gateway's forward-auth knob ([`ENVOY_AUTH_KNOB`]) resolves on for this
-/// selection. Reads the bool knob off whichever catalog module fills the `gateway` role,
-/// honouring a [`Selection::knob_overrides`] value over the knob's default. Returns `Ok(false)`
-/// when there is no gateway module or it declares no such knob.
-///
-/// Explicitly selecting an identity provider (see [`selected_auth_provider`]) turns auth on
-/// unless the knob is explicitly overridden: an auth provider the gateway never consults would
-/// run as an orphan — up, but authenticating nothing.
 /// The `policy`-role provider the selection names (by module id or by the `policy`
 /// capability), if any. Selecting one is what puts the gateway's authorization check in place.
 pub(super) fn selected_policy_provider(
@@ -128,38 +120,116 @@ pub(super) fn selected_policy_provider(
         })
 }
 
+/// A legacy `auth` override on a gateway module (the canonical [`ENVOY_AUTH_KNOB`] key or
+/// its [`ENVOY_AUTH_KNOB_LEGACY`] alias), coerced to a bool. Read whether or not the gateway
+/// still declares the knob, so manifests written before [`GatewaySettings`](super::GatewaySettings)
+/// keep planning the same.
+fn legacy_auth_override(
+    selection: &Selection,
+    gateway_id: &ModuleId,
+) -> Result<Option<bool>, PlanError> {
+    let Some(overrides) = selection.knob_overrides.get(gateway_id) else {
+        return Ok(None);
+    };
+    let Some(raw) = overrides
+        .get(ENVOY_AUTH_KNOB)
+        .or_else(|| overrides.get(ENVOY_AUTH_KNOB_LEGACY))
+    else {
+        return Ok(None);
+    };
+    let kind = crate::catalog::module::KnobKind::Bool;
+    match coerce_knob(raw, &kind) {
+        Some(value) => Ok(Some(value == "true")),
+        None => Err(PlanError::InvalidKnobValue {
+            module: gateway_id.clone(),
+            key: ENVOY_AUTH_KNOB.into(),
+            value: raw.clone(),
+            kind,
+        }),
+    }
+}
+
+/// Whether gateway forward-auth is on for this selection.
+///
+/// [`Selection::gateway`] wins when it asks for sign-in (directly or through `policy`).
+/// Otherwise the legacy signals decide, read off whichever catalog module fills the `gateway`
+/// role: an explicit `auth` knob override; else selecting an identity provider (see
+/// [`selected_auth_provider`]) or a policy engine, since an auth provider the gateway never
+/// consults would run as an orphan, up but authenticating nothing; else the gateway's own
+/// `auth` knob default, if it declares one.
 pub(super) fn gateway_auth_enabled(
     selection: &Selection,
     catalog: &Catalog,
 ) -> Result<bool, PlanError> {
+    if selection.gateway.auth_enabled() {
+        return Ok(true);
+    }
+    for gateway_id in catalog.providers_of(Role::GATEWAY) {
+        if let Some(explicit) = legacy_auth_override(selection, gateway_id)? {
+            return Ok(explicit);
+        }
+    }
+    if selected_auth_provider(selection, catalog).is_some()
+        || selected_policy_provider(selection, catalog).is_some()
+    {
+        return Ok(true);
+    }
     for gateway_id in catalog.providers_of(Role::GATEWAY) {
         let Some(module) = catalog.get(gateway_id) else {
             continue;
         };
-        let Some(knob) = module.knobs().iter().find(|k| k.key == ENVOY_AUTH_KNOB) else {
-            continue;
-        };
-        let overrides = selection.knob_overrides.get(gateway_id);
-        let explicit = overrides.is_some_and(|o| {
-            o.contains_key(&knob.key) || knob.aliases.iter().any(|a| o.contains_key(a))
-        });
-        // Selecting an auth provider — or a policy engine, which authorizes the identity the
-        // auth provider asserts — turns auth on unless the knob says otherwise.
-        if !explicit
-            && (selected_auth_provider(selection, catalog).is_some()
-                || selected_policy_provider(selection, catalog).is_some())
+        if let Some(knob) = module.knobs().iter().find(|k| k.key == ENVOY_AUTH_KNOB)
+            && let Some(value) = resolve_knob(gateway_id, knob, None)?
         {
-            return Ok(true);
-        }
-        if let Some(value) = resolve_knob(gateway_id, knob, overrides)? {
             return Ok(value == "true");
         }
     }
     Ok(false)
 }
 
+/// The `policy`-role provider to wire: the one the selection names, else the catalog's first
+/// when [`GatewaySettings::policy`](super::GatewaySettings::policy) asks for one.
+pub(super) fn policy_provider(selection: &Selection, catalog: &Catalog) -> Option<ModuleId> {
+    selected_policy_provider(selection, catalog).or_else(|| {
+        selection
+            .gateway
+            .policy
+            .then(|| {
+                catalog
+                    .providers_of(Role::POLICY)
+                    .first()
+                    .map(|p| (*p).clone())
+            })
+            .flatten()
+    })
+}
+
+/// The `gateway`-role provider every environment runs: the one the selection names, else
+/// the first preferred via [`PlanCtx::provider_preference`], else the catalog's first. `None`
+/// only for a catalog without a gateway.
+pub(super) fn gateway_provider(
+    selection: &Selection,
+    catalog: &Catalog,
+    ctx: &PlanCtx,
+) -> Option<ModuleId> {
+    let providers = catalog.providers_of(Role::GATEWAY);
+    selection
+        .modules
+        .iter()
+        .find(|m| providers.contains(m))
+        .or_else(|| {
+            ctx.provider_preference
+                .get(Role::GATEWAY)
+                .into_iter()
+                .flatten()
+                .find(|m| providers.contains(m))
+        })
+        .or_else(|| providers.first().copied())
+        .cloned()
+}
+
 /// Forward-auth (single-sign-on) configuration for the gateway: present only when the
-/// gateway's `auth` knob is on. It tells the Envoy renderer to gate the shared
+/// gateway's sign-in is on. It tells the Envoy renderer to gate the shared
 /// listener (API + UI routes) behind an `ext_authz` HTTP filter pointed at the auth
 /// provider, and which identity headers to treat as trusted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,7 +266,7 @@ pub struct GatewayConfig {
     /// [`PlanCtx::gateway_admin_port`]; the `Default` of `0` is only ever a transient
     /// accumulator value the planner overwrites.
     pub admin_port: u16,
-    /// Forward-auth configuration, present only when the gateway's `ENVOY_AUTH` knob is on.
+    /// Forward-auth configuration, present only when gateway sign-in is on.
     /// When set, the Envoy renderer gates the shared listener behind `ext_authz`.
     pub auth: Option<AuthConfig>,
     /// The TLS listener emulating public hostnames, present only when some selected module
