@@ -15,6 +15,7 @@ import {
   Scale,
   Server,
   ShieldCheck,
+  Waypoints,
   Workflow,
 } from "lucide-react";
 
@@ -81,6 +82,11 @@ const ROLE_STYLES: Record<string, RoleStyle> = {
     label: "Notebooks",
     icon: NotebookPen,
     accent: "text-[hsl(var(--status-done))]",
+  },
+  graph: {
+    label: "Graph engine",
+    icon: Waypoints,
+    accent: "text-primary",
   },
 };
 

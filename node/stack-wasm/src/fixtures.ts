@@ -416,6 +416,63 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
     },
     {
+      id: "puppygraph",
+      display_name: "PuppyGraph",
+      summary: "Graph queries (Cypher, Gremlin) over Unity Catalog tables.",
+      category: "graph",
+      provider_of: "graph",
+      requires: ["envoy", "unity-catalog"],
+      conflicts_with: [],
+      resource_kinds: [],
+      resource_nouns: [],
+      knobs: [
+        {
+          key: "catalog",
+          title: "Unity Catalog catalog",
+          kind: {
+            kind: "string",
+          },
+          default: "unity",
+          required: false,
+          help: "The UC catalog whose schemas and tables the graph schema maps.",
+        },
+        {
+          key: "uc_url",
+          title: "Unity Catalog URL",
+          kind: {
+            kind: "string",
+          },
+          default: "http://unitycatalog:8080",
+          required: false,
+          help: "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
+          advanced: true,
+        },
+        {
+          key: "password",
+          title: "PuppyGraph password",
+          kind: {
+            kind: "string",
+          },
+          default: "puppygraph123",
+          required: false,
+          help: "Password of the `puppygraph` user for the web UI, Bolt and Gremlin. A local default; set your own if the ports are reachable by others.",
+          advanced: true,
+        },
+        {
+          key: "image",
+          title: "PuppyGraph image",
+          kind: {
+            kind: "string",
+          },
+          default: "puppygraph/puppygraph:1.14.0",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["PUPPYGRAPH_IMAGE"],
+          advanced: true,
+        },
+      ],
+    },
+    {
       id: "opa",
       display_name: "Open Policy Agent",
       summary: "Rego authorization for every gateway request, after sign-on.",
