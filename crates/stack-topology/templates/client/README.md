@@ -16,5 +16,15 @@ Notebooks read their endpoints from `host.env`, which marimo loads automatically
 credentials. To run a notebook from a container on the compose network, point
 `dotenv` at `container.env` instead.
 
+## Hosted editor
+
+Select the `marimo` module and the stack serves this workspace itself, at
+`$MARIMO_URL` (`<gateway>/marimo/`), with no local Python or uv needed. It edits
+these same files. Inside the container the notebooks load `container.env` in
+place of `host.env`, and packages install into a container-owned virtualenv
+(the host's `.venv` is untouched). The editor has no token of its own: the
+gateway, and its sign-in when enabled, is the only thing guarding it, and anyone
+who reaches it can run code in the stack.
+
 If the gateway requires sign-in (`envoy.auth`), the examples don't authenticate
 yet. Use a stack without auth for now.

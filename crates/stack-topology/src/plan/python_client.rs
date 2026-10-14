@@ -48,13 +48,19 @@ pub struct PythonWorkspace {
     pub notebooks: Vec<(ModuleId, ClientNotebook)>,
 }
 
-/// Aggregate the graph's Python contributions, or `None` when the selection doesn't ask for
+/// Aggregate the graph's Python contributions, or `None` when neither the selection nor a
+/// planned module ([`requires_workspace`](crate::PythonClient::requires_workspace)) asks for
 /// the workspace.
 pub(super) fn resolve_python_client(
     plan: &Plan,
     client: ClientSelection,
 ) -> Option<PythonWorkspace> {
-    if !client.enabled() {
+    let required = plan
+        .graph
+        .nodes
+        .iter()
+        .any(|module| module.provides().python.requires_workspace);
+    if !client.enabled() && !required {
         return None;
     }
     let mut workspace = PythonWorkspace::default();

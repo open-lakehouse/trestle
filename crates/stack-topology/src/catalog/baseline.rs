@@ -137,9 +137,10 @@ pub fn baseline_catalog() -> Catalog {
         jaeger(),
         headwaters(),
         omnigent(),
+        marimo(),
         opa(),
         databricks_emulator_env(),
-    ] as [Arc<dyn Module>; 12])
+    ] as [Arc<dyn Module>; 13])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
@@ -766,6 +767,7 @@ fn mlflow() -> Arc<dyn Module> {
             title: "train a scikit-learn model and track it in MLflow".into(),
             contents: include_str!("../../templates/modules/mlflow/notebooks/quickstart.py").into(),
         }],
+        ..PythonClient::default()
     };
 
     Arc::new(DataModule {
@@ -1403,6 +1405,62 @@ impl Module for Omnigent {
 
 fn omnigent() -> Arc<dyn Module> {
     Arc::new(Omnigent::new())
+}
+
+/// Where marimo serves its editor (pages, API, kernel WebSockets) at the gateway.
+const MARIMO_BASE_PATH: &str = "/marimo";
+/// The port the marimo editor listens on in its container.
+const MARIMO_PORT: u16 = 2718;
+
+/// `marimo` — the stack's Python client workspace served by a hosted
+/// [marimo](https://marimo.io) editor, behind the gateway at `/marimo`.
+///
+/// It edits the same `client/` workspace as the host workflow (`uv run marimo edit
+/// notebooks`), so selecting it generates the workspace
+/// ([`requires_workspace`](crate::PythonClient::requires_workspace)). Inside the container the
+/// notebooks load the in-network `container.env` in place of `host.env`, and packages install
+/// into a container-owned virtualenv, so the host's `client/.venv` is never touched.
+///
+/// Single-user: the editor runs without its own token, so the gateway (and its sign-in, when
+/// enabled) is the only boundary. Anyone who reaches `/marimo` can run code in the stack.
+fn marimo() -> Arc<dyn Module> {
+    let mut provides = Provides::default();
+    provides.client_env.insert(
+        "MARIMO_URL".into(),
+        ClientValue::endpoint("marimo", "ui", UrlPart::Full),
+    );
+    provides.python.requires_workspace = true;
+    Arc::new(DataModule {
+        id: ModuleId::from("marimo"),
+        display_name: Some("marimo notebooks".into()),
+        summary: Some("Hosted marimo editor for the client workspace's notebooks.".into()),
+        category: Some("notebooks".into()),
+        provider_of: Some(Role::NOTEBOOKS.into()),
+        requires: vec![ModuleId::from("envoy")],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "marimo".into(),
+            role: Role::notebooks(),
+            placement: container("marimo"),
+            // `--base-url` moves the whole editor under the prefix; kernels talk over a
+            // long-lived WebSocket, so the route carries no timeout.
+            base_path: MARIMO_BASE_PATH.into(),
+            endpoints: vec![Endpoint::ui_prefixable("ui", MARIMO_PORT, None).streaming()],
+            depends_on: vec![],
+        }],
+        provides,
+        knobs: vec![image_knob(
+            "image",
+            "marimo runtime image",
+            images::MARIMO,
+            "MARIMO_IMAGE",
+        )],
+        renders: template(include_str!(
+            "../../templates/modules/marimo/compose.yaml.jinja"
+        ))
+        .for_compose(),
+    })
 }
 
 /// `opa` — Open Policy Agent as the gateway's authorization engine.

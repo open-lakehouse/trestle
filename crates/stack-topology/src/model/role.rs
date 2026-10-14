@@ -66,6 +66,8 @@ impl Role {
     /// `agent_platform` — an AI-agent runtime: a coordinating server plus the hosts its agents
     /// run on.
     pub const AGENT_PLATFORM: &'static str = "agent_platform";
+    /// `notebooks` — a hosted notebook editor serving the stack's client workspace.
+    pub const NOTEBOOKS: &'static str = "notebooks";
 
     /// The roles the planner fills from the environment itself rather than the module
     /// selection: the always-on [`GATEWAY`](Self::GATEWAY) and the
@@ -109,6 +111,10 @@ impl Role {
     /// The `agent_platform` role.
     pub fn agent_platform() -> Role {
         Role::new(Self::AGENT_PLATFORM)
+    }
+    /// The `notebooks` role.
+    pub fn notebooks() -> Role {
+        Role::new(Self::NOTEBOOKS)
     }
     /// The `app_runtime` role.
     pub fn app_runtime() -> Role {

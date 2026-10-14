@@ -39,3 +39,6 @@ pub const HEADWATERS: &str = "ghcr.io/open-lakehouse/headwaters:0.0.7";
 pub const OMNIGENT_SERVER: &str = "ghcr.io/omnigent-ai/omnigent-server:v0.17.0";
 /// Omnigent agent host (runs agents; ships the claude / codex / pi harness CLIs).
 pub const OMNIGENT_HOST: &str = "ghcr.io/omnigent-ai/omnigent-host:v0.17.0";
+/// The uv + Python runtime the hosted marimo editor installs the client workspace into (the
+/// workspace's `pyproject.toml` owns the packages, marimo included).
+pub const MARIMO: &str = "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim";

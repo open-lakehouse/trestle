@@ -1,0 +1,38 @@
+# marimo editor serving the client workspace's notebooks
+services:
+  marimo:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+    working_dir: /workspace
+    environment:
+      # Packages install into a container-owned virtualenv, never the host's `client/.venv`.
+      UV_PROJECT_ENVIRONMENT: /venv
+      UV_CACHE_DIR: /uv-cache
+      UV_LINK_MODE: copy
+    command:
+      - sh
+      - -c
+      - >-
+        uv sync
+        && exec uv run --no-sync marimo edit notebooks
+        --host 0.0.0.0 --port 2718 --headless --no-token --skip-update-check
+        --base-url {{ env.BASE_PATH }}
+    volumes:
+      # The same workspace the host edits, so notebooks saved here show up there.
+      - ./client:/workspace
+      # The notebooks load `host.env` (pyproject's `[tool.marimo.runtime] dotenv`); inside the
+      # network they get the in-network addresses instead. The host's file is untouched.
+      - ./client/container.env:/workspace/host.env:ro
+      - {{ env.DATA_ROOT }}/marimo/venv:/venv
+      - {{ env.DATA_ROOT }}/marimo/uv-cache:/uv-cache
+    expose:
+      - "2718"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:2718{{ env.BASE_PATH }}/health')\""
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      # First boot installs the workspace's packages.
+      start_period: 120s

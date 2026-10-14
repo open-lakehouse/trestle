@@ -149,12 +149,17 @@ pub struct PythonClient {
     /// Example notebooks, emitted only when the selection asks for examples.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notebooks: Vec<ClientNotebook>,
+    /// Whether the module needs the workspace itself (e.g. it serves `client/` from a
+    /// container), so selecting it generates the workspace even when the selection's
+    /// [`client`](crate::Selection::client) section leaves it off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_workspace: bool,
 }
 
 impl PythonClient {
     /// Whether the module contributes nothing.
     pub fn is_empty(&self) -> bool {
-        self.dependencies.is_empty() && self.notebooks.is_empty()
+        self.dependencies.is_empty() && self.notebooks.is_empty() && !self.requires_workspace
     }
 }
 
