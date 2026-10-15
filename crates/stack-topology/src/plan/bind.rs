@@ -20,7 +20,7 @@ use crate::catalog::baseline::{
     GATEWAY_INTERNAL_HOST_VAR, GATEWAY_INTERNAL_URL_VAR, GATEWAY_URL_VAR,
 };
 use crate::catalog::module::{
-    GatewayTls, ModuleId, PortMapping, Readiness, ReadyGate, RenderCtx, ResolvedKnobs,
+    GatewayTls, ModuleId, PortMapping, Readiness, ReadyGate, RenderCtx, ResolvedKnobs, StackFacts,
 };
 use crate::model::connection::Connection;
 use crate::model::placement::Vantage;
@@ -45,6 +45,8 @@ pub struct ModuleBinding {
     pub published_ports: Vec<PortMapping>,
     /// The gateway's TLS material (gateway module only, when it serves TLS).
     pub tls: Option<GatewayTls>,
+    /// The stack-wide facts, identical for every module (the `stack` render global).
+    pub stack: StackFacts,
 }
 
 impl ModuleBinding {
@@ -59,6 +61,7 @@ impl ModuleBinding {
             objects: self.objects.clone(),
             published_ports: self.published_ports.clone(),
             tls: self.tls.clone(),
+            stack: self.stack.clone(),
         }
     }
 }
@@ -100,7 +103,12 @@ pub(super) fn bind(
     let client_env_keys = graph
         .nodes
         .iter()
-        .flat_map(|m| m.provides().client_env.keys().cloned())
+        .flat_map(|m| {
+            m.client_env_in(stack_facts)
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
@@ -255,6 +263,7 @@ pub(super) fn bind(
                 objects,
                 published_ports,
                 tls,
+                stack: stack_facts.clone(),
             },
         );
     }

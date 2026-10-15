@@ -25,7 +25,8 @@
 //! seeing every module at once, can assign prefixes that don't collide (see
 //! [`plan`](crate::plan) and [`RoutePlan`](crate::RoutePlan)).
 
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -195,17 +196,25 @@ pub enum ClientValue {
         /// The value.
         value: String,
     },
-    /// The address of one of this module's endpoints, as seen from the client's vantage —
-    /// through the gateway when the endpoint is routed (see
-    /// [`ServiceRef::address`](crate::ServiceRef::address)).
+    /// The address of one of this module's endpoints (or, with [`module`](Self::Endpoint::module),
+    /// another graph module's), as seen from the client's vantage — through the gateway when
+    /// the endpoint is routed (see [`ServiceRef::address`](crate::ServiceRef::address)).
     Endpoint {
-        /// The module's service hosting the endpoint.
+        /// The module whose service hosts the endpoint; `None` is the declaring module. Naming
+        /// another module only makes sense for a value contributed while that module is in the
+        /// stack (see [`Module::client_env_in`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        module: Option<ModuleId>,
+        /// The service hosting the endpoint.
         service: String,
         /// The endpoint id on that service.
         endpoint: String,
         /// Which part of the resolved URL to emit.
         #[serde(default)]
         part: UrlPart,
+        /// A literal prepended to the emitted part (e.g. a `uc:` registry-URI scheme).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        prefix: String,
     },
     /// The gateway's shared-listener origin (`scheme://host:port`) from the client's vantage.
     GatewayOrigin,
@@ -226,10 +235,37 @@ impl ClientValue {
         part: UrlPart,
     ) -> Self {
         ClientValue::Endpoint {
+            module: None,
             service: service.into(),
             endpoint: endpoint.into(),
             part,
+            prefix: String::new(),
         }
+    }
+
+    /// An [`Endpoint`](ClientValue::Endpoint) value on another module's service.
+    pub fn module_endpoint(
+        module: impl Into<ModuleId>,
+        service: impl Into<String>,
+        endpoint: impl Into<String>,
+        part: UrlPart,
+    ) -> Self {
+        ClientValue::Endpoint {
+            module: Some(module.into()),
+            service: service.into(),
+            endpoint: endpoint.into(),
+            part,
+            prefix: String::new(),
+        }
+    }
+
+    /// This value with `prefix` prepended to an [`Endpoint`](ClientValue::Endpoint)'s output
+    /// (other variants are returned unchanged).
+    pub fn with_prefix(mut self, value: impl Into<String>) -> Self {
+        if let ClientValue::Endpoint { prefix, .. } = &mut self {
+            *prefix = value.into();
+        }
+        self
     }
 }
 
@@ -600,6 +636,9 @@ pub struct RenderCtx<'a> {
     /// aliases and to mint a certificate covering its hostnames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<GatewayTls>,
+    /// The stack-wide facts (see [`StackFacts`]), as the `stack` global: a fragment branches on
+    /// an optional partner with `{% if "unity-catalog" in stack.modules %}`.
+    pub stack: StackFacts,
 }
 
 /// What the gateway's render needs to serve hostnames over TLS (see [`RenderCtx::tls`]).
@@ -641,6 +680,7 @@ impl<'a> RenderCtx<'a> {
             objects: Vec::new(),
             published_ports: Vec::new(),
             tls: None,
+            stack: StackFacts::default(),
         }
     }
 
@@ -667,15 +707,27 @@ fn render_template(
 }
 
 /// Stack-wide facts a module's topology may depend on beyond its own knobs, settled by the
-/// planner before any module's services are computed (see [`Module::services_in`]).
+/// planner before any module's services are computed (see [`Module::services_in`] and
+/// [`Module::client_env_in`]).
 ///
-/// The same facts reach every fragment as render-only variables (e.g. `GATEWAY_AUTH`), so a
-/// module's services and its rendered compose can't disagree.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The same facts reach every fragment, as render-only variables (e.g. `GATEWAY_AUTH`) and as
+/// the `stack` global (`{% if "unity-catalog" in stack.modules %}`), so a module's services and
+/// its rendered compose can't disagree.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct StackFacts {
     /// Whether the gateway authenticates the requests it fronts (its forward-auth knob is on
     /// and an auth provider is wired).
     pub gateway_auth: bool,
+    /// Every module in the resolved graph (auto-provisioned providers included). A module
+    /// integrates with an optional partner by checking it here rather than requiring it.
+    pub modules: BTreeSet<ModuleId>,
+}
+
+impl StackFacts {
+    /// Whether the module `id` is in the stack.
+    pub fn has(&self, id: &str) -> bool {
+        self.modules.iter().any(|m| m.as_str() == id)
+    }
 }
 
 /// A module's knobs resolved to their canonical, coerced values — the input a module's
@@ -830,6 +882,14 @@ pub trait Module: Send + Sync {
     fn services_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ServiceSpec> {
         let _ = stack;
         self.services(knobs)
+    }
+    /// The client-environment entries this module contributes to a stack with the given
+    /// [`StackFacts`] — what the planner resolves. Defaults to
+    /// [`Provides::client_env`]; a module overrides it only when a stack-wide fact (e.g. an
+    /// optional partner module being present) changes what clients should load.
+    fn client_env_in(&self, stack: &StackFacts) -> Cow<'_, BTreeMap<String, ClientValue>> {
+        let _ = stack;
+        Cow::Borrowed(&self.provides().client_env)
     }
     /// Look up one of this module's services by `name`, given the resolved knobs.
     fn service(&self, name: &str, knobs: &ResolvedKnobs) -> Option<ServiceSpec> {
@@ -987,6 +1047,7 @@ mod tests {
                 objects: Vec::new(),
                 published_ports: Vec::new(),
                 tls: None,
+                stack: StackFacts::default(),
             })
             .expect("template renders");
         assert!(out.fragment.contains("url: postgresql://db/x"));
@@ -1032,6 +1093,7 @@ mod tests {
             objects: Vec::new(),
             published_ports: Vec::new(),
             tls: None,
+            stack: StackFacts::default(),
         };
         let out = spec.render(&ctx).expect("template renders");
         // Each readiness serializes to the Compose condition's suffix.

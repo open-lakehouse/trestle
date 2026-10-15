@@ -13,29 +13,36 @@ use crate::render::InjectedEnv;
 pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedEnv, PlanError> {
     let mut env = InjectedEnv::new();
     for module in &plan.graph.nodes {
-        for (key, value) in &module.provides().client_env {
+        for (key, value) in module.client_env_in(&plan.stack_facts).iter() {
             let resolved = match value {
                 ClientValue::Literal { value } => Ok(value.clone()),
                 ClientValue::GatewayOrigin => {
                     gateway_origin(from, &plan.gateway_facts).map(|u| origin(&u))
                 }
                 ClientValue::Endpoint {
+                    module: owner,
                     service,
                     endpoint,
                     part,
-                } => plan
-                    .service_named(module.id(), service)
-                    .ok_or_else(|| AddressError::UnknownService {
-                        module: module.id().to_string(),
-                        service: service.clone(),
-                    })
-                    .and_then(|s| s.address(from, endpoint))
-                    .map(|url| match part {
-                        UrlPart::Full => url.as_str().trim_end_matches('/').to_string(),
-                        UrlPart::Origin => origin(&url),
-                        UrlPart::Path => url.path().to_string(),
-                        UrlPart::Authority => authority(&url),
-                    }),
+                    prefix,
+                } => {
+                    let owner = owner.as_ref().unwrap_or(module.id());
+                    plan.service_named(owner, service)
+                        .ok_or_else(|| AddressError::UnknownService {
+                            module: owner.to_string(),
+                            service: service.clone(),
+                        })
+                        .and_then(|s| s.address(from, endpoint))
+                        .map(|url| {
+                            let part = match part {
+                                UrlPart::Full => url.as_str().trim_end_matches('/').to_string(),
+                                UrlPart::Origin => origin(&url),
+                                UrlPart::Path => url.path().to_string(),
+                                UrlPart::Authority => authority(&url),
+                            };
+                            format!("{prefix}{part}")
+                        })
+                }
             }
             .map_err(|source| PlanError::ClientEnv {
                 module: module.id().clone(),

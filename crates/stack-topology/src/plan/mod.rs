@@ -64,7 +64,7 @@ mod settle;
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::DATA_ROOT_DEFAULT;
-use crate::catalog::module::{ExtraResource, ModuleId};
+use crate::catalog::module::{ExtraResource, ModuleId, StackFacts};
 use crate::model::connection::Connection;
 use crate::model::endpoint::Scheme;
 use crate::model::placement::Vantage;
@@ -702,6 +702,9 @@ pub struct Plan {
     /// The Python client workspace to generate, when the selection asks for one (see
     /// [`Selection::client`]): the merged dependencies and example notebooks of every module.
     pub python_client: Option<PythonWorkspace>,
+    /// The stack-wide facts every module's services, client env and render were settled
+    /// against.
+    pub stack_facts: StackFacts,
     /// The gateway facts the address resolver reads (captured from [`PlanCtx`]). Private:
     /// callers reach addressing through [`Plan::service`] → [`ServiceRef::address`], never
     /// by reconstructing this.
@@ -888,6 +891,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         provisioned: settled.provisioned,
         env: bound.env,
         gateway_facts: routed.facts,
+        stack_facts: settled.stack_facts,
         client_env_host: InjectedEnv::new(),
         client_env_container: InjectedEnv::new(),
         python_client: None,
