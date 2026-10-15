@@ -23,3 +23,5 @@ node/**/.vite/
 # wasm-bindgen output for the stack-wasm package (built via `just build-stack-wasm`)
 node/stack-wasm/pkg/
 *.tsbuildinfo
+
+.isaac/
