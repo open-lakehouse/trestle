@@ -26,13 +26,11 @@ use crate::model::role::ServiceSpec;
 pub(super) fn plan_impersonation(
     graph: &ResolvedGraph,
     provisioned_by: &BTreeMap<ModuleId, Vec<String>>,
-    externals: &super::external::Externals,
     gateway: &mut GatewayConfig,
 ) -> Result<Option<TlsListenerConfig>, PlanError> {
     let mut owner: BTreeMap<String, ModuleId> = BTreeMap::new();
     let mut virtual_hosts: Vec<TlsVirtualHost> = Vec::new();
-    // An external provider is the real cloud service: nothing to emulate.
-    for module in graph.nodes.iter().filter(|m| !externals.contains(m.id())) {
+    for module in &graph.nodes {
         let objects = provisioned_by
             .get(module.id())
             .map(Vec::as_slice)

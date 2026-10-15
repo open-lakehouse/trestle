@@ -50,8 +50,8 @@ mod augment;
 mod bind;
 mod client_env;
 mod demands;
-pub mod external;
 mod gateway;
+pub mod hosted;
 mod impersonation;
 mod knobs;
 mod names;
@@ -76,13 +76,13 @@ use crate::target::TargetId;
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;
-use external::SecretValues;
-pub use external::{ExternalConnection, ExternalResource, Secrets};
 pub use gateway::{
     AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
     GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, PolicyConfig, SecureOrigin,
     TlsListenerConfig, TlsVirtualHost,
 };
+use hosted::SecretValues;
+pub use hosted::{HostedConnection, HostedKind, HostedResource, Secrets};
 pub use names::{is_valid_resource_name, resource_name_rule};
 use python_client::resolve_python_client;
 pub use python_client::{ClientSelection, PYTHON_CLIENT_BASE_DEPENDENCIES, PythonWorkspace};
@@ -117,12 +117,12 @@ pub struct Selection {
     /// demands the role) but never bound into any module's env. See [`ExtraResource`].
     #[serde(default)]
     pub extra_resources: Vec<ExtraResource>,
-    /// Resource providers the environment uses but does not run — a managed cloud database or
-    /// object store — keyed by provider module id (e.g. `postgres`, `rustfs`). Each joins the
-    /// graph like a selected module (so the topology still shows it) but is reached at its
-    /// [`ExternalResource::connection`] instead of being deployed. See [`external`].
+    /// How each hosted provider is reached — a managed database or cloud object store the
+    /// environment uses but does not run — keyed by the hosted module's id (e.g.
+    /// `hosted-postgres`, `aws-s3`). An entry selects its module; a hosted module selected
+    /// without one uses its kind's [default](HostedKind::default_resource). See [`hosted`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub external: BTreeMap<ModuleId, ExternalResource>,
+    pub hosted: BTreeMap<ModuleId, HostedResource>,
     /// Whether to generate the Python client workspace under `client/`, and with which
     /// example notebooks (see [`ClientSelection`]). Off by default.
     #[serde(default, skip_serializing_if = "ClientSelection::is_default")]
@@ -319,7 +319,7 @@ pub struct PlanCtx {
     /// structural fact about the gateway, not a render-time decoration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<AppUpstream>,
-    /// The values `${VAR}` references in [`external`](Selection::external) connections resolve
+    /// The values `${VAR}` references in [`hosted`](Selection::hosted) connections resolve
     /// against — supplied at plan time by the consumer (e.g. from the process environment),
     /// never persisted. `None` (a preview) leaves the references verbatim; `Some` requires every
     /// one to resolve ([`PlanError::UnresolvedSecrets`]).
@@ -376,18 +376,18 @@ pub enum PlanError {
     /// Resolving the module graph failed (unknown id, conflict, or cycle).
     #[error(transparent)]
     Resolve(#[from] ResolveError),
-    /// An [`external`](Selection::external) connection references secrets (`${VAR}`) that
+    /// A [hosted](Selection::hosted) connection references secrets (`${VAR}`) that
     /// [`PlanCtx::secrets`] does not supply.
-    #[error("external resources reference unset secrets: {}", vars.join(", "))]
+    #[error("hosted resources reference unset secrets: {}", vars.join(", "))]
     UnresolvedSecrets {
         /// The unset secret names, sorted.
         vars: Vec<String>,
     },
-    /// An [`external`](Selection::external) entry is unusable: the module provisions no
-    /// resource of the connection's kind, or the connection is incomplete.
-    #[error("external module `{module}`: {reason}")]
-    InvalidExternal {
-        /// The module marked external.
+    /// A [`hosted`](Selection::hosted) entry is unusable: its module is not a hosted
+    /// provider, or the connection is for another kind of resource.
+    #[error("hosted module `{module}`: {reason}")]
+    InvalidHosted {
+        /// The module the entry configures.
         module: ModuleId,
         /// What is wrong with it.
         reason: String,
@@ -480,12 +480,12 @@ pub enum PlanError {
         /// The connection field the variant does not carry.
         field: crate::model::connection::ConnectionField,
     },
-    /// Two or more providers of the same resource role are in one environment without an
-    /// explicit per-demand pin selecting each. The fix is to pin each demand's provider or
-    /// drop one provider from the selection.
+    /// Two or more providers of the same resource role are in one environment. An environment
+    /// has one provider per role (e.g. one object store), so drop all but one from the
+    /// selection (or align the demands that pin a different one).
     #[error(
-        "role `{role}` has multiple unpinned providers {providers:?} in one environment; \
-         pin each demand's provider or remove one"
+        "role `{role}` has multiple providers {providers:?} in one environment; \
+         an environment uses one provider per role, so remove all but one"
     )]
     ConflictingRoleProviders {
         /// The over-subscribed role.
@@ -670,11 +670,12 @@ pub struct Plan {
     /// today, exposed in typed form so a consumer can make explicit per-flavour rendering
     /// decisions (e.g. branch on S3 vs Azure credentials) without re-parsing strings.
     pub connections: BTreeMap<(ModuleId, usize), Connection>,
-    /// The provider modules the environment uses but does not run (see
-    /// [`Selection::external`]), with how they are reached. A deploy target renders nothing for
-    /// them; the resources [`provisioned`](Self::provisioned) on them must already exist.
-    pub external: BTreeMap<ModuleId, ExternalResource>,
-    /// The secret values substituted into external connections (for sensitivity marking).
+    /// The hosted providers in the environment — used but not run (see [`hosted`]) — with how
+    /// they are reached (secrets unresolved; a provider the selection didn't configure shows
+    /// its kind's default). A deploy target renders nothing for them; the resources
+    /// [`provisioned`](Self::provisioned) on them must already exist.
+    pub hosted: BTreeMap<ModuleId, HostedResource>,
+    /// The secret values substituted into hosted connections (for sensitivity marking).
     pub(crate) secret_values: SecretValues,
     /// Each module's typed render data — its knobs, connections, readiness gates, provisioned
     /// objects and (for the gateway) published ports and TLS. Together with
@@ -781,8 +782,7 @@ impl Plan {
 
     /// Every resource name provisioned for the resource role `role` (e.g.
     /// `"relational_db"`), across all of the plan's providers of that role, in plan
-    /// (dependency) order. Usually one provider fills a role; a consumer that pins two
-    /// same-role providers gets both lists, concatenated.
+    /// (dependency) order. One provider fills a role, so this is that provider's list.
     pub fn provisioned_for_role(&self, role: &str) -> Vec<&str> {
         self.graph
             .nodes
@@ -881,8 +881,8 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             .into_iter()
             .map(|(key, c)| (key, c.connection))
             .collect(),
-        external: selection.external.clone(),
-        secret_values: std::mem::take(&mut settled.externals.secret_values),
+        hosted: std::mem::take(&mut settled.hosted.resources),
+        secret_values: std::mem::take(&mut settled.hosted.secret_values),
         bindings: bound.bindings,
         gateway: routed.gateway,
         provisioned: settled.provisioned,

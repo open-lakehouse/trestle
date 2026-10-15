@@ -39,7 +39,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::catalog::Catalog;
 use crate::catalog::module::{ExtraResource, ModuleId};
-use crate::plan::{Plan, PlanCtx, PlanError, Selection};
+use crate::model::connection::ObjectStoreCredential;
+use crate::plan::{HostedConnection, HostedResource, Plan, PlanCtx, PlanError, Selection};
 
 /// What can go wrong (de)serializing an [`EnvManifest`].
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +61,15 @@ pub enum ManifestError {
         found: u32,
         /// The newest version this crate reads.
         supported: u32,
+    },
+    /// A version-2 `[selection.external.<module>]` entry can't be migrated to a hosted
+    /// provider (see [`EnvManifest::from_toml`]).
+    #[error("cannot migrate external resource `{module}` to a hosted provider: {reason}")]
+    LegacyExternal {
+        /// The module the legacy entry marked external.
+        module: String,
+        /// Why it can't be migrated.
+        reason: String,
     },
     /// Reading or writing the manifest file failed (only the `std-io` helpers).
     #[cfg(feature = "std-io")]
@@ -91,9 +101,12 @@ impl EnvManifest {
     /// The current manifest schema version. Version 2 added
     /// [`Selection::gateway`](crate::Selection::gateway); a version-1 file still reads (the
     /// planner honours its legacy gateway forms, see
-    /// [`normalize_gateway`](Self::normalize_gateway)).
+    /// [`normalize_gateway`](Self::normalize_gateway)). Version 3 replaced
+    /// `[selection.external.<module>]` (an in-stack provider marked external) with hosted
+    /// provider modules ([`Selection::hosted`](crate::Selection::hosted)); an older file's
+    /// entries are migrated on read (see [`from_toml`](Self::from_toml)).
     pub fn current_version() -> u32 {
-        2
+        3
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -115,13 +128,24 @@ impl EnvManifest {
     ///
     /// Errors with [`ManifestError::UnsupportedVersion`] for a file newer than this crate: it
     /// may carry settings this version would silently drop (such as gateway sign-in).
+    ///
+    /// A pre-version-3 file's `[selection.external.<module>]` entries are migrated to the hosted
+    /// provider of their connection's kind — `hosted-postgres`, `aws-s3` or `azure-storage` —
+    /// which replaces the in-stack module in the selection (its knob overrides are dropped), and
+    /// the manifest is stamped with the current version. An Azure entry whose storage account
+    /// can't be read off its endpoint is a [`ManifestError::LegacyExternal`].
     pub fn from_toml(s: &str) -> Result<Self, ManifestError> {
-        let manifest: Self = toml::from_str(s)?;
+        let mut table: toml::Table = toml::from_str(s)?;
+        let migrated = migrate_external(&mut table)?;
+        let mut manifest: Self = toml::Value::Table(table).try_into()?;
         if manifest.version > Self::current_version() {
             return Err(ManifestError::UnsupportedVersion {
                 found: manifest.version,
                 supported: Self::current_version(),
             });
+        }
+        if migrated {
+            manifest.version = Self::current_version();
         }
         Ok(manifest)
     }
@@ -243,6 +267,170 @@ impl EnvManifest {
         std::fs::write(path, toml)?;
         Ok(())
     }
+}
+
+/// A version-2 `[selection.external.<module>]` entry: an in-stack provider marked external.
+#[derive(Deserialize)]
+struct LegacyExternal {
+    #[serde(default)]
+    cloud: Option<String>,
+    connection: LegacyConnection,
+}
+
+/// A version-2 external connection.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+enum LegacyConnection {
+    RelationalDb {
+        host: String,
+        #[serde(default = "legacy_postgres_port")]
+        port: u16,
+        #[serde(default = "legacy_name_placeholder")]
+        database: String,
+        username: String,
+        password: String,
+    },
+    ObjectStore {
+        endpoint: String,
+        #[serde(default)]
+        uri: Option<String>,
+        #[serde(default = "legacy_name_placeholder")]
+        bucket: String,
+        credential: ObjectStoreCredential,
+    },
+}
+
+fn legacy_postgres_port() -> u16 {
+    5432
+}
+
+fn legacy_name_placeholder() -> String {
+    "{name}".into()
+}
+
+/// Rewrite a pre-version-3 manifest's `selection.external` table in place into
+/// `selection.hosted`, swapping each in-stack module for its hosted provider. Returns whether
+/// anything was migrated.
+fn migrate_external(table: &mut toml::Table) -> Result<bool, ManifestError> {
+    let Some(toml::Value::Table(selection)) = table.get_mut("selection") else {
+        return Ok(false);
+    };
+    let Some(external) = selection.remove("external") else {
+        return Ok(false);
+    };
+    let external: std::collections::BTreeMap<String, LegacyExternal> = external.try_into()?;
+    for (module, legacy) in external {
+        let (hosted_id, resource) = legacy_to_hosted(&module, legacy)?;
+        let hosted = selection
+            .entry("hosted")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        if let toml::Value::Table(hosted) = hosted {
+            hosted.insert(hosted_id.into(), toml::Value::try_from(resource)?);
+        }
+        // The hosted provider replaces the in-stack one (and the hosted entry selects it).
+        if let Some(toml::Value::Array(modules)) = selection.get_mut("modules") {
+            modules.retain(|m| m.as_str() != Some(module.as_str()));
+        }
+        if let Some(toml::Value::Table(overrides)) = selection.get_mut("knob_overrides") {
+            overrides.remove(&module);
+        }
+    }
+    Ok(true)
+}
+
+/// The hosted provider and its configuration for a legacy external entry on `module`.
+fn legacy_to_hosted(
+    module: &str,
+    legacy: LegacyExternal,
+) -> Result<(&'static str, HostedResource), ManifestError> {
+    let (id, connection) = match legacy.connection {
+        LegacyConnection::RelationalDb {
+            host,
+            port,
+            database,
+            username,
+            password,
+        } => (
+            "hosted-postgres",
+            HostedConnection::Postgres {
+                host,
+                port,
+                database,
+                username,
+                password,
+            },
+        ),
+        LegacyConnection::ObjectStore {
+            endpoint,
+            bucket,
+            credential:
+                ObjectStoreCredential::S3 {
+                    access_key_id,
+                    secret_access_key,
+                    region,
+                    role_arn,
+                },
+            ..
+        } => {
+            // Keep only an endpoint the region doesn't already imply.
+            let endpoint = endpoint.trim_end_matches('/');
+            let endpoint = (endpoint != format!("https://s3.{region}.amazonaws.com"))
+                .then(|| endpoint.to_string());
+            (
+                "aws-s3",
+                HostedConnection::S3 {
+                    region,
+                    endpoint,
+                    bucket,
+                    access_key_id,
+                    secret_access_key,
+                    role_arn,
+                },
+            )
+        }
+        LegacyConnection::ObjectStore {
+            endpoint,
+            uri,
+            bucket,
+            credential: ObjectStoreCredential::AzureBlob { connection_string },
+        } => {
+            let account = azure_account(&endpoint)
+                .or_else(|| uri.as_deref().and_then(azure_account))
+                .ok_or_else(|| ManifestError::LegacyExternal {
+                    module: module.into(),
+                    reason: format!(
+                        "no storage account in endpoint `{endpoint}`; configure \
+                         `[selection.hosted.azure-storage]` by hand"
+                    ),
+                })?;
+            (
+                "azure-storage",
+                HostedConnection::AzureBlob {
+                    account,
+                    container: bucket,
+                    connection_string,
+                },
+            )
+        }
+    };
+    Ok((
+        id,
+        HostedResource {
+            cloud: legacy.cloud,
+            connection,
+        },
+    ))
+}
+
+/// The storage account in an Azure URL: `https://<account>.blob.core.windows.net` or
+/// `abfss://<container>@<account>.dfs.core.windows.net`.
+fn azure_account(url: &str) -> Option<String> {
+    let authority = url.split_once("://")?.1.split('/').next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let (account, domain) = host.split_once('.')?;
+    (!account.is_empty() && domain.ends_with(".core.windows.net")).then(|| account.to_string())
 }
 
 #[cfg(test)]
@@ -435,6 +623,60 @@ mod tests {
                 .unwrap()
                 .contains("[selection.gateway]\nauth = true\npolicy = false")
         );
+    }
+
+    #[test]
+    fn a_v2_external_entry_migrates_to_its_hosted_provider() {
+        let m = EnvManifest::from_toml(
+            "version = 2\n[selection]\nmodules = [\"postgres\", \"rustfs\", \"unity-catalog\"]\n\
+             [selection.knob_overrides.rustfs]\nimage = \"rustfs:pinned\"\n\
+             [selection.external.postgres]\ncloud = \"aws\"\n\
+             [selection.external.postgres.connection]\nkind = \"relational_db\"\n\
+             host = \"db.example.com\"\nusername = \"app\"\npassword = \"${PG_PASSWORD}\"\n\
+             [selection.external.rustfs.connection]\nkind = \"object_store\"\n\
+             endpoint = \"https://s3.eu-west-1.amazonaws.com/\"\n\
+             [selection.external.rustfs.connection.credential]\nflavour = \"s3\"\n\
+             access_key_id = \"${AWS_ACCESS_KEY_ID}\"\n\
+             secret_access_key = \"${AWS_SECRET_ACCESS_KEY}\"\nregion = \"eu-west-1\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.version, EnvManifest::current_version());
+        assert_eq!(m.selection.modules, vec![ModuleId::from("unity-catalog")]);
+        assert!(m.selection.knob_overrides.is_empty());
+        let pg = &m.selection.hosted[&ModuleId::from("hosted-postgres")];
+        assert_eq!(pg.cloud.as_deref(), Some("aws"));
+        assert!(matches!(
+            &pg.connection,
+            HostedConnection::Postgres { host, port: 5432, .. } if host == "db.example.com"
+        ));
+        let s3 = &m.selection.hosted[&ModuleId::from("aws-s3")];
+        assert!(matches!(
+            &s3.connection,
+            HostedConnection::S3 { region, endpoint: None, .. } if region == "eu-west-1"
+        ));
+        // It plans with the hosted providers in place of the in-stack ones.
+        let plan = m.plan(&baseline_catalog()).unwrap();
+        assert!(plan.graph.module(&ModuleId::from("rustfs")).is_none());
+        assert!(plan.graph.module(&ModuleId::from("aws-s3")).is_some());
+    }
+
+    #[test]
+    fn a_v2_azure_entry_migrates_with_its_account() {
+        let m = EnvManifest::from_toml(
+            "version = 2\n[selection]\nmodules = [\"azurite\"]\n\
+             [selection.external.azurite.connection]\nkind = \"object_store\"\n\
+             endpoint = \"https://lakeacct.blob.core.windows.net\"\n\
+             uri = \"abfss://{name}@lakeacct.dfs.core.windows.net\"\n\
+             [selection.external.azurite.connection.credential]\nflavour = \"azure_blob\"\n\
+             connection_string = \"${AZURE_STORAGE_CONNECTION_STRING}\"\n",
+        )
+        .unwrap();
+        assert!(m.selection.modules.is_empty());
+        assert!(matches!(
+            &m.selection.hosted[&ModuleId::from("azure-storage")].connection,
+            HostedConnection::AzureBlob { account, .. } if account == "lakeacct"
+        ));
+        assert_eq!(azure_account("http://azurite:10000/devstoreaccount1"), None);
     }
 }
 

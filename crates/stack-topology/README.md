@@ -72,6 +72,50 @@ rendering for the environment's target (`PlanError::UnsupportedOnTarget`) instea
 silently dropping it. The Envoy bootstrap (`render::envoy`) is shared by every target: Envoy
 is the gateway implementation, not the deploy target.
 
+## Hosted resources
+
+An environment has **one provider per resource role**. A database or object store can run in
+the stack, or the stack can use one a cloud already runs:
+
+| Role | In the stack | Hosted |
+| --- | --- | --- |
+| `relational_db` | `postgres` | `hosted-postgres` (RDS, Azure Database for PostgreSQL, Neon, …) |
+| `object_store` | `rustfs`, `azurite` | `aws-s3` (or an S3-compatible endpoint), `azure-storage` |
+
+Select a hosted provider in place of the in-stack one. Selecting two providers for one role
+is a `ConflictingRoleProviders` error. Nothing is rendered for a hosted provider, and the
+gateway doesn't front it. Consumers connect straight to its origin, and the databases or
+buckets they need must already exist (`LAYOUT.md` lists them). Unconfigured, a hosted
+provider reads its ecosystem's usual env vars (`PGHOST`/`PGUSER`/`PGPASSWORD`,
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `AZURE_STORAGE_ACCOUNT`/
+`AZURE_STORAGE_CONNECTION_STRING`). To configure one, add it under `[selection.hosted]`:
+
+```toml
+[selection]
+modules = ["hosted-postgres", "aws-s3", "unity-catalog"]
+
+[selection.hosted.hosted-postgres]
+cloud = "neon"          # free-form; groups the node in the topology
+
+[selection.hosted.hosted-postgres.connection]
+kind = "postgres"
+host = "ep-cool-name-123456.us-east-2.aws.neon.tech"
+username = "lakehouse"
+password = "${PG_PASSWORD}"
+
+[selection.hosted.aws-s3.connection]
+kind = "s3"
+region = "eu-west-1"   # endpoint defaults to https://s3.<region>.amazonaws.com
+access_key_id = "${AWS_ACCESS_KEY_ID}"
+secret_access_key = "${AWS_SECRET_ACCESS_KEY}"
+```
+
+Secrets are `${VAR}` references, so `env.toml` stays committable. `trestle env render` resolves
+them from the environment or a git-ignored `secrets.env` beside `env.toml`, and any rendered
+file a secret lands in is marked sensitive. A version-2 `env.toml` that marked `postgres`,
+`rustfs` or `azurite` as `[selection.external.*]` is migrated to the matching hosted provider
+when it's read.
+
 ## Client environment
 
 Besides the stack itself, every render writes what a *client* (an app, notebook, or

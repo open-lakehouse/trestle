@@ -48,6 +48,7 @@
 //! rendered concrete; RustFS's bucket-init lines, for instance, iterate the provisioned
 //! `objects` rather than splicing a planner-filled placeholder.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::Catalog;
@@ -63,6 +64,7 @@ use crate::model::connection::{
 use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
+use crate::plan::hosted::HostedKind;
 use crate::render::RenderFile;
 use crate::target::TargetId;
 
@@ -120,10 +122,11 @@ pub const DATA_ROOT_DEFAULT: &str = "./.data";
 
 /// The inlined baseline catalog: all common local-Lakehouse modules.
 ///
-/// The `object_store` role has two providers (RustFS and Azurite); the catalog
-/// default is RustFS, so the baseline plans the S3 wiring out of the box. An
-/// environment that prefers Azurite (e.g. for local UC credential vending) overrides
-/// via [`PlanCtx::provider_preference`](crate::PlanCtx::provider_preference).
+/// The `object_store` role has two in-stack providers (RustFS and Azurite) and two hosted ones
+/// (`aws-s3`, `azure-storage`); the catalog default is RustFS, so the baseline plans the S3
+/// wiring out of the box. `relational_db` is the in-stack `postgres` or `hosted-postgres`. An
+/// environment uses one provider per role: selecting another one (or preferring it via
+/// [`PlanCtx::provider_preference`](crate::PlanCtx::provider_preference)) replaces the default.
 pub fn baseline_catalog() -> Catalog {
     Catalog::from_modules([
         envoy(),
@@ -131,6 +134,9 @@ pub fn baseline_catalog() -> Catalog {
         postgres(),
         rustfs(),
         azurite(),
+        hosted_postgres(),
+        aws_s3(),
+        azure_storage(),
         mlflow(),
         unity_catalog(),
         jaeger(),
@@ -139,11 +145,115 @@ pub fn baseline_catalog() -> Catalog {
         marimo(),
         puppygraph(),
         opa(),
-    ] as [Arc<dyn Module>; 13])
+    ] as [Arc<dyn Module>; 16])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
+    .with_default_provider(Role::RELATIONAL_DB, "postgres")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
     // check.
+}
+
+/// `hosted-postgres` — a managed PostgreSQL server (Amazon RDS, Azure Database for
+/// PostgreSQL, Neon, …) in place of the in-stack `postgres`. Consumers connect to it directly;
+/// the databases they demand must already exist.
+fn hosted_postgres() -> Arc<dyn Module> {
+    hosted_module(
+        "hosted-postgres",
+        "Hosted Postgres",
+        "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
+        "metadata_db",
+        HostedKind::Postgres,
+        ServiceSpec {
+            name: "db".into(),
+            role: Role::relational_db(),
+            placement: hosted_placement(),
+            endpoints: vec![Endpoint::internal("sql", Scheme::Tcp, 5432, None)],
+            depends_on: vec![],
+            base_path: String::new(),
+        },
+    )
+}
+
+/// `aws-s3` — Amazon S3 (or an S3-compatible store at an explicit endpoint) in place of an
+/// in-stack object store. The buckets consumers demand must already exist.
+fn aws_s3() -> Arc<dyn Module> {
+    hosted_module(
+        "aws-s3",
+        "Amazon S3",
+        "Amazon S3 or an S3-compatible store; buckets must already exist.",
+        "storage",
+        HostedKind::S3,
+        ServiceSpec {
+            name: "s3".into(),
+            role: Role::object_store(),
+            placement: hosted_placement(),
+            endpoints: vec![Endpoint::internal("s3", Scheme::Https, 443, None)],
+            depends_on: vec![],
+            base_path: String::new(),
+        },
+    )
+}
+
+/// `azure-storage` — an Azure storage account (Blob / ADLS Gen2) in place of an in-stack
+/// object store. The containers consumers demand must already exist.
+fn azure_storage() -> Arc<dyn Module> {
+    hosted_module(
+        "azure-storage",
+        "Azure Storage",
+        "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
+        "storage",
+        HostedKind::AzureBlob,
+        ServiceSpec {
+            name: "blob".into(),
+            role: Role::object_store(),
+            placement: hosted_placement(),
+            endpoints: vec![Endpoint::internal("blob", Scheme::Https, 443, None)],
+            depends_on: vec![],
+            base_path: String::new(),
+        },
+    )
+}
+
+/// A hosted provider of `kind`'s role: one service, reached at the configured connection's
+/// origin (the planner fills in the placement), and nothing to render. Its template is the
+/// kind's default connection; the planner binds the configured one instead.
+fn hosted_module(
+    id: &str,
+    display_name: &str,
+    summary: &str,
+    category: &str,
+    kind: HostedKind,
+    service: ServiceSpec,
+) -> Arc<dyn Module> {
+    let mut provides = Provides {
+        hosted: Some(kind),
+        ..Provides::default()
+    };
+    provides
+        .resource_kinds
+        .insert(kind.role().into(), kind.default_connection().template());
+    Arc::new(DataModule {
+        id: ModuleId::from(id),
+        display_name: Some(display_name.into()),
+        summary: Some(summary.into()),
+        category: Some(category.into()),
+        provider_of: Some(kind.role().into()),
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![service],
+        provides,
+        knobs: vec![],
+        renders: BTreeMap::new(),
+    })
+}
+
+/// A hosted service's placement before planning, which replaces the origin with the
+/// configured connection's.
+fn hosted_placement() -> Placement {
+    Placement::External {
+        origin: String::new(),
+    }
 }
 
 /// The default lakehouse selection: the default category picks (a relational store and
@@ -695,9 +805,9 @@ fn azurite() -> Arc<dyn Module> {
         category: Some("storage".into()),
         provider_of: Some(Role::OBJECT_STORE.into()),
         requires: vec![],
-        // Same-role exclusivity is enforced by the planner (two unpinned object_store
-        // providers in one environment is a `ConflictingRoleProviders` error), so no
-        // hand-listed `conflicts_with` is needed here.
+        // Same-role exclusivity is enforced by the planner (two object_store providers in one
+        // environment is a `ConflictingRoleProviders` error), so no hand-listed
+        // `conflicts_with` is needed here.
         conflicts_with: vec![],
         needs: vec![],
         service_specs: vec![ServiceSpec {

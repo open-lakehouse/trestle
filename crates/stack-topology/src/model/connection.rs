@@ -362,11 +362,6 @@ impl Connection {
         }
     }
 
-    /// Whether `other` is the same variant (both object stores, or both relational databases).
-    pub(crate) fn same_kind(&self, other: &Connection) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
-
     /// The value of one typed [`ConnectionField`], if this connection variant has it.
     ///
     /// Returns `None` for a field absent from the variant (e.g.

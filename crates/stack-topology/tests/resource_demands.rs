@@ -567,10 +567,9 @@ fn a_service_can_demand_two_object_stores_of_the_same_role() {
 }
 
 #[test]
-fn same_role_demands_can_pin_different_providers() {
-    // The escape hatch: a service's two object-store demands can deliberately land on
-    // different providers (e.g. managed on RustFS, external on Azurite for
-    // credential vending) by pinning each.
+fn same_role_demands_pinning_different_providers_conflict() {
+    // One provider per role: a service whose two object-store demands pin different providers
+    // would run RustFS and Azurite side by side, which the planner rejects.
     let uc = consumer(
         "catalog",
         vec![
@@ -588,28 +587,16 @@ fn same_role_demands_can_pin_different_providers() {
             },
         ],
     );
-    // Both object_store providers run in one environment, which is allowed *because* each
-    // demand pins its provider — role-exclusivity (`check_role_exclusivity`) only rejects
-    // unpinned same-role clashes, so no hand-listed `conflicts_with` is involved.
     let catalog = baseline_catalog().merge(Catalog::from_modules([uc]));
-    let p = catalog
+    let err = catalog
         .plan(&Selection::modules(["catalog"]), &PlanCtx::default())
-        .unwrap();
-
-    // Managed went to RustFS (s3://), external to Azurite (wasbs://).
-    assert!(
-        p.provisioned_by(&"rustfs".into())
-            .contains(&"uc-managed".to_string())
-    );
-    assert!(
-        p.provisioned_by(&"azurite".into())
-            .contains(&"uc-external".to_string())
-    );
-    let env = p.injected.get(&ModuleId::from("catalog")).unwrap();
-    assert_eq!(env.get("UC_MANAGED_URI"), Some("s3://uc-managed"));
+        .unwrap_err();
     assert_eq!(
-        env.get("UC_EXTERNAL_URI"),
-        Some("wasbs://uc-external@devstoreaccount1.blob.core.windows.net")
+        err,
+        PlanError::ConflictingRoleProviders {
+            role: "object_store".into(),
+            providers: vec!["azurite".into(), "rustfs".into()],
+        }
     );
 }
 
@@ -729,31 +716,24 @@ fn extra_resource_dedups_against_a_module_demand() {
     );
 }
 
-/// A pinned extra resource lands on the pinned provider, and a pin introducing a *second*
-/// same-role provider is sanctioned (not a ConflictingRoleProviders clash) — mirroring a
-/// demand pin.
+/// A pinned extra resource lands on the pinned provider, but a pin introducing a *second*
+/// same-role provider is a ConflictingRoleProviders clash — one provider per role.
 #[test]
-fn pinned_extra_resource_sanctions_a_second_provider() {
-    // mlflow demands an object_store → rustfs (the default). An extra bucket pins azurite,
-    // a deliberate second object_store provider.
+fn a_pinned_extra_resource_cannot_add_a_second_provider() {
+    // mlflow demands an object_store → rustfs (the default). An extra bucket pinning azurite
+    // would add a second object_store provider.
     let mut sel = Selection::modules(["envoy", "postgres", "mlflow", "rustfs"]);
     sel.extra_resources = vec![ExtraResource {
         resource: Role::OBJECT_STORE.into(),
         name: "exports".into(),
         provider: Some(ModuleId::from("azurite")),
     }];
-    let p = baseline_catalog()
+    let err = baseline_catalog()
         .plan(&sel, &PlanCtx::default())
-        .expect("a pinned extra sanctions the second provider");
+        .unwrap_err();
     assert!(
-        p.services.contains_key(&ModuleId::from("azurite")),
-        "the pinned provider is deployed"
-    );
-    assert!(
-        p.provisioned_by(&"azurite".into())
-            .contains(&"exports".to_string()),
-        "the extra bucket is provisioned on the pinned azurite: {:?}",
-        p.provisioned_by(&"azurite".into())
+        matches!(err, PlanError::ConflictingRoleProviders { ref role, .. } if role == "object_store"),
+        "{err:?}"
     );
 }
 

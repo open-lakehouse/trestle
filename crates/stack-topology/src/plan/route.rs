@@ -49,7 +49,6 @@ pub(super) fn route(
         services: services_of,
         provisioned,
         stack_facts,
-        externals,
         ..
     } = settled;
 
@@ -72,7 +71,7 @@ pub(super) fn route(
     };
     // Emulated public hostnames: give the gateway a TLS listener for them, and mark every
     // connection those providers vend with the trust a consumer needs for the local CA.
-    gateway.tls = plan_impersonation(graph, provisioned, externals, &mut gateway)?;
+    gateway.tls = plan_impersonation(graph, provisioned, &mut gateway)?;
     // Forward-auth needs a secure, dotted origin (see `SecureOrigin`).
     if stack_facts.gateway_auth {
         gateway.secure = Some(SecureOrigin::for_env(&ctx.env_name));
@@ -81,7 +80,7 @@ pub(super) fn route(
         let emulating: BTreeSet<&ModuleId> = graph
             .nodes
             .iter()
-            .filter(|m| !m.provides().impersonated_hosts.is_empty() && !externals.contains(m.id()))
+            .filter(|m| !m.provides().impersonated_hosts.is_empty())
             .map(|m| m.id())
             .collect();
         for resolved in chosen.values_mut() {

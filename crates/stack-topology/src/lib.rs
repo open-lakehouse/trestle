@@ -108,8 +108,8 @@ pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, 
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClientSelection, ClusterConfig, ENVOY_AUTH_KNOB,
-    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, ExternalConnection, ExternalResource,
-    GatewayConfig, GatewayRoute, GatewaySettings, ListenerConfig, ModuleBinding,
+    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, GatewaySettings,
+    HostedConnection, HostedKind, HostedResource, ListenerConfig, ModuleBinding,
     PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace,
     Secrets, SecureOrigin, Selection, TlsListenerConfig, TlsVirtualHost, is_valid_resource_name,
     resource_name_rule,

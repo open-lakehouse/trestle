@@ -11,9 +11,9 @@
 use std::collections::BTreeMap;
 
 use olai_stack_topology::{
-    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, Knob, ListenerConfig, PlanCtx, PlanError,
-    RenderError, Role, Selection, ServiceSpec, TargetId, baseline_catalog, baseline_selection,
-    builtin_targets,
+    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, HostedKind, HostedResource, Knob,
+    ListenerConfig, PlanCtx, PlanError, RenderError, Role, Selection, ServiceSpec, TargetId,
+    baseline_catalog, baseline_selection, builtin_targets,
 };
 use serde::Serialize;
 
@@ -71,6 +71,19 @@ pub struct ModuleDto {
     /// The user-tunable config knobs this module exposes. `Knob` already derives `Serialize`, so
     /// it is reused verbatim.
     pub knobs: Vec<Knob>,
+    /// Set for a hosted provider (a managed database or cloud object store the stack uses but
+    /// does not run): what it stands for and the configuration it uses until the selection's
+    /// `hosted` entry overrides it.
+    pub hosted: Option<HostedModuleDto>,
+}
+
+/// A hosted provider module's kind and default configuration (see [`ModuleDto::hosted`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct HostedModuleDto {
+    /// What it stands for (`"postgres"`, `"s3"`, `"azure_blob"`).
+    pub kind: HostedKind,
+    /// The configuration used when the selection gives none.
+    pub default: HostedResource,
 }
 
 /// The result of planning a selection: the runtime topology for the diagram, the resolved
@@ -213,6 +226,10 @@ pub fn catalog_dto() -> CatalogDto {
             resource_kinds: m.provides().resource_kinds.keys().cloned().collect(),
             resource_nouns: resource_nouns(m.as_ref()),
             knobs: m.knobs().to_vec(),
+            hosted: m.hosted().map(|kind| HostedModuleDto {
+                kind,
+                default: kind.default_resource(),
+            }),
         })
         .collect();
     CatalogDto {
@@ -539,14 +556,14 @@ mod tests {
     }
 
     #[test]
-    fn external_providers_are_external_nodes_grouped_by_cloud() {
-        use olai_stack_topology::{ExternalConnection, ExternalResource};
-        let mut selection = Selection::modules(["envoy", "postgres", "mlflow"]);
-        selection.external.insert(
-            "postgres".into(),
-            ExternalResource {
-                cloud: Some("aws".into()),
-                connection: ExternalConnection::RelationalDb {
+    fn hosted_providers_are_external_nodes_grouped_by_cloud() {
+        use olai_stack_topology::HostedConnection;
+        let mut selection = Selection::modules(["envoy", "hosted-postgres", "aws-s3", "mlflow"]);
+        selection.hosted.insert(
+            "hosted-postgres".into(),
+            HostedResource {
+                cloud: Some("neon".into()),
+                connection: HostedConnection::Postgres {
                     host: "db.example.com".into(),
                     port: 5432,
                     database: "{name}".into(),
@@ -557,9 +574,11 @@ mod tests {
         );
         let result = plan_result(&selection, None).expect("plan should succeed");
         let node = |id: &str| result.graph.nodes.iter().find(|n| n.id == id).unwrap();
-        let pg = node("postgres");
+        let pg = node("hosted-postgres");
         assert_eq!(pg.kind, NodeKind::External);
-        assert_eq!(pg.cloud.as_deref(), Some("aws"));
+        assert_eq!(pg.cloud.as_deref(), Some("neon"));
+        // Unconfigured, a hosted provider sits in its kind's default cloud.
+        assert_eq!(node("aws-s3").cloud.as_deref(), Some("aws"));
         assert_eq!(
             pg.placement.as_deref(),
             Some("external:tcp://db.example.com:5432")
@@ -571,13 +590,13 @@ mod tests {
                 .graph
                 .edges
                 .iter()
-                .any(|e| e.endpoints() == ("mlflow", "postgres"))
+                .any(|e| e.endpoints() == ("mlflow", "hosted-postgres"))
         );
         assert!(
             !result
                 .files
                 .iter()
-                .any(|f| f.path.starts_with("modules/postgres/"))
+                .any(|f| f.path.starts_with("modules/hosted-postgres/"))
         );
     }
 

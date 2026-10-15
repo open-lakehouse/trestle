@@ -96,16 +96,16 @@ pub fn layout_report(plan: &Plan) -> String {
         }
     }
 
-    // --- External resources ---
-    if !plan.external.is_empty() {
-        out.push_str("\n## External resources\n\n");
+    // --- Hosted resources ---
+    if !plan.hosted.is_empty() {
+        out.push_str("\n## Hosted resources\n\n");
         out.push_str(
             "Provided outside the stack: create the listed resources before starting it, and set\n",
         );
         out.push_str("the secrets in the environment `trestle env render` runs in.\n\n");
         out.push_str("| Module | Cloud | Reached at | Must exist | Secrets |\n");
         out.push_str("| --- | --- | --- | --- | --- |\n");
-        for (module, resource) in &plan.external {
+        for (module, resource) in &plan.hosted {
             let origin = plan
                 .services
                 .get(module)

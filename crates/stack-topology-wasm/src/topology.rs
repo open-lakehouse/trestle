@@ -52,7 +52,7 @@ pub enum NodeKind {
     /// A component the stack runs.
     Component,
     /// A component the plan relies on but does not run on the deploy target: host-bound,
-    /// in-process, or provided by an external cloud (see [`GraphNodeDto::cloud`]).
+    /// in-process, or a hosted provider in a cloud (see [`GraphNodeDto::cloud`]).
     External,
 }
 
@@ -75,9 +75,9 @@ pub struct GraphNodeDto {
     /// Where the component runs (`in_process` / `host` / `container:<service>` /
     /// `external:<origin>`).
     pub placement: Option<String>,
-    /// For a resource provided by an external cloud environment (see
-    /// [`Selection::external`](olai_stack_topology::Selection::external)): the environment's
-    /// label (e.g. `"aws"`), or `""` when it is unnamed. The UI groups these nodes by it. `None`
+    /// For a hosted provider (see
+    /// [`Plan::hosted`](olai_stack_topology::Plan::hosted)): its cloud environment's label
+    /// (e.g. `"aws"`), or `""` when it is unnamed. The UI groups these nodes by it. `None`
     /// for everything the stack runs.
     pub cloud: Option<String>,
     /// For the gateway: what it exposes, one surface per listener — the platform surface
@@ -573,7 +573,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             role: Some(svc.role.as_str().to_string()),
             placement: Some(placement_str(&svc.placement)),
             cloud: plan
-                .external
+                .hosted
                 .get(m.id())
                 .map(|e| e.cloud.clone().unwrap_or_default()),
             offers: offers_of(id),

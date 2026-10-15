@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::connection::{ConnectionField, ConnectionTemplate};
 use crate::model::role::ServiceSpec;
+use crate::plan::hosted::HostedKind;
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
 use crate::target::TargetId;
 
@@ -137,6 +138,15 @@ pub struct Provides {
     /// [`ClientSelection`](crate::ClientSelection)).
     #[serde(default, skip_serializing_if = "PythonClient::is_empty")]
     pub python: PythonClient,
+    /// Set for a **hosted** provider: one the environment uses but does not run (a managed
+    /// database, a cloud object store). Its consumers bind a [`HostedConnection`] of this kind
+    /// instead of [`resource_kinds`](Self::resource_kinds)' template, its services are
+    /// reached directly at that connection's origin, and no deploy target renders it. See
+    /// [`plan::hosted`](crate::plan::hosted).
+    ///
+    /// [`HostedConnection`]: crate::HostedConnection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted: Option<HostedKind>,
 }
 
 /// A module's contribution to the Python client workspace (see [`Provides::python`]).
@@ -287,8 +297,10 @@ pub struct ResourceDemand {
     /// The concrete resource name to provision (e.g. `"unitycatalog"`, `"unity"`).
     pub name: String,
     /// Pin a specific provider module for this demand, overriding preference/default.
-    /// The escape hatch for when a consumer truly needs one backend; normally `None`
-    /// and the planner chooses.
+    /// For a consumer that truly needs one backend; normally `None` and the planner chooses.
+    /// An environment still has one provider per role, so a pin that disagrees with the
+    /// role's other provider is a
+    /// [`ConflictingRoleProviders`](crate::PlanError::ConflictingRoleProviders) error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ModuleId>,
     /// How the resolved connection's typed fields map into the demanding module's env so
@@ -798,6 +810,11 @@ pub trait Module: Send + Sync {
     /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
     /// extras).
     fn provides(&self) -> &Provides;
+    /// The kind of hosted resource this module stands for, if it is a hosted provider (see
+    /// [`Provides::hosted`]). A hosted provider needs no [`render_for`](Module::render_for).
+    fn hosted(&self) -> Option<HostedKind> {
+        self.provides().hosted
+    }
     /// How this module renders on the deploy target `target` (its fragment and mountable
     /// files in that target's format), or `None` if the module can't run on it — the planner
     /// then rejects it with [`PlanError::UnsupportedOnTarget`](crate::PlanError::UnsupportedOnTarget).

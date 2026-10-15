@@ -1,6 +1,6 @@
 //! The **client environment**: the variables an app, notebook, or engine loads to reach the
 //! stack, resolved per caller [`Vantage`] from every selected module's
-//! [`client_env`](crate::Provides::client_env).
+//! [`client_env`](crate::Provides::client_env) and every hosted provider's coordinates.
 
 use super::{Plan, PlanError};
 use crate::address::{AddressError, gateway_origin};
@@ -43,6 +43,12 @@ pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedE
                 source,
             })?;
             env.set(key, resolved);
+        }
+        // A hosted provider's coordinates depend on its configured connection, not the module.
+        if let Some(hosted) = plan.hosted.get(module.id()) {
+            for (key, value) in hosted.connection.client_env() {
+                env.set(key, value);
+            }
         }
     }
     Ok(env)

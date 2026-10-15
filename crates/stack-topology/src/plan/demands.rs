@@ -1,7 +1,7 @@
 //! Selection and demand resolution: which modules join the graph, which provider satisfies
 //! each resource demand, and how a resolved connection binds into a consumer's env.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use super::resolve::{ExtraEdges, ResolvedGraph, resolve, resolve_with};
 use super::{PlanCtx, PlanError, Selection};
@@ -284,80 +284,52 @@ pub(super) fn resolve_demand_providers(
     Ok(chosen)
 }
 
-/// Reject an environment that contains two or more providers of the same resource role,
-/// unless every extra provider was reached by an explicit per-demand
-/// [`provider`](crate::ResourceDemand::provider) pin.
+/// Reject an environment that contains two or more providers of the same resource role: an
+/// environment has one instance per capability — RustFS *or* Azurite *or* a hosted S3 bucket,
+/// never two side by side.
 ///
 /// `choose_provider` already selects exactly one provider per demand, so a same-role clash
-/// only arises when a *second* provider is in the graph for an unrelated reason — directly
-/// selected, or pulled in by `requires`. That is the case this rejects (with
-/// [`PlanError::ConflictingRoleProviders`]): selecting both RustFS and Azurite with no
-/// pins is ambiguous, and the planner will not silently drop one. The exception is the
-/// deliberate multi-store shape — a consumer that pins each demand's provider, or an
-/// environment-level [`ExtraResource`] that pins one — where every provider beyond the first is
-/// accounted for by a pin.
-pub(super) fn check_role_exclusivity(
-    graph: &ResolvedGraph,
-    selection: &Selection,
-) -> Result<(), PlanError> {
-    // The (role, provider) pairs a demand or an extra resource explicitly pinned — sanctioned.
-    let mut pinned: BTreeSet<(String, ModuleId)> = BTreeSet::new();
+/// only arises when a *second* provider is in the graph for another reason — directly
+/// selected, pulled in by `requires`, or reached by a demand's
+/// [`provider`](crate::ResourceDemand::provider) pin that disagrees with the rest. The
+/// planner will not silently drop one, so each is a [`PlanError::ConflictingRoleProviders`].
+pub(super) fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanError> {
+    // Providers of each role present in the resolved graph. A node *provisions* a role it
+    // declares under `resource_kinds`; it may also name one as its `provider_of` capability.
+    let mut provisioning: BTreeMap<&str, Vec<ModuleId>> = BTreeMap::new();
+    let mut capability: BTreeMap<&str, Vec<ModuleId>> = BTreeMap::new();
     for module in &graph.nodes {
-        for demand in module.needs() {
-            if let Some(p) = &demand.provider {
-                pinned.insert((demand.resource.clone(), p.clone()));
-            }
-        }
-    }
-    for extra in &selection.extra_resources {
-        if let Some(p) = &extra.provider {
-            pinned.insert((extra.resource.clone(), p.clone()));
-        }
-    }
-
-    // Providers of each role present in the resolved graph (a node provides a role if it
-    // declares it under `resource_kinds`, or its `provider_of` capability names it).
-    let mut by_role: BTreeMap<String, Vec<ModuleId>> = BTreeMap::new();
-    for module in &graph.nodes {
-        let mut roles: BTreeSet<&str> = module
-            .provides()
-            .resource_kinds
-            .keys()
-            .map(String::as_str)
-            .collect();
-        if let Some(cap) = module.provider_of() {
-            roles.insert(cap);
-        }
-        for role in roles {
-            by_role
-                .entry(role.to_string())
+        for role in module.provides().resource_kinds.keys() {
+            provisioning
+                .entry(role)
                 .or_default()
                 .push(module.id().clone());
         }
-    }
-
-    for (role, mut providers) in by_role {
-        if providers.len() < 2 {
-            continue;
+        if let Some(cap) = module.provider_of()
+            && !module.provides().resource_kinds.contains_key(cap)
+        {
+            capability.entry(cap).or_default().push(module.id().clone());
         }
-        // Allow it only if at most one provider is unpinned: every other was a deliberate pin.
-        let unpinned = providers
+    }
+    // Two provisioning providers always clash. Two providers of a bare capability only clash
+    // when a demand targets it (otherwise nothing is ambiguous).
+    let demanded = |role: &str| {
+        graph
+            .nodes
             .iter()
-            .filter(|id| !pinned.contains(&(role.clone(), (*id).clone())))
-            .count();
-        if unpinned > 1 {
-            // Ignore a role that no demand actually targets (e.g. a `provider_of` capability
-            // with no matching `resource_kinds` demand): it is not a provisioning clash.
-            let demanded = graph
-                .nodes
-                .iter()
-                .flat_map(|m| m.needs())
-                .any(|d| d.resource == role);
-            if !demanded {
-                continue;
-            }
+            .flat_map(|m| m.needs())
+            .any(|d| d.resource == role)
+    };
+    for (role, mut providers) in provisioning
+        .into_iter()
+        .chain(capability.into_iter().filter(|(role, _)| demanded(role)))
+    {
+        if providers.len() > 1 {
             providers.sort();
-            return Err(PlanError::ConflictingRoleProviders { role, providers });
+            return Err(PlanError::ConflictingRoleProviders {
+                role: role.to_string(),
+                providers,
+            });
         }
     }
     Ok(())
@@ -373,8 +345,7 @@ pub(super) fn provider_ready_gate(
 }
 
 /// The resources to provision, grouped by the *chosen provider* (deduped, in dependency
-/// order). Grouping by provider — not by abstract role — is what lets one object-store
-/// demand land on RustFS and another on Azurite, each provisioning on its own init.
+/// order).
 ///
 /// Modules are walked in graph (dependency) order so the grouped names stay deterministic.
 /// The environment-level [`extra_resources`](Selection::extra_resources) are folded in on the

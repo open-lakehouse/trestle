@@ -12,7 +12,7 @@ land in `scratch/env/<scenario>/` (gitignored).
 | **lakehouse** | minimal + unity-catalog, mlflow | Resource demands (auto-created DBs/buckets), multi-route gateway, UC S3 credential vending |
 | **authenticated** | lakehouse + `[selection.gateway] auth = true` | Authelia pulled in automatically; forward-auth on API/UI routes |
 | **full-azure** | lakehouse modules on Azurite + jaeger, headwaters | Provider substitution (`object_store=azurite`), tracing, lineage UI |
-| **hybrid** | lakehouse, with `postgres` and `rustfs` marked external (AWS RDS + S3) | External resources: nothing rendered for them, consumers bind the external connection, `${VAR}` secrets resolved from `secrets.env` (placeholders) |
+| **hybrid** | lakehouse on the hosted `hosted-postgres` and `aws-s3` providers (AWS RDS + S3) | Hosted resources: nothing rendered for them, consumers bind the hosted connection, `${VAR}` secrets resolved from `secrets.env` (placeholders) |
 
 Gateway URL for every scenario: `http://localhost:9080` (dedicated object-store listener: `:9100`).
 With auth on (**authenticated**, **authorized**) it is `https://<scenario>.localhost:9080` instead,
