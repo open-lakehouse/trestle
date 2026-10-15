@@ -8,7 +8,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
   modules: [
     {
       id: "envoy",
-      display_name: "Envoy gateway",
+      display_name: "Envoy",
       summary: "Single-port gateway, Databricks-shaped URL rewrites.",
       category: "gateway",
       provider_of: "gateway",
@@ -101,7 +101,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "rustfs",
-      display_name: "RustFS (local S3 + STS)",
+      display_name: "RustFS",
       summary:
         "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
       category: "storage",
@@ -157,7 +157,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "azurite",
-      display_name: "Azurite (local Azure Blob)",
+      display_name: "Azurite",
       summary: "Azure Blob emulator; object store with Azure-shaped wiring.",
       category: "storage",
       provider_of: "object_store",
@@ -200,7 +200,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "mlflow",
-      display_name: "MLflow tracking",
+      display_name: "MLflow",
       summary:
         "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
       category: "ml",
@@ -238,7 +238,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     {
       id: "unity-catalog",
       display_name: "Unity Catalog",
-      summary: "Databricks UC server; Databricks-shaped REST API.",
+      summary: "Open-source Unity Catalog server; Databricks-shaped REST API.",
       category: "catalog",
       provider_of: "data_catalog",
       requires: ["envoy"],
@@ -262,7 +262,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "jaeger",
-      display_name: "Jaeger tracing",
+      display_name: "Jaeger",
       summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
       category: "observability",
       provider_of: "tracing",
@@ -287,10 +287,10 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "headwaters",
-      display_name: "Headwaters lineage",
+      display_name: "Headwaters",
       summary:
         "OpenLineage lineage service; Databricks-style API + optional UI.",
-      category: "observability",
+      category: "lineage",
       provider_of: "lineage",
       requires: ["envoy"],
       conflicts_with: [],
@@ -392,7 +392,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "marimo",
-      display_name: "marimo notebooks",
+      display_name: "marimo",
       summary: "Hosted marimo editor for the client workspace's notebooks.",
       category: "notebooks",
       provider_of: "notebooks",
@@ -585,7 +585,7 @@ export const FIXTURE_PLAN: PlanResult = {
       {
         id: "envoy",
         kind: "gateway",
-        display_name: "Envoy gateway",
+        display_name: "Envoy",
         summary: "Single-port gateway, Databricks-shaped URL rewrites.",
         category: "gateway",
         role: "gateway",
@@ -684,7 +684,7 @@ export const FIXTURE_PLAN: PlanResult = {
       {
         id: "jaeger",
         kind: "component",
-        display_name: "Jaeger tracing",
+        display_name: "Jaeger",
         summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
         category: "observability",
         role: "tracing",
@@ -743,7 +743,7 @@ export const FIXTURE_PLAN: PlanResult = {
       {
         id: "rustfs",
         kind: "component",
-        display_name: "RustFS (local S3 + STS)",
+        display_name: "RustFS",
         summary:
           "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
         category: "storage",
@@ -776,7 +776,8 @@ export const FIXTURE_PLAN: PlanResult = {
         id: "unity-catalog",
         kind: "component",
         display_name: "Unity Catalog",
-        summary: "Databricks UC server; Databricks-shaped REST API.",
+        summary:
+          "Open-source Unity Catalog server; Databricks-shaped REST API.",
         category: "catalog",
         role: "data_catalog",
         placement: "container:unitycatalog",
@@ -789,7 +790,7 @@ export const FIXTURE_PLAN: PlanResult = {
       {
         id: "mlflow",
         kind: "component",
-        display_name: "MLflow tracking",
+        display_name: "MLflow",
         summary:
           "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
         category: "ml",

@@ -271,7 +271,7 @@ fn envoy() -> Arc<dyn Module> {
     let provides = Provides::default();
     Arc::new(DataModule {
         id: ModuleId::from("envoy"),
-        display_name: Some("Envoy gateway".into()),
+        display_name: Some("Envoy".into()),
         summary: Some("Single-port gateway, Databricks-shaped URL rewrites.".into()),
         category: Some("gateway".into()),
         provider_of: Some(Role::GATEWAY.into()),
@@ -588,7 +588,7 @@ fn rustfs() -> Arc<dyn Module> {
     ];
     Arc::new(DataModule {
         id: ModuleId::from("rustfs"),
-        display_name: Some("RustFS (local S3 + STS)".into()),
+        display_name: Some("RustFS".into()),
         summary: Some(
             "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS \
              hostnames in-network."
@@ -692,7 +692,7 @@ fn azurite() -> Arc<dyn Module> {
 
     Arc::new(DataModule {
         id: ModuleId::from("azurite"),
-        display_name: Some("Azurite (local Azure Blob)".into()),
+        display_name: Some("Azurite".into()),
         summary: Some("Azure Blob emulator; object store with Azure-shaped wiring.".into()),
         category: Some("storage".into()),
         provider_of: Some(Role::OBJECT_STORE.into()),
@@ -773,7 +773,7 @@ fn mlflow() -> Arc<dyn Module> {
 
     Arc::new(DataModule {
         id: ModuleId::from("mlflow"),
-        display_name: Some("MLflow tracking".into()),
+        display_name: Some("MLflow".into()),
         summary: Some(
             "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.".into(),
         ),
@@ -903,7 +903,7 @@ fn unity_catalog() -> Arc<dyn Module> {
     Arc::new(DataModule {
         id: ModuleId::from("unity-catalog"),
         display_name: Some("Unity Catalog".into()),
-        summary: Some("Databricks UC server; Databricks-shaped REST API.".into()),
+        summary: Some("Open-source Unity Catalog server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
         provider_of: Some(Role::DATA_CATALOG.into()),
         // Only the gateway is a hard module dependency; Postgres + S3 arrive as demands.
@@ -1001,7 +1001,7 @@ fn jaeger() -> Arc<dyn Module> {
     );
     Arc::new(DataModule {
         id: ModuleId::from("jaeger"),
-        display_name: Some("Jaeger tracing".into()),
+        display_name: Some("Jaeger".into()),
         summary: Some("All-in-one OTLP tracing backend with the Jaeger UI.".into()),
         category: Some("observability".into()),
         provider_of: Some(Role::TRACING.into()),
@@ -1173,13 +1173,13 @@ impl Module for Headwaters {
         &self.id
     }
     fn display_name(&self) -> Option<&str> {
-        Some("Headwaters lineage")
+        Some("Headwaters")
     }
     fn summary(&self) -> Option<&str> {
         Some("OpenLineage lineage service; Databricks-style API + optional UI.")
     }
     fn category(&self) -> Option<&str> {
-        Some("observability")
+        Some("lineage")
     }
     fn provider_of(&self) -> Option<&str> {
         Some(Role::LINEAGE)
@@ -1448,7 +1448,7 @@ fn marimo() -> Arc<dyn Module> {
     provides.python.requires_workspace = true;
     Arc::new(DataModule {
         id: ModuleId::from("marimo"),
-        display_name: Some("marimo notebooks".into()),
+        display_name: Some("marimo".into()),
         summary: Some("Hosted marimo editor for the client workspace's notebooks.".into()),
         category: Some("notebooks".into()),
         provider_of: Some(Role::NOTEBOOKS.into()),

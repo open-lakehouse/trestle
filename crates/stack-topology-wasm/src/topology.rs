@@ -63,7 +63,7 @@ pub struct GraphNodeDto {
     pub id: String,
     /// What the node stands for.
     pub kind: NodeKind,
-    /// The implementation's human-readable name (e.g. `"RustFS (local S3 + STS)"`).
+    /// The implementation's human-readable name (e.g. `"RustFS"`).
     pub display_name: Option<String>,
     /// One-line summary, for a tooltip.
     pub summary: Option<String>,

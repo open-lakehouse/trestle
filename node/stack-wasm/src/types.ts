@@ -196,7 +196,7 @@ export interface GraphNodeDto {
   /** Module id, or `"@clients"` (Rust `CLIENTS_NODE_ID`). */
   id: string;
   kind: NodeKind;
-  /** The implementation's name (e.g. "RustFS (local S3 + STS)"). */
+  /** The implementation's name (e.g. "RustFS"). */
   display_name?: string | null;
   summary?: string | null;
   category?: string | null;
