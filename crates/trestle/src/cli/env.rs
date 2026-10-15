@@ -261,15 +261,31 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
 
     // Plan, then materialize + persist. This is the shared core with `env render`.
     // Secrets are runtime-only (never persisted): resolve them for this render only.
-    let plan = catalog
-        .plan(
-            &selection,
-            &PlanCtx {
-                secrets: Some(load_secrets(&out_dir)?),
-                ..ctx.clone()
-            },
-        )
-        .map_err(map_plan_err)?;
+    let plan = match catalog.plan(
+        &selection,
+        &PlanCtx {
+            secrets: Some(load_secrets(&out_dir)?),
+            ..ctx.clone()
+        },
+    ) {
+        // A hosted provider needs secrets that aren't set yet: keep the choices in env.toml so
+        // setting them and running `env render` picks up where this left off.
+        Err(PlanError::UnresolvedSecrets { vars }) => {
+            let preview = catalog.plan(&selection, &ctx).map_err(map_plan_err)?;
+            write_manifest(&preview, &selection, &ctx, &out_dir)?;
+            return Err(Error::other(format!(
+                "hosted resources reference unset secrets: {}",
+                vars.join(", ")
+            ))
+            .with_hint(format!(
+                "saved {}/env.toml; export them (or set them in `{SECRETS_FILE}` beside it), \
+                 then run `trestle env render {}`",
+                out_dir.display(),
+                out_dir.display()
+            )));
+        }
+        plan => plan.map_err(map_plan_err)?,
+    };
 
     let summary = config_summary(&plan, &selection, &out_dir);
     if !interactive {
@@ -306,6 +322,18 @@ fn write_env(
         .map_err(map_render_err)?
         .write_to(dir)
         .map_err(|e| Error::io_at(dir, e))?;
+    write_manifest(plan, selection, ctx, dir)
+}
+
+/// Persist the `env.toml` manifest for `selection` in `dir`, followed by a commented reference
+/// of what `plan` leaves at its defaults (knobs, hosted connections).
+fn write_manifest(
+    plan: &olai_stack_topology::Plan,
+    selection: &Selection,
+    ctx: &PlanCtx,
+    dir: &std::path::Path,
+) -> Result<()> {
+    std::fs::create_dir_all(dir).map_err(|e| Error::io_at(dir, e))?;
     let manifest = EnvManifest::new(selection.clone(), ctx.clone());
     let manifest_path = dir.join("env.toml");
     manifest
@@ -313,7 +341,7 @@ fn write_env(
         .map_err(map_manifest_err)?;
     // Defaults are listed as comments, not written as overrides, so a later
     // trestle release's defaults (e.g. image bumps) still apply on re-render.
-    let reference = knob_reference(plan, selection);
+    let reference = knob_reference(plan, selection) + &hosted_reference(plan, selection);
     if !reference.is_empty() {
         use std::io::Write as _;
         std::fs::OpenOptions::new()
@@ -412,6 +440,45 @@ fn knob_reference(plan: &olai_stack_topology::Plan, selection: &Selection) -> St
     format!(
         "\n# --- Available knobs (defaults shown; uncomment to override) ---\n\
          # Values are strings. See `trestle env list-modules --knobs` for what each does.\n{out}"
+    )
+}
+
+/// A commented TOML block for the end of `env.toml` showing the connection each planned hosted
+/// provider uses by default (`selection` doesn't configure it), to uncomment and edit, plus the
+/// env vars its `${VAR}` references read.
+fn hosted_reference(plan: &olai_stack_topology::Plan, selection: &Selection) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    for (id, resource) in &plan.hosted {
+        if selection.hosted.contains_key(id) {
+            continue;
+        }
+        let vars: Vec<String> = resource.connection.secret_refs().into_iter().collect();
+        // Nested maps over the resource itself (not a `toml::Table`, which sorts keys) keep the
+        // connection's fields in declaration order, `kind` first.
+        let table = std::collections::BTreeMap::from([(
+            "selection",
+            std::collections::BTreeMap::from([(
+                "hosted",
+                std::collections::BTreeMap::from([(id, resource)]),
+            )]),
+        )]);
+        let block = toml::to_string_pretty(&table).expect("a hosted resource serializes");
+        out.push('\n');
+        if !vars.is_empty() {
+            let _ = writeln!(out, "# {id} reads: {}", vars.join(", "));
+        }
+        for line in block.lines().filter(|l| !l.is_empty()) {
+            let _ = writeln!(out, "# {line}");
+        }
+    }
+    if out.is_empty() {
+        return out;
+    }
+    format!(
+        "\n# --- Hosted connections (defaults shown; uncomment to configure) ---\n\
+         # Set the `${{VAR}}` secrets in the environment or `{SECRETS_FILE}`; never write them here.\n{out}"
     )
 }
 
@@ -542,6 +609,7 @@ fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
         };
         // The planner adds these itself; say how instead of implying `--select`.
         let category = match module.provider_of() {
+            _ if module.hosted().is_some() => format!("{category} (hosted: not run)"),
             Some(olai_stack_topology::Role::GATEWAY) => format!("{category} (always included)"),
             Some(olai_stack_topology::Role::AUTH) => format!("{category} (enabled by --auth)"),
             Some(olai_stack_topology::Role::POLICY) => format!("{category} (enabled by --policy)"),
@@ -630,10 +698,10 @@ fn ensure_writable_dir(dir: &std::path::Path, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// The file beside `env.toml` that may supply secrets for external resources (git-ignored).
+/// The file beside `env.toml` that may supply secrets for hosted resources (git-ignored).
 const SECRETS_FILE: &str = "secrets.env";
 
-/// The secrets `${VAR}` references in external resources resolve against: `KEY=VALUE` lines
+/// The secrets `${VAR}` references in hosted resources resolve against: `KEY=VALUE` lines
 /// from [`SECRETS_FILE`] in `dir` (if present), overridden by the process environment.
 fn load_secrets(dir: &std::path::Path) -> Result<Secrets> {
     let mut secrets = Secrets::new();
@@ -1050,7 +1118,9 @@ mod tests {
         EnvManifest, GatewaySettings, KnobKind, ModuleId, PlanCtx, Selection, baseline_catalog,
     };
 
-    use super::{config_summary, knob_reference, next_steps, parse_env_lines, wizard};
+    use super::{
+        config_summary, hosted_reference, knob_reference, next_steps, parse_env_lines, wizard,
+    };
 
     #[test]
     fn env_lines_parse_like_dotenv() {
@@ -1247,6 +1317,42 @@ mod tests {
             edited.selection.knob_overrides[&ModuleId::from("postgres")]["image"],
             "postgres:16"
         );
+    }
+
+    #[test]
+    fn hosted_reference_shows_the_default_connection_to_uncomment() {
+        let selection = Selection::modules(["aws-s3", "unity-catalog"]);
+        let plan = baseline_catalog()
+            .plan(&selection, &PlanCtx::default())
+            .unwrap();
+        let reference = hosted_reference(&plan, &selection);
+        assert!(
+            reference.contains("# aws-s3 reads: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY"),
+            "{reference}"
+        );
+        assert!(
+            reference
+                .lines()
+                .all(|l| l.is_empty() || l.starts_with('#')),
+            "{reference}"
+        );
+        // Uncommented, it configures the provider with exactly its default.
+        let manifest = EnvManifest::new(selection, PlanCtx::default());
+        let uncommented: String = reference
+            .lines()
+            .filter(|l| l.starts_with("# [") || l.contains(" = "))
+            .filter(|l| !l.starts_with("# ---"))
+            .map(|l| format!("{}\n", l.trim_start_matches("# ")))
+            .collect();
+        let edited =
+            EnvManifest::from_toml(&format!("{}\n{uncommented}", manifest.to_toml().unwrap()))
+                .unwrap();
+        assert_eq!(
+            edited.selection.hosted[&ModuleId::from("aws-s3")],
+            olai_stack_topology::HostedKind::S3.default_resource()
+        );
+        // A configured provider is not repeated.
+        assert!(hosted_reference(&plan, &edited.selection).is_empty());
     }
 
     #[test]
