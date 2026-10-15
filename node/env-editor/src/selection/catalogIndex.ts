@@ -41,6 +41,41 @@ export function conflictsWith(
 }
 
 /**
+ * The role `module` holds a unique slot for, if any: a resource role it
+ * provisions (a database, an object store). An environment has one provider
+ * per such role — RustFS *or* Azurite *or* Amazon S3 — so picking another
+ * means switching (mirrors the planner's role exclusivity).
+ */
+export function uniqueSlot(
+  module: Pick<ModuleDto, "provider_of" | "resource_kinds">,
+): string | undefined {
+  const role = module.provider_of;
+  return role && module.resource_kinds.includes(role) ? role : undefined;
+}
+
+/**
+ * For each module that fills a unique slot (see `uniqueSlot`), the module in
+ * `present` already holding it, if another one does.
+ */
+export function slotHolders(
+  catalog: CatalogDto,
+  present: Set<string>,
+): Map<string, string> {
+  const holder = new Map<string, string>();
+  for (const m of catalog.modules) {
+    const role = uniqueSlot(m);
+    if (role && present.has(m.id)) holder.set(role, m.id);
+  }
+  const out = new Map<string, string>();
+  for (const m of catalog.modules) {
+    const role = uniqueSlot(m);
+    const held = role && holder.get(role);
+    if (held && held !== m.id) out.set(m.id, held);
+  }
+  return out;
+}
+
+/**
  * The roles the planner fills on its own (mirrors the Rust
  * `Role::GATEWAY_MANAGED`): the always-on gateway, and the sign-in and policy
  * providers the gateway's access settings turn on. Pickers don't offer them.

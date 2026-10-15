@@ -21,6 +21,7 @@ import {
   conflictsWith,
   groupByCategory,
   isGatewayManaged,
+  slotHolders,
 } from "../selection/catalogIndex";
 import { describeOrigin, formatList, type Origin } from "../state/origin";
 import type { CatalogDto, ModuleDto, Selection } from "../types";
@@ -47,6 +48,8 @@ type RowAction =
   | { kind: "add" }
   | { kind: "remove" }
   | { kind: "replace"; fromId: string; fromName: string }
+  /** Take over a one-per-environment slot (e.g. the object store). */
+  | { kind: "switch"; fromId: string; fromName: string }
   | { kind: "unavailable"; reason: string };
 
 interface ModuleRow {
@@ -68,8 +71,9 @@ type Row = ModuleRow | CapabilityRow;
 
 /**
  * A searchable command palette over the catalog: add a module, replace a
- * conflicting one, remove one you added, or ask for a capability and let the
- * planner pick its provider. Browsing lists what's in the environment first;
+ * conflicting one, switch the provider of a one-per-environment slot (the
+ * database, the object store), remove one you added, or ask for a capability
+ * and let the planner pick its provider. Browsing lists what's in the environment first;
  * a query starting with "remove" narrows to what can be removed. Arrow keys
  * move, Enter picks.
  */
@@ -135,7 +139,8 @@ export function ComponentPalette({
     const { action } = row;
     if (action.kind === "unavailable") return;
     if (row.type === "capability") onToggleCapability(row.capability);
-    else if (action.kind === "replace") onSwap(action.fromId, row.module.id);
+    else if (action.kind === "replace" || action.kind === "switch")
+      onSwap(action.fromId, row.module.id);
     else if (action.kind === "remove") onRemove(row.module.id);
     else onAdd(row.module.id);
     // Stay open after a removal, so several can go in a row.
@@ -326,7 +331,7 @@ function PaletteRow({
       <span
         className={cn(
           "max-w-[45%] shrink-0 truncate text-[11px]",
-          action.kind === "replace"
+          action.kind === "replace" || action.kind === "switch"
             ? "text-primary"
             : action.kind === "remove"
               ? "text-destructive"
@@ -336,6 +341,8 @@ function PaletteRow({
         {action.kind === "add" && (active ? "Add ↵" : "")}
         {action.kind === "remove" && (active ? "Remove ↵" : "Remove")}
         {action.kind === "replace" && `Replace ${action.fromName}`}
+        {action.kind === "switch" &&
+          `Switch from ${action.fromName}${active ? " ↵" : ""}`}
         {action.kind === "unavailable" && action.reason}
       </span>
     </button>
@@ -358,6 +365,7 @@ function paletteRows(
     q === "" || fields.some((f) => f?.toLowerCase().includes(q));
   const present = new Set([...planned, ...selection.modules]);
   const conflicts = conflictsWith(catalog, present);
+  const slots = slotHolders(catalog, present);
   const name = (id: string) =>
     catalog.modules.find((m) => m.id === id)?.display_name ?? id;
 
@@ -368,6 +376,12 @@ function paletteRows(
         ? { kind: "remove" }
         : { kind: "unavailable", reason: describeOrigin(origin) };
     }
+    // The slot's provider is switched, wherever it came from: an auto-added
+    // provider (e.g. the object store Unity Catalog pulled in) is just
+    // replaced by the one picked.
+    const holder = slots.get(m.id);
+    if (holder)
+      return { kind: "switch", fromId: holder, fromName: name(holder) };
     const blockers = conflicts.get(m.id) ?? [];
     if (blockers.length === 0) return { kind: "add" };
     // One conflicting pick the user made can be swapped out in place.
