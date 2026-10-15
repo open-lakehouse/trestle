@@ -9,6 +9,10 @@ services:
       UV_PROJECT_ENVIRONMENT: /venv
       UV_CACHE_DIR: /uv-cache
       UV_LINK_MODE: copy
+{%- if knobs.index_url %}
+      # The host's uv config (a mirror in `uv.toml`) doesn't reach the container.
+      UV_DEFAULT_INDEX: {{ knobs.index_url }}
+{%- endif %}
     command:
       - sh
       - -c

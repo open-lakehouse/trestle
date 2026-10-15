@@ -26,5 +26,9 @@ place of `host.env`, and packages install into a container-owned virtualenv
 gateway, and its sign-in when enabled, is the only thing guarding it, and anyone
 who reaches it can run code in the stack.
 
+The container installs from PyPI and doesn't see your host's uv config. Where
+PyPI is unreachable (e.g. a mirror is configured in `uv.toml`), set the
+`marimo.index_url` knob to the mirror's `/simple/` URL, or the editor won't start.
+
 If the gateway requires sign-in (`envoy.auth`), the examples don't authenticate
 yet. Use a stack without auth for now.

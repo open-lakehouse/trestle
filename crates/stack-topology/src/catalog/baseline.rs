@@ -1680,12 +1680,29 @@ fn marimo() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![image_knob(
-            "image",
-            "marimo runtime image",
-            images::MARIMO,
-            "MARIMO_IMAGE",
-        )],
+        knobs: vec![
+            image_knob(
+                "image",
+                "marimo runtime image",
+                images::MARIMO,
+                "MARIMO_IMAGE",
+            ),
+            Knob {
+                key: "index_url".into(),
+                title: Some("Python package index".into()),
+                kind: KnobKind::String,
+                default: None,
+                required: false,
+                help: Some(
+                    "The package index the editor installs the workspace's packages from \
+                     (`UV_DEFAULT_INDEX`), e.g. a mirror's `/simple/` URL where PyPI is \
+                     unreachable. Unset uses PyPI."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
+        ],
         renders: template(include_str!(
             "../../templates/modules/marimo/compose.yaml.jinja"
         ))

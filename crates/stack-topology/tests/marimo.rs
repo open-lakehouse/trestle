@@ -72,3 +72,23 @@ fn notebooks_run_against_the_in_network_env_in_their_own_venv() {
     assert!(f.contains("UV_PROJECT_ENVIRONMENT: /venv"), "{f}");
     assert!(f.contains("127.0.0.1:2718/marimo/health"), "{f}");
 }
+
+#[test]
+fn packages_install_from_pypi_unless_an_index_is_set() {
+    let f = fragment(&plan(&["marimo"]), "marimo");
+    assert!(!f.contains("UV_DEFAULT_INDEX"), "{f}");
+
+    let mut selection = Selection::modules(["marimo"]);
+    selection.knob_overrides.insert(
+        ModuleId::from("marimo"),
+        [("index_url".into(), "https://mirror.example/simple/".into())].into(),
+    );
+    let p = baseline_catalog()
+        .plan(&selection, &PlanCtx::default())
+        .unwrap();
+    let f = fragment(&p, "marimo");
+    assert!(
+        f.contains("UV_DEFAULT_INDEX: https://mirror.example/simple/"),
+        "{f}"
+    );
+}
