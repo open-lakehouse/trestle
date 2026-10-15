@@ -1,232 +1,168 @@
-import { Input, Label, Switch } from "@open-lakehouse/ui-kit";
+import { Button, Input, Label } from "@open-lakehouse/ui-kit";
 import { Cloud } from "lucide-react";
-import type { ExternalConnection, ExternalResource, ModuleDto } from "../types";
+import type { HostedConnection, HostedResource, ModuleDto } from "../types";
 
 /** An env-var reference (`${NAME}`), resolved from the environment when the
  *  stack is rendered — how a secret is written in `env.toml`. */
 export const envRef = (name: string) => `\${${name}}`;
 
-/** Whether `module` provisions a resource an external cloud can provide
- *  instead (a database, an object store). */
-export function canRunExternally(module: ModuleDto | undefined): boolean {
-  return (
-    !!module &&
-    (module.resource_kinds.includes("relational_db") ||
-      module.resource_kinds.includes("object_store"))
-  );
-}
-
-/** A starting external resource for `module`: example coordinates, and every
- *  secret an env-var reference resolved at render time. */
-export function defaultExternal(module: ModuleDto): ExternalResource {
-  if (module.resource_kinds.includes("relational_db")) {
-    return {
-      cloud: "aws",
-      connection: {
-        kind: "relational_db",
-        host: "mydb.example.us-east-1.rds.amazonaws.com",
-        port: 5432,
-        username: "lakehouse",
-        password: envRef("PG_PASSWORD"),
-      },
-    };
+/** The env vars `${NAME}` references in `connection` read, sorted. */
+export function secretRefs(connection: HostedConnection): string[] {
+  const refs = new Set<string>();
+  for (const value of Object.values(connection)) {
+    if (typeof value !== "string") continue;
+    for (const m of value.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+      refs.add(m[1]);
+    }
   }
-  // A store whose resources are "containers" is Azure-flavoured (Azurite).
-  const azure = module.resource_nouns.some(
-    (n) => n.kind === "object_store" && n.singular === "container",
-  );
-  return azure
-    ? {
-        cloud: "azure",
-        connection: {
-          kind: "object_store",
-          endpoint: "https://myaccount.blob.core.windows.net",
-          uri: "abfss://{name}@myaccount.dfs.core.windows.net",
-          credential: {
-            flavour: "azure_blob",
-            connection_string: envRef("AZURE_STORAGE_CONNECTION_STRING"),
-          },
-        },
-      }
-    : {
-        cloud: "aws",
-        connection: {
-          kind: "object_store",
-          endpoint: "https://s3.us-east-1.amazonaws.com",
-          credential: {
-            flavour: "s3",
-            access_key_id: envRef("AWS_ACCESS_KEY_ID"),
-            secret_access_key: envRef("AWS_SECRET_ACCESS_KEY"),
-            region: "us-east-1",
-          },
-        },
-      };
+  return [...refs].sort();
 }
 
-/** One editable field of an external connection. */
+/** One editable field of a hosted connection. */
 interface Field {
   label: string;
   value: string;
   /** Rebuild the connection with this field set to `value`. */
-  set: (value: string) => ExternalConnection;
+  set: (value: string) => HostedConnection;
   hint?: string;
 }
 
 const SECRET_HINT = `An env-var reference like ${envRef("VAR")}, set when rendering.`;
 
-function fieldsOf(c: ExternalConnection): Field[] {
-  if (c.kind === "relational_db") {
-    return [
-      { label: "Host", value: c.host, set: (host) => ({ ...c, host }) },
-      {
-        label: "Port",
-        value: String(c.port ?? 5432),
-        set: (port) => ({ ...c, port: Number(port) || 5432 }),
-      },
-      {
-        label: "Username",
-        value: c.username,
-        set: (username) => ({ ...c, username }),
-      },
-      {
-        label: "Password",
-        value: c.password,
-        set: (password) => ({ ...c, password }),
-        hint: SECRET_HINT,
-      },
-    ];
+function fieldsOf(c: HostedConnection): Field[] {
+  switch (c.kind) {
+    case "postgres":
+      return [
+        { label: "Host", value: c.host, set: (host) => ({ ...c, host }) },
+        {
+          label: "Port",
+          value: String(c.port ?? 5432),
+          set: (port) => ({ ...c, port: Number(port) || 5432 }),
+        },
+        {
+          label: "Username",
+          value: c.username,
+          set: (username) => ({ ...c, username }),
+        },
+        {
+          label: "Password",
+          value: c.password,
+          set: (password) => ({ ...c, password }),
+          hint: SECRET_HINT,
+        },
+      ];
+    case "s3":
+      return [
+        {
+          label: "Region",
+          value: c.region ?? "us-east-1",
+          set: (region) => ({ ...c, region }),
+        },
+        {
+          label: "Endpoint (optional)",
+          value: c.endpoint ?? "",
+          set: (endpoint) => ({ ...c, endpoint: endpoint || null }),
+          hint: "Defaults to AWS for the region; set for an S3-compatible store.",
+        },
+        {
+          label: "Access key ID",
+          value: c.access_key_id,
+          set: (access_key_id) => ({ ...c, access_key_id }),
+          hint: SECRET_HINT,
+        },
+        {
+          label: "Secret access key",
+          value: c.secret_access_key,
+          set: (secret_access_key) => ({ ...c, secret_access_key }),
+          hint: SECRET_HINT,
+        },
+        {
+          label: "Role ARN (optional)",
+          value: c.role_arn ?? "",
+          set: (role_arn) => ({ ...c, role_arn: role_arn || null }),
+        },
+      ];
+    case "azure_blob":
+      return [
+        {
+          label: "Storage account",
+          value: c.account,
+          set: (account) => ({ ...c, account }),
+        },
+        {
+          label: "Connection string",
+          value: c.connection_string,
+          set: (connection_string) => ({ ...c, connection_string }),
+          hint: SECRET_HINT,
+        },
+      ];
   }
-  const endpoint: Field = {
-    label: "Endpoint",
-    value: c.endpoint,
-    set: (endpoint) => ({ ...c, endpoint }),
-  };
-  const cred = c.credential;
-  if (cred.flavour === "azure_blob") {
-    return [
-      endpoint,
-      {
-        label: "URI",
-        value: c.uri ?? "",
-        set: (uri) => ({ ...c, uri }),
-        hint: "Per resource; {name} is the container.",
-      },
-      {
-        label: "Connection string",
-        value: cred.connection_string,
-        set: (connection_string) => ({
-          ...c,
-          credential: { ...cred, connection_string },
-        }),
-        hint: SECRET_HINT,
-      },
-    ];
-  }
-  return [
-    endpoint,
-    {
-      label: "Region",
-      value: cred.region,
-      set: (region) => ({ ...c, credential: { ...cred, region } }),
-    },
-    {
-      label: "Access key ID",
-      value: cred.access_key_id,
-      set: (access_key_id) => ({
-        ...c,
-        credential: { ...cred, access_key_id },
-      }),
-      hint: SECRET_HINT,
-    },
-    {
-      label: "Secret access key",
-      value: cred.secret_access_key,
-      set: (secret_access_key) => ({
-        ...c,
-        credential: { ...cred, secret_access_key },
-      }),
-      hint: SECRET_HINT,
-    },
-    {
-      label: "Role ARN (optional)",
-      value: cred.role_arn ?? "",
-      set: (role_arn) => ({
-        ...c,
-        credential: { ...cred, role_arn: role_arn || null },
-      }),
-    },
-  ];
 }
 
 /**
- * Where a resource provider runs: in the stack, or provided by an external
- * cloud (a managed database, a cloud object store). When external, the stack
- * renders nothing for it and its consumers connect to the coordinates here;
- * the node stays on the canvas, framed with its cloud.
+ * How a hosted provider (a managed database, a cloud object store) is
+ * reached. The stack renders nothing for it and its consumers connect to the
+ * coordinates here; the node is framed with its cloud on the canvas. Until the
+ * user edits it, the module's default applies (the ecosystem's usual env vars).
  */
-export function ExternalSection({
+export function HostedSection({
   module,
-  external,
+  hosted,
   onChange,
 }: {
   module: ModuleDto;
-  external: ExternalResource | undefined;
-  onChange: (external: ExternalResource | undefined) => void;
+  /** The selection's configuration; `undefined` while the default applies. */
+  hosted: HostedResource | undefined;
+  onChange: (hosted: HostedResource | undefined) => void;
 }) {
-  const fieldId = (name: string) => `external.${module.id}.${name}`;
+  const fallback = module.hosted?.default;
+  const current = hosted ?? fallback;
+  if (!current) return null;
+  const fieldId = (name: string) => `hosted.${module.id}.${name}`;
+  const vars = secretRefs(current.connection);
   return (
     <section className="border-b border-border px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <Label
-          htmlFor={fieldId("toggle")}
-          className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-        >
+        <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <Cloud className="h-3.5 w-3.5" />
-          External cloud
-        </Label>
-        <Switch
-          id={fieldId("toggle")}
-          checked={!!external}
-          onCheckedChange={(on) =>
-            onChange(on ? defaultExternal(module) : undefined)
-          }
-        />
+          Hosted connection
+        </h3>
+        {hosted && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            onClick={() => onChange(undefined)}
+          >
+            Use defaults
+          </Button>
+        )}
       </div>
-      {!external ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Runs in the stack. Switch on when a cloud provides it instead.
+      <div className="mt-3 flex flex-col gap-3">
+        <p className="text-xs text-muted-foreground">
+          Not deployed: consumers connect here, and its{" "}
+          {module.resource_nouns[0]?.plural ?? "resources"} must already exist.
+          {vars.length > 0 && <> Reads {vars.join(", ")} when rendering.</>}
         </p>
-      ) : (
-        <div className="mt-3 flex flex-col gap-3">
-          <p className="text-xs text-muted-foreground">
-            Not deployed: consumers connect here, and its{" "}
-            {module.resource_kinds.includes("relational_db")
-              ? "databases"
-              : "buckets"}{" "}
-            must already exist.
-          </p>
+        <TextField
+          id={fieldId("cloud")}
+          label="Cloud"
+          value={current.cloud ?? ""}
+          onChange={(cloud) => onChange({ ...current, cloud: cloud || null })}
+        />
+        {fieldsOf(current.connection).map((f) => (
           <TextField
-            id={fieldId("cloud")}
-            label="Cloud"
-            value={external.cloud ?? ""}
-            onChange={(cloud) =>
-              onChange({ ...external, cloud: cloud || null })
+            key={f.label}
+            id={fieldId(f.label)}
+            label={f.label}
+            value={f.value}
+            hint={f.hint}
+            onChange={(value) =>
+              onChange({ ...current, connection: f.set(value) })
             }
           />
-          {fieldsOf(external.connection).map((f) => (
-            <TextField
-              key={f.label}
-              id={fieldId(f.label)}
-              label={f.label}
-              value={f.value}
-              hint={f.hint}
-              onChange={(value) =>
-                onChange({ ...external, connection: f.set(value) })
-              }
-            />
-          ))}
-        </div>
-      )}
+        ))}
+      </div>
     </section>
   );
 }

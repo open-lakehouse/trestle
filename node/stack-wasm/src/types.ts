@@ -41,6 +41,20 @@ export interface ModuleDto {
   /** What it calls each kind it provisions (e.g. Azurite's "containers"). */
   resource_nouns: ResourceNounDto[];
   knobs: Knob[];
+  /** Set for a hosted provider: a managed database or cloud object store the
+   *  stack uses but does not run. */
+  hosted?: HostedModuleDto | null;
+}
+
+/** What a hosted provider stands for (mirrors `HostedKind`). */
+export type HostedKind = "postgres" | "s3" | "azure_blob";
+
+/** A hosted provider's kind and default configuration (mirrors
+ *  `HostedModuleDto`). */
+export interface HostedModuleDto {
+  kind: HostedKind;
+  /** The configuration used while the selection has no `hosted` entry for it. */
+  default: HostedResource;
 }
 
 /** The user's environment choices (mirrors the Rust `Selection`). This is the
@@ -52,9 +66,9 @@ export interface Selection {
   knob_overrides: Record<string, Record<string, string>>;
   /** Environment-level resources no module consumes (extra databases, buckets). */
   extra_resources?: ExtraResource[];
-  /** Providers the environment uses but does not run (a managed cloud database
-   *  or object store), by module id. */
-  external?: Record<string, ExternalResource>;
+  /** How each hosted provider is reached, by module id (e.g. "aws-s3"). A
+   *  hosted module without an entry uses its default. */
+  hosted?: Record<string, HostedResource>;
   /** Whether to generate the Python client workspace (`client/`), and with
    *  which example notebooks (mirrors `ClientSelection`). Off when omitted. */
   client?: ClientSelection;
@@ -80,18 +94,19 @@ export interface GatewaySettings {
   policy: boolean;
 }
 
-/** A provider marked external (mirrors the Rust `ExternalResource`). */
-export interface ExternalResource {
+/** How a hosted provider is configured (mirrors the Rust `HostedResource`). */
+export interface HostedResource {
   /** The cloud environment it lives in (e.g. "aws"); groups nodes on the canvas. */
   cloud?: string | null;
-  connection: ExternalConnection;
+  connection: HostedConnection;
 }
 
-/** How consumers reach an external resource (mirrors `ExternalConnection`).
- *  Strings may hold `{name}` and `${VAR}` secret references. */
-export type ExternalConnection =
+/** How consumers reach a hosted resource, one variant per `HostedKind`
+ *  (mirrors `HostedConnection`). Strings may hold `{name}` and `${VAR}`
+ *  secret references. */
+export type HostedConnection =
   | {
-      kind: "relational_db";
+      kind: "postgres";
       host: string;
       port?: number;
       database?: string;
@@ -99,19 +114,20 @@ export type ExternalConnection =
       password: string;
     }
   | {
-      kind: "object_store";
-      endpoint: string;
-      uri?: string | null;
+      kind: "s3";
+      region?: string;
+      /** Defaults to `https://s3.<region>.amazonaws.com`. */
+      endpoint?: string | null;
       bucket?: string;
-      credential:
-        | {
-            flavour: "s3";
-            access_key_id: string;
-            secret_access_key: string;
-            region: string;
-            role_arn?: string | null;
-          }
-        | { flavour: "azure_blob"; connection_string: string };
+      access_key_id: string;
+      secret_access_key: string;
+      role_arn?: string | null;
+    }
+  | {
+      kind: "azure_blob";
+      account: string;
+      container?: string;
+      connection_string: string;
     };
 
 /** An extra resource to provision (mirrors the Rust `ExtraResource`). */

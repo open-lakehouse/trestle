@@ -53,6 +53,16 @@
           }
         }
       }
+    },
+    {
+      "includes": ["stack-wasm/src/fixtures.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noTemplateCurlyInString": "off"
+          }
+        }
+      }
     }
   ]
 }

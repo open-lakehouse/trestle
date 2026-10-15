@@ -31,8 +31,8 @@ import { KnobField } from "../knobs/KnobField";
 import { describeOrigin, type Origin } from "../state/origin";
 import type {
   CatalogDto,
-  ExternalResource,
   GatewaySettings,
+  HostedResource,
   ModuleDto,
   PlanResult,
   ProvisionedDto,
@@ -40,7 +40,7 @@ import type {
   TopologyEdgeDto,
 } from "../types";
 import { AccessSection } from "./AccessSection";
-import { canRunExternally, ExternalSection } from "./ExternalSection";
+import { HostedSection } from "./HostedSection";
 
 export interface InspectorPanelProps {
   /** The inspected component's module id. */
@@ -59,13 +59,10 @@ export interface InspectorPanelProps {
   onAddResource: (moduleId: string, kind: string, name: string) => void;
   /** Drop an extra resource. */
   onRemoveResource: (kind: string, name: string) => void;
-  /** How this provider is provided by an external cloud, if it is. */
-  external: ExternalResource | undefined;
-  /** Mark this provider external (or run it in the stack: `undefined`). */
-  onSetExternal: (
-    moduleId: string,
-    external: ExternalResource | undefined,
-  ) => void;
+  /** How this hosted provider is configured, if the selection configures it. */
+  hosted: HostedResource | undefined;
+  /** Configure this hosted provider (or use its defaults: `undefined`). */
+  onSetHosted: (moduleId: string, hosted: HostedResource | undefined) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
   /** How the gateway guards access; shown when the gateway is inspected. */
   gateway: GatewaySettings | undefined;
@@ -96,8 +93,8 @@ export function InspectorPanel({
   resourcesSeq,
   onAddResource,
   onRemoveResource,
-  external,
-  onSetExternal,
+  hosted,
+  onSetHosted,
   onSetKnob,
   gateway,
   onSetGateway,
@@ -171,11 +168,11 @@ export function InspectorPanel({
           <p className="px-4 pt-3 text-xs text-muted-foreground">{summary}</p>
         )}
 
-        {module && canRunExternally(module) && (
-          <ExternalSection
+        {module?.hosted && (
+          <HostedSection
             module={module}
-            external={external}
-            onChange={(next) => onSetExternal(moduleId, next)}
+            hosted={hosted}
+            onChange={(next) => onSetHosted(moduleId, next)}
           />
         )}
 

@@ -42,6 +42,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "authelia",
@@ -67,6 +68,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "postgres",
@@ -98,6 +100,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "rustfs",
@@ -154,6 +157,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "azurite",
@@ -197,6 +201,102 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
+    },
+    {
+      id: "hosted-postgres",
+      display_name: "Hosted Postgres",
+      summary:
+        "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
+      category: "metadata_db",
+      provider_of: "relational_db",
+      requires: [],
+      conflicts_with: [],
+      resource_kinds: ["relational_db"],
+      resource_nouns: [
+        {
+          kind: "relational_db",
+          singular: "database",
+          plural: "databases",
+        },
+      ],
+      knobs: [],
+      hosted: {
+        kind: "postgres",
+        default: {
+          connection: {
+            kind: "postgres",
+            host: "${PGHOST}",
+            port: 5432,
+            database: "{name}",
+            username: "${PGUSER}",
+            password: "${PGPASSWORD}",
+          },
+        },
+      },
+    },
+    {
+      id: "aws-s3",
+      display_name: "Amazon S3",
+      summary:
+        "Amazon S3 or an S3-compatible store; buckets must already exist.",
+      category: "storage",
+      provider_of: "object_store",
+      requires: [],
+      conflicts_with: [],
+      resource_kinds: ["object_store"],
+      resource_nouns: [
+        {
+          kind: "object_store",
+          singular: "bucket",
+          plural: "buckets",
+        },
+      ],
+      knobs: [],
+      hosted: {
+        kind: "s3",
+        default: {
+          cloud: "aws",
+          connection: {
+            kind: "s3",
+            region: "us-east-1",
+            bucket: "{name}",
+            access_key_id: "${AWS_ACCESS_KEY_ID}",
+            secret_access_key: "${AWS_SECRET_ACCESS_KEY}",
+          },
+        },
+      },
+    },
+    {
+      id: "azure-storage",
+      display_name: "Azure Storage",
+      summary:
+        "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
+      category: "storage",
+      provider_of: "object_store",
+      requires: [],
+      conflicts_with: [],
+      resource_kinds: ["object_store"],
+      resource_nouns: [
+        {
+          kind: "object_store",
+          singular: "container",
+          plural: "containers",
+        },
+      ],
+      knobs: [],
+      hosted: {
+        kind: "azure_blob",
+        default: {
+          cloud: "azure",
+          connection: {
+            kind: "azure_blob",
+            account: "${AZURE_STORAGE_ACCOUNT}",
+            container: "{name}",
+            connection_string: "${AZURE_STORAGE_CONNECTION_STRING}",
+          },
+        },
+      },
     },
     {
       id: "mlflow",
@@ -234,6 +334,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           help: "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A pair is seeded only when its provider key (e.g. ANTHROPIC_API_KEY) is exported before `docker compose up`.",
         },
       ],
+      hosted: null,
     },
     {
       id: "unity-catalog",
@@ -259,6 +360,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "jaeger",
@@ -284,6 +386,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "headwaters",
@@ -321,6 +424,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "omnigent",
@@ -389,6 +493,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "marimo",
@@ -414,6 +519,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "puppygraph",
@@ -471,6 +577,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
     {
       id: "opa",
@@ -518,6 +625,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      hosted: null,
     },
   ],
   default_selection: {

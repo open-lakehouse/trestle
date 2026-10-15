@@ -345,8 +345,8 @@ function EditorBody({
                     env.addResource(provider, kind, name)
                   }
                   onRemoveResource={env.removeResource}
-                  external={selection.external?.[inspected]}
-                  onSetExternal={env.setExternal}
+                  hosted={selection.hosted?.[inspected]}
+                  onSetHosted={env.setHosted}
                   onSetKnob={env.setKnob}
                   gateway={selection.gateway}
                   onSetGateway={env.setGateway}
