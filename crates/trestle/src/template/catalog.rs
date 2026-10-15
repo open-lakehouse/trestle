@@ -107,9 +107,9 @@ mod tests {
 
     #[test]
     fn embedded_catalog_loads_without_local_stack_components() {
-        // The composed-environment components (`local-stack-*`, `databricks-emulator-env`)
-        // moved out of `trestle new` into the `trestle env` engine, so the shared
-        // component catalog no longer indexes them. It must still load cleanly, and
+        // The composed-environment components (`local-stack-*`) moved out of
+        // `trestle new` into the `trestle env` engine, so the shared component
+        // catalog no longer indexes them. It must still load cleanly, and
         // the compose categories it used to serve must be gone.
         let cat = ComponentCatalog::from_embedded().expect("embedded catalog loads");
         for category in [

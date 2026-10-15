@@ -519,19 +519,6 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
     },
-    {
-      id: "databricks-emulator-env",
-      display_name: "Databricks app runtime contract",
-      summary:
-        "DATABRICKS_HOST / app URL / forwarded-user env vars apps expect.",
-      category: "app_runtime",
-      provider_of: "databricks_apps_contract",
-      requires: [],
-      conflicts_with: [],
-      resource_kinds: [],
-      resource_nouns: [],
-      knobs: [],
-    },
   ],
   default_selection: {
     modules: ["postgres", "rustfs", "unity-catalog"],

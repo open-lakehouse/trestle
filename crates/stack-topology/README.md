@@ -88,7 +88,6 @@ the stack serves:
 | `headwaters` | `OPENLINEAGE_URL`, `OPENLINEAGE_ENDPOINT` |
 | `jaeger` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` |
 | `rustfs` | `AWS_ENDPOINT_URL_S3`, `AWS_REGION` |
-| `databricks-emulator-env` | `DATABRICKS_HOST`, `DATABRICKS_APP_URL`, forwarded-user contract |
 | `omnigent` | `OMNIGENT_URL` |
 | `puppygraph` | `PUPPYGRAPH_URL`, `PUPPYGRAPH_BOLT_ADDRESS`, `PUPPYGRAPH_GREMLIN_ADDRESS` (`host:port`) |
 

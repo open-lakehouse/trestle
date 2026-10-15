@@ -22,7 +22,6 @@ fn full_stack() -> Selection {
         "mlflow",
         "jaeger",
         "headwaters",
-        "databricks-emulator-env",
         "omnigent",
     ])
 }
@@ -38,7 +37,6 @@ fn host_addresses_follow_the_gateway_port_and_routes() {
     );
     let env = p.client_env(Vantage::Host);
     let get = |k: &str| env.get(k).unwrap_or_else(|| panic!("missing {k}"));
-    assert_eq!(get("DATABRICKS_HOST"), "http://localhost:9090");
     assert_eq!(get("MLFLOW_TRACKING_URI"), "http://localhost:9090");
     assert_eq!(
         get("UNITY_CATALOG_URL"),
@@ -79,7 +77,6 @@ fn auth_moves_gateway_addresses_to_the_secure_origin() {
     );
     let host = p.client_env(Vantage::Host);
     let get = |k: &str| host.get(k).unwrap_or_else(|| panic!("missing {k}"));
-    assert_eq!(get("DATABRICKS_HOST"), "https://demo.localhost:9080");
     assert_eq!(get("MLFLOW_TRACKING_URI"), "https://demo.localhost:9080");
     assert_eq!(
         get("MLFLOW_AI_GATEWAY_URL"),
@@ -90,7 +87,7 @@ fn auth_moves_gateway_addresses_to_the_secure_origin() {
 
     let container = p.client_env(Vantage::Container);
     let get = |k: &str| container.get(k).unwrap_or_else(|| panic!("missing {k}"));
-    assert_eq!(get("DATABRICKS_HOST"), "http://demo.internal:10000");
+    assert_eq!(get("MLFLOW_TRACKING_URI"), "http://demo.internal:10000");
     assert_eq!(
         get("MLFLOW_AI_GATEWAY_URL"),
         "http://demo.internal:10000/ai-gateway"
@@ -103,7 +100,7 @@ fn container_addresses_stay_in_network() {
     let p = plan(full_stack(), PlanCtx::default());
     let env = p.client_env(Vantage::Container);
     let get = |k: &str| env.get(k).unwrap_or_else(|| panic!("missing {k}"));
-    assert_eq!(get("DATABRICKS_HOST"), "http://envoy:10000");
+    assert_eq!(get("MLFLOW_TRACKING_URI"), "http://envoy:10000");
     assert_eq!(get("OPENLINEAGE_URL"), "http://envoy:10000");
     assert_eq!(
         get("MLFLOW_AI_GATEWAY_URL"),
