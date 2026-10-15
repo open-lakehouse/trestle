@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.8...olai-trestle-v0.0.9) - 2026-10-15
+
+### Added
+
+- PuppyGraph graph queries over Unity Catalog (#133)
+
+### Changed
+
+- name modules by product; drop databricks-emulator-env (#135)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.7...olai-trestle-v0.0.8) - 2026-10-14
 
 ### Added

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.1.1...trestle-diagram-v0.1.2) - 2026-10-15
+
+### Added
+
+- PuppyGraph graph queries over Unity Catalog (#133)
+
+### Changed
+
+- name modules by product; drop databricks-emulator-env (#135)
+
 ## [0.1.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.1.0...trestle-diagram-v0.1.1) - 2026-10-14
 
 ### Added
