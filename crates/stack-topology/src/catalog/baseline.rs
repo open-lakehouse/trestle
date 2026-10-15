@@ -48,6 +48,7 @@
 //! rendered concrete; RustFS's bucket-init lines, for instance, iterate the provisioned
 //! `objects` rather than splicing a planner-filled placeholder.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -879,7 +880,7 @@ fn mlflow() -> Arc<dyn Module> {
         ..PythonClient::default()
     };
 
-    Arc::new(DataModule {
+    Arc::new(Mlflow(DataModule {
         id: ModuleId::from("mlflow"),
         display_name: Some("MLflow".into()),
         summary: Some(
@@ -967,6 +968,23 @@ fn mlflow() -> Arc<dyn Module> {
                 aliases: vec![],
                 advanced: false,
             },
+            Knob {
+                key: "uc_url".into(),
+                title: Some("Unity Catalog URL".into()),
+                kind: KnobKind::String,
+                default: Some(format!(
+                    "http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}"
+                )),
+                required: false,
+                help: Some(
+                    "Where MLflow reaches Unity Catalog's REST API when both are in the \
+                     environment, directly on the compose network: MLflow's model registry is \
+                     then served from Unity Catalog."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
         ],
         renders: template_with_files(
             include_str!("../../templates/modules/mlflow/compose.yaml.jinja"),
@@ -980,10 +998,98 @@ fn mlflow() -> Arc<dyn Module> {
                     "mlflow_seed_gateway",
                     include_str!("../../templates/modules/mlflow/seed_gateway.py"),
                 ),
+                // A one-module Python distribution whose entry point registers MLflow's own
+                // OSS Unity Catalog registry store for the `uc:` scheme, which `mlflow server`
+                // otherwise only accepts client-side.
+                config_file(
+                    "uc-registry/trestle_mlflow_uc_registry.py",
+                    "mlflow_uc_registry_module",
+                    include_str!(
+                        "../../templates/modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py"
+                    ),
+                ),
+                config_file(
+                    "uc-registry/METADATA",
+                    "mlflow_uc_registry_metadata",
+                    include_str!("../../templates/modules/mlflow/uc-registry/METADATA"),
+                ),
+                config_file(
+                    "uc-registry/entry_points.txt",
+                    "mlflow_uc_registry_entry_points",
+                    include_str!("../../templates/modules/mlflow/uc-registry/entry_points.txt"),
+                ),
             ],
         )
         .for_compose(),
-    })
+    }))
+}
+
+/// [`mlflow`]: a data module whose model registry moves to Unity Catalog when
+/// `unity-catalog` is in the stack.
+///
+/// Both serve registered models, and an environment should have one registry. With UC present,
+/// the server's registry store is UC (`--registry-store-uri uc:…`, see the fragment), so
+/// MLflow's own registry API and UI read and write UC models, and clients get
+/// `MLFLOW_REGISTRY_URI` to talk to UC's API directly. UC stays optional: MLflow alone keeps
+/// its registry in its own database.
+struct Mlflow(DataModule);
+
+impl Module for Mlflow {
+    fn id(&self) -> &ModuleId {
+        self.0.id()
+    }
+    fn display_name(&self) -> Option<&str> {
+        self.0.display_name()
+    }
+    fn summary(&self) -> Option<&str> {
+        self.0.summary()
+    }
+    fn category(&self) -> Option<&str> {
+        self.0.category()
+    }
+    fn provider_of(&self) -> Option<&str> {
+        self.0.provider_of()
+    }
+    fn requires(&self) -> &[ModuleId] {
+        self.0.requires()
+    }
+    fn conflicts_with(&self) -> &[ModuleId] {
+        self.0.conflicts_with()
+    }
+    fn needs(&self) -> &[ResourceDemand] {
+        self.0.needs()
+    }
+    fn knobs(&self) -> &[Knob] {
+        self.0.knobs()
+    }
+    fn provides(&self) -> &Provides {
+        self.0.provides()
+    }
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        self.0.render_for(target)
+    }
+    fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
+        self.0.services(knobs)
+    }
+    fn client_env_in(&self, stack: &StackFacts) -> Cow<'_, BTreeMap<String, ClientValue>> {
+        if !stack.has("unity-catalog") {
+            return Cow::Borrowed(&self.0.provides.client_env);
+        }
+        // The MLflow client's OSS Unity Catalog registry: `uc:` + the origin it appends
+        // `/api/2.1/unity-catalog` to (UC's REST mount sits at the gateway root).
+        let mut env = self.0.provides.client_env.clone();
+        env.insert(
+            "MLFLOW_REGISTRY_URI".into(),
+            ClientValue::module_endpoint(
+                "unity-catalog",
+                UNITY_CATALOG_SERVICE,
+                "rest",
+                UrlPart::Origin,
+            )
+            .with_prefix("uc:"),
+        );
+        Cow::Owned(env)
+    }
 }
 
 /// Unity Catalog's compose service, and the port its REST API listens on in the container.

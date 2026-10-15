@@ -9,6 +9,12 @@ configs:
     file: ./modules/envoy/certs.sh
   mlflow_seed_gateway:
     file: ./modules/mlflow/seed_gateway.py
+  mlflow_uc_registry_entry_points:
+    file: ./modules/mlflow/uc-registry/entry_points.txt
+  mlflow_uc_registry_metadata:
+    file: ./modules/mlflow/uc-registry/METADATA
+  mlflow_uc_registry_module:
+    file: ./modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py
   postgres_init:
     file: ./modules/postgres/init-databases.sh
   rustfs_sts_shim:

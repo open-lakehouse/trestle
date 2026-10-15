@@ -20,6 +20,10 @@ services:
       - "5000"
       - "--static-prefix"
       - "/mlflow"
+      # One model registry per environment: with Unity Catalog in the stack, MLflow's registry
+      # API and UI read and write UC models, called directly on the compose network.
+      - "--registry-store-uri"
+      - "uc:http://unitycatalog:8080"
     env_file:
       - path: ./modules/mlflow/.env/mlflow.env
         format: raw
@@ -28,6 +32,19 @@ services:
       # name under auth), in-network callers through the gateway, and the gateway-init job
       # calling it directly.
       MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,envoy:10000,mlflow:5000"
+      # Makes the mounted package visible: its entry point registers MLflow's OSS Unity Catalog
+      # store for the `uc:` scheme, which the server otherwise doesn't accept.
+      PYTHONPATH: /opt/trestle/mlflow-plugins
+      # Registering a model version copies its files into UC's storage; the UC store downloads
+      # them first through this tracking URI, i.e. from the server itself.
+      MLFLOW_TRACKING_URI: http://127.0.0.1:5000/mlflow
+    configs:
+      - source: mlflow_uc_registry_module
+        target: /opt/trestle/mlflow-plugins/trestle_mlflow_uc_registry.py
+      - source: mlflow_uc_registry_metadata
+        target: /opt/trestle/mlflow-plugins/trestle_mlflow_uc_registry-0.0.0.dist-info/METADATA
+      - source: mlflow_uc_registry_entry_points
+        target: /opt/trestle/mlflow-plugins/trestle_mlflow_uc_registry-0.0.0.dist-info/entry_points.txt
     expose:
       - "5000"
     healthcheck:

@@ -1,0 +1,2 @@
+[mlflow.model_registry_store]
+uc = trestle_mlflow_uc_registry:UcRegistryStore
