@@ -13,14 +13,20 @@
 //! - [`EnvCommand::Render`] — re-render an existing environment from its persisted
 //!   `env.toml` ([`EnvManifest`]); ports and routes stay stable by construction.
 //! - [`EnvCommand::ListModules`] — enumerate the catalog and the knobs each module
-//!   exposes.
+//!   exposes, as text or (`--json`) the catalog projection.
 //!
 //! Every environment persists an editable `env.toml` alongside its rendered
-//! artifacts, so re-rendering and hand-editing are the supported edit loop.
+//! artifacts, so re-rendering and hand-editing are the supported edit loop. Each
+//! render also writes [`PLAN_JSON`], the settled plan for tools that join the
+//! environment to something else.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
+use olai_stack_topology::projection::catalog_dto_of;
+use olai_stack_topology::projection::export::{
+    CatalogIdentity, ExportMeta, Generator, catalog_identity, plan_export, plan_export_json,
+};
 use olai_stack_topology::{
     Catalog, EnvManifest, GatewaySettings, Knob, KnobKind, ManifestError, ModuleId, PlanCtx,
     PlanError, RenderError, Secrets, Selection, TargetId, baseline_catalog, baseline_selection,
@@ -136,6 +142,15 @@ pub struct EnvListModulesArgs {
     /// Also print each module's knobs.
     #[clap(long)]
     pub knobs: bool,
+
+    /// Print the catalog as JSON: every module with its model ref, role, knobs, and helpers,
+    /// plus the catalog's identity (as `plan.json` records it).
+    #[clap(long)]
+    pub json: bool,
+
+    /// Include the module manifests the `env.toml` in this directory lists.
+    #[clap(long)]
+    pub dir: Option<PathBuf>,
 }
 
 /// Parse a `module.key=value` override. The value is split on the *first* `=`
@@ -318,11 +333,56 @@ fn write_env(
     ctx: &PlanCtx,
     dir: &std::path::Path,
 ) -> Result<()> {
-    plan.materialize()
-        .map_err(map_render_err)?
+    let manifest = EnvManifest::new(selection.clone(), ctx.clone());
+    write_rendered(plan, &manifest, &baseline_catalog(), dir)?;
+    write_manifest(plan, selection, ctx, dir)
+}
+
+/// The file every render writes beside `compose.yaml`: the settled plan as JSON.
+pub const PLAN_JSON: &str = "plan.json";
+
+/// Materialize `plan` (planned from `manifest` against `catalog`) to `dir`, with its
+/// [`PLAN_JSON`] export of the same plan beside the files.
+fn write_rendered(
+    plan: &olai_stack_topology::Plan,
+    manifest: &EnvManifest,
+    catalog: &Catalog,
+    dir: &Path,
+) -> Result<()> {
+    let materialized = plan.materialize().map_err(map_render_err)?;
+    let export = plan_export(plan, &materialized, manifest, catalog, &export_meta())
+        .and_then(|export| plan_export_json(&export))
+        .map_err(|e| Error::other(format!("serializing {PLAN_JSON}: {e}")))?;
+    materialized
         .write_to(dir)
         .map_err(|e| Error::io_at(dir, e))?;
-    write_manifest(plan, selection, ctx, dir)
+    let path = dir.join(PLAN_JSON);
+    std::fs::write(&path, export).map_err(|e| Error::io_at(&path, e))
+}
+
+/// This build's provenance for [`PLAN_JSON`]. `TRESTLE_REVISION`, when set at build time,
+/// records the source revision; without it the output stays identical across rebuilds.
+fn export_meta() -> ExportMeta {
+    ExportMeta::new(Generator {
+        name: "trestle".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        revision: option_env!("TRESTLE_REVISION").map(str::to_string),
+    })
+}
+
+/// The catalog `manifest` plans against: the baseline, with the module manifests its
+/// `[catalog] manifests` lists (relative to `dir`) merged over it in order, so a manifest
+/// module with a baseline id replaces that module.
+fn load_catalog(manifest: &EnvManifest, dir: &Path) -> Result<Catalog> {
+    let mut catalog = baseline_catalog();
+    for rel in &manifest.catalog.manifests {
+        let path = dir.join(rel);
+        let text = std::fs::read_to_string(&path).map_err(|e| Error::io_at(&path, e))?;
+        let custom =
+            Catalog::from_manifests([text.as_str()]).map_err(|e| Error::yaml_at(&path, e))?;
+        catalog = catalog.merge(custom);
+    }
+    Ok(catalog)
 }
 
 /// Persist the `env.toml` manifest for `selection` in `dir`, followed by a commented reference
@@ -575,7 +635,7 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
         ))
     })?;
 
-    let catalog = baseline_catalog();
+    let catalog = load_catalog(&manifest, &args.dir)?;
     manifest.context.secrets = Some(load_secrets(&args.dir)?);
     let plan = manifest.plan(&catalog).map_err(map_plan_err)?;
 
@@ -587,10 +647,7 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
     }
 
     println!("{}", layout_report(&plan));
-    plan.materialize()
-        .map_err(map_render_err)?
-        .write_to(&out_dir)
-        .map_err(|e| Error::io_at(&out_dir, e))?;
+    write_rendered(&plan, &manifest, &catalog, &out_dir)?;
     report_written(&plan, &out_dir);
     Ok(())
 }
@@ -600,7 +657,31 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
-    let catalog = baseline_catalog();
+    let (catalog, manifests) = match &args.dir {
+        Some(dir) => {
+            let manifest =
+                EnvManifest::read_from(&dir.join("env.toml")).map_err(map_manifest_err)?;
+            (load_catalog(&manifest, dir)?, manifest.catalog.manifests)
+        }
+        None => (baseline_catalog(), Vec::new()),
+    };
+    if args.json {
+        #[derive(serde::Serialize)]
+        struct Listing {
+            catalog: CatalogIdentity,
+            #[serde(flatten)]
+            projection: olai_stack_topology::projection::CatalogDto,
+        }
+        let listing = catalog_identity(&catalog, &manifests, &export_meta())
+            .map(|identity| Listing {
+                catalog: identity,
+                projection: catalog_dto_of(&catalog),
+            })
+            .and_then(|listing| serde_json::to_string_pretty(&listing))
+            .map_err(|e| Error::other(format!("serializing the catalog: {e}")))?;
+        println!("{listing}");
+        return Ok(());
+    }
     for module in catalog.modules() {
         let id = module.id();
         let name = module.display_name().unwrap_or(id.as_str());
