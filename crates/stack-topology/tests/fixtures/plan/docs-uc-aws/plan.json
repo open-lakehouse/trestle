@@ -1,0 +1,556 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:5dce43b9894df356bc992068e9ffa17a6dbbaa140b535dd45775a2f28134c136"
+  },
+  "recipe": {
+    "digest": "sha256:ac4a6c407f9e72a28d26f884e39eb977356532a14879511aa04ba7b520c2fa20"
+  },
+  "context": {
+    "env_name": "uc-docs",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 8080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [
+      9000
+    ],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {},
+    "data_root": "./.data",
+    "local_secrets": "inline"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 8080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "unity-catalog",
+                "endpoint": "rest",
+                "kind": "api",
+                "prefix": "/api/2.1/unity-catalog",
+                "gated": false
+              },
+              {
+                "module": "unity-catalog",
+                "endpoint": "rest_alias",
+                "kind": "api",
+                "prefix": "/unity-catalog",
+                "gated": false
+              }
+            ]
+          },
+          {
+            "host_port": 9000,
+            "kind": "service",
+            "protocols": [
+              "S3 + STS"
+            ],
+            "exposes": [
+              {
+                "module": "rustfs",
+                "endpoint": "s3",
+                "kind": "service",
+                "prefix": "/",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "unitycatalog",
+            "consumers": [
+              "unity-catalog"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "rustfs",
+        "model": "rustfs",
+        "kind": "component",
+        "display_name": "RustFS",
+        "summary": "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
+        "category": "storage",
+        "role": "object_store",
+        "placement": "container:rustfs",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "S3 + STS"
+        ],
+        "provisions": [
+          {
+            "resource": "object_store",
+            "name": "unity",
+            "consumers": [
+              "unity-catalog"
+            ]
+          },
+          {
+            "resource": "object_store",
+            "name": "uc-docs",
+            "consumers": []
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "object_store",
+            "singular": "bucket",
+            "plural": "buckets"
+          }
+        ]
+      },
+      {
+        "id": "unity-catalog",
+        "model": "unityCatalogOSS",
+        "kind": "component",
+        "display_name": "Unity Catalog",
+        "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
+        "category": "catalog",
+        "role": "data_catalog",
+        "placement": "container:unitycatalog",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:8080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 8080
+      },
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9000",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9000
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→unity-catalog:8080",
+        "from": "envoy",
+        "to": "unity-catalog",
+        "host_port": 8080,
+        "gated": false
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→rustfs:9000",
+        "from": "envoy",
+        "to": "rustfs",
+        "host_port": 9000,
+        "gated": false
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog→postgres:relational_db",
+        "from": "unity-catalog",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "unitycatalog"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog→rustfs:object_store",
+        "from": "unity-catalog",
+        "to": "rustfs",
+        "role": "object_store",
+        "protocol": "S3",
+        "resources": [
+          "unity"
+        ]
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "rustfs",
+      "component": "rustfs",
+      "kind": "service"
+    },
+    {
+      "name": "sts-shim",
+      "component": "rustfs",
+      "kind": "sidecar"
+    },
+    {
+      "name": "rustfs-init",
+      "component": "rustfs",
+      "kind": "init"
+    },
+    {
+      "name": "unitycatalog",
+      "component": "unity-catalog",
+      "kind": "service"
+    }
+  ],
+  "services": {
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "rustfs": [
+      {
+        "name": "rustfs",
+        "role": "object_store",
+        "placement": {
+          "kind": "container",
+          "service": "rustfs"
+        },
+        "endpoints": [
+          {
+            "id": "s3",
+            "scheme": "http",
+            "internal_port": 9000,
+            "intent": {
+              "kind": "gatewayed"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "unity-catalog": [
+      {
+        "name": "unitycatalog",
+        "role": "data_catalog",
+        "placement": {
+          "kind": "container",
+          "service": "unitycatalog"
+        },
+        "endpoints": [
+          {
+            "id": "rest",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.1/unity-catalog",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "rest_alias",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/unity-catalog",
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 8080,
+        "routes": [
+          {
+            "prefix": "/api/2.1/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          },
+          {
+            "prefix": "/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          }
+        ]
+      },
+      {
+        "host_port": 9000,
+        "routes": [
+          {
+            "prefix": "/",
+            "cluster": "rustfs",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "rustfs",
+        "host": "rustfs",
+        "port": 9000
+      },
+      {
+        "name": "sts-shim",
+        "host": "sts-shim",
+        "port": 8080
+      },
+      {
+        "name": "unitycatalog",
+        "host": "unitycatalog",
+        "port": 8080
+      }
+    ],
+    "admin_port": 9901,
+    "auth": null,
+    "tls": {
+      "port": 443,
+      "hosts": [
+        "s3.amazonaws.com",
+        "s3.us-east-1.amazonaws.com",
+        "sts.amazonaws.com",
+        "sts.us-east-1.amazonaws.com",
+        "uc-docs.s3.amazonaws.com",
+        "uc-docs.s3.us-east-1.amazonaws.com",
+        "unity.s3.amazonaws.com",
+        "unity.s3.us-east-1.amazonaws.com"
+      ],
+      "virtual_hosts": [
+        {
+          "cluster": "sts-shim",
+          "hosts": [
+            "sts.amazonaws.com",
+            "sts.us-east-1.amazonaws.com"
+          ]
+        },
+        {
+          "cluster": "rustfs",
+          "hosts": [
+            "s3.amazonaws.com",
+            "s3.us-east-1.amazonaws.com",
+            "unity.s3.amazonaws.com",
+            "uc-docs.s3.amazonaws.com",
+            "unity.s3.us-east-1.amazonaws.com",
+            "uc-docs.s3.us-east-1.amazonaws.com"
+          ]
+        }
+      ]
+    },
+    "policy": null
+  },
+  "client": {
+    "host": {
+      "AWS_ALLOW_HTTP": "true",
+      "AWS_ENDPOINT_URL": "http://localhost:9000",
+      "AWS_ENDPOINT_URL_S3": "http://localhost:9000",
+      "AWS_REGION": "us-east-1",
+      "UNITY_CATALOG_URL": "http://localhost:8080/api/2.1/unity-catalog"
+    },
+    "container": {
+      "AWS_ALLOW_HTTP": "true",
+      "AWS_ENDPOINT_URL": "http://envoy:9000",
+      "AWS_ENDPOINT_URL_S3": "http://envoy:9000",
+      "AWS_REGION": "us-east-1",
+      "UNITY_CATALOG_URL": "http://envoy:10000/api/2.1/unity-catalog"
+    }
+  },
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": false
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/certs.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": false
+    },
+    {
+      "path": "modules/rustfs/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/rustfs/.env/rustfs.env",
+      "sensitive": false
+    },
+    {
+      "path": "modules/rustfs/sts_shim.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog/secrets/server.properties",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog/secrets/hibernate.properties",
+      "sensitive": false
+    }
+  ]
+}

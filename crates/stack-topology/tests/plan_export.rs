@@ -7,6 +7,7 @@
 //! UPDATE_GOLDENS=1 cargo test -p olai-stack-topology --test plan_export
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use olai_stack_topology::projection::export::{
@@ -14,7 +15,14 @@ use olai_stack_topology::projection::export::{
 };
 use olai_stack_topology::{EnvManifest, PlanCtx, Secrets, baseline_catalog};
 
-const FIXTURES: &[&str] = &["baseline-uc", "custom-context", "hosted"];
+const FIXTURES: &[&str] = &[
+    "baseline-uc",
+    "custom-context",
+    "docs-uc-aws",
+    "docs-uc-default",
+    "hosted",
+    "uc-api-storage",
+];
 
 /// Fixed provenance, so a release's version bump doesn't rewrite the goldens.
 fn meta() -> ExportMeta {
@@ -66,6 +74,130 @@ fn exports_match_their_goldens() {
             "{name}: plan.json drifted from its golden (run with UPDATE_GOLDENS=1 and review the diff)"
         );
     }
+}
+
+/// Fixtures whose rendered files are committed beside their `plan.json`, under `rendered/`.
+const RENDERED: &[&str] = &["docs-uc-aws", "docs-uc-default", "uc-api-storage"];
+
+/// The materialized files a fixture's golden holds: everything but credentials (which inline
+/// secrets make ordinary), the human-readable layout report, and `.env` files, which this
+/// repository's `.gitignore` excludes (`plan.json` still lists them).
+fn rendered_files(name: &str) -> BTreeMap<String, String> {
+    let plan = manifest(name)
+        .plan(&baseline_catalog())
+        .expect("fixture plans");
+    plan.materialize()
+        .expect("fixture renders")
+        .files
+        .into_iter()
+        .filter(|f| !f.sensitive && f.path != "LAYOUT.md")
+        .filter(|f| !f.path.split('/').any(|part| part == ".env"))
+        .map(|f| (f.path, f.contents))
+        .collect()
+}
+
+#[test]
+fn rendered_files_match_their_goldens() {
+    let update = std::env::var_os("UPDATE_GOLDENS").is_some();
+    for name in RENDERED {
+        let root = fixture_dir(name).join("rendered");
+        let files = rendered_files(name);
+        if update {
+            let _ = std::fs::remove_dir_all(&root);
+            for (path, contents) in &files {
+                let path = root.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, contents).unwrap();
+            }
+            continue;
+        }
+        let committed: BTreeMap<String, String> = walk(&root)
+            .into_iter()
+            .map(|path| {
+                let rel = path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                (rel, std::fs::read_to_string(&path).unwrap())
+            })
+            .collect();
+        assert_eq!(
+            files.keys().collect::<Vec<_>>(),
+            committed.keys().collect::<Vec<_>>(),
+            "{name}: rendered file set drifted (run with UPDATE_GOLDENS=1)"
+        );
+        for (path, contents) in &files {
+            assert!(
+                *contents == committed[path],
+                "{name}: {path} drifted from its golden (run with UPDATE_GOLDENS=1)"
+            );
+        }
+    }
+}
+
+fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{dir:?}: {e}")) {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            out.extend(walk(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out
+}
+
+#[test]
+fn the_docs_aws_environment_keeps_the_docs_contract() {
+    let files = rendered_files("docs-uc-aws");
+    // Inline secrets: the properties are ordinary files, and match the docs' hand-written
+    // server.aws.properties key for key.
+    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    let keys: Vec<&str> = props
+        .lines()
+        .filter(|l| !l.starts_with('#') && l.contains('='))
+        .map(|l| l.split('=').next().unwrap())
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "server.env",
+            "server.authorization",
+            "aws.accessKey",
+            "aws.secretKey",
+            "aws.region",
+            "aws.masterRoleArn",
+        ]
+    );
+    assert!(!files.contains_key("modules/unity-catalog/storage.txt"));
+
+    let plan = manifest("docs-uc-aws").plan(&baseline_catalog()).unwrap();
+    let host = &plan.client_env_host;
+    assert_eq!(
+        host.get("UNITY_CATALOG_URL"),
+        Some("http://localhost:8080/api/2.1/unity-catalog")
+    );
+    assert_eq!(host.get("AWS_ENDPOINT_URL"), Some("http://localhost:9000"));
+    assert_eq!(host.get("AWS_ALLOW_HTTP"), Some("true"));
+
+    let compose: serde_yaml::Value =
+        serde_yaml::from_str(&files["modules/unity-catalog/compose.yaml"]).unwrap();
+    let uc = &compose["services"]["unitycatalog"];
+    assert_eq!(uc["container_name"], "unitycatalog");
+    assert_eq!(uc["build"]["context"], "./image");
+    assert_eq!(uc["init"], true);
+}
+
+#[test]
+fn the_docs_default_environment_runs_only_the_server() {
+    let plan = manifest("docs-uc-default")
+        .plan(&baseline_catalog())
+        .unwrap();
+    let mut ids: Vec<&str> = plan.graph.nodes.iter().map(|m| m.id().as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["envoy", "unity-catalog"]);
 }
 
 #[test]
