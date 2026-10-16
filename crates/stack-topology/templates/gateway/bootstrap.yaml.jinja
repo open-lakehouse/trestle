@@ -211,6 +211,13 @@ static_resources:
                         - "{{ h }}"
                         - "{{ h }}:{{ tls.port }}"
 {%- endfor %}
+{%- if v.response_headers %}
+                      response_headers_to_add:
+{%- for key, value in v.response_headers | items %}
+                        - header: { key: "{{ key }}", value: "{{ value }}" }
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+{%- endfor %}
+{%- endif %}
                       routes:
                         - match: { prefix: "/" }
                           # No timeout: object uploads and downloads can be long-lived.

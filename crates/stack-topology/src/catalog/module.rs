@@ -360,6 +360,10 @@ pub struct ImpersonatedHost {
     pub service: String,
     /// The upstream port on [`service`](Self::service) (plain HTTP).
     pub port: u16,
+    /// Headers the gateway sets on every response for this host, where the real service
+    /// sends one its emulator doesn't (S3 names a bucket's region on every response).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub response_headers: BTreeMap<String, String>,
 }
 
 /// A named, defaulted port a module exposes.

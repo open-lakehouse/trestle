@@ -61,10 +61,14 @@ pub(super) fn plan_impersonation(
                 }
                 owner.insert(host.clone(), module.id().clone());
                 match virtual_hosts.iter_mut().find(|v| v.cluster == decl.service) {
-                    Some(vhost) => vhost.hosts.push(host),
+                    Some(vhost) => {
+                        vhost.hosts.push(host);
+                        vhost.response_headers.extend(decl.response_headers.clone());
+                    }
                     None => virtual_hosts.push(TlsVirtualHost {
                         cluster: decl.service.clone(),
                         hosts: vec![host],
+                        response_headers: decl.response_headers.clone(),
                     }),
                 }
             }

@@ -372,6 +372,9 @@ pub struct TlsVirtualHost {
     pub cluster: String,
     /// The exact hostnames routed to [`cluster`](Self::cluster), without ports.
     pub hosts: Vec<String>,
+    /// The [`response_headers`](crate::ImpersonatedHost::response_headers) of every host
+    /// routed here, merged.
+    pub response_headers: BTreeMap<String, String>,
 }
 
 /// The in-network port the gateway's TLS listener binds (see [`TlsListenerConfig`]). Fixed at

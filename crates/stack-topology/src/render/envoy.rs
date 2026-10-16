@@ -4,6 +4,8 @@
 //! stack, the gateway reads the same bootstrap, rendered here from the planner's structured
 //! [`GatewayConfig`]. Pure and string-only — no I/O.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::plan::GatewayConfig;
@@ -64,6 +66,7 @@ struct SecureCtx {
 struct TlsVhostCtx<'a> {
     cluster: &'a str,
     hosts: &'a [String],
+    response_headers: &'a BTreeMap<String, String>,
 }
 
 /// The forward-auth template context: the `ext_authz` upstream and the trusted identity
@@ -222,6 +225,7 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
                 .map(|v| TlsVhostCtx {
                     cluster: &v.cluster,
                     hosts: &v.hosts,
+                    response_headers: &v.response_headers,
                 })
                 .collect(),
         }),

@@ -720,11 +720,15 @@ fn rustfs() -> Arc<dyn Module> {
         host: host.into(),
         service: "sts-shim".into(),
         port: 8080,
+        response_headers: BTreeMap::new(),
     };
     let s3 = |host: &str| ImpersonatedHost {
         host: host.into(),
         service: "rustfs".into(),
         port: 9000,
+        // UC 0.7 reads a bucket's region from this header before it vends Iceberg table
+        // credentials; real S3 sends it on every response, RustFS doesn't.
+        response_headers: [("x-amz-bucket-region".into(), "us-east-1".into())].into(),
     };
     provides.impersonated_hosts = vec![
         sts("sts.amazonaws.com"),

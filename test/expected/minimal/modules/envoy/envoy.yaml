@@ -104,6 +104,9 @@ static_resources:
                         - "s3.amazonaws.com:443"
                         - "s3.us-east-1.amazonaws.com"
                         - "s3.us-east-1.amazonaws.com:443"
+                      response_headers_to_add:
+                        - header: { key: "x-amz-bucket-region", value: "us-east-1" }
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
                       routes:
                         - match: { prefix: "/" }
                           # No timeout: object uploads and downloads can be long-lived.

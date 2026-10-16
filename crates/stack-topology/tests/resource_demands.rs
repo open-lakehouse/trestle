@@ -812,6 +812,7 @@ fn emulator(id: &str, host: &str) -> Arc<dyn Module> {
             host: host.into(),
             service: id.into(),
             port: 80,
+            response_headers: Default::default(),
         }],
         ..Provides::default()
     };

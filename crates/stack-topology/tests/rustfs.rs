@@ -74,3 +74,46 @@ fn the_dedicated_s3_listener_is_a_server_domain() {
         Some("http://localhost:9000")
     );
 }
+
+#[test]
+fn emulated_s3_hosts_name_the_bucket_region() {
+    let plan = plan(&[], &PlanCtx::default());
+    let tls = plan
+        .gateway
+        .tls
+        .as_ref()
+        .expect("RustFS emulates the AWS hostnames");
+    let s3 = tls
+        .virtual_hosts
+        .iter()
+        .find(|v| v.cluster == "rustfs")
+        .unwrap();
+    assert_eq!(s3.response_headers["x-amz-bucket-region"], "us-east-1");
+    let sts = tls
+        .virtual_hosts
+        .iter()
+        .find(|v| v.cluster == "sts-shim")
+        .unwrap();
+    assert!(sts.response_headers.is_empty());
+
+    let envoy: serde_yaml::Value =
+        serde_yaml::from_str(&olai_stack_topology::render_all(&plan).unwrap().envoy).unwrap();
+    let listener = envoy["static_resources"]["listeners"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|l| l["name"] == "emulated_tls")
+        .unwrap();
+    let vhost = &listener["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]
+        ["virtual_hosts"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "rustfs")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        vhost["response_headers_to_add"][0]["header"]["key"],
+        "x-amz-bucket-region"
+    );
+}
