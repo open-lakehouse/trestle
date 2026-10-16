@@ -580,6 +580,43 @@ export const FIXTURE_CATALOG: CatalogDto = {
       hosted: null,
     },
     {
+      id: "rivers",
+      display_name: "Rivers",
+      summary: "Asset-based orchestration of Python pipelines, with a run UI.",
+      category: "orchestration",
+      provider_of: "orchestration",
+      requires: ["envoy"],
+      conflicts_with: [],
+      resource_kinds: [],
+      resource_nouns: [],
+      knobs: [
+        {
+          key: "module",
+          title: "Pipeline module",
+          kind: {
+            kind: "string",
+          },
+          default: "quickstart",
+          required: false,
+          help: "The Python module under `pipelines/rivers/` whose `repo` CodeRepository the server loads.",
+          advanced: true,
+        },
+        {
+          key: "image",
+          title: "Rivers runtime image",
+          kind: {
+            kind: "string",
+          },
+          default: "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["RIVERS_IMAGE"],
+          advanced: true,
+        },
+      ],
+      hosted: null,
+    },
+    {
       id: "opa",
       display_name: "Open Policy Agent",
       summary: "Rego authorization for every gateway request, after sign-on.",

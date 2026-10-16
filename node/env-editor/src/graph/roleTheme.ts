@@ -5,6 +5,7 @@
 import {
   Bot,
   Boxes,
+  CalendarClock,
   Database,
   DoorOpen,
   Gauge,
@@ -87,6 +88,11 @@ const ROLE_STYLES: Record<string, RoleStyle> = {
     label: "Graph engine",
     icon: Waypoints,
     accent: "text-primary",
+  },
+  orchestration: {
+    label: "Orchestrator",
+    icon: CalendarClock,
+    accent: "text-[hsl(var(--status-ready))]",
   },
 };
 
