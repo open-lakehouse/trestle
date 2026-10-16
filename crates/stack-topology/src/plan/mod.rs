@@ -521,6 +521,17 @@ pub enum PlanError {
         /// The kind the value failed to satisfy.
         kind: crate::catalog::module::KnobKind,
     },
+    /// A module rejected its resolved knobs (see [`Module::check_knobs`](crate::Module::check_knobs)):
+    /// a value's syntax, or a combination of knobs it can't honour.
+    #[error("knob `{key}` on module `{module}` {reason}")]
+    RejectedKnob {
+        /// The module that owns the knob.
+        module: ModuleId,
+        /// The knob's `key`.
+        key: String,
+        /// Why the module rejected it.
+        reason: String,
+    },
     /// Gateway sign-in is on and an `auth`-role provider was selected, but that
     /// provider does not declare what the gateway needs to wire `ext_authz`: a service with an
     /// [`Internal`](crate::RouteIntent::Internal) endpoint (the upstream the filter calls) and the

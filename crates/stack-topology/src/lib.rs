@@ -96,8 +96,8 @@ pub use model::role::{Role, ServiceSpec};
 // --- catalog: the module set + how a module is defined ---
 pub use catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls,
-    HelperKind, HelperService, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, PortDecl,
-    PortMapping, Provides, PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec,
+    HelperKind, HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId,
+    PortDecl, PortMapping, Provides, PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec,
     ResolvedKnobs, ResourceDemand, StackFacts, TemplateError, UrlPart, is_model_ref,
 };
 pub use catalog::{

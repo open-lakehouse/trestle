@@ -130,6 +130,15 @@ pub(super) fn settle(
     // selection overrides (never on services), so there is no circularity: the services a
     // module emits may *vary* with its knobs, but the knobs are settled first.
     let knobs = resolve_module_knobs(&graph, selection)?;
+    for module in &graph.nodes {
+        module
+            .check_knobs(&knobs[module.id()])
+            .map_err(|rejection| PlanError::RejectedKnob {
+                module: module.id().clone(),
+                key: rejection.key,
+                reason: rejection.reason,
+            })?;
+    }
     let stack_facts = StackFacts {
         gateway_auth,
         modules: graph.nodes.iter().map(|m| m.id().clone()).collect(),

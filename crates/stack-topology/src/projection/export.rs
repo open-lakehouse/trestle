@@ -244,7 +244,10 @@ fn containers(plan: &Plan) -> Vec<ContainerDto> {
         if module.hosted().is_some() {
             continue;
         }
-        for helper in &module.provides().helpers {
+        let Some(binding) = plan.bindings.get(module.id()) else {
+            continue;
+        };
+        for helper in module.helpers_in(&binding.knobs).iter() {
             out.push(ContainerDto {
                 name: helper.name.clone(),
                 component: component.to_string(),
