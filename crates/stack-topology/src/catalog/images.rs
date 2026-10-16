@@ -5,7 +5,7 @@
 //! editing templates. Bump versions here when refreshing the baseline stack.
 
 /// Envoy gateway proxy.
-pub const ENVOY: &str = "envoyproxy/envoy:v1.34-latest";
+pub const ENVOY: &str = "envoyproxy/envoy:v1.38-latest";
 /// Authelia forward-auth provider.
 pub const AUTHELIA: &str = "ghcr.io/authelia/authelia:4.39";
 /// Postgres relational database.

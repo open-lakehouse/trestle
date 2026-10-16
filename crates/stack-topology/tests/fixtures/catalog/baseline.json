@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:5dce43b9894df356bc992068e9ffa17a6dbbaa140b535dd45775a2f28134c136"
+    "digest": "sha256:04e7bfd3e89dfad2ac03854d62ed19adb513df8594339ca9f561e4851e4cb9aa"
   },
   "modules": [
     {
@@ -30,7 +30,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "envoyproxy/envoy:v1.34-latest",
+          "default": "envoyproxy/envoy:v1.38-latest",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [

@@ -427,7 +427,7 @@ fn image_defaults_are_baked_into_compose() {
     );
     let envoy = fs::read_to_string(dir.path().join("modules/envoy/compose.yaml")).unwrap();
     assert!(
-        envoy.contains("image: envoyproxy/envoy:v1.34-latest"),
+        envoy.contains("image: envoyproxy/envoy:v1.38-latest"),
         "envoy image default should be baked at render time"
     );
 }

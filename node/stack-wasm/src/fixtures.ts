@@ -24,7 +24,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "envoyproxy/envoy:v1.34-latest",
+          default: "envoyproxy/envoy:v1.38-latest",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["ENVOY_IMAGE"],

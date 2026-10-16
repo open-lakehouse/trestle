@@ -1,7 +1,7 @@
 # Envoy gateway
 services:
   envoy:
-    image: envoyproxy/envoy:v1.34-latest
+    image: envoyproxy/envoy:v1.38-latest
     restart: unless-stopped
     configs:
       - source: envoy_config
