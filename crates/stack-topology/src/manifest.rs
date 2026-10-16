@@ -95,6 +95,27 @@ pub struct EnvManifest {
     /// the host-facing port stays put across re-plans.
     #[serde(default)]
     pub context: PlanCtx,
+    /// Module manifests to plan with beyond the built-in catalog (`[catalog] manifests`).
+    #[serde(default, skip_serializing_if = "CatalogSource::is_empty")]
+    pub catalog: CatalogSource,
+}
+
+/// The module manifests an environment adds to the built-in catalog. Each path is a
+/// `module.yaml` (a [`DataModule`](crate::DataModule)), relative to the directory holding the
+/// manifest; the CLI reads them and merges them over the baseline, so a module with a
+/// baseline id replaces it. The pure core only carries the list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogSource {
+    /// Manifest paths, relative to the environment manifest's directory.
+    #[serde(default)]
+    pub manifests: Vec<String>,
+}
+
+impl CatalogSource {
+    /// Whether the environment uses only the built-in catalog.
+    pub fn is_empty(&self) -> bool {
+        self.manifests.is_empty()
+    }
 }
 
 impl EnvManifest {
@@ -115,6 +136,7 @@ impl EnvManifest {
             version: Self::current_version(),
             selection,
             context,
+            catalog: CatalogSource::default(),
         }
     }
 

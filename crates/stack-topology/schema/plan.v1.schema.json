@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/open-lakehouse/trestle/crates/stack-topology/schema/plan.v1.schema.json",
+  "title": "trestle plan.json, version 1",
+  "description": "A settled Trestle plan: planned configuration, never credentials. Written by `trestle env render` beside the rendered files. Optional fields may be added without a version bump; anything a reader could misread bumps `version`.",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "state",
+    "generator",
+    "catalog",
+    "recipe",
+    "context",
+    "graph",
+    "containers",
+    "services",
+    "gateway",
+    "client",
+    "files"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format": { "const": "trestle-plan" },
+    "version": { "const": 1 },
+    "state": {
+      "description": "What the document describes. Health and test results are separate evidence.",
+      "const": "planned"
+    },
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "revision": { "type": "string" }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "required": ["baseline", "manifests", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline": { "type": "string" },
+        "manifests": {
+          "description": "Module manifests merged over the baseline, relative to the recipe.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "recipe": {
+      "type": "object",
+      "required": ["digest"],
+      "additionalProperties": false,
+      "properties": { "digest": { "$ref": "#/$defs/digest" } }
+    },
+    "context": {
+      "description": "The plan context the recipe settled (gateway ports, env name, provider preferences, ...).",
+      "type": "object",
+      "required": ["env_name", "target", "gateway_host_port"],
+      "properties": {
+        "env_name": { "type": "string" },
+        "target": { "type": "string" },
+        "gateway_host_port": { "$ref": "#/$defs/port" }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "additionalProperties": false,
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } }
+      }
+    },
+    "containers": {
+      "description": "Every container the deploy target runs. Hosted, host, and in-process services are graph nodes, not containers.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "component", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "component": { "description": "The graph node (module id) it belongs to.", "type": "string" },
+          "kind": { "enum": ["service", "init", "sidecar"] }
+        }
+      }
+    },
+    "services": {
+      "description": "Each module's resolved services, keyed by module id.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["name", "role", "placement", "endpoints"],
+          "properties": {
+            "name": { "type": "string" },
+            "role": { "type": "string" }
+          }
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "required": ["listeners", "clusters", "admin_port"],
+      "properties": {
+        "listeners": { "type": "array" },
+        "clusters": { "type": "array" },
+        "admin_port": { "$ref": "#/$defs/port" }
+      }
+    },
+    "client": {
+      "description": "Variables a client loads to reach the stack: addresses only, never credentials.",
+      "type": "object",
+      "required": ["host", "container"],
+      "additionalProperties": false,
+      "properties": {
+        "host": { "$ref": "#/$defs/env" },
+        "container": { "$ref": "#/$defs/env" }
+      }
+    },
+    "files": {
+      "description": "Every materialized file, without contents.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sensitive"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "sensitive": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+    "nullableString": { "type": ["string", "null"] },
+    "node": {
+      "type": "object",
+      "required": ["id", "model", "kind", "role", "placement", "surfaces", "offers", "provisions", "resource_nouns"],
+      "properties": {
+        "id": { "type": "string" },
+        "model": {
+          "description": "The architecture-model element the component is, or null.",
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" }
+          ]
+        },
+        "kind": { "enum": ["clients", "gateway", "component", "external"] },
+        "display_name": { "$ref": "#/$defs/nullableString" },
+        "summary": { "$ref": "#/$defs/nullableString" },
+        "category": { "$ref": "#/$defs/nullableString" },
+        "role": { "$ref": "#/$defs/nullableString" },
+        "placement": { "$ref": "#/$defs/nullableString" },
+        "cloud": { "$ref": "#/$defs/nullableString" },
+        "surfaces": { "type": "array" },
+        "offers": { "type": "array", "items": { "type": "string" } },
+        "provisions": { "type": "array" },
+        "resource_nouns": { "type": "array" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["kind", "key", "from", "to"],
+      "properties": {
+        "kind": { "enum": ["access", "route", "authenticates", "authorizes", "uses"] },
+        "key": {
+          "description": "Unique within the graph and stable across re-plans: kind:from→to:qualifier.",
+          "type": "string",
+          "pattern": "^[a-z]+:[^→]+→[^:]+:.+$"
+        },
+        "from": { "type": "string" },
+        "to": { "type": "string" }
+      }
+    }
+  }
+}

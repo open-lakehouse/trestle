@@ -23,7 +23,11 @@ std-io = []
 [dependencies]
 # workspace dependencies (in alphabetical order)
 serde = { workspace = true }
+# Canonical JSON for the `plan.json` export and its recipe/catalog digests (both pure and
+# wasm32-clean).
+serde_json = { workspace = true }
 serde_yaml = { workspace = true, optional = true }
+sha2 = "0.10"
 thiserror = { workspace = true }
 # TOML (de)serialization for the persisted `EnvManifest`. Non-optional: the pure
 # `to_toml`/`from_toml` are always available (only the manifest's `read_from`/`write_to`,
@@ -39,7 +43,7 @@ url = { workspace = true }
 minijinja = { version = "2.19", default-features = false, features = ["builtins", "serde"] }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+jsonschema = { version = "0.58.6", default-features = false }
 # Used by the golden-artifact tests to assert the rendered Envoy/compose output is
 # valid YAML and to compare it semantically against the captured trestle fixtures.
 serde_yaml = { workspace = true }

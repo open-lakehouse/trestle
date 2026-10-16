@@ -1,0 +1,257 @@
+//! `plan.json`: the settled plan as a versioned, credential-free JSON document, for tools that
+//! join an environment to something else (an architecture model, docs, a registry) without
+//! running the planner.
+//!
+//! It is the [`PlanResultDto`](super::PlanResultDto) without file bodies, plus what a joining
+//! tool needs that the browser doesn't: every container with its component, the client
+//! environments per vantage, the file manifest, and provenance. The document records *planned
+//! configuration*; whether the stack is healthy, or a test passed against it, is separate
+//! evidence.
+//!
+//! Identical inputs give identical bytes: every map is ordered, nothing records a time or an
+//! absolute path, and the version strings come from the caller ([`ExportMeta`]), so a test can
+//! pin them. The schema is `schema/plan.v1.schema.json` in this crate.
+
+use std::collections::BTreeMap;
+
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+
+use super::topology::{GraphDto, graph_dto};
+use super::{CatalogDto, GatewayDto, catalog_dto_of, gateway_dto, services_by_module};
+use crate::render::output::MaterializedOutput;
+use crate::{Catalog, EnvManifest, HelperKind, InjectedEnv, Placement, Plan, PlanCtx, ServiceSpec};
+
+/// The `format` every `plan.json` carries.
+pub const PLAN_EXPORT_FORMAT: &str = "trestle-plan";
+
+/// The `plan.json` schema version this crate writes. Bump it for any change a reader could
+/// misread; adding an optional field is not one.
+pub const PLAN_EXPORT_VERSION: u32 = 1;
+
+/// The exported plan (see the [module docs](self)).
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanExport {
+    /// Always [`PLAN_EXPORT_FORMAT`].
+    pub format: &'static str,
+    /// Always [`PLAN_EXPORT_VERSION`].
+    pub version: u32,
+    /// What the document describes: always [`PlanState::Planned`].
+    pub state: PlanState,
+    /// The tool that wrote the document.
+    pub generator: Generator,
+    /// The module catalog the plan was made from.
+    pub catalog: CatalogIdentity,
+    /// The recipe (the environment manifest) the plan was made from.
+    pub recipe: RecipeIdentity,
+    /// The plan context, as the manifest settled it. Secrets are never serialized.
+    pub context: PlanCtx,
+    /// The functional topology: components (with their model refs) and keyed edges.
+    pub graph: GraphDto,
+    /// Every container the deploy target runs, with the component it belongs to: each module's
+    /// container-placed services, then its declared helpers. Hosted, host, and in-process
+    /// services are graph nodes but not containers.
+    pub containers: Vec<ContainerDto>,
+    /// Each module's resolved services, keyed by module id.
+    pub services: BTreeMap<String, Vec<ServiceSpec>>,
+    /// The gateway layout: listeners, routes, and upstream clusters.
+    pub gateway: GatewayDto,
+    /// The variables a client loads to reach the stack, per vantage.
+    pub client: ClientEnvDto,
+    /// Every file the plan materializes, without contents.
+    pub files: Vec<FileEntryDto>,
+}
+
+/// What a [`PlanExport`] describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanState {
+    /// The configuration the planner settled, before anything ran.
+    Planned,
+}
+
+/// The tool that wrote a [`PlanExport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Generator {
+    /// The tool's name (e.g. `"trestle"`).
+    pub name: String,
+    /// Its version.
+    pub version: String,
+    /// The source revision it was built from, when the build recorded one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+/// Where a [`PlanExport`]'s modules came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CatalogIdentity {
+    /// The built-in catalog's label (e.g. `"olai-stack-topology@0.0.5"`).
+    pub baseline: String,
+    /// The module manifests merged over it, as the recipe lists them.
+    pub manifests: Vec<String>,
+    /// `sha256:<hex>` over the catalog's JSON projection ([`CatalogDto`]), so two exports can
+    /// tell whether they planned from the same modules.
+    pub digest: String,
+}
+
+/// The recipe a [`PlanExport`] was planned from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecipeIdentity {
+    /// `sha256:<hex>` over the manifest's canonical JSON (parsed and re-serialized, so
+    /// comments and formatting don't count; secrets are never part of it).
+    pub digest: String,
+}
+
+/// The caller-supplied provenance of a [`PlanExport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportMeta {
+    /// The tool writing the export.
+    pub generator: Generator,
+    /// The built-in catalog's label; [`ExportMeta::new`] uses this crate's name and version.
+    pub baseline: String,
+}
+
+impl ExportMeta {
+    /// Provenance for `generator`, labelling the baseline with this crate's version.
+    pub fn new(generator: Generator) -> Self {
+        ExportMeta {
+            generator,
+            baseline: concat!(env!("CARGO_PKG_NAME"), "@", env!("CARGO_PKG_VERSION")).into(),
+        }
+    }
+}
+
+/// One container in a [`PlanExport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContainerDto {
+    /// The compose service name.
+    pub name: String,
+    /// The module (graph component) it belongs to.
+    pub component: String,
+    /// What it is to that component.
+    pub kind: ContainerKind,
+}
+
+/// What a [`ContainerDto`] is to its component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerKind {
+    /// One of the module's topology services.
+    Service,
+    /// A declared helper that runs once and exits. A helper may not run in every stack (see
+    /// [`Provides::helpers`](crate::Provides::helpers)).
+    Init,
+    /// A declared helper that runs beside the module's services.
+    Sidecar,
+}
+
+/// The client environments of a [`PlanExport`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ClientEnvDto {
+    /// For a client on the host (through published ports).
+    pub host: InjectedEnv,
+    /// For a client on the stack's network.
+    pub container: InjectedEnv,
+}
+
+/// One materialized file, without its contents.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileEntryDto {
+    /// Path relative to the environment root.
+    pub path: String,
+    /// Whether it holds credentials (written with restricted permissions, and git-ignored).
+    pub sensitive: bool,
+}
+
+/// Export `plan`, planned from `manifest` against `catalog`, with `materialized` its rendered
+/// output. Pass the same plan the caller writes to disk, so the export describes exactly those
+/// files.
+pub fn plan_export(
+    plan: &Plan,
+    materialized: &MaterializedOutput,
+    manifest: &EnvManifest,
+    catalog: &Catalog,
+    meta: &ExportMeta,
+) -> Result<PlanExport, serde_json::Error> {
+    let catalog_projection: CatalogDto = catalog_dto_of(catalog);
+    Ok(PlanExport {
+        format: PLAN_EXPORT_FORMAT,
+        version: PLAN_EXPORT_VERSION,
+        state: PlanState::Planned,
+        generator: meta.generator.clone(),
+        catalog: CatalogIdentity {
+            baseline: meta.baseline.clone(),
+            manifests: manifest.catalog.manifests.clone(),
+            digest: digest(&catalog_projection)?,
+        },
+        recipe: RecipeIdentity {
+            digest: digest(manifest)?,
+        },
+        context: manifest.context.clone(),
+        graph: graph_dto(plan),
+        containers: containers(plan),
+        services: services_by_module(plan),
+        gateway: gateway_dto(&plan.gateway),
+        client: ClientEnvDto {
+            host: plan.client_env_host.clone(),
+            container: plan.client_env_container.clone(),
+        },
+        files: materialized
+            .files
+            .iter()
+            .map(|f| FileEntryDto {
+                path: f.path.clone(),
+                sensitive: f.sensitive,
+            })
+            .collect(),
+    })
+}
+
+/// Serialize `export` as `plan.json` text: pretty-printed, with a trailing newline.
+pub fn plan_export_json(export: &PlanExport) -> Result<String, serde_json::Error> {
+    let mut text = serde_json::to_string_pretty(export)?;
+    text.push('\n');
+    Ok(text)
+}
+
+/// Every container, in dependency order: each module's container-placed services, then its
+/// helpers.
+fn containers(plan: &Plan) -> Vec<ContainerDto> {
+    let mut out = Vec::new();
+    for module in &plan.graph.nodes {
+        let component = module.id().as_str();
+        for spec in plan.services.get(module.id()).into_iter().flatten() {
+            if !matches!(spec.placement, Placement::Container { .. }) {
+                continue;
+            }
+            out.push(ContainerDto {
+                name: spec.name.clone(),
+                component: component.to_string(),
+                kind: ContainerKind::Service,
+            });
+        }
+        // A hosted provider runs nothing, so it has no helpers to list.
+        if module.hosted().is_some() {
+            continue;
+        }
+        for helper in &module.provides().helpers {
+            out.push(ContainerDto {
+                name: helper.name.clone(),
+                component: component.to_string(),
+                kind: match helper.kind {
+                    HelperKind::Init => ContainerKind::Init,
+                    HelperKind::Sidecar => ContainerKind::Sidecar,
+                },
+            });
+        }
+    }
+    out
+}
+
+/// `sha256:<hex>` over `value`'s JSON. Struct fields serialize in declaration order and every
+/// map is a `BTreeMap`, so the JSON is canonical for a given value.
+fn digest(value: &impl Serialize) -> Result<String, serde_json::Error> {
+    let hash = Sha256::digest(serde_json::to_vec(value)?);
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("sha256:{hex}"))
+}

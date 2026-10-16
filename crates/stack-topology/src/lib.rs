@@ -135,7 +135,7 @@ pub use target::{Compose, DeployTarget, TargetId, builtin_targets};
 pub use address::{AddressError, ServiceRef};
 
 // --- manifest: persist a user's choices, re-plan deterministically ---
-pub use manifest::{EnvManifest, ManifestError, pin_dedicated_ports};
+pub use manifest::{CatalogSource, EnvManifest, ManifestError, pin_dedicated_ports};
 
 // --- report: a human-readable layout summary ---
 pub use report::layout_report;

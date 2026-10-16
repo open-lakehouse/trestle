@@ -1,0 +1,430 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:063a91f79a1693a530c88da4ff703800c7a5bfe596d03310fe822155140aac74"
+  },
+  "recipe": {
+    "digest": "sha256:ba5851f35f1e292a20fba1e8d861c1d67d5fafdb856a6dd18df57f6485c858d5"
+  },
+  "context": {
+    "env_name": "hosted",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 9080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {},
+    "data_root": "./.data"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "aws-s3",
+        "model": "amazonS3",
+        "kind": "external",
+        "display_name": "Amazon S3",
+        "summary": "Amazon S3 or an S3-compatible store; buckets must already exist.",
+        "category": "storage",
+        "role": "object_store",
+        "placement": "external:https://s3.us-east-1.amazonaws.com",
+        "cloud": "aws",
+        "surfaces": [],
+        "offers": [
+          "S3"
+        ],
+        "provisions": [
+          {
+            "resource": "object_store",
+            "name": "unity",
+            "consumers": [
+              "unity-catalog"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "object_store",
+            "singular": "bucket",
+            "plural": "buckets"
+          }
+        ]
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 9080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "unity-catalog",
+                "endpoint": "rest",
+                "kind": "api",
+                "prefix": "/api/2.1/unity-catalog",
+                "gated": false
+              },
+              {
+                "module": "unity-catalog",
+                "endpoint": "rest_alias",
+                "kind": "api",
+                "prefix": "/unity-catalog",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "unitycatalog",
+            "consumers": [
+              "unity-catalog"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "unity-catalog",
+        "model": "unityCatalogOSS",
+        "kind": "component",
+        "display_name": "Unity Catalog",
+        "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
+        "category": "catalog",
+        "role": "data_catalog",
+        "placement": "container:unitycatalog",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9080
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→unity-catalog:9080",
+        "from": "envoy",
+        "to": "unity-catalog",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog→postgres:relational_db",
+        "from": "unity-catalog",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "unitycatalog"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog→aws-s3:object_store",
+        "from": "unity-catalog",
+        "to": "aws-s3",
+        "role": "object_store",
+        "protocol": "S3",
+        "resources": [
+          "unity"
+        ]
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "unitycatalog",
+      "component": "unity-catalog",
+      "kind": "service"
+    }
+  ],
+  "services": {
+    "aws-s3": [
+      {
+        "name": "s3",
+        "role": "object_store",
+        "placement": {
+          "kind": "external",
+          "origin": "https://s3.us-east-1.amazonaws.com"
+        },
+        "endpoints": [
+          {
+            "id": "s3",
+            "scheme": "https",
+            "internal_port": 443,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "unity-catalog": [
+      {
+        "name": "unitycatalog",
+        "role": "data_catalog",
+        "placement": {
+          "kind": "container",
+          "service": "unitycatalog"
+        },
+        "endpoints": [
+          {
+            "id": "rest",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.1/unity-catalog",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "rest_alias",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/unity-catalog",
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 9080,
+        "routes": [
+          {
+            "prefix": "/api/2.1/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          },
+          {
+            "prefix": "/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "unitycatalog",
+        "host": "unitycatalog",
+        "port": 8080
+      }
+    ],
+    "admin_port": 9901,
+    "auth": null,
+    "tls": null,
+    "policy": null
+  },
+  "client": {
+    "host": {
+      "AWS_ENDPOINT_URL_S3": "https://s3.us-east-1.amazonaws.com",
+      "AWS_REGION": "us-east-1",
+      "UNITY_CATALOG_URL": "http://localhost:9080/api/2.1/unity-catalog"
+    },
+    "container": {
+      "AWS_ENDPOINT_URL_S3": "https://s3.us-east-1.amazonaws.com",
+      "AWS_REGION": "us-east-1",
+      "UNITY_CATALOG_URL": "http://envoy:10000/api/2.1/unity-catalog"
+    }
+  },
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": true
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": true
+    },
+    {
+      "path": "modules/unity-catalog/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog/secrets/server.properties",
+      "sensitive": true
+    },
+    {
+      "path": "modules/unity-catalog/secrets/hibernate.properties",
+      "sensitive": true
+    }
+  ]
+}

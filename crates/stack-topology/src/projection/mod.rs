@@ -7,14 +7,15 @@
 //! consumer (the browser planner, the CLI's JSON output) never sees a trait object. It is pure
 //! and compiles on every target.
 
+pub mod export;
 pub mod topology;
 
 use std::collections::BTreeMap;
 
 use crate::{
-    Catalog, ClusterConfig, GatewayConfig, GatewayRoute, HostedKind, HostedResource, Knob,
-    ListenerConfig, PlanCtx, PlanError, RenderError, Role, Selection, ServiceSpec, TargetId,
-    baseline_catalog, baseline_selection, builtin_targets,
+    Catalog, ClusterConfig, EnvManifest, GatewayConfig, GatewayRoute, HelperService, HostedKind,
+    HostedResource, Knob, ListenerConfig, Plan, PlanCtx, PlanError, RenderError, Role, Selection,
+    ServiceSpec, TargetId, baseline_catalog, baseline_selection, builtin_targets,
 };
 use serde::Serialize;
 
@@ -28,7 +29,7 @@ pub use self::topology::{
 /// capability it provides, and its tunable knobs.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogDto {
-    /// Every module in the baseline catalog, in catalog order.
+    /// Every module in the catalog, in catalog order.
     pub modules: Vec<ModuleDto>,
     /// A sensible starting selection (the baseline lakehouse), so the UI can open pre-populated.
     pub default_selection: Selection,
@@ -75,6 +76,8 @@ pub struct ModuleDto {
     /// The user-tunable config knobs this module exposes. `Knob` already derives `Serialize`, so
     /// it is reused verbatim.
     pub knobs: Vec<Knob>,
+    /// The helper containers (init jobs, sidecars) the module may run beside its services.
+    pub helpers: Vec<HelperService>,
     /// Set for a hosted provider (a managed database or cloud object store the stack uses but
     /// does not run): what it stands for and the configuration it uses until the selection's
     /// `hosted` entry overrides it.
@@ -207,7 +210,12 @@ pub struct ClusterDto {
 /// Reads each module through the [`Module`] trait accessors (the trait is not `Serialize`) and
 /// reuses `Knob`'s own `Serialize` impl for the knob list.
 pub fn catalog_dto() -> CatalogDto {
-    let catalog = baseline_catalog();
+    catalog_dto_of(&baseline_catalog())
+}
+
+/// Project `catalog` (the baseline, or the baseline merged with custom manifests) for a picker
+/// or a JSON listing.
+pub fn catalog_dto_of(catalog: &Catalog) -> CatalogDto {
     let modules = catalog
         .modules()
         .iter()
@@ -231,6 +239,7 @@ pub fn catalog_dto() -> CatalogDto {
             resource_kinds: m.provides().resource_kinds.keys().cloned().collect(),
             resource_nouns: resource_nouns(m.as_ref()),
             knobs: m.knobs().to_vec(),
+            helpers: m.provides().helpers.clone(),
             hosted: m.hosted().map(|kind| HostedModuleDto {
                 kind,
                 default: kind.default_resource(),
@@ -329,6 +338,20 @@ pub fn plan_result(
         ..PlanCtx::default()
     };
     let plan = catalog.plan(selection, &ctx)?;
+    project_result(&plan)
+}
+
+/// Plan `manifest` with its whole [`PlanCtx`] (gateway ports, provider preferences, env name,
+/// …) against `catalog`, and project the result as [`plan_result`] does. Where
+/// [`plan_result`] defaults everything but the target, this honours a saved environment.
+pub fn plan_result_for_manifest(
+    manifest: &EnvManifest,
+    catalog: &Catalog,
+) -> Result<PlanResultDto, PlanResultError> {
+    project_result(&manifest.plan(catalog)?)
+}
+
+fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
     let materialized = plan.materialize()?;
     // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
     let files = materialized
@@ -341,15 +364,19 @@ pub fn plan_result(
         })
         .collect();
     Ok(PlanResultDto {
-        graph: graph_dto(&plan),
-        services: plan
-            .services
-            .iter()
-            .map(|(id, specs)| (id.as_str().to_string(), specs.clone()))
-            .collect(),
+        graph: graph_dto(plan),
+        services: services_by_module(plan),
         gateway: gateway_dto(&plan.gateway),
         files,
     })
+}
+
+/// Each module's resolved services, keyed by module id.
+fn services_by_module(plan: &Plan) -> BTreeMap<String, Vec<ServiceSpec>> {
+    plan.services
+        .iter()
+        .map(|(id, specs)| (id.as_str().to_string(), specs.clone()))
+        .collect()
 }
 
 /// Well-known role strings, re-exported as a convenience for the JS side's role→theme map. Kept
@@ -603,6 +630,27 @@ mod tests {
                 .iter()
                 .any(|f| f.path.starts_with("modules/hosted-postgres/"))
         );
+    }
+
+    #[test]
+    fn a_manifest_plans_with_its_whole_context() {
+        let selection = Selection::modules(["unity-catalog"]);
+        let ctx = PlanCtx {
+            gateway_host_port: 8080,
+            ..PlanCtx::default()
+        };
+        let manifest = EnvManifest::new(selection.clone(), ctx);
+        let host_ports = |r: &PlanResultDto| -> Vec<u16> {
+            r.gateway.listeners.iter().map(|l| l.host_port).collect()
+        };
+        let saved = plan_result_for_manifest(&manifest, &baseline_catalog()).unwrap();
+        let defaulted = plan_result(&selection, None).unwrap();
+        assert!(
+            host_ports(&saved).contains(&8080),
+            "{:?}",
+            host_ports(&saved)
+        );
+        assert!(!host_ports(&defaulted).contains(&8080));
     }
 
     #[test]

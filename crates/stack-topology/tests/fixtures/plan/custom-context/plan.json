@@ -1,0 +1,707 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:063a91f79a1693a530c88da4ff703800c7a5bfe596d03310fe822155140aac74"
+  },
+  "recipe": {
+    "digest": "sha256:763d18679afb3322b9a6dc06877f6443fc99a0de542363a930ffaed2465d7659"
+  },
+  "context": {
+    "env_name": "docs-uc",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 8080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {
+      "object_store": [
+        "azurite"
+      ]
+    },
+    "data_root": "./.data"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "azurite",
+        "model": "azurite",
+        "kind": "component",
+        "display_name": "Azurite",
+        "summary": "Azure Blob emulator; object store with Azure-shaped wiring.",
+        "category": "storage",
+        "role": "object_store",
+        "placement": "container:azurite",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "Azure Blob"
+        ],
+        "provisions": [
+          {
+            "resource": "object_store",
+            "name": "unity",
+            "consumers": [
+              "unity-catalog"
+            ]
+          },
+          {
+            "resource": "object_store",
+            "name": "mlflow",
+            "consumers": [
+              "mlflow"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "object_store",
+            "singular": "container",
+            "plural": "containers"
+          }
+        ]
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 8080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "unity-catalog",
+                "endpoint": "rest",
+                "kind": "api",
+                "prefix": "/api/2.1/unity-catalog",
+                "gated": false
+              },
+              {
+                "module": "unity-catalog",
+                "endpoint": "rest_alias",
+                "kind": "api",
+                "prefix": "/unity-catalog",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking",
+                "kind": "api",
+                "prefix": "/api/2.0/mlflow",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "otel",
+                "kind": "api",
+                "prefix": "/api/2.0/otel",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "ai_gateway",
+                "kind": "api",
+                "prefix": "/ai-gateway",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/mlflow",
+                "gated": false
+              }
+            ]
+          },
+          {
+            "host_port": 9100,
+            "kind": "service",
+            "protocols": [
+              "Azure Blob"
+            ],
+            "exposes": [
+              {
+                "module": "azurite",
+                "endpoint": "blob",
+                "kind": "service",
+                "prefix": "/",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "unitycatalog",
+            "consumers": [
+              "unity-catalog"
+            ]
+          },
+          {
+            "resource": "relational_db",
+            "name": "mlflow",
+            "consumers": [
+              "mlflow"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "unity-catalog",
+        "model": "unityCatalogOSS",
+        "kind": "component",
+        "display_name": "Unity Catalog",
+        "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
+        "category": "catalog",
+        "role": "data_catalog",
+        "placement": "container:unitycatalog",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "mlflow",
+        "model": "mlflow",
+        "kind": "component",
+        "display_name": "MLflow",
+        "summary": "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
+        "category": "ml",
+        "role": "experiment_tracking",
+        "placement": "container:mlflow",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:8080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 8080
+      },
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9100",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9100
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→unity-catalog:8080",
+        "from": "envoy",
+        "to": "unity-catalog",
+        "host_port": 8080,
+        "gated": false
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→mlflow:8080",
+        "from": "envoy",
+        "to": "mlflow",
+        "host_port": 8080,
+        "gated": false
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→azurite:9100",
+        "from": "envoy",
+        "to": "azurite",
+        "host_port": 9100,
+        "gated": false
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog→postgres:relational_db",
+        "from": "unity-catalog",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "unitycatalog"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog→azurite:object_store",
+        "from": "unity-catalog",
+        "to": "azurite",
+        "role": "object_store",
+        "protocol": "Azure Blob",
+        "resources": [
+          "unity"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→postgres:relational_db",
+        "from": "mlflow",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "mlflow"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→azurite:object_store",
+        "from": "mlflow",
+        "to": "azurite",
+        "role": "object_store",
+        "protocol": "Azure Blob",
+        "resources": [
+          "mlflow"
+        ]
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "azurite",
+      "component": "azurite",
+      "kind": "service"
+    },
+    {
+      "name": "azurite-init",
+      "component": "azurite",
+      "kind": "init"
+    },
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "unitycatalog",
+      "component": "unity-catalog",
+      "kind": "service"
+    },
+    {
+      "name": "mlflow",
+      "component": "mlflow",
+      "kind": "service"
+    },
+    {
+      "name": "mlflow-gateway-init",
+      "component": "mlflow",
+      "kind": "init"
+    }
+  ],
+  "services": {
+    "azurite": [
+      {
+        "name": "azurite",
+        "role": "object_store",
+        "placement": {
+          "kind": "container",
+          "service": "azurite"
+        },
+        "endpoints": [
+          {
+            "id": "blob",
+            "scheme": "http",
+            "internal_port": 10000,
+            "intent": {
+              "kind": "gatewayed"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "mlflow": [
+      {
+        "name": "mlflow",
+        "role": "experiment_tracking",
+        "placement": {
+          "kind": "container",
+          "service": "mlflow"
+        },
+        "endpoints": [
+          {
+            "id": "tracking",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "otel",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.0/otel",
+            "rewrite": {
+              "to": "/mlflow"
+            }
+          },
+          {
+            "id": "ai_gateway",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/ai-gateway",
+            "rewrite": {
+              "to": "/mlflow/gateway"
+            },
+            "route": {
+              "streaming": true,
+              "strip_client_credentials": true
+            }
+          },
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/mlflow"
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "unity-catalog": [
+      {
+        "name": "unitycatalog",
+        "role": "data_catalog",
+        "placement": {
+          "kind": "container",
+          "service": "unitycatalog"
+        },
+        "endpoints": [
+          {
+            "id": "rest",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.1/unity-catalog",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "rest_alias",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/unity-catalog",
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 8080,
+        "routes": [
+          {
+            "prefix": "/api/2.1/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          },
+          {
+            "prefix": "/api/2.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/2.0/mlflow"
+          },
+          {
+            "prefix": "/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          },
+          {
+            "prefix": "/api/2.0/otel",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow"
+          },
+          {
+            "prefix": "/ai-gateway",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/gateway"
+          },
+          {
+            "prefix": "/mlflow",
+            "cluster": "mlflow",
+            "rewrite": null
+          }
+        ]
+      },
+      {
+        "host_port": 9100,
+        "routes": [
+          {
+            "prefix": "/",
+            "cluster": "azurite",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "azurite",
+        "host": "azurite",
+        "port": 10000
+      },
+      {
+        "name": "mlflow",
+        "host": "mlflow",
+        "port": 5000
+      },
+      {
+        "name": "unitycatalog",
+        "host": "unitycatalog",
+        "port": 8080
+      }
+    ],
+    "admin_port": 9901,
+    "auth": null,
+    "tls": null,
+    "policy": null
+  },
+  "client": {
+    "host": {
+      "MLFLOW_AI_GATEWAY_URL": "http://localhost:8080/ai-gateway",
+      "MLFLOW_REGISTRY_URI": "uc:http://localhost:8080",
+      "MLFLOW_TRACKING_URI": "http://localhost:8080",
+      "UNITY_CATALOG_URL": "http://localhost:8080/api/2.1/unity-catalog"
+    },
+    "container": {
+      "MLFLOW_AI_GATEWAY_URL": "http://envoy:10000/ai-gateway",
+      "MLFLOW_REGISTRY_URI": "uc:http://envoy:10000",
+      "MLFLOW_TRACKING_URI": "http://envoy:10000",
+      "UNITY_CATALOG_URL": "http://envoy:10000/api/2.1/unity-catalog"
+    }
+  },
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": true
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/azurite/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/azurite/.env/azurite-init.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": true
+    },
+    {
+      "path": "modules/unity-catalog/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog/secrets/server.properties",
+      "sensitive": true
+    },
+    {
+      "path": "modules/unity-catalog/secrets/hibernate.properties",
+      "sensitive": true
+    },
+    {
+      "path": "modules/mlflow/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/.env/mlflow.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/mlflow/seed_gateway.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/METADATA",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/entry_points.txt",
+      "sensitive": false
+    }
+  ]
+}
