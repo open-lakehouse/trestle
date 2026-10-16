@@ -173,17 +173,12 @@ pub fn plan_export(
     catalog: &Catalog,
     meta: &ExportMeta,
 ) -> Result<PlanExport, serde_json::Error> {
-    let catalog_projection: CatalogDto = catalog_dto_of(catalog);
     Ok(PlanExport {
         format: PLAN_EXPORT_FORMAT,
         version: PLAN_EXPORT_VERSION,
         state: PlanState::Planned,
         generator: meta.generator.clone(),
-        catalog: CatalogIdentity {
-            baseline: meta.baseline.clone(),
-            manifests: manifest.catalog.manifests.clone(),
-            digest: digest(&catalog_projection)?,
-        },
+        catalog: catalog_identity(catalog, &manifest.catalog.manifests, meta)?,
         recipe: RecipeIdentity {
             digest: digest(manifest)?,
         },
@@ -204,6 +199,21 @@ pub fn plan_export(
                 sensitive: f.sensitive,
             })
             .collect(),
+    })
+}
+
+/// The identity of `catalog`, assembled from the baseline and the module manifests
+/// `manifests` lists: the label from `meta`, and a digest of its [`CatalogDto`] projection.
+pub fn catalog_identity(
+    catalog: &Catalog,
+    manifests: &[String],
+    meta: &ExportMeta,
+) -> Result<CatalogIdentity, serde_json::Error> {
+    let projection: CatalogDto = catalog_dto_of(catalog);
+    Ok(CatalogIdentity {
+        baseline: meta.baseline.clone(),
+        manifests: manifests.to_vec(),
+        digest: digest(&projection)?,
     })
 }
 

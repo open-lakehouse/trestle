@@ -48,7 +48,8 @@ callers). This crate makes the topology a single, tested model:
 - **Surface mode** — the "one unified platform surface" Lakehouse invariant, with
   the in-process desktop variant expressed in-model rather than forked.
 
-The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O. Rendering is
+The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O (the `plan.json`
+export adds `serde_json` and `sha2`). Rendering is
 also pure — it produces artifact strings and relative filenames in memory; the consumer
 owns disk I/O — so it is always available and compiles to `wasm32`.
 
@@ -333,6 +334,27 @@ from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `
 Dedicated listeners are not gated by default: resource backends (object stores) and UIs with
 their own login (PuppyGraph) stay open. An endpoint opts in with `RouteOptions::gated`
 (`rivers` does): its listener then gets the same forward-auth and HTTPS as the shared one.
+
+## Model refs and `plan.json`
+
+A module can name the implementation it packages as an element of an external architecture
+model (`model: postgresql` in a manifest, `Module::model()` in code). It's identity only:
+the planner never reads it, and only its shape is checked (dot-separated identifiers).
+Every baseline module carries one, and the plan projection repeats it on each graph node.
+
+`trestle env render` (and `env new`) write `plan.json` beside `compose.yaml`: the settled
+plan as a versioned, credential-free document for tools that join the environment to
+something else. It holds the functional graph (nodes with model refs, edges with stable
+`kind:from→to:qualifier` keys), every container with its component (services plus each
+module's declared `helpers`), the gateway layout, the host and container client environments,
+the file manifest without contents, and provenance (digests of the catalog and the recipe).
+Identical inputs give identical bytes. The schema is
+[`schema/plan.v1.schema.json`](schema/plan.v1.schema.json), and
+`tests/fixtures/plan/` holds examples.
+
+`trestle env list-modules --json` prints the catalog the same way, with its identity;
+`--dir <env>` includes the module manifests that environment's `env.toml` lists under
+`[catalog] manifests` (paths relative to the `env.toml`, merged over the baseline).
 
 ## Seeing the rendered output
 
