@@ -98,7 +98,7 @@ pub(super) fn settle(
     // Every name the plan provisions reaches a provider's init job verbatim, so check them all
     // (module demands and environment-level extras alike) before anything renders.
     for module in &graph.nodes {
-        for demand in module.needs() {
+        for demand in graph.needs(module.id()) {
             names::check_resource_name(&demand.resource, &demand.name)?;
         }
     }
@@ -118,7 +118,7 @@ pub(super) fn settle(
         let Some(provider) = hosted.modules.get(&resolved.provider) else {
             continue;
         };
-        let demand = &graph.module(module).expect("in graph").needs()[*idx];
+        let demand = &graph.needs(module)[*idx];
         resolved.connection = provider.template.resolve(&demand.name);
     }
 

@@ -144,7 +144,7 @@ pub(super) fn bind(
         // injections / container env vars.
         // Bind each demand's resolved connection back into the consuming module's env, by
         // typed field.
-        for (idx, demand) in module.needs().iter().enumerate() {
+        for (idx, demand) in graph.needs(module.id()).iter().enumerate() {
             let connection = &chosen[&(module.id().clone(), idx)].connection;
             bind_connection(&mut module_env, module.id(), demand, connection)?;
         }
@@ -179,7 +179,7 @@ pub(super) fn bind(
                 env.set(k, v);
             }
         }
-        for (idx, demand) in module.needs().iter().enumerate() {
+        for (idx, demand) in graph.needs(module.id()).iter().enumerate() {
             let connection = &chosen[&(module.id().clone(), idx)].connection;
             bind_connection(&mut env, module.id(), demand, connection)?;
         }
@@ -193,7 +193,7 @@ pub(super) fn bind(
         // so a template iterates them instead of hard-coding which backend it waits on.
         let mut connections: BTreeMap<String, Vec<Connection>> = BTreeMap::new();
         let mut dependencies: Vec<ReadyGate> = Vec::new();
-        for (idx, demand) in module.needs().iter().enumerate() {
+        for (idx, demand) in graph.needs(module.id()).iter().enumerate() {
             let resolved = &chosen[&(module.id().clone(), idx)];
             connections
                 .entry(demand.resource.clone())

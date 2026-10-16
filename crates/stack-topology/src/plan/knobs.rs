@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use super::resolve::ResolvedGraph;
 use super::{PlanError, Selection};
-use crate::catalog::module::{ModuleId, ResolvedKnobs};
+use crate::catalog::module::{Module, ModuleId, ResolvedKnobs};
 
 /// Resolve a knob to its canonical value, **validated and coerced against its
 /// [`KnobKind`]**: an override (from [`Selection::knob_overrides`]) wins — matching the
@@ -87,16 +87,29 @@ pub(super) fn resolve_module_knobs(
     graph: &ResolvedGraph,
     selection: &Selection,
 ) -> Result<BTreeMap<ModuleId, ResolvedKnobs>, PlanError> {
-    let mut resolved = BTreeMap::new();
-    for module in &graph.nodes {
-        let overrides = selection.knob_overrides.get(module.id());
-        let mut knobs = ResolvedKnobs::new();
-        for knob in module.knobs() {
-            if let Some(value) = resolve_knob(module.id(), knob, overrides)? {
-                knobs.set(&knob.key, value);
-            }
+    graph
+        .nodes
+        .iter()
+        .map(|module| {
+            Ok((
+                module.id().clone(),
+                resolve_knobs_of(module.as_ref(), selection)?,
+            ))
+        })
+        .collect()
+}
+
+/// Resolve one module's knobs against the selection's overrides (see [`resolve_knob`]).
+pub(super) fn resolve_knobs_of(
+    module: &dyn Module,
+    selection: &Selection,
+) -> Result<ResolvedKnobs, PlanError> {
+    let overrides = selection.knob_overrides.get(module.id());
+    let mut knobs = ResolvedKnobs::new();
+    for knob in module.knobs() {
+        if let Some(value) = resolve_knob(module.id(), knob, overrides)? {
+            knobs.set(&knob.key, value);
         }
-        resolved.insert(module.id().clone(), knobs);
     }
-    Ok(resolved)
+    Ok(knobs)
 }

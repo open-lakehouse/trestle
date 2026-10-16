@@ -904,6 +904,13 @@ pub trait Module: Send + Sync {
     fn needs(&self) -> &[ResourceDemand] {
         &[]
     }
+    /// The resources this module needs given its resolved `knobs` — what the planner reads.
+    /// Defaults to [`needs`](Module::needs); a module overrides it only when a knob changes
+    /// which resources it needs (e.g. an embedded store that replaces a demanded one).
+    fn needs_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [ResourceDemand]> {
+        let _ = knobs;
+        Cow::Borrowed(self.needs())
+    }
     /// User-tunable config knobs this module exposes.
     fn knobs(&self) -> &[Knob] {
         &[]

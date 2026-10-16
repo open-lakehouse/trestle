@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::module::{Module, ModuleId};
+use crate::catalog::module::{Module, ModuleId, ResourceDemand};
 
 /// Extra dependency edges supplied alongside a catalog: `consumer → [providers]`, ordered
 /// like `requires` (each provider starts before the consumer). The planner passes the
@@ -66,6 +66,9 @@ pub struct ResolvedGraph {
     pub nodes: Vec<Arc<dyn Module>>,
     /// Dependency edges among `nodes`.
     pub edges: Vec<Edge>,
+    /// Each node's resource demands, resolved against its knobs (see [`Module::needs_in`]).
+    /// Demand indexes into this list key every per-demand fact the planner records.
+    demands: BTreeMap<ModuleId, Vec<ResourceDemand>>,
 }
 
 impl std::fmt::Debug for ResolvedGraph {
@@ -81,6 +84,25 @@ impl ResolvedGraph {
     /// Look up a resolved module by id.
     pub fn module(&self, id: &ModuleId) -> Option<&Arc<dyn Module>> {
         self.nodes.iter().find(|m| m.id() == id)
+    }
+
+    /// The resource demands of the node `id` as the planner resolved them; empty for a module
+    /// not in the graph.
+    pub fn needs(&self, id: &ModuleId) -> &[ResourceDemand] {
+        self.demands.get(id).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Replace the knob-blind demands [`resolve_with`] records with each node's effective ones.
+    pub(in crate::plan) fn with_demands(
+        mut self,
+        mut demands: BTreeMap<ModuleId, Vec<ResourceDemand>>,
+    ) -> Self {
+        for (id, list) in &mut self.demands {
+            if let Some(effective) = demands.remove(id) {
+                *list = effective;
+            }
+        }
+        self
     }
 }
 
@@ -140,12 +162,20 @@ pub fn resolve_with(
     check_conflicts(&included, &by_id)?;
 
     let edges = collect_edges(&included, &by_id, extra_edges);
-    let nodes = topo_sort(&included, &edges)?
+    let nodes: Vec<Arc<dyn Module>> = topo_sort(&included, &edges)?
         .into_iter()
         .map(|id| Arc::clone(*by_id.get(id.as_str()).unwrap()))
         .collect();
+    let demands = nodes
+        .iter()
+        .map(|m| (m.id().clone(), m.needs().to_vec()))
+        .collect();
 
-    Ok(ResolvedGraph { nodes, edges })
+    Ok(ResolvedGraph {
+        nodes,
+        edges,
+        demands,
+    })
 }
 
 /// Reject the selection if any two included modules declare a `conflicts_with`

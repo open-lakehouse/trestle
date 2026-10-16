@@ -2,14 +2,15 @@
 //! and the planner auto-deploys a provider, provisions the named resource, and binds the
 //! provider's typed [`Connection`] back into the consumer.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use olai_stack_topology::{
     Catalog, Connection, ConnectionBinding, ConnectionField, ConnectionTemplate, DataModule,
-    ExtraResource, ImpersonatedHost, Module, ModuleId, ObjectStoreCredential, Placement, PlanCtx,
-    PlanError, Provides, RenderSpec, ResourceDemand, Role, Selection, ServiceSpec,
-    baseline_catalog,
+    ExtraResource, ImpersonatedHost, Knob, KnobKind, Module, ModuleId, ObjectStoreCredential,
+    Placement, PlanCtx, PlanError, Provides, RenderSpec, ResolvedKnobs, ResourceDemand, Role,
+    Selection, ServiceSpec, TargetId, baseline_catalog,
 };
 
 /// Build a minimal provider module that provisions `kind` and vends the given typed
@@ -868,4 +869,122 @@ fn no_impersonated_hosts_means_no_tls_listener() {
         )),
         "no connection carries a CA when nothing is emulated"
     );
+}
+
+/// A consumer whose `embedded` knob drops its relational-store demand, the first of two, so
+/// the object-store demand moves from index 1 to index 0.
+struct Embeddable(DataModule);
+
+impl Module for Embeddable {
+    fn id(&self) -> &ModuleId {
+        self.0.id()
+    }
+    fn needs(&self) -> &[ResourceDemand] {
+        self.0.needs()
+    }
+    fn needs_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [ResourceDemand]> {
+        if knobs.get("embedded") == Some("true") {
+            Cow::Owned(
+                self.needs()
+                    .iter()
+                    .filter(|d| d.resource != "relational_db")
+                    .cloned()
+                    .collect(),
+            )
+        } else {
+            Cow::Borrowed(self.needs())
+        }
+    }
+    fn knobs(&self) -> &[Knob] {
+        self.0.knobs()
+    }
+    fn provides(&self) -> &Provides {
+        self.0.provides()
+    }
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        self.0.render_for(target)
+    }
+    fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
+        self.0.services(knobs)
+    }
+}
+
+fn embeddable_catalog() -> Catalog {
+    let module = DataModule {
+        id: ModuleId::from("embeddable"),
+        model: None,
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![
+            ResourceDemand {
+                resource: "relational_db".into(),
+                name: "meta".into(),
+                provider: None,
+                bind: bind1(ConnectionField::Url, "META_URL"),
+            },
+            ResourceDemand {
+                resource: "object_store".into(),
+                name: "lake".into(),
+                provider: None,
+                bind: bind1(ConnectionField::Bucket, "LAKE_BUCKET"),
+            },
+        ],
+        service_specs: vec![],
+        provides: Provides::default(),
+        knobs: vec![Knob {
+            key: "embedded".into(),
+            title: None,
+            kind: KnobKind::Bool,
+            default: Some("false".into()),
+            required: false,
+            help: None,
+            aliases: vec![],
+            advanced: false,
+        }],
+        renders: RenderSpec::default().for_compose(),
+    };
+    baseline_catalog().merge(Catalog::from_modules([
+        Arc::new(Embeddable(module)) as Arc<dyn Module>
+    ]))
+}
+
+#[test]
+fn a_knob_can_drop_a_demand_and_its_provider() {
+    let catalog = embeddable_catalog();
+    let mut selection = Selection::modules(["embeddable"]);
+    selection.knob_overrides.insert(
+        "embeddable".into(),
+        BTreeMap::from([("embedded".to_string(), "yes".to_string())]),
+    );
+    let p = catalog.plan(&selection, &PlanCtx::default()).unwrap();
+
+    assert!(p.graph.module(&ModuleId::from("postgres")).is_none());
+    assert!(p.graph.module(&ModuleId::from("rustfs")).is_some());
+    let id = ModuleId::from("embeddable");
+    assert_eq!(p.graph.needs(&id).len(), 1);
+    // The object-store demand now sits at index 0, and its binding still resolves.
+    let env = p.injected.get(&id).unwrap();
+    assert_eq!(env.get("LAKE_BUCKET"), Some("lake"));
+    assert_eq!(env.get("META_URL"), None);
+    assert!(
+        p.provisioned_by(&"rustfs".into())
+            .contains(&"lake".to_string())
+    );
+}
+
+#[test]
+fn without_the_knob_every_demand_is_served() {
+    let p = embeddable_catalog()
+        .plan(&Selection::modules(["embeddable"]), &PlanCtx::default())
+        .unwrap();
+    let id = ModuleId::from("embeddable");
+    assert!(p.graph.module(&ModuleId::from("postgres")).is_some());
+    assert_eq!(p.graph.needs(&id).len(), 2);
+    let env = p.injected.get(&id).unwrap();
+    assert_eq!(env.get("LAKE_BUCKET"), Some("lake"));
+    assert!(env.get("META_URL").is_some());
 }

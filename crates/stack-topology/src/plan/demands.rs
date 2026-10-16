@@ -3,10 +3,11 @@
 
 use std::collections::BTreeMap;
 
+use super::knobs::resolve_knobs_of;
 use super::resolve::{ExtraEdges, ResolvedGraph, resolve, resolve_with};
 use super::{PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
-use crate::catalog::module::ModuleId;
+use crate::catalog::module::{ModuleId, ResourceDemand};
 use crate::model::connection::Connection;
 use crate::render::InjectedEnv;
 
@@ -56,14 +57,19 @@ pub(super) fn resolve_with_demands(
     // as `extra_edges` rather than folded into any module — a module is never mutated.
     let mut demand_edges: ExtraEdges = ExtraEdges::new();
     let mut selected = resolve_selection(selection, catalog)?;
+    // Each node's demands, resolved against its knobs; the last pass's become the graph's.
+    let mut effective: BTreeMap<ModuleId, Vec<ResourceDemand>> = BTreeMap::new();
 
     // Fixed point: resolve → scan demands → add missing providers → repeat. Bounded by
     // the catalog size (each iteration adds ≥1 module).
     for _ in 0..=catalog.modules().len() {
         let graph = resolve(&selected, catalog.modules())?;
         let mut added = false;
+        effective.clear();
         for module in &graph.nodes {
-            for demand in module.needs() {
+            let knobs = resolve_knobs_of(module.as_ref(), selection)?;
+            let demands = module.needs_in(&knobs).into_owned();
+            for demand in &demands {
                 let provider = choose_provider(
                     ctx,
                     catalog,
@@ -80,6 +86,7 @@ pub(super) fn resolve_with_demands(
                     added = true;
                 }
             }
+            effective.insert(module.id().clone(), demands);
         }
         // Environment-level extra resources have no consuming module, so they add their
         // provider to the selection (becoming a graph node) but contribute no dependency
@@ -97,7 +104,9 @@ pub(super) fn resolve_with_demands(
         if !added {
             // Final resolve with the demand edges threaded in, so providers start before
             // the consumers that demand their resources.
-            return resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into);
+            return resolve_with(&selected, catalog.modules(), &demand_edges)
+                .map(|graph| graph.with_demands(effective))
+                .map_err(Into::into);
         }
     }
     // Unreachable in practice (the loop bound exceeds the max modules addable).
@@ -255,7 +264,7 @@ pub(super) fn resolve_demand_providers(
 ) -> Result<ChosenProviders, PlanError> {
     let mut chosen = ChosenProviders::new();
     for module in &graph.nodes {
-        for (idx, demand) in module.needs().iter().enumerate() {
+        for (idx, demand) in graph.needs(module.id()).iter().enumerate() {
             let provider_id = choose_provider(
                 ctx,
                 catalog,
@@ -317,7 +326,7 @@ pub(super) fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanEr
         graph
             .nodes
             .iter()
-            .flat_map(|m| m.needs())
+            .flat_map(|m| graph.needs(m.id()))
             .any(|d| d.resource == role)
     };
     for (role, mut providers) in provisioning
@@ -367,7 +376,7 @@ pub(super) fn provisioned_by_provider(
         }
     };
     for module in &graph.nodes {
-        for (idx, demand) in module.needs().iter().enumerate() {
+        for (idx, demand) in graph.needs(module.id()).iter().enumerate() {
             add(
                 chosen[&(module.id().clone(), idx)].provider.clone(),
                 &demand.name,

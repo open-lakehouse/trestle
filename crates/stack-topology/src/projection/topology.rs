@@ -455,7 +455,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
     // (provider, resource name) → (kind, consumers), from the demands.
     let mut consumers_of: BTreeMap<(String, String), (String, Vec<String>)> = BTreeMap::new();
     for module in &plan.graph.nodes {
-        for (idx, demand) in module.needs().iter().enumerate() {
+        for (idx, demand) in plan.graph.needs(module.id()).iter().enumerate() {
             let Some(provider) = plan.graph.edges.iter().find_map(|e| {
                 (e.from == *module.id())
                     .then(|| plan.graph.module(&e.to))
