@@ -9,7 +9,7 @@ static_resources:
       address:
         socket_address: { address: 0.0.0.0, port_value: {{ l.internal_port }} }
 {%- if l.ext_authz and secure %}
-      # Under forward-auth the shared listener speaks both HTTPS (host-side callers, on the
+      # Under forward-auth a gated listener speaks both HTTPS (host-side callers, on the
       # `*.localhost` origin the auth provider issues sessions for) and plain HTTP (in-network
       # callers, on the dotted network alias). The TLS inspector picks the filter chain.
       listener_filters:
@@ -26,7 +26,7 @@ static_resources:
                 tls_certificates:
                   - certificate_chain: { filename: {{ secure.cert_chain }} }
                     private_key: { filename: {{ secure.private_key }} }
-          filters: &shared_filters
+          filters: &{{ 'shared' if loop.first else l.name }}_filters
 {%- else %}
       filter_chains:
         - filters:
@@ -111,7 +111,7 @@ static_resources:
 {%- for h in auth.identity_headers %}
                           - remove: "{{ h }}"
 {%- endfor %}
-                  # Forward-auth: every request on this (shared) listener is checked with the
+                  # Forward-auth: every request on this (gated) listener is checked with the
                   # auth provider first. Both browser sessions (cookie) and API clients
                   # (Authorization / Proxy-Authorization header) are supported — the provider
                   # decides which applies. On allow it returns the trusted Remote-* identity
@@ -176,7 +176,7 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 {%- if l.ext_authz and secure %}
         # Plain HTTP from in-network callers: the same filters, without TLS.
-        - filters: *shared_filters
+        - filters: *{{ 'shared' if loop.first else l.name }}_filters
 {%- endif %}
 {%- endfor %}
 {%- if tls %}

@@ -50,6 +50,10 @@ pub struct ListenerConfig {
     pub internal_port: u16,
     /// The routes on this listener, most-specific-first (Envoy match priority).
     pub routes: Vec<GatewayRoute>,
+    /// Whether this listener is behind the gateway's sign-in when forward-auth is on. Always
+    /// true for the shared listener; a dedicated one follows its endpoint's
+    /// [`RouteOptions::gated`](crate::RouteOptions::gated).
+    pub gated: bool,
 }
 
 /// The gateway knob key that turns on forward-auth. A bool knob with this key, declared on

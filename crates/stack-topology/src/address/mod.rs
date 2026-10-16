@@ -250,6 +250,16 @@ fn gateway_target(
             };
             (scheme, host, port)
         }
+        // A gated dedicated listener under forward-auth serves the shared listener's secure
+        // origin (same hosts and scheme), on its own port.
+        (_, Listener::Dedicated { port }) if endpoint.route.gated && facts.secure.is_some() => {
+            let (listener_scheme, host, _) = facts.shared_listener(from);
+            let scheme = match (endpoint.scheme, listener_scheme) {
+                (Scheme::Http, Scheme::Https) => Scheme::Https,
+                (scheme, _) => scheme,
+            };
+            (scheme, host, *port)
+        }
         // From inside the compose network, the gateway is just another container: a
         // dedicated listener listens on its declared port (we control both ends, so no remap).
         (Vantage::Container, Listener::Dedicated { port }) => {

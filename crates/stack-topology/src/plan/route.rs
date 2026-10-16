@@ -186,6 +186,7 @@ pub(super) fn route(
                                 rewrite: None,
                                 options: endpoint.route.clone(),
                             }],
+                            gated: endpoint.route.gated,
                         });
                         routes.assign(
                             &service.name,
@@ -225,6 +226,7 @@ pub(super) fn route(
         host_port: ctx.gateway_host_port,
         internal_port: ctx.gateway_internal_port,
         routes: shared_routes,
+        gated: true,
     });
     gateway.listeners.extend(dedicated);
 

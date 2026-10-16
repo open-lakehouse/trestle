@@ -305,7 +305,9 @@ from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `
   `opa test policies/`, and roll them out with `--set opa.dry_run=true` first: every
   request is allowed and each decision is logged (`docker compose logs opa`).
 
-Resource backends on dedicated listeners (object stores) are never gated.
+Dedicated listeners are not gated by default: resource backends (object stores) and UIs with
+their own login (PuppyGraph) stay open. An endpoint opts in with `RouteOptions::gated`
+(`rivers` does): its listener then gets the same forward-auth and HTTPS as the shared one.
 
 ## Seeing the rendered output
 

@@ -330,6 +330,7 @@ fn probe_module() -> std::sync::Arc<dyn olai_stack_topology::Module> {
                     RouteOptions {
                         streaming: true,
                         strip_client_credentials: true,
+                        ..RouteOptions::default()
                     },
                 ),
             ],

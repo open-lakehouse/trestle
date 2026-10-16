@@ -7,7 +7,7 @@ static_resources:
     - name: gateway
       address:
         socket_address: { address: 0.0.0.0, port_value: 10000 }
-      # Under forward-auth the shared listener speaks both HTTPS (host-side callers, on the
+      # Under forward-auth a gated listener speaks both HTTPS (host-side callers, on the
       # `*.localhost` origin the auth provider issues sessions for) and plain HTTP (in-network
       # callers, on the dotted network alias). The TLS inspector picks the filter chain.
       listener_filters:
@@ -111,7 +111,7 @@ static_resources:
                           - remove: "Remote-Email"
                           - remove: "Remote-Name"
                           - remove: "Remote-Groups"
-                  # Forward-auth: every request on this (shared) listener is checked with the
+                  # Forward-auth: every request on this (gated) listener is checked with the
                   # auth provider first. Both browser sessions (cookie) and API clients
                   # (Authorization / Proxy-Authorization header) are supported — the provider
                   # decides which applies. On allow it returns the trusted Remote-* identity

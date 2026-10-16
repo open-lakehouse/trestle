@@ -166,9 +166,10 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
                     strip_client_credentials: r.options.strip_client_credentials,
                 })
                 .collect(),
-            // Only the shared listener is gated: it carries the API/UI routes. Dedicated
-            // listeners front resource backends (gatewayed object stores) and stay open.
-            ext_authz: i == 0 && gateway.auth.is_some(),
+            // The shared listener is gated: it carries the API/UI routes. Dedicated listeners
+            // front resource backends (gatewayed object stores) or UIs with their own login, and
+            // stay open unless their endpoint asks for the sign-in.
+            ext_authz: (i == 0 || l.gated) && gateway.auth.is_some(),
         })
         .collect();
     if listeners.is_empty() {

@@ -122,8 +122,9 @@ pub enum Rewrite {
 
 /// How the gateway treats the requests it forwards to an endpoint, beyond where they go.
 ///
-/// Both options default off, so an endpoint that doesn't ask for them is routed exactly as
-/// before. They apply wherever the endpoint is fronted (its shared-listener route).
+/// Every option defaults off, so an endpoint that doesn't ask for them is routed exactly as
+/// before. They apply wherever the endpoint is fronted (its shared-listener route, or its
+/// dedicated listener).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteOptions {
     /// The endpoint holds requests open (server-sent events, streamed model output, long
@@ -135,6 +136,13 @@ pub struct RouteOptions {
     /// `Authorization` / `x-api-key` before forwarding rather than letting it shadow them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strip_client_credentials: bool,
+    /// The endpoint's [dedicated listener](RouteIntent::UiFixed) sits behind the gateway's
+    /// sign-in when forward-auth is on, like the shared listener: requests are checked with the
+    /// auth provider and arrive carrying its asserted identity headers. Off, a dedicated
+    /// listener stays open (it fronts a backend with its own login, or an object store). Has
+    /// no effect on a shared-listener route, which is always gated under forward-auth.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gated: bool,
 }
 
 impl RouteOptions {
@@ -297,6 +305,13 @@ impl Endpoint {
     /// caller credentials on its route.
     pub(crate) fn strip_client_credentials(mut self) -> Endpoint {
         self.route.strip_client_credentials = true;
+        self
+    }
+
+    /// This endpoint with [`RouteOptions::gated`] set: its dedicated listener is behind the
+    /// gateway's sign-in when forward-auth is on.
+    pub(crate) fn gated(mut self) -> Endpoint {
+        self.route.gated = true;
         self
     }
 }
