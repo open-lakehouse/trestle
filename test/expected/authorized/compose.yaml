@@ -31,6 +31,10 @@ configs:
     file: ./modules/postgres/init-databases.sh
   rustfs_sts_shim:
     file: ./modules/rustfs/sts_shim.py
+  unitycatalog_bootstrap_storage:
+    file: ./modules/unity-catalog/bootstrap_storage.py
+  unitycatalog_storage:
+    file: ./modules/unity-catalog/storage.txt
 
 secrets:
   authelia_jwt_secret:

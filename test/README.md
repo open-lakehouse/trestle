@@ -57,7 +57,9 @@ host client ──http://localhost:9100 (AWS_ENDPOINT_URL)──▶ envoy :9100 
 - The gateway holds every emulated hostname as a network alias (one per bucket, since
   Compose DNS has no wildcards) and terminates TLS with a CA minted by the one-shot
   `gateway-certs` service into the `gateway-certs` volume.
-- UC gets a real-AWS `server.properties` (bucket, region, role ARN, keys; no endpoint) and
+- UC's `server.properties` holds only its real-AWS master identity (keys, region, role ARN;
+  no endpoint). The `unitycatalog-storage` helper registers each bucket in UC's database as
+  a storage credential and an external location, and turns healthy once it's done. UC
   trusts the CA through `JAVA_TOOL_OPTIONS`. Other in-network clients that should use the
   AWS names must trust it too: `AWS_CA_BUNDLE=/certs/ca.pem` (botocore) or
   `SSL_CERT_FILE=/certs/ca.pem` (object_store, obstore, delta-rs), with the volume mounted.

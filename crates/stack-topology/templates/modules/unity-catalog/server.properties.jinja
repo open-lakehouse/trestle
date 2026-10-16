@@ -2,20 +2,20 @@
 # this configuration for a shared server.
 server.env=dev
 server.authorization=disable
-{%- for obj in connections.object_store %}
-{%- if obj.credential.flavour == "s3" %}
+{%- set obj = connections.object_store[0] if connections.object_store else none %}
+{%- if obj and obj.credential.flavour == "s3" %}
 
-# The same per-bucket config you'd write for real AWS: no endpoint override.
-s3.bucketPath.{{ loop.index0 }}={{ obj.uri }}
-s3.region.{{ loop.index0 }}={{ obj.credential.region }}
+# The master identity UC signs AWS calls with: it assumes a storage credential's role to vend
+# temporary credentials. The storage itself (credentials, external locations) is registered in
+# UC's database, not here. No endpoint override, which UC doesn't support.
+aws.accessKey={{ obj.credential.access_key_id }}
+aws.secretKey={{ obj.credential.secret_access_key }}
+aws.region={{ obj.credential.region }}
 {%- if obj.credential.role_arn %}
-s3.awsRoleArn.{{ loop.index0 }}={{ obj.credential.role_arn }}
+aws.masterRoleArn={{ obj.credential.role_arn }}
 {%- endif %}
-s3.accessKey.{{ loop.index0 }}={{ obj.credential.access_key_id }}
-s3.secretKey.{{ loop.index0 }}={{ obj.credential.secret_access_key }}
-{%- else %}
+{%- elif obj %}
 
 # {{ obj.uri }}: Unity Catalog's adls.* storage config needs a service principal, which a
 # local emulator can't provide, so this store is not registered for credential vending.
 {%- endif %}
-{%- endfor %}

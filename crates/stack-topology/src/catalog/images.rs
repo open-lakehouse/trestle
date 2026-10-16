@@ -29,6 +29,8 @@ pub const AZURITE_INIT: &str = "mcr.microsoft.com/azure-cli:2.87.0";
 pub const MLFLOW: &str = "ghcr.io/mlflow/mlflow:v3.17.0-full";
 /// Unity Catalog server.
 pub const UNITY_CATALOG: &str = "unitycatalog/unitycatalog:v0.6.0";
+/// The Python runtime for Unity Catalog's storage registration helper (stdlib only).
+pub const UNITY_CATALOG_STORAGE: &str = "python:3.13-alpine";
 /// Jaeger all-in-one tracing backend.
 pub const JAEGER: &str = "cr.jaegertracing.io/jaegertracing/jaeger:2.14.1";
 /// Open Policy Agent with the Envoy ext_authz plugin (the multi-arch `-static` build).

@@ -405,7 +405,13 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     // on the chosen object-store credential flavour. Select UC + its hard `requires` only,
     // letting the object_store demand resolve via the catalog default / `ctx` preference (so
     // the chosen provider is unambiguous).
-    let uc_render = |ctx: PlanCtx| -> (String, String) {
+    let file_of = |out: &olai_stack_topology::RenderOutput, suffix: &str| -> Option<String> {
+        out.files
+            .iter()
+            .find(|file| file.path.ends_with(suffix))
+            .map(|file| file.contents.clone())
+    };
+    let uc_render = |ctx: PlanCtx| -> (String, String, Option<String>) {
         let sel = Selection::modules(["unity-catalog"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
         let (_, out) = olai_stack_topology::render_all(&p)
@@ -417,19 +423,15 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         // Valid YAML in either branch.
         let _: Value =
             serde_yaml::from_str(&out.fragment).expect("rendered UC fragment must be valid YAML");
-        let props = out
-            .files
-            .iter()
-            .find(|file| file.path.ends_with("/secrets/server.properties"))
-            .expect("UC server.properties")
-            .contents
-            .clone();
-        (out.fragment.clone(), props)
+        let props = file_of(&out, "/secrets/server.properties").expect("UC server.properties");
+        let storage = file_of(&out, "/storage.txt");
+        (out.fragment.clone(), props, storage)
     };
 
-    // Default → RustFS (S3): the real-AWS per-bucket keys with the store's role (no endpoint
-    // override, which UC lacks), a `rustfs-init` dependency, and the gateway's CA trusted.
-    let (s3, s3_props) = uc_render(PlanCtx::default());
+    // Default → RustFS (S3): the master identity with the store's role (no endpoint override,
+    // which UC lacks), the bucket registered through the API, a `rustfs-init` dependency, and
+    // the gateway's CA trusted.
+    let (s3, s3_props, s3_storage) = uc_render(PlanCtx::default());
     let s3_yaml: Value = serde_yaml::from_str(&s3).expect("valid YAML");
     let uc = &s3_yaml["services"]["unitycatalog"];
     assert!(
@@ -465,17 +467,29 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         "keys stay out of the fragment: {s3}"
     );
     for line in [
-        "s3.bucketPath.0=s3://unity",
-        "s3.region.0=us-east-1",
-        "s3.awsRoleArn.0=arn:aws:iam::000000000000:role/local-storage",
-        "s3.accessKey.0=rustfs-root",
-        "s3.secretKey.0=rustfs-root-secret",
+        "aws.accessKey=rustfs-root",
+        "aws.secretKey=rustfs-root-secret",
+        "aws.region=us-east-1",
+        "aws.masterRoleArn=arn:aws:iam::000000000000:role/local-storage",
     ] {
         assert!(
             s3_props.lines().any(|l| l == line),
             "missing `{line}`: {s3_props}"
         );
     }
+    assert!(!s3_props.contains("s3."), "no per-bucket keys: {s3_props}");
+    let s3_storage = s3_storage.expect("storage.txt under S3");
+    assert!(
+        s3_storage.lines().any(|l| l
+            == "location unity s3://unity unity_storage arn:aws:iam::000000000000:role/local-storage"),
+        "the bucket is registered: {s3_storage}"
+    );
+    assert_eq!(
+        s3_yaml["services"]["unitycatalog-storage"]["depends_on"]["unitycatalog"]["condition"]
+            .as_str(),
+        Some("service_healthy"),
+        "registration waits for the server: {s3}"
+    );
     assert!(
         !s3_props
             .lines()
@@ -490,7 +504,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         "object_store".to_string(),
         vec![ModuleId::from("azurite"), ModuleId::from("rustfs")],
     );
-    let (azure, azure_props) = uc_render(PlanCtx {
+    let (azure, azure_props, azure_storage) = uc_render(PlanCtx {
         provider_preference: preference,
         ..Default::default()
     });
@@ -510,8 +524,13 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
     );
     assert!(azure_props.contains("server.authorization=disable"));
     assert!(
-        !azure_props.contains("s3.") && !azure_props.contains("AccountKey"),
-        "no S3 entries or Azure keys: {azure_props}"
+        !azure_props.contains("aws.") && !azure_props.contains("AccountKey"),
+        "no AWS identity or Azure keys: {azure_props}"
+    );
+    let azure_storage = azure_storage.expect("storage.txt under Azure");
+    assert!(
+        !azure_storage.lines().any(|l| l.starts_with("location")),
+        "nothing to register without an IAM role: {azure_storage}"
     );
 }
 
@@ -1028,7 +1047,7 @@ fn headwaters_ui_knob_override_turns_off_the_ui() {
 }
 
 #[test]
-fn headwaters_runs_migrations_in_an_init_job_before_serve() {
+fn headwaters_runs_migrations_in_an_storage_helper_before_serve() {
     use olai_stack_topology::ModuleId;
 
     // Headwaters' `serve` refuses to start against a schema that is behind, so the fragment
@@ -1078,7 +1097,7 @@ fn headwaters_runs_migrations_in_an_init_job_before_serve() {
 }
 
 #[test]
-fn extra_resources_are_created_by_the_provider_init_jobs() {
+fn extra_resources_are_created_by_the_provider_storage_helpers() {
     use olai_stack_topology::{ExtraResource, ModuleId};
 
     // An operator declares an extra database and an extra bucket no module consumes — for a

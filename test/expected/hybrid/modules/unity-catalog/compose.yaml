@@ -20,3 +20,25 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  # Registers the object store in UC's database (a storage credential and an external location
+  # per bucket, plus `default_catalog`), so server.properties carries only the master identity.
+  # It stays up and turns healthy once done, so `up --wait` waits for registration too.
+  unitycatalog-storage:
+    image: python:3.13-alpine
+    init: true
+    restart: "no"
+    command: ["python", "/bootstrap_storage.py"]
+    configs:
+      - source: unitycatalog_bootstrap_storage
+        target: /bootstrap_storage.py
+      - source: unitycatalog_storage
+        target: /storage.txt
+    depends_on:
+      unitycatalog:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/registered"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

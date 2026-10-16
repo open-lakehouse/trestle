@@ -1126,24 +1126,31 @@ impl Module for Mlflow {
 /// Unity Catalog's compose service, and the port its REST API listens on in the container.
 /// Shared with consumers that call UC directly on the compose network (see [`puppygraph`]).
 const UNITY_CATALOG_SERVICE: &str = "unitycatalog";
+/// The helper that registers the stack's object stores in Unity Catalog's database, then
+/// stays up (healthy) so `up --wait` covers it.
+const UNITY_CATALOG_STORAGE: &str = "unitycatalog-storage";
 const UNITY_CATALOG_PORT: u16 = 8080;
 
 /// `unity-catalog` — the data catalog.
 /// Databricks-shaped path at root, so `/api/2.1/unity-catalog` fronts with no rewrite;
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
-    let mut provides = Provides::default();
+    let mut provides = Provides {
+        helpers: vec![HelperService::sidecar(UNITY_CATALOG_STORAGE)],
+        ..Provides::default()
+    };
     provides.client_env.insert(
         "UNITY_CATALOG_URL".into(),
         ClientValue::endpoint(UNITY_CATALOG_SERVICE, "rest", UrlPart::Full),
     );
-    // UC reads its storage config from a rendered `server.properties` and its metadata-store
-    // config from a rendered `hibernate.properties` (both mounted as secrets: they carry keys
-    // and a password). They read the typed connections directly, so this module injects no env
-    // vars of its own. The S3 entries are what you'd write for
-    // real AWS — no endpoint override, which UC doesn't support — so the store must answer the
-    // AWS hostnames itself (see `rustfs`), and the fragment trusts the gateway's local CA when
-    // the connection carries a `tls_trust`.
+    // UC reads its master AWS identity from a rendered `server.properties` and its
+    // metadata-store config from a rendered `hibernate.properties` (both mounted as secrets:
+    // they carry keys and a password). Storage is registered in UC's database instead: with
+    // `storage_bootstrap = api`, the `unitycatalog-storage` helper creates a storage credential and
+    // an external location per S3 bucket. The templates read the typed connections directly,
+    // so this module injects no env vars of its own. There is no endpoint override, which UC
+    // doesn't support, so the store must answer the AWS hostnames itself (see `rustfs`), and
+    // the fragment trusts the gateway's local CA when the connection carries a `tls_trust`.
 
     Arc::new(UnityCatalog(DataModule {
         id: ModuleId::from("unity-catalog"),
@@ -1208,6 +1215,35 @@ fn unity_catalog() -> Arc<dyn Module> {
                 images::UNITY_CATALOG,
                 "UC_IMAGE",
             ),
+            image_knob(
+                "storage_image",
+                "Unity Catalog storage registration image",
+                images::UNITY_CATALOG_STORAGE,
+                "UC_STORAGE_IMAGE",
+            ),
+            Knob {
+                key: "storage_bootstrap".into(),
+                title: Some("Storage registration".into()),
+                kind: KnobKind::Enum {
+                    options: vec!["api".into(), "none".into()],
+                },
+                default: Some("api".into()),
+                required: false,
+                help: Some(
+                    "`api` registers a storage credential and an external location per S3 \
+                     bucket through UC's API once the server is up. `none` leaves storage \
+                     unregistered, for docs and tests that register it themselves."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
+            optional_string_knob(
+                "default_catalog",
+                "Default catalog",
+                "Also create this catalog, with managed storage under the first registered \
+                 bucket. Needs `storage_bootstrap = api`.",
+            ),
             Knob {
                 key: "embedded_metadata".into(),
                 title: Some("Embedded metadata".into()),
@@ -1258,6 +1294,19 @@ fn unity_catalog() -> Arc<dyn Module> {
                         "../../templates/modules/unity-catalog/hibernate.properties.jinja"
                     ),
                 ),
+                // What `unitycatalog-storage` registers (no secrets: names, URLs, role ARNs).
+                config_file(
+                    "storage.txt",
+                    "unitycatalog_storage",
+                    include_str!("../../templates/modules/unity-catalog/storage.txt.jinja"),
+                ),
+                config_file(
+                    "bootstrap_storage.py",
+                    "unitycatalog_bootstrap_storage",
+                    include_str!(
+                        "../../templates/modules/unity-catalog/bootstrap_storage.py.jinja"
+                    ),
+                ),
             ],
         )
         .for_compose(),
@@ -1285,6 +1334,11 @@ struct UnityCatalog(DataModule);
 impl UnityCatalog {
     fn embedded(knobs: &ResolvedKnobs) -> bool {
         knobs.get("embedded_metadata") == Some("true")
+    }
+
+    /// Whether `unitycatalog-storage` runs: an object store to register, and registration on.
+    fn registers_storage(knobs: &ResolvedKnobs) -> bool {
+        !Self::embedded(knobs) && knobs.get("storage_bootstrap") == Some("api")
     }
 }
 
@@ -1354,6 +1408,26 @@ impl Module for UnityCatalog {
                 }
             }
         }
+        if let Some(catalog) = knobs.get("default_catalog") {
+            let mut chars = catalog.chars();
+            let valid = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !valid {
+                return Err(KnobRejection::new(
+                    "default_catalog",
+                    "must be letters, digits, and `_`, not starting with a digit",
+                ));
+            }
+            if !Self::registers_storage(knobs) {
+                return Err(KnobRejection::new(
+                    "default_catalog",
+                    "needs `storage_bootstrap = api` and an object store \
+                     (not `embedded_metadata`)",
+                ));
+            }
+        }
         if let Some(context) = knobs.get("build") {
             let path = std::path::Path::new(context);
             let escapes = path
@@ -1373,6 +1447,13 @@ impl Module for UnityCatalog {
     }
     fn provides(&self) -> &Provides {
         self.0.provides()
+    }
+    fn helpers_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [HelperService]> {
+        if Self::registers_storage(knobs) {
+            Cow::Borrowed(&self.0.provides().helpers)
+        } else {
+            Cow::Borrowed(&[])
+        }
     }
     fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
         self.0.render_for(target)

@@ -144,3 +144,70 @@ fn invalid_knob_values_are_rejected() {
         assert_eq!(got, key, "{key} = {value:?}");
     }
 }
+
+fn compose(plan: &Plan) -> serde_yaml::Value {
+    serde_yaml::from_str(&files(plan)["modules/unity-catalog/compose.yaml"]).unwrap()
+}
+
+#[test]
+fn storage_is_registered_through_the_api_by_default() {
+    let plan = plan_with(&[("default_catalog", "main")]).unwrap();
+    let init = &compose(&plan)["services"]["unitycatalog-storage"];
+    assert_eq!(init["image"], "python:3.13-alpine");
+    let files = files(&plan);
+    let storage = &files["modules/unity-catalog/storage.txt"];
+    let entries: Vec<&str> = storage.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(
+        entries,
+        [
+            "location unity s3://unity unity_storage arn:aws:iam::000000000000:role/local-storage",
+            "catalog main",
+        ]
+    );
+    assert!(files.contains_key("modules/unity-catalog/bootstrap_storage.py"));
+    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    assert!(!props.contains("s3."), "{props}");
+    assert!(props.contains("aws.accessKey="), "{props}");
+}
+
+#[test]
+fn storage_bootstrap_none_renders_no_storage_helper() {
+    let plan = plan_with(&[("storage_bootstrap", "none")]).unwrap();
+    assert!(
+        compose(&plan)["services"]
+            .get("unitycatalog-storage")
+            .is_none()
+    );
+    let files = files(&plan);
+    assert!(!files.contains_key("modules/unity-catalog/storage.txt"));
+    assert!(!files.contains_key("modules/unity-catalog/bootstrap_storage.py"));
+    // The master identity stays: storage credentials created later still vend.
+    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    assert!(props.contains("aws.masterRoleArn="), "{props}");
+}
+
+#[test]
+fn embedded_metadata_renders_no_storage_helper() {
+    let plan = plan_with(&[("embedded_metadata", "true")]).unwrap();
+    assert!(
+        compose(&plan)["services"]
+            .get("unitycatalog-storage")
+            .is_none()
+    );
+    assert!(!files(&plan).contains_key("modules/unity-catalog/storage.txt"));
+}
+
+#[test]
+fn default_catalog_needs_api_registration_and_a_valid_name() {
+    for knobs in [
+        &[("default_catalog", "main"), ("storage_bootstrap", "none")][..],
+        &[("default_catalog", "main"), ("embedded_metadata", "true")],
+        &[("default_catalog", "1st")],
+        &[("default_catalog", "has-dash")],
+    ] {
+        let err = plan_with(knobs).unwrap_err();
+        assert_eq!(rejected_key(err), "default_catalog", "{knobs:?}");
+    }
+    let err = plan_with(&[("storage_bootstrap", "properties")]).unwrap_err();
+    assert!(matches!(err, PlanError::InvalidKnobValue { .. }), "{err:?}");
+}

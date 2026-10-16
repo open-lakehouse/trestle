@@ -13,6 +13,10 @@ configs:
     file: ./modules/mlflow/uc-registry/METADATA
   mlflow_uc_registry_module:
     file: ./modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py
+  unitycatalog_bootstrap_storage:
+    file: ./modules/unity-catalog/bootstrap_storage.py
+  unitycatalog_storage:
+    file: ./modules/unity-catalog/storage.txt
 
 secrets:
   unitycatalog_hibernate_properties:
