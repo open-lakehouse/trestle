@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/open-lakehouse/trestle/crates/stack-topology/schema/catalog.v1.schema.json",
+  "title": "trestle module catalog, version 1",
+  "description": "The module catalog an environment plans against, as `trestle env list-modules --json` prints it. `generator` and `catalog` match the provenance a plan.json records. Optional fields may be added without a version bump; anything a reader could misread bumps `version`.",
+  "type": "object",
+  "required": ["format", "version", "generator", "catalog", "modules", "default_selection", "targets"],
+  "properties": {
+    "format": { "const": "trestle-catalog" },
+    "version": { "const": 1 },
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "revision": { "type": "string" }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "required": ["baseline", "manifests", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "baseline": { "type": "string" },
+        "manifests": {
+          "description": "Module manifests merged over the baseline, relative to the recipe.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/module" }
+    },
+    "default_selection": { "type": "object" },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "nullableString": { "type": ["string", "null"] },
+    "module": {
+      "type": "object",
+      "required": ["id", "model", "provider_of", "requires", "knobs", "helpers"],
+      "properties": {
+        "id": { "type": "string" },
+        "model": {
+          "description": "The architecture-model element the module is, or null.",
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" }
+          ]
+        },
+        "display_name": { "$ref": "#/$defs/nullableString" },
+        "summary": { "$ref": "#/$defs/nullableString" },
+        "category": { "$ref": "#/$defs/nullableString" },
+        "provider_of": {
+          "description": "The role the module provides, or null.",
+          "$ref": "#/$defs/nullableString"
+        },
+        "requires": { "type": "array", "items": { "type": "string" } },
+        "conflicts_with": { "type": "array", "items": { "type": "string" } },
+        "resource_kinds": { "type": "array", "items": { "type": "string" } },
+        "knobs": { "type": "array", "items": { "$ref": "#/$defs/knob" } },
+        "helpers": {
+          "description": "Containers the module may run beside its services. Which ones run can depend on its knobs; a plan.json lists the ones that do.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "kind"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "kind": { "enum": ["init", "sidecar"] }
+            }
+          }
+        }
+      }
+    },
+    "knob": {
+      "type": "object",
+      "required": ["key", "kind"],
+      "properties": {
+        "key": { "type": "string" },
+        "title": { "type": "string" },
+        "kind": {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "enum": ["string", "bool", "enum", "integer", "port"] } }
+        },
+        "default": { "type": "string" },
+        "required": { "type": "boolean" },
+        "help": { "type": "string" },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "advanced": { "type": "boolean" }
+      }
+    }
+  }
+}

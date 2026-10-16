@@ -23,9 +23,8 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
-use olai_stack_topology::projection::catalog_dto_of;
 use olai_stack_topology::projection::export::{
-    CatalogIdentity, ExportMeta, Generator, catalog_identity, plan_export, plan_export_json,
+    ExportMeta, Generator, catalog_export, catalog_export_json, plan_export, plan_export_json,
 };
 use olai_stack_topology::{
     Catalog, EnvManifest, GatewaySettings, Knob, KnobKind, ManifestError, ModuleId, PlanCtx,
@@ -666,20 +665,10 @@ fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
         None => (baseline_catalog(), Vec::new()),
     };
     if args.json {
-        #[derive(serde::Serialize)]
-        struct Listing {
-            catalog: CatalogIdentity,
-            #[serde(flatten)]
-            projection: olai_stack_topology::projection::CatalogDto,
-        }
-        let listing = catalog_identity(&catalog, &manifests, &export_meta())
-            .map(|identity| Listing {
-                catalog: identity,
-                projection: catalog_dto_of(&catalog),
-            })
-            .and_then(|listing| serde_json::to_string_pretty(&listing))
+        let listing = catalog_export(&catalog, &manifests, &export_meta())
+            .and_then(|export| catalog_export_json(&export))
             .map_err(|e| Error::other(format!("serializing the catalog: {e}")))?;
-        println!("{listing}");
+        print!("{listing}");
         return Ok(());
     }
     for module in catalog.modules() {

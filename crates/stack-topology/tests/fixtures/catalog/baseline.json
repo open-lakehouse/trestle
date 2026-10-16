@@ -1,0 +1,945 @@
+{
+  "format": "trestle-catalog",
+  "version": 1,
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test",
+    "revision": "0000000000000000000000000000000000000000"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:016e13cfd9b80c046682b8622084d50964c9dd82ac4ee86af4be39d1ade9b52a"
+  },
+  "modules": [
+    {
+      "id": "envoy",
+      "model": "envoy",
+      "display_name": "Envoy",
+      "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+      "category": "gateway",
+      "provider_of": "gateway",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Envoy image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "envoyproxy/envoy:v1.34-latest",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "ENVOY_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "certs_image",
+          "title": "Certificate minting image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "eclipse-temurin:17-jdk-noble",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "GATEWAY_CERTS_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "gateway-certs",
+          "kind": "init"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "authelia",
+      "model": "authelia",
+      "display_name": "Authelia",
+      "summary": "Forward-auth single-sign-on for the gateway (file-based).",
+      "category": "gateway",
+      "provider_of": "auth",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Authelia image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/authelia/authelia:4.39",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "AUTHELIA_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "postgres",
+      "model": "postgresql",
+      "display_name": "Postgres",
+      "summary": "Postgres 16; auto-creates DBs other modules declare.",
+      "category": "metadata_db",
+      "provider_of": "relational_db",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "relational_db"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "relational_db",
+          "singular": "database",
+          "plural": "databases"
+        }
+      ],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Postgres image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "postgres:16",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "POSTGRES_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "rustfs",
+      "model": "rustfs",
+      "display_name": "RustFS",
+      "summary": "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
+      "category": "storage",
+      "provider_of": "object_store",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "object_store"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "object_store",
+          "singular": "bucket",
+          "plural": "buckets"
+        }
+      ],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "RustFS image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "rustfs/rustfs:1.0.1",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "RUSTFS_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "init_image",
+          "title": "RustFS init image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "amazon/aws-cli:latest",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "RUSTFS_INIT_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "sts_shim_image",
+          "title": "STS shim image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "python:3.13-alpine",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "STS_SHIM_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "generic_endpoint_env",
+          "title": "Generic endpoint variables",
+          "kind": {
+            "kind": "bool"
+          },
+          "default": "false",
+          "required": false,
+          "help": "Also give clients `AWS_ENDPOINT_URL` and `AWS_ALLOW_HTTP=true`, for tools that don't read `AWS_ENDPOINT_URL_S3`. Off by default: a global endpoint also redirects every AWS SDK client's STS calls.",
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "sts-shim",
+          "kind": "sidecar"
+        },
+        {
+          "name": "rustfs-init",
+          "kind": "init"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "azurite",
+      "model": "azurite",
+      "display_name": "Azurite",
+      "summary": "Azure Blob emulator; object store with Azure-shaped wiring.",
+      "category": "storage",
+      "provider_of": "object_store",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "object_store"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "object_store",
+          "singular": "container",
+          "plural": "containers"
+        }
+      ],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Azurite image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "mcr.microsoft.com/azure-storage/azurite:3.35.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "AZURITE_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "init_image",
+          "title": "Azurite init image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "mcr.microsoft.com/azure-cli:2.87.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "AZURITE_INIT_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "azurite-init",
+          "kind": "init"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "hosted-postgres",
+      "model": "postgresql",
+      "display_name": "Hosted Postgres",
+      "summary": "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
+      "category": "metadata_db",
+      "provider_of": "relational_db",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "relational_db"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "relational_db",
+          "singular": "database",
+          "plural": "databases"
+        }
+      ],
+      "knobs": [],
+      "helpers": [],
+      "hosted": {
+        "kind": "postgres",
+        "default": {
+          "connection": {
+            "kind": "postgres",
+            "host": "${PGHOST}",
+            "port": 5432,
+            "database": "{name}",
+            "username": "${PGUSER}",
+            "password": "${PGPASSWORD}"
+          }
+        }
+      }
+    },
+    {
+      "id": "aws-s3",
+      "model": "amazonS3",
+      "display_name": "Amazon S3",
+      "summary": "Amazon S3 or an S3-compatible store; buckets must already exist.",
+      "category": "storage",
+      "provider_of": "object_store",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "object_store"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "object_store",
+          "singular": "bucket",
+          "plural": "buckets"
+        }
+      ],
+      "knobs": [],
+      "helpers": [],
+      "hosted": {
+        "kind": "s3",
+        "default": {
+          "cloud": "aws",
+          "connection": {
+            "kind": "s3",
+            "region": "us-east-1",
+            "bucket": "{name}",
+            "access_key_id": "${AWS_ACCESS_KEY_ID}",
+            "secret_access_key": "${AWS_SECRET_ACCESS_KEY}"
+          }
+        }
+      }
+    },
+    {
+      "id": "azure-storage",
+      "model": "azureBlobStorage",
+      "display_name": "Azure Storage",
+      "summary": "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
+      "category": "storage",
+      "provider_of": "object_store",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "object_store"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "object_store",
+          "singular": "container",
+          "plural": "containers"
+        }
+      ],
+      "knobs": [],
+      "helpers": [],
+      "hosted": {
+        "kind": "azure_blob",
+        "default": {
+          "cloud": "azure",
+          "connection": {
+            "kind": "azure_blob",
+            "account": "${AZURE_STORAGE_ACCOUNT}",
+            "container": "{name}",
+            "connection_string": "${AZURE_STORAGE_CONNECTION_STRING}"
+          }
+        }
+      }
+    },
+    {
+      "id": "mlflow",
+      "model": "mlflow",
+      "display_name": "MLflow",
+      "summary": "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
+      "category": "ml",
+      "provider_of": "experiment_tracking",
+      "requires": [
+        "envoy"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "MLflow image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/mlflow/mlflow:v3.17.0-full",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "MLFLOW_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "ai_gateway_models",
+          "title": "AI Gateway models",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5",
+          "required": false,
+          "help": "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A pair is seeded only when its provider key (e.g. ANTHROPIC_API_KEY) is exported before `docker compose up`."
+        },
+        {
+          "key": "uc_url",
+          "title": "Unity Catalog URL",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "http://unitycatalog:8080",
+          "required": false,
+          "help": "Where MLflow reaches Unity Catalog's REST API when both are in the environment, directly on the compose network: MLflow's model registry is then served from Unity Catalog.",
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "mlflow-gateway-init",
+          "kind": "init"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "unity-catalog",
+      "model": "unityCatalogOSS",
+      "display_name": "Unity Catalog",
+      "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
+      "category": "catalog",
+      "provider_of": "data_catalog",
+      "requires": [
+        "envoy"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Unity Catalog image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "unitycatalog/unitycatalog:v0.6.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "UC_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "storage_image",
+          "title": "Unity Catalog storage registration image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "python:3.13-alpine",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "UC_STORAGE_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "storage_bootstrap",
+          "title": "Storage registration",
+          "kind": {
+            "kind": "enum",
+            "options": [
+              "api",
+              "none"
+            ]
+          },
+          "default": "api",
+          "required": false,
+          "help": "`api` registers a storage credential and an external location per S3 bucket through UC's API once the server is up. `none` leaves storage unregistered, for docs and tests that register it themselves.",
+          "advanced": true
+        },
+        {
+          "key": "default_catalog",
+          "title": "Default catalog",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "Also create this catalog, with managed storage under the first registered bucket. Needs `storage_bootstrap = api`.",
+          "advanced": true
+        },
+        {
+          "key": "embedded_metadata",
+          "title": "Embedded metadata",
+          "kind": {
+            "kind": "bool"
+          },
+          "default": "false",
+          "required": false,
+          "help": "Keep metadata in the server's own H2 file and store data on local paths, so the stack runs no relational or object store. Metadata is lost with the container."
+        },
+        {
+          "key": "container_name",
+          "title": "Container name",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "A fixed Docker container name, for `docker exec <name> ...` instructions.",
+          "advanced": true
+        },
+        {
+          "key": "extra_mounts",
+          "title": "Extra mounts",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "More volumes for the server, `;`-separated, each in Compose short syntax (`source:target[:mode]`). Variable interpolation is passed through.",
+          "advanced": true
+        },
+        {
+          "key": "build",
+          "title": "Build context",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "Build the server image from this directory (relative to the rendered compose.yaml) and tag it with the `image` knob.",
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "unitycatalog-storage",
+          "kind": "sidecar"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "jaeger",
+      "model": "jaeger",
+      "display_name": "Jaeger",
+      "summary": "All-in-one OTLP tracing backend with the Jaeger UI.",
+      "category": "observability",
+      "provider_of": "tracing",
+      "requires": [
+        "envoy"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Jaeger image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "cr.jaegertracing.io/jaegertracing/jaeger:2.14.1",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "JAEGER_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "headwaters",
+      "model": "headwaters",
+      "display_name": "Headwaters",
+      "summary": "OpenLineage lineage service; Databricks-style API + optional UI.",
+      "category": "lineage",
+      "provider_of": "lineage",
+      "requires": [
+        "envoy"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "serve_ui",
+          "title": "Serve the lineage UI",
+          "kind": {
+            "kind": "bool"
+          },
+          "default": "true",
+          "required": false,
+          "help": "Serve the bundled lineage web UI. Turn off to run the service API-only (e.g. when embedding a custom UI built on the shipped components).",
+          "aliases": [
+            "HEADWATERS_SERVE_UI"
+          ]
+        },
+        {
+          "key": "image",
+          "title": "Headwaters image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/open-lakehouse/headwaters:0.0.7",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "HEADWATERS_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "headwaters-migrate",
+          "kind": "init"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "omnigent",
+      "model": "omnigent",
+      "display_name": "Omnigent",
+      "summary": "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway.",
+      "category": "agents",
+      "provider_of": "agent_platform",
+      "requires": [
+        "envoy",
+        "mlflow"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "host",
+          "title": "Run an agent host in the stack",
+          "kind": {
+            "kind": "bool"
+          },
+          "default": "true",
+          "required": false,
+          "help": "Run agents in a host container on the stack's network, with the lakehouse's client env and models from MLflow's AI Gateway. Off: attach your own host with `omnigent host $OMNIGENT_URL`. Always off while the gateway authenticates."
+        },
+        {
+          "key": "model",
+          "title": "Agent model",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "claude-opus-5-5",
+          "required": false,
+          "help": "The model agents use by default: an AI Gateway endpoint name (see mlflow.ai_gateway_models)."
+        },
+        {
+          "key": "fast_model",
+          "title": "Background model",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "claude-haiku-5-5",
+          "required": false,
+          "help": "The model harnesses use for quick background calls: an AI Gateway endpoint name."
+        },
+        {
+          "key": "image",
+          "title": "Omnigent server image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/omnigent-ai/omnigent-server:v0.17.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "OMNIGENT_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "host_image",
+          "title": "Omnigent host image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/omnigent-ai/omnigent-host:v0.17.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "OMNIGENT_HOST_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "marimo",
+      "model": "marimo",
+      "display_name": "marimo",
+      "summary": "Hosted marimo editor for the client workspace's notebooks.",
+      "category": "notebooks",
+      "provider_of": "notebooks",
+      "requires": [
+        "envoy"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "marimo runtime image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "MARIMO_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "index_url",
+          "title": "Python package index",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "The package index the editor installs the workspace's packages from (`UV_DEFAULT_INDEX`), e.g. a mirror's `/simple/` URL where PyPI is unreachable. Unset uses PyPI.",
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "puppygraph",
+      "model": "puppygraph",
+      "display_name": "PuppyGraph",
+      "summary": "Graph queries (Cypher, Gremlin) over Unity Catalog tables.",
+      "category": "graph",
+      "provider_of": "graph",
+      "requires": [
+        "envoy",
+        "unity-catalog"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "catalog",
+          "title": "Unity Catalog catalog",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "unity",
+          "required": false,
+          "help": "The UC catalog whose schemas and tables the graph schema maps."
+        },
+        {
+          "key": "uc_url",
+          "title": "Unity Catalog URL",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "http://unitycatalog:8080",
+          "required": false,
+          "help": "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
+          "advanced": true
+        },
+        {
+          "key": "password",
+          "title": "PuppyGraph password",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "puppygraph123",
+          "required": false,
+          "help": "Password of the `puppygraph` user for the web UI, Bolt and Gremlin. A local default; set your own if the ports are reachable by others.",
+          "advanced": true
+        },
+        {
+          "key": "image",
+          "title": "PuppyGraph image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "puppygraph/puppygraph:1.14.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "PUPPYGRAPH_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [
+        {
+          "name": "puppygraph-schema",
+          "kind": "init"
+        }
+      ],
+      "hosted": null
+    },
+    {
+      "id": "rivers",
+      "model": "rivers",
+      "display_name": "Rivers",
+      "summary": "Asset-based orchestration of Python pipelines, with a run UI.",
+      "category": "orchestration",
+      "provider_of": "orchestration",
+      "requires": [
+        "envoy"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "module",
+          "title": "Pipeline module",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "quickstart",
+          "required": false,
+          "help": "The Python module under `pipelines/rivers/` whose `repo` CodeRepository the server loads.",
+          "advanced": true
+        },
+        {
+          "key": "image",
+          "title": "Rivers runtime image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "RIVERS_IMAGE"
+          ],
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "opa",
+      "model": "openPolicyAgent",
+      "display_name": "Open Policy Agent",
+      "summary": "Rego authorization for every gateway request, after sign-on.",
+      "category": "gateway",
+      "provider_of": "policy",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "OPA image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "openpolicyagent/opa:1.21.1-envoy-static",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "aliases": [
+            "OPA_IMAGE"
+          ],
+          "advanced": true
+        },
+        {
+          "key": "dry_run",
+          "title": "Dry run",
+          "kind": {
+            "kind": "bool"
+          },
+          "default": "false",
+          "required": false,
+          "help": "Allow every request and only log the policy's decision — for rolling out a policy change safely.",
+          "advanced": true
+        },
+        {
+          "key": "log_level",
+          "title": "Log level",
+          "kind": {
+            "kind": "enum",
+            "options": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ]
+          },
+          "default": "info",
+          "required": false,
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    }
+  ],
+  "default_selection": {
+    "modules": [
+      "postgres",
+      "rustfs",
+      "unity-catalog"
+    ],
+    "capabilities": [],
+    "knob_overrides": {},
+    "extra_resources": [],
+    "gateway": {
+      "auth": false,
+      "policy": false
+    }
+  },
+  "targets": [
+    {
+      "id": "compose",
+      "display_name": "Docker Compose"
+    }
+  ]
+}

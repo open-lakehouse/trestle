@@ -77,6 +77,9 @@ fn every_render_writes_the_same_plan_json() {
 fn list_modules_json_lists_model_refs_and_the_catalog_identity() {
     let out = trestle(&["env", "list-modules", "--json"]);
     let listing = json(&out.stdout);
+    assert_eq!(listing["format"], "trestle-catalog");
+    assert_eq!(listing["version"], 1);
+    assert_eq!(listing["generator"]["name"], "trestle");
     assert!(
         listing["catalog"]["digest"]
             .as_str()
@@ -155,4 +158,15 @@ fn a_malformed_module_manifest_names_its_file() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("probe.module.yaml"), "{stderr}");
     assert!(stderr.contains("invalid model ref"), "{stderr}");
+}
+
+#[test]
+fn version_names_the_revision_when_the_build_recorded_one() {
+    let out = trestle(&["--version"]);
+    let version = String::from_utf8(out.stdout).unwrap();
+    let expected = match option_env!("TRESTLE_REVISION") {
+        Some(revision) => format!("trestle {} ({revision})\n", env!("CARGO_PKG_VERSION")),
+        None => format!("trestle {}\n", env!("CARGO_PKG_VERSION")),
+    };
+    assert_eq!(version, expected);
 }

@@ -7,15 +7,27 @@ pub mod generate;
 pub mod list;
 pub mod new;
 
+use std::sync::LazyLock;
+
 use clap::{Parser, Subcommand};
 
 use crate::error::Result;
+
+/// `--version`: the crate version, plus the source revision when the build set
+/// `TRESTLE_REVISION`, so an installed binary can be checked against a pinned commit.
+static VERSION: LazyLock<String> = LazyLock::new(|| {
+    let version = env!("CARGO_PKG_VERSION");
+    match option_env!("TRESTLE_REVISION") {
+        Some(revision) => format!("{version} ({revision})"),
+        None => version.to_string(),
+    }
+});
 
 /// `trestle` — unified CLI for proto codegen and project scaffolding.
 #[derive(Parser)]
 #[command(
     name = "trestle",
-    version,
+    version = VERSION.as_str(),
     about = "Proto-driven codegen and project scaffolding for open lakehouse architectures"
 )]
 pub struct Cli {
