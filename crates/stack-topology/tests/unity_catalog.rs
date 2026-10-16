@@ -135,6 +135,8 @@ fn invalid_knob_values_are_rejected() {
         ("build", "./dot-prefixed"),
         ("build", " "),
         ("embedded_metadata", "sometimes"),
+        ("master_role_arn", "uc-master"),
+        ("master_role_arn", "arn:aws:iam::1:user/someone"),
     ] {
         let err = plan_with(&[(key, value)]).unwrap_err();
         let got = match err {
@@ -210,4 +212,20 @@ fn default_catalog_needs_api_registration_and_a_valid_name() {
     }
     let err = plan_with(&[("storage_bootstrap", "properties")]).unwrap_err();
     assert!(matches!(err, PlanError::InvalidKnobValue { .. }), "{err:?}");
+}
+
+#[test]
+fn master_role_arn_overrides_the_store_role() {
+    let props =
+        |plan: &Plan| files(plan)["modules/unity-catalog/secrets/server.properties"].clone();
+    let default = plan_with(&[]).unwrap();
+    assert!(
+        props(&default).contains("aws.masterRoleArn=arn:aws:iam::000000000000:role/local-storage")
+    );
+    let custom = plan_with(&[(
+        "master_role_arn",
+        "arn:aws:iam::123456789012:role/uc-master",
+    )])
+    .unwrap();
+    assert!(props(&custom).contains("aws.masterRoleArn=arn:aws:iam::123456789012:role/uc-master"));
 }

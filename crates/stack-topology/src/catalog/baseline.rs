@@ -1326,6 +1326,12 @@ fn unity_catalog() -> Arc<dyn Module> {
                 advanced: true,
             },
             optional_string_knob(
+                "master_role_arn",
+                "Master role ARN",
+                "The IAM role UC reports as its own identity (`aws.masterRoleArn`), which a \
+                 storage role's trust policy names. Defaults to the object store's role.",
+            ),
+            optional_string_knob(
                 "default_catalog",
                 "Default catalog",
                 "Also create this catalog, with managed storage under the first registered \
@@ -1494,6 +1500,16 @@ impl Module for UnityCatalog {
                     ));
                 }
             }
+        }
+        if let Some(arn) = knobs.get("master_role_arn")
+            && !(arn.starts_with("arn:")
+                && arn.contains(":role/")
+                && !arn.contains(char::is_whitespace))
+        {
+            return Err(KnobRejection::new(
+                "master_role_arn",
+                "must be an IAM role ARN (`arn:aws:iam::<account>:role/<name>`)",
+            ));
         }
         if let Some(catalog) = knobs.get("default_catalog") {
             let mut chars = catalog.chars();

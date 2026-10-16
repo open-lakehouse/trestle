@@ -11,8 +11,8 @@ server.authorization=disable
 aws.accessKey={{ obj.credential.access_key_id }}
 aws.secretKey={{ obj.credential.secret_access_key }}
 aws.region={{ obj.credential.region }}
-{%- if obj.credential.role_arn %}
-aws.masterRoleArn={{ obj.credential.role_arn }}
+{%- if knobs.master_role_arn or obj.credential.role_arn %}
+aws.masterRoleArn={{ knobs.master_role_arn or obj.credential.role_arn }}
 {%- endif %}
 {%- elif obj %}
 

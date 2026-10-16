@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:016e13cfd9b80c046682b8622084d50964c9dd82ac4ee86af4be39d1ade9b52a"
+    "digest": "sha256:5dce43b9894df356bc992068e9ffa17a6dbbaa140b535dd45775a2f28134c136"
   },
   "modules": [
     {
@@ -489,6 +489,16 @@
           "default": "api",
           "required": false,
           "help": "`api` registers a storage credential and an external location per S3 bucket through UC's API once the server is up. `none` leaves storage unregistered, for docs and tests that register it themselves.",
+          "advanced": true
+        },
+        {
+          "key": "master_role_arn",
+          "title": "Master role ARN",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "The IAM role UC reports as its own identity (`aws.masterRoleArn`), which a storage role's trust policy names. Defaults to the object store's role.",
           "advanced": true
         },
         {
