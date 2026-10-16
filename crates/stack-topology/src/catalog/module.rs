@@ -964,12 +964,16 @@ pub trait Module: Send + Sync {
         let _ = stack;
         self.services(knobs)
     }
-    /// The client-environment entries this module contributes to a stack with the given
-    /// [`StackFacts`] — what the planner resolves. Defaults to
-    /// [`Provides::client_env`]; a module overrides it only when a stack-wide fact (e.g. an
-    /// optional partner module being present) changes what clients should load.
-    fn client_env_in(&self, stack: &StackFacts) -> Cow<'_, BTreeMap<String, ClientValue>> {
-        let _ = stack;
+    /// The client-environment entries this module contributes, given its resolved `knobs`, to
+    /// a stack with the given [`StackFacts`] — what the planner resolves. Defaults to
+    /// [`Provides::client_env`]; a module overrides it only when a knob or a stack-wide fact
+    /// (e.g. an optional partner module being present) changes what clients should load.
+    fn client_env_in(
+        &self,
+        knobs: &ResolvedKnobs,
+        stack: &StackFacts,
+    ) -> Cow<'_, BTreeMap<String, ClientValue>> {
+        let _ = (knobs, stack);
         Cow::Borrowed(&self.provides().client_env)
     }
     /// The helper containers this module renders with the resolved `knobs`. Defaults to

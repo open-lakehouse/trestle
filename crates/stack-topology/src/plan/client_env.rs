@@ -13,7 +13,8 @@ use crate::render::InjectedEnv;
 pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedEnv, PlanError> {
     let mut env = InjectedEnv::new();
     for module in &plan.graph.nodes {
-        for (key, value) in module.client_env_in(&plan.stack_facts).iter() {
+        let knobs = &plan.bindings[module.id()].knobs;
+        for (key, value) in module.client_env_in(knobs, &plan.stack_facts).iter() {
             let resolved = match value {
                 ClientValue::Literal { value } => Ok(value.clone()),
                 ClientValue::GatewayOrigin => {

@@ -29,7 +29,9 @@ pub(crate) mod baseline;
 pub(crate) mod images;
 pub mod module;
 
-pub use baseline::{DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection};
+pub use baseline::{
+    DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog, baseline_selection,
+};
 
 /// A set of modules to plan against, with id and capability indexes.
 ///

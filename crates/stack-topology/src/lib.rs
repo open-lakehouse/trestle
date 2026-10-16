@@ -101,7 +101,8 @@ pub use catalog::module::{
     ResolvedKnobs, ResourceDemand, StackFacts, TemplateError, UrlPart, is_model_ref,
 };
 pub use catalog::{
-    Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, baseline_catalog, baseline_selection,
+    Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,
+    baseline_selection,
 };
 
 // --- plan: the producer + the resolved environment ---

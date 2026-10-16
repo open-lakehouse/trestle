@@ -116,6 +116,12 @@ pub const GATEWAY_AUTH_VAR: &str = "GATEWAY_AUTH";
 /// exactly the stack's contract to them without naming other modules' variables.
 pub const CLIENT_ENV_KEYS_VAR: &str = "CLIENT_ENV_KEYS";
 
+/// The prefix of the render-only variables carrying a module's dedicated host listener ports:
+/// `HOST_PORT_<ENDPOINT>` (the endpoint id upper-cased, e.g. `HOST_PORT_S3`) for each of its
+/// gatewayed endpoints the gateway publishes on its own port, which is the same on the host and
+/// in the network. A store that must recognise its host-side name (`localhost:<port>`) reads it.
+pub const HOST_PORT_VAR_PREFIX: &str = "HOST_PORT_";
+
 /// The default value injected for [`DATA_ROOT_VAR`]: `./.data`, relative to the compose
 /// file's directory — matching where the fragments persisted data before the root was
 /// centralized.
@@ -714,7 +720,7 @@ fn rustfs() -> Arc<dyn Module> {
         s3("{name}.s3.amazonaws.com"),
         s3("{name}.s3.us-east-1.amazonaws.com"),
     ];
-    Arc::new(DataModule {
+    Arc::new(Rustfs(DataModule {
         id: ModuleId::from("rustfs"),
         model: Some("rustfs".into()),
         display_name: Some("RustFS".into()),
@@ -753,6 +759,21 @@ fn rustfs() -> Arc<dyn Module> {
                 images::STS_SHIM,
                 "STS_SHIM_IMAGE",
             ),
+            Knob {
+                key: "generic_endpoint_env".into(),
+                title: Some("Generic endpoint variables".into()),
+                kind: KnobKind::Bool,
+                default: Some("false".into()),
+                required: false,
+                help: Some(
+                    "Also give clients `AWS_ENDPOINT_URL` and `AWS_ALLOW_HTTP=true`, for \
+                     tools that don't read `AWS_ENDPOINT_URL_S3`. Off by default: a global \
+                     endpoint also redirects every AWS SDK client's STS calls."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
         ],
         renders: template_with_files(
             include_str!("../../templates/modules/rustfs/compose.yaml.jinja"),
@@ -766,7 +787,69 @@ fn rustfs() -> Arc<dyn Module> {
             ],
         )
         .for_compose(),
-    })
+    }))
+}
+
+/// RustFS, whose `generic_endpoint_env` knob adds the generic AWS endpoint variables to the
+/// client environment.
+struct Rustfs(DataModule);
+
+impl Module for Rustfs {
+    fn id(&self) -> &ModuleId {
+        self.0.id()
+    }
+    fn model(&self) -> Option<&str> {
+        self.0.model()
+    }
+    fn display_name(&self) -> Option<&str> {
+        self.0.display_name()
+    }
+    fn summary(&self) -> Option<&str> {
+        self.0.summary()
+    }
+    fn category(&self) -> Option<&str> {
+        self.0.category()
+    }
+    fn provider_of(&self) -> Option<&str> {
+        self.0.provider_of()
+    }
+    fn requires(&self) -> &[ModuleId] {
+        self.0.requires()
+    }
+    fn conflicts_with(&self) -> &[ModuleId] {
+        self.0.conflicts_with()
+    }
+    fn needs(&self) -> &[ResourceDemand] {
+        self.0.needs()
+    }
+    fn knobs(&self) -> &[Knob] {
+        self.0.knobs()
+    }
+    fn provides(&self) -> &Provides {
+        self.0.provides()
+    }
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        self.0.render_for(target)
+    }
+    fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
+        self.0.services(knobs)
+    }
+    fn client_env_in(
+        &self,
+        knobs: &ResolvedKnobs,
+        _stack: &StackFacts,
+    ) -> Cow<'_, BTreeMap<String, ClientValue>> {
+        if knobs.get("generic_endpoint_env") != Some("true") {
+            return Cow::Borrowed(&self.0.provides.client_env);
+        }
+        let mut env = self.0.provides.client_env.clone();
+        env.insert(
+            "AWS_ENDPOINT_URL".into(),
+            ClientValue::endpoint("rustfs", "s3", UrlPart::Full),
+        );
+        env.insert("AWS_ALLOW_HTTP".into(), ClientValue::literal("true"));
+        Cow::Owned(env)
+    }
 }
 
 /// The env file every RustFS service loads: the server's root keys, the same keys under the
@@ -1102,7 +1185,11 @@ impl Module for Mlflow {
     fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
         self.0.services(knobs)
     }
-    fn client_env_in(&self, stack: &StackFacts) -> Cow<'_, BTreeMap<String, ClientValue>> {
+    fn client_env_in(
+        &self,
+        _knobs: &ResolvedKnobs,
+        stack: &StackFacts,
+    ) -> Cow<'_, BTreeMap<String, ClientValue>> {
         if !stack.has("unity-catalog") {
             return Cow::Borrowed(&self.0.provides.client_env);
         }

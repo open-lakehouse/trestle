@@ -10,8 +10,9 @@ services:
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: ":9000"
       # Lets RustFS parse virtual-hosted requests (<bucket>.s3.<region>.amazonaws.com) that
-      # reach it through the gateway's emulated AWS hostnames.
-      RUSTFS_SERVER_DOMAINS: s3.us-east-1.amazonaws.com,s3.amazonaws.com
+      # reach it through the gateway's emulated AWS hostnames, and <bucket>.localhost:<port>
+      # from host-side clients on the store's dedicated listener.
+      RUSTFS_SERVER_DOMAINS: s3.us-east-1.amazonaws.com,s3.amazonaws.com{% if env.HOST_PORT_S3 %},localhost:{{ env.HOST_PORT_S3 }}{% endif %}
     expose:
       - "9000"
     volumes:
