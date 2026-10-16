@@ -192,11 +192,34 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "catalog")]
+    #[test]
+    fn manifest_model_ref_round_trips() {
+        let cat = Catalog::from_manifests(["id: probe\nmodel: lakehouse.catalog\n"]).unwrap();
+        let probe = cat.get(&"probe".into()).unwrap();
+        assert_eq!(probe.model(), Some("lakehouse.catalog"));
+
+        let bare = Catalog::from_manifests(["id: bare\n"]).unwrap();
+        assert_eq!(bare.get(&"bare".into()).unwrap().model(), None);
+    }
+
+    #[cfg(feature = "catalog")]
+    #[test]
+    fn manifest_rejects_a_malformed_model_ref() {
+        for bad in ["unity-catalog", "lakehouse..table", "9lives", ""] {
+            let err = Catalog::from_manifests([format!("id: probe\nmodel: '{bad}'\n").as_str()])
+                .err()
+                .unwrap_or_else(|| panic!("`{bad}` was accepted"));
+            assert!(err.to_string().contains("invalid model ref"), "{err}");
+        }
+    }
+
     #[test]
     fn merge_overlays_by_id_without_duplicating() {
         // Overlay a same-id module (a data module carrying a new summary) onto the baseline.
         let overlay = DataModule {
             id: "envoy".into(),
+            model: None,
             display_name: None,
             summary: Some("overridden".into()),
             category: None,

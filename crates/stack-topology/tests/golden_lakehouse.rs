@@ -111,6 +111,7 @@ fn real_prefix_collision_fails_loudly() {
         // `Endpoint.mount_prefix`), so the planner must reject the collision.
         Arc::new(DataModule {
             id: ModuleId::from(id),
+            model: None,
             display_name: None,
             summary: None,
             category: None,
@@ -160,6 +161,7 @@ fn real_prefix_collision_fails_loudly() {
 fn svc_module(id: &str, service_name: &str, mount_prefix: &str) -> Arc<dyn Module> {
     Arc::new(DataModule {
         id: ModuleId::from(id),
+        model: None,
         display_name: None,
         summary: None,
         category: None,

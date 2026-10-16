@@ -266,6 +266,7 @@ mod tests {
     fn m_conflicts(id: &str, requires: &[&str], conflicts: &[&str]) -> Arc<dyn Module> {
         Arc::new(DataModule {
             id: id.into(),
+            model: None,
             display_name: None,
             summary: None,
             category: None,

@@ -138,6 +138,7 @@ fn a_plain_file_holding_a_resolved_secret_is_sensitive_and_ignored() {
     // An app that writes its database URL into a plain (non-secret) mounted config file.
     let app = DataModule {
         id: ModuleId::from("app"),
+        model: None,
         display_name: None,
         summary: None,
         category: None,

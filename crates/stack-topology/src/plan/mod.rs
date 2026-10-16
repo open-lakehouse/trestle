@@ -938,6 +938,7 @@ mod tests {
     ) -> crate::catalog::module::DataModule {
         crate::catalog::module::DataModule {
             id: id.into(),
+            model: None,
             display_name: None,
             summary: None,
             category: None,

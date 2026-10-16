@@ -308,6 +308,7 @@ fn probe_module() -> std::sync::Arc<dyn olai_stack_topology::Module> {
     );
     std::sync::Arc::new(DataModule {
         id: ModuleId::from("probe"),
+        model: None,
         display_name: None,
         summary: None,
         category: None,

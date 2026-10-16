@@ -29,6 +29,7 @@ fn provider_with_needs(
     provides.resource_kinds.insert(kind.into(), template);
     Arc::new(DataModule {
         id: ModuleId::from(id),
+        model: None,
         display_name: None,
         summary: None,
         category: None,
@@ -85,6 +86,7 @@ fn bind1(field: ConnectionField, key: &str) -> ConnectionBinding {
 fn consumer(id: &str, needs: Vec<ResourceDemand>) -> Arc<dyn Module> {
     Arc::new(DataModule {
         id: ModuleId::from(id),
+        model: None,
         display_name: None,
         summary: None,
         category: None,
@@ -814,6 +816,7 @@ fn emulator(id: &str, host: &str) -> Arc<dyn Module> {
     };
     Arc::new(DataModule {
         id: ModuleId::from(id),
+        model: None,
         display_name: None,
         summary: None,
         category: None,

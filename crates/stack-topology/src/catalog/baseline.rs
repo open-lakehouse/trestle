@@ -161,6 +161,7 @@ pub fn baseline_catalog() -> Catalog {
 fn hosted_postgres() -> Arc<dyn Module> {
     hosted_module(
         "hosted-postgres",
+        "postgresql",
         "Hosted Postgres",
         "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
         "metadata_db",
@@ -181,6 +182,7 @@ fn hosted_postgres() -> Arc<dyn Module> {
 fn aws_s3() -> Arc<dyn Module> {
     hosted_module(
         "aws-s3",
+        "amazonS3",
         "Amazon S3",
         "Amazon S3 or an S3-compatible store; buckets must already exist.",
         "storage",
@@ -201,6 +203,7 @@ fn aws_s3() -> Arc<dyn Module> {
 fn azure_storage() -> Arc<dyn Module> {
     hosted_module(
         "azure-storage",
+        "azureBlobStorage",
         "Azure Storage",
         "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
         "storage",
@@ -221,6 +224,7 @@ fn azure_storage() -> Arc<dyn Module> {
 /// kind's default connection; the planner binds the configured one instead.
 fn hosted_module(
     id: &str,
+    model: &str,
     display_name: &str,
     summary: &str,
     category: &str,
@@ -236,6 +240,7 @@ fn hosted_module(
         .insert(kind.role().into(), kind.default_connection().template());
     Arc::new(DataModule {
         id: ModuleId::from(id),
+        model: Some(model.into()),
         display_name: Some(display_name.into()),
         summary: Some(summary.into()),
         category: Some(category.into()),
@@ -381,6 +386,7 @@ fn envoy() -> Arc<dyn Module> {
     let provides = Provides::default();
     Arc::new(DataModule {
         id: ModuleId::from("envoy"),
+        model: Some("envoy".into()),
         display_name: Some("Envoy".into()),
         summary: Some("Single-port gateway, Databricks-shaped URL rewrites.".into()),
         category: Some("gateway".into()),
@@ -449,6 +455,7 @@ fn authelia() -> Arc<dyn Module> {
     });
     Arc::new(DataModule {
         id: ModuleId::from("authelia"),
+        model: Some("authelia".into()),
         display_name: Some("Authelia".into()),
         summary: Some("Forward-auth single-sign-on for the gateway (file-based).".into()),
         category: Some("gateway".into()),
@@ -566,6 +573,7 @@ fn postgres() -> Arc<dyn Module> {
     });
     Arc::new(DataModule {
         id: ModuleId::from("postgres"),
+        model: Some("postgresql".into()),
         display_name: Some("Postgres".into()),
         summary: Some("Postgres 16; auto-creates DBs other modules declare.".into()),
         category: Some("metadata_db".into()),
@@ -698,6 +706,7 @@ fn rustfs() -> Arc<dyn Module> {
     ];
     Arc::new(DataModule {
         id: ModuleId::from("rustfs"),
+        model: Some("rustfs".into()),
         display_name: Some("RustFS".into()),
         summary: Some(
             "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS \
@@ -802,6 +811,7 @@ fn azurite() -> Arc<dyn Module> {
 
     Arc::new(DataModule {
         id: ModuleId::from("azurite"),
+        model: Some("azurite".into()),
         display_name: Some("Azurite".into()),
         summary: Some("Azure Blob emulator; object store with Azure-shaped wiring.".into()),
         category: Some("storage".into()),
@@ -883,6 +893,7 @@ fn mlflow() -> Arc<dyn Module> {
 
     Arc::new(Mlflow(DataModule {
         id: ModuleId::from("mlflow"),
+        model: Some("mlflow".into()),
         display_name: Some("MLflow".into()),
         summary: Some(
             "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.".into(),
@@ -1039,6 +1050,9 @@ impl Module for Mlflow {
     fn id(&self) -> &ModuleId {
         self.0.id()
     }
+    fn model(&self) -> Option<&str> {
+        self.0.model()
+    }
     fn display_name(&self) -> Option<&str> {
         self.0.display_name()
     }
@@ -1117,6 +1131,7 @@ fn unity_catalog() -> Arc<dyn Module> {
 
     Arc::new(DataModule {
         id: ModuleId::from("unity-catalog"),
+        model: Some("unityCatalogOSS".into()),
         display_name: Some("Unity Catalog".into()),
         summary: Some("Open-source Unity Catalog server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
@@ -1216,6 +1231,7 @@ fn jaeger() -> Arc<dyn Module> {
     );
     Arc::new(DataModule {
         id: ModuleId::from("jaeger"),
+        model: Some("jaeger".into()),
         display_name: Some("Jaeger".into()),
         summary: Some("All-in-one OTLP tracing backend with the Jaeger UI.".into()),
         category: Some("observability".into()),
@@ -1386,6 +1402,9 @@ impl Headwaters {
 impl Module for Headwaters {
     fn id(&self) -> &ModuleId {
         &self.id
+    }
+    fn model(&self) -> Option<&str> {
+        Some("headwaters")
     }
     fn display_name(&self) -> Option<&str> {
         Some("Headwaters")
@@ -1576,6 +1595,9 @@ impl Module for Omnigent {
     fn id(&self) -> &ModuleId {
         &self.id
     }
+    fn model(&self) -> Option<&str> {
+        Some("omnigent")
+    }
     fn display_name(&self) -> Option<&str> {
         Some("Omnigent")
     }
@@ -1663,6 +1685,7 @@ fn marimo() -> Arc<dyn Module> {
     provides.python.requires_workspace = true;
     Arc::new(DataModule {
         id: ModuleId::from("marimo"),
+        model: Some("marimo".into()),
         display_name: Some("marimo".into()),
         summary: Some("Hosted marimo editor for the client workspace's notebooks.".into()),
         category: Some("notebooks".into()),
@@ -1773,6 +1796,7 @@ fn puppygraph() -> Arc<dyn Module> {
     let uc_url = format!("http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}");
     Arc::new(DataModule {
         id: ModuleId::from("puppygraph"),
+        model: Some("puppygraph".into()),
         display_name: Some("PuppyGraph".into()),
         summary: Some("Graph queries (Cypher, Gremlin) over Unity Catalog tables.".into()),
         category: Some("graph".into()),
@@ -1911,6 +1935,7 @@ fn rivers() -> Arc<dyn Module> {
     };
     Arc::new(DataModule {
         id: ModuleId::from("rivers"),
+        model: Some("rivers".into()),
         display_name: Some("Rivers".into()),
         summary: Some("Asset-based orchestration of Python pipelines, with a run UI.".into()),
         category: Some("orchestration".into()),
@@ -1978,6 +2003,7 @@ fn rivers() -> Arc<dyn Module> {
 fn opa() -> Arc<dyn Module> {
     Arc::new(DataModule {
         id: ModuleId::from("opa"),
+        model: Some("openPolicyAgent".into()),
         display_name: Some("Open Policy Agent".into()),
         summary: Some("Rego authorization for every gateway request, after sign-on.".into()),
         category: Some("gateway".into()),
@@ -2055,6 +2081,44 @@ fn opa() -> Arc<dyn Module> {
 mod tests {
     use super::*;
     use crate::model::endpoint::RouteIntent;
+
+    #[test]
+    fn every_baseline_module_names_its_implementation() {
+        // Exhaustive on purpose: a new module must pick a ref (or this test must say why not),
+        // and a hand-written module that forgets to implement `model()` fails here.
+        let expected = [
+            ("envoy", "envoy"),
+            ("authelia", "authelia"),
+            ("postgres", "postgresql"),
+            ("rustfs", "rustfs"),
+            ("azurite", "azurite"),
+            ("hosted-postgres", "postgresql"),
+            ("aws-s3", "amazonS3"),
+            ("azure-storage", "azureBlobStorage"),
+            ("mlflow", "mlflow"),
+            ("unity-catalog", "unityCatalogOSS"),
+            ("jaeger", "jaeger"),
+            ("headwaters", "headwaters"),
+            ("omnigent", "omnigent"),
+            ("marimo", "marimo"),
+            ("puppygraph", "puppygraph"),
+            ("rivers", "rivers"),
+            ("opa", "openPolicyAgent"),
+        ];
+        let cat = baseline_catalog();
+        let actual: BTreeMap<&str, Option<&str>> = cat
+            .modules()
+            .iter()
+            .map(|m| (m.id().as_str(), m.model()))
+            .collect();
+        let expected: BTreeMap<&str, Option<&str>> =
+            expected.into_iter().map(|(id, r)| (id, Some(r))).collect();
+        assert_eq!(actual, expected);
+        assert!(
+            actual.values().flatten().all(|r| crate::is_model_ref(r)),
+            "a baseline ref is malformed"
+        );
+    }
 
     #[test]
     fn headwaters_emits_api_and_optional_ui_per_knob() {
