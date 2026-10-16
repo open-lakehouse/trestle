@@ -28,8 +28,6 @@ services:
           - sts.us-east-1.amazonaws.com
           - uc-docs.s3.amazonaws.com
           - uc-docs.s3.us-east-1.amazonaws.com
-          - unity.s3.amazonaws.com
-          - unity.s3.us-east-1.amazonaws.com
 
   # One-shot: mints the local CA and the gateway's certificate for its TLS hostnames.
   gateway-certs:
@@ -37,7 +35,7 @@ services:
     entrypoint: ["bash", "/certs.sh"]
     environment:
       CERT_DIR: /certs
-      CERT_HOSTS: "s3.amazonaws.com s3.us-east-1.amazonaws.com sts.amazonaws.com sts.us-east-1.amazonaws.com uc-docs.s3.amazonaws.com uc-docs.s3.us-east-1.amazonaws.com unity.s3.amazonaws.com unity.s3.us-east-1.amazonaws.com"
+      CERT_HOSTS: "s3.amazonaws.com s3.us-east-1.amazonaws.com sts.amazonaws.com sts.us-east-1.amazonaws.com uc-docs.s3.amazonaws.com uc-docs.s3.us-east-1.amazonaws.com"
     configs:
       - source: gateway_certs_script
         target: /certs.sh

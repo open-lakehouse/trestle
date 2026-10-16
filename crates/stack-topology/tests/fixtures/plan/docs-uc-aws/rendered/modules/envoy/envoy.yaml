@@ -110,12 +110,8 @@ static_resources:
                         - "s3.amazonaws.com:443"
                         - "s3.us-east-1.amazonaws.com"
                         - "s3.us-east-1.amazonaws.com:443"
-                        - "unity.s3.amazonaws.com"
-                        - "unity.s3.amazonaws.com:443"
                         - "uc-docs.s3.amazonaws.com"
                         - "uc-docs.s3.amazonaws.com:443"
-                        - "unity.s3.us-east-1.amazonaws.com"
-                        - "unity.s3.us-east-1.amazonaws.com:443"
                         - "uc-docs.s3.us-east-1.amazonaws.com"
                         - "uc-docs.s3.us-east-1.amazonaws.com:443"
                       routes:

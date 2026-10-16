@@ -229,3 +229,17 @@ fn master_role_arn_overrides_the_store_role() {
     .unwrap();
     assert!(props(&custom).contains("aws.masterRoleArn=arn:aws:iam::123456789012:role/uc-master"));
 }
+
+#[test]
+fn bucket_renames_the_object_store_demand() {
+    let buckets = |plan: &Plan| plan.provisioned[&ModuleId::from("rustfs")].clone();
+    assert_eq!(buckets(&plan_with(&[]).unwrap()), ["unity"]);
+    let plan = plan_with(&[("bucket", "uc-docs")]).unwrap();
+    assert_eq!(buckets(&plan), ["uc-docs"]);
+    let files = files(&plan);
+    let init = &files["modules/rustfs/compose.yaml"];
+    assert!(
+        init.contains("s3://uc-docs") && !init.contains("s3://unity"),
+        "{init}"
+    );
+}

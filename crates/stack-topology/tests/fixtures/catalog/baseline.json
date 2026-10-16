@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:b51fab9b3d3bea840fb8b899d1ae7800fae6fa8a253d003d82acb116a7a0d06b"
+    "digest": "sha256:dc8b2ea27298ea3230b32f129d0bbc85a4c627ad64763ca41d64a5795279288e"
   },
   "modules": [
     {
@@ -500,6 +500,17 @@
           "default": "api",
           "required": false,
           "help": "`api` registers a storage credential and an external location per S3 bucket through UC's API once the server is up. `none` leaves storage unregistered, for docs and tests that register it themselves.",
+          "advanced": true
+        },
+        {
+          "key": "bucket",
+          "title": "Bucket",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "unity",
+          "required": false,
+          "help": "The bucket UC's object-store demand provisions. Other modules that demand `unity` (PuppyGraph) get a separate bucket when this changes.",
           "advanced": true
         },
         {

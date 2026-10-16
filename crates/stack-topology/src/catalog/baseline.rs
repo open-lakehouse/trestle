@@ -1339,6 +1339,20 @@ fn unity_catalog() -> Arc<dyn Module> {
                 aliases: vec![],
                 advanced: true,
             },
+            Knob {
+                key: "bucket".into(),
+                title: Some("Bucket".into()),
+                kind: KnobKind::String,
+                default: Some("unity".into()),
+                required: false,
+                help: Some(
+                    "The bucket UC's object-store demand provisions. Other modules that demand \
+                     `unity` (PuppyGraph) get a separate bucket when this changes."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
             optional_string_knob(
                 "master_role_arn",
                 "Master role ARN",
@@ -1479,9 +1493,23 @@ impl Module for UnityCatalog {
     }
     fn needs_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [ResourceDemand]> {
         if Self::embedded(knobs) {
-            Cow::Borrowed(&[])
-        } else {
-            Cow::Borrowed(self.0.needs())
+            return Cow::Borrowed(&[]);
+        }
+        match knobs.get("bucket") {
+            Some(bucket) if bucket != "unity" => Cow::Owned(
+                self.0
+                    .needs()
+                    .iter()
+                    .cloned()
+                    .map(|mut demand| {
+                        if demand.resource == Role::OBJECT_STORE {
+                            demand.name = bucket.into();
+                        }
+                        demand
+                    })
+                    .collect(),
+            ),
+            _ => Cow::Borrowed(self.0.needs()),
         }
     }
     fn knobs(&self) -> &[Knob] {
