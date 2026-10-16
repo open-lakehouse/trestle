@@ -70,6 +70,8 @@ impl Role {
     pub const NOTEBOOKS: &'static str = "notebooks";
     /// `graph` — a graph query engine (openCypher / Gremlin) over the lakehouse's tables.
     pub const GRAPH: &'static str = "graph";
+    /// `orchestration` — a pipeline orchestrator: schedules and runs data assets / jobs.
+    pub const ORCHESTRATION: &'static str = "orchestration";
 
     /// The roles the planner fills from the environment itself rather than the module
     /// selection: the always-on [`GATEWAY`](Self::GATEWAY) and the
@@ -121,6 +123,10 @@ impl Role {
     /// The `graph` role.
     pub fn graph() -> Role {
         Role::new(Self::GRAPH)
+    }
+    /// The `orchestration` role.
+    pub fn orchestration() -> Role {
+        Role::new(Self::ORCHESTRATION)
     }
     /// The `app_runtime` role.
     pub fn app_runtime() -> Role {

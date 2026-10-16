@@ -45,3 +45,6 @@ pub const MARIMO: &str = "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim";
 /// PuppyGraph graph query engine (web UI + REST, Gremlin, openCypher over Bolt). Its bundled
 /// `python3` also runs the one-shot schema upload.
 pub const PUPPYGRAPH: &str = "puppygraph/puppygraph:1.14.0";
+/// The uv + Python runtime the Rivers dev server installs the client workspace into (the
+/// workspace's `pyproject.toml` carries `rivers`). Rivers publishes no standalone server image.
+pub const RIVERS: &str = "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim";

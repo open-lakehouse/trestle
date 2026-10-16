@@ -1,0 +1,53 @@
+# Rivers: asset orchestration, its web UI, scheduler and code location in one dev server
+services:
+  rivers:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+    # The dev server puts its working directory on the import path, so `rivers dev <module>`
+    # finds the operator's pipelines.
+    working_dir: /pipelines
+    env_file:
+      # The pipelines reach the stack at its in-network addresses.
+      - path: ./client/container.env
+        format: raw
+    environment:
+      # Packages install into a container-owned virtualenv, never the host's `client/.venv`.
+      UV_PROJECT_ENVIRONMENT: /venv
+      UV_CACHE_DIR: /uv-cache
+      UV_LINK_MODE: copy
+      # The code location runs in a child interpreter; keep the pipelines importable there.
+      PYTHONPATH: /pipelines
+{%- if env.GATEWAY_AUTH == "true" %}
+      # The gateway authenticates every request on Rivers' listener and strips client-supplied
+      # identity headers, so the Remote-* identity it asserts is trusted as the Rivers user.
+      # Rivers only accepts those headers from a trusted peer: the gateway's address on the
+      # compose network isn't fixed, so trust the private ranges compose allocates networks
+      # from. The UI publishes no host port, so only the stack's containers reach it.
+      RIVERS_AUTH_MODE: forward
+      RIVERS_AUTH_FORWARD_TRUSTED_PROXIES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+{%- endif %}
+    command:
+      - sh
+      - -c
+      - >-
+        uv sync --project /workspace
+        && exec /venv/bin/rivers dev {{ knobs.module }}
+        --host 0.0.0.0 --port 3000 --storage-path /tmp/rivers/storage
+    volumes:
+      - ./client:/workspace
+      # Operator-owned: edit, then reload the code location from the UI.
+      - ./pipelines/rivers:/pipelines
+      - {{ env.DATA_ROOT }}/rivers/venv:/venv
+      - {{ env.DATA_ROOT }}/rivers/uv-cache:/uv-cache
+    # The web UI is fronted on its own gateway listener.
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/healthz')\""
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      # First boot installs the workspace's packages.
+      start_period: 120s

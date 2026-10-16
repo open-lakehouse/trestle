@@ -134,6 +134,7 @@ the stack serves:
 | `rustfs` | `AWS_ENDPOINT_URL_S3`, `AWS_REGION` |
 | `omnigent` | `OMNIGENT_URL` |
 | `puppygraph` | `PUPPYGRAPH_URL`, `PUPPYGRAPH_BOLT_ADDRESS`, `PUPPYGRAPH_GREMLIN_ADDRESS` (`host:port`) |
+| `rivers` | `RIVERS_URL` |
 
 The files hold **no credentials**. Clients authenticate through the gateway and read or
 write object storage with the temporary credentials Unity Catalog vends. The root `.env`
@@ -160,6 +161,7 @@ written once, so local edits survive.
 | --- | --- | --- |
 | `mlflow` | `mlflow`, `scikit-learn` | `mlflow_quickstart.py`: train a model, track it in MLflow |
 | `puppygraph` | `neo4j`, `gremlinpython` | `puppygraph_quickstart.py`: the same graph query in Cypher and Gremlin |
+| `rivers` | `rivers[delta]` | `rivers_quickstart.py`: define assets and materialize them in-process |
 
 ## AI Gateway (MLflow)
 
@@ -268,6 +270,29 @@ a lot of memory: give Docker about 8 GB.
   sign-in does not cover them, so set your own password if others can reach those ports.
   Omnigent's agents get the addresses through `client/container.env`, like every other
   module's.
+
+## Orchestration (Rivers)
+
+The `rivers` module runs [Rivers](https://orchestrator.rs), an asset-based orchestrator:
+pipelines are Python functions decorated with `@rs.Asset`, collected in a `CodeRepository`,
+and scheduled and run by its Rust core. It fills the `orchestration` role.
+
+- **One process.** The container runs `rivers dev`: the web UI, the scheduler and the code
+  location, with SurrealDB embedded. That storage doesn't outlive the container, so run
+  history resets when it restarts.
+- **Pipelines.** The code location is `pipelines/rivers/`, next to `compose.yaml`. It is
+  written once (a two-asset `quickstart.py`) and then yours to edit; reload the code location
+  from the UI to pick up changes. The `rivers.module` knob (default `quickstart`) names the
+  module whose `repo` is loaded.
+- **Packages.** Selecting it generates the client workspace, which carries `rivers[delta]`
+  (and every other selected module's client packages). The server installs the workspace into
+  its own virtualenv, as `marimo` does. `client/pyproject.toml` is regenerated on render, so
+  pipelines can't add packages of their own yet. Pipelines read the stack's in-network
+  addresses from `client/container.env`.
+- **Endpoints.** The web UI only serves at `/`, so it has its own gateway listener
+  (`RIVERS_URL`). With gateway auth on, that listener is behind sign-in (on the same
+  `https://<env>.localhost` origin, at its own port) and Rivers runs in forward-auth mode,
+  taking the user from the gateway's `Remote-*` headers.
 
 ## Gateway authentication and authorization
 

@@ -145,8 +145,9 @@ pub fn baseline_catalog() -> Catalog {
         omnigent(),
         marimo(),
         puppygraph(),
+        rivers(),
         opa(),
-    ] as [Arc<dyn Module>; 16])
+    ] as [Arc<dyn Module>; 17])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     .with_default_provider(Role::RELATIONAL_DB, "postgres")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
@@ -1849,6 +1850,100 @@ fn puppygraph() -> Arc<dyn Module> {
                     include_str!("../../templates/modules/puppygraph/schema.json"),
                 ),
             ],
+        )
+        .for_compose(),
+    })
+}
+
+/// The port the Rivers web UI (pages, API, server-sent events) listens on in its container.
+const RIVERS_UI_PORT: u16 = 3000;
+/// The `rivers` knob naming the Python module (under `pipelines/rivers/`) whose
+/// `CodeRepository` the dev server loads.
+const RIVERS_MODULE_KNOB: &str = "module";
+
+/// `rivers` — [Rivers](https://orchestrator.rs), an asset-based orchestrator: pipelines are
+/// Python assets (`@rs.Asset`) collected in a `CodeRepository`, scheduled and run by a Rust
+/// core, with a web UI to launch and follow runs.
+///
+/// One container runs `rivers dev`: the web UI, the scheduler and the code location in one
+/// process, with SurrealDB embedded. The pipelines are operator-owned: `pipelines/rivers/` is
+/// written beside `compose.yaml` once (a quickstart repository) and never overwritten; reload
+/// the code location from the UI after editing. Packages come from the client workspace
+/// ([`requires_workspace`](crate::PythonClient::requires_workspace), which carries `rivers`),
+/// installed into a container-owned virtualenv as for `marimo`; the pipelines read the stack's
+/// in-network client environment. The embedded storage does not outlive the container, so run
+/// history resets on restart.
+///
+/// The UI only serves at `/`, so it gets a dedicated gateway listener, behind the gateway's
+/// sign-in when forward-auth is on: Rivers then runs in its forward-auth mode, taking the user
+/// from the `Remote-*` headers the gateway asserts (and strips from clients).
+fn rivers() -> Arc<dyn Module> {
+    let mut provides = Provides::default();
+    provides.client_env.insert(
+        "RIVERS_URL".into(),
+        ClientValue::endpoint("rivers", "ui", UrlPart::Full),
+    );
+    provides.python = PythonClient {
+        dependencies: vec!["rivers[delta]>=0.5".into()],
+        notebooks: vec![ClientNotebook {
+            file: "rivers_quickstart.py".into(),
+            title: "define and materialize assets with the Rivers SDK".into(),
+            contents: include_str!("../../templates/modules/rivers/notebooks/quickstart.py").into(),
+        }],
+        requires_workspace: true,
+    };
+    Arc::new(DataModule {
+        id: ModuleId::from("rivers"),
+        display_name: Some("Rivers".into()),
+        summary: Some("Asset-based orchestration of Python pipelines, with a run UI.".into()),
+        category: Some("orchestration".into()),
+        provider_of: Some(Role::ORCHESTRATION.into()),
+        requires: vec![ModuleId::from("envoy")],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "rivers".into(),
+            role: Role::orchestration(),
+            placement: container("rivers"),
+            base_path: String::new(),
+            // Run state streams to the UI over SSE, so the route carries no timeout.
+            endpoints: vec![Endpoint::ui_fixed("ui", RIVERS_UI_PORT).streaming().gated()],
+            depends_on: vec![],
+        }],
+        provides,
+        knobs: vec![
+            Knob {
+                key: RIVERS_MODULE_KNOB.into(),
+                title: Some("Pipeline module".into()),
+                kind: KnobKind::String,
+                default: Some("quickstart".into()),
+                required: false,
+                help: Some(
+                    "The Python module under `pipelines/rivers/` whose `repo` CodeRepository \
+                     the server loads."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
+            image_knob(
+                "image",
+                "Rivers runtime image",
+                images::RIVERS,
+                "RIVERS_IMAGE",
+            ),
+        ],
+        renders: template_with_files(
+            include_str!("../../templates/modules/rivers/compose.yaml.jinja"),
+            vec![RenderFile {
+                // Bind-mounted as a directory (so added modules show up), not a config.
+                alias: None,
+                ..operator_file(
+                    "pipelines/rivers/quickstart.py",
+                    "rivers_quickstart",
+                    include_str!("../../templates/modules/rivers/pipelines/quickstart.py"),
+                )
+            }],
         )
         .for_compose(),
     })
