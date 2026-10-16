@@ -3,7 +3,7 @@
 // it was when exported — with no planner, catalog, or wasm on the page. Later
 // planner changes never redraw an existing snapshot.
 
-import type { GraphDto } from "../types";
+import type { GraphDto, TopologyEdgeDto } from "../types";
 
 /** The `format` tag every snapshot carries. */
 export const GRAPH_SNAPSHOT_FORMAT = "trestle-graph";
@@ -13,6 +13,10 @@ export const GRAPH_SNAPSHOT_FORMAT = "trestle-graph";
  * `GraphDto` change would make existing snapshots render wrongly.
  */
 export const GRAPH_SNAPSHOT_VERSION = 1;
+
+/** Every snapshot version this build can read. Version 1 snapshots saved
+ *  before edges carried a `key` get one derived on read (see {@link edgeKey}). */
+export const SUPPORTED_GRAPH_SNAPSHOT_VERSIONS: readonly number[] = [1];
 
 /** The file extension snapshots are saved under. */
 export const GRAPH_SNAPSHOT_EXTENSION = ".trestle-graph.json";
@@ -44,9 +48,11 @@ export function createGraphSnapshot(
 }
 
 /**
- * Validate parsed JSON as a snapshot this build can render. Checks the
- * envelope (format, version, node/edge arrays), not every DTO field; throws
- * an `Error` naming what is wrong.
+ * Validate parsed JSON as a snapshot this build can render: the envelope
+ * (format, a supported version, node/edge arrays) and the graph's integrity
+ * (unique node ids, edges of a known kind between existing nodes, unique edge
+ * keys). Other DTO fields aren't checked. Throws an `Error` naming what is
+ * wrong; an edge without a `key` gets the one the planner would assign.
  */
 export function parseGraphSnapshot(input: unknown): GraphSnapshot {
   if (!isRecord(input)) {
@@ -57,9 +63,12 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
       `graph snapshot: expected format "${GRAPH_SNAPSHOT_FORMAT}", got ${JSON.stringify(input.format)}`,
     );
   }
-  if (input.version !== GRAPH_SNAPSHOT_VERSION) {
+  if (
+    typeof input.version !== "number" ||
+    !SUPPORTED_GRAPH_SNAPSHOT_VERSIONS.includes(input.version)
+  ) {
     throw new Error(
-      `graph snapshot: unsupported version ${JSON.stringify(input.version)} (this build reads version ${GRAPH_SNAPSHOT_VERSION}); re-export it or upgrade @open-lakehouse/trestle-diagram`,
+      `graph snapshot: unsupported version ${JSON.stringify(input.version)} (this build reads version ${SUPPORTED_GRAPH_SNAPSHOT_VERSIONS.join(", ")}); re-export it or upgrade @open-lakehouse/trestle-diagram`,
     );
   }
   const { graph } = input;
@@ -72,8 +81,73 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
       "graph snapshot: `graph` must have `nodes` and `edges` arrays",
     );
   }
-  return input as unknown as GraphSnapshot;
+
+  const ids = new Set<string>();
+  for (const [i, node] of graph.nodes.entries()) {
+    if (!isRecord(node) || typeof node.id !== "string") {
+      throw new Error(`graph snapshot: node ${i} has no string \`id\``);
+    }
+    if (ids.has(node.id)) {
+      throw new Error(`graph snapshot: duplicate node id "${node.id}"`);
+    }
+    ids.add(node.id);
+  }
+
+  const keys = new Set<string>();
+  const edges = graph.edges.map((edge: unknown, i: number) => {
+    if (
+      !isRecord(edge) ||
+      typeof edge.kind !== "string" ||
+      !EDGE_KINDS.has(edge.kind) ||
+      typeof edge.from !== "string" ||
+      typeof edge.to !== "string"
+    ) {
+      throw new Error(
+        `graph snapshot: edge ${i} needs a known \`kind\` and string \`from\`/\`to\``,
+      );
+    }
+    for (const end of [edge.from, edge.to]) {
+      if (!ids.has(end)) {
+        throw new Error(
+          `graph snapshot: edge ${i} (${edge.kind}) references missing node "${end}"`,
+        );
+      }
+    }
+    const keyed = (
+      typeof edge.key === "string"
+        ? edge
+        : { ...edge, key: edgeKey(edge as unknown as TopologyEdgeDto) }
+    ) as TopologyEdgeDto;
+    if (keys.has(keyed.key)) {
+      throw new Error(`graph snapshot: duplicate edge key "${keyed.key}"`);
+    }
+    keys.add(keyed.key);
+    return keyed;
+  });
+
+  return {
+    ...input,
+    graph: { ...graph, edges },
+  } as unknown as GraphSnapshot;
 }
+
+/**
+ * The key the planner assigns `edge` (Rust `TopologyEdgeDto::derive_key`):
+ * `kind:from→to:qualifier`, where the qualifier is the capability for a
+ * `uses` edge and the surface's host port for the gateway's edges.
+ */
+export function edgeKey(edge: TopologyEdgeDto): string {
+  const qualifier = edge.kind === "uses" ? edge.role : String(edge.host_port);
+  return `${edge.kind}:${edge.from}→${edge.to}:${qualifier}`;
+}
+
+const EDGE_KINDS: ReadonlySet<string> = new Set<TopologyEdgeDto["kind"]>([
+  "access",
+  "route",
+  "authenticates",
+  "authorizes",
+  "uses",
+]);
 
 /** Serialize a snapshot the way the editor saves it (stable, diff-friendly). */
 export function stringifyGraphSnapshot(snapshot: GraphSnapshot): string {

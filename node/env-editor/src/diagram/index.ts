@@ -30,10 +30,12 @@ export {
 } from "./exportImage";
 export {
   createGraphSnapshot,
+  edgeKey,
   GRAPH_SNAPSHOT_EXTENSION,
   GRAPH_SNAPSHOT_FORMAT,
   GRAPH_SNAPSHOT_VERSION,
   type GraphSnapshot,
   parseGraphSnapshot,
+  SUPPORTED_GRAPH_SNAPSHOT_VERSIONS,
   stringifyGraphSnapshot,
 } from "./snapshot";

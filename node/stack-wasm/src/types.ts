@@ -29,6 +29,9 @@ export interface Knob {
 /** One selectable module, projected for the picker (mirrors `ModuleDto`). */
 export interface ModuleDto {
   id: string;
+  /** The implementation the module packages, as an architecture-model element
+   *  id (e.g. "postgresql"). Identity only. */
+  model?: string | null;
   display_name?: string | null;
   summary?: string | null;
   category?: string | null;
@@ -41,9 +44,19 @@ export interface ModuleDto {
   /** What it calls each kind it provisions (e.g. Azurite's "containers"). */
   resource_nouns: ResourceNounDto[];
   knobs: Knob[];
+  /** The init jobs and sidecars the module may run beside its services. */
+  helpers: HelperService[];
   /** Set for a hosted provider: a managed database or cloud object store the
    *  stack uses but does not run. */
   hosted?: HostedModuleDto | null;
+}
+
+/** A container a module runs to support its services (mirrors
+ *  `HelperService`). */
+export interface HelperService {
+  /** The compose service name. */
+  name: string;
+  kind: "init" | "sidecar";
 }
 
 /** What a hosted provider stands for (mirrors `HostedKind`). */
@@ -211,6 +224,9 @@ export interface ProvisionedDto {
 export interface GraphNodeDto {
   /** Module id, or `"@clients"` (Rust `CLIENTS_NODE_ID`). */
   id: string;
+  /** The implementation the component is, as an architecture-model element id;
+   *  null for the clients node. Absent in snapshots saved before it existed. */
+  model?: string | null;
   kind: NodeKind;
   /** The implementation's name (e.g. "RustFS"). */
   display_name?: string | null;
@@ -234,8 +250,9 @@ export interface GraphNodeDto {
 }
 
 /** A typed, request-direction edge: `from` calls `to` (mirrors
- *  `TopologyEdgeDto`, serde tag "kind"). */
-export type TopologyEdgeDto =
+ *  `TopologyEdgeDto`, serde tag "kind"). `key` (`kind:from→to:qualifier`) is
+ *  unique within its graph and stable across re-plans. */
+export type TopologyEdgeDto = { key: string } & (
   | { kind: "access"; from: string; to: string; host_port: number }
   | {
       kind: "route";
@@ -259,7 +276,8 @@ export type TopologyEdgeDto =
       role: string;
       protocol: string;
       resources: string[];
-    };
+    }
+);
 
 /** The edge kinds, for legends and filters. */
 export type TopologyEdgeKind = TopologyEdgeDto["kind"];

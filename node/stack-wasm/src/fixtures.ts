@@ -1,4 +1,4 @@
-// Auto-generated fixture from the real planner (crates/stack-topology-wasm).
+// Auto-generated fixture from the real planner (crates/stack-topology).
 // Regenerate: see node/stack-wasm/README.md. Do not hand-edit.
 
 import { FIXTURE_FILES } from "./fixture-files";
@@ -8,6 +8,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
   modules: [
     {
       id: "envoy",
+      model: "envoy",
       display_name: "Envoy",
       summary: "Single-port gateway, Databricks-shaped URL rewrites.",
       category: "gateway",
@@ -42,10 +43,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [
+        {
+          name: "gateway-certs",
+          kind: "init",
+        },
+      ],
       hosted: null,
     },
     {
       id: "authelia",
+      model: "authelia",
       display_name: "Authelia",
       summary: "Forward-auth single-sign-on for the gateway (file-based).",
       category: "gateway",
@@ -68,10 +76,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "postgres",
+      model: "postgresql",
       display_name: "Postgres",
       summary: "Postgres 16; auto-creates DBs other modules declare.",
       category: "metadata_db",
@@ -100,10 +110,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "rustfs",
+      model: "rustfs",
       display_name: "RustFS",
       summary:
         "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
@@ -157,10 +169,21 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [
+        {
+          name: "sts-shim",
+          kind: "sidecar",
+        },
+        {
+          name: "rustfs-init",
+          kind: "init",
+        },
+      ],
       hosted: null,
     },
     {
       id: "azurite",
+      model: "azurite",
       display_name: "Azurite",
       summary: "Azure Blob emulator; object store with Azure-shaped wiring.",
       category: "storage",
@@ -201,10 +224,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [
+        {
+          name: "azurite-init",
+          kind: "init",
+        },
+      ],
       hosted: null,
     },
     {
       id: "hosted-postgres",
+      model: "postgresql",
       display_name: "Hosted Postgres",
       summary:
         "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
@@ -221,6 +251,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
       knobs: [],
+      helpers: [],
       hosted: {
         kind: "postgres",
         default: {
@@ -237,6 +268,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "aws-s3",
+      model: "amazonS3",
       display_name: "Amazon S3",
       summary:
         "Amazon S3 or an S3-compatible store; buckets must already exist.",
@@ -253,6 +285,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
       knobs: [],
+      helpers: [],
       hosted: {
         kind: "s3",
         default: {
@@ -269,6 +302,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "azure-storage",
+      model: "azureBlobStorage",
       display_name: "Azure Storage",
       summary:
         "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
@@ -285,6 +319,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
       knobs: [],
+      helpers: [],
       hosted: {
         kind: "azure_blob",
         default: {
@@ -300,6 +335,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "mlflow",
+      model: "mlflow",
       display_name: "MLflow",
       summary:
         "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
@@ -333,11 +369,29 @@ export const FIXTURE_CATALOG: CatalogDto = {
           required: false,
           help: "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A pair is seeded only when its provider key (e.g. ANTHROPIC_API_KEY) is exported before `docker compose up`.",
         },
+        {
+          key: "uc_url",
+          title: "Unity Catalog URL",
+          kind: {
+            kind: "string",
+          },
+          default: "http://unitycatalog:8080",
+          required: false,
+          help: "Where MLflow reaches Unity Catalog's REST API when both are in the environment, directly on the compose network: MLflow's model registry is then served from Unity Catalog.",
+          advanced: true,
+        },
+      ],
+      helpers: [
+        {
+          name: "mlflow-gateway-init",
+          kind: "init",
+        },
       ],
       hosted: null,
     },
     {
       id: "unity-catalog",
+      model: "unityCatalogOSS",
       display_name: "Unity Catalog",
       summary: "Open-source Unity Catalog server; Databricks-shaped REST API.",
       category: "catalog",
@@ -360,10 +414,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "jaeger",
+      model: "jaeger",
       display_name: "Jaeger",
       summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
       category: "observability",
@@ -386,10 +442,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "headwaters",
+      model: "headwaters",
       display_name: "Headwaters",
       summary:
         "OpenLineage lineage service; Databricks-style API + optional UI.",
@@ -424,10 +482,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [
+        {
+          name: "headwaters-migrate",
+          kind: "init",
+        },
+      ],
       hosted: null,
     },
     {
       id: "omnigent",
+      model: "omnigent",
       display_name: "Omnigent",
       summary:
         "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway.",
@@ -493,10 +558,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "marimo",
+      model: "marimo",
       display_name: "marimo",
       summary: "Hosted marimo editor for the client workspace's notebooks.",
       category: "notebooks",
@@ -518,11 +585,23 @@ export const FIXTURE_CATALOG: CatalogDto = {
           aliases: ["MARIMO_IMAGE"],
           advanced: true,
         },
+        {
+          key: "index_url",
+          title: "Python package index",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "The package index the editor installs the workspace's packages from (`UV_DEFAULT_INDEX`), e.g. a mirror's `/simple/` URL where PyPI is unreachable. Unset uses PyPI.",
+          advanced: true,
+        },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "puppygraph",
+      model: "puppygraph",
       display_name: "PuppyGraph",
       summary: "Graph queries (Cypher, Gremlin) over Unity Catalog tables.",
       category: "graph",
@@ -577,10 +656,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [
+        {
+          name: "puppygraph-schema",
+          kind: "init",
+        },
+      ],
       hosted: null,
     },
     {
       id: "rivers",
+      model: "rivers",
       display_name: "Rivers",
       summary: "Asset-based orchestration of Python pipelines, with a run UI.",
       category: "orchestration",
@@ -614,10 +700,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
     {
       id: "opa",
+      model: "openPolicyAgent",
       display_name: "Open Policy Agent",
       summary: "Rego authorization for every gateway request, after sign-on.",
       category: "gateway",
@@ -662,6 +750,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
       ],
+      helpers: [],
       hosted: null,
     },
   ],
@@ -688,6 +777,7 @@ export const FIXTURE_PLAN: PlanResult = {
     nodes: [
       {
         id: "@clients",
+        model: null,
         kind: "clients",
         display_name: "Clients",
         summary: "Browsers, SDKs and CLIs on the host.",
@@ -702,6 +792,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "authelia",
+        model: "authelia",
         kind: "component",
         display_name: "Authelia",
         summary: "Forward-auth single-sign-on for the gateway (file-based).",
@@ -716,6 +807,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "envoy",
+        model: "envoy",
         kind: "gateway",
         display_name: "Envoy",
         summary: "Single-port gateway, Databricks-shaped URL rewrites.",
@@ -815,6 +907,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "jaeger",
+        model: "jaeger",
         kind: "component",
         display_name: "Jaeger",
         summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
@@ -829,6 +922,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "opa",
+        model: "openPolicyAgent",
         kind: "component",
         display_name: "Open Policy Agent",
         summary: "Rego authorization for every gateway request, after sign-on.",
@@ -843,6 +937,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "postgres",
+        model: "postgresql",
         kind: "component",
         display_name: "Postgres",
         summary: "Postgres 16; auto-creates DBs other modules declare.",
@@ -874,6 +969,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "rustfs",
+        model: "rustfs",
         kind: "component",
         display_name: "RustFS",
         summary:
@@ -906,6 +1002,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "unity-catalog",
+        model: "unityCatalogOSS",
         kind: "component",
         display_name: "Unity Catalog",
         summary:
@@ -921,6 +1018,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "mlflow",
+        model: "mlflow",
         kind: "component",
         display_name: "MLflow",
         summary:
@@ -938,18 +1036,21 @@ export const FIXTURE_PLAN: PlanResult = {
     edges: [
       {
         kind: "access",
+        key: "access:@clients→envoy:9080",
         from: "@clients",
         to: "envoy",
         host_port: 9080,
       },
       {
         kind: "access",
+        key: "access:@clients→envoy:9100",
         from: "@clients",
         to: "envoy",
         host_port: 9100,
       },
       {
         kind: "route",
+        key: "route:envoy→jaeger:9080",
         from: "envoy",
         to: "jaeger",
         host_port: 9080,
@@ -957,6 +1058,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "route",
+        key: "route:envoy→unity-catalog:9080",
         from: "envoy",
         to: "unity-catalog",
         host_port: 9080,
@@ -964,6 +1066,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "route",
+        key: "route:envoy→mlflow:9080",
         from: "envoy",
         to: "mlflow",
         host_port: 9080,
@@ -971,6 +1074,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "route",
+        key: "route:envoy→rustfs:9100",
         from: "envoy",
         to: "rustfs",
         host_port: 9100,
@@ -978,6 +1082,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "authenticates",
+        key: "authenticates:envoy→authelia:9080",
         from: "envoy",
         to: "authelia",
         host_port: 9080,
@@ -985,12 +1090,14 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "authorizes",
+        key: "authorizes:envoy→opa:9080",
         from: "envoy",
         to: "opa",
         host_port: 9080,
       },
       {
         kind: "uses",
+        key: "uses:unity-catalog→postgres:relational_db",
         from: "unity-catalog",
         to: "postgres",
         role: "relational_db",
@@ -999,6 +1106,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "uses",
+        key: "uses:unity-catalog→rustfs:object_store",
         from: "unity-catalog",
         to: "rustfs",
         role: "object_store",
@@ -1007,6 +1115,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "uses",
+        key: "uses:mlflow→postgres:relational_db",
         from: "mlflow",
         to: "postgres",
         role: "relational_db",
@@ -1015,6 +1124,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "uses",
+        key: "uses:mlflow→rustfs:object_store",
         from: "mlflow",
         to: "rustfs",
         role: "object_store",
