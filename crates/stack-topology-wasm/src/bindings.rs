@@ -42,3 +42,16 @@ pub fn plan(selection_json: &str, target: Option<String>) -> Result<JsValue, JsV
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }
+
+/// Plan a saved environment manifest (`env.toml` text) with its whole context — gateway ports,
+/// provider preferences, env name — and return the projected result as [`plan`] does. Older
+/// manifest versions are migrated on read.
+#[wasm_bindgen(js_name = planManifest)]
+pub fn plan_manifest(manifest_toml: &str) -> Result<JsValue, JsValue> {
+    let manifest = olai_stack_topology::EnvManifest::from_toml(manifest_toml)
+        .map_err(|e| JsValue::from_str(&format!("invalid environment manifest: {e}")))?;
+    let catalog = olai_stack_topology::baseline_catalog();
+    let result = dto::plan_result_for_manifest(&manifest, &catalog)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+}

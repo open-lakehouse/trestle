@@ -26,4 +26,8 @@ declare module "stack-topology-wasm-pkg" {
    *  when omitted); returns a `PlanResult` object or throws a string message on
    *  a deserialization / plan error. */
   export function plan(selectionJson: string, target?: string | null): unknown;
+
+  /** Plan a saved environment manifest (`env.toml` text) with its whole
+   *  context; returns a `PlanResult` object or throws a string message. */
+  export function planManifest(manifestToml: string): unknown;
 }
