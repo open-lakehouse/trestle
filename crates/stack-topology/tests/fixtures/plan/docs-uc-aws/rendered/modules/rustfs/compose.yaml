@@ -31,6 +31,8 @@ services:
   # hostnames here.
   sts-shim:
     image: python:3.13-alpine
+    # Python ignores SIGTERM as PID 1; an init forwards it, so `down` doesn't wait for the kill.
+    init: true
     restart: unless-stopped
     command: ["python", "/sts_shim.py"]
     env_file:
