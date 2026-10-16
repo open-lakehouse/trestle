@@ -16,7 +16,7 @@ use std::fmt::Write as _;
 
 use crate::catalog::module::ModuleId;
 use crate::model::placement::Vantage;
-use crate::plan::Plan;
+use crate::plan::{LocalSecrets, Plan};
 use crate::render::envoy::render_envoy;
 use crate::render::output::{
     CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
@@ -374,6 +374,11 @@ pub fn render_all(plan: &Plan) -> Result<Artifacts, RenderError> {
 /// rendered file a hosted resource's secret was resolved into (they can sit anywhere a
 /// template writes, e.g. a mounted config file).
 fn render_gitignore(plan: &Plan, modules: &[(ModuleId, RenderOutput)]) -> String {
+    // Inline credentials are meant to be committed with the rest (planning refuses hosted
+    // modules then, so no resolved secret is rendered anywhere).
+    if plan.local_secrets == LocalSecrets::Inline {
+        return String::from(".data/\n");
+    }
     let mut out = String::from(".data/\n.env\nsecrets.env\nmodules/*/.env/\nmodules/*/secrets/\n");
     let mut secret_files: Vec<String> = Vec::new();
     for (id, render) in modules {
@@ -504,6 +509,12 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
 
     // The Python client workspace, when selected, sits beside the client environments.
     files.extend(crate::render::python_client::python_client_files(plan));
+
+    if plan.local_secrets == LocalSecrets::Inline {
+        for file in &mut files {
+            file.sensitive = false;
+        }
+    }
 
     Ok(MaterializedOutput { files })
 }

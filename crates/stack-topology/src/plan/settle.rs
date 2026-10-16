@@ -14,7 +14,7 @@ use super::demands::{
 use super::hosted::{HostedProviders, ResolveHostedError, resolve_hosted};
 use super::knobs::resolve_module_knobs;
 use super::resolve::ResolvedGraph;
-use super::{PlanCtx, PlanError, Selection, names};
+use super::{LocalSecrets, PlanCtx, PlanError, Selection, names};
 use crate::catalog::Catalog;
 use crate::catalog::module::{ModuleId, ResolvedKnobs, StackFacts};
 use crate::model::endpoint::RouteIntent;
@@ -69,6 +69,11 @@ pub(super) fn settle(
         .iter()
         .filter_map(|m| Some((m.id().clone(), m.hosted()?)))
         .collect();
+    if ctx.local_secrets == LocalSecrets::Inline && !hosted_modules.is_empty() {
+        return Err(PlanError::InlineSecretsWithHosted {
+            modules: hosted_modules.into_keys().collect(),
+        });
+    }
     let hosted =
         resolve_hosted(&hosted_modules, &selection.hosted, ctx.secrets.as_ref()).map_err(|e| {
             match e {

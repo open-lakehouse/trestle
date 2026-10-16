@@ -64,7 +64,11 @@
       "properties": {
         "env_name": { "type": "string" },
         "target": { "type": "string" },
-        "gateway_host_port": { "$ref": "#/$defs/port" }
+        "gateway_host_port": { "$ref": "#/$defs/port" },
+        "local_secrets": {
+          "description": "Absent means `separate`: credential-bearing files are sensitive. `inline` renders them as ordinary files.",
+          "enum": ["separate", "inline"]
+        }
       }
     },
     "graph": {
