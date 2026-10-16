@@ -614,12 +614,32 @@ fn postgres() -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![image_knob(
-            "image",
-            "Postgres image",
-            images::POSTGRES,
-            "POSTGRES_IMAGE",
-        )],
+        knobs: vec![
+            image_knob(
+                "image",
+                "Postgres image",
+                images::POSTGRES,
+                "POSTGRES_IMAGE",
+            ),
+            Knob {
+                key: "data".into(),
+                title: Some("Data storage".into()),
+                kind: KnobKind::Enum {
+                    options: vec!["bind".into(), "volume".into()],
+                },
+                default: Some("bind".into()),
+                required: false,
+                help: Some(
+                    "`bind` keeps the data under the environment's data root \
+                     ({{ env.DATA_ROOT }}/postgres, survives `docker compose down -v`); \
+                     `volume` uses a named Docker volume, so `docker compose down -v` resets \
+                     the database."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
+        ],
         renders: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
             vec![
