@@ -387,7 +387,7 @@ fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
 /// Every environment runs it: the planner adds the `gateway`-role provider whether or not it
 /// was selected. Sign-in and policy are [`GatewaySettings`](crate::GatewaySettings), realized
 /// in the planner and the Envoy renderer (they pull in `authelia` / `opa` and emit the
-/// `ext_authz` filters), so its only knobs are its images.
+/// `ext_authz` filters), so its knobs are its images and whether the admin port is published.
 fn envoy() -> Arc<dyn Module> {
     let provides = Provides {
         // Mints the local CA and leaf certificate when a module impersonates a public host.
@@ -421,6 +421,20 @@ fn envoy() -> Arc<dyn Module> {
                 images::CERTS,
                 "GATEWAY_CERTS_IMAGE",
             ),
+            Knob {
+                key: "publish_admin".into(),
+                title: Some("Publish the admin port".into()),
+                kind: KnobKind::Bool,
+                default: Some("true".into()),
+                required: false,
+                help: Some(
+                    "Publish Envoy's admin endpoint (`gateway_admin_port`) on the host. The \
+                     gateway still serves it in-network when off."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: true,
+            },
         ],
         // The certificate script renders only when the gateway emulates public hostnames
         // (`tls` is set); otherwise it is empty and dropped.

@@ -419,3 +419,50 @@ fn fragments_see_the_stack_wide_render_variables() {
     let gated = fragment(&plan_with_probe(true));
     assert!(gated.contains("auth=true"), "{gated}");
 }
+
+#[test]
+fn publish_admin_controls_the_admin_port() {
+    let ports = |admin: Option<&str>| {
+        let mut selection = olai_stack_topology::Selection::modules(["unity-catalog"]);
+        if let Some(value) = admin {
+            selection.knob_overrides.insert(
+                "envoy".into(),
+                [("publish_admin".to_string(), value.to_string())].into(),
+            );
+        }
+        let plan = olai_stack_topology::baseline_catalog()
+            .plan(&selection, &olai_stack_topology::PlanCtx::default())
+            .unwrap();
+        let fragment = plan
+            .materialize()
+            .unwrap()
+            .files
+            .into_iter()
+            .find(|f| f.path == "modules/envoy/compose.yaml")
+            .unwrap()
+            .contents;
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&fragment).unwrap();
+        yaml["services"]["envoy"]["ports"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(ports(None).contains(&"9901:9901".to_string()));
+    assert!(ports(Some("true")).contains(&"9901:9901".to_string()));
+    let off = ports(Some("false"));
+    assert!(!off.contains(&"9901:9901".to_string()), "{off:?}");
+    assert!(!off.is_empty(), "the routing listeners stay published");
+
+    let mut selection = olai_stack_topology::Selection::modules(["unity-catalog"]);
+    selection.knob_overrides.insert(
+        "envoy".into(),
+        [("publish_admin".to_string(), "sometimes".to_string())].into(),
+    );
+    assert!(
+        olai_stack_topology::baseline_catalog()
+            .plan(&selection, &olai_stack_topology::PlanCtx::default())
+            .is_err()
+    );
+}

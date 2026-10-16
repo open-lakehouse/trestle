@@ -13,7 +13,6 @@ services:
     ports:
       - "8080:10000"
       - "9000:9000"
-      - "9901:9901"
     volumes:
       - gateway-certs:/certs:ro
     networks:

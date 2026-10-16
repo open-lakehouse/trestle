@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:04e7bfd3e89dfad2ac03854d62ed19adb513df8594339ca9f561e4851e4cb9aa"
+    "digest": "sha256:b51fab9b3d3bea840fb8b899d1ae7800fae6fa8a253d003d82acb116a7a0d06b"
   },
   "modules": [
     {
@@ -50,6 +50,17 @@
           "aliases": [
             "GATEWAY_CERTS_IMAGE"
           ],
+          "advanced": true
+        },
+        {
+          "key": "publish_admin",
+          "title": "Publish the admin port",
+          "kind": {
+            "kind": "bool"
+          },
+          "default": "true",
+          "required": false,
+          "help": "Publish Envoy's admin endpoint (`gateway_admin_port`) on the host. The gateway still serves it in-network when off.",
           "advanced": true
         }
       ],

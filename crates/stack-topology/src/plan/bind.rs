@@ -265,7 +265,11 @@ pub(super) fn bind(
             {
                 dependencies.push(gate);
             }
-            (published_ports(gateway, ctx), gateway_render_tls(gateway))
+            let admin = knobs[module.id()].get("publish_admin") != Some("false");
+            (
+                published_ports(gateway, ctx, admin),
+                gateway_render_tls(gateway),
+            )
         } else {
             (Vec::new(), None)
         };
@@ -304,9 +308,10 @@ fn provider_templates<'a>(
         .map(move |own| configured.map_or(own, |h| &h.template))
 }
 
-/// The gateway's published `host:container` mappings: every routing listener, then the Envoy
-/// admin endpoint (not a routing listener, so not in `gateway.listeners`), published 1:1.
-fn published_ports(gateway: &GatewayConfig, ctx: &PlanCtx) -> Vec<PortMapping> {
+/// The gateway's published `host:container` mappings: every routing listener, then, unless
+/// `admin` is off, the Envoy admin endpoint (not a routing listener, so not in
+/// `gateway.listeners`), published 1:1.
+fn published_ports(gateway: &GatewayConfig, ctx: &PlanCtx, admin: bool) -> Vec<PortMapping> {
     gateway
         .listeners
         .iter()
@@ -314,7 +319,7 @@ fn published_ports(gateway: &GatewayConfig, ctx: &PlanCtx) -> Vec<PortMapping> {
             host: l.host_port,
             container: l.internal_port,
         })
-        .chain(std::iter::once(PortMapping {
+        .chain(admin.then_some(PortMapping {
             host: ctx.gateway_admin_port,
             container: ctx.gateway_admin_port,
         }))
