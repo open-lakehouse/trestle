@@ -6,19 +6,22 @@
 //! `wasm32`-clean (disk I/O is feature-gated out of `olai-stack-topology`), so the whole
 //! catalog → plan → render pipeline runs in the browser.
 //!
-//! The design is a two-layer split:
-//!
-//! - [`dto`] — the serializable projection (planner types → `#[derive(Serialize)]` DTOs) and the
-//!   pure `plan_result` core. Compiled on **all** targets and unit-tested natively, because the
-//!   load-bearing work is projecting `Arc<dyn Module>` graph nodes and the non-`Serialize`
-//!   gateway config into plain data.
-//! - [`topology`] — the functional-topology projection behind the diagram: components, the
-//!   gateway's exposed surface, and what each component uses, read from the settled plan.
-//! - [`bindings`] — the thin `#[wasm_bindgen]` JSON-in / JsValue-out wrappers, compiled only on
-//!   `wasm32` so native builds never need the wasm-bindgen toolchain.
+//! The projection itself (planner types → `#[derive(Serialize)]` DTOs, and the pure
+//! `plan_result` core) lives in [`olai_stack_topology::projection`], so the native CLI and the
+//! browser share one implementation. [`dto`] and [`topology`] re-export it under the paths this
+//! crate has always exposed; [`bindings`] holds the thin `#[wasm_bindgen]` JSON-in / JsValue-out
+//! wrappers, compiled only on `wasm32` so native builds never need the wasm-bindgen toolchain.
 
-pub mod dto;
-pub mod topology;
+/// The serializable projection (re-exported from [`olai_stack_topology::projection`]).
+pub mod dto {
+    pub use olai_stack_topology::projection::*;
+}
+
+/// The functional topology behind the diagram (re-exported from
+/// [`olai_stack_topology::projection::topology`]).
+pub mod topology {
+    pub use olai_stack_topology::projection::topology::*;
+}
 
 #[cfg(target_arch = "wasm32")]
 pub mod bindings;

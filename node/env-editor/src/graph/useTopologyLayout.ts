@@ -1,5 +1,5 @@
 // ELK-driven layout for the environment "markitecture". The graph is the
-// plan's *functional* topology (see `crates/stack-topology-wasm/src/topology.rs`):
+// plan's *functional* topology (see `crates/stack-topology/src/projection/topology.rs`):
 // one node per component, read in request direction — clients → gateway →
 // the components it exposes → the capabilities they use — laid out
 // left-to-right with ELK's `layered` algorithm (the same engine + tuning the

@@ -1656,6 +1656,7 @@ version = "0.0.5"
 dependencies = [
  "minijinja",
  "serde",
+ "serde_json",
  "serde_yaml",
  "thiserror 2.0.21",
  "toml",
@@ -2890,10 +2891,8 @@ version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
  "olai-stack-topology",
- "serde",
  "serde-wasm-bindgen",
  "serde_json",
- "thiserror 2.0.21",
  "wasm-bindgen",
 ]
 

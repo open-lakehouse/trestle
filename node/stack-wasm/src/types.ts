@@ -1,8 +1,8 @@
 // TypeScript mirror of the Rust DTOs in
-// `crates/stack-topology-wasm/src/dto.rs`. Hand-authored (serde-wasm-bindgen
+// `crates/stack-topology/src/projection/mod.rs`. Hand-authored (serde-wasm-bindgen
 // produces untyped JS objects), and the single source of truth for both the
 // wasm client and the `@open-lakehouse/env-editor` component. Keep these shapes
-// in sync with `dto.rs` — its native unit tests pin the projection.
+// in sync with `projection/mod.rs` — its native unit tests pin the projection.
 
 /** The kind of value a knob holds (mirrors `KnobKind`, serde tag "kind",
  *  snake_case). Drives which form control the editor renders. */

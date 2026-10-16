@@ -1,23 +1,24 @@
-//! The serializable projection layer between the planner and JS.
+//! The serializable projection of a settled [`Plan`](crate::Plan) and of a [`Catalog`].
 //!
 //! Several planner types are deliberately **not** `Serialize`:
-//! [`ResolvedGraph`](olai_stack_topology::ResolvedGraph)'s nodes are `Arc<dyn Module>` trait
-//! objects, and the gateway config types keep serialization at the artifact-renderer boundary.
-//! This module defines plain `#[derive(Serialize)]` DTOs and projects the planner's output into
-//! them, so the JS side never sees a trait object. It is pure and compiles on every target, so
-//! the projection is unit-tested natively (no wasm runner) — only the thin `JsValue` wrappers in
-//! [`bindings`](crate::bindings) are wasm-gated.
+//! [`ResolvedGraph`](crate::ResolvedGraph)'s nodes are `Arc<dyn Module>` trait objects, and the
+//! gateway config types keep serialization at the artifact-renderer boundary. This module
+//! defines plain `#[derive(Serialize)]` DTOs and projects the planner's output into them, so a
+//! consumer (the browser planner, the CLI's JSON output) never sees a trait object. It is pure
+//! and compiles on every target.
+
+pub mod topology;
 
 use std::collections::BTreeMap;
 
-use olai_stack_topology::{
+use crate::{
     Catalog, ClusterConfig, GatewayConfig, GatewayRoute, HostedKind, HostedResource, Knob,
     ListenerConfig, PlanCtx, PlanError, RenderError, Role, Selection, ServiceSpec, TargetId,
     baseline_catalog, baseline_selection, builtin_targets,
 };
 use serde::Serialize;
 
-pub use crate::topology::{
+pub use self::topology::{
     CLIENTS_NODE_ID, ExposedDto, ExposedKind, GraphDto, GraphNodeDto, NodeKind, ProvisionedDto,
     ResourceNounDto, SurfaceDto, SurfaceKind, TopologyEdgeDto, graph_dto, resource_nouns,
 };
@@ -90,7 +91,7 @@ pub struct HostedModuleDto {
 /// services, a projected gateway layout, and the non-sensitive materialized files.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanResultDto {
-    /// The functional topology (see [`crate::topology`]) — the primary input to the React Flow
+    /// The functional topology (see [`topology`]) — the primary input to the React Flow
     /// "markitecture".
     pub graph: GraphDto,
     /// Each module's resolved services (`ServiceSpec` is `Serialize`), keyed by module id.
@@ -129,7 +130,7 @@ pub struct GatewayDto {
     pub policy: Option<PolicyDto>,
 }
 
-/// The gateway's forward-auth wiring, projected from [`AuthConfig`](olai_stack_topology::AuthConfig).
+/// The gateway's forward-auth wiring, projected from [`AuthConfig`](crate::AuthConfig).
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthDto {
     /// The upstream cluster the `ext_authz` check calls.
@@ -139,7 +140,7 @@ pub struct AuthDto {
 }
 
 /// The gateway's authorization-policy wiring, projected from
-/// [`PolicyConfig`](olai_stack_topology::PolicyConfig).
+/// [`PolicyConfig`](crate::PolicyConfig).
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyDto {
     /// The upstream cluster the gRPC `ext_authz` check calls.
@@ -147,7 +148,7 @@ pub struct PolicyDto {
 }
 
 /// The gateway's emulated-hostname TLS listener, projected from
-/// [`TlsListenerConfig`](olai_stack_topology::TlsListenerConfig).
+/// [`TlsListenerConfig`](crate::TlsListenerConfig).
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsDto {
     /// The listener's in-network port (never host-published).
@@ -466,7 +467,7 @@ mod tests {
     /// The selection the `node/stack-wasm` fixtures are captured from.
     fn fixture_selection() -> Selection {
         Selection {
-            gateway: olai_stack_topology::GatewaySettings::POLICY,
+            gateway: crate::GatewaySettings::POLICY,
             ..Selection::modules(["postgres", "rustfs", "unity-catalog", "mlflow", "jaeger"])
         }
     }
@@ -557,7 +558,7 @@ mod tests {
 
     #[test]
     fn hosted_providers_are_external_nodes_grouped_by_cloud() {
-        use olai_stack_topology::HostedConnection;
+        use crate::HostedConnection;
         let mut selection = Selection::modules(["envoy", "hosted-postgres", "aws-s3", "mlflow"]);
         selection.hosted.insert(
             "hosted-postgres".into(),

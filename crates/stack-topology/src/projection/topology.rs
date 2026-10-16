@@ -13,7 +13,7 @@
 //!   components' APIs and UIs together under path prefixes, and a *service* surface per
 //!   dedicated listener for a backend that must own its origin because clients speak its wire
 //!   protocol (an S3 endpoint). Locally these are ports; hosted, each is its own subdomain.
-//!   Every endpoint comes from the [`RoutePlan`](olai_stack_topology::RoutePlan), attributed to
+//!   Every endpoint comes from the [`RoutePlan`](crate::RoutePlan), attributed to
 //!   the backend it reaches, and flagged when forward-auth gates it.
 //! - **Edges** — clients reaching each surface, the gateway routing to each backend, the gateway
 //!   delegating authentication to the identity provider and authorization to the policy engine,
@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use olai_stack_topology::{
+use crate::{
     Connection, Listener, Module, ObjectStoreCredential, Placement, Plan, Role, RouteIntent,
 };
 use serde::Serialize;
@@ -76,7 +76,7 @@ pub struct GraphNodeDto {
     /// `external:<origin>`).
     pub placement: Option<String>,
     /// For a hosted provider (see
-    /// [`Plan::hosted`](olai_stack_topology::Plan::hosted)): its cloud environment's label
+    /// [`Plan::hosted`](crate::Plan::hosted)): its cloud environment's label
     /// (e.g. `"aws"`), or `""` when it is unnamed. The UI groups these nodes by it. `None`
     /// for everything the stack runs.
     pub cloud: Option<String>,
@@ -171,7 +171,6 @@ pub fn resource_nouns(module: &dyn Module) -> Vec<ResourceNounDto> {
                 } => ("container", "containers"),
                 Connection::ObjectStore { .. } => ("bucket", "buckets"),
                 Connection::RelationalDb { .. } => ("database", "databases"),
-                _ => ("resource", "resources"),
             };
             ResourceNounDto {
                 kind: kind.clone(),
@@ -294,14 +293,12 @@ fn protocol(connection: &Connection, full: bool) -> String {
             } if full => "S3 + STS".to_string(),
             ObjectStoreCredential::S3 { .. } => "S3".to_string(),
             ObjectStoreCredential::AzureBlob { .. } => "Azure Blob".to_string(),
-            _ => "object store".to_string(),
         },
         Connection::RelationalDb { url, .. } => match url.split_once("://") {
             Some(("postgres" | "postgresql", _)) => "PostgreSQL".to_string(),
             Some((scheme, _)) => scheme.to_string(),
             None => "SQL".to_string(),
         },
-        _ => "connection".to_string(),
     }
 }
 
@@ -661,7 +658,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
 
 #[cfg(test)]
 mod tests {
-    use olai_stack_topology::{Catalog, ExtraResource, PlanCtx, Selection, baseline_catalog};
+    use crate::{Catalog, ExtraResource, PlanCtx, Selection, baseline_catalog};
 
     use super::*;
 

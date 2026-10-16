@@ -15,7 +15,7 @@ that the `@open-lakehouse/env-editor` component consumes through its planner sea
   dependency. **Default builds and Storybook alias the whole package here**, so a
   plain `bun install && bun run dev` works before the wasm artifact is built.
 - **`./types`** (`types.ts`) — the DTO + `Planner` TypeScript types (the single
-  source of truth, hand-kept in sync with `crates/stack-topology-wasm/src/dto.rs`).
+  source of truth, hand-kept in sync with `crates/stack-topology/src/projection/mod.rs`).
 
 ## Building the wasm artifact
 
@@ -30,13 +30,13 @@ The output lands in `pkg/` (gitignored). Fresh clones run the stub until built.
 
 `src/fixtures.ts` is captured from the real planner so the stub and Storybook
 render true output (do not hand-edit). Two ignored tests in
-`crates/stack-topology-wasm/src/dto.rs` print the JSON to paste back:
+`crates/stack-topology/src/projection/mod.rs` print the JSON to paste back:
 
 ```bash
 # FIXTURE_CATALOG, plus FIXTURE_PLAN's graph / services / gateway
-cargo test -p stack-topology-wasm dump_fixture_plan_json -- --ignored --nocapture
+cargo test -p olai-stack-topology --lib dump_fixture_plan_json -- --ignored --nocapture
 # FIXTURE_FILES (src/fixture-files.ts)
-cargo test -p stack-topology-wasm dump_fixture_files_json -- --ignored --nocapture
+cargo test -p olai-stack-topology --lib dump_fixture_files_json -- --ignored --nocapture
 ```
 
 Then run `bun run lint:fix` to normalize the pasted JSON into the repo's style.

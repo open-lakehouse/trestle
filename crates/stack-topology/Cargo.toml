@@ -39,6 +39,7 @@ url = { workspace = true }
 minijinja = { version = "2.19", default-features = false, features = ["builtins", "serde"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 # Used by the golden-artifact tests to assert the rendered Envoy/compose output is
 # valid YAML and to compare it semantically against the captured trestle fixtures.
 serde_yaml = { workspace = true }

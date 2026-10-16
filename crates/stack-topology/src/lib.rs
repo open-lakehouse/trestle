@@ -80,6 +80,7 @@ pub mod catalog;
 pub mod manifest;
 pub mod model;
 pub mod plan;
+pub mod projection;
 pub mod render;
 pub mod report;
 pub mod target;
