@@ -24,7 +24,16 @@ fn selections() -> Vec<Selection> {
     ]);
     let azure = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog", "mlflow"]);
     let bare_store = Selection::modules(["envoy", "rustfs"]);
-    vec![everything, azure, bare_store]
+    let mut mounts = Selection::modules(["unity-catalog"]);
+    mounts.knob_overrides.insert(
+        "unity-catalog".into(),
+        [
+            ("extra_mounts".to_string(), "./data:/data".to_string()),
+            ("writable_mounts".to_string(), "/data".to_string()),
+        ]
+        .into(),
+    );
+    vec![everything, azure, bare_store, mounts]
 }
 
 fn rendered_services(fragment: &str) -> BTreeSet<String> {

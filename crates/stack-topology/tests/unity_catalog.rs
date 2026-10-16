@@ -137,6 +137,7 @@ fn invalid_knob_values_are_rejected() {
         ("embedded_metadata", "sometimes"),
         ("master_role_arn", "uc-master"),
         ("master_role_arn", "arn:aws:iam::1:user/someone"),
+        ("writable_mounts", "/data"),
     ] {
         let err = plan_with(&[(key, value)]).unwrap_err();
         let got = match err {
@@ -242,4 +243,38 @@ fn bucket_renames_the_object_store_demand() {
         init.contains("s3://uc-docs") && !init.contains("s3://unity"),
         "{init}"
     );
+}
+
+#[test]
+fn writable_mounts_open_their_paths_before_the_server_starts() {
+    let mount = "${UC_DOCS_ROOT:-/tmp/uc-docs}:${UC_DOCS_ROOT:-/tmp/uc-docs}";
+    let plan = plan_with(&[
+        ("extra_mounts", mount),
+        ("writable_mounts", "${UC_DOCS_ROOT:-/tmp/uc-docs}"),
+    ])
+    .unwrap();
+    let rendered = compose(&plan);
+    let helper = &rendered["services"]["unitycatalog-mounts"];
+    assert_eq!(helper["user"], "root");
+    assert_eq!(
+        helper["entrypoint"],
+        serde_yaml::to_value(["chmod", "0777", "${UC_DOCS_ROOT:-/tmp/uc-docs}"]).unwrap()
+    );
+    assert_eq!(helper["volumes"][0], mount);
+    assert_eq!(
+        rendered["services"]["unitycatalog"]["depends_on"]["unitycatalog-mounts"]["condition"],
+        "service_completed_successfully"
+    );
+
+    let unset = compose(&plan_with(&[("extra_mounts", mount)]).unwrap());
+    assert!(unset["services"].get("unitycatalog-mounts").is_none());
+}
+
+#[test]
+fn writable_mounts_need_mounts_and_absolute_paths() {
+    let mount = "./data:/data";
+    for value in ["data", "\"/data\""] {
+        let err = plan_with(&[("extra_mounts", mount), ("writable_mounts", value)]).unwrap_err();
+        assert_eq!(rejected_key(err), "writable_mounts", "{value:?}");
+    }
 }

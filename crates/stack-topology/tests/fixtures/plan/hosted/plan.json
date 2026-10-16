@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:dc8b2ea27298ea3230b32f129d0bbc85a4c627ad64763ca41d64a5795279288e"
+    "digest": "sha256:78e47db53239fba21533472d21ee2278b153779f2ff52f9c47a25324c2350977"
   },
   "recipe": {
     "digest": "sha256:ba5851f35f1e292a20fba1e8d861c1d67d5fafdb856a6dd18df57f6485c858d5"
@@ -223,6 +223,11 @@
       "name": "unitycatalog-storage",
       "component": "unity-catalog",
       "kind": "sidecar"
+    },
+    {
+      "name": "unitycatalog-mounts",
+      "component": "unity-catalog",
+      "kind": "init"
     }
   ],
   "services": {

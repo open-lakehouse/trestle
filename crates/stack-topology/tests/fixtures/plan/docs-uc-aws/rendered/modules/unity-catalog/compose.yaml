@@ -17,6 +17,8 @@ services:
         condition: service_completed_successfully
       gateway-certs:
         condition: service_completed_successfully
+      unitycatalog-mounts:
+        condition: service_completed_successfully
     secrets:
       - source: unitycatalog_server_properties
         target: /home/unitycatalog/etc/conf/server.properties
@@ -38,3 +40,16 @@ services:
       timeout: 5s
       retries: 12
       start_period: 15s
+
+  # One-shot: Docker creates a missing bind source owned by root, so open the paths up for
+  # the server and for host-side clients that write to the same directories.
+  unitycatalog-mounts:
+    image: python:3.13-alpine
+    user: root
+    restart: "no"
+    entrypoint:
+      - chmod
+      - "0777"
+      - "${UC_DOCS_ROOT:-/tmp/uc-docs}"
+    volumes:
+      - ${UC_DOCS_ROOT:-/tmp/uc-docs}:${UC_DOCS_ROOT:-/tmp/uc-docs}

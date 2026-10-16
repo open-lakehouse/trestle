@@ -1234,6 +1234,7 @@ const UNITY_CATALOG_SERVICE: &str = "unitycatalog";
 /// The helper that registers the stack's object stores in Unity Catalog's database, then
 /// stays up (healthy) so `up --wait` covers it.
 const UNITY_CATALOG_STORAGE: &str = "unitycatalog-storage";
+const UNITY_CATALOG_MOUNTS: &str = "unitycatalog-mounts";
 const UNITY_CATALOG_PORT: u16 = 8080;
 
 /// `unity-catalog` — the data catalog.
@@ -1241,7 +1242,10 @@ const UNITY_CATALOG_PORT: u16 = 8080;
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
     let mut provides = Provides {
-        helpers: vec![HelperService::sidecar(UNITY_CATALOG_STORAGE)],
+        helpers: vec![
+            HelperService::sidecar(UNITY_CATALOG_STORAGE),
+            HelperService::init(UNITY_CATALOG_MOUNTS),
+        ],
         ..Provides::default()
     };
     provides.client_env.insert(
@@ -1322,7 +1326,7 @@ fn unity_catalog() -> Arc<dyn Module> {
             ),
             image_knob(
                 "storage_image",
-                "Unity Catalog storage registration image",
+                "Unity Catalog helper image (storage registration, writable mounts)",
                 images::UNITY_CATALOG_STORAGE,
                 "UC_STORAGE_IMAGE",
             ),
@@ -1394,6 +1398,13 @@ fn unity_catalog() -> Arc<dyn Module> {
                 "Extra mounts",
                 "More volumes for the server, `;`-separated, each in Compose short syntax \
                  (`source:target[:mode]`). Variable interpolation is passed through.",
+            ),
+            optional_string_knob(
+                "writable_mounts",
+                "Writable mounts",
+                "`;`-separated `extra_mounts` targets to make writable by any user before the \
+                 server starts: Docker creates a missing bind source owned by root, and \
+                 host-side clients write to the same directory as the server.",
             ),
             optional_string_knob(
                 "build",
@@ -1543,6 +1554,24 @@ impl Module for UnityCatalog {
                     return Err(KnobRejection::new(
                         "extra_mounts",
                         "can't contain quotes or line breaks",
+                    ));
+                }
+            }
+        }
+        if let Some(paths) = knobs.get("writable_mounts") {
+            if knobs.get("extra_mounts").is_none() {
+                return Err(KnobRejection::new(
+                    "writable_mounts",
+                    "needs `extra_mounts` to mount the paths it opens",
+                ));
+            }
+            for path in paths.split(';').map(str::trim) {
+                if !(path.starts_with('/') || path.starts_with("${"))
+                    || path.contains(['"', '\'', '\n', '\r'])
+                {
+                    return Err(KnobRejection::new(
+                        "writable_mounts",
+                        "needs `;`-separated absolute container paths, without quotes",
                     ));
                 }
             }

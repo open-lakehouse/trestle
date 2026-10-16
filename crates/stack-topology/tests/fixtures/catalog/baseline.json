@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:dc8b2ea27298ea3230b32f129d0bbc85a4c627ad64763ca41d64a5795279288e"
+    "digest": "sha256:78e47db53239fba21533472d21ee2278b153779f2ff52f9c47a25324c2350977"
   },
   "modules": [
     {
@@ -475,7 +475,7 @@
         },
         {
           "key": "storage_image",
-          "title": "Unity Catalog storage registration image",
+          "title": "Unity Catalog helper image (storage registration, writable mounts)",
           "kind": {
             "kind": "string"
           },
@@ -564,6 +564,16 @@
           "advanced": true
         },
         {
+          "key": "writable_mounts",
+          "title": "Writable mounts",
+          "kind": {
+            "kind": "string"
+          },
+          "required": false,
+          "help": "`;`-separated `extra_mounts` targets to make writable by any user before the server starts: Docker creates a missing bind source owned by root, and host-side clients write to the same directory as the server.",
+          "advanced": true
+        },
+        {
           "key": "build",
           "title": "Build context",
           "kind": {
@@ -578,6 +588,10 @@
         {
           "name": "unitycatalog-storage",
           "kind": "sidecar"
+        },
+        {
+          "name": "unitycatalog-mounts",
+          "kind": "init"
         }
       ],
       "hosted": null
