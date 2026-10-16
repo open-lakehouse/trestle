@@ -549,6 +549,12 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
             "  Graph:     {url}  (schema: graphs/puppygraph/schema.json; then `docker compose up puppygraph-schema`)"
         );
     }
+    if let Some(url) = plan.client_env_host.get("RIVERS_URL") {
+        let _ = writeln!(
+            out,
+            "  Pipelines: {url}  (code: pipelines/rivers/; reload the code location from the UI after editing)"
+        );
+    }
     let _ = writeln!(
         out,
         "  Re-render: edit env.toml, then `trestle env render {dir}`"
@@ -1192,6 +1198,16 @@ mod tests {
             )
             .contains("Graph:")
         );
+    }
+
+    #[test]
+    fn next_steps_point_at_the_pipelines() {
+        let plan = baseline_catalog()
+            .plan(&Selection::modules(["rivers"]), &PlanCtx::default())
+            .unwrap();
+        let text = next_steps(&plan, std::path::Path::new("lh"));
+        assert!(text.contains("Pipelines: http://localhost:"), "{text}");
+        assert!(text.contains("pipelines/rivers/"), "{text}");
     }
 
     fn lakehouse() -> Selection {
