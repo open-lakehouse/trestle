@@ -56,8 +56,8 @@ use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, HelperService, ImpersonatedHost,
-    Knob, KnobKind, Module, ModuleId, Provides, PythonClient, Readiness, ReadyGate, RenderSpec,
-    ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
+    Knob, KnobKind, KnobRejection, Module, ModuleId, Provides, PythonClient, Readiness, ReadyGate,
+    RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -1145,7 +1145,7 @@ fn unity_catalog() -> Arc<dyn Module> {
     // AWS hostnames itself (see `rustfs`), and the fragment trusts the gateway's local CA when
     // the connection carries a `tls_trust`.
 
-    Arc::new(DataModule {
+    Arc::new(UnityCatalog(DataModule {
         id: ModuleId::from("unity-catalog"),
         model: Some("unityCatalogOSS".into()),
         display_name: Some("Unity Catalog".into()),
@@ -1201,12 +1201,46 @@ fn unity_catalog() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![image_knob(
-            "image",
-            "Unity Catalog image",
-            images::UNITY_CATALOG,
-            "UC_IMAGE",
-        )],
+        knobs: vec![
+            image_knob(
+                "image",
+                "Unity Catalog image",
+                images::UNITY_CATALOG,
+                "UC_IMAGE",
+            ),
+            Knob {
+                key: "embedded_metadata".into(),
+                title: Some("Embedded metadata".into()),
+                kind: KnobKind::Bool,
+                default: Some("false".into()),
+                required: false,
+                help: Some(
+                    "Keep metadata in the server's own H2 file and store data on local paths, \
+                     so the stack runs no relational or object store. Metadata is lost with \
+                     the container."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: false,
+            },
+            optional_string_knob(
+                "container_name",
+                "Container name",
+                "A fixed Docker container name, for `docker exec <name> ...` instructions.",
+            ),
+            optional_string_knob(
+                "extra_mounts",
+                "Extra mounts",
+                "More volumes for the server, `;`-separated, each in Compose short syntax \
+                 (`source:target[:mode]`). Variable interpolation is passed through.",
+            ),
+            optional_string_knob(
+                "build",
+                "Build context",
+                "Build the server image from this directory (relative to the rendered \
+                 compose.yaml) and tag it with the `image` knob.",
+            ),
+        ],
         renders: template_with_files(
             include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
             vec![
@@ -1227,7 +1261,125 @@ fn unity_catalog() -> Arc<dyn Module> {
             ],
         )
         .for_compose(),
-    })
+    }))
+}
+
+/// An optional, advanced string knob with no default.
+fn optional_string_knob(key: &str, title: &str, help: &str) -> Knob {
+    Knob {
+        key: key.into(),
+        title: Some(title.into()),
+        kind: KnobKind::String,
+        default: None,
+        required: false,
+        help: Some(help.into()),
+        aliases: vec![],
+        advanced: true,
+    }
+}
+
+/// Unity Catalog, with knobs that change what it needs: `embedded_metadata` keeps metadata in
+/// the server's H2 file and data on local paths, so it demands no relational or object store.
+struct UnityCatalog(DataModule);
+
+impl UnityCatalog {
+    fn embedded(knobs: &ResolvedKnobs) -> bool {
+        knobs.get("embedded_metadata") == Some("true")
+    }
+}
+
+impl Module for UnityCatalog {
+    fn id(&self) -> &ModuleId {
+        self.0.id()
+    }
+    fn model(&self) -> Option<&str> {
+        self.0.model()
+    }
+    fn display_name(&self) -> Option<&str> {
+        self.0.display_name()
+    }
+    fn summary(&self) -> Option<&str> {
+        self.0.summary()
+    }
+    fn category(&self) -> Option<&str> {
+        self.0.category()
+    }
+    fn provider_of(&self) -> Option<&str> {
+        self.0.provider_of()
+    }
+    fn requires(&self) -> &[ModuleId] {
+        self.0.requires()
+    }
+    fn conflicts_with(&self) -> &[ModuleId] {
+        self.0.conflicts_with()
+    }
+    fn needs(&self) -> &[ResourceDemand] {
+        self.0.needs()
+    }
+    fn needs_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [ResourceDemand]> {
+        if Self::embedded(knobs) {
+            Cow::Borrowed(&[])
+        } else {
+            Cow::Borrowed(self.0.needs())
+        }
+    }
+    fn knobs(&self) -> &[Knob] {
+        self.0.knobs()
+    }
+    fn check_knobs(&self, knobs: &ResolvedKnobs) -> Result<(), KnobRejection> {
+        if let Some(name) = knobs.get("container_name") {
+            let mut chars = name.chars();
+            let valid = chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+            if !valid {
+                return Err(KnobRejection::new(
+                    "container_name",
+                    "must start with a letter or digit and use only letters, digits, `_`, `.`, `-`",
+                ));
+            }
+        }
+        if let Some(mounts) = knobs.get("extra_mounts") {
+            for mount in mounts.split(';').map(str::trim) {
+                if mount.is_empty() || !mount.contains(':') {
+                    return Err(KnobRejection::new(
+                        "extra_mounts",
+                        "needs `;`-separated `source:target[:mode]` entries",
+                    ));
+                }
+                if mount.contains(['"', '\'', '\n', '\r']) {
+                    return Err(KnobRejection::new(
+                        "extra_mounts",
+                        "can't contain quotes or line breaks",
+                    ));
+                }
+            }
+        }
+        if let Some(context) = knobs.get("build") {
+            let path = std::path::Path::new(context);
+            let escapes = path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)));
+            if context.trim().is_empty()
+                || escapes
+                || context.contains(['"', '\'', '\n', '\r', '\\'])
+            {
+                return Err(KnobRejection::new(
+                    "build",
+                    "must be a relative path inside the render root (no `..`, `/`, or `.` prefix)",
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn provides(&self) -> &Provides {
+        self.0.provides()
+    }
+    fn render_for(&self, target: &TargetId) -> Option<&RenderSpec> {
+        self.0.render_for(target)
+    }
+    fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
+        self.0.services(knobs)
+    }
 }
 
 /// `jaeger` — all-in-one OTLP tracing backend, UI fronted at `/jaeger`.

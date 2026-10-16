@@ -1,7 +1,18 @@
 # Unity Catalog
 services:
   unitycatalog:
+{%- if knobs.container_name %}
+    container_name: {{ knobs.container_name }}
+{%- endif %}
+{%- if knobs.build %}
+    # Built locally from the render root, tagged with the `image` knob.
+    build:
+      context: ./{{ knobs.build }}
+    pull_policy: build
+{%- endif %}
     image: {{ knobs.image }}
+    # The server ignores SIGTERM as PID 1.
+    init: true
     restart: unless-stopped
 {%- if dependencies %}
     depends_on:
@@ -13,16 +24,28 @@ services:
     secrets:
       - source: unitycatalog_server_properties
         target: /home/unitycatalog/etc/conf/server.properties
+{%- if connections.relational_db %}
       # Points the metadata store at the relational_db provider instead of the built-in H2.
       - source: unitycatalog_hibernate_properties
         target: /home/unitycatalog/etc/conf/hibernate.properties
-{%- set obj = connections.object_store.0 %}
-{%- if obj.tls_trust %}
+{%- endif %}
+{%- set obj = connections.object_store[0] if connections.object_store else none %}
+{%- set trust = obj.tls_trust if obj else none %}
+{%- if trust %}
     environment:
       # Trust the gateway's local CA, which answers the AWS STS/S3 hostnames UC calls.
-      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore={{ obj.tls_trust.jvm_truststore }} -Djavax.net.ssl.trustStorePassword={{ obj.tls_trust.jvm_truststore_password }}
+      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore={{ trust.jvm_truststore }} -Djavax.net.ssl.trustStorePassword={{ trust.jvm_truststore_password }}
+{%- endif %}
+{%- if trust or knobs.extra_mounts %}
     volumes:
-      - {{ obj.tls_trust.volume }}:{{ obj.tls_trust.mount_path }}:ro
+{%- if trust %}
+      - {{ trust.volume }}:{{ trust.mount_path }}:ro
+{%- endif %}
+{%- if knobs.extra_mounts %}
+{%- for mount in knobs.extra_mounts | split(";") %}
+      - {{ mount | trim }}
+{%- endfor %}
+{%- endif %}
 {%- endif %}
     expose:
       - "8080"

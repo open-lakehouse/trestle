@@ -2,6 +2,8 @@
 services:
   unitycatalog:
     image: unitycatalog/unitycatalog:v0.6.0
+    # The server ignores SIGTERM as PID 1.
+    init: true
     restart: unless-stopped
     secrets:
       - source: unitycatalog_server_properties
