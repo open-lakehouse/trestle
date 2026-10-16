@@ -50,6 +50,9 @@ pub struct TargetDto {
 pub struct ModuleDto {
     /// Stable module id (e.g. `"mlflow"`).
     pub id: String,
+    /// The implementation the module packages, as an architecture-model element id (see
+    /// [`Module::model`](crate::Module::model)).
+    pub model: Option<String>,
     /// Human-readable name for a card title; falls back to the id when unset.
     pub display_name: Option<String>,
     /// One-line summary for the card body.
@@ -210,6 +213,7 @@ pub fn catalog_dto() -> CatalogDto {
         .iter()
         .map(|m| ModuleDto {
             id: m.id().as_str().to_string(),
+            model: m.model().map(str::to_string),
             display_name: m.display_name().map(str::to_string),
             summary: m.summary().map(str::to_string),
             category: m.category().map(str::to_string),

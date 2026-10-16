@@ -55,9 +55,9 @@ use std::sync::Arc;
 use super::Catalog;
 use crate::catalog::images;
 use crate::catalog::module::{
-    ClientNotebook, ClientValue, ConnectionBinding, DataModule, ImpersonatedHost, Knob, KnobKind,
-    Module, ModuleId, Provides, PythonClient, Readiness, ReadyGate, RenderSpec, ResolvedKnobs,
-    ResourceDemand, StackFacts, UrlPart,
+    ClientNotebook, ClientValue, ConnectionBinding, DataModule, HelperService, ImpersonatedHost,
+    Knob, KnobKind, Module, ModuleId, Provides, PythonClient, Readiness, ReadyGate, RenderSpec,
+    ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -383,7 +383,11 @@ fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
 /// in the planner and the Envoy renderer (they pull in `authelia` / `opa` and emit the
 /// `ext_authz` filters), so its only knobs are its images.
 fn envoy() -> Arc<dyn Module> {
-    let provides = Provides::default();
+    let provides = Provides {
+        // Mints the local CA and leaf certificate when a module impersonates a public host.
+        helpers: vec![HelperService::init("gateway-certs")],
+        ..Provides::default()
+    };
     Arc::new(DataModule {
         id: ModuleId::from("envoy"),
         model: Some("envoy".into()),
@@ -645,7 +649,13 @@ const RUSTFS_SECRET_KEY: &str = "rustfs-root-secret";
 /// to it. An STS shim sits in front of RustFS because RustFS rejects the session policies such
 /// clients send (see `templates/modules/rustfs/compose.yaml.jinja`).
 fn rustfs() -> Arc<dyn Module> {
-    let mut provides = Provides::default();
+    let mut provides = Provides {
+        helpers: vec![
+            HelperService::sidecar("sts-shim"),
+            HelperService::init("rustfs-init"),
+        ],
+        ..Provides::default()
+    };
     // No env vars are declared here: the S3 credentials (`AWS_ACCESS_KEY_ID` /
     // `AWS_SECRET_ACCESS_KEY` / `AWS_DEFAULT_REGION`) are derived from the typed S3 credential
     // below (via `Connection::standard_env`), so they are stated once and enter `.env` only
@@ -779,7 +789,10 @@ fn rustfs_env() -> String {
 /// object_store coordinate; RustFS is not deployed, so no `AWS_*` keys enter the stack.
 fn azurite() -> Arc<dyn Module> {
     const CONN: &str = "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;";
-    let mut provides = Provides::default();
+    let mut provides = Provides {
+        helpers: vec![HelperService::init("azurite-init")],
+        ..Provides::default()
+    };
     // `AZURE_STORAGE_CONNECTION_STRING` is not hand-listed: the planner derives it from the
     // typed Azure credential below (via `Connection::standard_env`), so it is stated once and
     // enters `.env` only when Azurite is the chosen object_store. The blob port is the
@@ -864,7 +877,10 @@ pub const MLFLOW_AI_GATEWAY_MODELS_DEFAULT: &str =
 /// the Databricks-shaped OTel (`/api/2.0/otel`) and AI Gateway (`/ai-gateway`) mounts rewrite
 /// onto the paths MLflow serves them at under it.
 fn mlflow() -> Arc<dyn Module> {
-    let mut provides = Provides::default();
+    let mut provides = Provides {
+        helpers: vec![HelperService::init("mlflow-gateway-init")],
+        ..Provides::default()
+    };
     // `MLFLOW_S3_ENDPOINT_URL` and the AWS_* credentials are no longer declared here — they
     // are injected from the object_store provider's coordinates (see `needs` below), so they
     // follow whichever provider the planner chose and carry the in-network endpoint.
@@ -1353,6 +1369,7 @@ impl Headwaters {
             // at the gateway regardless of the UI knob; the gateway applies any base-path
             // rewrite, so clients never see it.
             provides: Provides {
+                helpers: vec![HelperService::init("headwaters-migrate")],
                 client_env: [
                     (
                         "OPENLINEAGE_URL".to_string(),
@@ -1762,7 +1779,10 @@ const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
 /// published on their standard ports. All three use PuppyGraph's own login (the `password`
 /// knob); the dedicated listener is not behind the gateway's sign-in.
 fn puppygraph() -> Arc<dyn Module> {
-    let mut provides = Provides::default();
+    let mut provides = Provides {
+        helpers: vec![HelperService::init("puppygraph-schema")],
+        ..Provides::default()
+    };
     for (key, endpoint, part) in [
         ("PUPPYGRAPH_URL", "ui", UrlPart::Full),
         ("PUPPYGRAPH_BOLT_ADDRESS", "bolt", UrlPart::Authority),

@@ -148,6 +148,49 @@ pub struct Provides {
     /// [`HostedConnection`]: crate::HostedConnection
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted: Option<HostedKind>,
+    /// The helper containers this module's fragment may run beside its services (an init job,
+    /// a sidecar). They get no routes and fold into the module's node, so only this list lets
+    /// an export name every container the stack runs. Whether one runs can depend on knobs or
+    /// on the rest of the stack.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub helpers: Vec<HelperService>,
+}
+
+/// A container a module's fragment runs to support its services (see [`Provides::helpers`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelperService {
+    /// The compose service name.
+    pub name: String,
+    /// What it does for the module.
+    pub kind: HelperKind,
+}
+
+impl HelperService {
+    /// A one-shot job that runs to completion before (or as) the module starts.
+    pub fn init(name: &str) -> Self {
+        HelperService {
+            name: name.into(),
+            kind: HelperKind::Init,
+        }
+    }
+
+    /// A long-running container serving the module alongside its main service.
+    pub fn sidecar(name: &str) -> Self {
+        HelperService {
+            name: name.into(),
+            kind: HelperKind::Sidecar,
+        }
+    }
+}
+
+/// The kind of a [`HelperService`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HelperKind {
+    /// Runs once and exits (bucket creation, migrations, cert minting, seeding).
+    Init,
+    /// Keeps running next to the main service.
+    Sidecar,
 }
 
 /// A module's contribution to the Python client workspace (see [`Provides::python`]).
