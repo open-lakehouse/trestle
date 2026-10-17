@@ -1295,6 +1295,7 @@ mod tests {
                     contents: String::new(),
                     sensitive: false,
                     preserve: false,
+                    moved_from: None,
                 });
                 Ok(out)
             }
@@ -1348,6 +1349,7 @@ mod tests {
                     secret_alias: None,
                     at_root: false,
                     preserve: false,
+                    moved_from: None,
                 }],
             }
             .for_compose();
@@ -1388,6 +1390,7 @@ mod tests {
                 secret_alias: None,
                 at_root: false,
                 preserve: false,
+                moved_from: None,
             }],
         }
         .for_compose();

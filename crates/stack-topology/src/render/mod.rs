@@ -105,8 +105,8 @@ pub struct RenderFile {
     pub secret_alias: Option<String>,
     /// Write this file at the environment root rather than under `modules/<id>/`.
     ///
-    /// Used for operator-facing files that should sit beside `compose.yaml` (e.g. Authelia's
-    /// `users.yml`).
+    /// Used for operator-facing files that should sit beside `compose.yaml` (e.g. OPA's
+    /// `policies/authz.rego`).
     #[serde(default)]
     pub at_root: bool,
     /// Do not overwrite the on-disk file once it exists.
@@ -115,6 +115,14 @@ pub struct RenderFile {
     /// edits alone across subsequent `trestle env render` / `env new --force` runs.
     #[serde(default)]
     pub preserve: bool,
+    /// Where older renders wrote this [`preserve`](Self::preserve)d file, relative to the
+    /// environment root (not rooted under `modules/<id>/`).
+    ///
+    /// Lets a module relocate an operator-owned file without dropping the operator's edits:
+    /// when the file is missing at its new path but exists here, the writer moves it rather
+    /// than seeding the default (e.g. Authelia's `users.yml`, once written at the root).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
 /// What a module's render produces: a compose fragment plus any files to mount.
@@ -208,6 +216,7 @@ mod tests {
                 secret_alias: None,
                 at_root: false,
                 preserve: false,
+                moved_from: None,
             }],
         };
         assert_eq!(out.files.len(), 1);

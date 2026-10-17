@@ -602,6 +602,7 @@ impl RenderSpec {
                             .transpose()?,
                         at_root: f.at_root,
                         preserve: f.preserve,
+                        moved_from: f.moved_from.clone(),
                     })
                 })
                 .collect::<Result<_, TemplateError>>()?,

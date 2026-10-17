@@ -1706,8 +1706,16 @@ mod auth {
             .iter()
             .find(|f| f.alias.as_deref() == Some("authelia_users"))
             .expect("authelia_users");
-        assert_eq!(users.path, "users.yml");
+        assert_eq!(users.path, "modules/authelia/users.yml");
         assert!(users.preserve, "users.yml is operator-owned");
+        assert_eq!(users.moved_from.as_deref(), Some("users.yml"));
+        assert!(
+            out.files
+                .iter()
+                .any(|f| f.path == "modules/authelia/README.md"
+                    && f.contents.contains("modules/authelia/users.yml")),
+            "a README beside users.yml explains how to manage users"
+        );
 
         // The top-level compose includes the authelia fragment.
         let arts = render_all(&p).unwrap();
@@ -1717,8 +1725,8 @@ mod auth {
             arts.compose
         );
         assert!(
-            arts.compose.contains("file: ./users.yml"),
-            "users.yml is mounted from the environment root:\n{}",
+            arts.compose.contains("file: ./modules/authelia/users.yml"),
+            "users.yml is mounted from the authelia directory:\n{}",
             arts.compose
         );
 

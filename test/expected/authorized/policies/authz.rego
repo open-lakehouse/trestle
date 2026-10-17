@@ -26,7 +26,7 @@ allow if {
 	request.method in read_methods
 }
 
-# Writes need the `writers` or `admins` group (see `users.yml`).
+# Writes need the `writers` or `admins` group (see `modules/authelia/users.yml`).
 allow if {
 	user != ""
 	not request.method in read_methods

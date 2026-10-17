@@ -121,9 +121,9 @@ Rendered stacks keep container configuration out of Compose YAML:
 - Generated `.env`, module `.env/` and `secrets/` directories, and `.data/` are covered by
   the generated environment-root `.gitignore`. Sensitive files are written with mode `0600`
   on Unix.
-- Operator-owned files such as Authelia's `users.yml` are written at the environment root
-  (beside `compose.yaml`) and are **not** overwritten on subsequent renders. Delete the
-  file and re-render to restore the catalog default.
+- Operator-owned files such as Authelia's `modules/authelia/users.yml` (explained by the
+  `README.md` beside it) and OPA's `policies/authz.rego` are **not** overwritten on
+  subsequent renders. Delete the file and re-render to restore the catalog default.
 
 An env file prevents credentials from landing in committed YAML; it does not hide them from
 the container process environment. Commands such as `docker compose config` may display the

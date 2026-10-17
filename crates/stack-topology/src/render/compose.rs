@@ -420,18 +420,21 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             contents: artifacts.compose,
             sensitive: false,
             preserve: false,
+            moved_from: None,
         },
         OutputFile {
             path: ".env".into(),
             contents: artifacts.env,
             sensitive: true,
             preserve: false,
+            moved_from: None,
         },
         OutputFile {
             path: ".gitignore".into(),
             contents: artifacts.gitignore,
             sensitive: false,
             preserve: false,
+            moved_from: None,
         },
         // What a client loads to reach the stack, per vantage. Credential-free, so not
         // sensitive: it is meant to be shared (e.g. sourced by an app's dev environment).
@@ -443,6 +446,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             ),
             sensitive: false,
             preserve: false,
+            moved_from: None,
         },
         OutputFile {
             path: CLIENT_CONTAINER_ENV_PATH.into(),
@@ -452,6 +456,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             ),
             sensitive: false,
             preserve: false,
+            moved_from: None,
         },
         // A human-readable, at-a-glance summary of the gateway layout (routes → services).
         // Pure to build (see `report::layout_report`), so it keeps `materialize` pure.
@@ -460,6 +465,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             contents: crate::report::layout_report(plan),
             sensitive: false,
             preserve: false,
+            moved_from: None,
         },
     ];
 
@@ -473,6 +479,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             contents: artifacts.envoy,
             sensitive: false,
             preserve: false,
+            moved_from: None,
         });
     }
 
@@ -486,6 +493,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
                 contents: out.fragment.clone(),
                 sensitive: plan.secret_values.appear_in(&out.fragment),
                 preserve: false,
+                moved_from: None,
             });
         }
         for file in &out.files {
@@ -494,6 +502,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
                 contents: file.contents.clone(),
                 sensitive: file.sensitive,
                 preserve: file.preserve,
+                moved_from: file.moved_from.clone(),
             });
         }
     }

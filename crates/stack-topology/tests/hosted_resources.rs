@@ -173,6 +173,7 @@ fn a_plain_file_holding_a_resolved_secret_is_sensitive_and_ignored() {
                 secret_alias: None,
                 at_root: false,
                 preserve: false,
+                moved_from: None,
             }],
         }
         .for_compose(),

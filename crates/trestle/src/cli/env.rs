@@ -589,7 +589,7 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
     if plan.gateway.auth.is_some() {
         let _ = writeln!(
             out,
-            "  Sign in:   demo / authelia by default  (accounts: users.yml; APIs take basic auth)"
+            "  Sign in:   demo / authelia by default  (accounts: modules/authelia/users.yml, see its README.md; APIs take basic auth)"
         );
     }
     if plan.gateway.policy.is_some() {
@@ -1270,7 +1270,7 @@ mod tests {
             text.contains("docker compose cp gateway-certs:/certs/ca.pem ."),
             "{text}"
         );
-        assert!(text.contains("users.yml"), "{text}");
+        assert!(text.contains("modules/authelia/users.yml"), "{text}");
         assert!(text.contains("policies/authz.rego"), "{text}");
     }
 

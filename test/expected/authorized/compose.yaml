@@ -6,7 +6,7 @@ configs:
   authelia_config:
     file: ./modules/authelia/configuration.yml
   authelia_users:
-    file: ./users.yml
+    file: ./modules/authelia/users.yml
   envoy_config:
     file: ./modules/envoy/envoy.yaml
   gateway_certs_script:

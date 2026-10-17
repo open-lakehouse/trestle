@@ -344,13 +344,18 @@ fn authenticated_scenario_pulls_in_authelia() {
         "authenticated scenario should render authelia"
     );
     assert!(
-        dir.path().join("users.yml").is_file(),
-        "Authelia users.yml should live at the environment root"
+        dir.path().join("modules/authelia/users.yml").is_file(),
+        "Authelia users.yml should live in the authelia directory"
+    );
+    let readme = fs::read_to_string(dir.path().join("modules/authelia/README.md")).unwrap();
+    assert!(
+        readme.contains("docker compose restart authelia"),
+        "the README explains how to apply user changes:\n{readme}"
     );
     let compose = fs::read_to_string(dir.path().join("compose.yaml")).unwrap();
     assert!(
-        compose.contains("file: ./users.yml"),
-        "root compose should mount ./users.yml"
+        compose.contains("file: ./modules/authelia/users.yml"),
+        "root compose should mount the authelia users.yml"
     );
     let envoy_compose = fs::read_to_string(dir.path().join("modules/envoy/compose.yaml")).unwrap();
     assert!(
@@ -363,7 +368,7 @@ fn authenticated_scenario_pulls_in_authelia() {
 fn users_yml_survives_rerender() {
     let dir = tempfile::tempdir().unwrap();
     render_scenario("authenticated", dir.path());
-    let users = dir.path().join("users.yml");
+    let users = dir.path().join("modules/authelia/users.yml");
     fs::write(&users, "# edited by operator\nusers: {}\n").unwrap();
 
     let manifest = EnvManifest::read_from(&dir.path().join("env.toml")).unwrap();
@@ -373,6 +378,30 @@ fn users_yml_survives_rerender() {
     assert_eq!(
         after, "# edited by operator\nusers: {}\n",
         "operator edits to users.yml must survive re-render"
+    );
+}
+
+#[test]
+fn rerender_moves_a_legacy_root_users_yml_into_the_authelia_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    render_scenario("authenticated", dir.path());
+    // An environment rendered before users.yml moved: the operator's accounts at the root.
+    let users = dir.path().join("modules/authelia/users.yml");
+    let legacy = dir.path().join("users.yml");
+    fs::remove_file(&users).unwrap();
+    fs::write(&legacy, "# edited by operator\nusers: {}\n").unwrap();
+
+    let manifest = EnvManifest::read_from(&dir.path().join("env.toml")).unwrap();
+    render_manifest(&manifest, dir.path());
+
+    assert_eq!(
+        fs::read_to_string(&users).unwrap(),
+        "# edited by operator\nusers: {}\n",
+        "the operator's accounts move into place rather than the demo default"
+    );
+    assert!(
+        !legacy.exists(),
+        "the legacy root copy is moved, not duplicated"
     );
 }
 

@@ -33,12 +33,14 @@ pub fn python_client_files(plan: &Plan) -> Vec<OutputFile> {
         contents,
         sensitive: false,
         preserve: false,
+        moved_from: None,
     };
     let notebook = |file: &str, contents: &str| OutputFile {
         path: format!("{PYTHON_CLIENT_DIR}/notebooks/{file}"),
         contents: contents.to_string(),
         sensitive: false,
         preserve: true,
+        moved_from: None,
     };
 
     let mut files = vec![

@@ -32,6 +32,11 @@ pub struct OutputFile {
     pub sensitive: bool,
     /// Skip writing when the destination already exists (operator-owned files).
     pub preserve: bool,
+    /// For a `preserve`d file, the path older renders wrote it to: an existing file there is
+    /// moved to `path` instead of seeding the default (see [`RenderFile::moved_from`]).
+    ///
+    /// [`RenderFile::moved_from`]: crate::render::RenderFile::moved_from
+    pub moved_from: Option<String>,
 }
 
 /// Every file a rendered [`Plan`](crate::Plan) produces, flattened to write-ready
@@ -94,6 +99,15 @@ impl MaterializedOutput {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            // A relocated operator-owned file: carry the operator's copy over from where an
+            // older render left it, rather than seeding the default over it.
+            if file.preserve
+                && let Some(old) = file.moved_from.as_deref().map(|old| dir.join(old))
+                && old.is_file()
+            {
+                std::fs::rename(&old, &path)?;
+                continue;
+            }
             std::fs::write(&path, &file.contents)?;
             #[cfg(unix)]
             if file.sensitive {
@@ -138,30 +152,35 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn write_to_preserves_existing_operator_owned_files() {
-        // Force auth on so Authelia (and its root users.yml) is in the graph.
+    /// A plan with sign-in on, so Authelia (and its operator-owned users.yml) is rendered.
+    fn authenticated_output(env_name: &str) -> super::MaterializedOutput {
         let mut selection = Selection::modules(["envoy", "postgres"]);
         selection
             .knob_overrides
             .entry("envoy".into())
             .or_default()
             .insert("auth".into(), "true".into());
-        let plan = baseline_catalog()
+        baseline_catalog()
             .plan(
                 &selection,
                 &PlanCtx {
-                    env_name: "auth-preserve".into(),
+                    env_name: env_name.into(),
                     ..Default::default()
                 },
             )
-            .unwrap();
-        let out = plan.materialize().unwrap();
+            .unwrap()
+            .materialize()
+            .unwrap()
+    }
+
+    #[test]
+    fn write_to_preserves_existing_operator_owned_files() {
+        let out = authenticated_output("auth-preserve");
         assert!(
             out.files
                 .iter()
-                .any(|f| f.path == "users.yml" && f.preserve),
-            "Authelia users.yml should be a preserved root file"
+                .any(|f| f.path == "modules/authelia/users.yml" && f.preserve),
+            "Authelia users.yml should be a preserved module file"
         );
 
         let dir =
@@ -169,7 +188,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         out.write_to(&dir).unwrap();
 
-        let users = dir.join("users.yml");
+        let users = dir.join("modules/authelia/users.yml");
         assert!(users.is_file());
         std::fs::write(&users, "users:\n  edited: {}\n").unwrap();
 
@@ -177,6 +196,29 @@ mod tests {
         out.write_to(&dir).unwrap();
         let after = std::fs::read_to_string(&users).unwrap();
         assert_eq!(after, "users:\n  edited: {}\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_to_moves_a_relocated_operator_file_into_place() {
+        let out = authenticated_output("auth-moved");
+        let dir = std::env::temp_dir().join(format!("stack-topology-moved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // An environment rendered before users.yml moved into modules/authelia/.
+        std::fs::write(dir.join("users.yml"), "users:\n  edited: {}\n").unwrap();
+
+        out.write_to(&dir).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("modules/authelia/users.yml")).unwrap(),
+            "users:\n  edited: {}\n",
+            "the operator's accounts move to the new path instead of the demo default"
+        );
+        assert!(
+            !dir.join("users.yml").exists(),
+            "the old copy is moved, not left behind"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

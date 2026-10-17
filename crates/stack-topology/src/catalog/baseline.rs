@@ -314,6 +314,7 @@ fn sensitive_file(path: &str, contents: &str) -> RenderFile {
         secret_alias: None,
         at_root: false,
         preserve: false,
+        moved_from: None,
     }
 }
 
@@ -327,6 +328,7 @@ fn secret_file(path: &str, alias: &str, contents: &str) -> RenderFile {
         secret_alias: Some(alias.into()),
         at_root: false,
         preserve: false,
+        moved_from: None,
     }
 }
 
@@ -340,6 +342,7 @@ fn config_file(path: &str, alias: &str, contents: &str) -> RenderFile {
         secret_alias: None,
         at_root: false,
         preserve: false,
+        moved_from: None,
     }
 }
 
@@ -353,6 +356,7 @@ fn operator_file(path: &str, alias: &str, contents: &str) -> RenderFile {
     RenderFile {
         at_root: true,
         preserve: true,
+        moved_from: None,
         ..config_file(path, alias, contents)
     }
 }
@@ -461,7 +465,7 @@ fn envoy() -> Arc<dyn Module> {
 /// browser reaches its login portal through the gateway's redirect flow — so it needs no
 /// host-published port. Two mounted files carry its config (`configuration.yml`) and the demo
 /// user database (`users.yml`); both render against the typed [`RenderCtx`](crate::RenderCtx)
-/// like every other fragment.
+/// like every other fragment. A `README.md` beside them tells the operator how to manage users.
 fn authelia() -> Arc<dyn Module> {
     // Authelia's HTTP `ext_authz` endpoint path. Declared here (catalog data), not in the
     // planner, so the planner stays free of implementation names: the planner reads it back via
@@ -523,9 +527,11 @@ fn authelia() -> Arc<dyn Module> {
                     secret_alias: None,
                     at_root: false,
                     preserve: false,
+                    moved_from: None,
                 },
-                // Operator-facing: lives next to `compose.yaml` so users can find and edit
-                // local accounts. Seeded once (`preserve`) so later renders leave edits alone.
+                // Operator-owned local accounts, beside the README that explains them. Seeded
+                // once (`preserve`) so later renders leave edits alone. Older renders wrote it
+                // at the environment root; the writer moves that copy here.
                 RenderFile {
                     path: "users.yml".into(),
                     contents: include_str!("../../templates/gateway/authelia.users.yml.jinja")
@@ -533,8 +539,21 @@ fn authelia() -> Arc<dyn Module> {
                     alias: Some("authelia_users".into()),
                     sensitive: false,
                     secret_alias: None,
-                    at_root: true,
+                    at_root: false,
                     preserve: true,
+                    moved_from: Some("users.yml".into()),
+                },
+                // Where the accounts live and how to change them, for whoever runs the stack.
+                RenderFile {
+                    path: "README.md".into(),
+                    contents: include_str!("../../templates/gateway/authelia.README.md.jinja")
+                        .into(),
+                    alias: None,
+                    sensitive: false,
+                    secret_alias: None,
+                    at_root: false,
+                    preserve: false,
+                    moved_from: None,
                 },
                 sensitive_file(
                     ".env/authelia.env",
@@ -658,6 +677,7 @@ fn postgres() -> Arc<dyn Module> {
                     secret_alias: None,
                     at_root: false,
                     preserve: false,
+                    moved_from: None,
                 },
                 sensitive_file(
                     ".env/db.env",
@@ -1833,6 +1853,7 @@ impl Headwaters {
                         secret_alias: None,
                         at_root: false,
                         preserve: false,
+                        moved_from: None,
                     },
                     sensitive_file(
                         ".env/headwaters-migrate.env",

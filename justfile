@@ -166,6 +166,7 @@ env-golden-refresh:
       --exclude='.env/' \
       --exclude='secrets/' \
       --exclude='secrets.env' \
+      --exclude='plan.json' \
       "scratch/env/$name/" "test/expected/$name/"
   done
   echo ">> golden fixtures refreshed under test/expected/"
