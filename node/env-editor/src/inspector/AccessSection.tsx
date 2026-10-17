@@ -1,13 +1,26 @@
 import { Label, Switch } from "@open-lakehouse/ui-kit";
 import type { GatewaySettings } from "../types";
 
-const OPEN: GatewaySettings = { auth: false, policy: false };
+/** An open gateway: no sign-in, no policy. */
+export const OPEN: GatewaySettings = { auth: false, policy: false };
+
+/** The settings for running without a gateway: sign-in and policy need it. */
+export const DIRECT: GatewaySettings = {
+  enabled: false,
+  auth: false,
+  policy: false,
+};
+
+/** Whether `gateway` runs a gateway (omitted means it does). */
+export const gatewayEnabled = (gateway: GatewaySettings | undefined) =>
+  gateway?.enabled !== false;
 
 /**
- * How the gateway guards access. Each switch brings in its provider by role
- * (Authelia for sign-in, OPA for policy); policy needs sign-in, so turning it
- * on turns sign-in on and turning sign-in off turns policy off. Both need the
- * gateway, so turning either on turns it back on in a gateway-less environment.
+ * Whether the environment runs a gateway, and how it guards access. Without
+ * one, each service is published on its own host port. Each access switch
+ * brings in its provider by role (Authelia for sign-in, OPA for policy);
+ * policy needs sign-in, so turning it on turns sign-in on and turning sign-in
+ * off turns policy off. Both need the gateway, so they show only while it runs.
  */
 export function AccessSection({
   gateway = OPEN,
@@ -17,9 +30,36 @@ export function AccessSection({
   gateway: GatewaySettings | undefined;
   onChange: (gateway: GatewaySettings) => void;
 }) {
-  const signIn = gateway.auth || gateway.policy;
+  const enabled = gatewayEnabled(gateway);
   return (
     <div className="flex flex-col gap-3">
+      <AccessSwitch
+        id="gateway.enabled"
+        label="Run a gateway"
+        help={
+          enabled
+            ? "One front door for every API and UI, on a single port."
+            : "No gateway: each service is published on its own host port. Sign-in and policy need the gateway."
+        }
+        checked={enabled}
+        onChange={(on) => onChange(on ? OPEN : DIRECT)}
+      />
+      {enabled && <AccessSwitches gateway={gateway} onChange={onChange} />}
+    </div>
+  );
+}
+
+/** The sign-in and policy switches of a running gateway. */
+function AccessSwitches({
+  gateway,
+  onChange,
+}: {
+  gateway: GatewaySettings;
+  onChange: (gateway: GatewaySettings) => void;
+}) {
+  const signIn = gateway.auth || gateway.policy;
+  return (
+    <>
       <AccessSwitch
         id="gateway.auth"
         label="Require sign-in"
@@ -29,7 +69,7 @@ export function AccessSection({
           onChange(
             on
               ? { auth: true, policy: gateway.policy }
-              : { ...gateway, auth: false, policy: false },
+              : { auth: false, policy: false },
           )
         }
       />
@@ -40,11 +80,13 @@ export function AccessSection({
         checked={gateway.policy}
         onChange={(on) =>
           onChange(
-            on ? { auth: true, policy: true } : { ...gateway, policy: false },
+            on
+              ? { auth: true, policy: true }
+              : { auth: gateway.auth, policy: false },
           )
         }
       />
-    </div>
+    </>
   );
 }
 

@@ -153,11 +153,14 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
   }
 }
 
-/** The full detail of an edge, for its accessible label. */
-function edgeTitle(e: TopologyEdgeDto): string {
+/** The full detail of an edge, for its accessible label. `gateways` holds the
+ *  gateway nodes' ids: without one, clients reach a component directly. */
+function edgeTitle(e: TopologyEdgeDto, gateways: Set<string>): string {
   switch (e.kind) {
     case "access":
-      return `Clients reach the gateway's surface on :${e.host_port}`;
+      return gateways.has(e.to)
+        ? `Clients reach the gateway's surface on :${e.host_port}`
+        : `Clients reach ${e.to} directly on :${e.host_port}`;
     case "route":
       return `The gateway exposes ${e.to} on :${e.host_port}${e.gated ? " (requires sign-in)" : ""}`;
     case "authenticates":
@@ -245,52 +248,53 @@ function MarkitectureFlow({
 
   // Each kind has its own stroke/dash; selecting a component emphasizes its
   // incident edges and dims the rest.
-  const decoratedEdges = useMemo<Edge[]>(
-    () =>
-      edges.map((e) => {
-        const { edge, resource } = e.data as TopologyEdgeData;
-        const look = EDGE_STYLE[edge.kind];
-        const incident =
-          !!selectedId && (e.source === selectedId || e.target === selectedId);
-        const dimmed = !!selectedId && !incident;
-        const style: CSSProperties = {
-          stroke: look.stroke,
-          strokeWidth: incident ? 2.5 : 1.5,
-          strokeDasharray: look.dash,
-          opacity: dimmed ? 0.25 : incident ? 1 : 0.85,
-          transition: "opacity 150ms ease",
-        };
-        return {
-          ...e,
-          animated: look.animated,
-          // An edge landing on a resource row needs no label: the row names it.
-          label: resource ? undefined : edgeLabel(edge),
-          ariaLabel: resource
-            ? `${edge.from} uses ${resource} on ${edge.to}`
-            : edgeTitle(edge),
-          labelStyle: {
-            fontSize: 10,
-            fontWeight: 500,
-            fill: "hsl(var(--muted-foreground))",
-          },
-          labelBgStyle: {
-            fill: "hsl(var(--card))",
-            stroke: "hsl(var(--border))",
-            strokeWidth: 1,
-          },
-          labelBgPadding: [6, 3] as [number, number],
-          labelBgBorderRadius: 4,
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 14,
-            height: 14,
-            color: look.stroke,
-          },
-          style,
-        };
-      }),
-    [edges, selectedId],
-  );
+  const decoratedEdges = useMemo<Edge[]>(() => {
+    const gateways = new Set(
+      graph?.nodes.filter((n) => n.kind === "gateway").map((n) => n.id),
+    );
+    return edges.map((e) => {
+      const { edge, resource } = e.data as TopologyEdgeData;
+      const look = EDGE_STYLE[edge.kind];
+      const incident =
+        !!selectedId && (e.source === selectedId || e.target === selectedId);
+      const dimmed = !!selectedId && !incident;
+      const style: CSSProperties = {
+        stroke: look.stroke,
+        strokeWidth: incident ? 2.5 : 1.5,
+        strokeDasharray: look.dash,
+        opacity: dimmed ? 0.25 : incident ? 1 : 0.85,
+        transition: "opacity 150ms ease",
+      };
+      return {
+        ...e,
+        animated: look.animated,
+        // An edge landing on a resource row needs no label: the row names it.
+        label: resource ? undefined : edgeLabel(edge),
+        ariaLabel: resource
+          ? `${edge.from} uses ${resource} on ${edge.to}`
+          : edgeTitle(edge, gateways),
+        labelStyle: {
+          fontSize: 10,
+          fontWeight: 500,
+          fill: "hsl(var(--muted-foreground))",
+        },
+        labelBgStyle: {
+          fill: "hsl(var(--card))",
+          stroke: "hsl(var(--border))",
+          strokeWidth: 1,
+        },
+        labelBgPadding: [6, 3] as [number, number],
+        labelBgBorderRadius: 4,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color: look.stroke,
+        },
+        style,
+      };
+    });
+  }, [edges, graph, selectedId]);
 
   // ELK resolves asynchronously, so nodes arrive after ReactFlow's initial mount
   // (when the `fitView` prop fits an empty graph). Refit imperatively whenever

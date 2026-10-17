@@ -13,7 +13,7 @@ export interface ConfigPanelProps {
 }
 
 /**
- * Gateway access, then technology/capability selection and inline knobs: the
+ * The gateway and its access, then technology/capability selection and inline knobs: the
  * list view of the same selection the canvas edits. Every change replans live.
  */
 export function ConfigPanel({
@@ -29,7 +29,7 @@ export function ConfigPanel({
       <div className="w-full max-w-3xl">
         <Card className="mb-6 p-4">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Gateway access
+            Gateway
           </h3>
           <AccessSection gateway={selection.gateway} onChange={onSetGateway} />
         </Card>

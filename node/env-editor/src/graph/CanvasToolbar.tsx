@@ -1,6 +1,8 @@
 import {
   Button,
   cn,
+  Label,
+  Switch,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -50,6 +52,12 @@ export interface CanvasToolbarProps {
   exportName?: string;
   /** Called with a message when an export fails. */
   onExportError?: (message: string) => void;
+  /** Whether the environment runs a gateway. The toggle shows only with
+   *  `onToggleGateway`. */
+  gatewayEnabled?: boolean;
+  /** Turn the gateway on or off. Off publishes each service on its own host
+   *  port; this is the only way back when no gateway node is drawn. */
+  onToggleGateway?: (enabled: boolean) => void;
 }
 
 const MOD_KEY =
@@ -73,6 +81,8 @@ export function CanvasToolbar({
   graph,
   exportName = "environment",
   onExportError,
+  gatewayEnabled = true,
+  onToggleGateway,
 }: CanvasToolbarProps) {
   return (
     <Panel position="top-left">
@@ -106,6 +116,15 @@ export function CanvasToolbar({
           onError={onExportError}
         />
         <div className="mx-1 h-5 w-px bg-border" />
+        {onToggleGateway && (
+          <>
+            <GatewayToggle
+              enabled={gatewayEnabled}
+              onToggle={onToggleGateway}
+            />
+            <div className="mx-1 h-5 w-px bg-border" />
+          </>
+        )}
         <span
           className={cn(
             "inline-flex items-center gap-1.5 px-2 text-xs",
@@ -131,6 +150,37 @@ export function CanvasToolbar({
         </span>
       </div>
     </Panel>
+  );
+}
+
+/** Run the environment with or without a gateway. */
+function GatewayToggle({
+  enabled,
+  onToggle,
+}: {
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="flex items-center gap-1.5 px-1.5">
+          <Switch
+            id="canvas.gateway"
+            checked={enabled}
+            onCheckedChange={onToggle}
+          />
+          <Label htmlFor="canvas.gateway" className="text-xs">
+            Gateway
+          </Label>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>
+        {enabled
+          ? "Turn off to publish each service on its own host port"
+          : "Front every API and UI with one gateway"}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

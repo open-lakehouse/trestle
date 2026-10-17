@@ -15,6 +15,7 @@ import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar";
 import { ComponentPalette } from "./graph/ComponentPalette";
 import type { CanvasActions } from "./graph/canvasActions";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
+import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { ConfigPanel } from "./layout/ConfigPanel";
 import { PlannerProvider } from "./planner";
@@ -316,6 +317,8 @@ function EditorBody({
                     hasError={!!error}
                     graph={graph}
                     onExportError={setNotice}
+                    gatewayEnabled={gatewayEnabled(selection.gateway)}
+                    onToggleGateway={(on) => env.setGateway(on ? OPEN : DIRECT)}
                   />
                   <CanvasNotice
                     error={catalog ? error : null}

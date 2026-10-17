@@ -85,8 +85,8 @@ export interface Selection {
   /** Whether to generate the Python client workspace (`client/`), and with
    *  which example notebooks (mirrors `ClientSelection`). Off when omitted. */
   client?: ClientSelection;
-  /** How the always-on gateway guards access (mirrors `GatewaySettings`).
-   *  Omitted means open. */
+  /** Whether the gateway runs and how it guards access (mirrors
+   *  `GatewaySettings`). Omitted means a gateway that is open. */
   gateway?: GatewaySettings;
 }
 
