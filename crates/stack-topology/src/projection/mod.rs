@@ -13,9 +13,10 @@ pub mod topology;
 use std::collections::BTreeMap;
 
 use crate::{
-    Catalog, ClusterConfig, EnvManifest, GatewayConfig, GatewayRoute, HelperService, HostedKind,
-    HostedResource, Knob, ListenerConfig, Plan, PlanCtx, PlanError, RenderError, Role, Selection,
-    ServiceSpec, TargetId, baseline_catalog, baseline_selection, builtin_targets,
+    Catalog, ClusterConfig, DeployPhase, DeployStep, EnvManifest, GatewayConfig, GatewayRoute,
+    HelperService, HostedKind, HostedResource, Knob, ListenerConfig, Plan, PlanCtx, PlanError,
+    RenderError, Role, Selection, ServiceSpec, TargetId, baseline_catalog, baseline_selection,
+    builtin_targets,
 };
 use serde::Serialize;
 
@@ -107,6 +108,47 @@ pub struct PlanResultDto {
     pub gateway: GatewayDto,
     /// Every non-sensitive file the plan materializes (compose fragments, configs, etc.).
     pub files: Vec<OutputFileDto>,
+    /// The deployment steps, in order (see [`DeployStepDto`]).
+    pub deploy: Vec<DeployStepDto>,
+}
+
+/// One deployment step, projected from [`DeployStep`]: what to do, in deployment order, for a
+/// tool that walks an operator through it or automates it. A step's script is named by path;
+/// its contents are among the materialized files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeployStepDto {
+    /// The step's 1-based position in the deployment order.
+    pub order: usize,
+    /// When it happens (`provision`, `configure`, `start`, `verify`).
+    pub phase: DeployPhase,
+    /// The module that contributed it; absent for the deploy target's own step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// The step's id, unique within its module.
+    pub id: String,
+    /// Its title.
+    pub title: String,
+    /// What to do, as Markdown.
+    pub instructions: String,
+    /// The path of the script that does it, if it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+}
+
+/// Project rendered deployment steps (see [`DeployStepDto`]).
+pub fn deploy_steps_dto(steps: &[DeployStep]) -> Vec<DeployStepDto> {
+    steps
+        .iter()
+        .map(|s| DeployStepDto {
+            order: s.order,
+            phase: s.phase,
+            module: s.module.as_ref().map(|m| m.as_str().to_string()),
+            id: s.id.clone(),
+            title: s.title.clone(),
+            instructions: s.instructions.clone(),
+            script: s.script.as_ref().map(|script| script.path.clone()),
+        })
+        .collect()
 }
 
 /// One materialized file safe to expose in the browser (sensitive paths are filtered out).
@@ -353,6 +395,7 @@ pub fn plan_result_for_manifest(
 
 fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
     let materialized = plan.materialize()?;
+    let deploy = deploy_steps_dto(&materialized.deploy);
     // Omit secrets and LAYOUT.md — the topology diagram is the richer layout view.
     let files = materialized
         .files
@@ -368,6 +411,7 @@ fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
         services: services_by_module(plan),
         gateway: gateway_dto(&plan.gateway),
         files,
+        deploy,
     })
 }
 
@@ -525,6 +569,7 @@ mod tests {
             graph: &'a GraphDto,
             services: &'a BTreeMap<String, Vec<ServiceSpec>>,
             gateway: &'a GatewayDto,
+            deploy: &'a [DeployStepDto],
         }
         let result = plan_result(&fixture_selection(), None).expect("plan should succeed");
         let dump = Dump {
@@ -532,6 +577,7 @@ mod tests {
             graph: &result.graph,
             services: &result.services,
             gateway: &result.gateway,
+            deploy: &result.deploy,
         };
         eprintln!(
             "{}",
@@ -595,12 +641,14 @@ mod tests {
             "hosted-postgres".into(),
             HostedResource {
                 cloud: Some("neon".into()),
+                vendor: None,
                 connection: HostedConnection::Postgres {
                     host: "db.example.com".into(),
                     port: 5432,
                     database: "{name}".into(),
                     username: "app".into(),
                     password: "${PG_PASSWORD}".into(),
+                    ssl_mode: None,
                 },
             },
         );

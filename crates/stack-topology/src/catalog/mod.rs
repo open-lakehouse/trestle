@@ -26,6 +26,7 @@ use crate::catalog::module::DataModule;
 use crate::catalog::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
+pub mod deploy;
 pub(crate) mod images;
 pub mod module;
 

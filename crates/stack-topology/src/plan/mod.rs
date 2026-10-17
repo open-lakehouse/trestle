@@ -82,7 +82,9 @@ pub use gateway::{
     TlsListenerConfig, TlsVirtualHost,
 };
 use hosted::SecretValues;
-pub use hosted::{HostedConnection, HostedKind, HostedResource, Secrets};
+pub use hosted::{
+    HostedConnection, HostedKind, HostedResource, HostedStepView, HostedVendor, Secrets,
+};
 pub use names::{is_valid_resource_name, resource_name_rule};
 use python_client::resolve_python_client;
 pub use python_client::{ClientSelection, PYTHON_CLIENT_BASE_DEPENDENCIES, PythonWorkspace};
@@ -759,8 +761,9 @@ pub struct Plan {
     pub connections: BTreeMap<(ModuleId, usize), Connection>,
     /// The hosted providers in the environment — used but not run (see [`hosted`]) — with how
     /// they are reached (secrets unresolved; a provider the selection didn't configure shows
-    /// its kind's default). A deploy target renders nothing for them; the resources
-    /// [`provisioned`](Self::provisioned) on them must already exist.
+    /// its kind's default, and every entry has its vendor and cloud filled in). A deploy target
+    /// renders nothing for them; their deployment steps create the resources
+    /// [`provisioned`](Self::provisioned) on them.
     pub hosted: BTreeMap<ModuleId, HostedResource>,
     /// The secret values substituted into hosted connections (for sensitivity marking).
     pub(crate) secret_values: SecretValues,

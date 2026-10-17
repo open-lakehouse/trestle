@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:708f93663486c75612ab9f7e8eb0bcf2fc46afd709f9db3f7f428e4ae2c5053b"
+    "digest": "sha256:0e9dec34fead2080124abc151621290e1ec9eb0b344317d7910670e9a01dcb3e"
   },
   "recipe": {
     "digest": "sha256:155020fd5e2bc61d8e3300c6c34614783ac722032ffe6c76c77c2ec869c23ea3"
@@ -495,6 +495,10 @@
       "sensitive": false
     },
     {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
       "path": "modules/envoy/envoy.yaml",
       "sensitive": false
     },
@@ -553,6 +557,15 @@
     {
       "path": "modules/unity-catalog/bootstrap_storage.py",
       "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
     }
   ]
 }

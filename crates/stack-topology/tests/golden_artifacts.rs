@@ -1709,12 +1709,24 @@ mod auth {
         assert_eq!(users.path, "modules/authelia/users.yml");
         assert!(users.preserve, "users.yml is operator-owned");
         assert_eq!(users.moved_from.as_deref(), Some("users.yml"));
+        // How to manage users is a deployment step, collected into the environment's README.
         assert!(
-            out.files
-                .iter()
-                .any(|f| f.path == "modules/authelia/README.md"
-                    && f.contents.contains("modules/authelia/users.yml")),
-            "a README beside users.yml explains how to manage users"
+            !out.files.iter().any(|f| f.path.ends_with("README.md")),
+            "authelia renders no README of its own"
+        );
+        let materialized = p.materialize().unwrap();
+        let readme = materialized
+            .files
+            .iter()
+            .find(|f| f.path == "README.md")
+            .expect("the deployment README");
+        assert!(
+            readme
+                .contents
+                .contains("Review the sign-in accounts (`authelia`)")
+                && readme.contents.contains("modules/authelia/users.yml"),
+            "{}",
+            readme.contents
         );
 
         // The top-level compose includes the authelia fragment.

@@ -1,0 +1,15 @@
+{%- set v = hosted.values -%}
+{%- if hosted.resources -%}
+Create the buckets the stack uses: {% for r in hosted.resources %}`{{ r }}`{% if not loop.last %}, {% endif %}{% endfor %}
+{%- if v.endpoint %}, through the S3-compatible API at `{{ v.endpoint }}`{% else %}, in `{{ v.region }}`{% endif %}.
+The script needs the AWS CLI, signed in with credentials that may create buckets (a profile,
+SSO, or keys).
+{%- if hosted.vendor == "aws-s3" %} Unless `{{ hosted.vars.access_key_id }}` is already set, it also
+creates the IAM user `trestle-{{ env_name }}`, allowed only these buckets, and saves an access key
+for it as `{{ hosted.vars.access_key_id }}` and `{{ hosted.vars.secret_access_key }}` in
+`secrets.env`.
+{%- else %} Set `{{ hosted.vars.access_key_id }}` and `{{ hosted.vars.secret_access_key }}` to a
+key that may read and write them.
+{%- endif %}
+{%- if v.role_arn %} The stack's key must also be allowed to assume `{{ v.role_arn }}`.{% endif %}
+{%- endif %}

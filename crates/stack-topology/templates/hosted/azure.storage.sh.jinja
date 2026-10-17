@@ -1,0 +1,25 @@
+{%- set v = hosted.values -%}
+: "${AZURE_RESOURCE_GROUP:?set AZURE_RESOURCE_GROUP to the resource group to create the account in}"
+{%- if hosted.vars.account %}
+: "${{ '{' }}{{ hosted.vars.account }}:?set {{ hosted.vars.account }} to the storage account name}"
+{%- endif %}
+account={{ v.account | shell }}
+if az storage account show --name "$account" --resource-group "$AZURE_RESOURCE_GROUP" \
+  >/dev/null 2>&1; then
+  echo "storage account $account exists"
+else
+  az storage account create --name "$account" --resource-group "$AZURE_RESOURCE_GROUP" \
+    --location "${AZURE_LOCATION:-eastus}" --sku Standard_LRS --kind StorageV2 --hns true \
+    --output none
+  echo "created storage account $account"
+fi
+connection_var={{ hosted.vars.connection_string | shell }}
+if [ -z "${!connection_var:-}" ]; then
+  save_secret "$connection_var" "$(az storage account show-connection-string --name "$account" \
+    --resource-group "$AZURE_RESOURCE_GROUP" --output tsv)"
+fi
+for container in {% for r in hosted.resources %}{{ r | shell }} {% endfor %}; do
+  az storage container create --name "$container" \
+    --connection-string "${!connection_var}" --output none
+  echo "container $container is ready"
+done

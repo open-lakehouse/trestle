@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:708f93663486c75612ab9f7e8eb0bcf2fc46afd709f9db3f7f428e4ae2c5053b"
+    "digest": "sha256:0e9dec34fead2080124abc151621290e1ec9eb0b344317d7910670e9a01dcb3e"
   },
   "recipe": {
     "digest": "sha256:e872d3b6efc1a21fe30be92d1afca28925aef66b1c2d953ae25f1d11bacce8cd"
@@ -400,6 +400,10 @@
       "sensitive": false
     },
     {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
       "path": "modules/envoy/envoy.yaml",
       "sensitive": false
     },
@@ -458,6 +462,15 @@
     {
       "path": "modules/unity-catalog/bootstrap_storage.py",
       "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nEach service is then published on its own host port. [LAYOUT.md](LAYOUT.md) lists every route and address."
     }
   ]
 }

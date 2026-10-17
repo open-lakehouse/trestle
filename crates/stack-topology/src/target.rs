@@ -15,12 +15,15 @@
 //! target up by id with [`builtin`]. A new target implements [`DeployTarget`] and registers a
 //! [`RenderSpec`](crate::RenderSpec) per module under its id.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
 use crate::plan::Plan;
 use crate::render::RenderError;
+use crate::render::deploy::SECRETS_ENV_PATH;
 use crate::render::output::MaterializedOutput;
 
 /// A deploy target's stable id (e.g. `"compose"`), as written in `env.toml` and used to key a
@@ -82,6 +85,13 @@ pub trait DeployTarget: Send + Sync {
     /// Errors with a [`RenderError`] when a module's template fails, or when a module has no
     /// [`RenderSpec`](crate::RenderSpec) for this target (a plan made for a different target).
     fn materialize(&self, plan: &Plan) -> Result<MaterializedOutput, RenderError>;
+    /// The deployment steps this target adds to the modules' (see
+    /// [`catalog::deploy`](crate::catalog::deploy)): typically supplying secrets and starting
+    /// the stack. Within a phase they follow every module's steps.
+    fn deploy_steps(&self, plan: &Plan) -> Vec<DeployStepSpec> {
+        let _ = plan;
+        Vec::new()
+    }
 }
 
 /// The built-in **Docker Compose** target: a top-level `compose.yaml` that `include:`s one
@@ -99,6 +109,67 @@ impl DeployTarget for Compose {
     }
     fn materialize(&self, plan: &Plan) -> Result<MaterializedOutput, RenderError> {
         crate::render::compose::materialize(plan)
+    }
+    fn deploy_steps(&self, plan: &Plan) -> Vec<DeployStepSpec> {
+        let mut steps = Vec::new();
+        // The texts are built here, not templated: wrap them so nothing in them is read as
+        // template syntax.
+        let raw = |text: String| format!("{{% raw %}}{text}{{% endraw %}}");
+
+        let secrets: BTreeSet<String> = plan
+            .hosted
+            .values()
+            .flat_map(|r| r.connection.secret_refs())
+            .collect();
+        if !secrets.is_empty() {
+            let list = secrets
+                .iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            steps.push(DeployStepSpec::new(
+                "secrets",
+                DeployPhase::Configure,
+                "Supply the hosted resources' secrets",
+                raw(format!(
+                    "The hosted resources read {list}. Set them in `{SECRETS_ENV_PATH}` beside \
+                     `env.toml` (git-ignored; the scripts above save what they create there) or \
+                     export them, then render again so the stack picks them up:\n\n\
+                     ```bash\ntrestle env render .\n```"
+                )),
+            ));
+        }
+
+        let reach = match plan.gateway_url() {
+            Some(url) => format!("The gateway then serves the stack at <{url}>."),
+            None => "Each service is then published on its own host port.".into(),
+        };
+        steps.push(DeployStepSpec::new(
+            "up",
+            DeployPhase::Start,
+            "Start the stack",
+            raw(format!(
+                "Start every service and wait until each one is healthy:\n\n\
+                 ```bash\ndocker compose up -d --wait\n```\n\n{reach} [LAYOUT.md](LAYOUT.md) \
+                 lists every route and address."
+            )),
+        ));
+
+        if let Some(secure) = &plan.gateway.secure {
+            steps.push(DeployStepSpec::new(
+                "trust",
+                DeployPhase::Verify,
+                "Trust the gateway's local certificate authority",
+                raw(format!(
+                    "The gateway serves HTTPS with a certificate from a CA minted for this \
+                     environment. Copy it out, then add it to your browser or pass it to \
+                     `curl --cacert`:\n\n\
+                     ```bash\ndocker compose cp {}:{} .\n```",
+                    secure.mint_service, secure.trust.ca_pem
+                )),
+            ));
+        }
+        steps
     }
 }
 

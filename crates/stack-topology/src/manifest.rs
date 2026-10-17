@@ -382,6 +382,7 @@ fn legacy_to_hosted(
                 database,
                 username,
                 password,
+                ssl_mode: None,
             },
         ),
         LegacyConnection::ObjectStore {
@@ -441,6 +442,7 @@ fn legacy_to_hosted(
         id,
         HostedResource {
             cloud: legacy.cloud,
+            vendor: None,
             connection,
         },
     ))

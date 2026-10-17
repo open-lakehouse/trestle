@@ -21,7 +21,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::topology::{GraphDto, graph_dto};
-use super::{CatalogDto, GatewayDto, catalog_dto_of, gateway_dto, services_by_module};
+use super::{
+    CatalogDto, DeployStepDto, GatewayDto, catalog_dto_of, deploy_steps_dto, gateway_dto,
+    services_by_module,
+};
 use crate::render::output::MaterializedOutput;
 use crate::{Catalog, EnvManifest, HelperKind, InjectedEnv, Placement, Plan, PlanCtx, ServiceSpec};
 
@@ -69,6 +72,8 @@ pub struct PlanExport {
     pub client: ClientEnvDto,
     /// Every file the plan materializes, without contents.
     pub files: Vec<FileEntryDto>,
+    /// The deployment steps, in order; their scripts are among [`files`](Self::files).
+    pub deploy: Vec<DeployStepDto>,
 }
 
 /// What a [`PlanExport`] describes.
@@ -247,6 +252,7 @@ pub fn plan_export(
                 sensitive: f.sensitive,
             })
             .collect(),
+        deploy: deploy_steps_dto(&materialized.deploy),
     })
 }
 

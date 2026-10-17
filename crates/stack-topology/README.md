@@ -85,8 +85,23 @@ the stack, or the stack can use one a cloud already runs:
 
 Select a hosted provider in place of the in-stack one. Selecting two providers for one role
 is a `ConflictingRoleProviders` error. Nothing is rendered for a hosted provider, and the
-gateway doesn't front it. Consumers connect straight to its origin, and the databases or
-buckets they need must already exist (`LAYOUT.md` lists them). Unconfigured, a hosted
+gateway doesn't front it. Consumers connect straight to its origin. The databases, buckets or
+containers they need are created by the provider's [deployment steps](#deployment-steps), which
+depend on its `vendor`:
+
+| Kind | `vendor` | Setup steps |
+| --- | --- | --- |
+| `postgres` | `generic` (default) | describes the server; a `psql` script creates the databases |
+| `postgres` | `neon` | `neonctl` creates the project and databases, saves the connection |
+| `postgres` | `aws-rds` | `aws rds` creates the instance, saves its host (and a generated password) |
+| `postgres` | `azure-postgres` | `az postgres flexible-server` creates the server, saves its host |
+| `s3` | `aws-s3` (default) | creates the buckets, and an IAM user with a key scoped to them |
+| `s3` | `generic` | creates the buckets through an S3-compatible endpoint |
+| `azure_blob` | `azure-storage` (default) | creates the ADLS Gen2 account and containers, saves its connection string |
+
+The managed Postgres vendors connect with `sslmode=require` (set `ssl_mode` on the connection
+to override). A vendor also sets the node's `cloud` label when the selection sets none.
+Unconfigured, a hosted
 provider reads its ecosystem's usual env vars (`PGHOST`/`PGUSER`/`PGPASSWORD`,
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `AZURE_STORAGE_ACCOUNT`/
 `AZURE_STORAGE_CONNECTION_STRING`). To configure one, add it under `[selection.hosted]`:
@@ -96,7 +111,7 @@ provider reads its ecosystem's usual env vars (`PGHOST`/`PGUSER`/`PGPASSWORD`,
 modules = ["hosted-postgres", "aws-s3", "unity-catalog"]
 
 [selection.hosted.hosted-postgres]
-cloud = "neon"          # free-form; groups the node in the topology
+vendor = "neon"         # decides the setup steps; the `cloud` label defaults from it
 
 [selection.hosted.hosted-postgres.connection]
 kind = "postgres"
@@ -116,6 +131,29 @@ them from the environment or a git-ignored `secrets.env` beside `env.toml`, and 
 file a secret lands in is marked sensitive. A version-2 `env.toml` that marked `postgres`,
 `rustfs` or `azurite` as `[selection.external.*]` is migrated to the matching hosted provider
 when it's read.
+
+## Deployment steps
+
+Some things an operator does to bring an environment up aren't part of what the deploy target
+runs: creating a hosted database, reviewing the sign-in accounts, starting the stack. A module
+declares these as `Provides::deploy` (`DeployStepSpec`s: a phase, a title, Markdown
+instructions, and optionally a bash script), and the deploy target adds its own
+(`DeployTarget::deploy_steps`; Compose adds "supply the secrets" and "start the stack").
+Templates render against a `DeployCtx`. It carries a hosted resource's coordinates and the
+*names* of its secret variables, never their values, so steps are safe to commit and to show.
+
+The render orders every step by phase (`provision`, `configure`, `start`, `verify`), then
+dependencies first, and writes:
+
+- `README.md` at the environment's root: the steps in order, each with the command that runs
+  its script;
+- `deploy/<module>-<step>.sh`: each script, run from anywhere and safe to re-run. It loads
+  `secrets.env` and saves what it creates there (`save_secret`);
+- a `deploy` array in `plan.json` and the editor's graph snapshots: the same steps, with each
+  script as a path among `files`.
+
+When hosted secrets are still unset, `trestle env render` fails, but it writes the README and
+scripts anyway, since running them is how those secrets get created.
 
 ## Client environment
 
@@ -315,8 +353,8 @@ from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `
   API and UI route on the shared listener with Authelia forward-auth. Authelia's
   asserted identity reaches upstreams as `Remote-User` / `Remote-Email` / `Remote-Name` /
   `Remote-Groups`. Client-supplied copies are stripped before any check runs.
-- **Managing users**: with auth on, accounts live in `modules/authelia/users.yml`, next to a
-  generated `README.md` that explains how to edit them: add a block per user with an
+- **Managing users**: with auth on, accounts live in `modules/authelia/users.yml`, and a step
+  in the environment's deployment `README.md` explains how to edit them: add a block per user with an
   argon2id password hash, then `docker compose restart authelia`. The file starts with one
   demo account (`demo` / `authelia`) and is written on the first render only, so later
   `trestle env render` runs keep your edits; delete it and re-render to restore the default.

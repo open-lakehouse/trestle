@@ -13,6 +13,7 @@
 use std::fmt::Write as _;
 
 use crate::render::InjectedEnv;
+use crate::render::deploy::DeployStep;
 
 /// Where the host-vantage client environment is written (see
 /// [`Plan::client_env`](crate::Plan::client_env)).
@@ -58,6 +59,10 @@ pub struct MaterializedOutput {
     /// `LAYOUT.md` first, then the Envoy bootstrap, then each module's fragment and config files
     /// in plan (dependency) order.
     pub files: Vec<OutputFile>,
+    /// The environment's deployment steps, in order (see
+    /// [`render_steps`](crate::render::deploy::render_steps)). Their README and scripts are
+    /// among [`files`](Self::files) too.
+    pub deploy: Vec<DeployStep>,
 }
 
 /// Render a client environment file (see [`Plan::client_env`](crate::Plan::client_env)):

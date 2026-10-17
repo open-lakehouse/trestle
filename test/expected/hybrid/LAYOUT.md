@@ -23,10 +23,10 @@
 
 ## Hosted resources
 
-Provided outside the stack: create the listed resources before starting it, and set
-the secrets in the environment `trestle env render` runs in.
+Provided outside the stack: README.md walks through creating the listed resources
+and setting the secrets before the stack starts.
 
-| Module | Cloud | Reached at | Must exist | Secrets |
-| --- | --- | --- | --- | --- |
-| `aws-s3` | aws | `https://s3.us-east-1.amazonaws.com` | `unity`, `mlflow` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
-| `hosted-postgres` | aws | `tcp://lakehouse.abc123example.us-east-1.rds.amazonaws.com:5432` | `unitycatalog`, `mlflow` | `PG_PASSWORD` |
+| Module | Vendor | Cloud | Reached at | Must exist | Secrets |
+| --- | --- | --- | --- | --- | --- |
+| `aws-s3` | Amazon S3 | aws | `https://s3.us-east-1.amazonaws.com` | `unity`, `mlflow` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| `hosted-postgres` | Amazon RDS | aws | `tcp://lakehouse.abc123example.us-east-1.rds.amazonaws.com:5432` | `unitycatalog`, `mlflow` | `PG_PASSWORD` |

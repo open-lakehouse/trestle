@@ -18,12 +18,14 @@ fn hybrid_selection() -> Selection {
         ModuleId::from("hosted-postgres"),
         HostedResource {
             cloud: Some("aws".into()),
+            vendor: None,
             connection: HostedConnection::Postgres {
                 host: "db.example.com".into(),
                 port: 5432,
                 database: "{name}".into(),
                 username: "app".into(),
                 password: "${PG_PASSWORD}".into(),
+                ssl_mode: None,
             },
         },
     );
@@ -31,6 +33,7 @@ fn hybrid_selection() -> Selection {
         ModuleId::from("aws-s3"),
         HostedResource {
             cloud: Some("aws".into()),
+            vendor: None,
             connection: HostedConnection::S3 {
                 region: "us-east-1".into(),
                 endpoint: None,
@@ -318,12 +321,14 @@ fn a_preview_without_secrets_keeps_the_references() {
 fn a_hosted_entry_must_configure_a_hosted_module_of_its_kind() {
     let postgres = HostedResource {
         cloud: None,
+        vendor: None,
         connection: HostedConnection::Postgres {
             host: "db".into(),
             port: 5432,
             database: "{name}".into(),
             username: "u".into(),
             password: "p".into(),
+            ssl_mode: None,
         },
     };
     for id in ["mlflow", "postgres", "aws-s3"] {
@@ -392,6 +397,7 @@ fn azure_storage_binds_abfss_uris_for_the_account() {
         ModuleId::from("azure-storage"),
         HostedResource {
             cloud: Some("azure".into()),
+            vendor: None,
             connection: HostedConnection::AzureBlob {
                 account: "lakeacct".into(),
                 container: "{name}".into(),

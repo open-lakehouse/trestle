@@ -1,0 +1,8 @@
+{%- if hosted.resources -%}
+Create the databases the stack uses: {% for r in hosted.resources %}`{{ r }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+{%- if hosted.vendor == "neon" %} The script adds each one missing to the Neon project
+`NEON_PROJECT_ID` with `neonctl`.
+{%- else %} The script connects with `psql` as the stack's role (it must be allowed to create
+databases) and creates each one missing.
+{%- endif %}
+{%- endif %}

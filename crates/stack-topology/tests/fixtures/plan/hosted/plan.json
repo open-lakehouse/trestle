@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:708f93663486c75612ab9f7e8eb0bcf2fc46afd709f9db3f7f428e4ae2c5053b"
+    "digest": "sha256:0e9dec34fead2080124abc151621290e1ec9eb0b344317d7910670e9a01dcb3e"
   },
   "recipe": {
     "digest": "sha256:ba5851f35f1e292a20fba1e8d861c1d67d5fafdb856a6dd18df57f6485c858d5"
@@ -48,7 +48,7 @@
         "model": "amazonS3",
         "kind": "external",
         "display_name": "Amazon S3",
-        "summary": "Amazon S3 or an S3-compatible store; buckets must already exist.",
+        "summary": "Amazon S3 or an S3-compatible store; README.md sets up the buckets.",
         "category": "storage",
         "role": "object_store",
         "placement": "external:https://s3.us-east-1.amazonaws.com",
@@ -401,6 +401,10 @@
       "sensitive": false
     },
     {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
       "path": "modules/envoy/envoy.yaml",
       "sensitive": false
     },
@@ -443,6 +447,35 @@
     {
       "path": "modules/unity-catalog/bootstrap_storage.py",
       "sensitive": false
+    },
+    {
+      "path": "deploy/aws-s3-buckets.sh",
+      "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "provision",
+      "module": "aws-s3",
+      "id": "buckets",
+      "title": "Create the buckets",
+      "instructions": "Create the buckets the stack uses: `unity`, in `us-east-1`.\nThe script needs the AWS CLI, signed in with credentials that may create buckets (a profile,\nSSO, or keys). Unless `AWS_ACCESS_KEY_ID` is already set, it also\ncreates the IAM user `trestle-hosted`, allowed only these buckets, and saves an access key\nfor it as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in\n`secrets.env`. The stack's key must also be allowed to assume `arn:aws:iam::123456789012:role/uc`.",
+      "script": "deploy/aws-s3-buckets.sh"
+    },
+    {
+      "order": 2,
+      "phase": "configure",
+      "id": "secrets",
+      "title": "Supply the hosted resources' secrets",
+      "instructions": "The hosted resources read `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`. Set them in `secrets.env` beside `env.toml` (git-ignored; the scripts above save what they create there) or export them, then render again so the stack picks them up:\n\n```bash\ntrestle env render .\n```"
+    },
+    {
+      "order": 3,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
     }
   ]
 }

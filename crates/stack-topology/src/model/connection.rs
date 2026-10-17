@@ -79,6 +79,11 @@ pub enum Connection {
         username: String,
         /// The role's password.
         password: String,
+        /// The libpq `sslmode` to connect with (e.g. `require`), when the server needs one.
+        /// It is part of [`url`](Connection::RelationalDb::url) too; a client that builds its
+        /// own URL (JDBC) appends it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_mode: Option<String>,
     },
 }
 
@@ -233,6 +238,7 @@ impl ConnectionTemplate {
                 database,
                 username,
                 password,
+                ssl_mode,
             } => Connection::RelationalDb {
                 url: sub(url),
                 host: sub(host),
@@ -240,6 +246,7 @@ impl ConnectionTemplate {
                 database: sub(database),
                 username: sub(username),
                 password: sub(password),
+                ssl_mode: ssl_mode.clone(),
             },
         }
     }
@@ -359,7 +366,19 @@ impl Connection {
             database,
             username,
             password,
+            ssl_mode: None,
         }
+    }
+
+    /// A relational connection with its `sslmode` set to `mode` (and appended to its URL);
+    /// any other connection, or `mode: None`, unchanged.
+    pub fn with_ssl_mode(mut self, mode: Option<String>) -> Connection {
+        if let (Connection::RelationalDb { url, ssl_mode, .. }, Some(mode)) = (&mut self, mode) {
+            url.push_str("?sslmode=");
+            url.push_str(&mode);
+            *ssl_mode = Some(mode);
+        }
+        self
     }
 
     /// The value of one typed [`ConnectionField`], if this connection variant has it.

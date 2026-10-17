@@ -4,7 +4,7 @@
 # in-container H2 file, so catalogs survive a new container. This file replaces the image's own
 # hibernate.properties, so it writes every key. The image bundles the PostgreSQL JDBC driver.
 hibernate.connection.driver_class=org.postgresql.Driver
-hibernate.connection.url=jdbc:postgresql://{{ db.host }}:{{ db.port }}/{{ db.database }}
+hibernate.connection.url=jdbc:postgresql://{{ db.host }}:{{ db.port }}/{{ db.database }}{% if db.ssl_mode %}?sslmode={{ db.ssl_mode }}{% endif %}
 hibernate.connection.username={{ db.username }}
 hibernate.connection.password={{ db.password }}
 # The server has no separate migration tool: `update` creates missing tables and columns at

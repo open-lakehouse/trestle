@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:708f93663486c75612ab9f7e8eb0bcf2fc46afd709f9db3f7f428e4ae2c5053b"
+    "digest": "sha256:0e9dec34fead2080124abc151621290e1ec9eb0b344317d7910670e9a01dcb3e"
   },
   "recipe": {
     "digest": "sha256:763d18679afb3322b9a6dc06877f6443fc99a0de542363a930ffaed2465d7659"
@@ -646,6 +646,10 @@
       "sensitive": false
     },
     {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
       "path": "modules/envoy/envoy.yaml",
       "sensitive": false
     },
@@ -720,6 +724,15 @@
     {
       "path": "modules/mlflow/uc-registry/entry_points.txt",
       "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:8080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
     }
   ]
 }

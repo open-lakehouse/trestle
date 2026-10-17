@@ -1,0 +1,42 @@
+{%- set v = hosted.values -%}
+region={{ v.region | shell }}
+endpoint=({% if v.endpoint %}--endpoint-url {{ v.endpoint | shell }}{% endif %})
+for bucket in {% for r in hosted.resources %}{{ r | shell }} {% endfor %}; do
+  if aws s3api head-bucket --bucket "$bucket" ${endpoint[@]+"${endpoint[@]}"} 2>/dev/null; then
+    echo "bucket $bucket exists"
+  elif [ "$region" = us-east-1 ]; then
+    aws s3api create-bucket --bucket "$bucket" --region "$region" \
+      ${endpoint[@]+"${endpoint[@]}"} >/dev/null
+    echo "created bucket $bucket"
+  else
+    aws s3api create-bucket --bucket "$bucket" --region "$region" \
+      --create-bucket-configuration "LocationConstraint=$region" \
+      ${endpoint[@]+"${endpoint[@]}"} >/dev/null
+    echo "created bucket $bucket"
+  fi
+done
+{%- if hosted.vendor == "aws-s3" %}
+
+# An access key for the stack, scoped to these buckets.
+key_var={{ hosted.vars.access_key_id | shell }}
+secret_var={{ hosted.vars.secret_access_key | shell }}
+if [ -n "${!key_var:-}" ]; then
+  echo "$key_var is set; the stack uses that key"
+else
+  user={{ ("trestle-" ~ env_name) | shell }}
+  aws iam get-user --user-name "$user" >/dev/null 2>&1 \
+    || aws iam create-user --user-name "$user" >/dev/null
+  aws iam put-user-policy --user-name "$user" --policy-name trestle-buckets --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {"Effect": "Allow", "Action": "s3:*", "Resource": [
+        {%- for r in hosted.resources %}"arn:aws:s3:::{{ r }}", "arn:aws:s3:::{{ r }}/*"{% if not loop.last %}, {% endif %}{% endfor -%}
+      ]}
+    ]
+  }'
+  read -r key secret < <(aws iam create-access-key --user-name "$user" \
+    --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+  save_secret "$key_var" "$key"
+  save_secret "$secret_var" "$secret"
+fi
+{%- endif %}

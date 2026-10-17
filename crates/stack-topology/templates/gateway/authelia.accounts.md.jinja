@@ -1,0 +1,25 @@
+Sign-in is on (`[selection.gateway] auth = true`): Authelia checks every API and UI route on the
+gateway's shared listener. Browsers get its login page; API clients send basic auth.
+
+The accounts live in `modules/authelia/users.yml`. It starts with one demo account, username
+`demo` with password `authelia`. Change or remove that account before you share the
+environment. To add, change, or remove users:
+
+1. Edit `modules/authelia/users.yml`. Each user is one block under `users:`. Copy the `demo`
+   block, then change the name, `displayname`, `email`, `groups`, and `password`.
+2. Hash each password (Authelia stores argon2id hashes, not plain text), then paste the printed
+   `$argon2id$…` digest in as the user's `password`:
+
+   ```bash
+   docker run --rm authelia/authelia:latest \
+     authelia crypto hash generate argon2 --password 'choose-a-password'
+   ```
+3. If the stack is already running, restart Authelia so it rereads the file:
+   `docker compose restart authelia`.
+
+The services behind the gateway receive a user's `email` and `displayname` as the
+`Remote-Email` and `Remote-Name` headers, and `groups` as `Remote-Groups`. With policy on, the
+default policy lets any signed-in user read and lets the `writers` or `admins` group write.
+
+`trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive
+re-renders. To start over from the demo account, delete the file and render again.

@@ -30,6 +30,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::deploy::DeployStepSpec;
 use crate::model::connection::{ConnectionField, ConnectionTemplate};
 use crate::model::role::ServiceSpec;
 use crate::plan::hosted::HostedKind;
@@ -154,6 +155,13 @@ pub struct Provides {
     /// on the rest of the stack.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub helpers: Vec<HelperService>,
+    /// What an operator does to deploy this module beyond what the deploy target runs (create a
+    /// hosted resource, review generated accounts), collected with every other module's steps
+    /// into the environment's README in deployment order. See [`catalog::deploy`].
+    ///
+    /// [`catalog::deploy`]: crate::catalog::deploy
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deploy: Vec<DeployStepSpec>,
 }
 
 /// A container a module's fragment runs to support its services (see [`Provides::helpers`]).
@@ -822,8 +830,9 @@ impl ResolvedKnobs {
         ResolvedKnobs::default()
     }
 
-    /// A process-wide empty knobs map for tests that only need `env`.
-    fn empty_ref() -> &'static ResolvedKnobs {
+    /// A process-wide empty knobs map, for a context with no module's knobs (tests, a deploy
+    /// target's own steps).
+    pub(crate) fn empty_ref() -> &'static ResolvedKnobs {
         use std::sync::OnceLock;
         static EMPTY: OnceLock<ResolvedKnobs> = OnceLock::new();
         EMPTY.get_or_init(ResolvedKnobs::new)
@@ -986,6 +995,12 @@ pub trait Module: Send + Sync {
     fn helpers_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [HelperService]> {
         let _ = knobs;
         Cow::Borrowed(&self.provides().helpers)
+    }
+    /// The deployment steps this module contributes (see [`Provides::deploy`]). Each is
+    /// rendered against the module's [`DeployCtx`](crate::DeployCtx), so a step can branch on
+    /// knobs, the stack, or a hosted resource's vendor.
+    fn deploy_steps(&self) -> &[DeployStepSpec] {
+        &self.provides().deploy
     }
     /// Look up one of this module's services by `name`, given the resolved knobs.
     fn service(&self, name: &str, knobs: &ResolvedKnobs) -> Option<ServiceSpec> {

@@ -53,6 +53,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::Catalog;
+use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
 use crate::catalog::images;
 use crate::catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, HelperService, ImpersonatedHost,
@@ -163,13 +164,13 @@ pub fn baseline_catalog() -> Catalog {
 
 /// `hosted-postgres` — a managed PostgreSQL server (Amazon RDS, Azure Database for
 /// PostgreSQL, Neon, …) in place of the in-stack `postgres`. Consumers connect to it directly;
-/// the databases they demand must already exist.
+/// its deployment steps create the databases they demand.
 fn hosted_postgres() -> Arc<dyn Module> {
     hosted_module(
         "hosted-postgres",
         "postgresql",
         "Hosted Postgres",
-        "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
+        "A managed PostgreSQL server (Neon, RDS, Azure, …); README.md sets it up.",
         "metadata_db",
         HostedKind::Postgres,
         ServiceSpec {
@@ -184,13 +185,13 @@ fn hosted_postgres() -> Arc<dyn Module> {
 }
 
 /// `aws-s3` — Amazon S3 (or an S3-compatible store at an explicit endpoint) in place of an
-/// in-stack object store. The buckets consumers demand must already exist.
+/// in-stack object store. Its deployment steps create the buckets consumers demand.
 fn aws_s3() -> Arc<dyn Module> {
     hosted_module(
         "aws-s3",
         "amazonS3",
         "Amazon S3",
-        "Amazon S3 or an S3-compatible store; buckets must already exist.",
+        "Amazon S3 or an S3-compatible store; README.md sets up the buckets.",
         "storage",
         HostedKind::S3,
         ServiceSpec {
@@ -205,13 +206,13 @@ fn aws_s3() -> Arc<dyn Module> {
 }
 
 /// `azure-storage` — an Azure storage account (Blob / ADLS Gen2) in place of an in-stack
-/// object store. The containers consumers demand must already exist.
+/// object store. Its deployment steps create the containers consumers demand.
 fn azure_storage() -> Arc<dyn Module> {
     hosted_module(
         "azure-storage",
         "azureBlobStorage",
         "Azure Storage",
-        "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
+        "An Azure storage account (Blob / ADLS Gen2); README.md sets it up.",
         "storage",
         HostedKind::AzureBlob,
         ServiceSpec {
@@ -225,9 +226,60 @@ fn azure_storage() -> Arc<dyn Module> {
     )
 }
 
+/// The deployment steps of a hosted provider of `kind`: create what consumers demand, in the
+/// configured vendor's way (see `templates/hosted/`).
+fn hosted_steps(kind: HostedKind) -> Vec<DeployStepSpec> {
+    match kind {
+        HostedKind::Postgres => vec![
+            DeployStepSpec::new(
+                "server",
+                DeployPhase::Provision,
+                "{% if hosted.vendor == \"neon\" %}Create the Neon project\
+                 {% elif hosted.vendor == \"aws-rds\" %}Create the RDS instance\
+                 {% elif hosted.vendor == \"azure-postgres\" %}Create the Azure Postgres server\
+                 {% else %}Provide the Postgres server{% endif %}",
+                include_str!("../../templates/hosted/postgres.server.md.jinja"),
+            )
+            .with_script(include_str!(
+                "../../templates/hosted/postgres.server.sh.jinja"
+            )),
+            DeployStepSpec::new(
+                "databases",
+                DeployPhase::Provision,
+                "Create the databases",
+                include_str!("../../templates/hosted/postgres.databases.md.jinja"),
+            )
+            .with_script(include_str!(
+                "../../templates/hosted/postgres.databases.sh.jinja"
+            )),
+        ],
+        HostedKind::S3 => vec![
+            DeployStepSpec::new(
+                "buckets",
+                DeployPhase::Provision,
+                "Create the buckets",
+                include_str!("../../templates/hosted/s3.buckets.md.jinja"),
+            )
+            .with_script(include_str!("../../templates/hosted/s3.buckets.sh.jinja")),
+        ],
+        HostedKind::AzureBlob => vec![
+            DeployStepSpec::new(
+                "storage",
+                DeployPhase::Provision,
+                "Create the storage account and containers",
+                include_str!("../../templates/hosted/azure.storage.md.jinja"),
+            )
+            .with_script(include_str!(
+                "../../templates/hosted/azure.storage.sh.jinja"
+            )),
+        ],
+    }
+}
+
 /// A hosted provider of `kind`'s role: one service, reached at the configured connection's
-/// origin (the planner fills in the placement), and nothing to render. Its template is the
-/// kind's default connection; the planner binds the configured one instead.
+/// origin (the planner fills in the placement), nothing to render, and the
+/// [steps](hosted_steps) that create its resources. Its template is the kind's default
+/// connection; the planner binds the configured one instead.
 fn hosted_module(
     id: &str,
     model: &str,
@@ -239,6 +291,7 @@ fn hosted_module(
 ) -> Arc<dyn Module> {
     let mut provides = Provides {
         hosted: Some(kind),
+        deploy: hosted_steps(kind),
         ..Provides::default()
     };
     provides
@@ -465,7 +518,7 @@ fn envoy() -> Arc<dyn Module> {
 /// browser reaches its login portal through the gateway's redirect flow — so it needs no
 /// host-published port. Two mounted files carry its config (`configuration.yml`) and the demo
 /// user database (`users.yml`); both render against the typed [`RenderCtx`](crate::RenderCtx)
-/// like every other fragment. A `README.md` beside them tells the operator how to manage users.
+/// like every other fragment. Its deployment step tells the operator how to manage users.
 fn authelia() -> Arc<dyn Module> {
     // Authelia's HTTP `ext_authz` endpoint path. Declared here (catalog data), not in the
     // planner, so the planner stays free of implementation names: the planner reads it back via
@@ -482,6 +535,13 @@ fn authelia() -> Arc<dyn Module> {
         service: "authelia".into(),
         readiness: Readiness::Healthy,
     });
+    // Whoever deploys the stack replaces the demo account before sharing it.
+    provides.deploy = vec![DeployStepSpec::new(
+        "accounts",
+        DeployPhase::Configure,
+        "Review the sign-in accounts",
+        include_str!("../../templates/gateway/authelia.accounts.md.jinja"),
+    )];
     Arc::new(DataModule {
         id: ModuleId::from("authelia"),
         model: Some("authelia".into()),
@@ -529,7 +589,7 @@ fn authelia() -> Arc<dyn Module> {
                     preserve: false,
                     moved_from: None,
                 },
-                // Operator-owned local accounts, beside the README that explains them. Seeded
+                // Operator-owned local accounts, explained by the module's deployment step. Seeded
                 // once (`preserve`) so later renders leave edits alone. Older renders wrote it
                 // at the environment root; the writer moves that copy here.
                 RenderFile {
@@ -542,18 +602,6 @@ fn authelia() -> Arc<dyn Module> {
                     at_root: false,
                     preserve: true,
                     moved_from: Some("users.yml".into()),
-                },
-                // Where the accounts live and how to change them, for whoever runs the stack.
-                RenderFile {
-                    path: "README.md".into(),
-                    contents: include_str!("../../templates/gateway/authelia.README.md.jinja")
-                        .into(),
-                    alias: None,
-                    sensitive: false,
-                    secret_alias: None,
-                    at_root: false,
-                    preserve: false,
-                    moved_from: None,
                 },
                 sensitive_file(
                     ".env/authelia.env",

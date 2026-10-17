@@ -12,7 +12,8 @@
 //!   [default](HostedKind::default_connection) built from the conventional env vars;
 //! - places its services [`Placement::External`](crate::Placement::External): reached directly
 //!   at the connection's origin from every vantage, never through the gateway;
-//! - renders nothing for it. The resources it would provision must already exist.
+//! - renders nothing for it. The resources it would provision are created by its
+//!   [deploy steps](crate::catalog::deploy), which depend on the resource's [`HostedVendor`].
 //!
 //! Secrets are **env-var references**, so `env.toml` stays committable: a secret-bearing field
 //! holds `${VAR}`, and [`PlanCtx::secrets`](super::PlanCtx::secrets) — supplied at plan time by
@@ -81,6 +82,7 @@ impl HostedKind {
                 database: name_placeholder(),
                 username: "${PGUSER}".into(),
                 password: "${PGPASSWORD}".into(),
+                ssl_mode: None,
             },
             HostedKind::S3 => HostedConnection::S3 {
                 region: default_aws_region(),
@@ -103,7 +105,110 @@ impl HostedKind {
     pub fn default_resource(self) -> HostedResource {
         HostedResource {
             cloud: self.default_cloud().map(Into::into),
+            vendor: Some(self.default_vendor()),
             connection: self.default_connection(),
+        }
+    }
+
+    /// The vendor assumed when the selection names none: AWS for S3, Azure for Azure storage,
+    /// and an unspecified server for Postgres.
+    pub fn default_vendor(self) -> HostedVendor {
+        match self {
+            HostedKind::Postgres => HostedVendor::Generic,
+            HostedKind::S3 => HostedVendor::AwsS3,
+            HostedKind::AzureBlob => HostedVendor::AzureStorage,
+        }
+    }
+}
+
+/// Who runs a hosted resource: what its [deploy steps](crate::DeployStepSpec) provision it
+/// with, and the connection defaults that vendor needs (managed Postgres services require TLS).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum HostedVendor {
+    /// Any provider of the kind: setup is described, not scripted (beyond what works against
+    /// any server, such as creating databases). For S3, an S3-compatible store.
+    Generic,
+    /// A Neon serverless Postgres project.
+    Neon,
+    /// An Amazon RDS for PostgreSQL instance.
+    AwsRds,
+    /// An Azure Database for PostgreSQL flexible server.
+    AzurePostgres,
+    /// Amazon S3.
+    AwsS3,
+    /// An Azure storage account.
+    AzureStorage,
+}
+
+impl HostedVendor {
+    /// Every vendor, in display order.
+    pub const ALL: [HostedVendor; 6] = [
+        HostedVendor::Generic,
+        HostedVendor::Neon,
+        HostedVendor::AwsRds,
+        HostedVendor::AzurePostgres,
+        HostedVendor::AwsS3,
+        HostedVendor::AzureStorage,
+    ];
+
+    /// The vendor's serialized name (`generic`, `neon`, `aws-rds`, …).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HostedVendor::Generic => "generic",
+            HostedVendor::Neon => "neon",
+            HostedVendor::AwsRds => "aws-rds",
+            HostedVendor::AzurePostgres => "azure-postgres",
+            HostedVendor::AwsS3 => "aws-s3",
+            HostedVendor::AzureStorage => "azure-storage",
+        }
+    }
+
+    /// A human-readable name for a wizard/UI.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            HostedVendor::Generic => "Other",
+            HostedVendor::Neon => "Neon",
+            HostedVendor::AwsRds => "Amazon RDS",
+            HostedVendor::AzurePostgres => "Azure Database for PostgreSQL",
+            HostedVendor::AwsS3 => "Amazon S3",
+            HostedVendor::AzureStorage => "Azure Storage",
+        }
+    }
+
+    /// Whether this vendor offers resources of `kind`. [`Generic`](Self::Generic) fits every
+    /// kind.
+    pub fn offers(self, kind: HostedKind) -> bool {
+        match self {
+            HostedVendor::Generic => true,
+            HostedVendor::Neon | HostedVendor::AwsRds | HostedVendor::AzurePostgres => {
+                kind == HostedKind::Postgres
+            }
+            HostedVendor::AwsS3 => kind == HostedKind::S3,
+            HostedVendor::AzureStorage => kind == HostedKind::AzureBlob,
+        }
+    }
+
+    /// The cloud label a resource of this vendor is grouped under, when the selection sets
+    /// none.
+    pub fn default_cloud(self) -> Option<&'static str> {
+        match self {
+            HostedVendor::Generic => None,
+            HostedVendor::Neon => Some("neon"),
+            HostedVendor::AwsRds | HostedVendor::AwsS3 => Some("aws"),
+            HostedVendor::AzurePostgres | HostedVendor::AzureStorage => Some("azure"),
+        }
+    }
+
+    /// The Postgres `sslmode` this vendor's servers need, when the connection sets none: the
+    /// managed services all refuse unencrypted connections.
+    pub fn default_ssl_mode(self) -> Option<&'static str> {
+        match self {
+            HostedVendor::Neon | HostedVendor::AwsRds | HostedVendor::AzurePostgres => {
+                Some("require")
+            }
+            _ => None,
         }
     }
 }
@@ -116,8 +221,167 @@ pub struct HostedResource {
     /// label that groups hosted resources in the topology. `None` for an unnamed environment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud: Option<String>,
+    /// Who runs it, which decides its setup steps; defaults to the kind's
+    /// [default vendor](HostedKind::default_vendor). The planner fills it in, along with a
+    /// `cloud` derived from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<HostedVendor>,
     /// How consumers reach it.
     pub connection: HostedConnection,
+}
+
+impl HostedResource {
+    /// The effective vendor: the configured one, else the kind's default.
+    pub fn vendor(&self) -> HostedVendor {
+        self.vendor
+            .unwrap_or_else(|| self.connection.kind().default_vendor())
+    }
+
+    /// This resource with every default the planner derives filled in: the vendor, the cloud
+    /// label from it, and a Postgres `sslmode` the vendor requires.
+    fn settled(mut self) -> HostedResource {
+        let vendor = self.vendor();
+        self.vendor = Some(vendor);
+        if self.cloud.is_none() {
+            self.cloud = vendor.default_cloud().map(Into::into);
+        }
+        if let HostedConnection::Postgres { ssl_mode, .. } = &mut self.connection
+            && ssl_mode.is_none()
+        {
+            *ssl_mode = vendor.default_ssl_mode().map(Into::into);
+        }
+        self
+    }
+
+    /// The resource as a deploy step sees it (see [`HostedStepView`]), for the consumers'
+    /// demanded resource names `objects`.
+    pub fn step_view(&self, objects: &[String]) -> HostedStepView {
+        let (fields, name_field): (Vec<StepField>, &str) = match &self.connection {
+            HostedConnection::Postgres {
+                host,
+                port,
+                database,
+                username,
+                password,
+                ssl_mode,
+            } => {
+                let mut fields = vec![
+                    ("host", host.clone(), None),
+                    ("port", port.to_string(), None),
+                    ("database", database.clone(), None),
+                    ("username", username.clone(), None),
+                    ("password", password.clone(), Some("PGPASSWORD")),
+                ];
+                fields.extend(ssl_mode.iter().map(|m| ("ssl_mode", m.clone(), None)));
+                (fields, database)
+            }
+            HostedConnection::S3 {
+                region,
+                endpoint,
+                bucket,
+                access_key_id,
+                secret_access_key,
+                role_arn,
+            } => {
+                let mut fields = vec![
+                    ("region", region.clone(), None),
+                    ("bucket", bucket.clone(), None),
+                    (
+                        "access_key_id",
+                        access_key_id.clone(),
+                        Some("AWS_ACCESS_KEY_ID"),
+                    ),
+                    (
+                        "secret_access_key",
+                        secret_access_key.clone(),
+                        Some("AWS_SECRET_ACCESS_KEY"),
+                    ),
+                ];
+                fields.extend(endpoint.iter().map(|e| ("endpoint", e.clone(), None)));
+                fields.extend(role_arn.iter().map(|a| ("role_arn", a.clone(), None)));
+                (fields, bucket)
+            }
+            HostedConnection::AzureBlob {
+                account,
+                container,
+                connection_string,
+            } => (
+                vec![
+                    ("account", account.clone(), None),
+                    ("container", container.clone(), None),
+                    (
+                        "connection_string",
+                        connection_string.clone(),
+                        Some("AZURE_STORAGE_CONNECTION_STRING"),
+                    ),
+                ],
+                container,
+            ),
+        };
+        let mut values = BTreeMap::new();
+        let mut vars = BTreeMap::new();
+        for (field, value, conventional) in fields {
+            // A secret field set inline maps to its conventional variable, so a script reads
+            // the environment rather than embedding the value.
+            if let Some(var) = single_ref(&value).or(conventional) {
+                vars.insert(field, var.to_string());
+            }
+            if conventional.is_none() {
+                values.insert(field, value);
+            }
+        }
+        HostedStepView {
+            kind: self.connection.kind(),
+            vendor: self.vendor(),
+            cloud: self.cloud.clone(),
+            values,
+            vars,
+            resources: objects
+                .iter()
+                .map(|o| name_field.replace("{name}", o))
+                .collect(),
+            secrets: self.connection.secret_refs().into_iter().collect(),
+        }
+    }
+}
+
+/// A hosted resource as its [deploy steps](crate::DeployStepSpec) see it: the `hosted`
+/// template global. It carries coordinates and the *names* of the variables secrets are read
+/// from, never a secret's value, so rendered instructions and scripts are safe to commit and
+/// show.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HostedStepView {
+    /// The resource kind (`postgres`, `s3`, `azure_blob`).
+    pub kind: HostedKind,
+    /// The effective vendor (`neon`, `aws-rds`, `aws-s3`, …).
+    pub vendor: HostedVendor,
+    /// The cloud label, if any.
+    pub cloud: Option<String>,
+    /// The connection's non-secret fields as configured (`host`, `port`, `database`,
+    /// `username`, `ssl_mode`; `region`, `endpoint`, `bucket`, `role_arn`; `account`,
+    /// `container`). A `${VAR}` reference stays verbatim, which a shell expands.
+    pub values: BTreeMap<&'static str, String>,
+    /// The variable each field is read from: every field that is exactly one `${VAR}`, and
+    /// every secret field (`password`, `access_key_id`, `secret_access_key`,
+    /// `connection_string`), whose variable is the conventional one when it's set inline.
+    pub vars: BTreeMap<&'static str, String>,
+    /// The resources consumers demand, by their real names: each demanded name substituted
+    /// into the connection's database / bucket / container field.
+    pub resources: Vec<String>,
+    /// Every `${VAR}` the connection references, sorted.
+    pub secrets: Vec<String>,
+}
+
+/// One connection field as [`HostedResource::step_view`] reads it: its name, its configured
+/// value, and, for a secret field, the conventional variable it is read from when set inline.
+type StepField = (&'static str, String, Option<&'static str>);
+
+/// The variable `s` reads when it is exactly one `${VAR}` reference.
+fn single_ref(s: &str) -> Option<&str> {
+    match env_refs(s).as_slice() {
+        [(span, name)] if *span == (0..s.len()) => Some(name),
+        _ => None,
+    }
 }
 
 /// How consumers reach a hosted resource, one variant per [`HostedKind`]. The parts a cloud
@@ -148,6 +412,10 @@ pub enum HostedConnection {
         username: String,
         /// The role's password — typically a `${VAR}` reference.
         password: String,
+        /// The libpq `sslmode` consumers connect with (e.g. `require`); defaults to what the
+        /// [vendor](HostedVendor::default_ssl_mode) needs, else the client's default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_mode: Option<String>,
     },
     /// Amazon S3 (or an S3-compatible store, via `endpoint`).
     S3 {
@@ -201,6 +469,7 @@ impl std::fmt::Debug for HostedConnection {
                 port,
                 database,
                 username,
+                ssl_mode,
                 ..
             } => f
                 .debug_struct("Postgres")
@@ -209,6 +478,7 @@ impl std::fmt::Debug for HostedConnection {
                 .field("database", database)
                 .field("username", username)
                 .field("password", &"<redacted>")
+                .field("ssl_mode", ssl_mode)
                 .finish(),
             HostedConnection::S3 {
                 region,
@@ -268,13 +538,15 @@ impl HostedConnection {
                 database,
                 username,
                 password,
+                ssl_mode,
             } => Connection::postgres(
                 host.clone(),
                 *port,
                 database.clone(),
                 username.clone(),
                 password.clone(),
-            ),
+            )
+            .with_ssl_mode(ssl_mode.clone()),
             HostedConnection::S3 {
                 region,
                 endpoint,
@@ -339,12 +611,14 @@ impl HostedConnection {
                 database,
                 username,
                 password,
+                ssl_mode,
             } => HostedConnection::Postgres {
                 host: f(host),
                 port: *port,
                 database: f(database),
                 username: f(username),
                 password: f(password),
+                ssl_mode: ssl_mode.as_deref().map(&mut f),
             },
             HostedConnection::S3 {
                 region,
@@ -558,8 +832,18 @@ pub(super) fn resolve_hosted(
                     ),
                 });
             }
-            Some(resource) => resource.clone(),
-            None => kind.default_resource(),
+            Some(resource) if !resource.vendor().offers(*kind) => {
+                return Err(ResolveHostedError::Invalid {
+                    module: module.clone(),
+                    reason: format!(
+                        "vendor `{}` offers no `{}` resources",
+                        resource.vendor().as_str(),
+                        kind.as_str()
+                    ),
+                });
+            }
+            Some(resource) => resource.clone().settled(),
+            None => kind.default_resource().settled(),
         };
         let connection = match secrets {
             Some(secrets) => {
@@ -606,6 +890,7 @@ mod tests {
             database: "{name}".into(),
             username: "app".into(),
             password: "${PG_PASSWORD}".into(),
+            ssl_mode: None,
         }
     }
 
@@ -733,6 +1018,7 @@ mod tests {
             ModuleId::from("aws-s3"),
             HostedResource {
                 cloud: None,
+                vendor: None,
                 connection: rds(),
             },
         )]);

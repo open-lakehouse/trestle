@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:708f93663486c75612ab9f7e8eb0bcf2fc46afd709f9db3f7f428e4ae2c5053b"
+    "digest": "sha256:0e9dec34fead2080124abc151621290e1ec9eb0b344317d7910670e9a01dcb3e"
   },
   "modules": [
     {
@@ -302,7 +302,7 @@
       "id": "hosted-postgres",
       "model": "postgresql",
       "display_name": "Hosted Postgres",
-      "summary": "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
+      "summary": "A managed PostgreSQL server (Neon, RDS, Azure, …); README.md sets it up.",
       "category": "metadata_db",
       "provider_of": "relational_db",
       "requires": [],
@@ -322,6 +322,7 @@
       "hosted": {
         "kind": "postgres",
         "default": {
+          "vendor": "generic",
           "connection": {
             "kind": "postgres",
             "host": "${PGHOST}",
@@ -337,7 +338,7 @@
       "id": "aws-s3",
       "model": "amazonS3",
       "display_name": "Amazon S3",
-      "summary": "Amazon S3 or an S3-compatible store; buckets must already exist.",
+      "summary": "Amazon S3 or an S3-compatible store; README.md sets up the buckets.",
       "category": "storage",
       "provider_of": "object_store",
       "requires": [],
@@ -358,6 +359,7 @@
         "kind": "s3",
         "default": {
           "cloud": "aws",
+          "vendor": "aws-s3",
           "connection": {
             "kind": "s3",
             "region": "us-east-1",
@@ -372,7 +374,7 @@
       "id": "azure-storage",
       "model": "azureBlobStorage",
       "display_name": "Azure Storage",
-      "summary": "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
+      "summary": "An Azure storage account (Blob / ADLS Gen2); README.md sets it up.",
       "category": "storage",
       "provider_of": "object_store",
       "requires": [],
@@ -393,6 +395,7 @@
         "kind": "azure_blob",
         "default": {
           "cloud": "azure",
+          "vendor": "azure-storage",
           "connection": {
             "kind": "azure_blob",
             "account": "${AZURE_STORAGE_ACCOUNT}",

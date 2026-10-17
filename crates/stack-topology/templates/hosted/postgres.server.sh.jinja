@@ -1,0 +1,108 @@
+{%- set v = hosted.values -%}
+{%- if hosted.vendor == "neon" -%}
+project_name={{ ("trestle-" ~ env_name) | shell }}
+project_id="${NEON_PROJECT_ID:-}"
+if [ -z "$project_id" ]; then
+  project_id="$(neonctl projects list --output json \
+    | jq -r --arg name "$project_name" '(.projects // .)[] | select(.name == $name) | .id' \
+    | head -n 1)"
+fi
+if [ -z "$project_id" ]; then
+  project_id="$(neonctl projects create --name "$project_name" \
+    --region-id "${NEON_REGION:-aws-us-east-2}" --output json | jq -r '.project.id // .id')"
+  echo "created Neon project $project_name ($project_id)"
+else
+  echo "Neon project $project_name exists ($project_id)"
+fi
+save_secret NEON_PROJECT_ID "$project_id"
+
+# The project's default role and its password, from its connection string.
+uri="$(neonctl connection-string --project-id "$project_id")"
+rest="${uri#*://}"
+credentials="${rest%%@*}"
+host="${rest#*@}"
+host="${host%%/*}"
+host="${host%%:*}"
+{%- if hosted.vars.host %}
+save_secret {{ hosted.vars.host | shell }} "$host"
+{%- else %}
+echo "env.toml sets the connection's host: make sure it is $host"
+{%- endif %}
+{%- if hosted.vars.username %}
+save_secret {{ hosted.vars.username | shell }} "${credentials%%:*}"
+{%- else %}
+echo "env.toml sets the connection's username: make sure it is ${credentials%%:*}"
+{%- endif %}
+save_secret {{ hosted.vars.password | shell }} "${credentials#*:}"
+{%- elif hosted.vendor == "aws-rds" -%}
+instance={{ ("trestle-" ~ env_name) | shell }}
+region="${AWS_REGION:-us-east-1}"
+{%- if hosted.vars.username %}
+user_var={{ hosted.vars.username | shell }}
+user="${!user_var:-trestle}"
+{%- else %}
+user={{ v.username | shell }}
+{%- endif %}
+password_var={{ hosted.vars.password | shell }}
+if [ -z "${!password_var:-}" ]; then
+  save_secret "$password_var" "$(openssl rand -hex 24)"
+fi
+password="${!password_var}"
+if aws rds describe-db-instances --region "$region" --db-instance-identifier "$instance" \
+  >/dev/null 2>&1; then
+  echo "RDS instance $instance exists"
+else
+  aws rds create-db-instance --region "$region" --db-instance-identifier "$instance" \
+    --engine postgres --db-instance-class "${RDS_INSTANCE_CLASS:-db.t4g.micro}" \
+    --allocated-storage 20 --master-username "$user" --master-user-password "$password" \
+    --publicly-accessible >/dev/null
+  echo "creating RDS instance $instance"
+fi
+echo "waiting for $instance to be available (this takes several minutes)"
+aws rds wait db-instance-available --region "$region" --db-instance-identifier "$instance"
+host="$(aws rds describe-db-instances --region "$region" --db-instance-identifier "$instance" \
+  --query 'DBInstances[0].Endpoint.Address' --output text)"
+{%- if hosted.vars.host %}
+save_secret {{ hosted.vars.host | shell }} "$host"
+{%- else %}
+echo "env.toml sets the connection's host: make sure it is $host"
+{%- endif %}
+{%- if hosted.vars.username %}
+save_secret {{ hosted.vars.username | shell }} "$user"
+{%- endif %}
+{%- elif hosted.vendor == "azure-postgres" -%}
+: "${AZURE_RESOURCE_GROUP:?set AZURE_RESOURCE_GROUP to the resource group to create the server in}"
+server="${AZURE_POSTGRES_SERVER:-{{ "trestle-" ~ env_name }}}"
+{%- if hosted.vars.username %}
+user_var={{ hosted.vars.username | shell }}
+user="${!user_var:-trestle}"
+{%- else %}
+user={{ v.username | shell }}
+{%- endif %}
+password_var={{ hosted.vars.password | shell }}
+if [ -z "${!password_var:-}" ]; then
+  save_secret "$password_var" "$(openssl rand -hex 24)"
+fi
+password="${!password_var}"
+if az postgres flexible-server show --resource-group "$AZURE_RESOURCE_GROUP" --name "$server" \
+  >/dev/null 2>&1; then
+  echo "Azure Postgres server $server exists"
+else
+  allow_ip="${AZURE_POSTGRES_ALLOW_IP:-$(curl -fsS https://api.ipify.org)}"
+  az postgres flexible-server create --resource-group "$AZURE_RESOURCE_GROUP" --name "$server" \
+    --location "${AZURE_LOCATION:-eastus}" --admin-user "$user" --admin-password "$password" \
+    --tier Burstable --sku-name Standard_B1ms --storage-size 32 --version 16 \
+    --public-access "$allow_ip" --yes --output none
+  echo "created Azure Postgres server $server"
+fi
+host="$(az postgres flexible-server show --resource-group "$AZURE_RESOURCE_GROUP" \
+  --name "$server" --query fullyQualifiedDomainName --output tsv)"
+{%- if hosted.vars.host %}
+save_secret {{ hosted.vars.host | shell }} "$host"
+{%- else %}
+echo "env.toml sets the connection's host: make sure it is $host"
+{%- endif %}
+{%- if hosted.vars.username %}
+save_secret {{ hosted.vars.username | shell }} "$user"
+{%- endif %}
+{%- endif %}

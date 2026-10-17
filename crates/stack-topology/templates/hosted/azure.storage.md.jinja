@@ -1,0 +1,15 @@
+{%- set v = hosted.values -%}
+{%- if hosted.resources -%}
+{%- if hosted.vars.account -%}
+Choose a storage account name (3 to 24 lowercase letters and digits, unique across Azure) and set
+`{{ hosted.vars.account }}` to it. The script creates that account
+{%- else -%}
+The script creates the storage account `{{ v.account }}`
+{%- endif %} with a hierarchical namespace (ADLS Gen2) unless it exists, then the containers the
+stack uses: {% for r in hosted.resources %}`{{ r }}`{% if not loop.last %}, {% endif %}{% endfor %}.
+
+It needs the Azure CLI, signed in (`az login`), and `AZURE_RESOURCE_GROUP` set to an existing
+resource group, and creates the account in `AZURE_LOCATION` (default `eastus`). Unless
+`{{ hosted.vars.connection_string }}` is set, it saves the account's connection string there in
+`secrets.env`.
+{%- endif %}

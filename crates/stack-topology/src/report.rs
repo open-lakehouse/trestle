@@ -107,11 +107,11 @@ pub fn layout_report(plan: &Plan) -> String {
     if !plan.hosted.is_empty() {
         out.push_str("\n## Hosted resources\n\n");
         out.push_str(
-            "Provided outside the stack: create the listed resources before starting it, and set\n",
+            "Provided outside the stack: README.md walks through creating the listed resources\n",
         );
-        out.push_str("the secrets in the environment `trestle env render` runs in.\n\n");
-        out.push_str("| Module | Cloud | Reached at | Must exist | Secrets |\n");
-        out.push_str("| --- | --- | --- | --- | --- |\n");
+        out.push_str("and setting the secrets before the stack starts.\n\n");
+        out.push_str("| Module | Vendor | Cloud | Reached at | Must exist | Secrets |\n");
+        out.push_str("| --- | --- | --- | --- | --- | --- |\n");
         for (module, resource) in &plan.hosted {
             let origin = plan
                 .services
@@ -131,8 +131,9 @@ pub fn layout_report(plan: &Plan) -> String {
             };
             let _ = writeln!(
                 out,
-                "| `{}` | {} | `{}` | {} | {} |",
+                "| `{}` | {} | {} | `{}` | {} | {} |",
                 module,
+                resource.vendor().display_name(),
                 resource.cloud.as_deref().unwrap_or("—"),
                 origin,
                 list(

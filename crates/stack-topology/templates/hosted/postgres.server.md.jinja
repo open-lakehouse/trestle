@@ -1,0 +1,31 @@
+{%- set v = hosted.values -%}
+{%- set saved -%}
+{%- for f in ["host", "username", "password"] if hosted.vars[f] %}`{{ hosted.vars[f] }}`{% if not loop.last %}, {% endif %}{% endfor -%}
+{%- endset -%}
+{%- if hosted.vendor == "neon" -%}
+Create a Neon project for the stack's databases. The script needs
+[`neonctl`](https://neon.tech/docs/reference/neon-cli), signed in (`neonctl auth`, or
+`NEON_API_KEY` set), and `jq`. It creates the project `trestle-{{ env_name }}` unless it exists
+(in `NEON_REGION`, default `aws-us-east-2`), then saves its id as `NEON_PROJECT_ID`
+{%- if saved %} and its connection details as {{ saved }}{% endif %} in `secrets.env`.
+{%- elif hosted.vendor == "aws-rds" -%}
+Create an Amazon RDS for PostgreSQL instance. The script needs the AWS CLI, signed in to the
+account (a profile, SSO, or keys), and `openssl`. It creates the instance `trestle-{{ env_name }}`
+unless it exists (in `AWS_REGION`, default `us-east-1`; class `RDS_INSTANCE_CLASS`, default
+`db.t4g.micro`), with a generated password unless one is set, waits until it is available, and
+saves {{ saved or "its connection details" }} in `secrets.env`.
+
+The instance is publicly accessible in the account's default VPC, so the stack can reach it from
+your machine. Allow inbound TCP 5432 from your address in its security group, and nothing wider.
+{%- elif hosted.vendor == "azure-postgres" -%}
+Create an Azure Database for PostgreSQL flexible server. The script needs the Azure CLI, signed
+in (`az login`), `openssl`, and `AZURE_RESOURCE_GROUP` set to an existing resource group. It
+creates the server `AZURE_POSTGRES_SERVER` (default `trestle-{{ env_name }}`; the name must be
+unique across Azure) unless it exists, in `AZURE_LOCATION` (default `eastus`), with a generated
+password unless one is set. The firewall admits `AZURE_POSTGRES_ALLOW_IP`, by default this
+machine's public address. It then saves {{ saved or "its connection details" }} in `secrets.env`.
+{%- else -%}
+Provide a PostgreSQL server the stack can reach from where it runs (port {{ v.port }}), and a
+role that may create databases. The stack connects to `{{ v.host }}` as `{{ v.username }}`
+{%- if v.ssl_mode %} with `sslmode={{ v.ssl_mode }}`{% endif %}. Set {{ saved or "the connection's variables" }} to match.
+{%- endif %}

@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub mod compose;
+pub mod deploy;
 pub mod envoy;
 pub mod output;
 pub mod python_client;
@@ -152,6 +153,15 @@ pub enum RenderError {
     Template {
         /// The module whose template failed.
         module: ModuleId,
+        /// The underlying templating error.
+        #[source]
+        source: TemplateError,
+    },
+    /// A deployment step's template failed to compile or render.
+    #[error("deploy step `{step}` failed to render: {source}")]
+    DeployStep {
+        /// The step, as `<module or target>/<step id>`.
+        step: String,
         /// The underlying templating error.
         #[source]
         source: TemplateError,

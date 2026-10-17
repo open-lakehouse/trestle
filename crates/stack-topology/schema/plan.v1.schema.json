@@ -140,6 +140,24 @@
           "sensitive": { "type": "boolean" }
         }
       }
+    },
+    "deploy": {
+      "description": "The deployment steps in order: what an operator does beyond what the deploy target runs. A step's script is a path among `files`.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["order", "phase", "id", "title", "instructions"],
+        "additionalProperties": false,
+        "properties": {
+          "order": { "type": "integer", "minimum": 1 },
+          "phase": { "enum": ["provision", "configure", "start", "verify"] },
+          "module": { "type": "string" },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "instructions": { "type": "string" },
+          "script": { "type": "string" }
+        }
+      }
     }
   },
   "$defs": {

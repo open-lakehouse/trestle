@@ -94,6 +94,7 @@ pub use model::placement::{Placement, Vantage};
 pub use model::role::{Role, ServiceSpec};
 
 // --- catalog: the module set + how a module is defined ---
+pub use catalog::deploy::{DeployCtx, DeployPhase, DeployStepSpec, RenderedStep};
 pub use catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls,
     HelperKind, HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId,
@@ -111,16 +112,20 @@ pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClientSelection, ClusterConfig, ENVOY_AUTH_KNOB,
     ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, GatewaySettings,
-    HostedConnection, HostedKind, HostedResource, ListenerConfig, LocalSecrets, ModuleBinding,
-    PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace,
-    Secrets, SecureOrigin, Selection, TlsListenerConfig, TlsVirtualHost, is_valid_resource_name,
-    resource_name_rule,
+    HostedConnection, HostedKind, HostedResource, HostedStepView, HostedVendor, ListenerConfig,
+    LocalSecrets, ModuleBinding, PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx, PlanError,
+    PolicyConfig, PythonWorkspace, Secrets, SecureOrigin, Selection, TlsListenerConfig,
+    TlsVirtualHost, is_valid_resource_name, resource_name_rule,
 };
 
 // --- render: the planner↔template handshake + the stack artifacts ---
 pub use render::compose::{
     Artifacts, ComposeInclude, ConfigDecl, HeadFile, SecretDecl, render_all, render_compose,
     render_modules,
+};
+pub use render::deploy::{
+    DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployScript, DeployStep, SECRETS_ENV_PATH,
+    render_readme, render_steps,
 };
 pub use render::envoy::render_envoy;
 pub use render::output::{

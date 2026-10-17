@@ -17,13 +17,14 @@ use std::fmt::Write as _;
 use crate::catalog::module::ModuleId;
 use crate::model::placement::Vantage;
 use crate::plan::{LocalSecrets, Plan};
+use crate::render::deploy::{DEPLOY_README_PATH, render_readme, render_steps};
 use crate::render::envoy::render_envoy;
 use crate::render::output::{
     CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
     render_client_env,
 };
 use crate::render::{InjectedEnv, RenderError, RenderOutput};
-use crate::target::TargetId;
+use crate::target::{Compose, TargetId};
 
 /// A compose `include:` entry contributed by a module.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -414,6 +415,7 @@ fn render_gitignore(plan: &Plan, modules: &[(ModuleId, RenderOutput)]) -> String
 /// writes (see [`MaterializedOutput`] for the layout).
 pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     let artifacts = render_all(plan)?;
+    let deploy = render_steps(plan, &Compose)?;
     let mut files = vec![
         OutputFile {
             path: "compose.yaml".into(),
@@ -467,6 +469,14 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
             preserve: false,
             moved_from: None,
         },
+        // How to bring the environment up: every module's deployment steps, in order.
+        OutputFile {
+            path: DEPLOY_README_PATH.into(),
+            contents: render_readme(plan, &deploy),
+            sensitive: false,
+            preserve: false,
+            moved_from: None,
+        },
     ];
 
     // The Envoy bootstrap is written only when the plan has a gateway — the same condition
@@ -510,13 +520,27 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     // The Python client workspace, when selected, sits beside the client environments.
     files.extend(crate::render::python_client::python_client_files(plan));
 
+    // The deployment steps' scripts. They read secrets by variable name, never by value.
+    files.extend(
+        deploy
+            .iter()
+            .filter_map(|step| step.script.as_ref())
+            .map(|script| OutputFile {
+                path: script.path.clone(),
+                contents: script.contents.clone(),
+                sensitive: false,
+                preserve: false,
+                moved_from: None,
+            }),
+    );
+
     if plan.local_secrets == LocalSecrets::Inline {
         for file in &mut files {
             file.sensitive = false;
         }
     }
 
-    Ok(MaterializedOutput { files })
+    Ok(MaterializedOutput { files, deploy })
 }
 
 /// Whether the plan runs the gateway module, even only for its in-network TLS listener (unlike
