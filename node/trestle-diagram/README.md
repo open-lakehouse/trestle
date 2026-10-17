@@ -53,6 +53,8 @@ import snapshot from "./lakehouse.trestle-graph.json";
 | --- | --- | --- |
 | `snapshot` | — | The parsed snapshot JSON (validated; a bad or newer-version file renders an error box). |
 | `graph` | — | A `GraphDto` to draw directly, instead of a snapshot. |
+| `files` | — | The viewable file paths, with `graph` (a snapshot carries its own manifest). |
+| `readFile` | — | `(path) => Promise<string>`: a rendered file's contents. With it, nodes show their config files (see below). |
 | `colorMode` | `"system"` | `"light"`, `"dark"`, or `"system"`. Pass your site's active theme. |
 | `height` | fitted | A fixed height in px. By default the embed uses the diagram's aspect ratio, clamped to `minHeight`–`maxHeight` (240–640). |
 | `legend` | `true` | The connection-kind legend, shown as a row under the diagram. |
@@ -63,6 +65,40 @@ import snapshot from "./lakehouse.trestle-graph.json";
 The diagram pulls in React Flow and ELK (ELK alone is about 1.6 MB
 unminified), so lazy-load it (`React.lazy`) to keep them out of a page's main
 bundle.
+
+## Showing each node's config files
+
+A snapshot exported from the editor lists the environment's viewable files
+(`files`: paths relative to the rendered environment's root, such as
+`modules/postgres/compose.yaml`). It carries no contents: the rendered
+environment ships next to the snapshot, so the host reads them from there.
+Pass `readFile`, and each node with files under `modules/<id>/` shows a count
+in its header that opens them in a dialog: a tab per file, syntax-highlighted.
+
+```tsx
+// Vite: bundle the render's files as lazily loaded strings.
+const rendered = import.meta.glob("./lakehouse/**", {
+  query: "?raw",
+  import: "default",
+}) as Record<string, () => Promise<string>>;
+
+<EnvironmentDiagram
+  snapshot={snapshot}
+  readFile={(path) => rendered[`./lakehouse/${path}`]()}
+/>;
+
+// Or fetch them from where the site serves the render.
+<EnvironmentDiagram
+  snapshot={snapshot}
+  readFile={(path) => fetch(`/envs/lakehouse/${path}`).then((r) => r.text())}
+/>;
+```
+
+Only paths in the manifest are ever read. The planner leaves sensitive files
+out of it, so a secret in the render (e.g. `modules/postgres/secrets/…`)
+is never shown, even when the host's glob covers it. Each file is read once.
+Without a manifest or `readFile`, nodes show no file count. Highlighting
+(`shiki`) is imported only when the first file opens.
 
 ## Linking nodes to your own pages
 
@@ -86,7 +122,7 @@ keep that text. The lines keep their fixed height and truncate, so render
 inline content. Clicks inside a slot don't select or drag the node.
 
 `aside: (node) => ReactNode` adds content at the end of the header, after the
-"External" and "Auto" chips: a small chip such as a count, with the detail in
+"External" and "Auto" chips and the files count: a small chip such as a count, with the detail in
 its popover. It doesn't shrink, so the name truncates first; keep it short.
 Return `undefined` for nothing.
 

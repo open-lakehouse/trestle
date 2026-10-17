@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { FileSource } from "../artifacts/fileSource";
 import {
   ConnectionLegend,
   MarkitectureCanvas,
@@ -26,6 +27,18 @@ export interface EnvironmentDiagramProps {
   snapshot?: unknown;
   /** A graph to draw directly, instead of a snapshot. */
   graph?: GraphDto;
+  /**
+   * The viewable file paths, with `graph` (a snapshot carries its own
+   * manifest).
+   */
+  files?: readonly string[];
+  /**
+   * Read a rendered file's contents, given its path relative to the
+   * environment's root: typically from the rendered environment shipped next
+   * to the snapshot. With it (and a file manifest), each node shows a count of
+   * its config files that opens them. Only manifest paths are ever read.
+   */
+  readFile?: (path: string) => Promise<string>;
   /**
    * Light/dark rendering. Defaults to `"system"`; a host with its own theme
    * toggle passes its active theme.
@@ -75,6 +88,8 @@ export interface EnvironmentDiagramProps {
 export function EnvironmentDiagram({
   snapshot,
   graph,
+  files,
+  readFile,
   colorMode = "system",
   height,
   minHeight = 240,
@@ -86,14 +101,18 @@ export function EnvironmentDiagram({
   className,
 }: EnvironmentDiagramProps) {
   const resolved = useMemo(() => {
-    if (graph) return { graph, title: undefined };
+    if (graph) return { graph, title: undefined, files };
     try {
       const parsed = parseGraphSnapshot(snapshot);
-      return { graph: parsed.graph, title: parsed.title };
+      return { graph: parsed.graph, title: parsed.title, files: parsed.files };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }
-  }, [snapshot, graph]);
+  }, [snapshot, graph, files]);
+  const source = useFileSource(
+    "error" in resolved ? undefined : resolved.files,
+    readFile,
+  );
   const [fitted, setFitted] = useState<number>();
   const [expanded, setExpanded] = useState(false);
   const dark = useDark(colorMode);
@@ -132,6 +151,7 @@ export function EnvironmentDiagram({
             interactive={false}
             legend={false}
             slots={slots}
+            files={source}
           >
             <FitViewport />
             {height === undefined && (
@@ -162,6 +182,7 @@ export function EnvironmentDiagram({
             colorMode={colorMode}
             legend={legend}
             slots={slots}
+            files={source}
           >
             <Panel position="top-left">
               <ChromeButton label="Close" onClick={() => setExpanded(false)}>
@@ -173,6 +194,40 @@ export function EnvironmentDiagram({
       )}
     </>
   );
+}
+
+/**
+ * The manifest's files, read through the host's `readFile`: once per path
+ * (a failed read is retried on the next view), and through the latest
+ * `readFile` without the source changing identity when a host passes a fresh
+ * closure each render.
+ */
+function useFileSource(
+  paths: readonly string[] | undefined,
+  readFile: ((path: string) => Promise<string>) | undefined,
+): FileSource | undefined {
+  const latest = useRef(readFile);
+  latest.current = readFile;
+  const enabled = !!readFile && !!paths && paths.length > 0;
+  return useMemo(() => {
+    if (!enabled || !paths) return undefined;
+    const listed = new Set(paths);
+    const cache = new Map<string, Promise<string>>();
+    const read = (path: string): Promise<string> => {
+      const reader = latest.current;
+      if (!listed.has(path) || !reader) {
+        return Promise.reject(new Error("not in the file manifest"));
+      }
+      let pending = cache.get(path);
+      if (!pending) {
+        pending = reader(path);
+        cache.set(path, pending);
+        pending.catch(() => cache.delete(path));
+      }
+      return pending;
+    };
+    return { paths, read };
+  }, [enabled, paths]);
 }
 
 /** Whether `colorMode` resolves to dark, following the OS for `"system"`. */

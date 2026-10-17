@@ -48,6 +48,11 @@ export interface CanvasToolbarProps {
   hasError: boolean;
   /** The planned graph, for the export actions (disabled while absent). */
   graph?: GraphDto;
+  /**
+   * The plan's viewable file paths, saved in the snapshot as its manifest so
+   * an embed can show each node's files from the companion render.
+   */
+  files?: readonly string[];
   /** The exported files' base name. Defaults to `"environment"`. */
   exportName?: string;
   /** Called with a message when an export fails. */
@@ -79,6 +84,7 @@ export function CanvasToolbar({
   componentCount,
   hasError,
   graph,
+  files,
   exportName = "environment",
   onExportError,
   gatewayEnabled = true,
@@ -112,6 +118,7 @@ export function CanvasToolbar({
         <div className="mx-1 h-5 w-px bg-border" />
         <ExportActions
           graph={graph}
+          files={files}
           name={exportName}
           onError={onExportError}
         />
@@ -190,10 +197,12 @@ function GatewayToggle({
  */
 function ExportActions({
   graph,
+  files,
   name,
   onError,
 }: {
   graph: GraphDto | undefined;
+  files: readonly string[] | undefined;
   name: string;
   onError?: (message: string) => void;
 }) {
@@ -203,7 +212,7 @@ function ExportActions({
   const exportSnapshot = () => {
     if (!graph) return;
     downloadText(
-      stringifyGraphSnapshot(createGraphSnapshot(graph)),
+      stringifyGraphSnapshot(createGraphSnapshot(graph, { files })),
       `${name}${GRAPH_SNAPSHOT_EXTENSION}`,
     );
   };

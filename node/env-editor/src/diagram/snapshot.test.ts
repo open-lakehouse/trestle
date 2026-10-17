@@ -100,3 +100,33 @@ describe("parseGraphSnapshot", () => {
     expect(() => roundTrip(snapshot)).toThrow(message);
   });
 });
+
+describe("snapshot file manifest", () => {
+  const paths = FIXTURE_PLAN.files.map((f) => f.path);
+
+  test("saves the paths, sorted, without contents, and reads them back", () => {
+    const snapshot = createGraphSnapshot(FIXTURE_PLAN.graph, { files: paths });
+    expect(snapshot.files).toEqual([...paths].sort());
+    const json = stringifyGraphSnapshot(snapshot);
+    expect(json).not.toContain(FIXTURE_PLAN.files[0]?.contents ?? "\0");
+    expect(roundTrip(JSON.parse(json)).files).toEqual([...paths].sort());
+  });
+
+  test("is left out without files, and older snapshots still parse", () => {
+    const snapshot = createGraphSnapshot(FIXTURE_PLAN.graph);
+    expect("files" in snapshot).toBe(false);
+    expect(roundTrip(snapshot).files).toBeUndefined();
+  });
+
+  test.each([
+    ["not an array", "compose.yaml"],
+    ["a non-string", [1]],
+    ["an absolute path", ["/etc/passwd"]],
+    ["a parent segment", ["modules/../../secret"]],
+    ["an empty segment", ["modules//compose.yaml"]],
+    ["a duplicate", ["compose.yaml", "compose.yaml"]],
+  ])("rejects %s", (_, files) => {
+    const snapshot = { ...createGraphSnapshot(FIXTURE_PLAN.graph), files };
+    expect(() => roundTrip(snapshot)).toThrow(/graph snapshot:/);
+  });
+});

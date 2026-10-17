@@ -10,9 +10,11 @@
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "@xyflow/react/dist/style.css";
 
-/* The canvas sources (consumed from the env-editor workspace package). */
+/* The canvas sources (consumed from the env-editor workspace package), and
+   the file viewer its nodes open. */
 @source "../../env-editor/src/graph";
 @source "../../env-editor/src/diagram";
+@source "../../env-editor/src/artifacts";
 
 @theme inline {
   --color-background: hsl(var(--background));
@@ -120,5 +122,18 @@
 
   * {
     border-color: hsl(var(--border));
+  }
+}
+
+/* Highlighted file contents (the files dialog's viewer): each token carries
+   both themes' colors. `:root.dark` is a root rendered dark; `.dark` a dark
+   React Flow canvas. */
+@layer components {
+  .trestle-code-token {
+    color: var(--shiki-light);
+  }
+  :root.dark .trestle-code-token,
+  .dark .trestle-code-token {
+    color: var(--shiki-dark);
   }
 }

@@ -124,3 +124,33 @@ export const WithAside: Story = {
     },
   },
 };
+
+// A snapshot with its file manifest, the host reading contents from the
+// render shipped next to it (here the fixture plan's files, after a delay).
+const contents = new Map(FIXTURE_PLAN.files.map((f) => [f.path, f.contents]));
+const readFixtureFile = (path: string) =>
+  new Promise<string>((resolve, reject) =>
+    setTimeout(() => {
+      const found = contents.get(path);
+      if (found === undefined) reject(new Error("not found"));
+      else resolve(found);
+    }, 300),
+  );
+
+export const WithFiles: Story = {
+  args: {
+    snapshot: createGraphSnapshot(FIXTURE_PLAN.graph, {
+      title: "A local lakehouse",
+      files: FIXTURE_PLAN.files.map((f) => f.path),
+    }),
+    readFile: readFixtureFile,
+  },
+};
+
+// A host whose render is unreachable: the dialog says so per file.
+export const WithUnreadableFiles: Story = {
+  args: {
+    ...WithFiles.args,
+    readFile: () => Promise.reject(new Error("404 Not Found")),
+  },
+};

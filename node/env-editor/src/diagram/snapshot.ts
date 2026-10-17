@@ -31,12 +31,24 @@ export interface GraphSnapshot {
   title?: string;
   /** The plan's functional topology, as the planner projected it. */
   graph: GraphDto;
+  /**
+   * The rendered environment's viewable files: paths relative to its root,
+   * without contents. An embed reads them from the render shipped next to the
+   * snapshot (`EnvironmentDiagram`'s `readFile`) and offers only these, so a
+   * secret in the render is never shown. Absent on older snapshots.
+   */
+  files?: string[];
 }
 
-/** Freeze a plan's graph into a snapshot. */
+/** Freeze a plan's graph (and its file manifest, if given) into a snapshot. */
 export function createGraphSnapshot(
   graph: GraphDto,
-  options: { title?: string; generator?: string } = {},
+  options: {
+    title?: string;
+    generator?: string;
+    /** The plan's viewable file paths (`plan.files`' paths, no contents). */
+    files?: readonly string[];
+  } = {},
 ): GraphSnapshot {
   return {
     format: GRAPH_SNAPSHOT_FORMAT,
@@ -44,6 +56,7 @@ export function createGraphSnapshot(
     generator: options.generator ?? "@open-lakehouse/env-editor",
     ...(options.title ? { title: options.title } : {}),
     graph,
+    ...(options.files?.length ? { files: [...options.files].sort() } : {}),
   };
 }
 
@@ -51,7 +64,8 @@ export function createGraphSnapshot(
  * Validate parsed JSON as a snapshot this build can render: the envelope
  * (format, a supported version, node/edge arrays) and the graph's integrity
  * (unique node ids, edges of a known kind between existing nodes, unique edge
- * keys). Other DTO fields aren't checked. Throws an `Error` naming what is
+ * keys), and a file manifest's paths (unique, relative, within the render).
+ * Other DTO fields aren't checked. Throws an `Error` naming what is
  * wrong; an edge without a `key` gets the one the planner would assign.
  */
 export function parseGraphSnapshot(input: unknown): GraphSnapshot {
@@ -125,10 +139,39 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
     return keyed;
   });
 
+  if (input.files !== undefined) checkManifest(input.files);
+
   return {
     ...input,
     graph: { ...graph, edges },
   } as unknown as GraphSnapshot;
+}
+
+/** A manifest lists unique relative paths that stay inside the render. */
+function checkManifest(files: unknown): void {
+  if (!Array.isArray(files)) {
+    throw new Error("graph snapshot: `files` must be an array of paths");
+  }
+  const seen = new Set<string>();
+  for (const [i, path] of files.entries()) {
+    if (
+      typeof path !== "string" ||
+      path === "" ||
+      path.startsWith("/") ||
+      path.includes("\\") ||
+      path
+        .split("/")
+        .some((part) => part === "" || part === "." || part === "..")
+    ) {
+      throw new Error(
+        `graph snapshot: file ${i} must be a relative path inside the render, got ${JSON.stringify(path)}`,
+      );
+    }
+    if (seen.has(path)) {
+      throw new Error(`graph snapshot: duplicate file "${path}"`);
+    }
+    seen.add(path);
+  }
 }
 
 /**
