@@ -347,10 +347,10 @@ fn authenticated_scenario_pulls_in_authelia() {
         dir.path().join("modules/authelia/users.yml").is_file(),
         "Authelia users.yml should live in the authelia directory"
     );
-    let readme = fs::read_to_string(dir.path().join("modules/authelia/README.md")).unwrap();
+    let readme = fs::read_to_string(dir.path().join("README.md")).unwrap();
     assert!(
         readme.contains("docker compose restart authelia"),
-        "the README explains how to apply user changes:\n{readme}"
+        "the deployment README explains how to apply user changes:\n{readme}"
     );
     let compose = fs::read_to_string(dir.path().join("compose.yaml")).unwrap();
     assert!(

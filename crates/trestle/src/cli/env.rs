@@ -27,8 +27,9 @@ use olai_stack_topology::projection::export::{
     ExportMeta, Generator, catalog_export, catalog_export_json, plan_export, plan_export_json,
 };
 use olai_stack_topology::{
-    Catalog, EnvManifest, GatewaySettings, Knob, KnobKind, ManifestError, ModuleId, PlanCtx,
-    PlanError, RenderError, Secrets, Selection, TargetId, baseline_catalog, baseline_selection,
+    Catalog, DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployPhase, EnvManifest, GatewaySettings,
+    Knob, KnobKind, ManifestError, MaterializedOutput, ModuleId, PlanCtx, PlanError, RenderError,
+    SECRETS_ENV_PATH, Secrets, Selection, TargetId, baseline_catalog, baseline_selection,
     builtin_targets, layout_report,
 };
 
@@ -297,16 +298,12 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         Err(PlanError::UnresolvedSecrets { vars }) => {
             let preview = catalog.plan(&selection, &ctx).map_err(map_plan_err)?;
             write_manifest(&preview, &selection, &ctx, &out_dir)?;
-            return Err(Error::other(format!(
-                "hosted resources reference unset secrets: {}",
-                vars.join(", ")
-            ))
-            .with_hint(format!(
-                "saved {}/env.toml; export them (or set them in `{SECRETS_FILE}` beside it), \
-                 then run `trestle env render {}`",
-                out_dir.display(),
-                out_dir.display()
-            )));
+            write_deploy_guide(&preview, &out_dir)?;
+            return Err(unset_secrets(
+                &vars,
+                &out_dir,
+                "saved env.toml and README.md",
+            ));
         }
         plan => plan.map_err(map_plan_err)?,
     };
@@ -560,6 +557,40 @@ fn report_written(plan: &olai_stack_topology::Plan, dir: &std::path::Path) {
     print!("{}", next_steps(plan, dir));
 }
 
+/// Write just the deployment guide of `preview` (a plan made without secrets) to `dir`: the
+/// README and the `deploy/` scripts, whose steps create the hosted resources and save their
+/// secrets. The rest of the stack needs those secrets to render.
+fn write_deploy_guide(preview: &olai_stack_topology::Plan, dir: &Path) -> Result<()> {
+    let materialized = preview.materialize().map_err(map_render_err)?;
+    let guide = MaterializedOutput {
+        files: materialized
+            .files
+            .into_iter()
+            .filter(|f| {
+                f.path == DEPLOY_README_PATH
+                    || f.path.starts_with(&format!("{DEPLOY_SCRIPTS_DIR}/"))
+            })
+            .collect(),
+        deploy: materialized.deploy,
+    };
+    guide.write_to(dir).map_err(|e| Error::io_at(dir, e))
+}
+
+/// The error for hosted secrets `vars` that aren't set yet, pointing at the deployment guide
+/// in `dir` that creates them; `saved` says what was written anyway.
+fn unset_secrets(vars: &[String], dir: &Path, saved: &str) -> Error {
+    let dir = dir.display();
+    Error::other(format!(
+        "hosted resources reference unset secrets: {}",
+        vars.join(", ")
+    ))
+    .with_hint(format!(
+        "{saved} in {dir}: follow its Provision steps to create the resources (the scripts save \
+         what they create to `{SECRETS_FILE}`), or export the secrets, then run \
+         `trestle env render {dir}`"
+    ))
+}
+
 /// What to do after rendering: start the stack, where it is reachable, and the generated
 /// files a user is expected to read or edit.
 fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String {
@@ -567,6 +598,21 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
 
     let dir = dir.display();
     let mut out = format!("Wrote composed environment to {dir}\n\nNext steps:\n");
+    // Steps to do before the stack starts (creating hosted resources, reviewing accounts).
+    let before_start = olai_stack_topology::render_steps(plan, &olai_stack_topology::Compose)
+        .map_or(0, |steps| {
+            steps
+                .iter()
+                .filter(|s| s.phase < DeployPhase::Start)
+                .count()
+        });
+    if before_start > 0 {
+        let _ = writeln!(
+            out,
+            "  First:     {DEPLOY_README_PATH}  ({before_start} deployment step{} before starting)",
+            if before_start == 1 { "" } else { "s" }
+        );
+    }
     let _ = writeln!(out, "  cd {dir} && docker compose up -d --wait");
     match plan.gateway_url() {
         Some(url) => {
@@ -589,7 +635,7 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
     if plan.gateway.auth.is_some() {
         let _ = writeln!(
             out,
-            "  Sign in:   demo / authelia by default  (accounts: modules/authelia/users.yml, see its README.md; APIs take basic auth)"
+            "  Sign in:   demo / authelia by default  (accounts: modules/authelia/users.yml, see README.md; APIs take basic auth)"
         );
     }
     if plan.gateway.policy.is_some() {
@@ -651,15 +697,25 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
     })?;
 
     let catalog = load_catalog(&manifest, &args.dir)?;
-    manifest.context.secrets = Some(load_secrets(&args.dir)?);
-    let plan = manifest.plan(&catalog).map_err(map_plan_err)?;
-
     let out_dir = args.out_dir.clone().unwrap_or_else(|| args.dir.clone());
     // The manifest dir is expected to be non-empty (it holds env.toml); only
     // guard a *different* output dir against clobbering unrelated files.
     if out_dir != args.dir {
         ensure_writable_dir(&out_dir, args.force)?;
     }
+
+    manifest.context.secrets = Some(load_secrets(&args.dir)?);
+    let plan = match manifest.plan(&catalog) {
+        // The deployment guide creates the hosted resources (and saves their secrets), so
+        // write it from a secret-free preview even though the stack can't render yet.
+        Err(PlanError::UnresolvedSecrets { vars }) => {
+            manifest.context.secrets = None;
+            let preview = manifest.plan(&catalog).map_err(map_plan_err)?;
+            write_deploy_guide(&preview, &out_dir)?;
+            return Err(unset_secrets(&vars, &out_dir, "updated README.md"));
+        }
+        plan => plan.map_err(map_plan_err)?,
+    };
 
     println!("{}", layout_report(&plan));
     write_rendered(&plan, &manifest, &catalog, &out_dir)?;
@@ -791,7 +847,7 @@ fn ensure_writable_dir(dir: &std::path::Path, force: bool) -> Result<()> {
 }
 
 /// The file beside `env.toml` that may supply secrets for hosted resources (git-ignored).
-const SECRETS_FILE: &str = "secrets.env";
+const SECRETS_FILE: &str = SECRETS_ENV_PATH;
 
 /// The secrets `${VAR}` references in hosted resources resolve against: `KEY=VALUE` lines
 /// from [`SECRETS_FILE`] in `dir` (if present), overridden by the process environment.
