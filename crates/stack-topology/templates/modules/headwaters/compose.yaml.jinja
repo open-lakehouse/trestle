@@ -41,6 +41,12 @@ services:
         target: /etc/headwaters/config.toml
     expose:
       - "8091"
+{%- if published_ports %}
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+{%- endif %}
     healthcheck:
       test: ["CMD", "/usr/local/bin/app", "healthcheck", "--config", "/etc/headwaters/config.toml"]
       interval: 30s

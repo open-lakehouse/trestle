@@ -54,6 +54,12 @@ services:
 {%- endif %}
     expose:
       - "8080"
+{%- if published_ports %}
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+{%- endif %}
     healthcheck:
       test:
         ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/api/2.1/unity-catalog/catalogs || exit 1"]

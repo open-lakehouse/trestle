@@ -2,26 +2,31 @@
 //! the structured [`GatewayConfig`] (listeners, clusters, forward-auth, authorization, TLS).
 //!
 //! This is the one phase that sees every module's endpoints at once, so it is where prefixes
-//! are decided. It also finalizes the object-store connections the settle phase resolved: a
+//! are decided. Without a gateway ([`GatewaySettings::enabled`](super::GatewaySettings::enabled)
+//! off) it instead publishes each surface endpoint on its own host port (see [`route_direct`]). It also finalizes the object-store connections the settle phase resolved: a
 //! gatewayed store's endpoint is rewritten to the gateway, and a store whose cloud hostnames the
 //! gateway emulates carries the trust for the gateway's local CA.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::demands::ChosenProviders;
 use super::gateway::{
-    allocate_dedicated_ports, api_rewrite, claim, ensure_cluster, require_prefix,
+    allocate_dedicated_ports, api_rewrite, claim, ensure_cluster, join_path, require_prefix,
     wire_app_upstream, wire_auth, wire_policy,
 };
 use super::impersonation::{plan_impersonation, rewrite_gatewayed_object_store_endpoints};
+use super::resolve::ResolvedGraph;
 use super::routing::{AssignedRoute, Listener, RoutePlan};
 use super::settle::Settled;
 use super::{
     GatewayConfig, GatewayFacts, GatewayRoute, ListenerConfig, PlanCtx, PlanError, SecureOrigin,
 };
 use crate::catalog::Catalog;
-use crate::catalog::module::ModuleId;
+use crate::catalog::module::{ModuleId, PortMapping};
 use crate::model::connection::Connection;
 use crate::model::endpoint::RouteIntent;
+use crate::model::placement::Placement;
+use crate::model::role::ServiceSpec;
 
 /// The routing decisions: the per-endpoint routes the address resolver reads, the gateway
 /// config the Envoy renderer reads, and the gateway facts both resolve addresses against.
@@ -32,6 +37,9 @@ pub(super) struct Routed {
     pub gateway: GatewayConfig,
     /// The gateway's name, ports and (under forward-auth) secure origin.
     pub facts: GatewayFacts,
+    /// Without a gateway, the `host:container` ports each module publishes for its surface
+    /// endpoints. `None` when the gateway fronts them.
+    pub direct: Option<BTreeMap<ModuleId, Vec<PortMapping>>>,
 }
 
 /// Run the route phase (see the [module docs](self)), rewriting `settled.chosen`'s gatewayed
@@ -40,9 +48,13 @@ pub(super) fn route(
     settled: &mut Settled,
     catalog: &Catalog,
     ctx: &PlanCtx,
+    gateway_enabled: bool,
     auth_provider: Option<&ModuleId>,
     policy_provider: Option<&ModuleId>,
 ) -> Result<Routed, PlanError> {
+    if !gateway_enabled {
+        return route_direct(settled, ctx);
+    }
     let Settled {
         graph,
         chosen,
@@ -69,27 +81,10 @@ pub(super) fn route(
         admin_port: ctx.gateway_admin_port,
         ..GatewayConfig::default()
     };
-    // Emulated public hostnames: give the gateway a TLS listener for them, and mark every
-    // connection those providers vend with the trust a consumer needs for the local CA.
-    gateway.tls = plan_impersonation(graph, provisioned, &mut gateway)?;
+    emulate_public_hosts(graph, provisioned, chosen, &mut gateway)?;
     // Forward-auth needs a secure, dotted origin (see `SecureOrigin`).
     if stack_facts.gateway_auth {
         gateway.secure = Some(SecureOrigin::for_env(&ctx.env_name));
-    }
-    if let Some(tls) = &gateway.tls {
-        let emulating: BTreeSet<&ModuleId> = graph
-            .nodes
-            .iter()
-            .filter(|m| !m.provides().impersonated_hosts.is_empty())
-            .map(|m| m.id())
-            .collect();
-        for resolved in chosen.values_mut() {
-            if emulating.contains(&resolved.provider)
-                && let Connection::ObjectStore { tls_trust, .. } = &mut resolved.connection
-            {
-                *tls_trust = Some(Box::new(tls.trust.clone()));
-            }
-        }
     }
 
     let facts = GatewayFacts {
@@ -252,5 +247,144 @@ pub(super) fn route(
         routes,
         gateway,
         facts,
+        direct: None,
     })
+}
+
+/// Emulated public hostnames: give the gateway a TLS listener for them, and mark every
+/// connection those providers vend with the trust a consumer needs for the local CA.
+fn emulate_public_hosts(
+    graph: &ResolvedGraph,
+    provisioned: &BTreeMap<ModuleId, Vec<String>>,
+    chosen: &mut ChosenProviders,
+    gateway: &mut GatewayConfig,
+) -> Result<(), PlanError> {
+    gateway.tls = plan_impersonation(graph, provisioned, gateway)?;
+    if let Some(tls) = &gateway.tls {
+        let emulating: BTreeSet<&ModuleId> = graph
+            .nodes
+            .iter()
+            .filter(|m| !m.provides().impersonated_hosts.is_empty())
+            .map(|m| m.id())
+            .collect();
+        for resolved in chosen.values_mut() {
+            if emulating.contains(&resolved.provider)
+                && let Connection::ObjectStore { tls_trust, .. } = &mut resolved.connection
+            {
+                *tls_trust = Some(Box::new(tls.trust.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Route a gateway-less environment: assign no routes and leave the [`GatewayConfig`] empty, so
+/// every endpoint resolves directly, and publish each container's surface endpoints
+/// ([`Api`](RouteIntent::Api), the UIs, [`Gatewayed`](RouteIntent::Gatewayed)) on a host port.
+///
+/// Each endpoint gets the path its service itself serves (its gateway prefix after the rewrite
+/// the gateway would have applied), and one host port per `(service, internal port)`: the
+/// endpoint's declared `host_port`, else its internal port, else, when another service already
+/// took that port, the next from [`dedicated_listener_ports`](PlanCtx::dedicated_listener_ports)
+/// and then [`dedicated_listener_port_base`](PlanCtx::dedicated_listener_port_base) upward.
+///
+/// A module that emulates public hostnames still needs them answered in-network, so the gateway
+/// keeps only its TLS listener for them (the planner added it to the graph for that): it
+/// publishes nothing and fronts no surface endpoint.
+fn route_direct(settled: &mut Settled, ctx: &PlanCtx) -> Result<Routed, PlanError> {
+    let Settled {
+        graph,
+        chosen,
+        services: services_of,
+        provisioned,
+        ..
+    } = settled;
+    let mut gateway = GatewayConfig {
+        admin_port: ctx.gateway_admin_port,
+        ..GatewayConfig::default()
+    };
+    emulate_public_hosts(graph, provisioned, chosen, &mut gateway)?;
+
+    // Host ports already declared on endpoints the gateway never fronts stay theirs.
+    let mut taken: BTreeSet<u16> = services_of
+        .values()
+        .flatten()
+        .flat_map(|s| &s.endpoints)
+        .filter(|e| e.intent == RouteIntent::Internal)
+        .filter_map(|e| e.host_port)
+        .collect();
+    let mut explicit = ctx.dedicated_listener_ports.iter().copied();
+    let mut next_auto = ctx.dedicated_listener_port_base;
+    let mut published: BTreeMap<ModuleId, Vec<PortMapping>> = BTreeMap::new();
+    for module in &graph.nodes {
+        let Some(services) = services_of.get_mut(module.id()) else {
+            continue;
+        };
+        let mut mappings = Vec::new();
+        for service in services
+            .iter_mut()
+            .filter(|s| matches!(s.placement, Placement::Container { .. }))
+        {
+            publish_direct(service, &mut mappings, &mut taken, &mut || {
+                explicit.next().unwrap_or_else(|| {
+                    let p = next_auto;
+                    next_auto = next_auto.saturating_add(1);
+                    p
+                })
+            });
+        }
+        if !mappings.is_empty() {
+            published.insert(module.id().clone(), mappings);
+        }
+    }
+
+    Ok(Routed {
+        routes: RoutePlan::new(),
+        gateway,
+        facts: GatewayFacts {
+            service: ctx.gateway_service.clone(),
+            internal_port: ctx.gateway_internal_port,
+            host_port: ctx.gateway_host_port,
+            secure: None,
+        },
+        direct: Some(published),
+    })
+}
+
+/// Give `service`'s surface endpoints their direct path and host port (see [`route_direct`]),
+/// recording each newly published port in `mappings`. `alloc` yields the next fallback port.
+fn publish_direct(
+    service: &mut ServiceSpec,
+    mappings: &mut Vec<PortMapping>,
+    taken: &mut BTreeSet<u16>,
+    alloc: &mut dyn FnMut() -> u16,
+) {
+    // internal port → host port, so several endpoints on one port share one mapping.
+    let mut host_of: BTreeMap<u16, u16> = BTreeMap::new();
+    for endpoint in &mut service.endpoints {
+        let served = match endpoint.intent {
+            RouteIntent::Internal => continue,
+            RouteIntent::Api => {
+                let prefix = endpoint.mount_prefix.clone().unwrap_or_default();
+                api_rewrite(&endpoint.rewrite, &service.base_path, &prefix).unwrap_or(prefix)
+            }
+            RouteIntent::UiPrefixable => service.base_path.clone(),
+            RouteIntent::UiFixed | RouteIntent::Gatewayed => String::new(),
+        };
+        endpoint.path = join_path(&served, &endpoint.path);
+        let host = *host_of.entry(endpoint.internal_port).or_insert_with(|| {
+            let wanted = endpoint.host_port.unwrap_or(endpoint.internal_port);
+            let mut port = wanted;
+            while taken.contains(&port) {
+                port = alloc();
+            }
+            taken.insert(port);
+            mappings.push(PortMapping {
+                host: port,
+                container: endpoint.internal_port,
+            });
+            port
+        });
+        endpoint.host_port = Some(host);
+    }
 }

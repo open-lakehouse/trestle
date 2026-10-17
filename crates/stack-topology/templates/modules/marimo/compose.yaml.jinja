@@ -31,6 +31,12 @@ services:
       - {{ env.DATA_ROOT }}/marimo/uv-cache:/uv-cache
     expose:
       - "2718"
+{%- if published_ports %}
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+{%- endif %}
     healthcheck:
       test:
         - "CMD-SHELL"

@@ -127,9 +127,10 @@ pub struct Selection {
     /// example notebooks (see [`ClientSelection`]). Off by default.
     #[serde(default, skip_serializing_if = "ClientSelection::is_default")]
     pub client: ClientSelection,
-    /// How the gateway guards access. The gateway itself is not a selection: every
-    /// environment has one (the catalog's `gateway`-role provider), so this only says
-    /// whether it requires sign-in and enforces policy. See [`GatewaySettings`].
+    /// Whether the environment runs a gateway and how it guards access. The gateway itself is
+    /// not a module selection: unless [`enabled`](GatewaySettings::enabled) is off, every
+    /// environment has one (the catalog's `gateway`-role provider), so this says whether it
+    /// runs, requires sign-in and enforces policy. See [`GatewaySettings`].
     #[serde(default)]
     pub gateway: GatewaySettings,
 }
@@ -141,8 +142,15 @@ pub struct Selection {
 /// Older manifests expressed these through the gateway's `auth` knob override and by
 /// selecting the providers as modules; the planner still honours both (see
 /// [`Selection::normalize_gateway`] to rewrite them into this form).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewaySettings {
+    /// Run the gateway. On by default. Off plans a **direct** environment with no gateway:
+    /// every surface endpoint is published on its own host port and addressed at the path the
+    /// service itself serves (see [`DIRECT`](Self::DIRECT)). For bare deployments that only
+    /// need a service and its backends; sign-in, policy, emulated public hostnames and an app
+    /// upstream all need the gateway ([`PlanError::GatewayRequired`]).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub enabled: bool,
     /// Require single-sign-on for API and UI routes (forward-auth). Resource backends
     /// (object stores, databases) are never gated.
     #[serde(default)]
@@ -153,21 +161,44 @@ pub struct GatewaySettings {
     pub policy: bool,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+impl Default for GatewaySettings {
+    fn default() -> Self {
+        Self::OPEN
+    }
+}
+
 impl GatewaySettings {
-    /// Open: no sign-in, no policy.
+    /// Open: a gateway with no sign-in and no policy.
     pub const OPEN: Self = Self {
+        enabled: true,
         auth: false,
         policy: false,
     };
     /// Sign-in only.
     pub const SIGN_IN: Self = Self {
+        enabled: true,
         auth: true,
         policy: false,
     };
     /// Sign-in plus policy.
     pub const POLICY: Self = Self {
+        enabled: true,
         auth: true,
         policy: true,
+    };
+    /// No gateway: services are published directly on their own host ports.
+    pub const DIRECT: Self = Self {
+        enabled: false,
+        auth: false,
+        policy: false,
     };
 
     /// Whether sign-in is on, explicitly or because [`policy`](Self::policy) needs it.
@@ -207,6 +238,7 @@ impl Selection {
             });
         }
         self.gateway = GatewaySettings {
+            enabled: self.gateway.enabled,
             auth,
             policy: policy.is_some(),
         };
@@ -605,6 +637,14 @@ pub enum PlanError {
         /// The selected policy-role module.
         module: ModuleId,
     },
+    /// The selection turns the gateway off ([`GatewaySettings::enabled`]) but asks for
+    /// something only the gateway provides: sign-in, policy, a module emulating public
+    /// hostnames, an app upstream, or a `gateway`-role module selected explicitly.
+    #[error("{reason} needs the gateway; drop it or remove `[selection.gateway] enabled = false`")]
+    GatewayRequired {
+        /// What needs the gateway.
+        reason: String,
+    },
     /// The selected `policy`-role provider does not declare what the gateway needs to wire its
     /// gRPC `ext_authz` check.
     #[error("policy provider `{module}` is misconfigured: {reason}")]
@@ -858,18 +898,27 @@ impl Plan {
         }
     }
 
+    /// Whether a gateway fronts the environment's services (see [`GatewaySettings::enabled`]).
+    /// A gateway-less plan may still run the gateway module, for its in-network TLS listener
+    /// alone ([`GatewayConfig::tls`]); that does not count, since it has no listener a caller
+    /// addresses.
+    pub fn has_gateway(&self) -> bool {
+        !self.gateway.listeners.is_empty()
+    }
+
     /// The gateway's host-published port — what a host-side caller reaches the shared listener
-    /// at. The full origin is [`gateway_url`](Self::gateway_url); the URL to a specific service
-    /// is [`service`](Self::service) → [`ServiceRef::address`].
-    pub fn gateway_host_port(&self) -> u16 {
-        self.gateway_facts.host_port
+    /// at — or `None` without a gateway. The full origin is [`gateway_url`](Self::gateway_url);
+    /// the URL to a specific service is [`service`](Self::service) → [`ServiceRef::address`].
+    pub fn gateway_host_port(&self) -> Option<u16> {
+        self.has_gateway().then_some(self.gateway_facts.host_port)
     }
 
     /// The shared listener's origin as a host-side caller reaches it: `http://localhost:<port>`,
     /// or `https://<env>.localhost:<port>` when forward-auth is on (see
-    /// [`GatewayConfig::secure`]).
-    pub fn gateway_url(&self) -> String {
-        self.gateway_facts.origin(Vantage::Host).0
+    /// [`GatewayConfig::secure`]). `None` without a gateway.
+    pub fn gateway_url(&self) -> Option<String> {
+        self.has_gateway()
+            .then(|| self.gateway_facts.origin(Vantage::Host).0)
     }
 }
 
@@ -899,13 +948,36 @@ impl Catalog {
 ///
 /// The client environment is resolved last, through the finished plan's own addressing API.
 fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<Plan, PlanError> {
-    let augmented = augment::augment(selection, catalog, ctx)?;
+    let mut augmented = augment::augment(selection, catalog, ctx, false)?;
+    let mut settled = settle::settle(
+        &augmented.selection,
+        catalog,
+        &augmented.ctx,
+        augmented.auth_provider.is_some(),
+    )?;
+    // Without a gateway, a module emulating public hostnames (only known once the graph is
+    // resolved) still needs the gateway's in-network TLS listener: plan again with it.
+    if !selection.gateway.enabled
+        && settled
+            .graph
+            .nodes
+            .iter()
+            .any(|m| !m.provides().impersonated_hosts.is_empty())
+    {
+        augmented = augment::augment(selection, catalog, ctx, true)?;
+        settled = settle::settle(
+            &augmented.selection,
+            catalog,
+            &augmented.ctx,
+            augmented.auth_provider.is_some(),
+        )?;
+    }
     let (selection, ctx) = (&*augmented.selection, &*augmented.ctx);
-    let mut settled = settle::settle(selection, catalog, ctx, augmented.auth_provider.is_some())?;
     let routed = route::route(
         &mut settled,
         catalog,
         ctx,
+        selection.gateway.enabled,
         augmented.auth_provider.as_ref(),
         augmented.policy_provider.as_ref(),
     )?;
@@ -1789,6 +1861,7 @@ mod tests {
         selection.gateway = GatewaySettings {
             auth: false,
             policy: true,
+            ..GatewaySettings::OPEN
         };
         let p = plan_env(&selection, &catalog, &PlanCtx::default()).unwrap();
         let ids = graph_ids(&p);
@@ -1879,6 +1952,173 @@ mod tests {
         assert!(
             matches!(err, PlanError::PolicyRequiresAuth { .. }),
             "{err:?}"
+        );
+    }
+
+    fn direct(modules: &[&str]) -> Selection {
+        Selection {
+            gateway: GatewaySettings::DIRECT,
+            ..Selection::modules(modules.iter().copied())
+        }
+    }
+
+    fn host_url(p: &Plan, module: &str, service: &str, endpoint: &str, from: Vantage) -> String {
+        p.service_named(&ModuleId::from(module), service)
+            .unwrap()
+            .address(from, endpoint)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_direct_environment_publishes_each_service_on_its_own_port() {
+        let p = plan_env(
+            &direct(&["unity-catalog", "postgres", "azurite"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        assert!(
+            !graph_ids(&p).contains(&"envoy".to_string()),
+            "{:?}",
+            graph_ids(&p)
+        );
+        assert!(!p.has_gateway() && p.gateway_url().is_none());
+
+        assert_eq!(
+            host_url(&p, "unity-catalog", "unitycatalog", "rest", Vantage::Host),
+            "http://localhost:8080/api/2.1/unity-catalog"
+        );
+        assert_eq!(
+            host_url(
+                &p,
+                "unity-catalog",
+                "unitycatalog",
+                "rest",
+                Vantage::Container
+            ),
+            "http://unitycatalog:8080/api/2.1/unity-catalog"
+        );
+        assert_eq!(
+            host_url(&p, "azurite", "azurite", "blob", Vantage::Host),
+            "http://localhost:10000/"
+        );
+        // Both UC mounts share the one published port.
+        let uc = &p.bindings[&ModuleId::from("unity-catalog")];
+        assert_eq!(
+            uc.published_ports,
+            vec![crate::catalog::module::PortMapping {
+                host: 8080,
+                container: 8080
+            }]
+        );
+        let injected = &p.injected[&ModuleId::from("azurite")];
+        assert_eq!(injected.get("HOST_PORT_BLOB"), Some("10000"));
+        assert_eq!(injected.get("GATEWAY_URL"), None);
+        assert_eq!(injected.get("GATEWAY_AUTH"), Some("false"));
+    }
+
+    #[test]
+    fn a_direct_address_is_the_path_the_service_serves() {
+        let p = plan_env(
+            &direct(&["mlflow", "postgres", "azurite"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        let url = |endpoint| host_url(&p, "mlflow", "mlflow", endpoint, Vantage::Host);
+        // The gateway's rewrites, applied: `Inherit` under the base path, `To` verbatim.
+        assert_eq!(
+            url("tracking"),
+            "http://localhost:5000/mlflow/api/2.0/mlflow"
+        );
+        assert_eq!(url("otel"), "http://localhost:5000/mlflow");
+        assert_eq!(url("ai_gateway"), "http://localhost:5000/mlflow/gateway");
+        assert_eq!(url("ui"), "http://localhost:5000/mlflow");
+    }
+
+    #[test]
+    fn a_taken_direct_port_falls_back_to_the_allocator() {
+        let mut other = module_with(
+            "other",
+            vec![Endpoint::api("api", 8080, "/other", Rewrite::Passthrough)],
+            Default::default(),
+        );
+        other.service_specs[0].name = "other".into();
+        let mut catalog = baseline_catalog();
+        catalog.insert(arc(other));
+        let ctx = PlanCtx {
+            dedicated_listener_ports: vec![18080],
+            ..PlanCtx::default()
+        };
+        let p = plan_env(&direct(&["unity-catalog", "other"]), &catalog, &ctx).unwrap();
+        let uc = host_url(&p, "unity-catalog", "unitycatalog", "rest", Vantage::Host);
+        let other = host_url(&p, "other", "other", "api", Vantage::Host);
+        // Graph order decides who keeps 8080; the other gets the pinned fallback.
+        let mut ports = [uc, other].map(|u| u.split(':').nth(2).unwrap()[..5].to_string());
+        ports.sort();
+        assert_eq!(ports, ["18080", "8080/"]);
+    }
+
+    #[test]
+    fn a_direct_environment_keeps_the_gateway_only_for_emulated_hostnames() {
+        // RustFS answers the AWS hostnames UC vends credentials against, in-network.
+        let p = plan_env(
+            &direct(&["unity-catalog", "rustfs"]),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+        assert!(graph_ids(&p).contains(&"envoy".to_string()));
+        assert!(!p.has_gateway() && p.gateway.listeners.is_empty());
+        assert!(p.gateway.tls.is_some());
+        assert!(
+            p.bindings[&ModuleId::from("envoy")]
+                .published_ports
+                .is_empty()
+        );
+        assert_eq!(
+            host_url(&p, "rustfs", "rustfs", "s3", Vantage::Host),
+            "http://localhost:9000/"
+        );
+        // Consumers reach the store directly, trusting the gateway CA for the AWS hostnames.
+        let uc_store = &p.bindings[&ModuleId::from("unity-catalog")].connections["object_store"][0];
+        let Connection::ObjectStore {
+            endpoint,
+            tls_trust,
+            ..
+        } = uc_store
+        else {
+            panic!("{uc_store:?}");
+        };
+        assert_eq!(endpoint, "http://rustfs:9000");
+        assert!(tls_trust.is_some());
+    }
+
+    #[test]
+    fn a_direct_environment_rejects_what_needs_the_gateway() {
+        let catalog = baseline_catalog();
+        let required = |selection: Selection, ctx: PlanCtx| {
+            let err = plan_env(&selection, &catalog, &ctx).unwrap_err();
+            assert!(matches!(err, PlanError::GatewayRequired { .. }), "{err:?}");
+        };
+        let mut sign_in = direct(&["mlflow"]);
+        sign_in.gateway.auth = true;
+        required(sign_in, PlanCtx::default());
+        let mut policy = direct(&["mlflow"]);
+        policy.gateway.policy = true;
+        required(policy, PlanCtx::default());
+        required(direct(&["mlflow", "authelia"]), PlanCtx::default());
+        required(direct(&["envoy", "mlflow"]), PlanCtx::default());
+        required(
+            direct(&["mlflow"]),
+            PlanCtx {
+                app: Some(AppUpstream {
+                    service: "app".into(),
+                    port: 3000,
+                }),
+                ..PlanCtx::default()
+            },
         );
     }
 }

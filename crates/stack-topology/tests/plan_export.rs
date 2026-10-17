@@ -22,6 +22,7 @@ const FIXTURES: &[&str] = &[
     "docs-uc-default",
     "hosted",
     "uc-api-storage",
+    "uc-direct",
 ];
 
 /// Fixed provenance, so a release's version bump doesn't rewrite the goldens.

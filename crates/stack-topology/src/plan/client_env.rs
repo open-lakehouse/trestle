@@ -6,6 +6,7 @@ use super::{Plan, PlanError};
 use crate::address::{AddressError, gateway_origin};
 use crate::catalog::module::{ClientValue, UrlPart};
 use crate::model::placement::Vantage;
+use crate::model::role::Role;
 use crate::render::InjectedEnv;
 
 /// Resolve every graph module's client-env entries from `from`, in dependency order (a later
@@ -17,6 +18,9 @@ pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedE
         for (key, value) in module.client_env_in(knobs, &plan.stack_facts).iter() {
             let resolved = match value {
                 ClientValue::Literal { value } => Ok(value.clone()),
+                ClientValue::GatewayOrigin if !plan.has_gateway() => {
+                    Err(AddressError::NoSuchRole(Role::GATEWAY.into()))
+                }
                 ClientValue::GatewayOrigin => {
                     gateway_origin(from, &plan.gateway_facts).map(|u| origin(&u))
                 }

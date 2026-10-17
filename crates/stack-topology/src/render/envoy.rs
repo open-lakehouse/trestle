@@ -175,9 +175,10 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
             ext_authz: (i == 0 || l.gated) && gateway.auth.is_some(),
         })
         .collect();
-    if listeners.is_empty() {
+    if listeners.is_empty() && gateway.tls.is_none() {
         // No listeners at all (empty plan) — emit a bare shared listener so the config is
-        // still valid Envoy.
+        // still valid Envoy. A gateway-less plan's TLS listener for emulated hostnames is
+        // listener enough.
         listeners.push(ListenerCtx {
             name: "gateway".to_string(),
             internal_port: 10000,

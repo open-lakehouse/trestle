@@ -724,8 +724,8 @@ pub struct GatewayTls {
     pub mint_service: String,
 }
 
-/// A `host:container` port mapping a module publishes (currently only the gateway, for its
-/// listeners). Serialized as `{host, container}` so a template renders `"{{ p.host }}:{{ p.container }}"`.
+/// A `host:container` port mapping a module publishes: the gateway, for its listeners, or,
+/// without a gateway, a module for its own surface endpoints. Serialized as `{host, container}` so a template renders `"{{ p.host }}:{{ p.container }}"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortMapping {
     /// The host-published port (compose `ports:` left side).

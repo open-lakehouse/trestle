@@ -6,7 +6,8 @@ const OPEN: GatewaySettings = { auth: false, policy: false };
 /**
  * How the gateway guards access. Each switch brings in its provider by role
  * (Authelia for sign-in, OPA for policy); policy needs sign-in, so turning it
- * on turns sign-in on and turning sign-in off turns policy off.
+ * on turns sign-in on and turning sign-in off turns policy off. Both need the
+ * gateway, so turning either on turns it back on in a gateway-less environment.
  */
 export function AccessSection({
   gateway = OPEN,
@@ -26,7 +27,9 @@ export function AccessSection({
         checked={signIn}
         onChange={(on) =>
           onChange(
-            on ? { ...gateway, auth: true } : { auth: false, policy: false },
+            on
+              ? { auth: true, policy: gateway.policy }
+              : { ...gateway, auth: false, policy: false },
           )
         }
       />
@@ -35,7 +38,11 @@ export function AccessSection({
         label="Enforce policy"
         help="Authorize each signed-in request with a Rego policy (OPA). Turns on sign-in."
         checked={gateway.policy}
-        onChange={(on) => onChange({ auth: on || gateway.auth, policy: on })}
+        onChange={(on) =>
+          onChange(
+            on ? { auth: true, policy: true } : { ...gateway, policy: false },
+          )
+        }
       />
     </div>
   );

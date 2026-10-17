@@ -24,6 +24,7 @@ use crate::catalog::module::{
     GatewayTls, ModuleId, PortMapping, Readiness, ReadyGate, RenderCtx, ResolvedKnobs, StackFacts,
 };
 use crate::model::connection::Connection;
+use crate::model::endpoint::RouteIntent;
 use crate::model::placement::Vantage;
 use crate::model::role::Role;
 use crate::render::InjectedEnv;
@@ -42,7 +43,8 @@ pub struct ModuleBinding {
     pub dependencies: Vec<ReadyGate>,
     /// The resource names this module provisions for its own role (empty for a non-provider).
     pub objects: Vec<String>,
-    /// The gateway's `host:container` listener mappings (gateway module only).
+    /// The `host:container` ports the module publishes: the gateway's listener mappings, or,
+    /// without a gateway, the module's own surface endpoints.
     pub published_ports: Vec<PortMapping>,
     /// The gateway's TLS material (gateway module only, when it serves TLS).
     pub tls: Option<GatewayTls>,
@@ -123,10 +125,13 @@ pub(super) fn bind(
         // `{{ env.DATA_ROOT }}/<module>` rather than hard-coding a `./.data/...` path, so the
         // whole stack's persistence relocates via the one `PlanCtx::data_root` knob.
         module_env.set(DATA_ROOT_VAR, &ctx.data_root);
-        module_env.set(GATEWAY_URL_VAR, &gateway_url);
-        module_env.set(GATEWAY_HOST_VAR, &gateway_host);
-        module_env.set(GATEWAY_INTERNAL_URL_VAR, &gateway_internal_url);
-        module_env.set(GATEWAY_INTERNAL_HOST_VAR, &gateway_internal_host);
+        // Without a gateway there is no shared listener to point at.
+        if routed.direct.is_none() {
+            module_env.set(GATEWAY_URL_VAR, &gateway_url);
+            module_env.set(GATEWAY_HOST_VAR, &gateway_host);
+            module_env.set(GATEWAY_INTERNAL_URL_VAR, &gateway_internal_url);
+            module_env.set(GATEWAY_INTERNAL_HOST_VAR, &gateway_internal_host);
+        }
         module_env.set(
             GATEWAY_AUTH_VAR,
             if stack_facts.gateway_auth {
@@ -138,11 +143,19 @@ pub(super) fn bind(
         module_env.set(CLIENT_ENV_KEYS_VAR, &client_env_keys);
         for service in &services_of[module.id()] {
             for endpoint in &service.endpoints {
-                if let Some(Listener::Dedicated { port }) = routed
+                let port = match routed
                     .routes
                     .get(&service.name, &endpoint.id)
                     .map(|route| &route.listener)
                 {
+                    Some(Listener::Dedicated { port }) => Some(*port),
+                    // Without a gateway, a surface endpoint is published on its own host port.
+                    _ if routed.direct.is_some() && endpoint.intent != RouteIntent::Internal => {
+                        endpoint.host_port
+                    }
+                    _ => None,
+                };
+                if let Some(port) = port {
                     module_env.set(
                         format!("{HOST_PORT_VAR_PREFIX}{}", endpoint.id.to_ascii_uppercase()),
                         port.to_string(),
@@ -265,13 +278,16 @@ pub(super) fn bind(
             {
                 dependencies.push(gate);
             }
-            let admin = knobs[module.id()].get("publish_admin") != Some("false");
+            // An in-network-only gateway (no gateway fronting the stack) publishes nothing.
+            let admin =
+                routed.direct.is_none() && knobs[module.id()].get("publish_admin") != Some("false");
             (
                 published_ports(gateway, ctx, admin),
                 gateway_render_tls(gateway),
             )
         } else {
-            (Vec::new(), None)
+            let direct = routed.direct.as_ref().and_then(|d| d.get(module.id()));
+            (direct.cloned().unwrap_or_default(), None)
         };
         bindings.insert(
             module.id().clone(),

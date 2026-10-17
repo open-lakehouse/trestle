@@ -1,14 +1,15 @@
 //! Selection and demand resolution: which modules join the graph, which provider satisfies
 //! each resource demand, and how a resolved connection binds into a consumer's env.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::knobs::resolve_knobs_of;
-use super::resolve::{ExtraEdges, ResolvedGraph, resolve, resolve_with};
+use super::resolve::{ExtraEdges, ResolvedGraph, resolve_omitting};
 use super::{PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
 use crate::catalog::module::{ModuleId, ResourceDemand};
 use crate::model::connection::Connection;
+use crate::model::role::Role;
 use crate::render::InjectedEnv;
 
 /// Resolve a selection into a flat list of directly-selected module ids (capabilities
@@ -57,13 +58,25 @@ pub(super) fn resolve_with_demands(
     // as `extra_edges` rather than folded into any module — a module is never mutated.
     let mut demand_edges: ExtraEdges = ExtraEdges::new();
     let mut selected = resolve_selection(selection, catalog)?;
+    // Without a gateway, a surface module's `requires` on it is moot — unless the augment
+    // phase selected it anyway, for emulated hostnames.
+    let omit: BTreeSet<ModuleId> = if selection.gateway.enabled {
+        BTreeSet::new()
+    } else {
+        catalog
+            .providers_of(Role::GATEWAY)
+            .into_iter()
+            .filter(|m| !selected.contains(m))
+            .cloned()
+            .collect()
+    };
     // Each node's demands, resolved against its knobs; the last pass's become the graph's.
     let mut effective: BTreeMap<ModuleId, Vec<ResourceDemand>> = BTreeMap::new();
 
     // Fixed point: resolve → scan demands → add missing providers → repeat. Bounded by
     // the catalog size (each iteration adds ≥1 module).
     for _ in 0..=catalog.modules().len() {
-        let graph = resolve(&selected, catalog.modules())?;
+        let graph = resolve_omitting(&selected, catalog.modules(), &ExtraEdges::new(), &omit)?;
         let mut added = false;
         effective.clear();
         for module in &graph.nodes {
@@ -104,13 +117,13 @@ pub(super) fn resolve_with_demands(
         if !added {
             // Final resolve with the demand edges threaded in, so providers start before
             // the consumers that demand their resources.
-            return resolve_with(&selected, catalog.modules(), &demand_edges)
+            return resolve_omitting(&selected, catalog.modules(), &demand_edges, &omit)
                 .map(|graph| graph.with_demands(effective))
                 .map_err(Into::into);
         }
     }
     // Unreachable in practice (the loop bound exceeds the max modules addable).
-    resolve_with(&selected, catalog.modules(), &demand_edges).map_err(Into::into)
+    resolve_omitting(&selected, catalog.modules(), &demand_edges, &omit).map_err(Into::into)
 }
 
 /// `ctx` with the providers the user selected appended to its

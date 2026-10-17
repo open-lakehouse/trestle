@@ -297,9 +297,9 @@ and scheduled and run by its Rust core. It fills the `orchestration` role.
 
 ## Gateway authentication and authorization
 
-Every environment has the gateway: the planner adds the `gateway`-role provider (Envoy)
-whether or not it was selected. How it guards access is a setting of the environment, not
-a module to pick:
+Unless it is [turned off](#environments-without-a-gateway), every environment has the
+gateway: the planner adds the `gateway`-role provider (Envoy) whether or not it was selected.
+How it guards access is a setting of the environment, not a module to pick:
 
 ```toml
 [selection.gateway]
@@ -334,6 +334,32 @@ from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `
 Dedicated listeners are not gated by default: resource backends (object stores) and UIs with
 their own login (PuppyGraph) stay open. An endpoint opts in with `RouteOptions::gated`
 (`rivers` does): its listener then gets the same forward-auth and HTTPS as the shared one.
+
+## Environments without a gateway
+
+A bare deployment (a service and its backends, say Unity Catalog with Postgres and an
+object store) can skip the gateway:
+
+```toml
+[selection.gateway]
+enabled = false   # `trestle env new --no-gateway`, or "No gateway" in the wizard
+```
+
+The planner then assigns no routes. Each container's surface endpoints are published on
+their own host port: the endpoint's declared host port, else its internal port (Unity Catalog
+at `localhost:8080`, RustFS at `:9000`, Azurite at `:10000`, MLflow at `:5000`). If another
+service already holds that port, the endpoint gets the next one from
+`dedicated_listener_ports` / `dedicated_listener_port_base`. An endpoint's address is the path
+its service serves, which is the gateway prefix after the rewrite the gateway would have
+applied (MLflow's tracking API is at `/mlflow/api/2.0/mlflow`). Connections, `client/*.env`
+and `LAYOUT.md` all use these direct addresses. A module template publishes its ports from
+`published_ports`, as the gateway's does.
+
+A module that answers public hostnames in-network (RustFS's AWS S3/STS hostnames, which Unity
+Catalog vends credentials against) still needs the gateway's TLS listener. So Envoy runs for
+that listener alone: it publishes no port and fronts no endpoint, and `Plan::has_gateway` is
+false. Sign-in, policy, an app upstream and selecting the gateway module explicitly all need
+the gateway, so planning rejects them with `PlanError::GatewayRequired`.
 
 ## Model refs and `plan.json`
 

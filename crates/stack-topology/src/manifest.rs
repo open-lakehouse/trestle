@@ -125,9 +125,11 @@ impl EnvManifest {
     /// [`normalize_gateway`](Self::normalize_gateway)). Version 3 replaced
     /// `[selection.external.<module>]` (an in-stack provider marked external) with hosted
     /// provider modules ([`Selection::hosted`](crate::Selection::hosted)); an older file's
-    /// entries are migrated on read (see [`from_toml`](Self::from_toml)).
+    /// entries are migrated on read (see [`from_toml`](Self::from_toml)). Version 4 added
+    /// gateway-less environments ([`GatewaySettings::enabled`](crate::GatewaySettings::enabled));
+    /// an older file always has a gateway, so it reads unchanged.
     pub fn current_version() -> u32 {
-        3
+        4
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -267,7 +269,7 @@ pub fn pin_dedicated_ports(plan: &Plan) -> Vec<u16> {
     plan.gateway
         .listeners
         .iter()
-        .filter(|l| l.host_port != shared)
+        .filter(|l| Some(l.host_port) != shared)
         .map(|l| l.host_port)
         .collect()
 }
@@ -517,7 +519,7 @@ mod tests {
         let toml = manifest.to_toml().unwrap();
         let reloaded = EnvManifest::from_toml(&toml).unwrap();
         let plan = reloaded.plan(&baseline_catalog()).unwrap();
-        assert_eq!(plan.gateway_host_port(), 9090);
+        assert_eq!(plan.gateway_host_port(), Some(9090));
         // The shared listener (the one published on the host port) reflects it.
         assert!(
             plan.gateway.listeners.iter().any(|l| l.host_port == 9090),
@@ -543,7 +545,7 @@ mod tests {
 
         // Snapshot the shared listener (host port + its routes) before the edit.
         let before = manifest.plan(&catalog).unwrap();
-        let shared_port = before.gateway_host_port();
+        let shared_port = before.gateway_host_port().unwrap();
         let shared_routes_before: Vec<_> = before
             .gateway
             .listeners
@@ -558,7 +560,7 @@ mod tests {
         let after = manifest.plan(&catalog).unwrap();
         assert_eq!(
             after.gateway_host_port(),
-            shared_port,
+            Some(shared_port),
             "host port must not move"
         );
         let shared_after = after
@@ -623,6 +625,30 @@ mod tests {
         let v1 =
             EnvManifest::from_toml("version = 1\n[selection]\nmodules = [\"envoy\"]\n").unwrap();
         assert_eq!(v1.selection.gateway, crate::GatewaySettings::OPEN);
+    }
+
+    #[test]
+    fn a_gateway_less_manifest_round_trips() {
+        let manifest = EnvManifest::new(
+            Selection {
+                gateway: crate::GatewaySettings::DIRECT,
+                ..Selection::modules(["unity-catalog"])
+            },
+            PlanCtx::default(),
+        );
+        let text = manifest.to_toml().unwrap();
+        assert!(
+            text.contains("[selection.gateway]\nenabled = false"),
+            "{text}"
+        );
+        assert_eq!(EnvManifest::from_toml(&text).unwrap(), manifest);
+        // A gateway is the default, so it is never written out.
+        let open = EnvManifest::new(Selection::modules(["unity-catalog"]), PlanCtx::default());
+        assert!(!open.to_toml().unwrap().contains("enabled"));
+        // Normalizing keeps it off.
+        let mut normalized = manifest.clone();
+        normalized.normalize_gateway(&baseline_catalog()).unwrap();
+        assert_eq!(normalized.selection.gateway, crate::GatewaySettings::DIRECT);
     }
 
     #[test]

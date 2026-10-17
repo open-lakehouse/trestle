@@ -128,12 +128,23 @@ pub fn resolve_with(
     catalog: &[Arc<dyn Module>],
     extra_edges: &ExtraEdges,
 ) -> Result<ResolvedGraph, ResolveError> {
+    resolve_omitting(selected, catalog, extra_edges, &BTreeSet::new())
+}
+
+/// [`resolve_with`], ignoring every `requires` on a module in `omit`: the planner drops the
+/// gateway this way when the selection turns it off, though surface modules require it.
+pub(crate) fn resolve_omitting(
+    selected: &[ModuleId],
+    catalog: &[Arc<dyn Module>],
+    extra_edges: &ExtraEdges,
+    omit: &BTreeSet<ModuleId>,
+) -> Result<ResolvedGraph, ResolveError> {
     let by_id: BTreeMap<&str, &Arc<dyn Module>> =
         catalog.iter().map(|m| (m.id().as_str(), m)).collect();
 
-    // The combined `requires` of a module: its own plus any `extra_edges` for it.
+    // The combined `requires` of a module: its own (less any omitted) plus any `extra_edges`.
     let deps_of = |id: &ModuleId, module: &Arc<dyn Module>| -> Vec<ModuleId> {
-        let mut deps: Vec<ModuleId> = module.requires().to_vec();
+        let mut deps: Vec<ModuleId> = own_requires(module, omit);
         if let Some(extra) = extra_edges.get(id) {
             for p in extra {
                 if !deps.contains(p) {
@@ -161,7 +172,7 @@ pub fn resolve_with(
 
     check_conflicts(&included, &by_id)?;
 
-    let edges = collect_edges(&included, &by_id, extra_edges);
+    let edges = collect_edges(&included, &by_id, extra_edges, omit);
     let nodes: Vec<Arc<dyn Module>> = topo_sort(&included, &edges)?
         .into_iter()
         .map(|id| Arc::clone(*by_id.get(id.as_str()).unwrap()))
@@ -201,17 +212,28 @@ fn check_conflicts(
     Ok(())
 }
 
+/// `module`'s own `requires`, less the modules in `omit`.
+fn own_requires(module: &Arc<dyn Module>, omit: &BTreeSet<ModuleId>) -> Vec<ModuleId> {
+    module
+        .requires()
+        .iter()
+        .filter(|m| !omit.contains(*m))
+        .cloned()
+        .collect()
+}
+
 /// Collect the dependency edges (`from` requires `to`) within the included set — each
 /// module's own `requires` plus any `extra_edges` for it — in a deterministic order.
 fn collect_edges(
     included: &BTreeSet<ModuleId>,
     by_id: &BTreeMap<&str, &Arc<dyn Module>>,
     extra_edges: &ExtraEdges,
+    omit: &BTreeSet<ModuleId>,
 ) -> Vec<Edge> {
     let mut edges = Vec::new();
     for id in included {
         let module = by_id.get(id.as_str()).unwrap();
-        let mut deps: Vec<ModuleId> = module.requires().to_vec();
+        let mut deps: Vec<ModuleId> = own_requires(module, omit);
         if let Some(extra) = extra_edges.get(id) {
             for p in extra {
                 if !deps.contains(p) {

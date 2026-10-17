@@ -352,7 +352,7 @@ pub fn render_all(plan: &Plan) -> Result<Artifacts, RenderError> {
     // here rather than from a module's `RenderFile`. Skip it if a module already declared this
     // alias, so the synthetic push never emits a duplicate top-level key.
     let already_declared = head.configs.iter().any(|c| c.alias == ENVOY_CONFIG_ALIAS);
-    if has_gateway(plan) && !already_declared {
+    if runs_gateway(plan) && !already_declared {
         head.configs.push(ConfigDecl {
             alias: ENVOY_CONFIG_ALIAS.into(),
             path: ENVOY_CONFIG_PATH.into(),
@@ -408,15 +408,6 @@ fn render_gitignore(plan: &Plan, modules: &[(ModuleId, RenderOutput)]) -> String
         }
     }
     out
-}
-
-/// Whether the plan has a gateway. Detected by the `gateway` role on a resolved service, not a
-/// module-id string, so a differently-named gateway module is still covered.
-fn has_gateway(plan: &Plan) -> bool {
-    plan.services
-        .values()
-        .flatten()
-        .any(|s| s.role == crate::Role::gateway())
 }
 
 /// Render `plan` for Docker Compose and flatten everything into the on-disk layout a consumer
@@ -476,7 +467,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     // under which `render_all` declares the `envoy_config` mount. A gateway-less plan would
     // otherwise get an orphan `modules/envoy/envoy.yaml` that the top-level compose never
     // mounts. Detect the gateway by role (not module-id), matching `render_all`.
-    if has_gateway(plan) {
+    if runs_gateway(plan) {
         files.push(OutputFile {
             path: ENVOY_CONFIG_PATH.into(),
             contents: artifacts.envoy,
@@ -517,4 +508,14 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     }
 
     Ok(MaterializedOutput { files })
+}
+
+/// Whether the plan runs the gateway module, even only for its in-network TLS listener (unlike
+/// [`Plan::has_gateway`]). Detected by the `gateway` role on a resolved service, not a
+/// module-id string, so a differently-named gateway module is still covered.
+fn runs_gateway(plan: &Plan) -> bool {
+    plan.services
+        .values()
+        .flatten()
+        .any(|s| s.role == crate::Role::gateway())
 }

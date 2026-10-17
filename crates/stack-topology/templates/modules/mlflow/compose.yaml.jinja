@@ -33,7 +33,7 @@ services:
       # The Host headers MLflow accepts: browsers on localhost (or the gateway's `*.localhost`
       # name under auth), in-network callers through the gateway, and the gateway-init job
       # calling it directly.
-      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,{{ env.GATEWAY_INTERNAL_URL | replace('http://', '') }},mlflow:5000{% if env.GATEWAY_AUTH == "true" %},{{ env.GATEWAY_HOST }},{{ env.GATEWAY_HOST }}:*{% endif %}"
+      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,{% if env.GATEWAY_INTERNAL_URL %}{{ env.GATEWAY_INTERNAL_URL | replace('http://', '') }},{% endif %}mlflow:5000{% if env.GATEWAY_AUTH == "true" %},{{ env.GATEWAY_HOST }},{{ env.GATEWAY_HOST }}:*{% endif %}"
 {%- if "unity-catalog" in stack.modules %}
       # Makes the mounted package visible: its entry point registers MLflow's OSS Unity Catalog
       # store for the `uc:` scheme, which the server otherwise doesn't accept.
@@ -51,6 +51,12 @@ services:
 {%- endif %}
     expose:
       - "5000"
+{%- if published_ports %}
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+{%- endif %}
     healthcheck:
       test:
         - "CMD-SHELL"

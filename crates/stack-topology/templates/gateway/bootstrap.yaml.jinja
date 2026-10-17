@@ -200,7 +200,18 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: emulated_tls
+{%- if listeners %}
                 access_log: *access_log
+{%- else %}
+                # The only listener (a gateway-less stack), so nothing defined the anchor.
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        text_format_source:
+                          inline_string: "%REQ(:AUTHORITY)% %REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% -> %UPSTREAM_CLUSTER% %RESPONSE_CODE%\n"
+{%- endif %}
                 route_config:
                   name: emulated_tls_route
                   virtual_hosts:

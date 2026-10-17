@@ -101,6 +101,9 @@ export interface ClientSelection {
 /** Gateway access (mirrors the Rust `GatewaySettings`). Each setting pulls in
  *  its provider by role; `policy` implies `auth`. */
 export interface GatewaySettings {
+  /** Run the gateway; omitted means on. Off publishes each service on its own
+   *  host port, and rules out `auth` and `policy`. */
+  enabled?: boolean;
   /** Require sign-in (the `auth`-role provider, Authelia). */
   auth: boolean;
   /** Authorize each signed-in request (the `policy`-role provider, OPA). */

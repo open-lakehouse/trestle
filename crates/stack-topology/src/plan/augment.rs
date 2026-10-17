@@ -1,8 +1,8 @@
 //! Phase 1 — **augment**: fold the selection's implied modules and provider preferences in
 //! before the graph is resolved.
 //!
-//! Every environment has a gateway, so the `gateway`-role provider joins the selection here
-//! whether or not it was picked. Sign-in and policy are [gateway settings](super::GatewaySettings),
+//! Unless the selection turns it off, every environment has a gateway, so the `gateway`-role
+//! provider joins the selection here whether or not it was picked. Sign-in and policy are [gateway settings](super::GatewaySettings),
 //! not separately-selected modules, so when they resolve on their providers join too, as does
 //! every hosted provider the selection [configures](super::Selection::hosted) (adding a module
 //! changes the graph, so this must run before resolution). A provider the user picked directly also becomes the preferred provider
@@ -44,11 +44,19 @@ pub(super) struct Augmented<'a> {
 /// or provider still works. An explicitly selected provider wins over the catalog's first
 /// `auth`-role provider. Errors with [`PlanError::PolicyRequiresAuth`] when a policy engine is
 /// selected without forward-auth.
+///
+/// With the gateway off, `emulating` still adds it: some module in the graph emulates public
+/// hostnames, which only the gateway's in-network TLS listener answers (see
+/// [`route`](super::route)).
 pub(super) fn augment<'a>(
     selection: &'a Selection,
     catalog: &Catalog,
     ctx: &'a PlanCtx,
+    emulating: bool,
 ) -> Result<Augmented<'a>, PlanError> {
+    if !selection.gateway.enabled {
+        require_no_gateway_features(selection, catalog, ctx)?;
+    }
     let auth_provider: Option<ModuleId> = if gateway_auth_enabled(selection, catalog)? {
         selected_auth_provider(selection, catalog).or_else(|| {
             catalog
@@ -69,7 +77,9 @@ pub(super) fn augment<'a>(
     // The gateway, the auth and policy providers, and every configured hosted provider join the
     // selection like any directly selected module (a hosted provider satisfies its role's
     // demands and appears in the topology; it is just not deployed).
-    let gateway = gateway_provider(selection, catalog, ctx);
+    let gateway = (selection.gateway.enabled || emulating)
+        .then(|| gateway_provider(selection, catalog, ctx))
+        .flatten();
     let implied: Vec<&ModuleId> = gateway
         .iter()
         .chain(&auth_provider)
@@ -99,4 +109,33 @@ pub(super) fn augment<'a>(
         auth_provider,
         policy_provider,
     })
+}
+
+/// Reject a gateway-less selection that asks for something only the gateway provides: sign-in
+/// or policy (in any of their legacy forms too), an app upstream (the gateway's catch-all), or
+/// a `gateway`-role module selected explicitly. Emulated public hostnames are only known once
+/// the graph is resolved, so the route phase checks those.
+fn require_no_gateway_features(
+    selection: &Selection,
+    catalog: &Catalog,
+    ctx: &PlanCtx,
+) -> Result<(), PlanError> {
+    let required = |reason: String| Err(PlanError::GatewayRequired { reason });
+    if let Some(module) = selection
+        .modules
+        .iter()
+        .find(|m| catalog.providers_of(Role::GATEWAY).contains(m))
+    {
+        return required(format!("selecting the gateway module `{module}`"));
+    }
+    if gateway_auth_enabled(selection, catalog)? {
+        return required("sign-in".into());
+    }
+    if policy_provider(selection, catalog).is_some() {
+        return required("policy".into());
+    }
+    if ctx.app.is_some() {
+        return required("an app upstream".into());
+    }
+    Ok(())
 }

@@ -44,6 +44,9 @@ services:
     ports:
       - "7687:7687"
       - "8182:8182"
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8081/ || exit 1"]
       interval: 10s

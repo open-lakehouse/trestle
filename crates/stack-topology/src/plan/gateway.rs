@@ -208,7 +208,7 @@ pub(super) fn policy_provider(selection: &Selection, catalog: &Catalog) -> Optio
     })
 }
 
-/// The `gateway`-role provider every environment runs: the one the selection names, else
+/// The `gateway`-role provider an environment runs: the one the selection names, else
 /// the first preferred via [`PlanCtx::provider_preference`], else the catalog's first. `None`
 /// only for a catalog without a gateway.
 pub(super) fn gateway_provider(

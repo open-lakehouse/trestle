@@ -10,7 +10,8 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use crate::model::placement::Placement;
+use crate::model::endpoint::RouteIntent;
+use crate::model::placement::{Placement, Vantage};
 use crate::plan::Plan;
 
 /// Render a compact Markdown summary of `plan`'s gateway layout: the gateway routes (which prefix
@@ -23,12 +24,14 @@ pub fn layout_report(plan: &Plan) -> String {
     let mut out = String::new();
 
     // Title: the env name and the stable, host-facing gateway origin — the single most useful fact.
-    let _ = writeln!(
-        out,
-        "# Environment `{}` — gateway {}",
-        plan.env_name,
-        plan.gateway_url(),
-    );
+    match plan.gateway_url() {
+        Some(url) => {
+            let _ = writeln!(out, "# Environment `{}` — gateway {url}", plan.env_name);
+        }
+        None => {
+            let _ = writeln!(out, "# Environment `{}` — no gateway", plan.env_name);
+        }
+    }
 
     // Map a cluster name to a human "service @ host:port", so a route row says what it lands on.
     let clusters: BTreeMap<&str, String> = plan
@@ -39,26 +42,30 @@ pub fn layout_report(plan: &Plan) -> String {
         .collect();
     let shared_port = plan.gateway_host_port();
 
-    // --- Gateway routes ---
-    out.push_str("\n## Gateway routes\n\n");
-    out.push_str("| Listener | Prefix | Service (cluster) | Upstream | Rewrite |\n");
-    out.push_str("| --- | --- | --- | --- | --- |\n");
-    for listener in &plan.gateway.listeners {
-        let kind = if listener.host_port == shared_port {
-            format!("shared :{}", listener.host_port)
-        } else {
-            format!("dedicated :{}", listener.host_port)
-        };
-        for route in &listener.routes {
-            let upstream = clusters
-                .get(route.cluster.as_str())
-                .map_or("—", String::as_str);
-            let rewrite = route.rewrite.as_deref().unwrap_or("—");
-            let _ = writeln!(
-                out,
-                "| {} | `{}` | `{}` | {} | {} |",
-                kind, route.prefix, route.cluster, upstream, rewrite,
-            );
+    // --- Gateway routes --- (without a gateway, the directly published endpoints instead)
+    if !plan.has_gateway() {
+        direct_endpoints(plan, &mut out);
+    } else {
+        out.push_str("\n## Gateway routes\n\n");
+        out.push_str("| Listener | Prefix | Service (cluster) | Upstream | Rewrite |\n");
+        out.push_str("| --- | --- | --- | --- | --- |\n");
+        for listener in &plan.gateway.listeners {
+            let kind = if Some(listener.host_port) == shared_port {
+                format!("shared :{}", listener.host_port)
+            } else {
+                format!("dedicated :{}", listener.host_port)
+            };
+            for route in &listener.routes {
+                let upstream = clusters
+                    .get(route.cluster.as_str())
+                    .map_or("—", String::as_str);
+                let rewrite = route.rewrite.as_deref().unwrap_or("—");
+                let _ = writeln!(
+                    out,
+                    "| {} | `{}` | `{}` | {} | {} |",
+                    kind, route.prefix, route.cluster, upstream, rewrite,
+                );
+            }
         }
     }
 
@@ -147,6 +154,34 @@ pub fn layout_report(plan: &Plan) -> String {
     }
 
     out
+}
+
+/// The `## Direct endpoints` table of a gateway-less plan: every published surface endpoint and
+/// the URL a host-side caller reaches it at.
+fn direct_endpoints(plan: &Plan, out: &mut String) {
+    out.push_str("\n## Direct endpoints\n\n");
+    out.push_str("| Module | Service | Endpoint | Host URL |\n");
+    out.push_str("| --- | --- | --- | --- |\n");
+    for (module, services) in &plan.services {
+        for svc in services {
+            for endpoint in &svc.endpoints {
+                if endpoint.intent == RouteIntent::Internal {
+                    continue;
+                }
+                let Some(Ok(url)) = plan
+                    .service_named(module, &svc.name)
+                    .map(|s| s.address(Vantage::Host, &endpoint.id))
+                else {
+                    continue;
+                };
+                let _ = writeln!(
+                    out,
+                    "| `{module}` | `{}` | `{}` | {url} |",
+                    svc.name, endpoint.id
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

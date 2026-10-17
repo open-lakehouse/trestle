@@ -384,8 +384,9 @@ fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
 /// fragment also adds those hosts as network aliases and a one-shot that mints the local CA
 /// the gateway's TLS listener presents.
 ///
-/// Every environment runs it: the planner adds the `gateway`-role provider whether or not it
-/// was selected. Sign-in and policy are [`GatewaySettings`](crate::GatewaySettings), realized
+/// Every environment runs it unless the gateway is turned off: the planner adds the
+/// `gateway`-role provider whether or not it was selected (and, without a gateway, only for a
+/// module that emulates public hostnames). Sign-in and policy are [`GatewaySettings`](crate::GatewaySettings), realized
 /// in the planner and the Envoy renderer (they pull in `authelia` / `opa` and emit the
 /// `ext_authz` filters), so its knobs are its images and whether the admin port is published.
 fn envoy() -> Arc<dyn Module> {
