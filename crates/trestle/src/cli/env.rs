@@ -8,8 +8,8 @@
 //! - [`EnvCommand::New`] — pick modules and how the gateway guards access, optionally
 //!   tune knobs, then plan + render into a target directory. Interactive (a
 //!   [`cliclack`] wizard) or fully scripted (`--select` / `--auth` / `--policy` /
-//!   `--set` / `--prefer`). Every environment gets the gateway; it is not a module
-//!   to pick.
+//!   `--set` / `--prefer`). Every environment gets the gateway (unless
+//!   `--no-gateway`); it is not a module to pick.
 //! - [`EnvCommand::Render`] — re-render an existing environment from its persisted
 //!   `env.toml` ([`EnvManifest`]); ports and routes stay stable by construction.
 //! - [`EnvCommand::ListModules`] — enumerate the catalog and the knobs each module
@@ -55,8 +55,8 @@ pub struct EnvNewArgs {
     pub out_dir: Option<PathBuf>,
 
     /// Module ids to select, e.g. `--select postgres,mlflow`. Repeatable and
-    /// comma-separated. The gateway is always included. When empty in interactive
-    /// mode the wizard starts from the default lakehouse selection.
+    /// comma-separated. The gateway is included unless `--no-gateway`. When empty in
+    /// interactive mode the wizard starts from the default lakehouse selection.
     #[clap(long = "select", value_name = "MODULE[,MODULE]", value_delimiter = ',')]
     pub select: Vec<String>,
 
@@ -68,6 +68,11 @@ pub struct EnvNewArgs {
     /// Implies `--auth`.
     #[clap(long)]
     pub policy: bool,
+
+    /// Run without a gateway: publish each service on its own host port (e.g. Unity
+    /// Catalog at `localhost:8080`). For bare deployments of a service and its backends.
+    #[clap(long, conflicts_with_all = ["auth", "policy"])]
+    pub no_gateway: bool,
 
     /// Knob override, `module.key=value` (e.g. `--set postgres.image=postgres:17`).
     /// Repeatable. A value set here is not asked for again by the wizard.
@@ -218,11 +223,16 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
     } else {
         Selection::modules(args.select.iter().cloned())
     };
-    selection.gateway = GatewaySettings {
-        auth: args.auth,
-        policy: args.policy,
+    selection.gateway = if args.no_gateway {
+        GatewaySettings::DIRECT
+    } else {
+        GatewaySettings {
+            auth: args.auth,
+            policy: args.policy,
+            ..GatewaySettings::OPEN
+        }
     };
-    let access_preset = args.auth || args.policy;
+    let access_preset = args.auth || args.policy || args.no_gateway;
     for ((module, knob), value) in &args.knobs {
         selection
             .knob_overrides
@@ -558,11 +568,17 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
     let dir = dir.display();
     let mut out = format!("Wrote composed environment to {dir}\n\nNext steps:\n");
     let _ = writeln!(out, "  cd {dir} && docker compose up -d --wait");
-    let _ = writeln!(
-        out,
-        "  Gateway:   {}  (routes: LAYOUT.md)",
-        plan.gateway_url()
-    );
+    match plan.gateway_url() {
+        Some(url) => {
+            let _ = writeln!(out, "  Gateway:   {url}  (routes: LAYOUT.md)");
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "  Services:  no gateway; each on its own host port  (URLs: LAYOUT.md)"
+            );
+        }
+    }
     if let Some(secure) = &plan.gateway.secure {
         let _ = writeln!(
             out,
@@ -975,7 +991,8 @@ mod wizard {
             .collect())
     }
 
-    /// How the gateway guards access: open, sign-in, or sign-in plus policy.
+    /// How the gateway guards access: open, sign-in, or sign-in plus policy — or no
+    /// gateway at all.
     fn ask_access(current: GatewaySettings) -> Result<GatewaySettings> {
         cliclack::select("Gateway access?")
             .item(GatewaySettings::OPEN, "Open", "no sign-in")
@@ -988,6 +1005,11 @@ mod wizard {
                 GatewaySettings::POLICY,
                 "Sign-in + policy",
                 "also authorize each request with Rego (OPA)",
+            )
+            .item(
+                GatewaySettings::DIRECT,
+                "No gateway",
+                "publish each service on its own host port",
             )
             .initial_value(current)
             .interact()
