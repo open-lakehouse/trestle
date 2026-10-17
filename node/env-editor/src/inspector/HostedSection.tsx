@@ -1,6 +1,37 @@
-import { Button, Input, Label } from "@open-lakehouse/ui-kit";
+import {
+  Button,
+  Input,
+  Label,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@open-lakehouse/ui-kit";
 import { Cloud } from "lucide-react";
-import type { HostedConnection, HostedResource, ModuleDto } from "../types";
+import type {
+  HostedConnection,
+  HostedKind,
+  HostedResource,
+  HostedVendor,
+  ModuleDto,
+} from "../types";
+
+/** The vendors that offer each kind (mirrors `HostedVendor::offers`), the
+ *  kind's default first. The vendor decides the setup steps in README.md. */
+const VENDORS: Record<HostedKind, { value: HostedVendor; label: string }[]> = {
+  postgres: [
+    { value: "generic", label: "Other server" },
+    { value: "neon", label: "Neon" },
+    { value: "aws-rds", label: "Amazon RDS" },
+    { value: "azure-postgres", label: "Azure Database for PostgreSQL" },
+  ],
+  s3: [
+    { value: "aws-s3", label: "Amazon S3" },
+    { value: "generic", label: "S3-compatible (R2, MinIO, …)" },
+  ],
+  azure_blob: [{ value: "azure-storage", label: "Azure Storage" }],
+};
 
 /** An env-var reference (`${NAME}`), resolved from the environment when the
  *  stack is rendered — how a secret is written in `env.toml`. */
@@ -120,6 +151,8 @@ export function HostedSection({
   if (!current) return null;
   const fieldId = (name: string) => `hosted.${module.id}.${name}`;
   const vars = secretRefs(current.connection);
+  const vendors = VENDORS[current.connection.kind];
+  const vendor = current.vendor ?? fallback?.vendor ?? vendors[0].value;
   return (
     <section className="border-b border-border px-4 py-3">
       <div className="flex items-center justify-between gap-3">
@@ -140,10 +173,40 @@ export function HostedSection({
       </div>
       <div className="mt-3 flex flex-col gap-3">
         <p className="text-xs text-muted-foreground">
-          Not deployed: consumers connect here, and its{" "}
-          {module.resource_nouns[0]?.plural ?? "resources"} must already exist.
+          Not deployed: consumers connect here. The environment's README.md
+          walks through creating its{" "}
+          {module.resource_nouns[0]?.plural ?? "resources"}.
           {vars.length > 0 && <> Reads {vars.join(", ")} when rendering.</>}
         </p>
+        {vendors.length > 1 && (
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={fieldId("vendor")} className="text-xs">
+              Vendor
+            </Label>
+            <Select
+              value={vendor}
+              // The cloud label follows the vendor unless set by hand.
+              onValueChange={(v) =>
+                onChange({
+                  ...current,
+                  vendor: v as HostedVendor,
+                  cloud: null,
+                })
+              }
+            >
+              <SelectTrigger id={fieldId("vendor")} className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {vendors.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <TextField
           id={fieldId("cloud")}
           label="Cloud"

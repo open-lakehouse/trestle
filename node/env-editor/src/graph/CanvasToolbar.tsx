@@ -32,7 +32,7 @@ import {
   GRAPH_SNAPSHOT_EXTENSION,
   stringifyGraphSnapshot,
 } from "../diagram/snapshot";
-import type { GraphDto } from "../types";
+import type { DeployStepDto, GraphDto } from "../types";
 
 export interface CanvasToolbarProps {
   onAdd: () => void;
@@ -53,6 +53,8 @@ export interface CanvasToolbarProps {
    * an embed can show each node's files from the companion render.
    */
   files?: readonly string[];
+  /** The plan's deployment steps, saved in the snapshot for downstream tools. */
+  deploy?: readonly DeployStepDto[];
   /** The exported files' base name. Defaults to `"environment"`. */
   exportName?: string;
   /** Called with a message when an export fails. */
@@ -85,6 +87,7 @@ export function CanvasToolbar({
   hasError,
   graph,
   files,
+  deploy,
   exportName = "environment",
   onExportError,
   gatewayEnabled = true,
@@ -119,6 +122,7 @@ export function CanvasToolbar({
         <ExportActions
           graph={graph}
           files={files}
+          deploy={deploy}
           name={exportName}
           onError={onExportError}
         />
@@ -198,11 +202,13 @@ function GatewayToggle({
 function ExportActions({
   graph,
   files,
+  deploy,
   name,
   onError,
 }: {
   graph: GraphDto | undefined;
   files: readonly string[] | undefined;
+  deploy: readonly DeployStepDto[] | undefined;
   name: string;
   onError?: (message: string) => void;
 }) {
@@ -212,7 +218,7 @@ function ExportActions({
   const exportSnapshot = () => {
     if (!graph) return;
     downloadText(
-      stringifyGraphSnapshot(createGraphSnapshot(graph, { files })),
+      stringifyGraphSnapshot(createGraphSnapshot(graph, { files, deploy })),
       `${name}${GRAPH_SNAPSHOT_EXTENSION}`,
     );
   };

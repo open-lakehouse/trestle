@@ -130,3 +130,36 @@ describe("snapshot file manifest", () => {
     expect(() => roundTrip(snapshot)).toThrow(/graph snapshot:/);
   });
 });
+
+describe("snapshot deployment steps", () => {
+  test("saves the plan's steps in order and reads them back", () => {
+    expect(FIXTURE_PLAN.deploy.length).toBeGreaterThan(0);
+    const snapshot = createGraphSnapshot(FIXTURE_PLAN.graph, {
+      deploy: FIXTURE_PLAN.deploy,
+    });
+    expect(snapshot.deploy).toEqual(FIXTURE_PLAN.deploy);
+    expect(roundTrip(snapshot).deploy?.map((s) => s.order)).toEqual(
+      FIXTURE_PLAN.deploy.map((_, i) => i + 1),
+    );
+  });
+
+  test("is left out without steps", () => {
+    const snapshot = createGraphSnapshot(FIXTURE_PLAN.graph, { deploy: [] });
+    expect("deploy" in snapshot).toBe(false);
+  });
+
+  test.each([
+    ["not an array", { order: 1 }],
+    [
+      "an unknown phase",
+      [{ order: 1, phase: "later", id: "x", title: "X", instructions: "" }],
+    ],
+    [
+      "a missing title",
+      [{ order: 1, phase: "start", id: "x", instructions: "" }],
+    ],
+  ])("rejects %s", (_, deploy) => {
+    const snapshot = { ...createGraphSnapshot(FIXTURE_PLAN.graph), deploy };
+    expect(() => roundTrip(snapshot)).toThrow(/graph snapshot:/);
+  });
+});

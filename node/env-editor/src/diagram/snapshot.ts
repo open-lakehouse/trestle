@@ -3,7 +3,7 @@
 // it was when exported — with no planner, catalog, or wasm on the page. Later
 // planner changes never redraw an existing snapshot.
 
-import type { GraphDto, TopologyEdgeDto } from "../types";
+import type { DeployStepDto, GraphDto, TopologyEdgeDto } from "../types";
 
 /** The `format` tag every snapshot carries. */
 export const GRAPH_SNAPSHOT_FORMAT = "trestle-graph";
@@ -38,9 +38,17 @@ export interface GraphSnapshot {
    * secret in the render is never shown. Absent on older snapshots.
    */
   files?: string[];
+  /**
+   * The environment's deployment steps, in order: what an operator does beyond
+   * starting the stack (create hosted resources, review accounts). A step's
+   * `script` is a path among `files`. For tools that walk someone through, or
+   * automate, the deployment. Absent on older snapshots.
+   */
+  deploy?: DeployStepDto[];
 }
 
-/** Freeze a plan's graph (and its file manifest, if given) into a snapshot. */
+/** Freeze a plan's graph (and its file manifest and deployment steps, if
+ *  given) into a snapshot. */
 export function createGraphSnapshot(
   graph: GraphDto,
   options: {
@@ -48,6 +56,8 @@ export function createGraphSnapshot(
     generator?: string;
     /** The plan's viewable file paths (`plan.files`' paths, no contents). */
     files?: readonly string[];
+    /** The plan's deployment steps (`plan.deploy`). */
+    deploy?: readonly DeployStepDto[];
   } = {},
 ): GraphSnapshot {
   return {
@@ -57,6 +67,7 @@ export function createGraphSnapshot(
     ...(options.title ? { title: options.title } : {}),
     graph,
     ...(options.files?.length ? { files: [...options.files].sort() } : {}),
+    ...(options.deploy?.length ? { deploy: [...options.deploy] } : {}),
   };
 }
 
@@ -140,6 +151,7 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
   });
 
   if (input.files !== undefined) checkManifest(input.files);
+  if (input.deploy !== undefined) checkDeploy(input.deploy);
 
   return {
     ...input,
@@ -173,6 +185,34 @@ function checkManifest(files: unknown): void {
     seen.add(path);
   }
 }
+
+/** Deployment steps carry an order, a phase, an id, a title and instructions. */
+function checkDeploy(deploy: unknown): void {
+  if (!Array.isArray(deploy)) {
+    throw new Error("graph snapshot: `deploy` must be an array of steps");
+  }
+  for (const [i, step] of deploy.entries()) {
+    if (
+      !isRecord(step) ||
+      typeof step.order !== "number" ||
+      !DEPLOY_PHASES.has(step.phase as string) ||
+      typeof step.id !== "string" ||
+      typeof step.title !== "string" ||
+      typeof step.instructions !== "string"
+    ) {
+      throw new Error(
+        `graph snapshot: deploy step ${i} needs an \`order\`, a known \`phase\`, and string \`id\`/\`title\`/\`instructions\``,
+      );
+    }
+  }
+}
+
+const DEPLOY_PHASES: ReadonlySet<string> = new Set<DeployStepDto["phase"]>([
+  "provision",
+  "configure",
+  "start",
+  "verify",
+]);
 
 /**
  * The key the planner assigns `edge` (Rust `TopologyEdgeDto::derive_key`):

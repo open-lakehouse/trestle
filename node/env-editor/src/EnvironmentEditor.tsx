@@ -342,6 +342,7 @@ function EditorBody({
                     hasError={!!error}
                     graph={graph}
                     files={files?.paths}
+                    deploy={plan?.deploy}
                     onExportError={setNotice}
                     gatewayEnabled={gatewayEnabled(selection.gateway)}
                     onToggleGateway={(on) => env.setGateway(on ? OPEN : DIRECT)}

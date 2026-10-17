@@ -42,6 +42,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           aliases: ["GATEWAY_CERTS_IMAGE"],
           advanced: true,
         },
+        {
+          key: "publish_admin",
+          title: "Publish the admin port",
+          kind: {
+            kind: "bool",
+          },
+          default: "true",
+          required: false,
+          help: "Publish Envoy's admin endpoint (`gateway_admin_port`) on the host. The gateway still serves it in-network when off.",
+          advanced: true,
+        },
       ],
       helpers: [
         {
@@ -109,6 +120,18 @@ export const FIXTURE_CATALOG: CatalogDto = {
           aliases: ["POSTGRES_IMAGE"],
           advanced: true,
         },
+        {
+          key: "data",
+          title: "Data storage",
+          kind: {
+            kind: "enum",
+            options: ["bind", "volume"],
+          },
+          default: "bind",
+          required: false,
+          help: "`bind` keeps the data under the environment's data root ({{ env.DATA_ROOT }}/postgres, survives `docker compose down -v`); `volume` uses a named Docker volume, so `docker compose down -v` resets the database.",
+          advanced: true,
+        },
       ],
       helpers: [],
       hosted: null,
@@ -166,6 +189,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["STS_SHIM_IMAGE"],
+          advanced: true,
+        },
+        {
+          key: "generic_endpoint_env",
+          title: "Generic endpoint variables",
+          kind: {
+            kind: "bool",
+          },
+          default: "false",
+          required: false,
+          help: "Also give clients `AWS_ENDPOINT_URL` and `AWS_ALLOW_HTTP=true`, for tools that don't read `AWS_ENDPOINT_URL_S3`. Off by default: a global endpoint also redirects every AWS SDK client's STS calls.",
           advanced: true,
         },
       ],
@@ -237,7 +271,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       model: "postgresql",
       display_name: "Hosted Postgres",
       summary:
-        "A managed PostgreSQL server (RDS, Neon, …); databases must already exist.",
+        "A managed PostgreSQL server (Neon, RDS, Azure, …); README.md sets it up.",
       category: "metadata_db",
       provider_of: "relational_db",
       requires: [],
@@ -255,6 +289,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       hosted: {
         kind: "postgres",
         default: {
+          vendor: "generic",
           connection: {
             kind: "postgres",
             host: "${PGHOST}",
@@ -271,7 +306,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       model: "amazonS3",
       display_name: "Amazon S3",
       summary:
-        "Amazon S3 or an S3-compatible store; buckets must already exist.",
+        "Amazon S3 or an S3-compatible store; README.md sets up the buckets.",
       category: "storage",
       provider_of: "object_store",
       requires: [],
@@ -290,6 +325,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
         kind: "s3",
         default: {
           cloud: "aws",
+          vendor: "aws-s3",
           connection: {
             kind: "s3",
             region: "us-east-1",
@@ -305,7 +341,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       model: "azureBlobStorage",
       display_name: "Azure Storage",
       summary:
-        "An Azure storage account (Blob / ADLS Gen2); containers must already exist.",
+        "An Azure storage account (Blob / ADLS Gen2); README.md sets it up.",
       category: "storage",
       provider_of: "object_store",
       requires: [],
@@ -324,6 +360,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
         kind: "azure_blob",
         default: {
           cloud: "azure",
+          vendor: "azure-storage",
           connection: {
             kind: "azure_blob",
             account: "${AZURE_STORAGE_ACCOUNT}",
@@ -413,8 +450,123 @@ export const FIXTURE_CATALOG: CatalogDto = {
           aliases: ["UC_IMAGE"],
           advanced: true,
         },
+        {
+          key: "storage_image",
+          title:
+            "Unity Catalog helper image (storage registration, writable mounts)",
+          kind: {
+            kind: "string",
+          },
+          default: "python:3.13-alpine",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          aliases: ["UC_STORAGE_IMAGE"],
+          advanced: true,
+        },
+        {
+          key: "storage_bootstrap",
+          title: "Storage registration",
+          kind: {
+            kind: "enum",
+            options: ["api", "none"],
+          },
+          default: "api",
+          required: false,
+          help: "`api` registers a storage credential and an external location per S3 bucket through UC's API once the server is up. `none` leaves storage unregistered, for docs and tests that register it themselves.",
+          advanced: true,
+        },
+        {
+          key: "bucket",
+          title: "Bucket",
+          kind: {
+            kind: "string",
+          },
+          default: "unity",
+          required: false,
+          help: "The bucket UC's object-store demand provisions. Other modules that demand `unity` (PuppyGraph) get a separate bucket when this changes.",
+          advanced: true,
+        },
+        {
+          key: "master_role_arn",
+          title: "Master role ARN",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "The IAM role UC reports as its own identity (`aws.masterRoleArn`), which a storage role's trust policy names. Defaults to the object store's role.",
+          advanced: true,
+        },
+        {
+          key: "default_catalog",
+          title: "Default catalog",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "Also create this catalog, with managed storage under the first registered bucket. Needs `storage_bootstrap = api`.",
+          advanced: true,
+        },
+        {
+          key: "embedded_metadata",
+          title: "Embedded metadata",
+          kind: {
+            kind: "bool",
+          },
+          default: "false",
+          required: false,
+          help: "Keep metadata in the server's own H2 file and store data on local paths, so the stack runs no relational or object store. Metadata is lost with the container.",
+        },
+        {
+          key: "container_name",
+          title: "Container name",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "A fixed Docker container name, for `docker exec <name> ...` instructions.",
+          advanced: true,
+        },
+        {
+          key: "extra_mounts",
+          title: "Extra mounts",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "More volumes for the server, `;`-separated, each in Compose short syntax (`source:target[:mode]`). Variable interpolation is passed through.",
+          advanced: true,
+        },
+        {
+          key: "writable_mounts",
+          title: "Writable mounts",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "`;`-separated `extra_mounts` targets to make writable by any user before the server starts: Docker creates a missing bind source owned by root, and host-side clients write to the same directory as the server.",
+          advanced: true,
+        },
+        {
+          key: "build",
+          title: "Build context",
+          kind: {
+            kind: "string",
+          },
+          required: false,
+          help: "Build the server image from this directory (relative to the rendered compose.yaml) and tag it with the `image` knob.",
+          advanced: true,
+        },
       ],
-      helpers: [],
+      helpers: [
+        {
+          name: "unitycatalog-storage",
+          kind: "sidecar",
+        },
+        {
+          name: "unitycatalog-mounts",
+          kind: "init",
+        },
+      ],
       hosted: null,
     },
     {
@@ -1525,4 +1677,31 @@ export const FIXTURE_PLAN: PlanResult = {
     },
   },
   files: FIXTURE_FILES,
+  deploy: [
+    {
+      order: 1,
+      phase: "configure",
+      module: "authelia",
+      id: "accounts",
+      title: "Review the sign-in accounts",
+      instructions:
+        "Sign-in is on (`[selection.gateway] auth = true`): Authelia checks every API and UI route on the\ngateway's shared listener. Browsers get its login page; API clients send basic auth.\n\nThe accounts live in `modules/authelia/users.yml`. It starts with one demo account, username\n`demo` with password `authelia`. Change or remove that account before you share the\nenvironment. To add, change, or remove users:\n\n1. Edit `modules/authelia/users.yml`. Each user is one block under `users:`. Copy the `demo`\n   block, then change the name, `displayname`, `email`, `groups`, and `password`.\n2. Hash each password (Authelia stores argon2id hashes, not plain text), then paste the printed\n   `$argon2id$…` digest in as the user's `password`:\n\n   ```bash\n   docker run --rm authelia/authelia:latest \\\n     authelia crypto hash generate argon2 --password 'choose-a-password'\n   ```\n3. If the stack is already running, restart Authelia so it rereads the file:\n   `docker compose restart authelia`.\n\nThe services behind the gateway receive a user's `email` and `displayname` as the\n`Remote-Email` and `Remote-Name` headers, and `groups` as `Remote-Groups`. With policy on, the\ndefault policy lets any signed-in user read and lets the `writers` or `admins` group write.\n\n`trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive\nre-renders. To start over from the demo account, delete the file and render again.",
+    },
+    {
+      order: 2,
+      phase: "start",
+      id: "up",
+      title: "Start the stack",
+      instructions:
+        "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <https://lakehouse.localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address.",
+    },
+    {
+      order: 3,
+      phase: "verify",
+      id: "trust",
+      title: "Trust the gateway's local certificate authority",
+      instructions:
+        "The gateway serves HTTPS with a certificate from a CA minted for this environment. Copy it out, then add it to your browser or pass it to `curl --cacert`:\n\n```bash\ndocker compose cp gateway-certs:/certs/ca.pem .\n```",
+    },
+  ],
 };

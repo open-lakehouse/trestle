@@ -110,10 +110,23 @@ export interface GatewaySettings {
   policy: boolean;
 }
 
+/** Who runs a hosted resource (mirrors `HostedVendor`): it decides the
+ *  resource's setup steps. `generic` fits every kind. */
+export type HostedVendor =
+  | "generic"
+  | "neon"
+  | "aws-rds"
+  | "azure-postgres"
+  | "aws-s3"
+  | "azure-storage";
+
 /** How a hosted provider is configured (mirrors the Rust `HostedResource`). */
 export interface HostedResource {
-  /** The cloud environment it lives in (e.g. "aws"); groups nodes on the canvas. */
+  /** The cloud environment it lives in (e.g. "aws"); groups nodes on the canvas.
+   *  Defaults from the vendor. */
   cloud?: string | null;
+  /** Who runs it; defaults to the kind's usual vendor. */
+  vendor?: HostedVendor | null;
   connection: HostedConnection;
 }
 
@@ -128,6 +141,8 @@ export type HostedConnection =
       database?: string;
       username: string;
       password: string;
+      /** libpq `sslmode`; defaults to `require` for managed vendors. */
+      ssl_mode?: string | null;
     }
   | {
       kind: "s3";
@@ -371,12 +386,34 @@ export interface ServiceSpec {
   base_path?: string;
 }
 
+/** When a deployment step happens, relative to starting the stack (mirrors
+ *  `DeployPhase`). */
+export type DeployPhase = "provision" | "configure" | "start" | "verify";
+
+/** One deployment step, in deployment order (mirrors `DeployStepDto`). */
+export interface DeployStepDto {
+  /** 1-based position in the deployment order. */
+  order: number;
+  phase: DeployPhase;
+  /** The contributing module; absent for the deploy target's own step. */
+  module?: string;
+  /** Unique within its module. */
+  id: string;
+  title: string;
+  /** What to do, as Markdown. */
+  instructions: string;
+  /** The path of the script that does it (among the plan's files). */
+  script?: string;
+}
+
 /** The full plan result (mirrors `PlanResultDto`). */
 export interface PlanResult {
   graph: GraphDto;
   services: Record<string, ServiceSpec[]>;
   gateway: GatewayDto;
   files: OutputFile[];
+  /** The deployment steps, in order (collected into the root README.md). */
+  deploy: DeployStepDto[];
 }
 
 /**
