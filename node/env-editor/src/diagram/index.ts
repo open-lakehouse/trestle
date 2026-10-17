@@ -3,6 +3,10 @@
 // rendered diagram as an image. Nothing here plans or edits; this entry is what
 // `@open-lakehouse/trestle-diagram` bundles and publishes.
 
+export {
+  type NodeSlots,
+  useDiagramPortal,
+} from "../graph/nodeSlots";
 export type {
   ExposedDto,
   ExposedKind,

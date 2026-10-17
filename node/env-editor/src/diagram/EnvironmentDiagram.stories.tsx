@@ -1,5 +1,8 @@
 import { FIXTURE_PLAN } from "@open-lakehouse/stack-wasm/fixtures";
 import type { Meta, StoryObj } from "@storybook/react";
+import { type ReactNode, useState } from "react";
+import { createPortal } from "react-dom";
+import { useDiagramPortal } from "../graph/nodeSlots";
 import { EnvironmentDiagram } from "./EnvironmentDiagram";
 import { createGraphSnapshot } from "./snapshot";
 
@@ -34,4 +37,69 @@ export const FixedHeight: Story = { args: { height: 300, legend: false } };
 
 export const UnsupportedSnapshot: Story = {
   args: { snapshot: { format: "trestle-graph", version: 99 } },
+};
+
+// A host linking each node's name and role to its own pages, with a hover card
+// portaled into the diagram (it stays visible in the expand dialog).
+function HoverLink({
+  href,
+  card,
+  children,
+}: {
+  href: string;
+  card: string;
+  children: ReactNode;
+}) {
+  const portal = useDiagramPortal();
+  const [at, setAt] = useState<DOMRect>();
+  return (
+    <>
+      <a
+        href={href}
+        style={{ textDecoration: "underline dotted" }}
+        onMouseEnter={(e) => setAt(e.currentTarget.getBoundingClientRect())}
+        onMouseLeave={() => setAt(undefined)}
+      >
+        {children}
+      </a>
+      {at &&
+        portal &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              left: at.left,
+              top: at.bottom + 6,
+              zIndex: 50,
+            }}
+            className="rounded-md border border-border bg-card p-2 text-xs shadow-md"
+          >
+            {card}
+          </div>,
+          portal,
+        )}
+    </>
+  );
+}
+
+export const WithSlots: Story = {
+  args: {
+    slots: {
+      name: (node, fallback) =>
+        node.model ? (
+          <HoverLink
+            href={`#${node.model}`}
+            card={`Implementation: ${node.model}`}
+          >
+            {fallback}
+          </HoverLink>
+        ) : undefined,
+      role: (node, fallback) =>
+        node.role ? (
+          <HoverLink href={`#${node.role}`} card={`Role: ${node.role}`}>
+            {fallback}
+          </HoverLink>
+        ) : undefined,
+    },
+  },
 };

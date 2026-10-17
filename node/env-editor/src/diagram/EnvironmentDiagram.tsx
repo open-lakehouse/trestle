@@ -6,6 +6,7 @@ import {
   ConnectionLegend,
   MarkitectureCanvas,
 } from "../graph/MarkitectureCanvas";
+import { DiagramPortalContext, type NodeSlots } from "../graph/nodeSlots";
 import type { GraphDto } from "../types";
 import { useDiagramReady } from "./exportImage";
 import { parseGraphSnapshot } from "./snapshot";
@@ -46,6 +47,12 @@ export interface EnvironmentDiagramProps {
    * The diagram's accessible name. Defaults to the snapshot's `title`.
    */
   label?: string;
+  /**
+   * Host renderers for a node's name and role lines, e.g. links to the host's
+   * own pages with a hover card. A popover inside them portals into
+   * `useDiagramPortal()`.
+   */
+  slots?: NodeSlots;
   className?: string;
 }
 
@@ -68,6 +75,7 @@ export function EnvironmentDiagram({
   legend = true,
   expandable = true,
   label,
+  slots,
   className,
 }: EnvironmentDiagramProps) {
   const resolved = useMemo(() => {
@@ -81,6 +89,7 @@ export function EnvironmentDiagram({
   }, [snapshot, graph]);
   const [fitted, setFitted] = useState<number>();
   const [expanded, setExpanded] = useState(false);
+  const [portal, setPortal] = useState<HTMLElement | null>(null);
   const dark = useDark(colorMode);
 
   // The whole root takes the theme (not just the canvas, which React Flow
@@ -102,6 +111,7 @@ export function EnvironmentDiagram({
 
   return (
     <figure
+      ref={setPortal}
       className={root}
       aria-label={label ?? resolved.title ?? "Environment diagram"}
     >
@@ -109,27 +119,30 @@ export function EnvironmentDiagram({
         className="relative w-full overflow-hidden rounded-lg"
         style={{ height: height ?? fitted ?? minHeight }}
       >
-        <MarkitectureCanvas
-          graph={resolved.graph}
-          colorMode={colorMode}
-          interactive={false}
-          legend={false}
-        >
-          <FitViewport />
-          {height === undefined && (
-            <FitHeight min={minHeight} max={maxHeight} onHeight={setFitted} />
-          )}
-          {expandable && (
-            <Panel position="bottom-right">
-              <ChromeButton
-                label="Expand diagram"
-                onClick={() => setExpanded(true)}
-              >
-                <Maximize2 className="h-4 w-4" />
-              </ChromeButton>
-            </Panel>
-          )}
-        </MarkitectureCanvas>
+        <DiagramPortalContext.Provider value={portal}>
+          <MarkitectureCanvas
+            graph={resolved.graph}
+            colorMode={colorMode}
+            interactive={false}
+            legend={false}
+            slots={slots}
+          >
+            <FitViewport />
+            {height === undefined && (
+              <FitHeight min={minHeight} max={maxHeight} onHeight={setFitted} />
+            )}
+            {expandable && (
+              <Panel position="bottom-right">
+                <ChromeButton
+                  label="Expand diagram"
+                  onClick={() => setExpanded(true)}
+                >
+                  <Maximize2 className="h-4 w-4" />
+                </ChromeButton>
+              </Panel>
+            )}
+          </MarkitectureCanvas>
+        </DiagramPortalContext.Provider>
       </div>
       {legend && <ConnectionLegend graph={resolved.graph} layout="row" />}
       {expandable && (
@@ -138,6 +151,7 @@ export function EnvironmentDiagram({
             graph={resolved.graph}
             colorMode={colorMode}
             legend={legend}
+            slots={slots}
           >
             <Panel position="top-left">
               <ChromeButton label="Close" onClick={() => setExpanded(false)}>
@@ -231,6 +245,7 @@ function ExpandedDialog({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const [portal, setPortal] = useState<HTMLDialogElement | null>(null);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -242,7 +257,10 @@ function ExpandedDialog({
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: the click only catches the backdrop; Escape already closes a modal <dialog> natively.
     <dialog
-      ref={ref}
+      ref={(el) => {
+        ref.current = el;
+        setPortal(el);
+      }}
       aria-label="Environment diagram"
       className="m-auto h-[90vh] max-h-none w-[92vw] max-w-none overflow-hidden rounded-xl border border-border bg-background p-0 shadow-2xl backdrop:bg-black/60"
       // Escape fires `close`; keep React's state in step with it.
@@ -252,7 +270,11 @@ function ExpandedDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      {open && <div className="relative h-full w-full">{children}</div>}
+      {open && (
+        <DiagramPortalContext.Provider value={portal}>
+          <div className="relative h-full w-full">{children}</div>
+        </DiagramPortalContext.Provider>
+      )}
     </dialog>
   );
 }

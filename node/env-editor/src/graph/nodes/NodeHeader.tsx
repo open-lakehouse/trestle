@@ -1,7 +1,9 @@
 import { cn } from "@open-lakehouse/ui-kit";
+import type { ReactNode } from "react";
 import { describeOrigin } from "../../state/origin";
 import type { GraphNodeDto } from "../../types";
 import { useCanvasContext } from "../canvasActions";
+import { useNodeSlots } from "../nodeSlots";
 import { ModuleIcon } from "../projectIcons";
 import { roleStyle } from "../roleTheme";
 import { NODE_HEADER } from "../useTopologyLayout";
@@ -10,17 +12,23 @@ import { NODE_HEADER } from "../useTopologyLayout";
  * The heading every card opens with: the project's logo on a tile tinted by
  * the role accent, the implementation's name, and the function it fills. On
  * an editable canvas, a component the planner pulled in carries an "Auto" chip.
+ * A host's `NodeSlots` may render the name and role lines instead.
  * Fixed height (NODE_HEADER) — the layout reserves exactly this.
  */
 export function NodeHeader({ node }: { node: GraphNodeDto }) {
   const style = roleStyle(node.role);
   const origin = useCanvasContext()?.actions.originOf(node.id);
+  const slots = useNodeSlots();
   const title = node.display_name ?? node.id;
+  const name = slots?.name?.(node, title);
+  const role = slots?.role?.(node, style.label);
+  const slotted = name !== undefined || role !== undefined;
   return (
     <div
       className="flex shrink-0 items-center gap-2.5 px-3"
       style={{ height: NODE_HEADER }}
-      title={node.summary ?? title}
+      // A native tooltip would double the host's own popover.
+      title={slotted ? undefined : (node.summary ?? title)}
     >
       <div
         className={cn(
@@ -32,10 +40,10 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold leading-5 text-card-foreground">
-          {title}
+          {name === undefined ? title : <Slot>{name}</Slot>}
         </div>
         <div className="truncate text-[11px] leading-4 text-muted-foreground">
-          {style.label}
+          {role === undefined ? style.label : <Slot>{role}</Slot>}
         </div>
       </div>
       {node.kind === "external" && <Chip>External</Chip>}
@@ -43,6 +51,24 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
         <Chip title={describeOrigin(origin)}>Auto</Chip>
       )}
     </div>
+  );
+}
+
+/**
+ * Host content inside a node: a link click must navigate, not select the node
+ * or start a drag (`nodrag nopan` opt out of React Flow's pointer handling).
+ */
+function Slot({ children }: { children: ReactNode }) {
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: only stops propagation; the host's own element is the interactive one.
+    // biome-ignore lint/a11y/useKeyWithClickEvents: see above.
+    <span
+      className="nodrag nopan"
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {children}
+    </span>
   );
 }
 

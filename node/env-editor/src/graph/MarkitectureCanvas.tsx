@@ -34,6 +34,7 @@ import {
   type CanvasContextValue,
 } from "./canvasActions";
 import { ElkEdge } from "./edges/ElkEdge";
+import { type NodeSlots, NodeSlotsContext } from "./nodeSlots";
 import { ClientsNode } from "./nodes/ClientsNode";
 import { CloudGroupNode } from "./nodes/CloudGroupNode";
 import { ComponentNode } from "./nodes/ComponentNode";
@@ -83,6 +84,8 @@ export interface MarkitectureCanvasProps {
   interactive?: boolean;
   /** Whether to show the connection-kind legend. Defaults to `true`. */
   legend?: boolean;
+  /** Host renderers for a node's name and role lines. */
+  slots?: NodeSlots;
   /** Overlays rendered inside the flow (e.g. `<Panel>`s); they may use `useReactFlow`. */
   children?: ReactNode;
 }
@@ -201,6 +204,7 @@ function MarkitectureFlow({
   focus,
   interactive = true,
   legend = true,
+  slots,
   children,
 }: MarkitectureCanvasProps) {
   const { nodes, edges } = useTopologyLayout(graph);
@@ -349,44 +353,46 @@ function MarkitectureFlow({
 
   return (
     <CanvasContext.Provider value={context}>
-      <ReactFlow
-        nodes={decoratedNodes}
-        edges={decoratedEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodeClick={handleNodeClick}
-        onNodeDoubleClick={handleNodeDoubleClick}
-        onNodeMouseEnter={actions ? handleNodeEnter : undefined}
-        onNodeMouseLeave={actions ? leave : undefined}
-        onPaneClick={onDeselect}
-        // Removal goes through the editor's actions, not React Flow's own
-        // delete handling.
-        deleteKeyCode={null}
-        zoomOnDoubleClick={false}
-        panOnDrag={interactive}
-        zoomOnScroll={interactive}
-        zoomOnPinch={interactive}
-        preventScrolling={interactive}
-        nodesDraggable={interactive}
-        colorMode={colorMode}
-        fitView
-        proOptions={{ hideAttribution: true }}
-        minZoom={0.1}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color="hsl(var(--muted-foreground) / 0.35)"
-        />
-        {interactive && <Controls showInteractive={false} />}
-        {legend && (
-          <Panel position="top-right">
-            <Legend kinds={kinds} />
-          </Panel>
-        )}
-        {children}
-      </ReactFlow>
+      <NodeSlotsContext.Provider value={slots}>
+        <ReactFlow
+          nodes={decoratedNodes}
+          edges={decoratedEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodeClick={handleNodeClick}
+          onNodeDoubleClick={handleNodeDoubleClick}
+          onNodeMouseEnter={actions ? handleNodeEnter : undefined}
+          onNodeMouseLeave={actions ? leave : undefined}
+          onPaneClick={onDeselect}
+          // Removal goes through the editor's actions, not React Flow's own
+          // delete handling.
+          deleteKeyCode={null}
+          zoomOnDoubleClick={false}
+          panOnDrag={interactive}
+          zoomOnScroll={interactive}
+          zoomOnPinch={interactive}
+          preventScrolling={interactive}
+          nodesDraggable={interactive}
+          colorMode={colorMode}
+          fitView
+          proOptions={{ hideAttribution: true }}
+          minZoom={0.1}
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={20}
+            size={1}
+            color="hsl(var(--muted-foreground) / 0.35)"
+          />
+          {interactive && <Controls showInteractive={false} />}
+          {legend && (
+            <Panel position="top-right">
+              <Legend kinds={kinds} />
+            </Panel>
+          )}
+          {children}
+        </ReactFlow>
+      </NodeSlotsContext.Provider>
     </CanvasContext.Provider>
   );
 }

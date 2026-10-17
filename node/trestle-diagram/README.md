@@ -58,10 +58,37 @@ import snapshot from "./lakehouse.trestle-graph.json";
 | `legend` | `true` | The connection-kind legend, shown as a row under the diagram. |
 | `expandable` | `true` | The expand-to-dialog button. |
 | `label` | snapshot `title` | The figure's accessible name. |
+| `slots` | — | Renderers for a node's name and role lines (see below). |
 
 The diagram pulls in React Flow and ELK (ELK alone is about 1.6 MB
 unminified), so lazy-load it (`React.lazy`) to keep them out of a page's main
 bundle.
+
+## Linking nodes to your own pages
+
+A snapshot says what each node is (`id`, the module's `model` ref, its `role`)
+but nothing about where your site explains it. `slots` lets the host draw a
+node's name and role lines, so they can link to the host's pages and show a
+hover card:
+
+```tsx
+<EnvironmentDiagram
+  snapshot={snapshot}
+  slots={{
+    name: (node, fallback) => <ConceptLink id={node.model}>{fallback}</ConceptLink>,
+    role: (node, fallback) => <ConceptLink id={roleConcept(node.role)}>{fallback}</ConceptLink>,
+  }}
+/>
+```
+
+Each slot gets the node and the text drawn without it; return `undefined` to
+keep that text. The lines keep their fixed height and truncate, so render
+inline content. Clicks inside a slot don't select or drag the node.
+
+A popover in a slot must portal into `useDiagramPortal()`, not
+`document.body`: the inline frame clips overflow, and the expanded view is a
+modal `<dialog>` drawn above everything portaled to the body. The container sits
+inside the `.trestle-diagram` root, so give the popover its own styles.
 
 ## Styling
 
