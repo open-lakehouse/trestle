@@ -22,6 +22,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { type FileSource, filesByModule } from "../artifacts/fileSource";
+import { NodeFilesDialog } from "../artifacts/NodeFilesDialog";
 import type {
   GraphDto,
   GraphNodeDto,
@@ -34,6 +36,11 @@ import {
   type CanvasContextValue,
 } from "./canvasActions";
 import { ElkEdge } from "./edges/ElkEdge";
+import {
+  NodeFilesContext,
+  type NodeFilesContextValue,
+  type NodeFilesTarget,
+} from "./nodeFiles";
 import { type NodeSlots, NodeSlotsContext } from "./nodeSlots";
 import { ClientsNode } from "./nodes/ClientsNode";
 import { CloudGroupNode } from "./nodes/CloudGroupNode";
@@ -86,6 +93,20 @@ export interface MarkitectureCanvasProps {
   legend?: boolean;
   /** Host renderers for a node's name and role lines. */
   slots?: NodeSlots;
+  /**
+   * The rendered files to offer per node (those under `modules/<id>/`). With
+   * them, a node with files shows a count that opens them in a dialog.
+   */
+  files?: FileSource;
+  /**
+   * The node whose files are open. Pass it with `onOpenFilesChange` to drive
+   * the files dialog from outside (e.g. an inspector's file list); otherwise
+   * the canvas keeps that state itself.
+   */
+  openFiles?: NodeFilesTarget | null;
+  onOpenFilesChange?: (target: NodeFilesTarget | null) => void;
+  /** Show a file in the host's file explorer (a button in the files dialog). */
+  onOpenInExplorer?: (path: string) => void;
   /** Overlays rendered inside the flow (e.g. `<Panel>`s); they may use `useReactFlow`. */
   children?: ReactNode;
 }
@@ -208,6 +229,10 @@ function MarkitectureFlow({
   interactive = true,
   legend = true,
   slots,
+  files,
+  openFiles,
+  onOpenFilesChange,
+  onOpenInExplorer,
   children,
 }: MarkitectureCanvasProps) {
   const { nodes, edges } = useTopologyLayout(graph);
@@ -232,6 +257,13 @@ function MarkitectureFlow({
   const context = useMemo<CanvasContextValue | null>(
     () => (actions ? { actions, hoveredId, hover, leave } : null),
     [actions, hoveredId, hover, leave],
+  );
+
+  const nodeFiles = useNodeFilesState(
+    graph,
+    files,
+    openFiles,
+    onOpenFilesChange,
   );
 
   const decoratedNodes = useMemo(
@@ -358,47 +390,110 @@ function MarkitectureFlow({
   return (
     <CanvasContext.Provider value={context}>
       <NodeSlotsContext.Provider value={slots}>
-        <ReactFlow
-          nodes={decoratedNodes}
-          edges={decoratedEdges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onNodeClick={handleNodeClick}
-          onNodeDoubleClick={handleNodeDoubleClick}
-          onNodeMouseEnter={actions ? handleNodeEnter : undefined}
-          onNodeMouseLeave={actions ? leave : undefined}
-          onPaneClick={onDeselect}
-          // Removal goes through the editor's actions, not React Flow's own
-          // delete handling.
-          deleteKeyCode={null}
-          zoomOnDoubleClick={false}
-          panOnDrag={interactive}
-          zoomOnScroll={interactive}
-          zoomOnPinch={interactive}
-          preventScrolling={interactive}
-          nodesDraggable={interactive}
-          colorMode={colorMode}
-          fitView
-          proOptions={{ hideAttribution: true }}
-          minZoom={0.1}
-        >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={20}
-            size={1}
-            color="hsl(var(--muted-foreground) / 0.35)"
-          />
-          {interactive && <Controls showInteractive={false} />}
-          {legend && (
-            <Panel position="top-right">
-              <Legend kinds={kinds} />
-            </Panel>
+        <NodeFilesContext.Provider value={nodeFiles.context}>
+          <ReactFlow
+            nodes={decoratedNodes}
+            edges={decoratedEdges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            onNodeClick={handleNodeClick}
+            onNodeDoubleClick={handleNodeDoubleClick}
+            onNodeMouseEnter={actions ? handleNodeEnter : undefined}
+            onNodeMouseLeave={actions ? leave : undefined}
+            onPaneClick={onDeselect}
+            // Removal goes through the editor's actions, not React Flow's own
+            // delete handling.
+            deleteKeyCode={null}
+            zoomOnDoubleClick={false}
+            panOnDrag={interactive}
+            zoomOnScroll={interactive}
+            zoomOnPinch={interactive}
+            preventScrolling={interactive}
+            nodesDraggable={interactive}
+            colorMode={colorMode}
+            fitView
+            proOptions={{ hideAttribution: true }}
+            minZoom={0.1}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={20}
+              size={1}
+              color="hsl(var(--muted-foreground) / 0.35)"
+            />
+            {interactive && <Controls showInteractive={false} />}
+            {legend && (
+              <Panel position="top-right">
+                <Legend kinds={kinds} />
+              </Panel>
+            )}
+            {children}
+          </ReactFlow>
+          {files && (
+            <NodeFilesDialog
+              node={nodeFiles.node}
+              paths={nodeFiles.paths}
+              read={files.read}
+              path={nodeFiles.target?.path}
+              onPathChange={(path) =>
+                nodeFiles.target &&
+                nodeFiles.setTarget({ id: nodeFiles.target.id, path })
+              }
+              onClose={() => nodeFiles.setTarget(null)}
+              onOpenInExplorer={
+                onOpenInExplorer &&
+                ((path) => {
+                  nodeFiles.setTarget(null);
+                  onOpenInExplorer(path);
+                })
+              }
+            />
           )}
-          {children}
-        </ReactFlow>
+        </NodeFilesContext.Provider>
       </NodeSlotsContext.Provider>
     </CanvasContext.Provider>
   );
+}
+
+const NO_FILES: readonly string[] = [];
+
+/**
+ * Each node's files and the files dialog's target: the host's when it passes
+ * `onOpenFilesChange`, the canvas's own otherwise. A target whose node (or
+ * whose files) left the plan is dropped, so it doesn't reopen on its return.
+ */
+function useNodeFilesState(
+  graph: GraphDto | undefined,
+  files: FileSource | undefined,
+  openFiles: NodeFilesTarget | null | undefined,
+  onOpenFilesChange: ((target: NodeFilesTarget | null) => void) | undefined,
+) {
+  const [own, setOwn] = useState<NodeFilesTarget | null>(null);
+  const target = onOpenFilesChange ? (openFiles ?? null) : own;
+  const setTarget = onOpenFilesChange ?? setOwn;
+  const byModule = useMemo(() => filesByModule(files?.paths ?? []), [files]);
+
+  const context = useMemo<NodeFilesContextValue | null>(
+    () =>
+      byModule.size > 0
+        ? {
+            filesOf: (id) => byModule.get(id) ?? NO_FILES,
+            open: (id, path) => setTarget({ id, path }),
+          }
+        : null,
+    [byModule, setTarget],
+  );
+
+  const node = target
+    ? graph?.nodes.find((n) => n.id === target.id)
+    : undefined;
+  const paths = (target && byModule.get(target.id)) || NO_FILES;
+  const stale = !!target && !!graph && (!node || paths.length === 0);
+  useEffect(() => {
+    if (stale) setTarget(null);
+  }, [stale, setTarget]);
+
+  return { context, target, setTarget, node, paths };
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { moduleFiles, relativePath } from "../artifacts/fileSource";
 import { ModuleIcon } from "../graph/projectIcons";
 import { roleStyle } from "../graph/roleTheme";
 import { KnobField } from "../knobs/KnobField";
@@ -71,7 +72,7 @@ export interface InspectorPanelProps {
   onSwap: (fromId: string, toId: string) => void;
   /** Navigate to a connected component. */
   onSelect: (moduleId: string) => void;
-  /** Open a rendered file in the Files view. */
+  /** Open one of the component's rendered files. */
   onOpenFile: (path: string) => void;
   onClose: () => void;
 }
@@ -118,8 +119,9 @@ export function InspectorPanel({
   );
   const resourceKinds = module?.resource_kinds ?? [];
   const provisions = node?.provisions ?? [];
-  const files = (plan?.files ?? []).filter((f) =>
-    f.path.startsWith(`modules/${moduleId}/`),
+  const files = moduleFiles(
+    (plan?.files ?? []).map((f) => f.path),
+    moduleId,
   );
 
   const settingsRef = useRef<HTMLElement>(null);
@@ -240,18 +242,18 @@ export function InspectorPanel({
         )}
 
         {files.length > 0 && (
-          <Section title="Files">
+          <Section title={`Files · ${files.length}`}>
             <ul className="flex flex-col">
-              {files.map((f) => (
-                <li key={f.path}>
+              {files.map((path) => (
+                <li key={path}>
                   <button
                     type="button"
-                    onClick={() => onOpenFile(f.path)}
+                    onClick={() => onOpenFile(path)}
                     className="flex w-full items-center gap-2 rounded-sm px-1 py-1 text-left font-mono text-[11px] hover:bg-muted"
                   >
                     <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
                     <span className="truncate">
-                      {f.path.slice(`modules/${moduleId}/`.length)}
+                      {relativePath(path, moduleId)}
                     </span>
                   </button>
                 </li>

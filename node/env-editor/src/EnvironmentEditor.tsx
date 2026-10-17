@@ -11,10 +11,12 @@ import type { ColorMode } from "@xyflow/react";
 import { AlertTriangle, Loader2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FilesPanel } from "./artifacts/FilesPanel";
+import { fileSourceOf } from "./artifacts/fileSource";
 import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar";
 import { ComponentPalette } from "./graph/ComponentPalette";
 import type { CanvasActions } from "./graph/canvasActions";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
+import type { NodeFilesTarget } from "./graph/nodeFiles";
 import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { ConfigPanel } from "./layout/ConfigPanel";
@@ -81,10 +83,18 @@ function EditorBody({
   const [focus, setFocus] = useState<{ id: string; seq: number }>();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [filePath, setFilePath] = useState<string | undefined>();
+  /** The component whose files are open in the files dialog. */
+  const [openFiles, setOpenFiles] = useState<NodeFilesTarget | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   /** A removal awaiting its replan, to explain a component that stays. */
   const pendingRemoval = useRef<{ id: string; before: PlanResult | null }>(
     null,
+  );
+
+  const planFiles = plan?.files;
+  const files = useMemo(
+    () => (planFiles ? fileSourceOf(planFiles) : undefined),
+    [planFiles],
   );
 
   /** The components in the current plan (everything but the clients). */
@@ -228,6 +238,8 @@ function EditorBody({
   useEffect(() => {
     if (tab !== "canvas") return;
     const onKeyDown = (e: KeyboardEvent) => {
+      // The files dialog is modal: its own keys (Escape, the tab arrows) only.
+      if (openFiles) return;
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       if (mod && key === "k") {
@@ -256,7 +268,16 @@ function EditorBody({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [tab, paletteOpen, selectedId, originOf, removeComponent, undo, redo]);
+  }, [
+    tab,
+    paletteOpen,
+    openFiles,
+    selectedId,
+    originOf,
+    removeComponent,
+    undo,
+    redo,
+  ]);
 
   const inspected = selectedId && selectedId !== "@clients" ? selectedId : null;
   // On the canvas, plan errors show on the canvas itself.
@@ -305,6 +326,10 @@ function EditorBody({
                   actions={actions}
                   focus={focus}
                   colorMode={colorMode}
+                  files={files}
+                  openFiles={openFiles}
+                  onOpenFilesChange={setOpenFiles}
+                  onOpenInExplorer={openFile}
                 >
                   <CanvasToolbar
                     onAdd={() => setPaletteOpen(true)}
@@ -356,7 +381,7 @@ function EditorBody({
                   onRemove={removeComponent}
                   onSwap={swapComponent}
                   onSelect={goTo}
-                  onOpenFile={openFile}
+                  onOpenFile={(path) => setOpenFiles({ id: inspected, path })}
                   onClose={() => setSelectedId(undefined)}
                 />
               )}

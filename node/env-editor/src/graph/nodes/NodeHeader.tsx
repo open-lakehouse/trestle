@@ -1,8 +1,10 @@
 import { cn } from "@open-lakehouse/ui-kit";
+import { FileCode2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { describeOrigin } from "../../state/origin";
 import type { GraphNodeDto } from "../../types";
 import { useCanvasContext } from "../canvasActions";
+import { useNodeFiles } from "../nodeFiles";
 import { useNodeSlots } from "../nodeSlots";
 import { ModuleIcon } from "../projectIcons";
 import { roleStyle } from "../roleTheme";
@@ -11,7 +13,9 @@ import { NODE_HEADER } from "../useTopologyLayout";
 /**
  * The heading every card opens with: the project's logo on a tile tinted by
  * the role accent, the implementation's name, and the function it fills. On
- * an editable canvas, a component the planner pulled in carries an "Auto" chip.
+ * an editable canvas, a component the planner pulled in carries an "Auto" chip;
+ * a node with rendered files (when the host provides them) a count that opens
+ * them.
  * A host's `NodeSlots` may render the name and role lines instead, and add
  * trailing content after the chips.
  * Fixed height (NODE_HEADER) — the layout reserves exactly this.
@@ -20,6 +24,7 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
   const style = roleStyle(node.role);
   const origin = useCanvasContext()?.actions.originOf(node.id);
   const slots = useNodeSlots();
+  const files = useNodeFiles(node.id);
   const title = node.display_name ?? node.id;
   const name = slots?.name?.(node, title);
   const role = slots?.role?.(node, style.label);
@@ -52,6 +57,9 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
       {node.kind === "external" && <Chip>External</Chip>}
       {origin && origin.kind !== "explicit" && (
         <Chip title={describeOrigin(origin)}>Auto</Chip>
+      )}
+      {files && (
+        <FilesChip count={files.paths.length} onOpen={() => files.open()} />
       )}
       {aside !== undefined && (
         <div className="shrink-0">
@@ -88,5 +96,30 @@ function Chip({ title, children }: { title?: string; children: string }) {
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * How many config files a node renders, as a button that opens them. Like a
+ * slot, it takes its own pointer events: a click neither selects nor drags.
+ */
+function FilesChip({ count, onOpen }: { count: number; onOpen: () => void }) {
+  const label = `View ${count} config ${count === 1 ? "file" : "files"}`;
+  return (
+    <button
+      type="button"
+      className="nodrag nopan inline-flex h-5 shrink-0 items-center gap-1 rounded border border-border bg-background/60 px-1.5 text-[10px] font-semibold tabular-nums text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <FileCode2 className="h-3 w-3" />
+      {count}
+    </button>
   );
 }

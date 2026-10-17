@@ -5,7 +5,13 @@ import {
   TooltipTrigger,
 } from "@open-lakehouse/ui-kit";
 import { NodeToolbar, Position } from "@xyflow/react";
-import { ArrowLeftRight, Lock, Settings2, Trash2 } from "lucide-react";
+import {
+  ArrowLeftRight,
+  FileCode2,
+  Lock,
+  Settings2,
+  Trash2,
+} from "lucide-react";
 import {
   type ComponentType,
   type MouseEvent,
@@ -14,11 +20,12 @@ import {
 } from "react";
 import { describeOrigin } from "../../state/origin";
 import { useCanvasContext } from "../canvasActions";
+import { useNodeFiles } from "../nodeFiles";
 import { ModuleIcon } from "../projectIcons";
 
 /**
- * The action bar floating above a node on hover or selection: configure,
- * swap for another module filling the same role, and remove. A component the
+ * The action bar floating above a node on hover or selection: configure, view
+ * its config files, swap for another module filling the same role, and remove. A component the
  * planner pulled in shows a lock instead of remove, explaining what needs it.
  * Renders nothing when the canvas is read-only.
  */
@@ -30,6 +37,7 @@ export function NodeActions({
   selected?: boolean;
 }) {
   const ctx = useCanvasContext();
+  const files = useNodeFiles(id);
   const [swapOpen, setSwapOpen] = useState(false);
   const visible = !!ctx && (selected || ctx.hoveredId === id);
 
@@ -90,6 +98,13 @@ export function NodeActions({
             disabled={!hasSettings}
             onClick={run(() => actions.configure(id))}
           />
+          {files && (
+            <ActionButton
+              icon={FileCode2}
+              label="View config files"
+              onClick={run(() => files.open())}
+            />
+          )}
           <ActionButton
             icon={ArrowLeftRight}
             label={

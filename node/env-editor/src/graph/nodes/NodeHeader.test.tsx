@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { GraphNodeDto } from "../../types";
+import { NodeFilesContext, type NodeFilesContextValue } from "../nodeFiles";
 import { type NodeSlots, NodeSlotsContext } from "../nodeSlots";
 
 // The layout module builds an ELK instance on import, which needs a Web Worker
@@ -24,12 +25,18 @@ const node: GraphNodeDto = {
   resource_nouns: [],
 };
 
-function render(slots?: NodeSlots) {
+function render(slots?: NodeSlots, files?: NodeFilesContextValue) {
   return renderToStaticMarkup(
-    <NodeSlotsContext.Provider value={slots}>
-      <NodeHeader node={node} />
-    </NodeSlotsContext.Provider>,
+    <NodeFilesContext.Provider value={files ?? null}>
+      <NodeSlotsContext.Provider value={slots}>
+        <NodeHeader node={node} />
+      </NodeSlotsContext.Provider>
+    </NodeFilesContext.Provider>,
   );
+}
+
+function filesContext(byNode: Record<string, string[]>): NodeFilesContextValue {
+  return { filesOf: (id) => byNode[id] ?? [], open: () => undefined };
 }
 
 describe("NodeHeader slots", () => {
@@ -85,5 +92,42 @@ describe("NodeHeader slots", () => {
   test("an aside returning undefined draws nothing", () => {
     const html = render({ aside: () => undefined });
     expect(html).not.toContain("nodrag");
+  });
+});
+
+describe("NodeHeader files chip", () => {
+  test("counts the node's files on a read-only canvas", () => {
+    const html = render(
+      undefined,
+      filesContext({
+        "unity-catalog": [
+          "modules/unity-catalog/compose.yaml",
+          "modules/unity-catalog/server.properties",
+        ],
+      }),
+    );
+    expect(html).toContain('aria-label="View 2 config files"');
+    expect(html).toContain("nodrag nopan");
+    // The chip has its own tooltip; the header keeps the summary.
+    expect(html).toContain('title="Open-source catalog server."');
+  });
+
+  test("a node without files has no chip", () => {
+    const html = render(
+      undefined,
+      filesContext({ envoy: ["modules/envoy/compose.yaml"] }),
+    );
+    expect(html).not.toContain("config file");
+  });
+
+  test("the chip comes before a host's aside", () => {
+    const html = render(
+      { aside: () => <span>aside</span> },
+      filesContext({ "unity-catalog": ["modules/unity-catalog/compose.yaml"] }),
+    );
+    expect(html).toContain('aria-label="View 1 config file"');
+    expect(html.indexOf("View 1 config file")).toBeLessThan(
+      html.indexOf("aside"),
+    );
   });
 });
