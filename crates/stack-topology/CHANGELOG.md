@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.6...olai-stack-topology-v0.0.7) - 2026-10-17
+
+### Added
+
+- [**breaking**] per-node config files modal with highlighting; Authelia users.yml beside a README (#151)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.5...olai-stack-topology-v0.0.6) - 2026-10-17
 
 ### Added

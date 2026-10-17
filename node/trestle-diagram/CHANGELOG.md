@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.2.0...trestle-diagram-v0.3.0) - 2026-10-17
+
+### Added
+
+- [**breaking**] per-node config files modal with highlighting; Authelia users.yml beside a README (#151)
+- let hosts add trailing content to a diagram node's header (#149)
+
 ## [0.2.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.1.2...trestle-diagram-v0.2.0) - 2026-10-17
 
 ### Added
