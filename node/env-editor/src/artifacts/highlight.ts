@@ -18,6 +18,7 @@ export type CodeLanguage =
   | "dotenv"
   | "dockerfile"
   | "nginx"
+  | "markdown"
   | "plaintext";
 
 type Grammar = () => Promise<{ default: LanguageRegistration[] }>;
@@ -34,6 +35,7 @@ const GRAMMARS: Record<Exclude<CodeLanguage, "plaintext">, Grammar> = {
   dotenv: () => import("shiki/langs/dotenv.mjs"),
   dockerfile: () => import("shiki/langs/dockerfile.mjs"),
   nginx: () => import("shiki/langs/nginx.mjs"),
+  markdown: () => import("shiki/langs/markdown.mjs"),
 };
 
 const EXTENSIONS: Record<string, CodeLanguage> = {
@@ -50,6 +52,7 @@ const EXTENSIONS: Record<string, CodeLanguage> = {
   conf: "ini",
   sql: "sql",
   env: "dotenv",
+  md: "markdown",
 };
 
 const LABELS: Record<CodeLanguage, string> = {
@@ -64,6 +67,7 @@ const LABELS: Record<CodeLanguage, string> = {
   dotenv: ".env",
   dockerfile: "Dockerfile",
   nginx: "nginx",
+  markdown: "Markdown",
   plaintext: "Text",
 };
 

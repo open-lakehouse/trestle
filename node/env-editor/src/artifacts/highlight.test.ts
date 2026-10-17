@@ -13,6 +13,7 @@ describe("languageFor", () => {
     [".env", "dotenv"],
     ["templates/compose.yaml.jinja", "yaml"],
     ["Dockerfile", "dockerfile"],
+    ["modules/authelia/README.md", "markdown"],
     ["policies/authz.rego", "plaintext"],
     ["METADATA", "plaintext"],
     [".gitignore", "plaintext"],
