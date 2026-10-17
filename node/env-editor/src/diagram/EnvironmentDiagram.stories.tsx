@@ -40,7 +40,7 @@ export const UnsupportedSnapshot: Story = {
 };
 
 // A host linking each node's name and role to its own pages, with a hover card
-// portaled into the diagram (it stays visible in the expand dialog).
+// portaled where the diagram says (the body inline, inside the expand dialog).
 function HoverLink({
   href,
   card,
@@ -63,20 +63,24 @@ function HoverLink({
         {children}
       </a>
       {at &&
-        portal &&
         createPortal(
           <div
+            // Host styles: outside the diagram's scope, its utilities don't apply.
             style={{
               position: "fixed",
               left: at.left,
               top: at.bottom + 6,
               zIndex: 50,
+              padding: 8,
+              font: "12px sans-serif",
+              background: "white",
+              border: "1px solid #ccc",
+              borderRadius: 6,
             }}
-            className="rounded-md border border-border bg-card p-2 text-xs shadow-md"
           >
             {card}
           </div>,
-          portal,
+          portal ?? document.body,
         )}
     </>
   );

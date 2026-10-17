@@ -26,11 +26,11 @@ export function useNodeSlots(): NodeSlots | undefined {
 }
 
 /**
- * The element a host's popovers should portal into: the diagram's root inline,
- * the expand dialog while it is open. A popover portaled to `document.body`
- * is clipped by the inline frame or drawn under the modal dialog's top layer.
- * Both containers sit inside the `.trestle-diagram` root, so a host's popover
- * carries its own styles. `null` before the container mounts.
+ * The element a host's popovers should portal into, or `null` for
+ * `document.body`. Inline that is the body; in the expand dialog, a modal that
+ * draws above everything in the body, it is a container inside the dialog.
+ * Either way it is outside the `.trestle-diagram` style scope, so the host's
+ * own styles and tokens apply.
  */
 export const DiagramPortalContext = createContext<HTMLElement | null>(null);
 

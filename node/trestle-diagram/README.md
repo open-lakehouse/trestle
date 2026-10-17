@@ -85,10 +85,11 @@ Each slot gets the node and the text drawn without it; return `undefined` to
 keep that text. The lines keep their fixed height and truncate, so render
 inline content. Clicks inside a slot don't select or drag the node.
 
-A popover in a slot must portal into `useDiagramPortal()`, not
-`document.body`: the inline frame clips overflow, and the expanded view is a
-modal `<dialog>` drawn above everything portaled to the body. The container sits
-inside the `.trestle-diagram` root, so give the popover its own styles.
+A popover in a slot portals into `useDiagramPortal()`, or `document.body`
+when it returns `null` (inline). The expanded view is a modal `<dialog>` that
+draws above everything in the body, so there the hook returns a container
+inside it. Both are outside the `.trestle-diagram` style scope, so the
+popover keeps the host's own styles.
 
 ## Styling
 
