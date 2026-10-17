@@ -168,3 +168,14 @@
     border-radius: 9999px;
   }
 }
+
+/* Highlighted file contents (env-editor's CodeViewer): each token carries both
+   themes' colors, so a theme switch needs no re-highlight. */
+@layer components {
+  .trestle-code-token {
+    color: var(--shiki-light);
+  }
+  .dark .trestle-code-token {
+    color: var(--shiki-dark);
+  }
+}

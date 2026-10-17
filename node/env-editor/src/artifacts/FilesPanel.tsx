@@ -1,5 +1,5 @@
-import { Button, cn } from "@open-lakehouse/ui-kit";
-import { Check, ChevronRight, Copy, FileText, Folder } from "lucide-react";
+import { cn } from "@open-lakehouse/ui-kit";
+import { ChevronRight, FileText, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { OutputFile, PlanResult } from "../types";
 import {
@@ -7,6 +7,8 @@ import {
   defaultFilePath,
   type FileTreeNode,
 } from "./buildFileTree";
+import { CodeViewer } from "./CodeViewer";
+import { fileSourceOf } from "./fileSource";
 
 export interface FilesPanelProps {
   plan: PlanResult | null;
@@ -17,49 +19,6 @@ export interface FilesPanelProps {
 // A stable identity so the default-selection effect doesn't re-run every render
 // while no plan is loaded.
 const EMPTY_FILES: OutputFile[] = [];
-
-function CodeViewer({ file }: { file: OutputFile }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = () => {
-    void navigator.clipboard.writeText(file.contents).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-card-foreground">
-            {file.path.split("/").pop()}
-          </div>
-          <div className="truncate font-mono text-[11px] text-muted-foreground">
-            {file.path}
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0"
-          onClick={copy}
-          aria-label="Copy file contents"
-        >
-          {copied ? (
-            <Check className="h-4 w-4" />
-          ) : (
-            <Copy className="h-4 w-4" />
-          )}
-        </Button>
-      </div>
-      <pre className="min-h-0 flex-1 overflow-auto bg-muted/20 p-3 font-mono text-xs leading-relaxed text-foreground">
-        <code>{file.contents}</code>
-      </pre>
-    </div>
-  );
-}
 
 function FileTreeItem({
   node,
@@ -133,6 +92,7 @@ function FileTreeItem({
 export function FilesPanel({ plan, initialPath }: FilesPanelProps) {
   const files = plan?.files ?? EMPTY_FILES;
   const tree = useMemo(() => buildFileTree(files), [files]);
+  const source = useMemo(() => fileSourceOf(files), [files]);
   const [selectedPath, setSelectedPath] = useState<string | null>(
     initialPath ?? null,
   );
@@ -178,7 +138,11 @@ export function FilesPanel({ plan, initialPath }: FilesPanelProps) {
       </div>
       <div className="flex min-h-[240px] flex-col">
         {selectedFile ? (
-          <CodeViewer file={selectedFile} />
+          <CodeViewer
+            key={selectedFile.path}
+            path={selectedFile.path}
+            read={source.read}
+          />
         ) : (
           <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
             Select a file to preview its contents.
