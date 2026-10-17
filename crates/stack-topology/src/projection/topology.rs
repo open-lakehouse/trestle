@@ -15,7 +15,10 @@
 //!   protocol (an S3 endpoint). Locally these are ports; hosted, each is its own subdomain.
 //!   Every endpoint comes from the [`RoutePlan`](crate::RoutePlan), attributed to
 //!   the backend it reaches, and flagged when forward-auth gates it.
-//! - **Edges** — clients reaching each surface, the gateway routing to each backend, the gateway
+//!   Without a gateway ([`Plan::has_gateway`]) there are no surfaces: clients reach each
+//!   component directly on its own host port, and a gateway kept only to answer emulated
+//!   hostnames in-network is a helper of the component that needs it, so it has no node.
+//! - **Edges** — clients reaching each surface (or component, without a gateway), the gateway routing to each backend, the gateway
 //!   delegating authentication to the identity provider and authorization to the policy engine,
 //!   and each component *using* the capability it demanded (a relational DB, an object store)
 //!   from the provider the planner chose.
@@ -34,7 +37,7 @@ pub const CLIENTS_NODE_ID: &str = "@clients";
 /// The functional diagram: components and the typed relationships between them.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphDto {
-    /// The [`CLIENTS_NODE_ID`] node (when the gateway exposes anything), then every component
+    /// The [`CLIENTS_NODE_ID`] node (when anything is exposed to clients), then every component
     /// that runs a service, in dependency order.
     pub nodes: Vec<GraphNodeDto>,
     /// Typed, request-direction edges between [`nodes`](Self::nodes).
@@ -207,15 +210,16 @@ pub struct ProvisionedDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TopologyEdgeDto {
-    /// Clients reach one of the gateway's surfaces.
+    /// Clients reach one of the gateway's surfaces, or, without a gateway, a component
+    /// directly on one of its published ports.
     Access {
         /// The edge's stable key (`kind:from→to:qualifier`).
         key: String,
         /// Always [`CLIENTS_NODE_ID`].
         from: String,
-        /// The gateway component.
+        /// The gateway component, or without a gateway the component reached.
         to: String,
-        /// The surface reached (its listener's host port).
+        /// The host port reached: the surface's listener, or the component's published port.
         host_port: u16,
     },
     /// The gateway forwards part of one surface to a backend. The routed endpoints are that
@@ -611,6 +615,11 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         let Some(svc) = primary(id) else {
             continue;
         };
+        // A gateway that fronts nothing only answers emulated hostnames for another
+        // component: a helper, not a function of its own.
+        if !plan.has_gateway() && gateway_module.as_deref() == Some(id) {
+            continue;
+        }
         let kind = if gateway_module.as_deref() == Some(id) {
             NodeKind::Gateway
         } else if matches!(svc.placement, Placement::Container { .. }) {
@@ -642,27 +651,61 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         });
     }
 
+    let clients = || GraphNodeDto {
+        id: CLIENTS_NODE_ID.to_string(),
+        model: None,
+        kind: NodeKind::Clients,
+        display_name: Some("Clients".to_string()),
+        summary: Some("Browsers, SDKs and CLIs on the host.".to_string()),
+        category: None,
+        role: None,
+        placement: None,
+        cloud: None,
+        offers: Vec::new(),
+        surfaces: Vec::new(),
+        provisions: Vec::new(),
+        resource_nouns: Vec::new(),
+    };
     let mut edges: Vec<TopologyEdgeDto> = Vec::new();
-    if let Some(gw) = &gateway_module {
+    if !plan.has_gateway() {
+        // Clients reach each component on every port it publishes, in dependency order.
+        let mut reached: Vec<(String, u16)> = Vec::new();
+        for module in &plan.graph.nodes {
+            let id = module.id().as_str();
+            if !nodes.iter().any(|n| n.id == id) {
+                continue;
+            }
+            for spec in plan.services.get(module.id()).into_iter().flatten() {
+                if !matches!(spec.placement, Placement::Container { .. }) {
+                    continue;
+                }
+                for endpoint in &spec.endpoints {
+                    if endpoint.intent == RouteIntent::Internal {
+                        continue;
+                    }
+                    let Some(port) = endpoint.host_port else {
+                        continue;
+                    };
+                    if !reached.iter().any(|(m, p)| m == id && *p == port) {
+                        reached.push((id.to_string(), port));
+                    }
+                }
+            }
+        }
+        if !reached.is_empty() {
+            nodes.insert(0, clients());
+        }
+        for (to, host_port) in reached {
+            edges.push(TopologyEdgeDto::Access {
+                key: String::new(),
+                from: CLIENTS_NODE_ID.to_string(),
+                to,
+                host_port,
+            });
+        }
+    } else if let Some(gw) = &gateway_module {
         if !surfaces.is_empty() {
-            nodes.insert(
-                0,
-                GraphNodeDto {
-                    id: CLIENTS_NODE_ID.to_string(),
-                    model: None,
-                    kind: NodeKind::Clients,
-                    display_name: Some("Clients".to_string()),
-                    summary: Some("Browsers, SDKs and CLIs on the host.".to_string()),
-                    category: None,
-                    role: None,
-                    placement: None,
-                    cloud: None,
-                    offers: Vec::new(),
-                    surfaces: Vec::new(),
-                    provisions: Vec::new(),
-                    resource_nouns: Vec::new(),
-                },
-            );
+            nodes.insert(0, clients());
             for surface in &surfaces {
                 edges.push(TopologyEdgeDto::Access {
                     key: String::new(),
@@ -1111,5 +1154,35 @@ mod tests {
             Some("unityCatalogOSS")
         );
         assert_eq!(node(&g, CLIENTS_NODE_ID).model, None);
+    }
+
+    #[test]
+    fn without_a_gateway_clients_reach_each_component_directly() {
+        let selection = Selection {
+            gateway: crate::GatewaySettings::DIRECT,
+            ..Selection::modules(["unity-catalog", "postgres", "rustfs"])
+        };
+        let g = graph_dto(&plan(&selection));
+        let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        // RustFS's emulated AWS hostnames keep an in-network gateway running, but it is
+        // RustFS's helper, not a node.
+        assert_eq!(
+            ids,
+            [CLIENTS_NODE_ID, "postgres", "rustfs", "unity-catalog"]
+        );
+        let access: Vec<(&str, u16)> = g
+            .edges
+            .iter()
+            .filter_map(|e| match e {
+                TopologyEdgeDto::Access { to, host_port, .. } => Some((to.as_str(), *host_port)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(access, [("rustfs", 9000), ("unity-catalog", 8080)]);
+        assert!(
+            !g.edges
+                .iter()
+                .any(|e| matches!(e, TopologyEdgeDto::Route { .. }))
+        );
     }
 }

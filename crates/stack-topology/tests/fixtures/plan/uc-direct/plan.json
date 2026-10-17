@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:78e47db53239fba21533472d21ee2278b153779f2ff52f9c47a25324c2350977"
+    "digest": "sha256:708f93663486c75612ab9f7e8eb0bcf2fc46afd709f9db3f7f428e4ae2c5053b"
   },
   "recipe": {
     "digest": "sha256:e872d3b6efc1a21fe30be92d1afca28925aef66b1c2d953ae25f1d11bacce8cd"
@@ -29,14 +29,14 @@
   "graph": {
     "nodes": [
       {
-        "id": "envoy",
-        "model": "envoy",
-        "kind": "gateway",
-        "display_name": "Envoy",
-        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
-        "category": "gateway",
-        "role": "gateway",
-        "placement": "container:envoy",
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
         "cloud": null,
         "surfaces": [],
         "offers": [],
@@ -122,6 +122,20 @@
       }
     ],
     "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→rustfs:9000",
+        "from": "@clients",
+        "to": "rustfs",
+        "host_port": 9000
+      },
+      {
+        "kind": "access",
+        "key": "access:@clients→unity-catalog:8080",
+        "from": "@clients",
+        "to": "unity-catalog",
+        "host_port": 8080
+      },
       {
         "kind": "uses",
         "key": "uses:unity-catalog→postgres:relational_db",
