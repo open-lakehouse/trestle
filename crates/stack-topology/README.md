@@ -314,8 +314,16 @@ from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `
 - **Authentication**: `auth = true` fronts every
   API and UI route on the shared listener with Authelia forward-auth. Authelia's
   asserted identity reaches upstreams as `Remote-User` / `Remote-Email` / `Remote-Name` /
-  `Remote-Groups`. Client-supplied copies are stripped before any check runs. Accounts
-  live in `users.yml` beside `compose.yaml`.
+  `Remote-Groups`. Client-supplied copies are stripped before any check runs.
+- **Managing users**: with auth on, accounts live in `users.yml` at the environment's root,
+  beside `compose.yaml`. To add, remove, or change users, edit that file and restart
+  Authelia (`docker compose restart authelia`). It starts with one demo account (`demo` /
+  `authelia`). The file is written on the first render only, so later `trestle env render`
+  runs keep your edits; delete it and re-render to restore the default. Passwords are
+  argon2id hashes:
+  `docker run authelia/authelia:latest authelia crypto hash generate argon2 --password '<pw>'`.
+  The file sits outside `modules/authelia/`, so the editor's per-node files view doesn't
+  list it. Find it in the Files tab.
 - **HTTPS under auth**: Authelia only issues sessions for a dotted cookie domain on a secure
   origin, so with auth on the shared listener serves `https://<env>.localhost:<port>` from
   the host (browsers resolve `*.localhost` to loopback; no `/etc/hosts` entry needed). The
