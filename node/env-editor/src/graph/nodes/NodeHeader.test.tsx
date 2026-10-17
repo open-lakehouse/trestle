@@ -69,4 +69,21 @@ describe("NodeHeader slots", () => {
     expect(html).not.toContain("nodrag");
     expect(html).toContain('title="Open-source catalog server."');
   });
+
+  test("an aside slot draws after the name and role lines", () => {
+    const html = render({
+      aside: (n) => <button type="button">{n.model}: 8</button>,
+    });
+    expect(html).toContain('<button type="button">unityCatalogOSS: 8</button>');
+    expect(html.indexOf("unityCatalogOSS: 8")).toBeGreaterThan(
+      html.indexOf("Data catalog"),
+    );
+    expect(html).toContain('class="nodrag nopan"');
+    expect(html).not.toContain('title="Open-source catalog server."');
+  });
+
+  test("an aside returning undefined draws nothing", () => {
+    const html = render({ aside: () => undefined });
+    expect(html).not.toContain("nodrag");
+  });
 });

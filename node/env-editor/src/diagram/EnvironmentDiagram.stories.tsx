@@ -107,3 +107,20 @@ export const WithSlots: Story = {
     },
   },
 };
+
+// A host counting what each node manages in a trailing chip.
+export const WithAside: Story = {
+  args: {
+    slots: {
+      aside: (node) =>
+        node.role === "data_catalog" ? (
+          <HoverLink
+            href={`#${node.model}-assets`}
+            card="Tables, volumes, functions"
+          >
+            3
+          </HoverLink>
+        ) : undefined,
+    },
+  },
+};

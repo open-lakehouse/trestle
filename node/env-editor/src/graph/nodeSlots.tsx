@@ -1,5 +1,6 @@
 // The host's seam into a node's header. A host (a docs site linking components
-// to its own concept pages) renders the name and the role line itself; the
+// to its own concept pages) renders the name and the role line itself, and may
+// add trailing content; the
 // diagram knows nothing about what they point at. Slots travel by context
 // rather than node `data`, so changing them never re-runs the ELK layout.
 
@@ -17,6 +18,11 @@ export interface NodeSlots {
    * catalog"). `fallback` is that label. Return `undefined` to keep it.
    */
   role?: (node: GraphNodeDto, fallback: string) => ReactNode;
+  /**
+   * Trailing header content after the built-in chips, such as a count with
+   * its own popover. Nothing is drawn when it returns `undefined`.
+   */
+  aside?: (node: GraphNodeDto) => ReactNode;
 }
 
 export const NodeSlotsContext = createContext<NodeSlots | undefined>(undefined);

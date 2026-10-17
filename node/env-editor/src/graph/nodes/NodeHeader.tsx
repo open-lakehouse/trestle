@@ -12,7 +12,8 @@ import { NODE_HEADER } from "../useTopologyLayout";
  * The heading every card opens with: the project's logo on a tile tinted by
  * the role accent, the implementation's name, and the function it fills. On
  * an editable canvas, a component the planner pulled in carries an "Auto" chip.
- * A host's `NodeSlots` may render the name and role lines instead.
+ * A host's `NodeSlots` may render the name and role lines instead, and add
+ * trailing content after the chips.
  * Fixed height (NODE_HEADER) — the layout reserves exactly this.
  */
 export function NodeHeader({ node }: { node: GraphNodeDto }) {
@@ -22,7 +23,9 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
   const title = node.display_name ?? node.id;
   const name = slots?.name?.(node, title);
   const role = slots?.role?.(node, style.label);
-  const slotted = name !== undefined || role !== undefined;
+  const aside = slots?.aside?.(node);
+  const slotted =
+    name !== undefined || role !== undefined || aside !== undefined;
   return (
     <div
       className="flex shrink-0 items-center gap-2.5 px-3"
@@ -49,6 +52,11 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
       {node.kind === "external" && <Chip>External</Chip>}
       {origin && origin.kind !== "explicit" && (
         <Chip title={describeOrigin(origin)}>Auto</Chip>
+      )}
+      {aside !== undefined && (
+        <div className="shrink-0">
+          <Slot>{aside}</Slot>
+        </div>
       )}
     </div>
   );

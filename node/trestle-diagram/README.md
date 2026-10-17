@@ -58,7 +58,7 @@ import snapshot from "./lakehouse.trestle-graph.json";
 | `legend` | `true` | The connection-kind legend, shown as a row under the diagram. |
 | `expandable` | `true` | The expand-to-dialog button. |
 | `label` | snapshot `title` | The figure's accessible name. |
-| `slots` | — | Renderers for a node's name and role lines (see below). |
+| `slots` | — | Renderers for a node's name and role lines, and trailing header content (see below). |
 
 The diagram pulls in React Flow and ELK (ELK alone is about 1.6 MB
 unminified), so lazy-load it (`React.lazy`) to keep them out of a page's main
@@ -84,6 +84,11 @@ hover card:
 Each slot gets the node and the text drawn without it; return `undefined` to
 keep that text. The lines keep their fixed height and truncate, so render
 inline content. Clicks inside a slot don't select or drag the node.
+
+`aside: (node) => ReactNode` adds content at the end of the header, after the
+"External" and "Auto" chips: a small chip such as a count, with the detail in
+its popover. It doesn't shrink, so the name truncates first; keep it short.
+Return `undefined` for nothing.
 
 A popover in a slot portals into `useDiagramPortal()`, or `document.body`
 when it returns `null` (inline). The expanded view is a modal `<dialog>` that
