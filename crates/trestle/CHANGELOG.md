@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.11...olai-trestle-v0.0.12) - 2026-10-18
+
+### Added
+
+- [**breaking**] deployment steps README with vendor setup for hosted Postgres and storage (#152)
+
 ## [0.0.11](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.10...olai-trestle-v0.0.11) - 2026-10-17
 
 ### Added

@@ -1860,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "clap",
  "cliclack",
@@ -3600,7 +3600,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "try-lock"

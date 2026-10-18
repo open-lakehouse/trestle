@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.3.0...trestle-diagram-v0.4.0) - 2026-10-18
+
+### Added
+
+- [**breaking**] deployment steps README with vendor setup for hosted Postgres and storage (#152)
+
 ## [0.3.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.2.0...trestle-diagram-v0.3.0) - 2026-10-17
 
 ### Added
