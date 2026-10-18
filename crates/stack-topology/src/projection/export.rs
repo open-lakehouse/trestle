@@ -74,6 +74,11 @@ pub struct PlanExport {
     pub files: Vec<FileEntryDto>,
     /// The deployment steps, in order; their scripts are among [`files`](Self::files).
     pub deploy: Vec<DeployStepDto>,
+    /// What a shell runs once, from the environment's root, before pasting the steps'
+    /// [commands](DeployStepDto::commands): [`DEPLOY_SHELL_SETUP`](crate::DEPLOY_SHELL_SETUP).
+    /// Absent when no step has a script.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deploy_setup: Option<String>,
 }
 
 /// What a [`PlanExport`] describes.
@@ -253,6 +258,11 @@ pub fn plan_export(
             })
             .collect(),
         deploy: deploy_steps_dto(&materialized.deploy),
+        deploy_setup: materialized
+            .deploy
+            .iter()
+            .any(|s| s.script.is_some())
+            .then(|| crate::DEPLOY_SHELL_SETUP.to_string()),
     })
 }
 

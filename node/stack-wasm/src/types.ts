@@ -404,6 +404,9 @@ export interface DeployStepDto {
   instructions: string;
   /** The path of the script that does it (among the plan's files). */
   script?: string;
+  /** The script's own commands, without its preamble: what a reader pastes into a
+   *  shell at the environment's root once that shell has loaded `secrets.env`. */
+  commands?: string;
 }
 
 /** The full plan result (mirrors `PlanResultDto`). */

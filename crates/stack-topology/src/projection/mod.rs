@@ -133,6 +133,11 @@ pub struct DeployStepDto {
     /// The path of the script that does it, if it has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    /// The script's own commands, without its preamble, for a reader to see or paste into a
+    /// shell opened at the environment's root that has run
+    /// [`DEPLOY_SHELL_SETUP`](crate::DEPLOY_SHELL_SETUP).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands: Option<String>,
 }
 
 /// Project rendered deployment steps (see [`DeployStepDto`]).
@@ -147,6 +152,7 @@ pub fn deploy_steps_dto(steps: &[DeployStep]) -> Vec<DeployStepDto> {
             title: s.title.clone(),
             instructions: s.instructions.clone(),
             script: s.script.as_ref().map(|script| script.path.clone()),
+            commands: s.script.as_ref().map(|script| script.body.clone()),
         })
         .collect()
 }

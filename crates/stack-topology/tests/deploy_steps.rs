@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use olai_stack_topology::{
-    DeployPhase, HostedConnection, HostedKind, HostedResource, HostedVendor, MaterializedOutput,
-    ModuleId, Plan, PlanCtx, PlanError, Secrets, Selection, baseline_catalog,
+    DEPLOY_SHELL_SETUP, DeployPhase, HostedConnection, HostedKind, HostedResource, HostedVendor,
+    MaterializedOutput, ModuleId, Plan, PlanCtx, PlanError, Secrets, Selection, baseline_catalog,
 };
 
 /// Neon Postgres and S3 behind UC and MLflow.
@@ -151,6 +151,30 @@ fn each_script_is_written_where_the_readme_says() {
     for name in ["'unitycatalog'", "'mlflow'"] {
         assert!(databases.contains(name), "{name} in\n{databases}");
     }
+}
+
+#[test]
+fn a_scripts_commands_are_its_body_after_the_shell_setup() {
+    let out = plan(HostedVendor::Neon, Some(secrets()))
+        .materialize()
+        .unwrap();
+    let mut seen = 0;
+    for script in out.deploy.iter().filter_map(|s| s.script.as_ref()) {
+        // Pasted into an interactive shell, neither strict mode nor `$0` belongs.
+        for wrapper in ["set -euo pipefail", "$0", "#!/usr/bin/env bash"] {
+            assert!(!script.body.contains(wrapper), "{}: {wrapper}", script.path);
+        }
+        assert!(!script.body.contains("save_secret() {"), "{}", script.path);
+        let setup_then_body = format!("{DEPLOY_SHELL_SETUP}\n{}", script.body);
+        assert!(
+            script.contents.ends_with(&setup_then_body),
+            "{}:\n{}",
+            script.path,
+            script.contents
+        );
+        seen += 1;
+    }
+    assert!(seen >= 3, "saw {seen} scripts");
 }
 
 #[test]

@@ -124,8 +124,8 @@ pub use render::compose::{
     render_modules,
 };
 pub use render::deploy::{
-    DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployScript, DeployStep, SECRETS_ENV_PATH,
-    render_readme, render_steps,
+    DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DEPLOY_SHELL_SETUP, DeployScript, DeployStep,
+    SECRETS_ENV_PATH, render_readme, render_steps,
 };
 pub use render::envoy::render_envoy;
 pub use render::output::{

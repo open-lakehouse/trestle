@@ -461,7 +461,8 @@
       "id": "buckets",
       "title": "Create the buckets",
       "instructions": "Create the buckets the stack uses: `unity`, in `us-east-1`.\nThe script needs the AWS CLI, signed in with credentials that may create buckets (a profile,\nSSO, or keys). Unless `AWS_ACCESS_KEY_ID` is already set, it also\ncreates the IAM user `trestle-hosted`, allowed only these buckets, and saves an access key\nfor it as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in\n`secrets.env`. The stack's key must also be allowed to assume `arn:aws:iam::123456789012:role/uc`.",
-      "script": "deploy/aws-s3-buckets.sh"
+      "script": "deploy/aws-s3-buckets.sh",
+      "commands": "region='us-east-1'\nendpoint=()\nfor bucket in 'unity' ; do\n  if aws s3api head-bucket --bucket \"$bucket\" ${endpoint[@]+\"${endpoint[@]}\"} 2>/dev/null; then\n    echo \"bucket $bucket exists\"\n  elif [ \"$region\" = us-east-1 ]; then\n    aws s3api create-bucket --bucket \"$bucket\" --region \"$region\" \\\n      ${endpoint[@]+\"${endpoint[@]}\"} >/dev/null\n    echo \"created bucket $bucket\"\n  else\n    aws s3api create-bucket --bucket \"$bucket\" --region \"$region\" \\\n      --create-bucket-configuration \"LocationConstraint=$region\" \\\n      ${endpoint[@]+\"${endpoint[@]}\"} >/dev/null\n    echo \"created bucket $bucket\"\n  fi\ndone\n\n# An access key for the stack, scoped to these buckets.\nkey_var='AWS_ACCESS_KEY_ID'\nsecret_var='AWS_SECRET_ACCESS_KEY'\nif [ -n \"${!key_var:-}\" ]; then\n  echo \"$key_var is set; the stack uses that key\"\nelse\n  user='trestle-hosted'\n  aws iam get-user --user-name \"$user\" >/dev/null 2>&1 \\\n    || aws iam create-user --user-name \"$user\" >/dev/null\n  aws iam put-user-policy --user-name \"$user\" --policy-name trestle-buckets --policy-document '{\n    \"Version\": \"2012-10-17\",\n    \"Statement\": [\n      {\"Effect\": \"Allow\", \"Action\": \"s3:*\", \"Resource\": [\"arn:aws:s3:::unity\", \"arn:aws:s3:::unity/*\"]}\n    ]\n  }'\n  read -r key secret < <(aws iam create-access-key --user-name \"$user\" \\\n    --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)\n  save_secret \"$key_var\" \"$key\"\n  save_secret \"$secret_var\" \"$secret\"\nfi\n"
     },
     {
       "order": 2,
@@ -477,5 +478,6 @@
       "title": "Start the stack",
       "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
     }
-  ]
+  ],
+  "deploy_setup": "# Secrets kept in secrets.env (git-ignored) are read like exported ones.\nif [ -f secrets.env ]; then\n  set -a\n  # shellcheck source=/dev/null\n  . ./secrets.env\n  set +a\nfi\n\n# save_secret NAME VALUE: record NAME in secrets.env (and this shell), unless secrets.env\n# already sets it.\nsave_secret() {\n  if [ -f secrets.env ] && grep -q \"^$1=\" secrets.env; then\n    echo \"secrets.env already sets $1; leaving it as is\"\n  else\n    (umask 077 && printf '%s=%s\\n' \"$1\" \"$2\" >> secrets.env)\n    echo \"saved $1 to secrets.env\"\n  fi\n  export \"$1=$2\"\n}\n"
 }

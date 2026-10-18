@@ -155,9 +155,17 @@
           "id": { "type": "string" },
           "title": { "type": "string" },
           "instructions": { "type": "string" },
-          "script": { "type": "string" }
+          "script": { "type": "string" },
+          "commands": {
+            "description": "The script's own commands, without its preamble: what a reader pastes into a shell at the environment's root after `deploy_setup`.",
+            "type": "string"
+          }
         }
       }
+    },
+    "deploy_setup": {
+      "description": "What a shell runs once, from the environment's root, before pasting the steps' `commands`: load `secrets.env` and define `save_secret`. Absent when no step has a script.",
+      "type": "string"
     }
   },
   "$defs": {
