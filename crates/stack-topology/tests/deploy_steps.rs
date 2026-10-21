@@ -346,7 +346,36 @@ fn a_stack_without_hosted_resources_still_says_how_to_start() {
         .iter()
         .map(|s| (s.id.as_str(), s.phase))
         .collect();
-    assert_eq!(ids, BTreeMap::from([("up", DeployPhase::Start)]));
+    assert_eq!(
+        ids,
+        BTreeMap::from([
+            ("local-credentials", DeployPhase::Configure),
+            ("up", DeployPhase::Start),
+        ])
+    );
     assert!(!out.files.iter().any(|f| f.path.starts_with("deploy/")));
     assert!(file(&out, "README.md").contains("docker compose up -d --wait"));
+}
+
+#[test]
+fn the_local_credentials_step_lists_only_the_planned_services() {
+    let out = baseline_catalog()
+        .plan(
+            &Selection::modules(["postgres", "mlflow"]),
+            &PlanCtx::default(),
+        )
+        .unwrap()
+        .materialize()
+        .unwrap();
+    let readme = file(&out, "README.md");
+    assert!(
+        readme.contains("LOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)"),
+        "{readme}"
+    );
+    assert!(
+        readme.contains("LOCAL_RUSTFS_ACCESS_KEY=$(openssl rand -hex 10)"),
+        "{readme}"
+    );
+    // No Authelia without gateway auth.
+    assert!(!readme.contains("LOCAL_AUTHELIA_"), "{readme}");
 }

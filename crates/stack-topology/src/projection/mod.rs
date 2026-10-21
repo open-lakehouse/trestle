@@ -14,9 +14,10 @@ use std::collections::BTreeMap;
 
 use crate::{
     Catalog, ClusterConfig, DeployPhase, DeployStep, EnvManifest, GatewayConfig, GatewayRoute,
-    HelperService, HostedKind, HostedResource, Knob, ListenerConfig, Plan, PlanCtx, PlanError,
-    RenderError, Role, Selection, ServiceSpec, TargetId, baseline_catalog, baseline_selection,
-    builtin_targets,
+    HelperService, HostedKind, HostedResource, Knob, LOCAL_CREDENTIALS, ListenerConfig,
+    LocalCredentialError, LocalCredentials, ManifestError, Plan, PlanCtx, PlanError, RenderError,
+    Role, SECRETS_ENV_PATH, Selection, ServiceSpec, TargetId, baseline_catalog,
+    baseline_catalog_with, baseline_selection, builtin_targets,
 };
 use serde::Serialize;
 
@@ -36,6 +37,22 @@ pub struct CatalogDto {
     pub default_selection: Selection,
     /// The deploy targets an environment can run on, the default (Docker Compose) first.
     pub targets: Vec<TargetDto>,
+    /// The in-stack credentials a [bundle](bundle_result) can be given fresh values for.
+    pub local_credentials: Vec<LocalCredentialDto>,
+}
+
+/// One in-stack credential (see [`LocalCredential`](crate::LocalCredential)), for a consumer
+/// that generates its value. Its default is deliberately not projected.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalCredentialDto {
+    /// Its key (e.g. `"postgres_password"`).
+    pub key: String,
+    /// What it is.
+    pub description: String,
+    /// The shortest value accepted.
+    pub min_len: usize,
+    /// The longest value accepted.
+    pub max_len: usize,
 }
 
 /// One deploy target an environment can run on.
@@ -304,6 +321,15 @@ pub fn catalog_dto_of(catalog: &Catalog) -> CatalogDto {
                 display_name: t.display_name().to_string(),
             })
             .collect(),
+        local_credentials: LOCAL_CREDENTIALS
+            .iter()
+            .map(|c| LocalCredentialDto {
+                key: c.key.into(),
+                description: c.description.into(),
+                min_len: c.min_len,
+                max_len: c.max_len,
+            })
+            .collect(),
     }
 }
 
@@ -397,6 +423,106 @@ pub fn plan_result_for_manifest(
     catalog: &Catalog,
 ) -> Result<PlanResultDto, PlanResultError> {
     project_result(&manifest.plan(catalog)?)
+}
+
+/// Everything an environment needs on disk, for a consumer to package as a download: unlike
+/// [`PlanResultDto::files`], it includes the credential-bearing files, plus the `env.toml` the
+/// CLI re-renders it from.
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleDto {
+    /// The environment's name, a natural root directory and archive name.
+    pub env_name: String,
+    /// Every file, in materialization order, then `env.toml` and `secrets.env`.
+    pub files: Vec<BundleFileDto>,
+}
+
+/// One file of a [`BundleDto`].
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleFileDto {
+    /// Path relative to the environment root.
+    pub path: String,
+    /// The file's contents.
+    pub contents: String,
+    /// It holds credentials: write it owner-only.
+    pub sensitive: bool,
+    /// It is a script to run: write it executable.
+    pub executable: bool,
+}
+
+/// Why [`bundle_result`] failed.
+#[derive(Debug, thiserror::Error)]
+pub enum BundleError {
+    /// A supplied credential was refused.
+    #[error(transparent)]
+    Credentials(#[from] LocalCredentialError),
+    /// Planning the selection failed.
+    #[error(transparent)]
+    Plan(#[from] PlanError),
+    /// Rendering the plan's files failed.
+    #[error(transparent)]
+    Render(#[from] RenderError),
+    /// Serializing `env.toml` failed.
+    #[error(transparent)]
+    Manifest(#[from] ManifestError),
+}
+
+/// Plan a selection as [`plan_result`] does, with the in-stack services' credentials taken
+/// from `credentials`, and collect every file of the rendered environment into a
+/// [`BundleDto`]. Pure — no I/O.
+///
+/// The set credentials are also written to the bundle's `secrets.env` (see
+/// [`LocalCredentials::to_secrets_env`]), so `trestle env render` in the unpacked directory
+/// keeps them. Hosted resources' secrets are never known here: their `${VAR}` references stay
+/// unresolved, and the bundle's README says how to set them.
+pub fn bundle_result(
+    selection: &Selection,
+    target: Option<&str>,
+    credentials: &LocalCredentials,
+) -> Result<BundleDto, BundleError> {
+    let catalog = baseline_catalog_with(credentials);
+    let ctx = PlanCtx {
+        target: target.map(TargetId::from).unwrap_or_default(),
+        ..PlanCtx::default()
+    };
+    let plan = catalog.plan(selection, &ctx)?;
+    let materialized = plan.materialize()?;
+    let scripts: Vec<&str> = materialized
+        .deploy
+        .iter()
+        .filter_map(|step| step.script.as_ref().map(|s| s.path.as_str()))
+        .collect();
+    let mut files: Vec<BundleFileDto> = materialized
+        .files
+        .iter()
+        .map(|f| BundleFileDto {
+            path: f.path.clone(),
+            contents: f.contents.clone(),
+            sensitive: f.sensitive,
+            executable: scripts.contains(&f.path.as_str()),
+        })
+        .collect();
+    files.push(BundleFileDto {
+        path: "env.toml".into(),
+        contents: EnvManifest::new(selection.clone(), ctx).to_toml()?,
+        sensitive: false,
+        executable: false,
+    });
+    if !credentials.is_empty() {
+        files.push(BundleFileDto {
+            path: SECRETS_ENV_PATH.into(),
+            contents: format!(
+                "# The in-stack services' generated credentials; `trestle env render` reuses \
+                 them.\n{}",
+                credentials.to_secrets_env()
+            ),
+            sensitive: true,
+            executable: false,
+        });
+    }
+    Ok(BundleDto {
+        env_name: plan.env_name.clone(),
+        files,
+    })
 }
 
 fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
@@ -715,6 +841,110 @@ mod tests {
         assert!(
             plan_result(&selection, None).is_err(),
             "an unknown module should be a plan error"
+        );
+    }
+
+    /// A distinct value per credential, each within its bounds.
+    fn generated_credentials() -> LocalCredentials {
+        LocalCredentials::from_map(LOCAL_CREDENTIALS.iter().enumerate().map(|(i, c)| {
+            (
+                c.key.to_string(),
+                format!("gen{i}x").repeat(20)[..c.max_len.min(40)].to_string(),
+            )
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn bundle_carries_generated_credentials_only_in_sensitive_files() {
+        let creds = generated_credentials();
+        let selection = Selection::modules(["mlflow", "unity-catalog", "rustfs", "authelia"]);
+        let bundle = bundle_result(&selection, None, &creds).unwrap();
+        for spec in LOCAL_CREDENTIALS {
+            let value = creds.get(spec.key);
+            let holders: Vec<&BundleFileDto> = bundle
+                .files
+                .iter()
+                .filter(|f| f.contents.contains(value))
+                .collect();
+            assert!(!holders.is_empty(), "{} is used nowhere", spec.key);
+            for f in &holders {
+                assert!(
+                    f.sensitive,
+                    "{} leaks into non-sensitive {}",
+                    spec.key, f.path
+                );
+            }
+            // The development default is gone (the short Postgres one is too common a word
+            // to search for).
+            if spec.default.len() > 8 {
+                assert!(
+                    !bundle
+                        .files
+                        .iter()
+                        .any(|f| f.contents.contains(spec.default)),
+                    "{} default survives",
+                    spec.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundle_includes_sensitive_files_manifest_and_secrets_env() {
+        let creds = generated_credentials();
+        let bundle = bundle_result(&baseline_selection(), None, &creds).unwrap();
+        let file = |path: &str| bundle.files.iter().find(|f| f.path == path);
+        assert!(file(".env").is_some_and(|f| f.sensitive));
+        assert!(file("modules/postgres/secrets/postgres_password").is_some_and(|f| f.sensitive));
+        assert!(file("LAYOUT.md").is_some());
+        let manifest = file("env.toml").expect("env.toml");
+        assert_eq!(
+            EnvManifest::from_toml(&manifest.contents)
+                .unwrap()
+                .selection,
+            baseline_selection()
+        );
+        let secrets_env = file(SECRETS_ENV_PATH).expect("secrets.env");
+        assert!(secrets_env.sensitive);
+        let secrets: crate::Secrets = secrets_env
+            .contents
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once('='))
+            .collect();
+        assert_eq!(LocalCredentials::from_secrets(&secrets).unwrap(), creds);
+        // Without generated credentials there is nothing to keep.
+        let defaults =
+            bundle_result(&baseline_selection(), None, &LocalCredentials::new()).unwrap();
+        assert!(!defaults.files.iter().any(|f| f.path == SECRETS_ENV_PATH));
+    }
+
+    #[test]
+    fn bundle_marks_deploy_scripts_executable() {
+        let selection = Selection::modules(["hosted-postgres", "mlflow"]);
+        let bundle = bundle_result(&selection, None, &LocalCredentials::new()).unwrap();
+        let scripts: Vec<&str> = bundle
+            .files
+            .iter()
+            .filter(|f| f.executable)
+            .map(|f| f.path.as_str())
+            .collect();
+        assert!(!scripts.is_empty());
+        // The hosted secrets aren't known in a bundle; its README says how to supply them.
+        let readme = bundle.files.iter().find(|f| f.path == "README.md").unwrap();
+        assert!(
+            readme
+                .contents
+                .contains("Supply the hosted resources' secrets"),
+            "{}",
+            readme.contents
+        );
+        assert!(
+            scripts
+                .iter()
+                .all(|p| p.starts_with("deploy/") && p.ends_with(".sh")),
+            "{scripts:?}"
         );
     }
 }

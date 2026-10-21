@@ -44,6 +44,19 @@
         "required": ["id"],
         "properties": { "id": { "type": "string" } }
       }
+    },
+    "local_credentials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "min_len", "max_len"],
+        "properties": {
+          "key": { "type": "string" },
+          "description": { "type": "string" },
+          "min_len": { "type": "integer", "minimum": 1 },
+          "max_len": { "type": "integer", "minimum": 1 }
+        }
+      }
     }
   },
   "$defs": {

@@ -34,9 +34,38 @@ default policy lets any signed-in user read and lets the `writers` or `admins` g
 `trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive
 re-renders. To start over from the demo account, delete the file and render again.
 
+### 2. Set the services' own credentials
+
+The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.
+
+| Credential | Name in `secrets.env` |
+| --- | --- |
+| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |
+| RustFS root access key | `LOCAL_RUSTFS_ACCESS_KEY` |
+| RustFS root secret key | `LOCAL_RUSTFS_SECRET_KEY` |
+| Authelia session secret | `LOCAL_AUTHELIA_SESSION_SECRET` |
+| Authelia storage encryption key | `LOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY` |
+| Authelia identity-verification JWT secret | `LOCAL_AUTHELIA_JWT_SECRET` |
+
+To replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):
+
+```bash
+cat >> secrets.env <<EOF
+LOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)
+LOCAL_RUSTFS_ACCESS_KEY=$(openssl rand -hex 10)
+LOCAL_RUSTFS_SECRET_KEY=$(openssl rand -hex 20)
+LOCAL_AUTHELIA_SESSION_SECRET=$(openssl rand -hex 32)
+LOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY=$(openssl rand -hex 32)
+LOCAL_AUTHELIA_JWT_SECRET=$(openssl rand -hex 32)
+EOF
+trestle env render .
+```
+
+Do this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service.
+
 ## Start
 
-### 2. Start the stack
+### 3. Start the stack
 
 Start every service and wait until each one is healthy:
 
@@ -48,7 +77,7 @@ The gateway then serves the stack at <https://authorized.localhost:9080>. [LAYOU
 
 ## Verify
 
-### 3. Trust the gateway's local certificate authority
+### 4. Trust the gateway's local certificate authority
 
 The gateway serves HTTPS with a certificate from a CA minted for this environment. Copy it out, then add it to your browser or pass it to `curl --cacert`:
 

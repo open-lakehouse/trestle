@@ -16,12 +16,14 @@
 //! [`RenderSpec`](crate::RenderSpec) per module under its id.
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::credentials::{LOCAL_CREDENTIALS, LocalCredential};
 use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
-use crate::plan::Plan;
+use crate::plan::{LocalSecrets, Plan};
 use crate::render::RenderError;
 use crate::render::deploy::SECRETS_ENV_PATH;
 use crate::render::output::MaterializedOutput;
@@ -136,6 +138,49 @@ impl DeployTarget for Compose {
                      `env.toml` (git-ignored; the scripts above save what they create there) or \
                      export them, then render again so the stack picks them up:\n\n\
                      ```bash\ntrestle env render .\n```"
+                )),
+            ));
+        }
+
+        let credentials: Vec<&LocalCredential> = LOCAL_CREDENTIALS
+            .iter()
+            .filter(|c| plan.graph.nodes.iter().any(|m| m.id().as_str() == c.module))
+            .collect();
+        if !credentials.is_empty() {
+            let mut table = String::from("| Credential | Name in `secrets.env` |\n| --- | --- |\n");
+            let mut lines = String::new();
+            for c in &credentials {
+                let _ = writeln!(table, "| {} | `{}` |", c.description, c.env_var());
+                // Hex of the longest length every service accepts, capped at 64 characters.
+                let _ = writeln!(
+                    lines,
+                    "{}=$(openssl rand -hex {})",
+                    c.env_var(),
+                    c.max_len.min(64) / 2
+                );
+            }
+            steps.push(DeployStepSpec::new(
+                "local-credentials",
+                DeployPhase::Configure,
+                "Set the services' own credentials",
+                raw(format!(
+                    "The services the stack runs use these credentials. Unless \
+                     `{SECRETS_ENV_PATH}` sets them, they are fixed development values, the \
+                     same in every environment.\n\n{table}\n\
+                     To replace them with random ones, add them to `{SECRETS_ENV_PATH}` and \
+                     render again. Rendering writes each value into every file that uses it \
+                     (`.env`, `modules/*/.env/`, `modules/*/secrets/`{ignored}):\n\n\
+                     ```bash\ncat >> {SECRETS_ENV_PATH} <<EOF\n{lines}EOF\ntrestle env render .\n```\n\n\
+                     Do this before the first start. Services keep the credentials they first \
+                     started with in their persisted data (under the data root, `.data/` by \
+                     default), so a later change also needs that data removed, or the \
+                     credential changed inside the service.",
+                    // Inline credentials are committed with the rest (see `LocalSecrets`).
+                    ignored = if plan.local_secrets == LocalSecrets::Inline {
+                        ""
+                    } else {
+                        ", all git-ignored"
+                    },
                 )),
             ));
         }

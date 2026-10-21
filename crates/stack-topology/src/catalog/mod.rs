@@ -26,12 +26,14 @@ use crate::catalog::module::DataModule;
 use crate::catalog::module::{Module, ModuleId};
 
 pub(crate) mod baseline;
+pub mod credentials;
 pub mod deploy;
 pub(crate) mod images;
 pub mod module;
 
 pub use baseline::{
-    DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog, baseline_selection,
+    DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,
+    baseline_catalog_with, baseline_selection,
 };
 
 /// A set of modules to plan against, with id and capability indexes.

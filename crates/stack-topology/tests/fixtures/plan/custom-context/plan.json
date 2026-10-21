@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:0e9dec34fead2080124abc151621290e1ec9eb0b344317d7910670e9a01dcb3e"
+    "digest": "sha256:30e9ede790b3a7d858cf2705fd8fcf58e6a2bd892bc9058d20470c5028ba03c4"
   },
   "recipe": {
     "digest": "sha256:763d18679afb3322b9a6dc06877f6443fc99a0de542363a930ffaed2465d7659"
@@ -729,6 +729,13 @@
   "deploy": [
     {
       "order": 1,
+      "phase": "configure",
+      "id": "local-credentials",
+      "title": "Set the services' own credentials",
+      "instructions": "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service."
+    },
+    {
+      "order": 2,
       "phase": "start",
       "id": "up",
       "title": "Start the stack",

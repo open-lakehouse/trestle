@@ -53,6 +53,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::Catalog;
+use super::credentials::{self, LocalCredentials};
 use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
 use crate::catalog::images;
 use crate::catalog::module::{
@@ -136,11 +137,17 @@ pub const DATA_ROOT_DEFAULT: &str = "./.data";
 /// environment uses one provider per role: selecting another one (or preferring it via
 /// [`PlanCtx::provider_preference`](crate::PlanCtx::provider_preference)) replaces the default.
 pub fn baseline_catalog() -> Catalog {
+    baseline_catalog_with(&LocalCredentials::new())
+}
+
+/// The [baseline catalog](baseline_catalog), with the in-stack services' credentials taken from
+/// `credentials` instead of their fixed development defaults (see [`LocalCredentials`]).
+pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
     Catalog::from_modules([
         envoy(),
-        authelia(),
-        postgres(),
-        rustfs(),
+        authelia(credentials),
+        postgres(credentials),
+        rustfs(credentials),
         azurite(),
         hosted_postgres(),
         aws_s3(),
@@ -519,7 +526,7 @@ fn envoy() -> Arc<dyn Module> {
 /// host-published port. Two mounted files carry its config (`configuration.yml`) and the demo
 /// user database (`users.yml`); both render against the typed [`RenderCtx`](crate::RenderCtx)
 /// like every other fragment. Its deployment step tells the operator how to manage users.
-fn authelia() -> Arc<dyn Module> {
+fn authelia(credentials: &LocalCredentials) -> Arc<dyn Module> {
     // Authelia's HTTP `ext_authz` endpoint path. Declared here (catalog data), not in the
     // planner, so the planner stays free of implementation names: the planner reads it back via
     // [`EXT_AUTHZ_PATH_EXTRA`](crate::plan::EXT_AUTHZ_PATH_EXTRA) off the resolved provider.
@@ -610,17 +617,23 @@ fn authelia() -> Arc<dyn Module> {
                 secret_file(
                     "secrets/session_secret",
                     "authelia_session_secret",
-                    "insecure_session_secret_change_me\n",
+                    &format!(
+                        "{}\n",
+                        credentials.get(credentials::AUTHELIA_SESSION_SECRET)
+                    ),
                 ),
                 secret_file(
                     "secrets/storage_encryption_key",
                     "authelia_storage_encryption_key",
-                    "insecure_storage_encryption_key_change_me\n",
+                    &format!(
+                        "{}\n",
+                        credentials.get(credentials::AUTHELIA_STORAGE_ENCRYPTION_KEY)
+                    ),
                 ),
                 secret_file(
                     "secrets/jwt_secret",
                     "authelia_jwt_secret",
-                    "insecure_jwt_secret_change_me\n",
+                    &format!("{}\n", credentials.get(credentials::AUTHELIA_JWT_SECRET)),
                 ),
             ],
         )
@@ -630,19 +643,20 @@ fn authelia() -> Arc<dyn Module> {
 
 /// `postgres` — the relational store. Internal-only (a database port is
 /// never on the gateway surface).
-fn postgres() -> Arc<dyn Module> {
+fn postgres(credentials: &LocalCredentials) -> Arc<dyn Module> {
     let mut provides = Provides::default();
     // The Postgres container reads these to initialize on first boot, so they stay in `.env`.
     // (Ports are written concretely in the fragment, so no `*_PORT` var is needed.)
     //
-    // These are the *fixed* local-dev credentials, not an override surface: the connection URL
-    // below bakes `postgres:postgres` concretely, and consumers (MLflow, UC) embed that
-    // resolved connection. Editing `POSTGRES_USER`/`POSTGRES_PASSWORD` in `.env` would re-credential the
-    // container but NOT repoint those consumers, so they must move together. (A typed, mutable
-    // relational credential on the connection is the future home for making this configurable.)
+    // The password is the catalog's local credential (a fixed dev value unless the consumer
+    // supplies one), not an override surface: the connection URL below bakes it concretely,
+    // and consumers (MLflow, UC) embed that resolved connection. Editing `POSTGRES_PASSWORD`
+    // in `.env` would re-credential the container but NOT repoint those consumers, so they
+    // must move together.
+    let password = credentials.get(credentials::POSTGRES_PASSWORD);
     for (k, v) in [
         ("POSTGRES_USER", "postgres"),
-        ("POSTGRES_PASSWORD", "postgres"),
+        ("POSTGRES_PASSWORD", password),
         ("POSTGRES_DB", "postgres"),
     ] {
         provides.env_vars.insert(k.into(), v.into());
@@ -650,12 +664,12 @@ fn postgres() -> Arc<dyn Module> {
     // Provisions `relational_db` resources; vends a typed relational connection. The
     // resource-kind key matches the service's role (`relational_db`) — one identity, so
     // role-exclusivity keys off the same name. The credential is folded into the URL,
-    // concretely (matching the container's configured `postgres`/`postgres`) — no compose
+    // concretely (matching the container's configured user and password) — no compose
     // `${VAR}` fallback for a consumer to resolve at run time.
     provides.resource_kinds.insert(
         Role::RELATIONAL_DB.into(),
         ConnectionTemplate(Connection::postgres(
-            "db", 5432, "{name}", "postgres", "postgres",
+            "db", 5432, "{name}", "postgres", password,
         )),
     );
     // A consumer that demands `relational_db` should wait for the `db` service to be healthy.
@@ -734,18 +748,13 @@ fn postgres() -> Arc<dyn Module> {
                 secret_file(
                     "secrets/postgres_password",
                     "postgres_password",
-                    "postgres\n",
+                    &format!("{password}\n"),
                 ),
             ],
         )
         .for_compose(),
     })
 }
-
-/// The RustFS root credentials. Local throwaway keys, used by the bucket init, the STS shim,
-/// and every consumer of the store.
-const RUSTFS_ACCESS_KEY: &str = "rustfs-root";
-const RUSTFS_SECRET_KEY: &str = "rustfs-root-secret";
 
 /// `rustfs` — the S3-compatible object store, with STS. Reached by SDKs through the
 /// gateway's dedicated listener, like any gatewayed store. Its fragment iterates the buckets
@@ -757,7 +766,11 @@ const RUSTFS_SECRET_KEY: &str = "rustfs-root-secret";
 /// `https://sts.<region>.amazonaws.com` to vend credentials, so the store must look like AWS
 /// to it. An STS shim sits in front of RustFS because RustFS rejects the session policies such
 /// clients send (see `templates/modules/rustfs/compose.yaml.jinja`).
-fn rustfs() -> Arc<dyn Module> {
+fn rustfs(credentials: &LocalCredentials) -> Arc<dyn Module> {
+    // The root credentials, used by the bucket init, the STS shim, and every consumer of the
+    // store.
+    let access_key = credentials.get(credentials::RUSTFS_ACCESS_KEY);
+    let secret_key = credentials.get(credentials::RUSTFS_SECRET_KEY);
     let mut provides = Provides {
         helpers: vec![
             HelperService::sidecar("sts-shim"),
@@ -779,8 +792,8 @@ fn rustfs() -> Arc<dyn Module> {
             // it allocates the store's dedicated listener, so consumers reach it via Envoy.
             endpoint: "http://rustfs:9000".into(),
             credential: ObjectStoreCredential::S3 {
-                access_key_id: RUSTFS_ACCESS_KEY.into(),
-                secret_access_key: RUSTFS_SECRET_KEY.into(),
+                access_key_id: access_key.into(),
+                secret_access_key: secret_key.into(),
                 region: "us-east-1".into(),
                 // RustFS ignores the role; any well-formed ARN lets a consumer AssumeRole.
                 role_arn: Some("arn:aws:iam::000000000000:role/local-storage".into()),
@@ -885,7 +898,7 @@ fn rustfs() -> Arc<dyn Module> {
         renders: template_with_files(
             include_str!("../../templates/modules/rustfs/compose.yaml.jinja"),
             vec![
-                sensitive_file(".env/rustfs.env", &rustfs_env()),
+                sensitive_file(".env/rustfs.env", &rustfs_env(access_key, secret_key)),
                 config_file(
                     "sts_shim.py",
                     "rustfs_sts_shim",
@@ -961,15 +974,15 @@ impl Module for Rustfs {
 
 /// The env file every RustFS service loads: the server's root keys, the same keys under the
 /// names the bucket init (AWS CLI) and the STS shim read.
-fn rustfs_env() -> String {
+fn rustfs_env(access_key: &str, secret_key: &str) -> String {
     format!(
-        "RUSTFS_ACCESS_KEY={RUSTFS_ACCESS_KEY}\n\
-         RUSTFS_SECRET_KEY={RUSTFS_SECRET_KEY}\n\
-         AWS_ACCESS_KEY_ID={RUSTFS_ACCESS_KEY}\n\
-         AWS_SECRET_ACCESS_KEY={RUSTFS_SECRET_KEY}\n\
+        "RUSTFS_ACCESS_KEY={access_key}\n\
+         RUSTFS_SECRET_KEY={secret_key}\n\
+         AWS_ACCESS_KEY_ID={access_key}\n\
+         AWS_SECRET_ACCESS_KEY={secret_key}\n\
          AWS_DEFAULT_REGION=us-east-1\n\
-         STS_ACCESS_KEY={RUSTFS_ACCESS_KEY}\n\
-         STS_SECRET_KEY={RUSTFS_SECRET_KEY}\n"
+         STS_ACCESS_KEY={access_key}\n\
+         STS_SECRET_KEY={secret_key}\n"
     )
 }
 

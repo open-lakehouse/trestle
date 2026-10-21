@@ -94,6 +94,9 @@ pub use model::placement::{Placement, Vantage};
 pub use model::role::{Role, ServiceSpec};
 
 // --- catalog: the module set + how a module is defined ---
+pub use catalog::credentials::{
+    LOCAL_CREDENTIALS, LocalCredential, LocalCredentialError, LocalCredentials,
+};
 pub use catalog::deploy::{DeployCtx, DeployPhase, DeployStepSpec, RenderedStep};
 pub use catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls,
@@ -103,7 +106,7 @@ pub use catalog::module::{
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,
-    baseline_selection,
+    baseline_catalog_with, baseline_selection,
 };
 
 // --- plan: the producer + the resolved environment ---
