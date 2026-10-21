@@ -6,6 +6,8 @@
 
 export type {
   AuthDto,
+  Bundle,
+  BundleFile,
   CatalogDto,
   ClusterDto,
   DeployPhase,
@@ -26,6 +28,7 @@ export type {
   Knob,
   KnobKind,
   ListenerDto,
+  LocalCredentialDto,
   ModuleDto,
   NodeKind,
   OutputFile,

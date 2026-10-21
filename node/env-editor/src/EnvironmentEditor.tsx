@@ -10,8 +10,10 @@ import {
 import type { ColorMode } from "@xyflow/react";
 import { AlertTriangle, Loader2, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildBundleZip, generateCredentials } from "./artifacts/bundleZip";
 import { FilesPanel } from "./artifacts/FilesPanel";
 import { fileSourceOf } from "./artifacts/fileSource";
+import { downloadBlob } from "./diagram/exportImage";
 import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar";
 import { ComponentPalette } from "./graph/ComponentPalette";
 import type { CanvasActions } from "./graph/canvasActions";
@@ -20,7 +22,7 @@ import type { NodeFilesTarget } from "./graph/nodeFiles";
 import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { ConfigPanel } from "./layout/ConfigPanel";
-import { PlannerProvider } from "./planner";
+import { PlannerProvider, usePlanner } from "./planner";
 import { moduleName } from "./selection/catalogIndex";
 import { componentOrigin, describeOrigin } from "./state/origin";
 import { isEmptySelection, useEnvironment } from "./state/useEnvironment";
@@ -73,6 +75,7 @@ function EditorBody({
   catalog: seededCatalog,
   colorMode = "system",
 }: Pick<EnvironmentEditorProps, "catalog" | "colorMode">) {
+  const planner = usePlanner();
   const env = useEnvironment(seededCatalog);
   const { catalog, selection, plan, error, planning, undo, redo } = env;
   const graph = plan?.graph;
@@ -105,6 +108,38 @@ function EditorBody({
       ),
     [graph],
   );
+
+  /** A hosted provider is planned: its secrets stay placeholders in a
+   *  download. */
+  const plansHosted = useMemo(
+    () => !!catalog?.modules.some((m) => m.hosted && planned.has(m.id)),
+    [catalog, planned],
+  );
+  const [bundling, setBundling] = useState(false);
+  const downloadBundle = useCallback(() => {
+    if (!planner.bundle) return;
+    setBundling(true);
+    const credentials = generateCredentials(catalog?.local_credentials ?? []);
+    planner
+      .bundle(selection, undefined, credentials)
+      .then((bundle) => {
+        const zip = buildBundleZip(bundle);
+        downloadBlob(
+          new Blob([zip as BlobPart], { type: "application/zip" }),
+          `${bundle.env_name}.zip`,
+        );
+        if (plansHosted) {
+          setNotice(
+            "The hosted resources' secrets aren't in the download: its README.md says how to set them.",
+          );
+        }
+      })
+      .catch((e: unknown) => {
+        const reason = e instanceof Error ? e.message : String(e);
+        setNotice(`Could not prepare the download: ${reason}`);
+      })
+      .finally(() => setBundling(false));
+  }, [planner, catalog, selection, plansHosted]);
 
   const originOf = useCallback(
     (id: string) => componentOrigin(id, selection, catalog, graph),
@@ -344,6 +379,15 @@ function EditorBody({
                     files={files?.paths}
                     deploy={plan?.deploy}
                     onExportError={setNotice}
+                    onDownloadBundle={
+                      planner.bundle ? downloadBundle : undefined
+                    }
+                    bundling={bundling}
+                    bundleLabel={
+                      plansHosted
+                        ? "Download environment (.zip) — hosted secrets are placeholders, see its README"
+                        : "Download environment (.zip) with fresh credentials"
+                    }
                     gatewayEnabled={gatewayEnabled(selection.gateway)}
                     onToggleGateway={(on) => env.setGateway(on ? OPEN : DIRECT)}
                   />

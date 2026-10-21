@@ -161,7 +161,12 @@ export function downloadText(
   filename: string,
   type = "application/json",
 ): void {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+  downloadBlob(new Blob([text], { type }), filename);
+}
+
+/** Save a blob as a download. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
   downloadUrl(url, filename);
   // Let the click's navigation start before revoking.
   setTimeout(() => URL.revokeObjectURL(url), 0);

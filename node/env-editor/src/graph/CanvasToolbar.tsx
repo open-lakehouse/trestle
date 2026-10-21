@@ -10,6 +10,7 @@ import {
 import { Panel } from "@xyflow/react";
 import {
   AlertTriangle,
+  FileArchive,
   FileImage,
   FileJson,
   ImageDown,
@@ -59,6 +60,13 @@ export interface CanvasToolbarProps {
   exportName?: string;
   /** Called with a message when an export fails. */
   onExportError?: (message: string) => void;
+  /** Download the whole rendered environment. The action shows only with
+   *  this. */
+  onDownloadBundle?: () => void;
+  /** A download is being prepared. */
+  bundling?: boolean;
+  /** The download action's tooltip. */
+  bundleLabel?: string;
   /** Whether the environment runs a gateway. The toggle shows only with
    *  `onToggleGateway`. */
   gatewayEnabled?: boolean;
@@ -74,7 +82,7 @@ const MOD_KEY =
 
 /**
  * The canvas's top-left bar: add a component, undo/redo, export the diagram,
- * and the planner's status. Render it as a child of `MarkitectureCanvas`.
+ * download the environment, and the planner's status. Render it as a child of `MarkitectureCanvas`.
  */
 export function CanvasToolbar({
   onAdd,
@@ -90,6 +98,9 @@ export function CanvasToolbar({
   deploy,
   exportName = "environment",
   onExportError,
+  onDownloadBundle,
+  bundling = false,
+  bundleLabel = "Download environment (.zip)",
   gatewayEnabled = true,
   onToggleGateway,
 }: CanvasToolbarProps) {
@@ -126,6 +137,19 @@ export function CanvasToolbar({
           name={exportName}
           onError={onExportError}
         />
+        {onDownloadBundle && (
+          <IconAction
+            label={bundleLabel}
+            disabled={hasError || planning || bundling || componentCount === 0}
+            onClick={onDownloadBundle}
+          >
+            {bundling ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <FileArchive className="h-4 w-4" />
+            )}
+          </IconAction>
+        )}
         <div className="mx-1 h-5 w-px bg-border" />
         {onToggleGateway && (
           <>

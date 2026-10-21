@@ -40,6 +40,7 @@
         "@open-lakehouse/ui-kit": "workspace:*",
         "@xyflow/react": "^12.4.0",
         "elkjs": "^0.11.0",
+        "fflate": "^0.8.2",
         "html-to-image": "^1.11.13",
         "lucide-react": "^0.475.0",
         "shiki": "^3.23.0",
@@ -67,7 +68,7 @@
     },
     "trestle-diagram": {
       "name": "@open-lakehouse/trestle-diagram",
-      "version": "0.1.0",
+      "version": "0.0.0",
       "dependencies": {
         "@radix-ui/react-tooltip": "^1.2.8",
         "@xyflow/react": "^12.4.0",
@@ -582,6 +583,8 @@
     "esprima": ["esprima@4.0.1", "", { "bin": { "esparse": "./bin/esparse.js", "esvalidate": "./bin/esvalidate.js" } }, "sha512-eGuFFw7Upda+g4p+QHvnW0RyTX/SVeJBDM/gCtMARO0cLuT2HcEKnTPvhjV6aGeqrCB/sbNop0Kszm0jsaWU4A=="],
 
     "fdir": ["fdir@6.5.0", "", { "peerDependencies": { "picomatch": "^3 || ^4" }, "optionalPeers": ["picomatch"] }, "sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg=="],
+
+    "fflate": ["fflate@0.8.3", "", {}, "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="],
 
     "for-each": ["for-each@0.3.5", "", { "dependencies": { "is-callable": "^1.2.7" } }, "sha512-dKx12eRCVIzqCxFGplyFKJMPvLEWgmNtUrpTiJIR5u97zEhRG8ySrtboPHZXx7daLxQVrl643cTzbab2tkQjxg=="],
 

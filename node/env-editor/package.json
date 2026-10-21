@@ -21,6 +21,7 @@
     "@open-lakehouse/ui-kit": "workspace:*",
     "@xyflow/react": "^12.4.0",
     "elkjs": "^0.11.0",
+    "fflate": "^0.8.2",
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.475.0",
     "shiki": "^3.23.0"
