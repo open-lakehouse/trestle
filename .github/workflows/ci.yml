@@ -272,11 +272,13 @@ jobs:
       # bun.lock must record packages from the default registry as "" so each
       # machine resolves them through its own configured registry. A tarball
       # URL pinned to a private mirror (e.g. a corporate npm proxy) is
-      # unreachable from CI and hangs the install.
+      # unreachable from CI and hangs the install. The postinstall hook strips
+      # them locally; fail fast here if a lock slipped through without it.
       - name: Check bun.lock pins no registry URLs
         run: |
-          if grep -nE '"https?://[^"]+\.tgz"' bun.lock; then
-            echo "::error file=node/bun.lock::bun.lock pins tarball URLs; replace them with \"\" (the default registry)"
+          bun scripts/strip-lock-proxy.ts
+          if ! git diff --exit-code -- bun.lock; then
+            echo "::error file=node/bun.lock::bun.lock pins tarball URLs; run \`bun install\` in node/ (its postinstall strips them) and commit the lock"
             exit 1
           fi
       - run: bun install --frozen-lockfile

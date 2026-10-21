@@ -10,6 +10,7 @@
     "env-app"
   ],
   "scripts": {
+    "postinstall": "bun scripts/strip-lock-proxy.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
