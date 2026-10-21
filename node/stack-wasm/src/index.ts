@@ -10,11 +10,19 @@
 // builds alias THIS PACKAGE to ./stub.ts (see node/env-app/vite.config.ts), so
 // the artifact is only resolved when VITE_ENABLE_WASM=true.
 
-import initWasm, { catalog, init, plan } from "stack-topology-wasm-pkg";
-import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
+import initWasm, { bundle, catalog, init, plan } from "stack-topology-wasm-pkg";
+import type {
+  Bundle,
+  CatalogDto,
+  Planner,
+  PlanResult,
+  Selection,
+} from "./types";
 
 export type {
   AuthDto,
+  Bundle,
+  BundleFile,
   CatalogDto,
   ClientSelection,
   ClusterDto,
@@ -36,6 +44,7 @@ export type {
   Knob,
   KnobKind,
   ListenerDto,
+  LocalCredentialDto,
   ModuleDto,
   NodeKind,
   OutputFile,
@@ -83,6 +92,18 @@ export function createWasmPlanner(): Planner {
       // The wasm `plan` throws (rejects) with a string message on a plan error;
       // let it propagate so the UI can render it inline.
       return plan(JSON.stringify(selection), target) as PlanResult;
+    },
+    async bundle(
+      selection: Selection,
+      target: string | undefined,
+      credentials: Record<string, string>,
+    ): Promise<Bundle> {
+      await ensureReady();
+      return bundle(
+        JSON.stringify(selection),
+        target,
+        JSON.stringify(credentials),
+      ) as Bundle;
     },
   };
 }

@@ -13,6 +13,8 @@ import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
 
 export type {
   AuthDto,
+  Bundle,
+  BundleFile,
   CatalogDto,
   ClusterDto,
   Endpoint,
@@ -28,6 +30,7 @@ export type {
   Knob,
   KnobKind,
   ListenerDto,
+  LocalCredentialDto,
   ModuleDto,
   NodeKind,
   OutputFile,

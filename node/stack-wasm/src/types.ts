@@ -184,6 +184,18 @@ export interface CatalogDto {
   default_selection: Selection;
   /** The deploy targets, the default (Docker Compose) first. */
   targets: TargetDto[];
+  /** The in-stack credentials a bundle can be given fresh values for. Absent
+   *  from catalogs captured before bundles existed. */
+  local_credentials?: LocalCredentialDto[];
+}
+
+/** One in-stack credential (mirrors `LocalCredentialDto`): a value for it is
+ *  `min_len..=max_len` characters of `[A-Za-z0-9_-]`. */
+export interface LocalCredentialDto {
+  key: string;
+  description: string;
+  min_len: number;
+  max_len: number;
 }
 
 /** What a diagram node stands for (mirrors `NodeKind`). */
@@ -367,6 +379,23 @@ export interface OutputFile {
   contents: string;
 }
 
+/** One file of a {@link Bundle} (mirrors `BundleFileDto`). */
+export interface BundleFile {
+  path: string;
+  contents: string;
+  /** It holds credentials: write it owner-only. */
+  sensitive: boolean;
+  /** It is a script to run: write it executable. */
+  executable: boolean;
+}
+
+/** Every file of a rendered environment, credential-bearing ones included
+ *  (mirrors `BundleDto`), for packaging as a download. */
+export interface Bundle {
+  env_name: string;
+  files: BundleFile[];
+}
+
 /** One endpoint a service offers (mirrors `Endpoint`; loosely typed — the
  *  editor only surfaces the shape for detail views). */
 export interface Endpoint {
@@ -431,4 +460,14 @@ export interface Planner {
   /** Plan a selection for a deploy target (default: Docker Compose) into a full
    *  result, or reject with a `PlanError` message. */
   plan(selection: Selection, target?: string): Promise<PlanResult>;
+  /** Render every file of a selection's environment, with the in-stack
+   *  credentials set to `credentials` (keyed by the catalog's
+   *  `local_credentials`; missing ones keep their development defaults), or
+   *  reject with a message. Optional: a planner without it (e.g. a read-only
+   *  fixture) can't produce a download. */
+  bundle?(
+    selection: Selection,
+    target: string | undefined,
+    credentials: Record<string, string>,
+  ): Promise<Bundle>;
 }

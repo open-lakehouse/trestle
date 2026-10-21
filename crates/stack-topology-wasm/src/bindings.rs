@@ -55,3 +55,27 @@ pub fn plan_manifest(manifest_toml: &str) -> Result<JsValue, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }
+
+/// Plan a selection as [`plan`] does and return every file of the rendered environment —
+/// credential-bearing ones included — as a JS object (see `Bundle` in the TS types), for the
+/// editor to package as a download.
+///
+/// `credentials_json` is a JSON object of fresh values for the in-stack credentials, keyed by
+/// the catalog's `local_credentials` keys (`{}` keeps the development defaults). A refused
+/// value or a plan error is returned as a rejected `Err` carrying the message string.
+#[wasm_bindgen]
+pub fn bundle(
+    selection_json: &str,
+    target: Option<String>,
+    credentials_json: &str,
+) -> Result<JsValue, JsValue> {
+    let selection: Selection = serde_json::from_str(selection_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid selection JSON: {e}")))?;
+    let values: std::collections::BTreeMap<String, String> = serde_json::from_str(credentials_json)
+        .map_err(|e| JsValue::from_str(&format!("invalid credentials JSON: {e}")))?;
+    let credentials = olai_stack_topology::LocalCredentials::from_map(values)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = dto::bundle_result(&selection, target.as_deref(), &credentials)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+}

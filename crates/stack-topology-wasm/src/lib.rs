@@ -1,8 +1,9 @@
 //! Browser/WASM bindings for the [`olai_stack_topology`] planner.
 //!
-//! Exposes two functions to JS — [`catalog`](bindings::catalog) (the selectable module catalog)
-//! and [`plan`](bindings::plan) (plan a selection → graph + services + gateway + rendered
-//! artifacts) — for the `@open-lakehouse/env-editor` component. The planner is pure and
+//! Exposes three functions to JS — [`catalog`](bindings::catalog) (the selectable module catalog),
+//! [`plan`](bindings::plan) (plan a selection → graph + services + gateway + rendered
+//! artifacts), and [`bundle`](bindings::bundle) (every file of the rendered environment, for a
+//! download) — for the `@open-lakehouse/env-editor` component. The planner is pure and
 //! `wasm32`-clean (disk I/O is feature-gated out of `olai-stack-topology`), so the whole
 //! catalog → plan → render pipeline runs in the browser.
 //!

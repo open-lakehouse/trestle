@@ -2,7 +2,8 @@
 
 The in-browser planner for the environment editor: a thin TypeScript wrapper over
 the `stack-topology-wasm` Rust crate (the pure `olai-stack-topology` planner
-compiled to `wasm32`). Exposes a `Planner` — `catalog()` and `plan(selection)` —
+compiled to `wasm32`). Exposes a `Planner` — `catalog()`, `plan(selection)` and
+`bundle(selection, target, credentials)` (every file, for a download) —
 that the `@open-lakehouse/env-editor` component consumes through its planner seam.
 
 ## Entries

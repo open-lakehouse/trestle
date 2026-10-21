@@ -30,4 +30,13 @@ declare module "stack-topology-wasm-pkg" {
   /** Plan a saved environment manifest (`env.toml` text) with its whole
    *  context; returns a `PlanResult` object or throws a string message. */
   export function planManifest(manifestToml: string): unknown;
+
+  /** Render every file of a selection's environment (see `Bundle`), with the
+   *  in-stack credentials from a JSON object; throws a string message on a
+   *  refused credential or a plan error. */
+  export function bundle(
+    selectionJson: string,
+    target: string | null | undefined,
+    credentialsJson: string,
+  ): unknown;
 }
