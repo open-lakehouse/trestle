@@ -28,9 +28,9 @@ use olai_stack_topology::projection::export::{
 };
 use olai_stack_topology::{
     Catalog, DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployPhase, EnvManifest, GatewaySettings,
-    Knob, KnobKind, ManifestError, MaterializedOutput, ModuleId, PlanCtx, PlanError, RenderError,
-    SECRETS_ENV_PATH, Secrets, Selection, TargetId, baseline_catalog, baseline_selection,
-    builtin_targets, layout_report,
+    Knob, KnobKind, LocalCredentials, ManifestError, MaterializedOutput, ModuleId, PlanCtx,
+    PlanError, RenderError, SECRETS_ENV_PATH, Secrets, Selection, TargetId, baseline_catalog,
+    baseline_catalog_with, baseline_selection, builtin_targets, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -210,7 +210,7 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         .unwrap_or_else(|| PathBuf::from(&args.name));
     ensure_writable_dir(&out_dir, args.force)?;
 
-    let catalog = baseline_catalog();
+    let catalog = baseline_catalog_with(&load_local_credentials(&out_dir)?);
 
     // `--defaults` and `--non-interactive` both skip every prompt; only the
     // latter is strict about an explicit selection.
@@ -380,7 +380,7 @@ fn export_meta() -> ExportMeta {
 /// `[catalog] manifests` lists (relative to `dir`) merged over it in order, so a manifest
 /// module with a baseline id replaces that module.
 fn load_catalog(manifest: &EnvManifest, dir: &Path) -> Result<Catalog> {
-    let mut catalog = baseline_catalog();
+    let mut catalog = baseline_catalog_with(&load_local_credentials(dir)?);
     for rel in &manifest.catalog.manifests {
         let path = dir.join(rel);
         let text = std::fs::read_to_string(&path).map_err(|e| Error::io_at(&path, e))?;
@@ -866,6 +866,14 @@ fn load_secrets(dir: &std::path::Path) -> Result<Secrets> {
     Ok(secrets)
 }
 
+/// The in-stack services' credentials an environment in `dir` keeps in [`SECRETS_FILE`] (or the
+/// process environment) under their `LOCAL_*` names; the ones not set keep their development
+/// defaults.
+fn load_local_credentials(dir: &std::path::Path) -> Result<LocalCredentials> {
+    LocalCredentials::from_secrets(&load_secrets(dir)?)
+        .map_err(|e| Error::other(format!("{}: {e}", dir.join(SECRETS_FILE).display())))
+}
+
 /// Parse dotenv-style `KEY=VALUE` lines: blank lines and `#` comments are skipped, an
 /// `export ` prefix is allowed, and one pair of matching surrounding quotes is stripped.
 fn parse_env_lines(text: &str) -> Vec<(String, String)> {
@@ -1273,8 +1281,37 @@ mod tests {
     };
 
     use super::{
-        config_summary, hosted_reference, knob_reference, next_steps, parse_env_lines, wizard,
+        config_summary, hosted_reference, knob_reference, load_catalog, next_steps,
+        parse_env_lines, wizard,
     };
+
+    #[test]
+    fn a_render_keeps_the_local_credentials_in_secrets_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let password = "p".repeat(32);
+        std::fs::write(
+            dir.path().join("secrets.env"),
+            format!("LOCAL_POSTGRES_PASSWORD={password}\n"),
+        )
+        .unwrap();
+        let manifest = EnvManifest::new(Selection::modules(["postgres"]), PlanCtx::default());
+        let catalog = load_catalog(&manifest, dir.path()).unwrap();
+        let out = manifest.plan(&catalog).unwrap().materialize().unwrap();
+        let secret = out
+            .files
+            .iter()
+            .find(|f| f.path == "modules/postgres/secrets/postgres_password")
+            .unwrap();
+        assert_eq!(secret.contents, format!("{password}\n"));
+
+        // A value a service would refuse is an error, not silently replaced.
+        std::fs::write(
+            dir.path().join("secrets.env"),
+            "LOCAL_POSTGRES_PASSWORD=x\n",
+        )
+        .unwrap();
+        assert!(load_catalog(&manifest, dir.path()).is_err());
+    }
 
     #[test]
     fn env_lines_parse_like_dotenv() {
