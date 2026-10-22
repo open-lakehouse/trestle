@@ -148,3 +148,6 @@ pub use manifest::{CatalogSource, EnvManifest, ManifestError, pin_dedicated_port
 
 // --- report: a human-readable layout summary ---
 pub use report::layout_report;
+
+// --- projection: the topology as Mermaid, for Markdown ---
+pub use projection::graph_mermaid;

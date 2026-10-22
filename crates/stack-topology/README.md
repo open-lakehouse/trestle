@@ -426,6 +426,14 @@ Identical inputs give identical bytes. The schema is
 `--dir <env>` includes the module manifests that environment's `env.toml` lists under
 `[catalog] manifests` (paths relative to the `env.toml`, merged over the baseline).
 
+## Mermaid diagram
+
+`graph_mermaid` renders the functional graph as a Mermaid flowchart for Markdown: components
+by name and role, hosted providers grouped by cloud, and each edge labelled with the port,
+routed prefixes or protocol and resources. The generated root `README.md` embeds it under
+**Architecture**, `trestle env diagram [--fenced] <env>` prints it, and the browser planner
+returns it as `PlanResult.mermaid`.
+
 ## Seeing the rendered output
 
 To materialize and print every artifact a selection produces (the Envoy gateway config,

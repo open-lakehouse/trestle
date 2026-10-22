@@ -14,6 +14,7 @@ use std::fmt::Write as _;
 use crate::catalog::deploy::{DeployCtx, DeployPhase, DeployStepSpec};
 use crate::catalog::module::{ModuleId, ResolvedKnobs};
 use crate::plan::Plan;
+use crate::projection::{graph_dto, graph_mermaid};
 use crate::render::RenderError;
 use crate::target::DeployTarget;
 
@@ -192,8 +193,8 @@ save_secret() {
 }
 "#;
 
-/// The deployment README of `plan`: every step in order, under its phase, with the command
-/// that runs its script.
+/// The deployment README of `plan`: the environment's architecture as a Mermaid diagram, then
+/// every step in order, under its phase, with the command that runs its script.
 pub fn render_readme(plan: &Plan, steps: &[DeployStep]) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# Deploying `{}`\n", plan.env_name);
@@ -202,6 +203,14 @@ pub fn render_readme(plan: &Plan, steps: &[DeployStep]) -> String {
          step's script\nruns from anywhere and is safe to re-run. The services, their routes \
          and addresses are in\n[LAYOUT.md](LAYOUT.md).\n",
     );
+    let graph = graph_dto(plan);
+    if !graph.nodes.is_empty() {
+        let _ = write!(
+            out,
+            "\n## Architecture\n\n```mermaid\n{}```\n",
+            graph_mermaid(&graph)
+        );
+    }
     for phase in DeployPhase::ALL {
         let mut in_phase = steps.iter().filter(|s| s.phase == phase).peekable();
         if in_phase.peek().is_none() {

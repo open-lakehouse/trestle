@@ -8,6 +8,7 @@
 //! and compiles on every target.
 
 pub mod export;
+pub mod mermaid;
 pub mod topology;
 
 use std::collections::BTreeMap;
@@ -21,6 +22,7 @@ use crate::{
 };
 use serde::Serialize;
 
+pub use self::mermaid::graph_mermaid;
 pub use self::topology::{
     CLIENTS_NODE_ID, ExposedDto, ExposedKind, GraphDto, GraphNodeDto, NodeKind, ProvisionedDto,
     ResourceNounDto, SurfaceDto, SurfaceKind, TopologyEdgeDto, graph_dto, resource_nouns,
@@ -118,6 +120,8 @@ pub struct PlanResultDto {
     /// The functional topology (see [`topology`]) — the primary input to the React Flow
     /// "markitecture".
     pub graph: GraphDto,
+    /// [`graph`](Self::graph) as a Mermaid flowchart (see [`graph_mermaid`]), for Markdown.
+    pub mermaid: String,
     /// Each module's resolved services (`ServiceSpec` is `Serialize`), keyed by module id.
     pub services: BTreeMap<String, Vec<ServiceSpec>>,
     /// The gateway layout (listeners → routes, and upstream clusters), projected from the
@@ -538,8 +542,10 @@ fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
             contents: f.contents,
         })
         .collect();
+    let graph = graph_dto(plan);
     Ok(PlanResultDto {
-        graph: graph_dto(plan),
+        mermaid: graph_mermaid(&graph),
+        graph,
         services: services_by_module(plan),
         gateway: gateway_dto(&plan.gateway),
         files,
@@ -699,6 +705,7 @@ mod tests {
         struct Dump<'a> {
             catalog: CatalogDto,
             graph: &'a GraphDto,
+            mermaid: &'a str,
             services: &'a BTreeMap<String, Vec<ServiceSpec>>,
             gateway: &'a GatewayDto,
             deploy: &'a [DeployStepDto],
@@ -707,6 +714,7 @@ mod tests {
         let dump = Dump {
             catalog: catalog_dto(),
             graph: &result.graph,
+            mermaid: &result.mermaid,
             services: &result.services,
             gateway: &result.gateway,
             deploy: &result.deploy,
