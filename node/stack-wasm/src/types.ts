@@ -441,6 +441,8 @@ export interface DeployStepDto {
 /** The full plan result (mirrors `PlanResultDto`). */
 export interface PlanResult {
   graph: GraphDto;
+  /** `graph` as a Mermaid flowchart, for Markdown (without a code fence). */
+  mermaid: string;
   services: Record<string, ServiceSpec[]>;
   gateway: GatewayDto;
   files: OutputFile[];

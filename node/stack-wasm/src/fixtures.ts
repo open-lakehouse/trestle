@@ -1285,6 +1285,8 @@ export const FIXTURE_PLAN: PlanResult = {
       },
     ],
   },
+  mermaid:
+    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
   services: {
     authelia: [
       {

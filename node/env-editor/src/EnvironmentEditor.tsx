@@ -378,6 +378,7 @@ function EditorBody({
                     graph={graph}
                     files={files?.paths}
                     deploy={plan?.deploy}
+                    mermaid={plan?.mermaid}
                     onExportError={setNotice}
                     onDownloadBundle={
                       planner.bundle ? downloadBundle : undefined

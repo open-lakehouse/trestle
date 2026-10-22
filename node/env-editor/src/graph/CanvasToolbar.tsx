@@ -10,7 +10,9 @@ import {
 import { Panel } from "@xyflow/react";
 import {
   AlertTriangle,
+  ClipboardCopy,
   FileArchive,
+  FileCode,
   FileImage,
   FileJson,
   ImageDown,
@@ -56,6 +58,9 @@ export interface CanvasToolbarProps {
   files?: readonly string[];
   /** The plan's deployment steps, saved in the snapshot for downstream tools. */
   deploy?: readonly DeployStepDto[];
+  /** The plan's Mermaid diagram, for the Markdown export actions and the
+   *  snapshot. */
+  mermaid?: string;
   /** The exported files' base name. Defaults to `"environment"`. */
   exportName?: string;
   /** Called with a message when an export fails. */
@@ -96,6 +101,7 @@ export function CanvasToolbar({
   graph,
   files,
   deploy,
+  mermaid,
   exportName = "environment",
   onExportError,
   onDownloadBundle,
@@ -134,6 +140,7 @@ export function CanvasToolbar({
           graph={graph}
           files={files}
           deploy={deploy}
+          mermaid={mermaid}
           name={exportName}
           onError={onExportError}
         />
@@ -221,18 +228,21 @@ function GatewayToggle({
 
 /**
  * Save the diagram for use elsewhere: a graph snapshot (what an
- * `EnvironmentDiagram` embed renders) or a static SVG/PNG image.
+ * `EnvironmentDiagram` embed renders), Mermaid for Markdown, or a static
+ * SVG/PNG image.
  */
 function ExportActions({
   graph,
   files,
   deploy,
+  mermaid,
   name,
   onError,
 }: {
   graph: GraphDto | undefined;
   files: readonly string[] | undefined;
   deploy: readonly DeployStepDto[] | undefined;
+  mermaid: string | undefined;
   name: string;
   onError?: (message: string) => void;
 }) {
@@ -242,9 +252,27 @@ function ExportActions({
   const exportSnapshot = () => {
     if (!graph) return;
     downloadText(
-      stringifyGraphSnapshot(createGraphSnapshot(graph, { files, deploy })),
+      stringifyGraphSnapshot(
+        createGraphSnapshot(graph, { files, deploy, mermaid }),
+      ),
       `${name}${GRAPH_SNAPSHOT_EXTENSION}`,
     );
+  };
+  const copyMermaid = () => {
+    if (!mermaid) return;
+    // `navigator.clipboard` is absent outside a secure context; report that too.
+    Promise.resolve()
+      .then(() =>
+        navigator.clipboard.writeText(`\`\`\`mermaid\n${mermaid}\`\`\`\n`),
+      )
+      .catch((e: unknown) => {
+        const reason = e instanceof Error ? e.message : String(e);
+        onError?.(`Could not copy the Mermaid diagram: ${reason}`);
+      });
+  };
+  const exportMermaid = () => {
+    if (!mermaid) return;
+    downloadText(mermaid, `${name}.mmd`, "text/vnd.mermaid");
   };
   const exportImage = (format: DiagramImageFormat) => {
     renderImage({ format })
@@ -265,6 +293,20 @@ function ExportActions({
         onClick={exportSnapshot}
       >
         <FileJson className="h-4 w-4" />
+      </IconAction>
+      <IconAction
+        label="Copy Mermaid (paste into Markdown)"
+        disabled={empty || !mermaid}
+        onClick={copyMermaid}
+      >
+        <ClipboardCopy className="h-4 w-4" />
+      </IconAction>
+      <IconAction
+        label="Export Mermaid (.mmd)"
+        disabled={empty || !mermaid}
+        onClick={exportMermaid}
+      >
+        <FileCode className="h-4 w-4" />
       </IconAction>
       <IconAction
         label="Export SVG"

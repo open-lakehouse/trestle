@@ -163,3 +163,25 @@ describe("snapshot deployment steps", () => {
     expect(() => roundTrip(snapshot)).toThrow(/graph snapshot:/);
   });
 });
+
+describe("snapshot Mermaid diagram", () => {
+  test("saves the plan's diagram and reads it back", () => {
+    const snapshot = createGraphSnapshot(FIXTURE_PLAN.graph, {
+      mermaid: FIXTURE_PLAN.mermaid,
+    });
+    expect(snapshot.mermaid).toStartWith("flowchart LR\n");
+    expect(roundTrip(snapshot).mermaid).toBe(FIXTURE_PLAN.mermaid);
+  });
+
+  test("is left out without one", () => {
+    expect("mermaid" in createGraphSnapshot(FIXTURE_PLAN.graph)).toBe(false);
+  });
+
+  test("rejects a non-string diagram", () => {
+    const snapshot = {
+      ...createGraphSnapshot(FIXTURE_PLAN.graph),
+      mermaid: ["flowchart LR"],
+    };
+    expect(() => roundTrip(snapshot)).toThrow(/`mermaid` must be a string/);
+  });
+});

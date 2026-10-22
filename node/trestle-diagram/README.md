@@ -16,7 +16,9 @@ site, such as a blog post or docs page. It is read-only and drawn from a
 In the environment editor, build the environment and click **Export snapshot**
 in the canvas toolbar. This saves `environment.trestle-graph.json`. The same
 toolbar exports **SVG** and **PNG** images, for social cards, feeds, or a
-no-JS fallback.
+no-JS fallback, and **Mermaid** (copied as a fenced Markdown block, or saved as
+`environment.mmd`) for Markdown that renders Mermaid, such as GitHub. A snapshot
+carries the same Mermaid text in its `mermaid` field.
 
 ## Install
 

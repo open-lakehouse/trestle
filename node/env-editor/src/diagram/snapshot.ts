@@ -45,6 +45,11 @@ export interface GraphSnapshot {
    * automate, the deployment. Absent on older snapshots.
    */
   deploy?: DeployStepDto[];
+  /**
+   * The graph as a Mermaid flowchart (the planner's `mermaid`), for pasting
+   * into Markdown. Absent on older snapshots.
+   */
+  mermaid?: string;
 }
 
 /** Freeze a plan's graph (and its file manifest and deployment steps, if
@@ -58,6 +63,8 @@ export function createGraphSnapshot(
     files?: readonly string[];
     /** The plan's deployment steps (`plan.deploy`). */
     deploy?: readonly DeployStepDto[];
+    /** The plan's Mermaid diagram (`plan.mermaid`). */
+    mermaid?: string;
   } = {},
 ): GraphSnapshot {
   return {
@@ -68,6 +75,7 @@ export function createGraphSnapshot(
     graph,
     ...(options.files?.length ? { files: [...options.files].sort() } : {}),
     ...(options.deploy?.length ? { deploy: [...options.deploy] } : {}),
+    ...(options.mermaid ? { mermaid: options.mermaid } : {}),
   };
 }
 
@@ -75,7 +83,8 @@ export function createGraphSnapshot(
  * Validate parsed JSON as a snapshot this build can render: the envelope
  * (format, a supported version, node/edge arrays) and the graph's integrity
  * (unique node ids, edges of a known kind between existing nodes, unique edge
- * keys), and a file manifest's paths (unique, relative, within the render).
+ * keys), a file manifest's paths (unique, relative, within the render), and
+ * that a Mermaid diagram is a string.
  * Other DTO fields aren't checked. Throws an `Error` naming what is
  * wrong; an edge without a `key` gets the one the planner would assign.
  */
@@ -152,6 +161,9 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
 
   if (input.files !== undefined) checkManifest(input.files);
   if (input.deploy !== undefined) checkDeploy(input.deploy);
+  if (input.mermaid !== undefined && typeof input.mermaid !== "string") {
+    throw new Error("graph snapshot: `mermaid` must be a string");
+  }
 
   return {
     ...input,
