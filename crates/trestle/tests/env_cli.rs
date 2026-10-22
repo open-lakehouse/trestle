@@ -170,3 +170,26 @@ fn version_names_the_revision_when_the_build_recorded_one() {
     };
     assert_eq!(version, expected);
 }
+
+#[test]
+fn diagram_prints_the_environment_as_mermaid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = tmp.path().join("env");
+    new_env(&env);
+    let out = trestle(&["env", "diagram", env.to_str().unwrap()]);
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("flowchart LR\n"), "got:\n{text}");
+    assert!(text.contains("<b>Unity Catalog</b>"), "got:\n{text}");
+
+    let readme = fs::read_to_string(env.join("README.md")).unwrap();
+    assert!(
+        readme.contains(&format!("```mermaid\n{text}```")),
+        "README.md embeds the same diagram"
+    );
+
+    let fenced = trestle(&["env", "diagram", "--fenced", env.to_str().unwrap()]);
+    assert_eq!(
+        String::from_utf8(fenced.stdout).unwrap(),
+        format!("```mermaid\n{text}```\n")
+    );
+}

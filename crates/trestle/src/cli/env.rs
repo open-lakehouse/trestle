@@ -14,6 +14,8 @@
 //!   `env.toml` ([`EnvManifest`]); ports and routes stay stable by construction.
 //! - [`EnvCommand::ListModules`] — enumerate the catalog and the knobs each module
 //!   exposes, as text or (`--json`) the catalog projection.
+//! - [`EnvCommand::Diagram`] — print an environment's architecture as a Mermaid
+//!   flowchart, for Markdown.
 //!
 //! Every environment persists an editable `env.toml` alongside its rendered
 //! artifacts, so re-rendering and hand-editing are the supported edit loop. Each
@@ -26,11 +28,12 @@ use clap::{Args, Subcommand};
 use olai_stack_topology::projection::export::{
     ExportMeta, Generator, catalog_export, catalog_export_json, plan_export, plan_export_json,
 };
+use olai_stack_topology::projection::graph_dto;
 use olai_stack_topology::{
     Catalog, DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployPhase, EnvManifest, GatewaySettings,
     Knob, KnobKind, LocalCredentials, ManifestError, MaterializedOutput, ModuleId, PlanCtx,
     PlanError, RenderError, SECRETS_ENV_PATH, Secrets, Selection, TargetId, baseline_catalog,
-    baseline_catalog_with, baseline_selection, builtin_targets, layout_report,
+    baseline_catalog_with, baseline_selection, builtin_targets, graph_mermaid, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -44,6 +47,8 @@ pub enum EnvCommand {
     Render(EnvRenderArgs),
     /// List catalog modules and the knobs each exposes.
     ListModules(EnvListModulesArgs),
+    /// Print an environment's architecture diagram as Mermaid, for Markdown.
+    Diagram(EnvDiagramArgs),
 }
 
 #[derive(Args, Clone)]
@@ -143,6 +148,17 @@ pub struct EnvRenderArgs {
 }
 
 #[derive(Args, Clone)]
+pub struct EnvDiagramArgs {
+    /// Directory containing `env.toml` (defaults to the current directory).
+    #[clap(default_value = ".")]
+    pub dir: PathBuf,
+
+    /// Wrap the diagram in a ```` ```mermaid ```` fence, ready to paste into Markdown.
+    #[clap(long)]
+    pub fenced: bool,
+}
+
+#[derive(Args, Clone)]
 pub struct EnvListModulesArgs {
     /// Also print each module's knobs.
     #[clap(long)]
@@ -195,6 +211,7 @@ pub fn run(cmd: EnvCommand) -> Result<()> {
         EnvCommand::New(args) => run_new(*args),
         EnvCommand::Render(args) => run_render(args),
         EnvCommand::ListModules(args) => run_list_modules(args),
+        EnvCommand::Diagram(args) => run_diagram(args),
     }
 }
 
@@ -687,14 +704,18 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
 // env render
 // ---------------------------------------------------------------------------
 
-fn run_render(args: EnvRenderArgs) -> Result<()> {
-    let manifest_path = args.dir.join("env.toml");
-    let mut manifest = EnvManifest::read_from(&manifest_path).map_err(|e| {
+/// The `env.toml` in `dir`, with a hint to create one when it is missing.
+fn read_env_manifest(dir: &Path) -> Result<EnvManifest> {
+    EnvManifest::read_from(&dir.join("env.toml")).map_err(|e| {
         map_manifest_err(e).with_hint(format!(
             "expected an `env.toml` in {} — create one with `trestle env new`",
-            args.dir.display()
+            dir.display()
         ))
-    })?;
+    })
+}
+
+fn run_render(args: EnvRenderArgs) -> Result<()> {
+    let mut manifest = read_env_manifest(&args.dir)?;
 
     let catalog = load_catalog(&manifest, &args.dir)?;
     let out_dir = args.out_dir.clone().unwrap_or_else(|| args.dir.clone());
@@ -720,6 +741,24 @@ fn run_render(args: EnvRenderArgs) -> Result<()> {
     println!("{}", layout_report(&plan));
     write_rendered(&plan, &manifest, &catalog, &out_dir)?;
     report_written(&plan, &out_dir);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// env diagram
+// ---------------------------------------------------------------------------
+
+fn run_diagram(args: EnvDiagramArgs) -> Result<()> {
+    let manifest = read_env_manifest(&args.dir)?;
+    let catalog = load_catalog(&manifest, &args.dir)?;
+    // Secret-free, like the deployment guide's preview: the topology doesn't depend on them.
+    let plan = manifest.plan(&catalog).map_err(map_plan_err)?;
+    let diagram = graph_mermaid(&graph_dto(&plan));
+    if args.fenced {
+        print!("```mermaid\n{diagram}```\n");
+    } else {
+        print!("{diagram}");
+    }
     Ok(())
 }
 
