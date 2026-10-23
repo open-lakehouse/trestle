@@ -70,7 +70,7 @@ fn every_render_writes_the_same_plan_json() {
         .iter()
         .find(|n| n["id"] == "unity-catalog")
         .unwrap();
-    assert_eq!(uc["model"], "unityCatalogOSS");
+    assert_eq!(uc["model"], "unityCatalogServer");
 }
 
 #[test]

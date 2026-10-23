@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:30e9ede790b3a7d858cf2705fd8fcf58e6a2bd892bc9058d20470c5028ba03c4"
+    "digest": "sha256:ad4c35d2d1b7bd4e2b32d1cd86e83e4caac2dcc6f349629fc4347dfb683e40c6"
   },
   "recipe": {
     "digest": "sha256:155020fd5e2bc61d8e3300c6c34614783ac722032ffe6c76c77c2ec869c23ea3"
@@ -160,7 +160,7 @@
       },
       {
         "id": "unity-catalog",
-        "model": "unityCatalogOSS",
+        "model": "unityCatalogServer",
         "kind": "component",
         "display_name": "Unity Catalog",
         "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",

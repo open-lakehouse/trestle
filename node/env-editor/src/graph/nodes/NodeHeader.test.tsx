@@ -11,7 +11,7 @@ const { NodeHeader } = await import("./NodeHeader");
 
 const node: GraphNodeDto = {
   id: "unity-catalog",
-  model: "unityCatalogOSS",
+  model: "unityCatalogServer",
   kind: "component",
   display_name: "Unity Catalog",
   summary: "Open-source catalog server.",
@@ -61,7 +61,7 @@ describe("NodeHeader slots", () => {
       },
     });
     expect(seen).toEqual([
-      "unityCatalogOSS:Unity Catalog",
+      "unityCatalogServer:Unity Catalog",
       "data_catalog:Data catalog",
     ]);
     expect(html).toContain('<a href="/impl">Unity Catalog</a>');
@@ -81,8 +81,10 @@ describe("NodeHeader slots", () => {
     const html = render({
       aside: (n) => <button type="button">{n.model}: 8</button>,
     });
-    expect(html).toContain('<button type="button">unityCatalogOSS: 8</button>');
-    expect(html.indexOf("unityCatalogOSS: 8")).toBeGreaterThan(
+    expect(html).toContain(
+      '<button type="button">unityCatalogServer: 8</button>',
+    );
+    expect(html.indexOf("unityCatalogServer: 8")).toBeGreaterThan(
       html.indexOf("Data catalog"),
     );
     expect(html).toContain('class="nodrag nopan"');

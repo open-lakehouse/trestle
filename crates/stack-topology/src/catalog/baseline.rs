@@ -1365,7 +1365,7 @@ fn unity_catalog() -> Arc<dyn Module> {
 
     Arc::new(UnityCatalog(DataModule {
         id: ModuleId::from("unity-catalog"),
-        model: Some("unityCatalogOSS".into()),
+        model: Some("unityCatalogServer".into()),
         display_name: Some("Unity Catalog".into()),
         summary: Some("Open-source Unity Catalog server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
@@ -2630,7 +2630,7 @@ mod tests {
             ("aws-s3", "amazonS3"),
             ("azure-storage", "azureBlobStorage"),
             ("mlflow", "mlflow"),
-            ("unity-catalog", "unityCatalogOSS"),
+            ("unity-catalog", "unityCatalogServer"),
             ("jaeger", "jaeger"),
             ("headwaters", "headwaters"),
             ("omnigent", "omnigent"),

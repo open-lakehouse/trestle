@@ -428,7 +428,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
     {
       id: "unity-catalog",
-      model: "unityCatalogOSS",
+      model: "unityCatalogServer",
       display_name: "Unity Catalog",
       summary: "Open-source Unity Catalog server; Databricks-shaped REST API.",
       category: "catalog",
@@ -1154,7 +1154,7 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         id: "unity-catalog",
-        model: "unityCatalogOSS",
+        model: "unityCatalogServer",
         kind: "component",
         display_name: "Unity Catalog",
         summary:

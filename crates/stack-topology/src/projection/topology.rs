@@ -1151,7 +1151,7 @@ mod tests {
         assert_eq!(node(&g, "postgres").model.as_deref(), Some("postgresql"));
         assert_eq!(
             node(&g, "unity-catalog").model.as_deref(),
-            Some("unityCatalogOSS")
+            Some("unityCatalogServer")
         );
         assert_eq!(node(&g, CLIENTS_NODE_ID).model, None);
     }
