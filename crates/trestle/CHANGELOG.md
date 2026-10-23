@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.12...olai-trestle-v0.0.13) - 2026-10-23
+
+### Added
+
+- export environment diagrams as Mermaid for Markdown (#157)
+- download the configured environment as a zip with fresh credentials (#156)
+
+### Changed
+
+- [**breaking**] name the Unity Catalog module's model unityCatalogServer (#158)
+
 ## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.11...olai-trestle-v0.0.12) - 2026-10-18
 
 ### Added

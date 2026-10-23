@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.8...olai-stack-topology-v0.0.9) - 2026-10-23
+
+### Added
+
+- export environment diagrams as Mermaid for Markdown (#157)
+- download the configured environment as a zip with fresh credentials (#156)
+- export each deploy step's commands and the shell setup (#154)
+
+### Changed
+
+- [**breaking**] name the Unity Catalog module's model unityCatalogServer (#158)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.7...olai-stack-topology-v0.0.8) - 2026-10-18
 
 ### Added
