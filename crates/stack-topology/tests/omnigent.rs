@@ -135,3 +135,18 @@ fn the_ai_gateway_is_seeded_with_the_configured_models() {
         "{f}"
     );
 }
+
+#[test]
+fn the_gateway_seeder_stays_up_so_compose_wait_returns() {
+    // Nothing depends on the seeder, so if it exited, `docker compose up --wait` would fail on
+    // it whenever it finished first; it stays up and reports healthy instead.
+    let f: serde_yaml::Value = serde_yaml::from_str(&fragment(&plan_with(&[]), "mlflow")).unwrap();
+    let init = &f["services"]["mlflow-gateway-init"];
+    assert_eq!(init["init"].as_bool(), Some(true), "{init:?}");
+    assert_eq!(
+        init["healthcheck"]["test"],
+        serde_yaml::from_str::<serde_yaml::Value>(r#"["CMD", "test", "-f", "/tmp/seeded"]"#)
+            .unwrap(),
+        "{init:?}"
+    );
+}

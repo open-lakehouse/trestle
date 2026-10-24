@@ -58,6 +58,7 @@ services:
   # exported in your shell. Idempotent: re-runs on every `up` and leaves existing endpoints alone.
   mlflow-gateway-init:
     image: ghcr.io/mlflow/mlflow:v3.17.0-full
+    init: true
     restart: "no"
     command: ["python", "/seed_gateway.py"]
     environment:
@@ -74,3 +75,8 @@ services:
     depends_on:
       mlflow:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/seeded"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

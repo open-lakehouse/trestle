@@ -14,10 +14,15 @@ container's environment (e.g. ANTHROPIC_API_KEY), it ensures:
 
 A pair whose key is missing is skipped with a log line; add the key and re-run, or create the
 endpoint in the MLflow UI. The keys only ever live here and in MLflow, never in the clients.
+
+It then stays up, healthy, so `docker compose up --wait` returns once seeding is done instead
+of failing on an exited container that no other service depends on.
 """
 
 import json
 import os
+import pathlib
+import signal
 import sys
 import time
 import urllib.error
@@ -25,6 +30,7 @@ import urllib.request
 
 BASE = os.environ["MLFLOW_URL"].rstrip("/")
 API = BASE + "/api/3.0/mlflow/gateway"
+READY = pathlib.Path("/tmp/seeded")
 KEY_ENV = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
@@ -133,7 +139,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # Compose logs aren't a TTY, and the process never exits to flush them.
+    sys.stdout.reconfigure(line_buffering=True)
     try:
         main()
     except urllib.error.HTTPError as err:
         sys.exit(f"mlflow-gateway-init: {err.code} {err.reason}: {err.read().decode(errors='replace')}")
+    READY.touch()
+    signal.pause()
