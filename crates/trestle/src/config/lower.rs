@@ -235,6 +235,7 @@ impl GenerateConfig {
             client_crate_name,
             py_error_type,
             py_result_type,
+            python_api: olai_codegen::PythonApi::default(),
             napi_error_ext_trait,
             typings_package_filter: py.and_then(|c| c.typings_package_filter.clone()),
             ts_error_base_class,

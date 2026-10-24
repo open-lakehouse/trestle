@@ -1,23 +1,69 @@
 //! Python code generation module
 //!
-//! Split into two submodules:
+//! Split into submodules:
 //! - `bindings`: PyO3 binding generation (Rust → Python wrapper structs)
+//! - `runtime`: the shared Tokio runtime, `block_on`, and list pagers (`codegen/runtime.rs`)
 //! - `typings`: `.pyi` type stub generation for Python IDE support
 
 mod bindings;
 mod model_conversions;
+mod runtime;
 mod typings;
 
 pub(crate) use bindings::{generate, main_module};
 pub(crate) use model_conversions::generate_pyo3_impls;
+pub(crate) use runtime::generate_runtime;
 pub(crate) use typings::generate_typings;
 
+use proc_macro2::Ident;
+use quote::format_ident;
+
 use crate::analysis::RequestType;
-use crate::codegen::MethodHandler;
+use crate::codegen::{MethodHandler, PythonApi};
 use crate::parsing::types::UnifiedType;
 use crate::utils::extract_simple_type_name;
 
 static DOCS_TARGET_WIDTH: usize = 100;
+
+/// Whether a generated client class blocks the calling thread or returns awaitables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PyFlavor {
+    /// Methods block (with the GIL released) and return the result.
+    Sync,
+    /// Methods return an `asyncio` awaitable (via `pyo3_async_runtimes::tokio::future_into_py`).
+    Async,
+}
+
+impl PyFlavor {
+    /// The flavors enabled by `api`, sync first.
+    pub(super) fn enabled(api: PythonApi) -> impl Iterator<Item = Self> {
+        [
+            api.has_sync().then_some(Self::Sync),
+            api.has_async().then_some(Self::Async),
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// The Python-visible class-name prefix (`""` / `"Async"`).
+    pub(super) fn prefix(self) -> &'static str {
+        match self {
+            Self::Sync => "",
+            Self::Async => "Async",
+        }
+    }
+
+    /// The Rust wrapper struct ident for a Rust client name (`CatalogClient` → `PyCatalogClient` /
+    /// `PyAsyncCatalogClient`).
+    pub(super) fn class_ident(self, rust_client: &str) -> Ident {
+        format_ident!("Py{}{}", self.prefix(), rust_client)
+    }
+
+    /// The Python-visible class name (`CatalogClient` / `AsyncCatalogClient`).
+    pub(super) fn class_name(self, rust_client: &str) -> String {
+        format!("{}{}", self.prefix(), rust_client)
+    }
+}
 
 /// Extract parameter names from a `ResourceDescriptor` pattern string.
 ///

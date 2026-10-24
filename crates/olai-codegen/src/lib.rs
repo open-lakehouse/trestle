@@ -56,7 +56,8 @@ pub mod utils;
 
 pub use codegen::{
     BindingsConfig, ClientProtocol, ClientProtocols, CodeGenConfig, CodeGenOutput,
-    DEFAULT_TRANSPORT_TYPE_PATH, GeneratedCode, Runtime, generate_code, generate_models_mod,
+    DEFAULT_TRANSPORT_TYPE_PATH, GeneratedCode, PythonApi, Runtime, generate_code,
+    generate_models_mod,
 };
 
 pub use analysis::{

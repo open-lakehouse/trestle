@@ -54,7 +54,7 @@ mod wasm;
 
 pub use config::{
     BindingsConfig, ClientProtocol, ClientProtocols, CodeGenConfig, CodeGenOutput,
-    DEFAULT_TRANSPORT_TYPE_PATH, ModelsPath, Runtime,
+    DEFAULT_TRANSPORT_TYPE_PATH, ModelsPath, PythonApi, Runtime,
 };
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 
@@ -397,6 +397,16 @@ fn generate_python_code(
 
     let module_code = python::main_module(&handlers)?;
     files.insert("mod.rs".to_string(), module_code);
+
+    let python_api = config
+        .bindings
+        .as_ref()
+        .map(|b| b.python_api)
+        .unwrap_or_default();
+    files.insert(
+        "runtime.rs".to_string(),
+        python::generate_runtime(python_api),
+    );
 
     let python_typings_code = python::generate_typings(&handlers);
     files.insert(

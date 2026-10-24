@@ -1,6 +1,6 @@
 # @generated — do not edit by hand.
 from __future__ import annotations
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Iterator, AsyncIterator
 import enum
 
 class AzureConfig():
@@ -302,13 +302,13 @@ class ExampleClient():
             The requested resource
         """
         ...
-    def list_catalogs(self, max_results: int) -> List[Catalog]:
+    def list_catalogs(self, max_results: int) -> Iterator[Catalog]:
         """
         Returns:
             List of items
         """
         ...
-    def list_schemas(self, catalog_name: str, max_results: int) -> List[Schema]:
+    def list_schemas(self, catalog_name: str, max_results: int) -> Iterator[Schema]:
         """
         Args:
             catalog_name: Parent scoping field carrying the child-type reference that makes Schema a child
@@ -354,4 +354,223 @@ class ExampleClient():
     def catalog(self, catalog_name: str) -> CatalogClient:
         ...
     def schema(self, catalog_name: str, schema_name: str) -> SchemaClient:
+        ...
+
+class AsyncCatalogClient():
+    async def delete(self) -> None:
+        """
+        Returns:
+            None
+        """
+        ...
+    async def get(self) -> Catalog:
+        """
+        Returns:
+            The requested resource
+        """
+        ...
+    async def update(self, catalog: Optional[Catalog] = None) -> Catalog:
+        """
+        Returns:
+            The requested resource
+        """
+        ...
+    def schema(self, catalog_name: str, schema_name: str) -> AsyncSchemaClient:
+        ...
+
+class AsyncSchemaClient():
+    async def delete(self) -> None:
+        """
+        Returns:
+            None
+        """
+        ...
+    async def get(self, view: GetSchemaRequestView) -> Schema:
+        """
+        Returns:
+            A Schema is a child resource of a Catalog. This fixture exercises the generated
+            nested resource-
+            scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+            the cross-
+            module model import for the create method's enum parameter (`SchemaType`).
+        """
+        ...
+    async def update(self, schema: Optional[Schema] = None) -> Schema:
+        """
+        Returns:
+            A Schema is a child resource of a Catalog. This fixture exercises the generated
+            nested resource-
+            scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+            the cross-
+            module model import for the create method's enum parameter (`SchemaType`).
+        """
+        ...
+
+class AsyncExampleClient():
+    def __init__(self, base_url: str, token: Optional[str] = None) -> None:
+        ...
+    async def create_catalog(self, catalog: Optional[Catalog] = None) -> Catalog:
+        """
+        Returns:
+            The requested resource
+        """
+        ...
+    async def create_schema(
+
+            self,
+            name: str,
+            catalog_name: str,
+            schema_type: SchemaType
+        ) -> Schema:
+        """
+        Args:
+            name: Schema's own name (the new component supplied by the caller).
+            catalog_name: Parent catalog name — filled from the parent `CatalogClient`'s captured component.
+            schema_type: Required enum parameter whose type lives in this (schemas) models module —
+                         exercises the child-model import on the parent's generated `create_schema` method.
+
+
+        Returns:
+            A Schema is a child resource of a Catalog. This fixture exercises the generated
+            nested resource-
+            scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+            the cross-
+            module model import for the create method's enum parameter (`SchemaType`).
+        """
+        ...
+    async def create_tag_assignment(
+
+            self,
+            entity_type: str,
+            entity_name: str,
+            tag: Optional[TagAssignment] = None
+        ) -> TagAssignment:
+        """
+        Create/assign a tag. Path params: entity_type, entity_name; body: tag.
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    async def delete_tag_assignment(
+
+            self,
+            entity_type: str,
+            entity_name: str,
+            tag_key: str
+        ) -> DeleteTagAssignmentResponse:
+        """
+        Delete a single assignment. Composite key path params.
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    async def fetch_tag_assignment(
+
+            self,
+            entity_type: str,
+            entity_name: str,
+            tag_key: str
+        ) -> TagAssignment:
+        """
+        Get a single assignment. Composite key: entity_type, entity_name, tag_key. Carries a gnostic
+        `operation_id` to exercise annotation-driven binding method naming (the binding method should be
+        named `fetch_tag_assignment`, not `get_tag_assignment`).
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    async def generate_catalog_token(self, catalog_id: str) -> CatalogToken:
+        """
+        Custom POST RPC without path params — covers `RequestType::Custom(Post)` dispatched as a collection
+        method (the shape used by factory-style RPCs like `GenerateTemporary*Credentials`).
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    async def list_by_catalog_type(self, catalog_type: CatalogType) -> ListByTagsResponse:
+        """
+        Enum query param
+
+
+        Args:
+            catalog_type: enum as query param
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    async def list_by_tags(self, tags: List[str], max_results: int) -> ListByTagsResponse:
+        """
+        Repeated string query param
+
+
+        Args:
+            tags: becomes repeated query param
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    def list_catalogs(self, max_results: int) -> AsyncIterator[Catalog]:
+        """
+        Returns:
+            List of items
+        """
+        ...
+    def list_schemas(self, catalog_name: str, max_results: int) -> AsyncIterator[Schema]:
+        """
+        Args:
+            catalog_name: Parent scoping field carrying the child-type reference that makes Schema a child
+                          of Catalog.
+
+
+        Returns:
+            List of items
+        """
+        ...
+    async def list_tag_assignments(
+
+            self,
+            entity_type: str,
+            entity_name: str,
+            max_results: int,
+            page_token: str
+        ) -> ListTagAssignmentsResponse:
+        """
+        List assignments for an entity. Path params: entity_type, entity_name.
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    async def touch_tag_assignment(
+
+            self,
+            entity_type: str,
+            entity_name: str,
+            tag_key: str
+        ) -> None:
+        """
+        Custom POST RPC targeting a composite key that returns `Empty` — exercises the `<()>` / void-return
+        path for a resource-less, path-param'd method.
+
+
+        Returns:
+            The requested resource
+        """
+        ...
+    def catalog(self, catalog_name: str) -> AsyncCatalogClient:
+        ...
+    def schema(self, catalog_name: str, schema_name: str) -> AsyncSchemaClient:
         ...

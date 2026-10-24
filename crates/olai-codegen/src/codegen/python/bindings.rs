@@ -3,6 +3,11 @@
 //! The dispatch and "which methods land where" logic is shared with the Node emitter via
 //! [`crate::codegen::bindings`]; this module supplies the PyO3-specific scaffold, marshaling, and
 //! method bodies through [`PyBackend`]'s [`BindingBackend`] impl.
+//!
+//! Each client is emitted once per enabled [`PyFlavor`] (see [`PythonApi`]): a blocking
+//! `PyFooClient` (Python `FooClient`) and/or an awaitable `PyAsyncFooClient` (Python
+//! `AsyncFooClient`). Both wrap the same Rust client and run on the shared runtime emitted into
+//! `codegen/runtime.rs` (see [`super::generate_runtime`]).
 
 use std::collections::BTreeSet;
 
@@ -11,10 +16,11 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::super::format_tokens;
+use super::PyFlavor;
 use crate::analysis::EmitShape;
 use crate::codegen::bindings::builder::{OptionalSetter, SetterRender, generate_builder_pattern};
 use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
-use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
+use crate::codegen::{BindingMode, MethodHandler, PythonApi, ServiceHandler};
 use crate::parsing::types::{BaseType, RenderContext, UnifiedType};
 
 /// The `Py`-prefixed wrapper ident for a model type ident (e.g. `Catalog` →
@@ -39,22 +45,6 @@ fn qualified_wrapper_ident(ty: &UnifiedType) -> Ident {
     }
 }
 
-/// Wrap a model output ident as its `Py` wrapper return type, and produce the
-/// expression converting the bare client result `result` into it.
-///
-/// Returns `(return_type, convert_expr)`. For an `Empty`-returning method
-/// ([`MethodHandler::output_type`] is `None`) the return type is `()` and the
-/// value is passed through unchanged.
-fn wrap_single_output(method: &MethodHandler<'_>) -> (TokenStream, TokenStream) {
-    match method.output_type() {
-        Some(ident) => {
-            let w = wrapper_ident(&ident);
-            (quote! { #w }, quote! { #w::from(result) })
-        }
-        None => (quote! { () }, quote! { result }),
-    }
-}
-
 /// `mut` keyword for the `let request = ...` binding, but only when there are
 /// optional-field setter calls that actually mutate it. Without setters the
 /// binding is never reassigned, so `let mut` would trip `unused_mut`.
@@ -66,34 +56,272 @@ fn mut_if_setters(builder_calls: &[TokenStream]) -> TokenStream {
     }
 }
 
-/// PyO3 binding backend. Holds the configured Python error/result type idents so the method bodies
-/// can wrap calls in the right `PyResult`/error conversion.
+/// What a binding method hands back to Python, and how the bare client result becomes it.
+enum PyOutput {
+    /// A single value: `ty` is the Python-facing return type, `convert` lifts `result` into it.
+    Single {
+        ty: TokenStream,
+        convert: TokenStream,
+    },
+    /// No value (deletes and `Empty`-returning RPCs): Python sees `None`.
+    Unit,
+    /// A lazy pager over `item_wrapper` objects, fed by the builder's `into_stream()`.
+    List { item_wrapper: Ident },
+}
+
+impl PyOutput {
+    /// The single-value output for `method`: its `Py` wrapper, or [`PyOutput::Unit`] for an
+    /// `Empty`-returning method ([`MethodHandler::output_type`] is `None`).
+    fn single(method: &MethodHandler<'_>) -> Self {
+        match method.output_type() {
+            Some(ident) => {
+                let w = wrapper_ident(&ident);
+                Self::Single {
+                    ty: quote! { #w },
+                    convert: quote! { #w::from(result) },
+                }
+            }
+            None => Self::Unit,
+        }
+    }
+}
+
+/// PyO3 binding backend for one [`PyFlavor`]. Holds the configured Python error type ident (client
+/// errors are mapped through it before surfacing as `PyErr`) and the flavors enabled overall.
 pub(crate) struct PyBackend {
     py_error_type: Ident,
-    py_result_type: Ident,
+    api: PythonApi,
+    flavor: PyFlavor,
 }
 
 impl PyBackend {
-    fn from_service(service: &ServiceHandler<'_>) -> Self {
-        let bindings = service
-            .config
-            .bindings
-            .as_ref()
-            .expect("bindings config required for python output");
+    fn from_bindings(bindings: &crate::codegen::BindingsConfig) -> Self {
+        let api = bindings.python_api;
         Self {
             py_error_type: format_ident!("{}", bindings.py_error_type),
-            py_result_type: format_ident!("{}", bindings.py_result_type),
+            api,
+            flavor: PyFlavor::enabled(api)
+                .next()
+                .expect("PythonApi enables at least one flavor"),
         }
     }
 
+    fn from_service(service: &ServiceHandler<'_>) -> Self {
+        Self::from_bindings(
+            service
+                .config
+                .bindings
+                .as_ref()
+                .expect("bindings config required for python output"),
+        )
+    }
+
     fn from_services(services: &[ServiceHandler<'_>]) -> Self {
-        let bindings = services
-            .first()
-            .and_then(|s| s.config.bindings.as_ref())
-            .expect("bindings config required for python output");
-        Self {
-            py_error_type: format_ident!("{}", bindings.py_error_type),
-            py_result_type: format_ident!("{}", bindings.py_result_type),
+        Self::from_bindings(
+            services
+                .first()
+                .and_then(|s| s.config.bindings.as_ref())
+                .expect("bindings config required for python output"),
+        )
+    }
+
+    /// This backend re-targeted at each enabled flavor.
+    fn flavors(&self) -> impl Iterator<Item = Self> + '_ {
+        PyFlavor::enabled(self.api).map(|flavor| Self {
+            py_error_type: self.py_error_type.clone(),
+            api: self.api,
+            flavor,
+        })
+    }
+
+    /// The `use` lines every generated binding module needs, independent of flavor.
+    fn common_imports(&self) -> TokenStream {
+        let py_error_type = &self.py_error_type;
+        let async_imports = self.api.has_async().then(|| {
+            quote! { use crate::codegen::runtime::AsyncListIterator; }
+        });
+        quote! {
+            use std::collections::HashMap;
+            use futures::stream::StreamExt;
+            use pyo3::IntoPyObjectExt;
+            use pyo3::prelude::*;
+            use crate::error::#py_error_type;
+            use crate::codegen::runtime::{block_on, ListIterator};
+            #async_imports
+        }
+    }
+
+    /// Assemble a binding method: signature, builder setup, and the flavor-specific body that runs
+    /// the request and hands `output` back to Python.
+    fn emit_method(
+        &self,
+        parts: &ShapeParts<'_>,
+        method_name: &Ident,
+        is_list: bool,
+        output: PyOutput,
+    ) -> TokenStream {
+        let method = parts.method;
+        let py_error_type = &self.py_error_type;
+        let param_defs = &parts.param_defs;
+        let signature = pyo3_signature(method, parts.mode);
+        let client_call = &parts.client_call;
+        let builder_calls = generate_builder_pattern(method, is_list, self);
+        let mut_kw = mut_if_setters(&builder_calls);
+        let setup = quote! {
+            let #mut_kw request = #client_call;
+            #(#builder_calls)*
+        };
+
+        match (self.flavor, output) {
+            // Lists return a lazy pager in both flavors; only the pager type differs. Each item is
+            // converted to its wrapper object as it is pulled, so no `py` token is needed here.
+            (flavor, PyOutput::List { item_wrapper }) => {
+                let pager = match flavor {
+                    PyFlavor::Sync => quote! { ListIterator },
+                    PyFlavor::Async => quote! { AsyncListIterator },
+                };
+                quote! {
+                    #signature
+                    pub fn #method_name(&self, #(#param_defs,)*) -> PyResult<#pager> {
+                        #setup
+                        let items = request.into_stream().map(|item| {
+                            let item = item.map_err(#py_error_type::from)?;
+                            Python::attach(|py| #item_wrapper::from(item).into_py_any(py))
+                        });
+                        Ok(#pager::new(items))
+                    }
+                }
+            }
+            (PyFlavor::Sync, output) => {
+                let (return_type, tail) = match output {
+                    PyOutput::Single { ty, convert } => (
+                        ty,
+                        quote! {
+                            // `result` is the bare model the Rust client returns; `#convert` lifts
+                            // it into the `Py` wrapper.
+                            let result = block_on(py, request.into_future())?
+                                .map_err(#py_error_type::from)?;
+                            Ok(#convert)
+                        },
+                    ),
+                    PyOutput::Unit => (
+                        quote! { () },
+                        quote! {
+                            block_on(py, request.into_future())?.map_err(#py_error_type::from)?;
+                            Ok(())
+                        },
+                    ),
+                    PyOutput::List { .. } => unreachable!("handled above"),
+                };
+                quote! {
+                    #signature
+                    pub fn #method_name(
+                        &self,
+                        py: Python<'_>,
+                        #(#param_defs,)*
+                    ) -> PyResult<#return_type> {
+                        #setup
+                        #tail
+                    }
+                }
+            }
+            (PyFlavor::Async, output) => {
+                let tail = match output {
+                    PyOutput::Single { convert, .. } => quote! {
+                        let result = request.await.map_err(#py_error_type::from)?;
+                        Ok::<_, PyErr>(#convert)
+                    },
+                    // Resolve to `None`: a bare `()` would convert to an empty tuple, unlike a
+                    // sync `#[pymethods]` return of `()`.
+                    PyOutput::Unit => quote! {
+                        request.await.map_err(#py_error_type::from)?;
+                        Ok::<_, PyErr>(None::<()>)
+                    },
+                    PyOutput::List { .. } => unreachable!("handled above"),
+                };
+                // Params are moved into the builder before the future is created, so the future
+                // owns everything it touches (`'static + Send`, as `future_into_py` requires).
+                quote! {
+                    #signature
+                    pub fn #method_name<'py>(
+                        &self,
+                        py: Python<'py>,
+                        #(#param_defs,)*
+                    ) -> PyResult<Bound<'py, PyAny>> {
+                        #setup
+                        ::pyo3_async_runtimes::tokio::future_into_py(py, async move { #tail })
+                    }
+                }
+            }
+        }
+    }
+
+    /// One `#[pyclass]` wrapper (struct + `#[pymethods]`) for a scoped service client, in this
+    /// backend's flavor.
+    fn service_class(&self, service: &ServiceHandler<'_>) -> TokenStream {
+        let rust_client_ident = service.client_type();
+        let rust_client_name = rust_client_ident.to_string();
+        let client_ident = self.flavor.class_ident(&rust_client_name);
+        let class_name = self.flavor.class_name(&rust_client_name);
+        let methods = driver::scoped_client_methods(self, service);
+
+        quote! {
+            #[pyclass(name = #class_name)]
+            pub struct #client_ident {
+                pub(crate) client: #rust_client_ident,
+            }
+
+            #[pymethods]
+            impl #client_ident {
+                #(#methods)*
+            }
+
+            impl #client_ident {
+                pub fn new(client: #rust_client_ident) -> Self {
+                    Self { client }
+                }
+            }
+        }
+    }
+
+    /// The root (aggregate) `#[pyclass]` in this backend's flavor: constructor, collection methods,
+    /// and resource accessors.
+    fn root_class(
+        &self,
+        sorted_services: &[&ServiceHandler<'_>],
+        aggregate_client_name: &str,
+    ) -> TokenStream {
+        let py_error_type = &self.py_error_type;
+        let aggregate_client_ident = format_ident!("{}", aggregate_client_name);
+        let py_aggregate_client_ident = self.flavor.class_ident(aggregate_client_name);
+        let class_name = self.flavor.class_name(aggregate_client_name);
+        let methods = driver::root_client_methods(self, sorted_services);
+        let resource_accessor_methods = driver::resource_accessor_methods(self, sorted_services);
+
+        quote! {
+            #[pyclass(name = #class_name)]
+            pub struct #py_aggregate_client_ident {
+                client: #aggregate_client_ident
+            }
+
+            #[pymethods]
+            impl #py_aggregate_client_ident {
+                #[new]
+                #[pyo3(signature = (base_url, token = None))]
+                pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
+                    let client = if let Some(token) = token {
+                        olai_http::CloudClient::new_with_token(token)
+                    } else {
+                        olai_http::CloudClient::new_unauthenticated()
+                    };
+                    let base_url = base_url.parse().map_err(#py_error_type::from)?;
+                    Ok(Self { client: #aggregate_client_ident::new(client, base_url) })
+                }
+
+                #(#methods)*
+
+                #(#resource_accessor_methods)*
+            }
         }
     }
 }
@@ -115,14 +343,13 @@ impl BindingBackend for PyBackend {
             .expect("bindings config required for python output");
 
         let rust_client_ident = service.client_type();
-        let client_ident = format_ident!("Py{}", rust_client_ident);
-        let rust_client_name = rust_client_ident.to_string();
-
         let client_crate = format_ident!("{}", bindings.client_crate_name);
-        let py_error_type = &self.py_error_type;
-        let py_result_type = &self.py_result_type;
+        let common_imports = self.common_imports();
 
-        let methods = driver::scoped_client_methods(self, service);
+        let classes = self
+            .flavors()
+            .map(|backend| backend.service_class(service))
+            .collect_vec();
         let mod_path = service.models_path();
         // The `Py*` model wrappers are re-exported at the models root; import them so
         // the wrapper return/param types resolve.
@@ -131,29 +358,12 @@ impl BindingBackend for PyBackend {
             .map(|root| quote! { use #root::*; });
 
         let tokens = quote! {
-            use std::collections::HashMap;
-            use pyo3::prelude::*;
+            #common_imports
             use #client_crate::#rust_client_ident;
             use #mod_path::*;
             #wrappers_import
-            use crate::error::{#py_error_type, #py_result_type};
-            use crate::runtime::get_runtime;
 
-            #[pyclass(name = #rust_client_name)]
-            pub struct #client_ident {
-                pub(crate) client: #rust_client_ident,
-            }
-
-            #[pymethods]
-            impl #client_ident {
-                #(#methods)*
-            }
-
-            impl #client_ident {
-                pub fn new(client: #rust_client_ident) -> Self {
-                    Self { client }
-                }
-            }
+            #(#classes)*
         };
 
         format_tokens(tokens)
@@ -184,9 +394,7 @@ impl BindingBackend for PyBackend {
         let aggregate_client_name = &bindings.aggregate_client_name;
         let client_crate = format_ident!("{}", bindings.client_crate_name);
         let aggregate_client_ident = format_ident!("{}", aggregate_client_name);
-        let py_aggregate_client_ident = format_ident!("Py{}", aggregate_client_name);
-        let py_error_type = &self.py_error_type;
-        let py_result_type = &self.py_result_type;
+        let common_imports = self.common_imports();
 
         let mut sorted_services = services.iter().collect_vec();
         sorted_services.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
@@ -209,58 +417,69 @@ impl BindingBackend for PyBackend {
             })
             .collect();
 
-        // Only services with a scoped binding expose a per-service scoped client to import.
+        // Only services with a scoped binding expose a per-service scoped client to import, once
+        // per enabled flavor.
         let codegen_imports = sorted_services
             .iter()
             .filter(|s| s.emits_scoped_binding())
-            .map(|s| {
+            .flat_map(|s| {
                 let mod_name = format_ident!("{}", s.plan.base_path);
-                let client_name = format_ident!("Py{}", s.client_type().to_string());
-                quote! { use crate::codegen::#mod_name::#client_name; }
+                let rust_client = s.client_type().to_string();
+                PyFlavor::enabled(self.api)
+                    .map(|flavor| {
+                        let client_name = flavor.class_ident(&rust_client);
+                        quote! { use crate::codegen::#mod_name::#client_name; }
+                    })
+                    .collect_vec()
             });
 
-        let methods = driver::root_client_methods(self, &sorted_services);
-        let resource_accessor_methods = driver::resource_accessor_methods(self, &sorted_services);
+        let root_classes = self
+            .flavors()
+            .map(|backend| backend.root_class(&sorted_services, aggregate_client_name))
+            .collect_vec();
+
+        // Every class the consumer's `#[pymodule]` should expose: the root and scoped clients per
+        // flavor, plus the pagers their list methods return.
+        let registered_classes = PyFlavor::enabled(self.api)
+            .flat_map(|flavor| {
+                std::iter::once(flavor.class_ident(aggregate_client_name)).chain(
+                    sorted_services
+                        .iter()
+                        .filter(|s| s.emits_scoped_binding())
+                        .map(move |s| flavor.class_ident(&s.client_type().to_string())),
+                )
+            })
+            .chain(self.api.has_sync().then(|| format_ident!("ListIterator")))
+            .chain(
+                self.api
+                    .has_async()
+                    .then(|| format_ident!("AsyncListIterator")),
+            )
+            .collect_vec();
 
         let tokens = quote! {
             // The aggregate module file carries the root `#[pyclass]` (flat methods →
             // too_many_arguments) and a use-prelude that not every build consumes.
             #![allow(dead_code, unused_imports, clippy::too_many_arguments)]
 
+            pub mod runtime;
             #(#service_modules)*
 
-            use std::collections::HashMap;
-            use futures::stream::TryStreamExt;
-            use pyo3::prelude::*;
+            #common_imports
             use #client_crate::{#aggregate_client_ident};
-            use crate::error::{#py_error_type, #py_result_type};
-            use crate::runtime::get_runtime;
             #(#mod_paths)*
             #(#wrapper_imports)*
             #(#codegen_imports)*
 
-            #[pyclass(name = #aggregate_client_name)]
-            pub struct #py_aggregate_client_ident {
-                client: #aggregate_client_ident
-            }
+            #(#root_classes)*
 
-            #[pymethods]
-            impl #py_aggregate_client_ident {
-                #[new]
-                #[pyo3(signature = (base_url, token = None))]
-                pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
-                    let client = if let Some(token) = token {
-                        olai_http::CloudClient::new_with_token(token)
-                    } else {
-                        olai_http::CloudClient::new_unauthenticated()
-                    };
-                    let base_url = base_url.parse().map_err(#py_error_type::from)?;
-                    Ok(Self { client: #aggregate_client_ident::new(client, base_url) })
-                }
-
-                #(#methods)*
-
-                #(#resource_accessor_methods)*
+            /// Add every generated client class (and the list pagers) to the extension module `m`.
+            ///
+            /// Call this from the crate's `#[pymodule]` so newly generated clients are exposed
+            /// without hand-maintaining an `add_class` list.
+            pub fn register_clients(m: &Bound<'_, PyModule>) -> PyResult<()> {
+                #(m.add_class::<#registered_classes>()?;)*
+                Ok(())
             }
         };
 
@@ -298,145 +517,52 @@ impl BindingBackend for PyBackend {
 
     fn emit_list(&self, parts: &ShapeParts<'_>) -> TokenStream {
         let method = parts.method;
-        let py_error_type = &self.py_error_type;
-        let py_result_type = &self.py_result_type;
-        let method_name = method.binding_method_name();
-        let param_defs = &parts.param_defs;
-        let signature = pyo3_signature(method, parts.mode);
-        let client_call = &parts.client_call;
-        let builder_calls = generate_builder_pattern(method, true, self);
-        let mut_kw = mut_if_setters(&builder_calls);
-
         let items_field = method
             .list_output_field()
             .expect("List-shaped method must have a list output field");
         // The list item type, and the wrapper it crosses the boundary as. List
         // items are always message types, so `type_ident()` is the model name.
-        let item_ident = items_field.unified_type.type_ident();
-        let item_wrapper = wrapper_ident(&item_ident);
-
-        quote! {
-            #signature
-            pub fn #method_name(
-                &self,
-                py: Python,
-                #(#param_defs,)*
-            ) -> #py_result_type<::std::vec::Vec<#item_wrapper>> {
-                let #mut_kw request = #client_call;
-                #(#builder_calls)*
-                let runtime = get_runtime(py)?;
-                py.detach(|| {
-                    let result: ::std::vec::Vec<_> = runtime.block_on(async move { request.into_stream().try_collect().await })?;
-                    Ok::<_, #py_error_type>(result.into_iter().map(#item_wrapper::from).collect())
-                })
-            }
-        }
+        let item_wrapper = wrapper_ident(&items_field.unified_type.type_ident());
+        self.emit_method(
+            parts,
+            &method.binding_method_name(),
+            true,
+            PyOutput::List { item_wrapper },
+        )
     }
 
     fn emit_create(&self, parts: &ShapeParts<'_>) -> TokenStream {
         let method = parts.method;
-        let py_error_type = &self.py_error_type;
-        let py_result_type = &self.py_result_type;
-        let method_name = method.binding_method_name();
-        let (response_type, convert) = wrap_single_output(method);
-        let param_defs = &parts.param_defs;
-        let signature = pyo3_signature(method, parts.mode);
-        let client_call = &parts.client_call;
-        let builder_calls = generate_builder_pattern(method, false, self);
-        let mut_kw = mut_if_setters(&builder_calls);
-
-        quote! {
-            #signature
-            pub fn #method_name(
-                &self,
-                py: Python,
-                #(#param_defs,)*
-            ) -> #py_result_type<#response_type> {
-                let #mut_kw request = #client_call;
-                #(#builder_calls)*
-                let runtime = get_runtime(py)?;
-                py.detach(|| {
-                    #[allow(clippy::let_unit_value)]
-                    let result = runtime.block_on(request.into_future())?;
-                    Ok::<_, #py_error_type>(#convert)
-                })
-            }
-        }
+        self.emit_method(
+            parts,
+            &method.binding_method_name(),
+            false,
+            PyOutput::single(method),
+        )
     }
 
     fn emit_get_update(&self, parts: &ShapeParts<'_>) -> TokenStream {
         let method = parts.method;
-        let py_error_type = &self.py_error_type;
-        let py_result_type = &self.py_result_type;
         let method_name = match parts.mode {
             BindingMode::Scoped => method.plan.resource_client_method(),
             BindingMode::Flat => method.binding_method_name(),
         };
-        let (response_type, convert) = wrap_single_output(method);
-        let param_defs = &parts.param_defs;
-        let signature = pyo3_signature(method, parts.mode);
-        let client_call = &parts.client_call;
-        let builder_calls = generate_builder_pattern(method, false, self);
-        let mut_kw = mut_if_setters(&builder_calls);
-
-        quote! {
-            #signature
-            pub fn #method_name(
-                &self,
-                py: Python,
-                #(#param_defs,)*
-            ) -> #py_result_type<#response_type> {
-                let #mut_kw request = #client_call;
-                #(#builder_calls)*
-                let runtime = get_runtime(py)?;
-                py.detach(|| {
-                    // `let result = ...` then convert: `result` is the bare model the
-                    // Rust client returns; `#convert` lifts it into the `Py` wrapper
-                    // (or passes a unit through unchanged).
-                    #[allow(clippy::let_unit_value)]
-                    let result = runtime.block_on(request.into_future())?;
-                    Ok::<_, #py_error_type>(#convert)
-                })
-            }
-        }
+        self.emit_method(parts, &method_name, false, PyOutput::single(method))
     }
 
     fn emit_delete(&self, parts: &ShapeParts<'_>) -> TokenStream {
         let method = parts.method;
-        let py_error_type = &self.py_error_type;
-        let py_result_type = &self.py_result_type;
         let method_name = match parts.mode {
             BindingMode::Scoped => method.plan.resource_client_method(),
             BindingMode::Flat => method.binding_method_name(),
         };
-        let param_defs = &parts.param_defs;
-        let signature = pyo3_signature(method, parts.mode);
-        let client_call = &parts.client_call;
-        let builder_calls = generate_builder_pattern(method, false, self);
-        let mut_kw = mut_if_setters(&builder_calls);
-
-        quote! {
-            #signature
-            pub fn #method_name(
-                &self,
-                py: Python,
-                #(#param_defs,)*
-            ) -> #py_result_type<()> {
-                let #mut_kw request = #client_call;
-                #(#builder_calls)*
-                let runtime = get_runtime(py)?;
-                py.detach(|| {
-                    runtime.block_on(request.into_future())?;
-                    Ok::<_, #py_error_type>(())
-                })
-            }
-        }
+        self.emit_method(parts, &method_name, false, PyOutput::Unit)
     }
 
     fn emit_resource_accessor(&self, service: &ServiceHandler<'_>) -> Option<TokenStream> {
         let spec = service.accessor_spec()?;
         let method_name = format_ident!("{}", spec.singular);
-        let client_name = format_ident!("Py{}", service.client_type().to_string());
+        let client_name = self.flavor.class_ident(&service.client_type().to_string());
 
         let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
         let param_list = param_idents

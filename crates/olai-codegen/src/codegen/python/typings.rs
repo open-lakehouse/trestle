@@ -3,9 +3,9 @@
 use textwrap::{Options, dedent, fill, indent, refill};
 
 use super::{
-    DOCS_TARGET_WIDTH, clean_and_format_description, extract_simple_type_name, is_list_method,
-    python_type_annotation, python_type_annotation_from_ident, resource_pattern_params,
-    sanitize_python_field_name,
+    DOCS_TARGET_WIDTH, PyFlavor, clean_and_format_description, extract_simple_type_name,
+    is_list_method, python_type_annotation, python_type_annotation_from_ident,
+    resource_pattern_params, sanitize_python_field_name,
 };
 use crate::analysis::RequestType;
 use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
@@ -43,30 +43,35 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
 
     let mut service_indices: Vec<usize> = (0..services.len()).collect();
     service_indices.sort_by_key(|&i| &services[i].plan.service_name);
+    let sorted_services: Vec<_> = service_indices.iter().map(|&i| &services[i]).collect();
+    let bindings = bindings.expect("bindings required when generating python typings");
 
-    for &i in &service_indices {
-        let service = &services[i];
-        // Resource-less (Flat) services have no per-service scoped client in the real bindings
-        // (their methods live on the aggregate client), so they must not get a phantom scoped
-        // class in the `.pyi` either. Flat-lowered resource services (no scoped client) are
-        // likewise excluded.
-        if !service.emits_scoped_binding() {
-            continue;
+    // One set of client classes per enabled flavor: `FooClient` (blocking) and/or
+    // `AsyncFooClient` (awaitable), mirroring the bindings emitter.
+    for flavor in PyFlavor::enabled(bindings.python_api) {
+        for service in &sorted_services {
+            // Resource-less (Flat) services have no per-service scoped client in the real
+            // bindings (their methods live on the aggregate client), so they must not get a
+            // phantom scoped class in the `.pyi` either. Flat-lowered resource services (no
+            // scoped client) are likewise excluded.
+            if !service.emits_scoped_binding() {
+                continue;
+            }
+            let service_class = generate_service_class_typings(service, services, flavor);
+            content.push(service_class);
+            content.push("".to_string());
         }
-        let service_class = generate_service_class_typings(service, services);
-        content.push(service_class);
+
+        let main_client_class = generate_main_client_class_typings(
+            &sorted_services,
+            bindings.aggregate_client_name.as_str(),
+            flavor,
+        );
+        content.push(main_client_class);
         content.push("".to_string());
     }
-
-    let sorted_services: Vec<_> = service_indices.iter().map(|&i| &services[i]).collect();
-    let main_client_class = generate_main_client_class_typings(
-        &sorted_services,
-        bindings
-            .expect("bindings required when generating python typings")
-            .aggregate_client_name
-            .as_str(),
-    );
-    content.push(main_client_class);
+    // The class blocks above are blank-line separated; drop the trailing separator.
+    content.pop();
 
     let body = content.join("\n");
 
@@ -76,10 +81,18 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
         body.split(|c: char| !c.is_alphanumeric() && c != '_')
             .any(|tok| tok == name)
     };
-    let typing_names: Vec<&str> = ["Optional", "List", "Dict", "Any", "Literal"]
-        .into_iter()
-        .filter(|n| uses(n))
-        .collect();
+    let typing_names: Vec<&str> = [
+        "Optional",
+        "List",
+        "Dict",
+        "Any",
+        "Literal",
+        "Iterator",
+        "AsyncIterator",
+    ]
+    .into_iter()
+    .filter(|n| uses(n))
+    .collect();
 
     let mut header = vec!["from __future__ import annotations".to_string()];
     if !typing_names.is_empty() {
@@ -93,7 +106,33 @@ pub(crate) fn generate_typings(services: &[ServiceHandler<'_>]) -> String {
     format!("{}\n{}", header.join("\n"), body)
 }
 
-fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<String> {
+/// The `.pyi` return type of a list method: a lazy pager over its items (`Iterator[T]` for the
+/// blocking client, `AsyncIterator[T]` for the awaitable one).
+fn list_return_type(method: &MethodHandler<'_>, flavor: PyFlavor) -> String {
+    let Some(items_field) = method.list_output_field() else {
+        return "Any".to_string();
+    };
+    let item_type = python_type_annotation(&items_field.unified_type);
+    let item_type = item_type.trim_start_matches("List[").trim_end_matches("]");
+    match flavor {
+        PyFlavor::Sync => format!("Iterator[{item_type}]"),
+        PyFlavor::Async => format!("AsyncIterator[{item_type}]"),
+    }
+}
+
+/// The `def` keyword for a method stub: async-flavor methods are coroutines (`async def`), except
+/// list methods, which return their [`AsyncIterator`](list_return_type) pager directly.
+fn def_keyword(method: &MethodHandler<'_>, flavor: PyFlavor) -> &'static str {
+    match flavor {
+        PyFlavor::Async if !is_list_method(method) => "async def",
+        _ => "def",
+    }
+}
+
+fn generate_method_typings_signature(
+    method: &MethodHandler<'_>,
+    flavor: PyFlavor,
+) -> Option<String> {
     let method_name = match &method.plan.request_type {
         RequestType::Get | RequestType::Update => method.plan.resource_client_method().to_string(),
         RequestType::Delete => method.plan.resource_client_method().to_string(),
@@ -111,17 +150,7 @@ fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<Strin
 
     let return_type = match &method.plan.request_type {
         RequestType::Delete => "None".to_string(),
-        RequestType::List => {
-            if let Some(items_field) = method.list_output_field() {
-                let item_type = python_type_annotation(&items_field.unified_type);
-                format!(
-                    "List[{}]",
-                    item_type.trim_start_matches("List[").trim_end_matches("]")
-                )
-            } else {
-                "Any".to_string()
-            }
-        }
+        RequestType::List => list_return_type(method, flavor),
         _ => {
             if let Some(output_type) = method.output_type() {
                 python_type_annotation_from_ident(&output_type)
@@ -151,8 +180,14 @@ fn generate_method_typings_signature(method: &MethodHandler<'_>) -> Option<Strin
     } else {
         Some(docstring.trim())
     };
-    let method_stub =
-        generate_method_template(&method_name, &params_vec, &return_type, docstring_text, 1);
+    let method_stub = generate_def_template(
+        def_keyword(method, flavor),
+        &method_name,
+        &params_vec,
+        &return_type,
+        docstring_text,
+        1,
+    );
 
     Some(method_stub)
 }
@@ -373,6 +408,7 @@ fn get_return_type_documentation(method: &MethodHandler<'_>) -> String {
 fn generate_resource_accessor_methods_for_typings(
     service: &ServiceHandler<'_>,
     all_services: &[ServiceHandler<'_>],
+    flavor: PyFlavor,
 ) -> Vec<String> {
     let parent_resource = match service.resource() {
         Some(r) => r,
@@ -415,7 +451,7 @@ fn generate_resource_accessor_methods_for_typings(
                 .unwrap_or_default();
             let mut params = vec!["self".to_string()];
             params.extend(accessor_params.iter().map(|p| format!("{p}: str")));
-            let return_type = format!("{}", other.client_type());
+            let return_type = flavor.class_name(&other.client_type().to_string());
 
             methods.push(generate_method_template(
                 method_name,
@@ -446,7 +482,7 @@ fn generate_resource_accessor_methods_for_typings(
             let child_params = resource_pattern_params(child_pattern);
             let mut params = vec!["self".to_string()];
             params.extend(child_params.iter().map(|p| format!("{p}: str")));
-            let return_type = format!("{}", other.client_type());
+            let return_type = flavor.class_name(&other.client_type().to_string());
 
             methods.push(generate_method_template(
                 method_name,
@@ -464,15 +500,15 @@ fn generate_resource_accessor_methods_for_typings(
 fn generate_service_class_typings(
     service: &ServiceHandler<'_>,
     all_services: &[ServiceHandler<'_>],
+    flavor: PyFlavor,
 ) -> String {
-    let rust_client_ident = service.client_type();
-    let client_ident = format!("{rust_client_ident}");
+    let client_ident = flavor.class_name(&service.client_type().to_string());
 
     let mut method_signatures: Vec<_> = service
         .methods()
         .filter(|method| !method.is_collection_method())
         .filter_map(|method| {
-            generate_method_typings_signature(&method)
+            generate_method_typings_signature(&method, flavor)
                 .map(|sig| (method.plan.base_method_ident().to_string(), sig))
         })
         .collect();
@@ -483,6 +519,7 @@ fn generate_service_class_typings(
     methods.extend(generate_resource_accessor_methods_for_typings(
         service,
         all_services,
+        flavor,
     ));
 
     let body_content = if methods.is_empty() {
@@ -503,21 +540,12 @@ fn generate_service_class_typings(
 fn generate_aggregate_method_typing(
     method: &MethodHandler<'_>,
     drop_path: bool,
+    flavor: PyFlavor,
 ) -> (String, String) {
     let method_name = method.binding_method_name_str();
 
     let return_type = match &method.plan.request_type {
-        RequestType::List => {
-            if let Some(items_field) = method.list_output_field() {
-                let item_type = python_type_annotation(&items_field.unified_type);
-                format!(
-                    "List[{}]",
-                    item_type.trim_start_matches("List[").trim_end_matches("]")
-                )
-            } else {
-                "Any".to_string()
-            }
-        }
+        RequestType::List => list_return_type(method, flavor),
         _ => {
             // Empty-returning RPCs (e.g. a `Touch*` custom method) are typed `None` in Python.
             if let Some(output_type) = method.output_type() {
@@ -541,13 +569,21 @@ fn generate_aggregate_method_typing(
 
     (
         method_name.clone(),
-        generate_method_template(&method_name, &params, &return_type, docstring_text, 1),
+        generate_def_template(
+            def_keyword(method, flavor),
+            &method_name,
+            &params,
+            &return_type,
+            docstring_text,
+            1,
+        ),
     )
 }
 
 fn generate_main_client_class_typings(
     services: &[&ServiceHandler<'_>],
     client_class_name: &str,
+    flavor: PyFlavor,
 ) -> String {
     let mut collection_methods = services
         .iter()
@@ -579,7 +615,7 @@ fn generate_main_client_class_typings(
                 }
                 // Collection methods of scoped services drop path params; flat methods keep them.
                 let drop_path = !is_flat;
-                Some(generate_aggregate_method_typing(&method, drop_path))
+                Some(generate_aggregate_method_typing(&method, drop_path, flavor))
             })
         })
         .collect::<Vec<_>>();
@@ -596,7 +632,7 @@ fn generate_main_client_class_typings(
         .filter_map(|service| {
             let resource = service.resource()?;
             let method_name = resource.descriptor.singular.clone();
-            let client_name = format!("{}", service.client_type());
+            let client_name = flavor.class_name(&service.client_type().to_string());
             // Guarded by `resource()?` above, so accessor params are always populated.
             let pattern_params = service
                 .plan
@@ -643,7 +679,12 @@ fn generate_main_client_class_typings(
                 .join("\n")
         };
 
-    generate_class_from_template(client_class_name, "", None, &main_client_all_methods)
+    generate_class_from_template(
+        &flavor.class_name(client_class_name),
+        "",
+        None,
+        &main_client_all_methods,
+    )
 }
 
 // --- Type collection ---
@@ -1029,6 +1070,25 @@ fn generate_method_template(
     docstring: Option<&str>,
     indent_level: usize,
 ) -> String {
+    generate_def_template(
+        "def",
+        method_name,
+        params,
+        return_type,
+        docstring,
+        indent_level,
+    )
+}
+
+/// [`generate_method_template`] with an explicit definition keyword (`def` / `async def`).
+fn generate_def_template(
+    def_kw: &str,
+    method_name: &str,
+    params: &[String],
+    return_type: &str,
+    docstring: Option<&str>,
+    indent_level: usize,
+) -> String {
     let indent_str = "    ".repeat(indent_level);
 
     let params_str = if params.len() <= 3 {
@@ -1043,9 +1103,9 @@ fn generate_method_template(
     };
 
     let signature = if params.len() <= 3 {
-        format!("def {method_name}({params_str}) -> {return_type}:")
+        format!("{def_kw} {method_name}({params_str}) -> {return_type}:")
     } else {
-        format!("def {method_name}(\n{params_str}\n{indent_str}) -> {return_type}:")
+        format!("{def_kw} {method_name}(\n{params_str}\n{indent_str}) -> {return_type}:")
     };
 
     let mut result = indent(&signature, &indent_str);

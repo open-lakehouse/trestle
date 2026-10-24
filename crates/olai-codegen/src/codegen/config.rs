@@ -108,6 +108,39 @@ pub enum Runtime {
     Buffa,
 }
 
+/// Which Python client flavors the PyO3 bindings expose.
+///
+/// Both flavors wrap the same Rust client and run on one shared Tokio runtime (see the
+/// generated `codegen/runtime.rs`).
+///
+/// - [`PythonApi::Sync`]: blocking clients only (`ExampleClient`). The generated code depends on
+///   `tokio` but not on `pyo3-async-runtimes`.
+/// - [`PythonApi::Async`]: awaitable clients only (`AsyncExampleClient`), built on
+///   `pyo3_async_runtimes::tokio::future_into_py`.
+/// - [`PythonApi::Both`] (default): both sets of classes side by side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PythonApi {
+    /// Blocking clients only.
+    Sync,
+    /// Awaitable (`asyncio`) clients only.
+    Async,
+    /// Blocking and awaitable clients.
+    #[default]
+    Both,
+}
+
+impl PythonApi {
+    /// Whether the blocking clients are emitted.
+    pub fn has_sync(self) -> bool {
+        matches!(self, Self::Sync | Self::Both)
+    }
+
+    /// Whether the awaitable clients are emitted (and `pyo3-async-runtimes` is required).
+    pub fn has_async(self) -> bool {
+        matches!(self, Self::Async | Self::Both)
+    }
+}
+
 /// Validated model import path derived from a `{service}` template string.
 ///
 /// Constructed once from [`CodeGenConfig`] template fields. `resolve` performs the
@@ -206,7 +239,13 @@ pub struct BindingsConfig {
     /// Fully-qualified Python error type (e.g. `"PyMyServiceError"`).
     pub py_error_type: String,
     /// Fully-qualified Python result alias (e.g. `"PyMyServiceResult"`).
+    ///
+    /// Not referenced by the generated PyO3 client, whose methods return `PyResult` (so they can
+    /// surface Python signals such as `KeyboardInterrupt` alongside `py_error_type` errors).
+    /// Retained for configuration compatibility.
     pub py_result_type: String,
+    /// Which Python client flavors (sync / async / both) to emit. See [`PythonApi`].
+    pub python_api: PythonApi,
     /// Name of the NAPI error extension trait (e.g. `"NapiErrorExt"`).
     pub napi_error_ext_trait: String,
     /// Optional substring filter for the Python typings package.

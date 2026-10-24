@@ -106,6 +106,7 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
             client_crate_name: "example_client".into(),
             py_error_type: "PyExampleError".into(),
             py_result_type: "PyExampleResult".into(),
+            python_api: olai_codegen::PythonApi::Both,
             napi_error_ext_trait: "NapiErrorExt".into(),
             typings_package_filter: Some(".example.".into()),
             ts_error_base_class: "ExampleError".into(),
