@@ -594,6 +594,12 @@ fn mlflow_template_uses_base_path_and_planner_driven_depends_on() {
         "no fallback hack: {s3}"
     );
     assert!(!s3_env.contains("AZURE_STORAGE_CONNECTION_STRING"));
+    // The database password reaches libpq on its own line, never inside the URI.
+    assert!(
+        s3_env.contains("MLFLOW_BACKEND_STORE_URI=postgresql://postgres@db:5432/mlflow\n"),
+        "{s3_env}"
+    );
+    assert!(s3_env.contains("\nPGPASSWORD="), "{s3_env}");
 
     // depends_on follows the chosen providers: db healthy + rustfs-init completed.
     let dep = &svc["depends_on"];
