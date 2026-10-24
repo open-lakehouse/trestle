@@ -46,7 +46,9 @@ impl NapiExampleClient {
     }
     #[napi(catch_unwind)]
     pub async fn list_catalogs(&self, max_results: i32) -> napi::Result<Vec<Buffer>> {
-        let mut request = self.client.list_catalogs(max_results, page_token);
+        let mut request = self
+            .client
+            .list_catalogs(max_results, ::std::string::String::new());
         request
             .into_stream()
             .map_ok(|item| Buffer::from(item.encode_to_vec()))
@@ -60,7 +62,9 @@ impl NapiExampleClient {
         env: Env,
         max_results: i32,
     ) -> napi::Result<ReadableStream<'_, Buffer>> {
-        let mut request = self.client.list_catalogs(max_results, page_token);
+        let mut request = self
+            .client
+            .list_catalogs(max_results, ::std::string::String::new());
         ReadableStream::new(
             &env,
             request
@@ -129,7 +133,7 @@ impl NapiExampleClient {
     ) -> napi::Result<Vec<Buffer>> {
         let mut request = self
             .client
-            .list_schemas(catalog_name, max_results, page_token);
+            .list_schemas(catalog_name, max_results, ::std::string::String::new());
         request
             .into_stream()
             .map_ok(|item| Buffer::from(item.encode_to_vec()))
@@ -146,7 +150,7 @@ impl NapiExampleClient {
     ) -> napi::Result<ReadableStream<'_, Buffer>> {
         let mut request = self
             .client
-            .list_schemas(catalog_name, max_results, page_token);
+            .list_schemas(catalog_name, max_results, ::std::string::String::new());
         ReadableStream::new(
             &env,
             request

@@ -8,7 +8,7 @@ use super::{
     sanitize_python_field_name,
 };
 use crate::analysis::RequestType;
-use crate::codegen::{MethodHandler, ServiceHandler};
+use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
 use crate::google::api::http_rule::Pattern;
 use crate::parsing::types::{BaseType, UnifiedType, unified_to_python_type};
 use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo};
@@ -171,28 +171,27 @@ fn generate_method_parameters_for_typings_inner(
     method: &MethodHandler<'_>,
     drop_path: bool,
 ) -> Vec<String> {
-    let mut parameters = Vec::new();
-
-    for param in method.required_parameters() {
-        if !(drop_path && param.is_path_param()) {
+    let mode = if drop_path {
+        BindingMode::Scoped
+    } else {
+        BindingMode::Flat
+    };
+    method
+        .param_plan(mode)
+        .into_iter()
+        .map(|param| {
             let param_type = python_type_annotation(param.field_type());
-            parameters.push(format!("{}: {}", param.name(), param_type));
-        }
-    }
-
-    for param in method.optional_parameters() {
-        if !(is_list_method(method) && param.name() == "page_token") {
-            let param_type = python_type_annotation(param.field_type());
+            if !param.is_optional() {
+                return format!("{}: {}", param.name(), param_type);
+            }
             let param_type = if param_type.starts_with("Optional[") {
                 param_type
             } else {
                 format!("Optional[{param_type}]")
             };
-            parameters.push(format!("{}: {} = None", param.name(), param_type));
-        }
-    }
-
-    parameters
+            format!("{}: {} = None", param.name(), param_type)
+        })
+        .collect()
 }
 
 fn format_method_docstring_with_params(method: &MethodHandler<'_>) -> String {
@@ -309,6 +308,7 @@ fn collect_parameter_documentation(method: &MethodHandler<'_>) -> Vec<(String, S
 
     for param in method.required_parameters() {
         if !param.is_path_param()
+            && !(is_list_method(method) && param.name() == "page_token")
             && let Some(doc) = param.documentation()
         {
             let cleaned_doc = clean_and_format_description(doc);

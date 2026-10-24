@@ -302,19 +302,13 @@ class ExampleClient():
             The requested resource
         """
         ...
-    def list_catalogs(self, max_results: int, page_token: str) -> List[Catalog]:
+    def list_catalogs(self, max_results: int) -> List[Catalog]:
         """
         Returns:
             List of items
         """
         ...
-    def list_schemas(
-
-            self,
-            catalog_name: str,
-            max_results: int,
-            page_token: str
-        ) -> List[Schema]:
+    def list_schemas(self, catalog_name: str, max_results: int) -> List[Schema]:
         """
         Args:
             catalog_name: Parent scoping field carrying the child-type reference that makes Schema a child

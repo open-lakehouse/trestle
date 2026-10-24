@@ -57,7 +57,9 @@ impl PyExampleClient {
         py: Python,
         max_results: i32,
     ) -> PyExampleResult<::std::vec::Vec<PyCatalog>> {
-        let request = self.client.list_catalogs(max_results, page_token);
+        let request = self
+            .client
+            .list_catalogs(max_results, ::std::string::String::new());
         let runtime = get_runtime(py)?;
         py.detach(|| {
             let result: ::std::vec::Vec<_> = runtime
@@ -131,7 +133,9 @@ impl PyExampleClient {
         catalog_name: String,
         max_results: i32,
     ) -> PyExampleResult<::std::vec::Vec<PySchema>> {
-        let request = self.client.list_schemas(catalog_name, max_results, page_token);
+        let request = self
+            .client
+            .list_schemas(catalog_name, max_results, ::std::string::String::new());
         let runtime = get_runtime(py)?;
         py.detach(|| {
             let result: ::std::vec::Vec<_> = runtime

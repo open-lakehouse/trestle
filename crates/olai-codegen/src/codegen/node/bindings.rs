@@ -10,6 +10,7 @@ use quote::{format_ident, quote};
 
 use super::super::format_tokens;
 use super::caps::{is_napi_supported, is_napi_supported_type, is_required_message_body};
+use crate::analysis::EmitShape;
 use crate::codegen::bindings::builder::{OptionalSetter, SetterRender, generate_builder_pattern};
 use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
 use crate::codegen::{BindingMode, MethodHandler, Runtime, ServiceHandler};
@@ -219,6 +220,7 @@ impl BindingBackend for NapiBackend {
             BindingMode::Scoped => (method.plan.resource_client_method(), true),
             BindingMode::Flat => (method.plan.base_method_ident(), false),
         };
+        let is_list = method.emit_shape() == EmitShape::List;
         let args = method
             .required_parameters()
             .filter(|param| {
@@ -226,6 +228,11 @@ impl BindingBackend for NapiBackend {
                     && (is_napi_supported(param) || is_required_message_body(param))
             })
             .map(|param| {
+                // A required `page_token` isn't exposed on list methods (the stream drives
+                // pagination and overwrites it), so seed the builder with an empty token.
+                if is_list && param.name() == "page_token" {
+                    return quote! { ::std::string::String::new() };
+                }
                 let param_name = param.field_ident();
                 if is_required_message_body(param) {
                     // Decode the protobuf bytes received over the NAPI boundary back into the message.

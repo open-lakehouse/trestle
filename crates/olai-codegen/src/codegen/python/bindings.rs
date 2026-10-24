@@ -11,6 +11,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::super::format_tokens;
+use crate::analysis::EmitShape;
 use crate::codegen::bindings::builder::{OptionalSetter, SetterRender, generate_builder_pattern};
 use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
 use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
@@ -275,10 +276,16 @@ impl BindingBackend for PyBackend {
             BindingMode::Scoped => (method.plan.resource_client_method(), true),
             BindingMode::Flat => (method.plan.base_method_ident(), false),
         };
+        let is_list = method.emit_shape() == EmitShape::List;
         let args = method
             .required_parameters()
             .filter(|param| !(drop_path && param.is_path_param()))
             .map(|param| {
+                // A required `page_token` isn't exposed to Python on list methods (the stream drives
+                // pagination and overwrites it), so seed the builder with an empty token.
+                if is_list && param.name() == "page_token" {
+                    return quote! { ::std::string::String::new() };
+                }
                 let param_name = param.field_ident();
                 // Required message/enum params arrive as their `Py` wrapper and must
                 // be converted back to the bare model the Rust client takes.
