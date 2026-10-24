@@ -66,6 +66,9 @@ static_resources:
                         - match: { prefix: "/" }
                           route:
                             cluster: rustfs
+                          response_headers_to_add:
+                            - header: { key: "x-amz-bucket-region", value: "us-east-1" }
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
                 http_filters:
                   - name: envoy.filters.http.router
                     typed_config:

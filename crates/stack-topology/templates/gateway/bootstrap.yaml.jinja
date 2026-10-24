@@ -96,6 +96,13 @@ static_resources:
                           # caller's at forward time (after any auth check) so they can't shadow them.
                           request_headers_to_remove: ["authorization", "x-api-key"]
 {%- endif %}
+{%- if r.response_headers %}
+                          response_headers_to_add:
+{%- for key, value in r.response_headers | items %}
+                            - header: { key: "{{ key }}", value: "{{ value }}" }
+                              append_action: OVERWRITE_IF_EXISTS_OR_ADD
+{%- endfor %}
+{%- endif %}
 {%- endfor %}
                 http_filters:
 {%- if l.ext_authz and auth is not none %}

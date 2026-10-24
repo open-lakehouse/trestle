@@ -105,6 +105,9 @@ struct RouteCtx<'a> {
     streaming: bool,
     /// Drop caller credentials before forwarding (the upstream holds its own).
     strip_client_credentials: bool,
+    /// The headers the cluster's emulated hostnames add, so a backend reached on its own port
+    /// answers like the public service it stands in for there too.
+    response_headers: Option<&'a BTreeMap<String, String>>,
 }
 
 /// Escape `literal` so RE2 matches it verbatim, in a form that is also valid inside a YAML
@@ -142,6 +145,14 @@ struct ClusterCtx<'a> {
 /// truth — the app catch-all route and cluster, when present, are already in it (the planner
 /// puts them there from [`PlanCtx::app`](crate::PlanCtx::app)).
 pub fn render_envoy(gateway: &GatewayConfig) -> String {
+    let impersonated_headers = |cluster: &str| {
+        gateway
+            .tls
+            .iter()
+            .flat_map(|t| &t.virtual_hosts)
+            .find(|v| v.cluster == cluster && !v.response_headers.is_empty())
+            .map(|v| &v.response_headers)
+    };
     // Each planner listener becomes an Envoy listener. The shared listener is first (it carries
     // the API/UI routes and, when present, the app catch-all the planner already appended);
     // dedicated listeners (their own port, a single `/` route) follow. An empty gateway still
@@ -167,6 +178,7 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
                     rewrite: r.rewrite.as_deref(),
                     streaming: r.options.streaming,
                     strip_client_credentials: r.options.strip_client_credentials,
+                    response_headers: impersonated_headers(&r.cluster),
                 })
                 .collect(),
             // The shared listener is gated: it carries the API/UI routes. Dedicated listeners

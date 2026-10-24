@@ -143,6 +143,48 @@ fn mlflow_accepts_the_secure_gateway_host() {
 }
 
 #[test]
+fn an_object_store_on_its_own_port_answers_like_the_service_it_emulates() {
+    let p = baseline_catalog()
+        .plan(
+            &Selection::modules(["envoy", "unity-catalog", "rustfs", "postgres"]),
+            &PlanCtx::default(),
+        )
+        .expect("plan should succeed");
+    let doc: serde_yaml::Value = serde_yaml::from_str(&render_all(&p).unwrap().envoy).unwrap();
+    let route_to = |cluster: &str| {
+        doc["static_resources"]["listeners"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .flat_map(|l| l["filter_chains"].as_sequence().unwrap())
+            .flat_map(|c| c["filters"].as_sequence().into_iter().flatten())
+            .flat_map(|f| {
+                f["typed_config"]["route_config"]["virtual_hosts"]
+                    .as_sequence()
+                    .into_iter()
+                    .flatten()
+            })
+            .flat_map(|v| v["routes"].as_sequence().unwrap())
+            .find(|r| r["route"]["cluster"].as_str() == Some(cluster))
+            .unwrap_or_else(|| panic!("a route to {cluster}"))
+            .clone()
+    };
+    // S3 clients on the host read the bucket region from this header (real S3 sends it on
+    // every response), as in-network ones do on the emulated hostnames.
+    let s3 = route_to("rustfs");
+    assert_eq!(
+        s3["response_headers_to_add"][0]["header"]["key"].as_str(),
+        Some("x-amz-bucket-region"),
+        "{s3:?}"
+    );
+    assert!(
+        route_to("unitycatalog")
+            .get("response_headers_to_add")
+            .is_none()
+    );
+}
+
+#[test]
 fn rewrite_patterns_match_prefixes_literally() {
     let envoy = render_all(&authenticated(9080)).unwrap().envoy;
     // `/api/2.0/mlflow` is rewritten under MLflow's base path; its `.` must not be a wildcard.
