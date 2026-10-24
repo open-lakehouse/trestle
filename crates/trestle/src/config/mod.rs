@@ -261,6 +261,34 @@ pub struct PythonClient {
     /// Substring filter for which packages get a `.pyi` stub.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub typings_package_filter: Option<String>,
+    /// Which client flavors to emit: blocking (`sync`), awaitable (`async`), or `both`
+    /// (the default when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<PythonApi>,
+}
+
+/// Python client flavors: `ExampleClient` (blocking) and/or `AsyncExampleClient` (awaitable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PythonApi {
+    /// Blocking clients only; the binding crate needs no `pyo3-async-runtimes`.
+    Sync,
+    /// Awaitable (`asyncio`) clients only.
+    Async,
+    /// Both flavors side by side.
+    #[default]
+    Both,
+}
+
+impl PythonApi {
+    /// Lower to the codegen crate's [`PythonApi`](olai_codegen::PythonApi).
+    pub fn to_codegen(self) -> olai_codegen::PythonApi {
+        match self {
+            PythonApi::Sync => olai_codegen::PythonApi::Sync,
+            PythonApi::Async => olai_codegen::PythonApi::Async,
+            PythonApi::Both => olai_codegen::PythonApi::Both,
+        }
+    }
 }
 
 /// Node.js client config (NAPI / TypeScript / WASM browser variants).
@@ -447,6 +475,30 @@ mod tests {
         assert_eq!(cfg.generate.proto_lib, ProtoLib::Prost);
         assert_eq!(cfg.generate.models.dir, "crates/common/src/models");
         assert!(!cfg.generate.servers.rest);
+    }
+
+    #[test]
+    fn python_api_parses_and_defaults_to_both() {
+        let yaml = |api: &str| {
+            format!(
+                "{}  clients:\n    python:\n      output: crates/client/python/src\n      \
+                 error_type: PyDemoError\n      result_type: PyDemoResult\n{api}",
+                minimal_yaml()
+            )
+        };
+        let api_of = |yaml: &str| {
+            let cfg: TrestleConfig = serde_yaml::from_str(yaml).unwrap();
+            cfg.generate.clients.python.unwrap().api
+        };
+        assert_eq!(api_of(&yaml("")), None);
+        assert_eq!(
+            PythonApi::default().to_codegen(),
+            olai_codegen::PythonApi::Both
+        );
+        assert_eq!(api_of(&yaml("      api: sync\n")), Some(PythonApi::Sync));
+        assert_eq!(api_of(&yaml("      api: async\n")), Some(PythonApi::Async));
+        assert_eq!(api_of(&yaml("      api: both\n")), Some(PythonApi::Both));
+        assert!(serde_yaml::from_str::<TrestleConfig>(&yaml("      api: threads\n")).is_err());
     }
 
     #[test]

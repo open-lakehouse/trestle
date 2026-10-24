@@ -206,6 +206,7 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
                 error_type: String::new(),
                 result_type: String::new(),
                 typings_package_filter: None,
+                api: None,
             });
         }
         if args.clients.contains(&ClientArg::Node) {
@@ -297,6 +298,7 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
             error_type: String::new(),
             result_type: String::new(),
             typings_package_filter: None,
+            api: None,
         });
     }
     if clients.contains(&ClientSel::Node) && cfg.generate.clients.node.is_none() {
