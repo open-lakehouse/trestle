@@ -73,8 +73,8 @@ URL template (path/query/body, in template order) — it does **not** invent a p
 resource-based param derivation.
 
 `Empty` returns are handled per-emitter from `MethodHandler::output_type()` being
-`None`: the Python emitter (`wrap_single_output`) yields `()` so the wrapper becomes
-`PyUnityCatalogResult<()>`; the TS/Node emitters likewise yield `Promise<void>` /
+`None`: the Python emitter (`PyOutput::Unit`) returns `PyResult<()>` from blocking methods
+and resolves awaitables to `None`; the TS/Node emitters likewise yield `Promise<void>` /
 `napi::Result<()>`.
 
 ### Generated Rust aggregate root client

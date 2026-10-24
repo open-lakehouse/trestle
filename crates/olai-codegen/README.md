@@ -138,6 +138,59 @@ Generated clients are decoupled from their HTTP transport via
 add `output.wasm` + `runtime: buffa` to also emit `#[wasm_bindgen]` JS bindings
 and a `client.d.ts`. See the `olai-http-wasm` README for details.
 
+## Python clients (sync and async)
+
+`output.python` emits a PyO3 binding module into the Python crate's `src/codegen/`. Each
+client comes in up to two flavors, chosen with `BindingsConfig::python_api` (`python.api:
+sync | async | both` in `trestle.yaml`, default `both`):
+
+```python
+from my_service import ExampleClient, AsyncExampleClient
+
+client = ExampleClient("https://api.example.com", token="...")
+catalog = client.catalog("main").get()          # blocks, GIL released
+for c in client.list_catalogs(max_results=50):  # lazy pager: pages fetched on demand
+    print(c.name)
+
+async def main():
+    aclient = AsyncExampleClient("https://api.example.com", token="...")
+    catalog = await aclient.catalog("main").get()
+    async for c in aclient.list_catalogs(max_results=50):
+        print(c.name)
+```
+
+Both flavors wrap the same Rust client and run on **one** process-wide multi-thread Tokio
+runtime, emitted into `codegen/runtime.rs` (you no longer hand-write a `runtime.rs`):
+
+- With async enabled, it is `pyo3-async-runtimes`' runtime, so awaitables
+  (`future_into_py`) and blocking calls share it and its connection pool. To tune it, call
+  `pyo3_async_runtimes::tokio::init(builder)` in your `#[pymodule]` before the first call;
+  the builder must enable I/O and timers (`enable_all`).
+- Sync-only output builds its own runtime lazily on first use.
+- Blocking calls release the GIL and wake every 100ms to run Python signal handlers, so
+  Ctrl-C interrupts an in-flight request. Cancelling an asyncio task drops its request.
+- The runtime starts on the first call, not at import. A process forked *after* that must
+  not keep using clients created before the fork.
+
+List methods return lazy pagers (`ListIterator` / `AsyncListIterator`, typed as
+`Iterator[T]` / `AsyncIterator[T]` in the `.pyi`) rather than lists; wrap them in
+`list(...)` when you need `len()` or indexing.
+
+You hand-write the crate's `error` module (the configured `py_error_type`, with `From`
+impls from your client `Error` and `url::ParseError`, and into `PyErr`) and the
+`#[pymodule]`, which can register everything with one call:
+
+```rust,ignore
+#[pymodule]
+fn my_service(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    codegen::register_clients(m)
+}
+```
+
+The binding crate depends on `pyo3`, `tokio` (`rt-multi-thread`, `sync`, `time`),
+`futures`, and, unless `python_api` is `Sync`, `pyo3-async-runtimes` with the
+`tokio-runtime` feature (keep it on the same minor version as `pyo3`).
+
 ## Examples
 
 The `proto/` directory has fully-annotated example definitions and a compiled
