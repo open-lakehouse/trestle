@@ -1,0 +1,28 @@
+# The generated PyO3 client bindings (sync + async) for the buffa e2e fixture,
+# compiled for real against the `buffa-e2e` client crate and driven from Python
+# by the tests in `src/lib.rs`. Run with the rest of the fixture:
+#
+#     cargo test --manifest-path crates/olai-codegen/tests/buffa_e2e/Cargo.toml --workspace --features python
+[package]
+name = "buffa-e2e-py"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# local crates (in alphabetical order)
+buffa-e2e = { path = "..", features = ["python"] }
+olai-http = { path = "../../../../olai-http" }
+
+# crates.io dependencies (in alphabetical order)
+futures = "0.3"
+# Keep pyo3-async-runtimes on the same minor as pyo3.
+pyo3 = "0.28"
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+url = "2"
+
+# The generated bindings reference these; machete's static scan of this crate's
+# own source can't see through the `include!`.
+[package.metadata.cargo-machete]
+ignored = ["futures", "olai-http", "pyo3-async-runtimes", "tokio"]

@@ -3,6 +3,7 @@ package demo.v1;
 
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
 
 enum Color {
   COLOR_UNSPECIFIED = 0;
@@ -60,5 +61,56 @@ message ListWidgetsResponse {
 service WidgetService {
   rpc ListWidgets(ListWidgetsRequest) returns (ListWidgetsResponse) {
     option (google.api.http) = { get: "/widgets" };
+  }
+}
+
+// A resource-annotated message. Its service gets the standard Get/List/Delete
+// classification, so the bindings emit a resource-scoped `GadgetClient` (plus its
+// `AsyncGadgetClient` twin) and a paginated list (`next_page_token`) that the
+// Python bindings expose as a lazy pager.
+message Gadget {
+  option (google.api.resource) = {
+    type: "demo.io/Gadget"
+    pattern: "gadgets/{gadget}"
+    plural: "gadgets"
+    singular: "gadget"
+  };
+
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  Color color = 2;
+}
+
+message GetGadgetRequest {
+  string name = 1;
+}
+
+// `optional` paging fields: the generated `into_stream` pagination treats
+// `max_results` as an optional cap and `page_token` / `next_page_token` as an
+// optional cursor.
+message ListGadgetsRequest {
+  optional int32 max_results = 1;
+  optional string page_token = 2;
+}
+
+message ListGadgetsResponse {
+  repeated Gadget gadgets = 1;
+  optional string next_page_token = 2;
+}
+
+message DeleteGadgetRequest {
+  string name = 1;
+}
+
+message DeleteGadgetResponse {}
+
+service GadgetService {
+  rpc GetGadget(GetGadgetRequest) returns (Gadget) {
+    option (google.api.http) = { get: "/gadgets/{name}" };
+  }
+  rpc ListGadgets(ListGadgetsRequest) returns (ListGadgetsResponse) {
+    option (google.api.http) = { get: "/gadgets" };
+  }
+  rpc DeleteGadget(DeleteGadgetRequest) returns (DeleteGadgetResponse) {
+    option (google.api.http) = { delete: "/gadgets/{name}" };
   }
 }

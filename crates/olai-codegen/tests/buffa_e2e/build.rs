@@ -56,6 +56,7 @@ fn main() {
         runtime: Runtime::Buffa,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
         client_protocols: olai_codegen::ClientProtocols::default(),
+        dual_transport: false,
         connect_client_path: None,
         output: CodeGenOutput {
             common: common_dir,
@@ -63,11 +64,11 @@ fn main() {
             models_subdir: "_gen".into(),
             server: None,
             client: Some(client_dir),
-            generate_resource_clients: false,
+            generate_resource_clients: true,
             // Enabling Python output makes the models block emit `pyo3_impls.rs`
             // (FromPyObject/IntoPyObject for the buffa model types) — the thing
             // this fixture proves compiles & round-trips against real buffa types.
-            python: Some(python_dir),
+            python: Some(python_dir.clone()),
             node: None,
             node_ts: None,
             wasm: None,
@@ -77,15 +78,21 @@ fn main() {
         generate_store_integration: false,
         error_type_path: None,
         generate_object_conversions: false,
-        // Python output requires a bindings config. We don't include! the PyO3
-        // client wrappers (they reference a `crate::error`/`crate::runtime` we
-        // don't define here) — only `pyo3_impls.rs` from the models dir — but the
-        // config still has to be present for generation to run.
+        // Python output requires a bindings config. This crate only include!s
+        // `pyo3_impls.rs` from the models dir; the PyO3 client wrappers (which
+        // name this crate as `buffa_e2e`) are compiled by the `py/` member crate.
         bindings: Some(BindingsConfig {
             aggregate_client_name: "DemoClient".into(),
             client_crate_name: "buffa_e2e".into(),
             py_error_type: "PyDemoError".into(),
             py_result_type: "PyDemoResult".into(),
+            // `BUFFA_E2E_PYTHON_API=sync|async` builds a single flavor (compile-check it with
+            // `cargo build -p buffa-e2e-py`; the `py` tests drive both and expect the default).
+            python_api: match std::env::var("BUFFA_E2E_PYTHON_API").as_deref() {
+                Ok("sync") => olai_codegen::PythonApi::Sync,
+                Ok("async") => olai_codegen::PythonApi::Async,
+                _ => olai_codegen::PythonApi::Both,
+            },
             napi_error_ext_trait: "NapiErrorExt".into(),
             typings_package_filter: Some(".demo.".into()),
             ts_error_base_class: "DemoError".into(),
@@ -94,6 +101,10 @@ fn main() {
     };
     generate_code(&metadata, &config).unwrap();
 
+    // Hand the generated PyO3 bindings to `py/build.rs` (`DEP_BUFFA_E2E_PYTHON_DIR`).
+    println!("cargo:python_dir={}", python_dir.display());
+
     println!("cargo:rerun-if-changed=proto/svc.bin");
+    println!("cargo:rerun-if-env-changed=BUFFA_E2E_PYTHON_API");
     println!("cargo:rerun-if-changed=proto/exported/svc.proto");
 }

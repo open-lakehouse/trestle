@@ -15,13 +15,21 @@
 # does not match when the repo is checked out under a nested path (e.g. a git
 # worktree). An empty `[workspace]` table makes the crate self-contained in any
 # checkout — cargo stops walking up and never resolves it into a parent workspace.
+#
+# `py/` is the generated PyO3 binding crate (sync + async clients), kept separate
+# because the bindings name this crate as the client crate (`buffa_e2e::…`), as a
+# real project's Python crate depends on its client crate.
 [workspace]
+members = ["py"]
 
 [package]
 name = "buffa-e2e"
 version = "0.0.0"
 edition = "2024"
 publish = false
+# Exposes the generated Python bindings dir to `py/build.rs` as
+# `DEP_BUFFA_E2E_PYTHON_DIR` (see `build.rs`).
+links = "buffa_e2e"
 
 [features]
 # Compiles the generated `pyo3_impls.rs` (FromPyObject/IntoPyObject for the buffa

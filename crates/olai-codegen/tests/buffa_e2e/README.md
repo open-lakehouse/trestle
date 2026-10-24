@@ -35,6 +35,22 @@ attribute access, an `isinstance`-checkable class, a real enum member, and a
 cargo test --manifest-path crates/olai-codegen/tests/buffa_e2e/Cargo.toml --features python
 ```
 
+The generated PyO3 **client bindings** (sync `DemoClient` / `GadgetClient` and their
+`Async*` twins, the shared `runtime.rs`, and the list pagers) are compiled by the
+`py/` workspace member, which depends on this crate as its client crate exactly as a
+real Python binding crate does. Its tests drive both flavors from Python against a
+local HTTP stub: calls, two-page pagination through `ListIterator` /
+`AsyncListIterator`, error mapping to the configured exception, concurrent awaits, and
+cancellation via `asyncio.wait_for`:
+
+```sh
+cargo test --manifest-path crates/olai-codegen/tests/buffa_e2e/Cargo.toml --workspace --features python
+```
+
+`BUFFA_E2E_PYTHON_API=sync` (or `async`) generates a single flavor instead of both, to
+compile-check that variant (the `py/` tests expect both, so use `cargo build -p buffa-e2e-py
+--features buffa-e2e/python`).
+
 ## Running
 
 Requires `protoc` on `PATH` (buffa-build invokes it). The proto sources and their
@@ -66,4 +82,10 @@ types.
 
 ```sh
 cd proto && buf export <module> -o exported && buf build <module> -o svc.bin
+```
+
+Or, after editing `proto/exported/svc.proto` in place:
+
+```sh
+protoc -I proto/exported --include_imports --descriptor_set_out=proto/svc.bin proto/exported/svc.proto
 ```

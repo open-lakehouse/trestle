@@ -20,6 +20,11 @@ pub mod models {
     pub mod pyo3_impls {
         include!(concat!(env!("OUT_DIR"), "/models_gen/_gen/pyo3_impls.rs"));
     }
+
+    // As in the real models `mod.rs`: the `Py*` wrappers are re-exported at the models
+    // root, where the generated client bindings (`py/`) import them from.
+    #[cfg(feature = "python")]
+    pub use pyo3_impls::*;
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -69,6 +74,11 @@ pub mod codegen {
 /// Back-compat alias: earlier the generated client was mounted at `crate::client`.
 pub use codegen as client;
 
+// The client-crate surface the PyO3 bindings import (`buffa_e2e::DemoClient`, …),
+// mirroring how a real client crate re-exports its generated clients at the root.
+pub use codegen::DemoClient;
+pub use codegen::gadget::GadgetClient;
+
 #[cfg(test)]
 mod tests {
     use crate::models::demo::v1::*;
@@ -86,7 +96,10 @@ mod tests {
         let back: ListWidgetsRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
         // proto3-canonical JSON: enums serialize as their proto NAME, not an int.
-        assert!(json.contains("GREEN"), "enum should serialize as name: {json}");
+        assert!(
+            json.contains("GREEN"),
+            "enum should serialize as name: {json}"
+        );
     }
 
     /// Mirror the exact idioms the **node/NAPI** emitter generates for the buffa runtime, so a
@@ -107,8 +120,12 @@ mod tests {
         assert_eq!(opt, Some(Color::Red));
 
         // Message-body decode from NAPI `Buffer` bytes.
-        let bytes = Widget { name: "w".into(), color: EnumValue::Known(Color::Red), ..Default::default() }
-            .encode_to_vec();
+        let bytes = Widget {
+            name: "w".into(),
+            color: EnumValue::Known(Color::Red),
+            ..Default::default()
+        }
+        .encode_to_vec();
         let decoded = <Widget as buffa::Message>::decode_from_slice(&bytes).expect("decodes");
         assert_eq!(decoded.name, "w");
     }
@@ -146,7 +163,10 @@ mod tests {
             };
             let wrapper: PyWidget = widget.clone().into();
 
-            let obj = wrapper.clone().into_pyobject(py).expect("wrapper -> py object");
+            let obj = wrapper
+                .clone()
+                .into_pyobject(py)
+                .expect("wrapper -> py object");
 
             // `isinstance(obj, Widget)` — a real class, not a dict.
             let widget_cls = obj.get_type();
@@ -210,16 +230,25 @@ mod tests {
             let shape_cls = PyType::new::<PyShape>(py);
 
             // Construct via the flattened message-variant kwarg: `Shape(circle=...)`.
-            let circle_obj = PyCircle::from(Circle { radius: 2.5, ..Default::default() })
-                .into_pyobject(py)
-                .unwrap();
+            let circle_obj = PyCircle::from(Circle {
+                radius: 2.5,
+                ..Default::default()
+            })
+            .into_pyobject(py)
+            .unwrap();
             let kwargs = pyo3::types::PyDict::new(py);
             kwargs.set_item("circle", circle_obj).unwrap();
             let shape = shape_cls.call((), Some(&kwargs)).unwrap();
 
             // The active variant reads back through its getter; the others are `None`.
-            assert!(!shape.getattr("circle").unwrap().is_none(), "circle is active");
-            assert!(shape.getattr("square").unwrap().is_none(), "square inactive");
+            assert!(
+                !shape.getattr("circle").unwrap().is_none(),
+                "circle is active"
+            );
+            assert!(
+                shape.getattr("square").unwrap().is_none(),
+                "square inactive"
+            );
             assert!(shape.getattr("label").unwrap().is_none(), "label inactive");
             let circle_back: PyCircle = shape.getattr("circle").unwrap().extract().unwrap();
             assert_eq!(Circle::from(circle_back).radius, 2.5);
@@ -242,16 +271,25 @@ mod tests {
 
             // A later variant wins when more than one kwarg is supplied (declaration
             // order: circle, square, label — so `square` overrides `circle`).
-            let square_obj = PySquare::from(Square { side: 3.0, ..Default::default() })
-                .into_pyobject(py)
-                .unwrap();
+            let square_obj = PySquare::from(Square {
+                side: 3.0,
+                ..Default::default()
+            })
+            .into_pyobject(py)
+            .unwrap();
             let both_kwargs = pyo3::types::PyDict::new(py);
             both_kwargs
-                .set_item("circle", PyCircle::from(Circle::default()).into_pyobject(py).unwrap())
+                .set_item(
+                    "circle",
+                    PyCircle::from(Circle::default()).into_pyobject(py).unwrap(),
+                )
                 .unwrap();
             both_kwargs.set_item("square", square_obj).unwrap();
             let both = shape_cls.call((), Some(&both_kwargs)).unwrap();
-            assert!(both.getattr("circle").unwrap().is_none(), "square overrides circle");
+            assert!(
+                both.getattr("circle").unwrap().is_none(),
+                "square overrides circle"
+            );
             let sq: PySquare = both.getattr("square").unwrap().extract().unwrap();
             assert_eq!(Square::from(sq).side, 3.0);
 
