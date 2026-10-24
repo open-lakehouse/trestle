@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub mod labels;
 pub use labels::{ObjectLabel, Resource};
 #[cfg(feature = "python")]
+#[allow(clippy::clone_on_copy)]
 pub mod pyo3_impls;
 #[cfg(feature = "python")]
 pub use pyo3_impls::*;

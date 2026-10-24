@@ -914,7 +914,11 @@ pub fn generate_models_mod(
     // Gated on the `python` feature so non-Python consumers never pull in pyo3.
     let pyo3_impls_decl: TokenStream = if include_pyo3_impls {
         quote! {
+            // pyo3's `#[pyclass(from_py_object)]` extracts via `Clone::clone`, which trips
+            // `clippy::clone_on_copy` on the (`Copy`) enum wrappers. The call lives in the
+            // macro-generated impl, so only a module-level allow can reach it.
             #[cfg(feature = "python")]
+            #[allow(clippy::clone_on_copy)]
             pub mod pyo3_impls;
             // Re-export the `Py*` wrapper `#[pyclass]` types at the models root so the
             // generated language bindings (and consumers) can name them without

@@ -17,6 +17,7 @@ pub mod models {
     // reproduce that here with a child `pyo3_impls` module so `super` is this
     // `models` module and `super::demo::v1::*` resolves to the buffa models above.
     #[cfg(feature = "python")]
+    #[allow(clippy::clone_on_copy)] // as on the real `pub mod pyo3_impls;` declaration
     pub mod pyo3_impls {
         include!(concat!(env!("OUT_DIR"), "/models_gen/_gen/pyo3_impls.rs"));
     }
@@ -108,7 +109,7 @@ mod tests {
     ///   - message body `Buffer` bytes -> message via `<M as buffa::Message>::decode_from_slice`
     #[test]
     fn buffa_node_marshalling_idioms_compile() {
-        use buffa::{Enumeration as _, Message as _};
+        use buffa::Message as _;
 
         // Required-enum NAPI param conversion (i32 -> bare enum, then builder wraps).
         let color = <Color as buffa::Enumeration>::from_i32(2).expect("known enum");
