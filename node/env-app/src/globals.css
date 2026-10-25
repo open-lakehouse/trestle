@@ -36,6 +36,9 @@
   --color-sidebar: hsl(var(--sidebar));
   --color-sidebar-foreground: hsl(var(--sidebar-foreground));
   --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-activitybar: hsl(var(--activitybar));
+  --color-statusbar: hsl(var(--statusbar));
+  --color-statusbar-foreground: hsl(var(--statusbar-foreground));
   --color-status-planned: hsl(var(--status-planned));
   --color-status-ready: hsl(var(--status-ready));
   --color-status-done: hsl(var(--status-done));
@@ -76,6 +79,10 @@
     --sidebar: 210 40% 98%;
     --sidebar-foreground: 222.2 47.4% 11.2%;
     --sidebar-accent: 210 40% 93%;
+    /* The icon rail left of the sidebar, and the status bar along the bottom. */
+    --activitybar: 210 30% 95%;
+    --statusbar: 212 92% 45%;
+    --statusbar-foreground: 0 0% 100%;
 
     --status-planned: 215 16% 47%;
     --status-ready: 38 92% 50%;
@@ -111,6 +118,9 @@
     --sidebar: 216 28% 9%;
     --sidebar-foreground: 215 31% 93%;
     --sidebar-accent: 216 47% 14%;
+    --activitybar: 216 30% 6%;
+    --statusbar: 216 28% 9%;
+    --statusbar-foreground: 210 9% 72%;
 
     --status-planned: 210 9% 58%;
     --status-ready: 38 92% 60%;

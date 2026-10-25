@@ -64,6 +64,7 @@ export {
   type Origin,
 } from "./state/origin";
 export {
+  type EnvironmentOptions,
   type EnvironmentState,
   useEnvironment,
 } from "./state/useEnvironment";
@@ -98,3 +99,4 @@ export type {
   TopologyEdgeKind,
   VirtualHostDto,
 } from "./types";
+export * from "./workspace";

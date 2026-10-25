@@ -62,6 +62,14 @@ Every consumer MUST define all of these on both `:root` and `.dark`.
 | `--status-in-progress` | Active (usually tracks `--primary`) |
 | `--status-blocked` | Error / blocked |
 
+### IDE chrome (the workspace shell)
+| Variable | Meaning |
+| --- | --- |
+| `--sidebar` / `--sidebar-foreground` | Sidebar and tab-strip surface + text |
+| `--sidebar-accent` | Selected / hovered row in the sidebar |
+| `--activitybar` | The icon rail left of the sidebar |
+| `--statusbar` / `--statusbar-foreground` | The status bar along the bottom + text on it |
+
 ### Typography (font stacks, not HSL)
 | Variable | Meaning |
 | --- | --- |

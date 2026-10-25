@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { strFromU8, unzipSync } from "fflate";
 import type { Bundle } from "../types";
-import { buildBundleZip, fileMode, generateCredentials } from "./bundleZip";
+import {
+  buildBundleZip,
+  buildWorkspaceZip,
+  fileMode,
+  generateCredentials,
+} from "./bundleZip";
 
 const bundle: Bundle = {
   env_name: "lakehouse",
@@ -80,5 +85,18 @@ describe("generateCredentials", () => {
     expect(first.access).toMatch(/^[0-9a-f]{20}$/);
     expect(first.secret).toMatch(/^[0-9a-f]{64}$/);
     expect(generateCredentials(specs).secret).not.toBe(first.secret);
+  });
+});
+
+describe("buildWorkspaceZip", () => {
+  test("lays members out under the workspace root, beside its manifest", () => {
+    const prod = { ...bundle, env_name: "prod" };
+    const zip = buildWorkspaceZip("demo", "version = 1\n", [bundle, prod]);
+    const names = Object.keys(unzipSync(zip)).sort();
+    expect(names).toContain("demo/trestle-workspace.toml");
+    expect(names).toContain("demo/lakehouse/compose.yaml");
+    expect(names).toContain("demo/prod/compose.yaml");
+    const modes = centralModes(zip);
+    expect(modes.get("demo/prod/deploy/hosted-postgres-server.sh")).toBe(0o755);
   });
 });

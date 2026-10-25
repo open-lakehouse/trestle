@@ -1,21 +1,29 @@
-import { EnvironmentEditor, PlannerProvider } from "@open-lakehouse/env-editor";
+import {
+  createLocalStorageWorkspaceStore,
+  PlannerProvider,
+  WorkspaceProvider,
+  WorkspaceShell,
+} from "@open-lakehouse/env-editor";
 import { createWasmPlanner } from "@open-lakehouse/stack-wasm";
 import { ThemeProvider, Toaster } from "@open-lakehouse/ui-kit";
 import { StrictMode, useMemo } from "react";
 import { createRoot } from "react-dom/client";
-import { AppShell } from "./AppShell";
+import { ThemeToggle } from "./ThemeToggle";
 import "./globals.css";
 
 // The planner resolves to the real wasm engine when built with
 // VITE_ENABLE_WASM=true, or to the fixture stub otherwise (see vite.config.ts).
+// The workspace lives in this browser's localStorage; another WorkspaceStore
+// (a folder, a local trestle server) drops in here.
 function App() {
   const planner = useMemo(() => createWasmPlanner(), []);
+  const store = useMemo(() => createLocalStorageWorkspaceStore(), []);
   return (
     <ThemeProvider>
       <PlannerProvider planner={planner}>
-        <AppShell>
-          <EnvironmentEditor colorMode="system" />
-        </AppShell>
+        <WorkspaceProvider store={store}>
+          <WorkspaceShell colorMode="system" statusItems={<ThemeToggle />} />
+        </WorkspaceProvider>
       </PlannerProvider>
       <Toaster />
     </ThemeProvider>

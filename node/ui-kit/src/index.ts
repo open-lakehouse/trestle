@@ -29,6 +29,11 @@ export {
 export { Input } from "./input";
 export { Label } from "./label";
 export {
+  ResizeHandle,
+  type ResizeHandleProps,
+  usePaneSize,
+} from "./resizable";
+export {
   Select,
   SelectContent,
   SelectGroup,
