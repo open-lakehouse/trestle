@@ -154,7 +154,7 @@ pub fn render_modules(
     secrets.sort_by(|a, b| a.alias.cmp(&b.alias));
 
     let head = HeadFile {
-        name: plan.env_name.clone(),
+        name: plan.project_name.clone(),
         env: plan.env.clone(),
         includes,
         configs,

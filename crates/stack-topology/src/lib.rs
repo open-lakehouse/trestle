@@ -100,9 +100,10 @@ pub use catalog::credentials::{
 pub use catalog::deploy::{DeployCtx, DeployPhase, DeployStepSpec, RenderedStep};
 pub use catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls,
-    HelperKind, HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId,
-    PortDecl, PortMapping, Provides, PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec,
-    ResolvedKnobs, ResourceDemand, StackFacts, TemplateError, UrlPart, is_model_ref,
+    HelperKind, HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, MeshNetwork,
+    Module, ModuleId, PortDecl, PortMapping, Provides, PythonClient, Readiness, ReadyGate,
+    RenderCtx, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, TemplateError, UrlPart,
+    is_model_ref,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,

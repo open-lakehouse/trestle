@@ -118,10 +118,13 @@ pub const GATEWAY_AUTH_VAR: &str = "GATEWAY_AUTH";
 /// exactly the stack's contract to them without naming other modules' variables.
 pub const CLIENT_ENV_KEYS_VAR: &str = "CLIENT_ENV_KEYS";
 
-/// The prefix of the render-only variables carrying a module's dedicated host listener ports:
+/// The prefix of the render-only variables carrying a module's host ports:
 /// `HOST_PORT_<ENDPOINT>` (the endpoint id upper-cased, e.g. `HOST_PORT_S3`) for each of its
 /// gatewayed endpoints the gateway publishes on its own port, which is the same on the host and
-/// in the network. A store that must recognise its host-side name (`localhost:<port>`) reads it.
+/// in the network, and for each internal endpoint declaring a host port the module publishes
+/// itself (shifted by [`PlanCtx::port_offset`](crate::PlanCtx::port_offset)). A store that must
+/// recognise its host-side name (`localhost:<port>`) reads it; a module publishing a port
+/// renders it as the `ports:` left side.
 pub const HOST_PORT_VAR_PREFIX: &str = "HOST_PORT_";
 
 /// The default value injected for [`DATA_ROOT_VAR`]: `./.data`, relative to the compose
@@ -2325,7 +2328,7 @@ const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
 /// table data.
 ///
 /// The web UI only serves at `/`, so it gets a dedicated gateway listener; Bolt and Gremlin are
-/// published on their standard ports. All three use PuppyGraph's own login (the `password`
+/// published on their standard ports, shifted by [`PlanCtx::port_offset`](crate::PlanCtx::port_offset). All three use PuppyGraph's own login (the `password`
 /// knob); the dedicated listener is not behind the gateway's sign-in.
 fn puppygraph() -> Arc<dyn Module> {
     let mut provides = Provides {

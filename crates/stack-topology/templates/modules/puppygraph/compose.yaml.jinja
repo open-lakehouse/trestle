@@ -38,12 +38,13 @@ services:
 {%- if obj.tls_trust %}
       - {{ obj.tls_trust.volume }}:{{ obj.tls_trust.mount_path }}:ro
 {%- endif %}
-    # The web UI is fronted on its own gateway listener; Bolt and Gremlin are published as-is.
+    # The web UI is fronted on its own gateway listener; Bolt and Gremlin are published
+    # directly, on their declared host ports (shifted by the env's port offset).
     expose:
       - "8081"
     ports:
-      - "7687:7687"
-      - "8182:8182"
+      - "{{ env.HOST_PORT_BOLT }}:7687"
+      - "{{ env.HOST_PORT_GREMLIN }}:8182"
 {%- for p in published_ports %}
       - "{{ p.host }}:{{ p.container }}"
 {%- endfor %}

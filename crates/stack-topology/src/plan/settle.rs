@@ -19,7 +19,7 @@ use crate::catalog::Catalog;
 use crate::catalog::module::{ModuleId, ResolvedKnobs, StackFacts};
 use crate::model::endpoint::RouteIntent;
 use crate::model::placement::Placement;
-use crate::model::role::ServiceSpec;
+use crate::model::role::{Role, ServiceSpec};
 
 /// The settled environment: the graph plus every fact resolved over it.
 pub(super) struct Settled {
@@ -154,25 +154,24 @@ pub(super) fn settle(
             .filter_map(|m| m.provider_of().map(str::to_string))
             .collect(),
     };
-    let services = graph
-        .nodes
-        .iter()
-        .map(|module| {
-            let mut services = module.services_in(&knobs[module.id()], &stack_facts);
-            // A hosted provider's services are reached directly at its origin, never routed.
-            if let Some(provider) = hosted.modules.get(module.id()) {
-                for service in &mut services {
-                    service.placement = Placement::External {
-                        origin: provider.origin.clone(),
-                    };
-                    for endpoint in &mut service.endpoints {
-                        endpoint.intent = RouteIntent::Internal;
-                    }
+    let mut services = BTreeMap::new();
+    for module in &graph.nodes {
+        let mut module_services = module.services_in(&knobs[module.id()], &stack_facts);
+        // A hosted provider's services are reached directly at its origin, never routed.
+        if let Some(provider) = hosted.modules.get(module.id()) {
+            for service in &mut module_services {
+                service.placement = Placement::External {
+                    origin: provider.origin.clone(),
+                };
+                for endpoint in &mut service.endpoints {
+                    endpoint.intent = RouteIntent::Internal;
                 }
             }
-            (module.id().clone(), services)
-        })
-        .collect();
+        } else {
+            offset_host_ports(&mut module_services, ctx.port_offset)?;
+        }
+        services.insert(module.id().clone(), module_services);
+    }
 
     let provisioned = provisioned_by_provider(&graph, &chosen, selection, catalog, ctx)?;
 
@@ -185,4 +184,29 @@ pub(super) fn settle(
         provisioned,
         hosted,
     })
+}
+
+/// Shift every host port a module's services declare by `offset` (see
+/// [`PlanCtx::port_offset`]). The gateway's own ports come from the [`PlanCtx`], so its
+/// services are left alone.
+fn offset_host_ports(services: &mut [ServiceSpec], offset: u16) -> Result<(), PlanError> {
+    if offset == 0 {
+        return Ok(());
+    }
+    for service in services.iter_mut().filter(|s| s.role != Role::gateway()) {
+        for endpoint in &mut service.endpoints {
+            if let Some(port) = endpoint.host_port {
+                endpoint.host_port =
+                    Some(
+                        port.checked_add(offset)
+                            .ok_or_else(|| PlanError::PortOutOfRange {
+                                endpoint: format!("{}.{}", service.name, endpoint.id),
+                                port,
+                                offset,
+                            })?,
+                    );
+            }
+        }
+    }
+    Ok(())
 }

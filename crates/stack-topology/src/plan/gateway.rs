@@ -321,7 +321,7 @@ impl SecureOrigin {
 /// `name` as a DNS label: lowercased, with every character outside `[a-z0-9-]` mapped to `-`,
 /// no leading or trailing `-`, and at most 63 characters. Falls back to `trestle` when nothing
 /// usable remains.
-fn dns_label(name: &str) -> String {
+pub(super) fn dns_label(name: &str) -> String {
     let mapped: String = name
         .chars()
         .map(|c| match c.to_ascii_lowercase() {

@@ -711,6 +711,10 @@ pub struct RenderCtx<'a> {
     /// aliases and to mint a certificate covering its hostnames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<GatewayTls>,
+    /// The cross-environment network the gateway joins, populated only for the gateway module
+    /// and only when [`PlanCtx::mesh_network`](crate::PlanCtx::mesh_network) is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<MeshNetwork>,
     /// The stack-wide facts (see [`StackFacts`]), as the `stack` global: a fragment branches on
     /// an optional partner with `{% if "unity-catalog" in stack.modules %}`.
     pub stack: StackFacts,
@@ -731,6 +735,15 @@ pub struct GatewayTls {
     /// The compose one-shot service that mints the CA material. The gateway waits for it,
     /// and so does every consumer of an emulated provider.
     pub mint_service: String,
+}
+
+/// The cross-environment network the gateway joins (see [`RenderCtx::mesh`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshNetwork {
+    /// The network's name, shared by every environment on it (the compose `name:`).
+    pub name: String,
+    /// The gateway's alias on it: how other environments address this one (`<env>.mesh`).
+    pub alias: String,
 }
 
 /// A `host:container` port mapping a module publishes: the gateway, for its listeners, or,
@@ -755,6 +768,7 @@ impl<'a> RenderCtx<'a> {
             objects: Vec::new(),
             published_ports: Vec::new(),
             tls: None,
+            mesh: None,
             stack: StackFacts::default(),
         }
     }
@@ -1210,6 +1224,7 @@ mod tests {
                 objects: Vec::new(),
                 published_ports: Vec::new(),
                 tls: None,
+                mesh: None,
                 stack: StackFacts::default(),
             })
             .expect("template renders");
@@ -1256,6 +1271,7 @@ mod tests {
             objects: Vec::new(),
             published_ports: Vec::new(),
             tls: None,
+            mesh: None,
             stack: StackFacts::default(),
         };
         let out = spec.render(&ctx).expect("template renders");

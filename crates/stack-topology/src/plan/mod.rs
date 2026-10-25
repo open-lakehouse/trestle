@@ -66,8 +66,8 @@ use crate::catalog::Catalog;
 use crate::catalog::baseline::DATA_ROOT_DEFAULT;
 use crate::catalog::module::{ExtraResource, ModuleId, StackFacts};
 use crate::model::connection::Connection;
-use crate::model::endpoint::Scheme;
-use crate::model::placement::Vantage;
+use crate::model::endpoint::{RouteIntent, Scheme};
+use crate::model::placement::{Placement, Vantage};
 use crate::model::role::{Role, ServiceSpec};
 use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
@@ -296,9 +296,16 @@ pub struct AppUpstream {
 /// code uses), keeping a hand-edited TOML terse.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanCtx {
-    /// The compose project / environment name (used as the head file's `name:`).
+    /// The environment name: the compose project name (the head file's `name:`) unless
+    /// [`project_name`](Self::project_name) overrides it, and the label of the env's
+    /// hostnames (`<env>.localhost`, `<env>.internal`).
     #[serde(default = "PlanCtx::default_env_name")]
     pub env_name: String,
+    /// The compose project name, when it differs from [`env_name`](Self::env_name). A
+    /// workspace sets it to `<workspace>-<env>` so equally named envs in two workspaces
+    /// never share a project; the hostnames keep following `env_name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
     /// The deploy target the environment runs on (see [`target`](crate::target)). Defaults to
     /// Docker Compose. Every selected module must have a rendering for it.
     #[serde(default)]
@@ -332,6 +339,19 @@ pub struct PlanCtx {
     #[allow(clippy::struct_field_names)]
     #[serde(default = "PlanCtx::default_dedicated_listener_port_base")]
     pub dedicated_listener_port_base: u16,
+    /// Added to every host port a *module* declares (an endpoint's `host_port`, and without a
+    /// gateway the container port a surface endpoint is published on), so several envs on one
+    /// host don't collide on them. The ports above (gateway, admin, dedicated listeners) are
+    /// the env's own absolute values and are not shifted. Defaults to `0`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub port_offset: u16,
+    /// A compose network shared across environments, which the gateway (and nothing else)
+    /// joins under the alias `<env>.mesh`: cross-env traffic enters and leaves an env only
+    /// through its gateway. Declared by name rather than `external`, so whichever env starts
+    /// first creates it. `None` (the default) keeps the env on its private network alone, as
+    /// does a gateway-less env (nothing fronts it for the others to reach).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_network: Option<String>,
     /// Ordered provider preference per resource role — the environment's say in which
     /// implementation satisfies an abstract demand (e.g. `object_store` →
     /// `["azurite", "rustfs"]` for an env that prefers Azurite). The planner picks the first
@@ -364,7 +384,17 @@ pub struct PlanCtx {
     pub secrets: Option<Secrets>,
 }
 
+fn is_zero(n: &u16) -> bool {
+    *n == 0
+}
+
 impl PlanCtx {
+    /// The compose project name: [`project_name`](Self::project_name), else
+    /// [`env_name`](Self::env_name).
+    pub fn compose_project(&self) -> &str {
+        self.project_name.as_deref().unwrap_or(&self.env_name)
+    }
+
     fn default_env_name() -> String {
         "lakehouse".into()
     }
@@ -392,6 +422,7 @@ impl Default for PlanCtx {
     fn default() -> Self {
         PlanCtx {
             env_name: PlanCtx::default_env_name(),
+            project_name: None,
             target: TargetId::default(),
             gateway_service: PlanCtx::default_gateway_service(),
             gateway_internal_port: PlanCtx::default_gateway_internal_port(),
@@ -399,6 +430,8 @@ impl Default for PlanCtx {
             gateway_admin_port: PlanCtx::default_gateway_admin_port(),
             dedicated_listener_ports: Vec::new(),
             dedicated_listener_port_base: PlanCtx::default_dedicated_listener_port_base(),
+            port_offset: 0,
+            mesh_network: None,
             provider_preference: BTreeMap::new(),
             data_root: PlanCtx::default_data_root(),
             local_secrets: LocalSecrets::default(),
@@ -459,6 +492,26 @@ pub enum PlanError {
         module: ModuleId,
         /// What is wrong with it.
         reason: String,
+    },
+    /// A host port shifted by [`PlanCtx::port_offset`] lands past `65535`.
+    #[error("port {port} of `{endpoint}` plus port_offset {offset} exceeds 65535")]
+    PortOutOfRange {
+        /// `service.endpoint` whose port overflowed.
+        endpoint: String,
+        /// The port before the offset.
+        port: u16,
+        /// The offset that pushed it out of range.
+        offset: u16,
+    },
+    /// Two parts of the environment bind the same host port.
+    #[error("host port {port} is bound by both `{first}` and `{second}`")]
+    HostPortCollision {
+        /// The doubly bound port.
+        port: u16,
+        /// The first owner (see [`Plan::host_ports`]).
+        first: String,
+        /// The second owner.
+        second: String,
     },
     /// The environment's deploy target is not a known target.
     #[error("unknown deploy target `{0}`")]
@@ -736,8 +789,10 @@ impl GatewayFacts {
 /// Not `PartialEq`/`Eq`: it embeds the [`ResolvedGraph`], whose modules are trait objects.
 #[derive(Clone, Debug)]
 pub struct Plan {
-    /// The environment's name (the compose project name; see [`PlanCtx::env_name`]).
+    /// The environment's name (see [`PlanCtx::env_name`]).
     pub env_name: String,
+    /// The compose project name (see [`PlanCtx::compose_project`]).
+    pub project_name: String,
     /// How the rendered environment holds its local credentials (see [`PlanCtx::local_secrets`]).
     pub local_secrets: LocalSecrets,
     /// The deploy target the plan was made for (see [`PlanCtx::target`]); every module in the
@@ -923,6 +978,36 @@ impl Plan {
         self.has_gateway()
             .then(|| self.gateway_facts.origin(Vantage::Host).0)
     }
+
+    /// Every host port the environment binds, sorted by port, each with its owner: the ports a
+    /// module publishes (the gateway's listeners and admin endpoint, or without a gateway the
+    /// direct publishes), as `<module>`, and the host ports internal endpoints declare, as
+    /// `<service>.<endpoint>`. Two environments on one host must not share any of them.
+    pub fn host_ports(&self) -> Vec<(u16, String)> {
+        let published = self.bindings.iter().flat_map(|(module, binding)| {
+            binding
+                .published_ports
+                .iter()
+                .map(move |p| (p.host, module.to_string()))
+        });
+        let declared = self
+            .services
+            .values()
+            .flatten()
+            .filter(|s| {
+                s.role != Role::gateway() && !matches!(s.placement, Placement::External { .. })
+            })
+            .flat_map(|s| {
+                s.endpoints
+                    .iter()
+                    .filter(|e| e.intent == RouteIntent::Internal)
+                    .filter_map(move |e| Some((e.host_port?, format!("{}.{}", s.name, e.id))))
+            });
+        let mut ports: Vec<_> = published.chain(declared).collect();
+        ports.sort();
+        ports.dedup();
+        ports
+    }
 }
 
 impl Catalog {
@@ -994,6 +1079,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
 
     let mut plan = Plan {
         env_name: ctx.env_name.clone(),
+        project_name: ctx.compose_project().to_owned(),
         local_secrets: ctx.local_secrets,
         target: ctx.target.clone(),
         graph: settled.graph,
@@ -1024,6 +1110,13 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     plan.client_env_host = resolve_client_env(&plan, Vantage::Host)?;
     plan.client_env_container = resolve_client_env(&plan, Vantage::Container)?;
     plan.python_client = resolve_python_client(&plan, selection.client);
+    if let Some(pair) = plan.host_ports().windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(PlanError::HostPortCollision {
+            port: pair[0].0,
+            first: pair[0].1.clone(),
+            second: pair[1].1.clone(),
+        });
+    }
     Ok(plan)
 }
 

@@ -21,7 +21,8 @@ use crate::catalog::baseline::{
     GATEWAY_INTERNAL_HOST_VAR, GATEWAY_INTERNAL_URL_VAR, GATEWAY_URL_VAR, HOST_PORT_VAR_PREFIX,
 };
 use crate::catalog::module::{
-    GatewayTls, ModuleId, PortMapping, Readiness, ReadyGate, RenderCtx, ResolvedKnobs, StackFacts,
+    GatewayTls, MeshNetwork, ModuleId, PortMapping, Readiness, ReadyGate, RenderCtx, ResolvedKnobs,
+    StackFacts,
 };
 use crate::model::connection::Connection;
 use crate::model::endpoint::RouteIntent;
@@ -48,6 +49,9 @@ pub struct ModuleBinding {
     pub published_ports: Vec<PortMapping>,
     /// The gateway's TLS material (gateway module only, when it serves TLS).
     pub tls: Option<GatewayTls>,
+    /// The cross-environment network the gateway joins (gateway module only, when
+    /// [`PlanCtx::mesh_network`] is set).
+    pub mesh: Option<MeshNetwork>,
     /// The stack-wide facts, identical for every module (the `stack` render global).
     pub stack: StackFacts,
 }
@@ -64,6 +68,7 @@ impl ModuleBinding {
             objects: self.objects.clone(),
             published_ports: self.published_ports.clone(),
             tls: self.tls.clone(),
+            mesh: self.mesh.clone(),
             stack: self.stack.clone(),
         }
     }
@@ -153,6 +158,8 @@ pub(super) fn bind(
                     _ if routed.direct.is_some() && endpoint.intent != RouteIntent::Internal => {
                         endpoint.host_port
                     }
+                    // A port the module publishes itself (never fronted by the gateway).
+                    _ if endpoint.intent == RouteIntent::Internal => endpoint.host_port,
                     _ => None,
                 };
                 if let Some(port) = port {
@@ -271,7 +278,7 @@ pub(super) fn bind(
         let is_gateway = services_of[module.id()]
             .iter()
             .any(|s| s.role == Role::gateway());
-        let (published_ports, tls) = if is_gateway {
+        let (published_ports, tls, mesh) = if is_gateway {
             // Under sign-in the gateway gates requests on the auth provider, so it waits for it.
             if gateway.auth.is_some()
                 && let Some(gate) = auth_provider.and_then(|p| provider_ready_gate(catalog, p))
@@ -281,13 +288,23 @@ pub(super) fn bind(
             // An in-network-only gateway (no gateway fronting the stack) publishes nothing.
             let admin =
                 routed.direct.is_none() && knobs[module.id()].get("publish_admin") != Some("false");
+            // Without a gateway fronting the env there is nothing for others to reach it at.
+            let mesh = ctx
+                .mesh_network
+                .as_ref()
+                .filter(|_| routed.direct.is_none());
+            let mesh = mesh.map(|name| MeshNetwork {
+                name: name.clone(),
+                alias: format!("{}.mesh", super::gateway::dns_label(&ctx.env_name)),
+            });
             (
                 published_ports(gateway, ctx, admin),
                 gateway_render_tls(gateway),
+                mesh,
             )
         } else {
             let direct = routed.direct.as_ref().and_then(|d| d.get(module.id()));
-            (direct.cloned().unwrap_or_default(), None)
+            (direct.cloned().unwrap_or_default(), None, None)
         };
         bindings.insert(
             module.id().clone(),
@@ -298,6 +315,7 @@ pub(super) fn bind(
                 objects,
                 published_ports,
                 tls,
+                mesh,
                 stack: stack_facts.clone(),
             },
         );

@@ -284,9 +284,10 @@ fn emulate_public_hosts(
 ///
 /// Each endpoint gets the path its service itself serves (its gateway prefix after the rewrite
 /// the gateway would have applied), and one host port per `(service, internal port)`: the
-/// endpoint's declared `host_port`, else its internal port, else, when another service already
-/// took that port, the next from [`dedicated_listener_ports`](PlanCtx::dedicated_listener_ports)
-/// and then [`dedicated_listener_port_base`](PlanCtx::dedicated_listener_port_base) upward.
+/// endpoint's declared `host_port`, else its internal port plus
+/// [`port_offset`](PlanCtx::port_offset), else, when another service already took that port,
+/// the next from [`dedicated_listener_ports`](PlanCtx::dedicated_listener_ports) and then
+/// [`dedicated_listener_port_base`](PlanCtx::dedicated_listener_port_base) upward.
 ///
 /// A module that emulates public hostnames still needs them answered in-network, so the gateway
 /// keeps only its TLS listener for them (the planner added it to the graph for that): it
@@ -325,13 +326,19 @@ fn route_direct(settled: &mut Settled, ctx: &PlanCtx) -> Result<Routed, PlanErro
             .iter_mut()
             .filter(|s| matches!(s.placement, Placement::Container { .. }))
         {
-            publish_direct(service, &mut mappings, &mut taken, &mut || {
-                explicit.next().unwrap_or_else(|| {
-                    let p = next_auto;
-                    next_auto = next_auto.saturating_add(1);
-                    p
-                })
-            });
+            publish_direct(
+                service,
+                ctx.port_offset,
+                &mut mappings,
+                &mut taken,
+                &mut || {
+                    explicit.next().unwrap_or_else(|| {
+                        let p = next_auto;
+                        next_auto = next_auto.saturating_add(1);
+                        p
+                    })
+                },
+            );
         }
         if !mappings.is_empty() {
             published.insert(module.id().clone(), mappings);
@@ -352,9 +359,12 @@ fn route_direct(settled: &mut Settled, ctx: &PlanCtx) -> Result<Routed, PlanErro
 }
 
 /// Give `service`'s surface endpoints their direct path and host port (see [`route_direct`]),
-/// recording each newly published port in `mappings`. `alloc` yields the next fallback port.
+/// recording each newly published port in `mappings`. An endpoint without a declared host port
+/// is published on its internal port shifted by `offset` (declared ones were shifted when the
+/// services settled). `alloc` yields the next fallback port.
 fn publish_direct(
     service: &mut ServiceSpec,
+    offset: u16,
     mappings: &mut Vec<PortMapping>,
     taken: &mut BTreeSet<u16>,
     alloc: &mut dyn FnMut() -> u16,
@@ -373,7 +383,9 @@ fn publish_direct(
         };
         endpoint.path = join_path(&served, &endpoint.path);
         let host = *host_of.entry(endpoint.internal_port).or_insert_with(|| {
-            let wanted = endpoint.host_port.unwrap_or(endpoint.internal_port);
+            let wanted = endpoint
+                .host_port
+                .unwrap_or_else(|| endpoint.internal_port.saturating_add(offset));
             let mut port = wanted;
             while taken.contains(&port) {
                 port = alloc();
