@@ -5,6 +5,9 @@ Design records and deeper explanations for Trestle.
 - [Architecture](architecture.md) — the build-time → runtime pipeline, the crate
   map, and the key design decisions (proto-driven, `Label`-generic store, flat
   routing, transport-decoupled clients).
+- [Multiple environments](multi-env.md) — running several environments side by
+  side as a workspace (ports, project names, the gateway mesh), and the path to
+  SPIFFE/SPIRE workload identity.
 
 For getting started, see the [top-level README](../README.md). For local
 development and the release process, see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
