@@ -354,8 +354,12 @@ function ExpandedDialog({
       ref={ref}
       aria-label="Environment diagram"
       style={DIALOG_STYLE}
-      // Escape fires `close`; keep React's state in step with it.
-      onClose={onClose}
+      // Escape fires `close`; keep React's state in step with it. React
+      // bubbles `close` through the component tree, so a nested dialog's (a
+      // node's files) closing reaches here too: only our own counts.
+      onClose={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       {open && (
         <>

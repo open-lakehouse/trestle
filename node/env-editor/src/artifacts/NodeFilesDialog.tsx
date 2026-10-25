@@ -73,8 +73,11 @@ export function NodeFilesDialog({
       ref={ref}
       aria-label={node ? `${node.display_name ?? node.id} files` : "Files"}
       style={DIALOG_STYLE}
-      // Escape fires `close`; keep the host's state in step with it.
-      onClose={onClose}
+      // Escape fires `close`; keep the host's state in step with it. React
+      // bubbles `close` through the component tree, so only our own counts.
+      onClose={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       {open && active && (
         // biome-ignore lint/a11y/noStaticElementInteractions: the click only catches the backdrop; Escape already closes a modal <dialog> natively.
