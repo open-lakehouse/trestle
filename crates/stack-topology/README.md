@@ -304,7 +304,8 @@ a lot of memory: give Docker about 8 GB.
   starts as root (as all of PuppyGraph's processes do). UC vends nothing for Azurite, so the
   graph can't read table data on an Azure store.
 - **Endpoints.** The web UI has its own gateway listener (`PUPPYGRAPH_URL`), because it only
-  serves at `/`. Bolt (7687) and Gremlin (8182) are published directly. All three use
+  serves at `/`. Bolt (7687) and Gremlin (8182) are published directly, shifted by
+  `port_offset` (see [Several environments on one host](#several-environments-on-one-host)). All three use
   PuppyGraph's login, `puppygraph` / `puppygraph.password` (default `puppygraph123`). Gateway
   sign-in does not cover them, so set your own password if others can reach those ports.
   Omnigent's agents get the addresses through `client/container.env`, like every other
@@ -404,6 +405,29 @@ Catalog vends credentials against) still needs the gateway's TLS listener. So En
 that listener alone: it publishes no port and fronts no endpoint, and `Plan::has_gateway` is
 false. Sign-in, policy, an app upstream and selecting the gateway module explicitly all need
 the gateway, so planning rejects them with `PlanError::GatewayRequired`.
+
+## Several environments on one host
+
+Each environment is its own compose project, so networks, named volumes and the gateway's CA
+are already separate. What two environments share is the host's ports. A
+[`WorkspaceManifest`](src/workspace.rs) (`trestle-workspace.toml`) lists member environments
+and gives each a slot. `WorkspaceManifest::apply` writes the slot's values into a member's
+`PlanCtx`:
+
+- `gateway_host_port`, `gateway_admin_port` and `dedicated_listener_port_base`: the defaults
+  shifted by `slot × 1000` (slot 1 serves the gateway on `10080`).
+- `port_offset`: the same shift for host ports a module declares itself (PuppyGraph's Bolt and
+  Gremlin, and the direct publishes of an env without a gateway).
+- `project_name`: `<workspace>-<env>`, the compose `name:`. Hostnames keep following
+  `env_name`.
+- `mesh_network`: with `mesh = true`, `trestle-<workspace>-mesh`. The gateway, and only the
+  gateway, joins it under the alias `<env>.mesh`, so cross-environment traffic always passes
+  through an Envoy.
+
+`Plan::host_ports` lists every host port a plan binds. Planning rejects one that is bound twice
+(`PlanError::HostPortCollision`), and `port_conflicts` finds the ports two planned members
+share. The design and the road to SPIFFE/SPIRE are in
+[`docs/multi-env.md`](../../docs/multi-env.md).
 
 ## Model refs and `plan.json`
 

@@ -84,6 +84,7 @@ pub mod projection;
 pub mod render;
 pub mod report;
 pub mod target;
+pub mod workspace;
 
 // --- model: the vocabulary types ---
 pub use model::connection::{
@@ -146,6 +147,12 @@ pub use address::{AddressError, ServiceRef};
 
 // --- manifest: persist a user's choices, re-plan deterministically ---
 pub use manifest::{CatalogSource, EnvManifest, ManifestError, pin_dedicated_ports};
+
+// --- workspace: several environments on one host ---
+pub use workspace::{
+    MAX_SLOT, PortConflict, SLOT_PORT_STRIDE, WORKSPACE_FILE, WorkspaceEnv, WorkspaceError,
+    WorkspaceManifest, port_conflicts,
+};
 
 // --- report: a human-readable layout summary ---
 pub use report::layout_report;
