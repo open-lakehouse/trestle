@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.8...olai-codegen-v0.0.9) - 2026-10-25
+
+### Added
+
+- [**breaking**] async Python clients via pyo3-async-runtimes (#161)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.7...olai-codegen-v0.0.8) - 2026-07-19
 
 ### Added

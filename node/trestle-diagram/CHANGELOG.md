@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.0...trestle-diagram-v0.5.1) - 2026-10-25
+
+### Fixed
+
+- MLflow 3 versioned APIs, proxied artifacts, and the MLflow → Unity Catalog edge (#163)
+- keep the expanded diagram open when closing a node's files (#162)
+
 ## [0.5.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.4.0...trestle-diagram-v0.5.0) - 2026-10-23
 
 ### Added

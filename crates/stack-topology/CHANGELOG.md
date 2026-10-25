@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.9...olai-stack-topology-v0.0.10) - 2026-10-25
+
+### Fixed
+
+- MLflow 3 versioned APIs, proxied artifacts, and the MLflow → Unity Catalog edge (#163)
+- make MLflow + Unity Catalog stacks start and register models from the host (#159)
+
 ## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.8...olai-stack-topology-v0.0.9) - 2026-10-23
 
 ### Added
