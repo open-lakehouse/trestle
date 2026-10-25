@@ -1473,3 +1473,91 @@ mod databricks_client_tests {
         mock.assert_async().await;
     }
 }
+
+#[cfg(test)]
+mod databricks_azure_auth_tests {
+    use super::*;
+    use databricks::{DatabricksBuilder, DatabricksConfigKey};
+
+    fn azure_sp_builder(server: &mockito::Server) -> DatabricksBuilder {
+        DatabricksBuilder::new()
+            .with_config(DatabricksConfigKey::Host, server.url())
+            .with_config(DatabricksConfigKey::ClientId, "sp-id")
+            .with_config(DatabricksConfigKey::ClientSecret, "sp-secret")
+            .with_config(DatabricksConfigKey::AzureTenantId, "tenant-1")
+            .with_config(DatabricksConfigKey::AzureAuthorityHost, server.url())
+            .with_config(
+                DatabricksConfigKey::Client(ClientConfigKey::AllowHttp),
+                "true",
+            )
+    }
+
+    /// A tenant id selects Azure AD client credentials for the Azure
+    /// Databricks application instead of Databricks OAuth M2M.
+    #[tokio::test]
+    async fn tenant_selects_azure_client_secret_auth() {
+        let mut server = mockito::Server::new_async().await;
+        let aad = server
+            .mock("POST", "/tenant-1/oauth2/v2.0/token")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("client_id".into(), "sp-id".into()),
+                mockito::Matcher::UrlEncoded(
+                    "scope".into(),
+                    "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default".into(),
+                ),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"aad-token","expires_in":3600,"token_type":"Bearer"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let m2m = server
+            .mock("POST", "/oidc/v1/token")
+            .expect(0)
+            .create_async()
+            .await;
+        let api = server
+            .mock("GET", "/api/2.1/unity-catalog/catalogs")
+            .match_header("authorization", "Bearer aad-token")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client =
+            CloudClient::new_databricks_from_builder(azure_sp_builder(&server), None).unwrap();
+        let url = format!("{}/api/2.1/unity-catalog/catalogs", server.url());
+        assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
+
+        aad.assert_async().await;
+        m2m.assert_async().await;
+        api.assert_async().await;
+    }
+
+    #[test]
+    fn forced_azure_client_secret_requires_a_tenant() {
+        let result = DatabricksBuilder::new()
+            .with_config(DatabricksConfigKey::ClientId, "sp-id")
+            .with_config(DatabricksConfigKey::ClientSecret, "sp-secret")
+            .with_auth_type("azure-client-secret")
+            .build(None);
+        let Err(err) = result else {
+            panic!("expected an error without a tenant id")
+        };
+        assert!(err.to_string().contains("AZURE_TENANT_ID"), "{err}");
+    }
+
+    #[test]
+    fn azure_config_keys_roundtrip() {
+        for key in [
+            DatabricksConfigKey::AzureTenantId,
+            DatabricksConfigKey::AzureAuthorityHost,
+        ] {
+            assert_eq!(key.as_ref().parse::<DatabricksConfigKey>().unwrap(), key);
+        }
+        assert_eq!(
+            "azure_tenant_id".parse::<DatabricksConfigKey>().unwrap(),
+            DatabricksConfigKey::AzureTenantId
+        );
+    }
+}
