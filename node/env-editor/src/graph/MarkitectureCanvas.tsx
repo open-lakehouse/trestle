@@ -109,6 +109,12 @@ export interface MarkitectureCanvasProps {
   onOpenInExplorer?: (path: string) => void;
   /** Overlays rendered inside the flow (e.g. `<Panel>`s); they may use `useReactFlow`. */
   children?: ReactNode;
+  /**
+   * Whether the canvas brings its own `ReactFlowProvider` (the default). Pass
+   * `false` under a host's provider, so controls outside the canvas (a
+   * toolbar above it) reach the same flow.
+   */
+  provider?: boolean;
 }
 
 /** How long the pointer may travel from a node onto its action bar. */
@@ -203,8 +209,12 @@ function edgeTitle(e: TopologyEdgeDto, gateways: Set<string>): string {
  * planner coupling. Editing is opt-in through `actions`, which the host
  * implements.
  */
-export function MarkitectureCanvas(props: MarkitectureCanvasProps) {
+export function MarkitectureCanvas({
+  provider = true,
+  ...props
+}: MarkitectureCanvasProps) {
   // useReactFlow requires a provider ancestor, so the flow lives inside one.
+  if (!provider) return <MarkitectureFlow {...props} />;
   return (
     <ReactFlowProvider>
       <MarkitectureFlow {...props} />

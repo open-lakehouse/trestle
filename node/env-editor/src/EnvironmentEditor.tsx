@@ -7,9 +7,16 @@ import {
   TabsTrigger,
   TooltipProvider,
 } from "@open-lakehouse/ui-kit";
-import type { ColorMode } from "@xyflow/react";
+import { type ColorMode, ReactFlowProvider } from "@xyflow/react";
 import { AlertTriangle, Loader2, Plus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { buildBundleZip, generateCredentials } from "./artifacts/bundleZip";
 import { FilesPanel } from "./artifacts/FilesPanel";
 import { fileSourceOf } from "./artifacts/fileSource";
@@ -56,6 +63,18 @@ export interface EnvironmentEditorProps {
   onSelectionChange?: (selection: Selection) => void;
   /** Called whenever the plan or its error changes, e.g. for a status bar. */
   onPlanChange?: (plan: PlanResult | null, error: string | null) => void;
+  /**
+   * `"standalone"` (the default) frames the canvas with its own Canvas /
+   * Components / Files tabs and a floating toolbar. `"workspace"` is the
+   * canvas alone, under a flat toolbar, for a host shell that owns the file
+   * views (see `onOpenFile`) and the surrounding chrome.
+   */
+  chrome?: "standalone" | "workspace";
+  /** Open a rendered file in the host (workspace chrome): the canvas's file
+   *  dialogs hand their "open in explorer" here. */
+  onOpenFile?: (path: string) => void;
+  /** Shown at the start of the workspace toolbar (e.g. a breadcrumb). */
+  toolbarLeading?: ReactNode;
 }
 
 /** The host-facing props the editor body reads. */
@@ -96,6 +115,9 @@ function EditorBody({
   context,
   onSelectionChange,
   onPlanChange,
+  chrome = "standalone",
+  onOpenFile,
+  toolbarLeading,
 }: BodyProps) {
   const planner = usePlanner();
   const env = useEnvironment(seededCatalog, {
@@ -235,10 +257,17 @@ function EditorBody({
     setFocus((f) => ({ id, seq: (f?.seq ?? 0) + 1 }));
   }, []);
 
-  const openFile = useCallback((path: string) => {
-    setFilePath(path);
-    setTab("files");
-  }, []);
+  const openFile = useCallback(
+    (path: string) => {
+      if (onOpenFile) {
+        onOpenFile(path);
+        return;
+      }
+      setFilePath(path);
+      setTab("files");
+    },
+    [onOpenFile],
+  );
 
   const actions = useMemo<CanvasActions>(
     () => ({
@@ -349,6 +378,125 @@ function EditorBody({
   // On the canvas, plan errors show on the canvas itself.
   const showErrorCard = !!error && (tab !== "canvas" || !catalog);
 
+  const toolbarEl = (
+    <CanvasToolbar
+      onAdd={() => setPaletteOpen(true)}
+      onUndo={undo}
+      onRedo={redo}
+      canUndo={env.canUndo}
+      canRedo={env.canRedo}
+      planning={planning}
+      componentCount={planned.size}
+      hasError={!!error}
+      graph={graph}
+      files={files?.paths}
+      deploy={plan?.deploy}
+      mermaid={plan?.mermaid}
+      onExportError={setNotice}
+      onDownloadBundle={planner.bundle ? downloadBundle : undefined}
+      bundling={bundling}
+      bundleLabel={
+        plansHosted
+          ? "Download environment (.zip) — hosted secrets are placeholders, see its README"
+          : "Download environment (.zip) with fresh credentials"
+      }
+      gatewayEnabled={gatewayEnabled(selection.gateway)}
+      onToggleGateway={(on) => env.setGateway(on ? OPEN : DIRECT)}
+      variant={chrome === "workspace" ? "bar" : "floating"}
+      leading={chrome === "workspace" ? toolbarLeading : undefined}
+    />
+  );
+
+  const canvasBody = (
+    <>
+      <div className="relative min-w-0 flex-1">
+        <MarkitectureCanvas
+          graph={graph}
+          selectedId={selectedId}
+          onSelect={(n) => setSelectedId(n.id)}
+          onDeselect={() => setSelectedId(undefined)}
+          actions={actions}
+          focus={focus}
+          colorMode={colorMode}
+          files={files}
+          openFiles={openFiles}
+          onOpenFilesChange={setOpenFiles}
+          onOpenInExplorer={openFile}
+          provider={chrome === "standalone"}
+        >
+          {chrome === "standalone" && toolbarEl}
+          <CanvasNotice
+            error={catalog ? error : null}
+            notice={notice}
+            onDismissNotice={() => setNotice(null)}
+          />
+        </MarkitectureCanvas>
+        {(!catalog || isEmptySelection(selection)) && (
+          <EmptyCanvas
+            loading={!catalog && !error}
+            onAdd={() => setPaletteOpen(true)}
+            onBaseline={catalog ? env.applyDefault : undefined}
+          />
+        )}
+      </div>
+      {inspected && (
+        <InspectorPanel
+          moduleId={inspected}
+          catalog={catalog}
+          plan={plan}
+          overrides={selection.knob_overrides}
+          origin={originOf(inspected)}
+          alternatives={alternativesOf(inspected)}
+          settingsSeq={settingsSeq}
+          resourcesSeq={resourcesSeq}
+          onAddResource={(provider, kind, name) =>
+            env.addResource(provider, kind, name)
+          }
+          onRemoveResource={env.removeResource}
+          hosted={selection.hosted?.[inspected]}
+          onSetHosted={env.setHosted}
+          onSetKnob={env.setKnob}
+          gateway={selection.gateway}
+          onSetGateway={env.setGateway}
+          onRemove={removeComponent}
+          onSwap={swapComponent}
+          onSelect={goTo}
+          onOpenFile={(path) => setOpenFiles({ id: inspected, path })}
+          onClose={() => setSelectedId(undefined)}
+        />
+      )}
+    </>
+  );
+
+  const palette = (
+    <ComponentPalette
+      open={paletteOpen}
+      onOpenChange={setPaletteOpen}
+      catalog={catalog}
+      selection={selection}
+      planned={planned}
+      originOf={originOf}
+      onAdd={addComponent}
+      onRemove={removeComponent}
+      onSwap={swapComponent}
+      onToggleCapability={env.toggleCapability}
+    />
+  );
+
+  if (chrome === "workspace") {
+    return (
+      <TooltipProvider>
+        <ReactFlowProvider>
+          <div className="flex h-full min-h-0 flex-col">
+            {toolbarEl}
+            <div className="flex min-h-0 flex-1">{canvasBody}</div>
+            {palette}
+          </div>
+        </ReactFlowProvider>
+      </TooltipProvider>
+    );
+  }
+
   return (
     <TooltipProvider>
       <div className="flex h-full min-h-0 flex-col p-3">
@@ -383,99 +531,9 @@ function EditorBody({
             className="mt-0 min-h-0 flex-1 data-[state=inactive]:hidden"
           >
             <Card className="flex h-full min-h-[280px] overflow-hidden p-0">
-              <div className="relative min-w-0 flex-1">
-                <MarkitectureCanvas
-                  graph={graph}
-                  selectedId={selectedId}
-                  onSelect={(n) => setSelectedId(n.id)}
-                  onDeselect={() => setSelectedId(undefined)}
-                  actions={actions}
-                  focus={focus}
-                  colorMode={colorMode}
-                  files={files}
-                  openFiles={openFiles}
-                  onOpenFilesChange={setOpenFiles}
-                  onOpenInExplorer={openFile}
-                >
-                  <CanvasToolbar
-                    onAdd={() => setPaletteOpen(true)}
-                    onUndo={undo}
-                    onRedo={redo}
-                    canUndo={env.canUndo}
-                    canRedo={env.canRedo}
-                    planning={planning}
-                    componentCount={planned.size}
-                    hasError={!!error}
-                    graph={graph}
-                    files={files?.paths}
-                    deploy={plan?.deploy}
-                    mermaid={plan?.mermaid}
-                    onExportError={setNotice}
-                    onDownloadBundle={
-                      planner.bundle ? downloadBundle : undefined
-                    }
-                    bundling={bundling}
-                    bundleLabel={
-                      plansHosted
-                        ? "Download environment (.zip) — hosted secrets are placeholders, see its README"
-                        : "Download environment (.zip) with fresh credentials"
-                    }
-                    gatewayEnabled={gatewayEnabled(selection.gateway)}
-                    onToggleGateway={(on) => env.setGateway(on ? OPEN : DIRECT)}
-                  />
-                  <CanvasNotice
-                    error={catalog ? error : null}
-                    notice={notice}
-                    onDismissNotice={() => setNotice(null)}
-                  />
-                </MarkitectureCanvas>
-                {(!catalog || isEmptySelection(selection)) && (
-                  <EmptyCanvas
-                    loading={!catalog && !error}
-                    onAdd={() => setPaletteOpen(true)}
-                    onBaseline={catalog ? env.applyDefault : undefined}
-                  />
-                )}
-              </div>
-              {inspected && (
-                <InspectorPanel
-                  moduleId={inspected}
-                  catalog={catalog}
-                  plan={plan}
-                  overrides={selection.knob_overrides}
-                  origin={originOf(inspected)}
-                  alternatives={alternativesOf(inspected)}
-                  settingsSeq={settingsSeq}
-                  resourcesSeq={resourcesSeq}
-                  onAddResource={(provider, kind, name) =>
-                    env.addResource(provider, kind, name)
-                  }
-                  onRemoveResource={env.removeResource}
-                  hosted={selection.hosted?.[inspected]}
-                  onSetHosted={env.setHosted}
-                  onSetKnob={env.setKnob}
-                  gateway={selection.gateway}
-                  onSetGateway={env.setGateway}
-                  onRemove={removeComponent}
-                  onSwap={swapComponent}
-                  onSelect={goTo}
-                  onOpenFile={(path) => setOpenFiles({ id: inspected, path })}
-                  onClose={() => setSelectedId(undefined)}
-                />
-              )}
+              {canvasBody}
             </Card>
-            <ComponentPalette
-              open={paletteOpen}
-              onOpenChange={setPaletteOpen}
-              catalog={catalog}
-              selection={selection}
-              planned={planned}
-              originOf={originOf}
-              onAdd={addComponent}
-              onRemove={removeComponent}
-              onSwap={swapComponent}
-              onToggleCapability={env.toggleCapability}
-            />
+            {palette}
           </TabsContent>
 
           <TabsContent
