@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { TopologyEdgeDto } from "../types";
 import {
+  arrangeColumns,
   BOTTOM_IN,
   BOTTOM_OUT,
   type Box,
@@ -153,5 +154,53 @@ describe("routeLateral", () => {
       boxes,
     );
     expect(rejected).toEqual(["e"]);
+  });
+});
+
+describe("arrangeColumns", () => {
+  /** One column of cards, top to bottom in `ids` order. */
+  const column = (ids: string[], x = 0) =>
+    new Map(ids.map((id, i) => [id, card(x, i * 100)]));
+  const edges = (pairs: [string, string][]) =>
+    pairs.map(([from, to], i) => ({ id: `e${i}`, from, to }));
+
+  test("regroups split partners into one adjacent run", () => {
+    // UC is used by MLflow and PuppyGraph, MLflow by Omnigent; ELK split them.
+    const boxes = column(["uc", "mlflow", "omnigent", "rivers", "graph"]);
+    const [order, ...rest] = arrangeColumns(
+      boxes,
+      edges([
+        ["graph", "uc"],
+        ["mlflow", "uc"],
+        ["omnigent", "mlflow"],
+      ]),
+    );
+    expect(rest).toEqual([]);
+    const at = (id: string) => order.indexOf(id);
+    expect(Math.abs(at("graph") - at("uc"))).toBe(1);
+    expect(Math.abs(at("mlflow") - at("uc"))).toBe(1);
+    expect(Math.abs(at("omnigent") - at("mlflow"))).toBe(1);
+    expect(order).toContain("rivers");
+  });
+
+  test("moves the other cards as little as possible", () => {
+    const boxes = column(["a", "x", "y", "b"]);
+    expect(arrangeColumns(boxes, edges([["a", "b"]]))).toEqual([
+      ["a", "b", "x", "y"],
+    ]);
+  });
+
+  test("leaves a column whose partners are already adjacent", () => {
+    const boxes = column(["uc", "mlflow", "omnigent"]);
+    const lateral = edges([
+      ["mlflow", "uc"],
+      ["omnigent", "mlflow"],
+    ]);
+    expect(arrangeColumns(boxes, lateral)).toEqual([]);
+  });
+
+  test("ignores partners in different columns", () => {
+    const boxes = new Map([...column(["a", "x"]), ...column(["b"], 400)]);
+    expect(arrangeColumns(boxes, edges([["a", "b"]]))).toEqual([]);
   });
 });

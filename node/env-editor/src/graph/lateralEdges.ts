@@ -215,3 +215,107 @@ export function routeLateral(
 
   return { routes, rejected };
 }
+
+/** The most partners `arrangeColumns` permutes as one run; a larger group
+ *  keeps ELK's order among its members. */
+const MAX_PERMUTED = 8;
+
+function permutations<T>(items: T[]): T[][] {
+  if (items.length <= 1) return [items];
+  return items.flatMap((item, i) =>
+    permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [
+      item,
+      ...rest,
+    ]),
+  );
+}
+
+/** How far apart `edges`' ends are in `run` (0 when every pair is adjacent),
+ *  then how far it moves them from their order in `from`. */
+function runCost(run: string[], edges: LateralEdge[], from: string[]) {
+  const at = new Map(run.map((id, i) => [id, i]));
+  let apart = 0;
+  for (const e of edges) {
+    const [a, b] = [at.get(e.from), at.get(e.to)];
+    if (a !== undefined && b !== undefined) apart += Math.abs(a - b) - 1;
+  }
+  const moved = run.reduce((m, id, i) => m + Math.abs(i - from.indexOf(id)), 0);
+  return [apart, moved] as const;
+}
+
+/**
+ * Reorder each column of the laid-out `boxes` so lateral partners sit next to
+ * each other: every group of partners in a column becomes one run, in the
+ * order that keeps the most pairs adjacent, placed where it moves the other
+ * cards least. Returns the new top-to-bottom order of each column it changed.
+ *
+ * ELK's crossing minimization doesn't know about the omitted lateral edges, so
+ * it often splits partners; the layout feeds this order back to ELK as
+ * positions for an interactive pass.
+ */
+export function arrangeColumns(
+  boxes: Map<string, Box>,
+  edges: LateralEdge[],
+): string[][] {
+  const columns = new Map<string, string[]>();
+  for (const [id, b] of boxes) {
+    const key = `${centerX(b)}:${b.width}`;
+    columns.set(key, [...(columns.get(key) ?? []), id]);
+  }
+  const changed: string[][] = [];
+  for (const ids of columns.values()) {
+    const original = ids.sort(
+      (a, b) => (boxes.get(a) as Box).y - (boxes.get(b) as Box).y,
+    );
+    const inColumn = edges.filter(
+      (e) =>
+        e.from !== e.to && original.includes(e.from) && original.includes(e.to),
+    );
+    if (inColumn.length === 0) continue;
+
+    // Groups of partners: connected components of the column's lateral edges.
+    const group = new Map<string, string>(original.map((id) => [id, id]));
+    const root = (id: string): string => {
+      const parent = group.get(id) as string;
+      return parent === id ? id : root(parent);
+    };
+    for (const e of inColumn) group.set(root(e.from), root(e.to));
+    const groups = new Map<string, string[]>();
+    for (const id of original) {
+      if (!inColumn.some((e) => e.from === id || e.to === id)) continue;
+      groups.set(root(id), [...(groups.get(root(id)) ?? []), id]);
+    }
+
+    let order = original;
+    for (const members of groups.values()) {
+      const runs =
+        members.length <= MAX_PERMUTED ? permutations(members) : [members];
+      let run = members;
+      let best = runCost(members, inColumn, members);
+      for (const candidate of runs) {
+        const c = runCost(candidate, inColumn, members);
+        if (c[0] < best[0] || (c[0] === best[0] && c[1] < best[1])) {
+          run = candidate;
+          best = c;
+        }
+      }
+      const rest = order.filter((id) => !members.includes(id));
+      let placed = order;
+      let least = Number.POSITIVE_INFINITY;
+      for (let i = 0; i <= rest.length; i++) {
+        const next = [...rest.slice(0, i), ...run, ...rest.slice(i)];
+        const moved = next.reduce(
+          (m, id, j) => m + Math.abs(j - original.indexOf(id)),
+          0,
+        );
+        if (moved < least) {
+          least = moved;
+          placed = next;
+        }
+      }
+      order = placed;
+    }
+    if (order.some((id, i) => id !== original[i])) changed.push(order);
+  }
+  return changed;
+}

@@ -19,7 +19,9 @@
 // Lateral edges — a component calling a peer's API, e.g. an experiment tracker
 // whose model registry is the data catalog — would otherwise push each callee
 // one column further right. They're laid out without, so peers the gateway
-// exposes share a column, then routed vertically through it (`routeLateral`).
+// exposes share a column, regrouped so partners are neighbours
+// (`arrangeColumns`, then a second ELK run that keeps that order), and routed
+// vertically through it (`routeLateral`).
 // One that can't be goes back to ELK as an ordinary edge, and the layout runs
 // again. The gateway's edges keep their fixed west/east rows.
 //
@@ -46,6 +48,7 @@ import type {
 } from "../types";
 import type { Point } from "./edges/ElkEdge";
 import {
+  arrangeColumns,
   type Box,
   isLateral,
   type LateralRoute,
@@ -411,8 +414,65 @@ function visualEdges(graph: GraphDto): VisualEdge[] {
 
 // Lateral edges are laid out without, then routed by `routeLateral`; one it
 // can't route goes back into ELK and the layout runs again. The last pass gives
-// ELK every lateral edge left, so the loop always ends.
+// ELK every lateral edge left, so the loop always ends. (A pass whose columns
+// `arrangeColumns` reorders runs ELK twice.)
 const MAX_PASSES = 3;
+
+/** Every laid-out node's position, relative to its parent (a frame's members
+ *  to the frame). */
+function positionsOf(laidOut: ElkNode): Map<string, { x: number; y: number }> {
+  const at = new Map<string, { x: number; y: number }>();
+  const visit = (n: ElkNode) => {
+    for (const c of n.children ?? []) {
+      at.set(c.id, { x: c.x ?? 0, y: c.y ?? 0 });
+      visit(c);
+    }
+  };
+  visit(laidOut);
+  return at;
+}
+
+/** The root's laid-out children as boxes, in flow coordinates. Lateral edges
+ *  never involve a framed node, so a frame is just an obstacle. */
+function boxesOf(laidOut: ElkNode): Map<string, Box> {
+  return new Map(
+    (laidOut.children ?? []).map((c) => [
+      c.id,
+      { x: c.x ?? 0, y: c.y ?? 0, width: c.width ?? 0, height: c.height ?? 0 },
+    ]),
+  );
+}
+
+/** `node` (and its children) positioned from `at`, if given. */
+function placed(
+  node: ElkNode,
+  at: Map<string, { x: number; y: number }> | undefined,
+): ElkNode {
+  if (!at) return node;
+  return {
+    ...node,
+    ...at.get(node.id),
+    children: node.children?.map((c) => placed(c, at)),
+  };
+}
+
+/** `sections` with the rows of the cards in `column` in its order; every
+ *  other row keeps its place. */
+function reorderRows(
+  sections: GatewaySection[],
+  column: string[],
+): GatewaySection[] {
+  return sections.map(({ surface, rows }) => {
+    const moved = rows
+      .filter((r) => column.includes(r.module))
+      .sort((a, b) => column.indexOf(a.module) - column.indexOf(b.module));
+    let next = 0;
+    return {
+      surface,
+      rows: rows.map((r) => (column.includes(r.module) ? moved[next++] : r)),
+    };
+  });
+}
 
 /**
  * Lay a plan's functional `GraphDto` out as positioned ReactFlow nodes and
@@ -472,31 +532,35 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
   const framed = new Set(
     graph.nodes.filter((n) => n.cloud != null).map((n) => n.id),
   );
-  const children: ElkNode[] = [
-    ...graph.nodes.filter((n) => n.cloud == null).map(elkNode),
-    ...[...clouds].map(([cloud, members]) => ({
-      id: cloudGroupId(cloud),
-      layoutOptions: {
-        "elk.padding": `[top=${CLOUD_GROUP_HEADER + CLOUD_GROUP_PAD / 2},left=${CLOUD_GROUP_PAD},bottom=${CLOUD_GROUP_PAD},right=${CLOUD_GROUP_PAD}]`,
-      },
-      children: members.map(elkNode),
-    })),
-  ];
 
-  /** The ELK graph of every drawn edge but those in `omitted`. */
-  const elkGraph = (omitted: Set<string>): ElkNode => ({
+  /** The ELK graph of every drawn edge but those in `omitted`. With `at`
+   *  (every node's position, relative to its parent), ELK keeps the order
+   *  of each layer that `at` gives instead of choosing its own. */
+  const elkGraph = (
+    omitted: Set<string>,
+    at?: Map<string, { x: number; y: number }>,
+  ): ElkNode => ({
     id: "root",
     // With frames, lay out across the hierarchy (edges cross into them) and
     // report every route in root (= flow) coordinates.
-    layoutOptions:
-      clouds.size > 0
-        ? {
-            ...LAYOUT_OPTIONS,
-            "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-            "elk.json.edgeCoords": "ROOT",
-          }
-        : LAYOUT_OPTIONS,
-    children: structuredClone(children),
+    layoutOptions: {
+      ...LAYOUT_OPTIONS,
+      ...(clouds.size > 0 && {
+        "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+        "elk.json.edgeCoords": "ROOT",
+      }),
+      ...(at && { "elk.layered.crossingMinimization.strategy": "INTERACTIVE" }),
+    },
+    children: [
+      ...graph.nodes.filter((n) => n.cloud == null).map(elkNode),
+      ...[...clouds].map(([cloud, members]) => ({
+        id: cloudGroupId(cloud),
+        layoutOptions: {
+          "elk.padding": `[top=${CLOUD_GROUP_HEADER + CLOUD_GROUP_PAD / 2},left=${CLOUD_GROUP_PAD},bottom=${CLOUD_GROUP_PAD},right=${CLOUD_GROUP_PAD}]`,
+        },
+        children: members.map(elkNode),
+      })),
+    ].map((child) => placed(child, at)),
     edges: drawn
       .filter(({ id }) => !omitted.has(id))
       .map(({ id, edge: e, resource }) => {
@@ -519,26 +583,31 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
   );
   for (let pass = 1; ; pass++) {
     if (pass === MAX_PASSES) lateral = [];
-    const laidOut = await elk().layout(
-      elkGraph(new Set(lateral.map((v) => v.id))),
-    );
-    // Root children are in flow coordinates: lateral edges never involve a
-    // framed node, so a frame is just an obstacle.
-    const boxes = new Map<string, Box>(
-      (laidOut.children ?? []).map((c) => [
-        c.id,
-        {
-          x: c.x ?? 0,
-          y: c.y ?? 0,
-          width: c.width ?? 0,
-          height: c.height ?? 0,
-        },
-      ]),
-    );
-    const { routes, rejected } = routeLateral(
-      lateral.map(({ id, edge }) => ({ id, from: edge.from, to: edge.to })),
-      boxes,
-    );
+    const omitted = new Set(lateral.map((v) => v.id));
+    const edges = lateral.map(({ id, edge }) => ({
+      id,
+      from: edge.from,
+      to: edge.to,
+    }));
+    let laidOut = await elk().layout(elkGraph(omitted));
+    // ELK ordered each column without the lateral edges, so partners may be
+    // apart: regroup them, match the gateway's rows to the new order, and
+    // have ELK lay out again in that order.
+    const columns = arrangeColumns(boxesOf(laidOut), edges);
+    if (columns.length > 0) {
+      const at = positionsOf(laidOut);
+      for (const column of columns) {
+        const ys = column.map((id) => at.get(id)?.y ?? 0).sort((a, b) => a - b);
+        column.forEach((id, i) => {
+          at.set(id, { x: at.get(id)?.x ?? 0, y: ys[i] });
+        });
+        for (const [id, sections] of sectionsOf) {
+          sectionsOf.set(id, reorderRows(sections, column));
+        }
+      }
+      laidOut = await elk().layout(elkGraph(omitted, at));
+    }
+    const { routes, rejected } = routeLateral(edges, boxesOf(laidOut));
     if (rejected.length === 0) return toFlow(laidOut, routes);
     lateral = lateral.filter((v) => !rejected.includes(v.id));
   }
