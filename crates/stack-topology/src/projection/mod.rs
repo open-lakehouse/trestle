@@ -131,6 +131,18 @@ pub struct PlanResultDto {
     pub files: Vec<OutputFileDto>,
     /// The deployment steps, in order (see [`DeployStepDto`]).
     pub deploy: Vec<DeployStepDto>,
+    /// Every host port the environment binds (see [`Plan::host_ports`]), sorted by port, for a
+    /// consumer checking that environments sharing a host don't collide.
+    pub host_ports: Vec<HostPortDto>,
+}
+
+/// One host port a plan binds, with what binds it (see [`Plan::host_ports`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HostPortDto {
+    /// The host port.
+    pub port: u16,
+    /// The module publishing it, or `<service>.<endpoint>` for a declared one.
+    pub owner: String,
 }
 
 /// One deployment step, projected from [`DeployStep`]: what to do, in deployment order, for a
@@ -404,18 +416,27 @@ pub enum PlanResultError {
 ///
 /// Plans for the deploy target `target` (Docker Compose when `None`) and otherwise uses
 /// [`PlanCtx::default`] for the environment context (gateway service/ports, data root); the
-/// planner itself prefers the providers the selection names. A future revision can accept a
-/// partial `PlanCtx` from the caller.
+/// planner itself prefers the providers the selection names. [`plan_result_in`] takes the
+/// whole context.
 pub fn plan_result(
     selection: &Selection,
     target: Option<&str>,
 ) -> Result<PlanResultDto, PlanResultError> {
-    let catalog: Catalog = baseline_catalog();
     let ctx = PlanCtx {
         target: target.map(TargetId::from).unwrap_or_default(),
         ..PlanCtx::default()
     };
-    let plan = catalog.plan(selection, &ctx)?;
+    plan_result_in(selection, &ctx)
+}
+
+/// Plan a selection under `ctx` (env name, ports, project, mesh — e.g. a workspace member's,
+/// see [`WorkspaceManifest::apply`](crate::WorkspaceManifest::apply)) against the baseline
+/// catalog, and project the result as [`plan_result`] does.
+pub fn plan_result_in(
+    selection: &Selection,
+    ctx: &PlanCtx,
+) -> Result<PlanResultDto, PlanResultError> {
+    let plan = baseline_catalog().plan(selection, ctx)?;
     project_result(&plan)
 }
 
@@ -483,11 +504,20 @@ pub fn bundle_result(
     target: Option<&str>,
     credentials: &LocalCredentials,
 ) -> Result<BundleDto, BundleError> {
-    let catalog = baseline_catalog_with(credentials);
     let ctx = PlanCtx {
         target: target.map(TargetId::from).unwrap_or_default(),
         ..PlanCtx::default()
     };
+    bundle_result_in(selection, ctx, credentials)
+}
+
+/// [`bundle_result`] under a whole `ctx`, which the bundle's `env.toml` records.
+pub fn bundle_result_in(
+    selection: &Selection,
+    ctx: PlanCtx,
+    credentials: &LocalCredentials,
+) -> Result<BundleDto, BundleError> {
+    let catalog = baseline_catalog_with(credentials);
     let plan = catalog.plan(selection, &ctx)?;
     let materialized = plan.materialize()?;
     let scripts: Vec<&str> = materialized
@@ -550,6 +580,11 @@ fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
         gateway: gateway_dto(&plan.gateway),
         files,
         deploy,
+        host_ports: plan
+            .host_ports()
+            .into_iter()
+            .map(|(port, owner)| HostPortDto { port, owner })
+            .collect(),
     })
 }
 
@@ -616,6 +651,23 @@ mod tests {
         let dto = catalog_dto();
         let mlflow = dto.modules.iter().find(|m| m.id == "mlflow").unwrap();
         assert_eq!(mlflow.provider_of.as_deref(), Some("experiment_tracking"));
+    }
+
+    #[test]
+    fn plan_result_in_plans_under_the_callers_context() {
+        let ctx = PlanCtx {
+            env_name: "prod".into(),
+            gateway_host_port: 10080,
+            gateway_admin_port: 10901,
+            ..PlanCtx::default()
+        };
+        let result = plan_result_in(&Selection::modules(["unity-catalog"]), &ctx).unwrap();
+        let ports: Vec<u16> = result.host_ports.iter().map(|p| p.port).collect();
+        assert!(
+            ports.contains(&10080) && ports.contains(&10901),
+            "{ports:?}"
+        );
+        assert!(!ports.contains(&9080), "{ports:?}");
     }
 
     #[test]

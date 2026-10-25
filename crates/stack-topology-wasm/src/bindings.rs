@@ -4,7 +4,7 @@
 //! planner, serialize the DTO out. All the interesting logic (and its tests) lives in `dto`; this
 //! file is `wasm32`-only glue, so native `cargo test`/`clippy` never pull the wasm toolchain.
 
-use olai_stack_topology::Selection;
+use olai_stack_topology::{PlanCtx, Selection, TargetId};
 use wasm_bindgen::prelude::*;
 
 use crate::dto;
@@ -26,20 +26,41 @@ pub fn catalog() -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&dto).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// The environment context: `context_json` (a JSON `PlanCtx`, any field omitted keeps its
+/// default; the defaults when absent), with `target` (if given) as its deploy target.
+fn plan_ctx(context_json: Option<&str>, target: Option<String>) -> Result<PlanCtx, JsValue> {
+    let mut ctx: PlanCtx = match context_json {
+        Some(json) => serde_json::from_str(json)
+            .map_err(|e| JsValue::from_str(&format!("invalid context JSON: {e}")))?,
+        None => PlanCtx::default(),
+    };
+    if let Some(target) = target {
+        ctx.target = TargetId::from(target.as_str());
+    }
+    Ok(ctx)
+}
+
 /// Plan a selection and return the projected result as a JS object (see `PlanResult` in the TS
 /// types).
 ///
 /// `selection_json` is a JSON-serialized `Selection` (`{ modules, capabilities, knob_overrides,
 /// extra_resources }`); `target` is a deploy-target id from the catalog's `targets` (Docker
-/// Compose when omitted). A deserialization failure or a [`PlanError`](olai_stack_topology::PlanError)
-/// (unknown/conflicting/cyclic modules, prefix collisions, …) is returned as a rejected `Err`
-/// carrying the message string, which the JS wrapper surfaces to the UI.
+/// Compose when omitted); `context_json`, when given, is the environment's JSON `PlanCtx` (env
+/// name, ports, project, mesh — a workspace member's). A deserialization failure or a
+/// [`PlanError`](olai_stack_topology::PlanError) (unknown/conflicting/cyclic modules, prefix
+/// collisions, …) is returned as a rejected `Err` carrying the message string, which the JS
+/// wrapper surfaces to the UI.
 #[wasm_bindgen]
-pub fn plan(selection_json: &str, target: Option<String>) -> Result<JsValue, JsValue> {
+pub fn plan(
+    selection_json: &str,
+    target: Option<String>,
+    context_json: Option<String>,
+) -> Result<JsValue, JsValue> {
     let selection: Selection = serde_json::from_str(selection_json)
         .map_err(|e| JsValue::from_str(&format!("invalid selection JSON: {e}")))?;
-    let result = dto::plan_result(&selection, target.as_deref())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let ctx = plan_ctx(context_json.as_deref(), target)?;
+    let result =
+        dto::plan_result_in(&selection, &ctx).map_err(|e| JsValue::from_str(&e.to_string()))?;
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -61,13 +82,16 @@ pub fn plan_manifest(manifest_toml: &str) -> Result<JsValue, JsValue> {
 /// editor to package as a download.
 ///
 /// `credentials_json` is a JSON object of fresh values for the in-stack credentials, keyed by
-/// the catalog's `local_credentials` keys (`{}` keeps the development defaults). A refused
-/// value or a plan error is returned as a rejected `Err` carrying the message string.
+/// the catalog's `local_credentials` keys (`{}` keeps the development defaults);
+/// `context_json` is the environment context as for [`plan`], recorded in the bundle's
+/// `env.toml`. A refused value or a plan error is returned as a rejected `Err` carrying the
+/// message string.
 #[wasm_bindgen]
 pub fn bundle(
     selection_json: &str,
     target: Option<String>,
     credentials_json: &str,
+    context_json: Option<String>,
 ) -> Result<JsValue, JsValue> {
     let selection: Selection = serde_json::from_str(selection_json)
         .map_err(|e| JsValue::from_str(&format!("invalid selection JSON: {e}")))?;
@@ -75,7 +99,8 @@ pub fn bundle(
         .map_err(|e| JsValue::from_str(&format!("invalid credentials JSON: {e}")))?;
     let credentials = olai_stack_topology::LocalCredentials::from_map(values)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = dto::bundle_result(&selection, target.as_deref(), &credentials)
+    let ctx = plan_ctx(context_json.as_deref(), target)?;
+    let result = dto::bundle_result_in(&selection, ctx, &credentials)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
 }
