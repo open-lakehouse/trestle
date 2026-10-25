@@ -38,6 +38,9 @@ fn host_addresses_follow_the_gateway_port_and_routes() {
     let env = p.client_env(Vantage::Host);
     let get = |k: &str| env.get(k).unwrap_or_else(|| panic!("missing {k}"));
     assert_eq!(get("MLFLOW_TRACKING_URI"), "http://localhost:9090");
+    // Artifacts go through MLflow's proxy, never presigned in-network URLs.
+    assert_eq!(get("MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"), "false");
+    assert_eq!(get("MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD"), "false");
     assert_eq!(
         get("UNITY_CATALOG_URL"),
         "http://localhost:9090/api/2.1/unity-catalog"

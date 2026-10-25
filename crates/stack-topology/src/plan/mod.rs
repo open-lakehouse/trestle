@@ -1466,6 +1466,15 @@ mod tests {
         let mlflow = route_for(&p, "/api/2.0/mlflow");
         assert_eq!(mlflow.cluster, "mlflow");
         assert_eq!(mlflow.rewrite.as_deref(), Some("/mlflow/api/2.0/mlflow"));
+        // So do the versioned APIs MLflow 3's client calls beside it (traces, server-info).
+        for version in ["3.0", "4.0"] {
+            let api = route_for(&p, &format!("/api/{version}/mlflow"));
+            assert_eq!(api.cluster, "mlflow");
+            assert_eq!(
+                api.rewrite.as_deref(),
+                Some(format!("/mlflow/api/{version}/mlflow").as_str())
+            );
+        }
 
         // MLflow OTLP ingest is mounted Databricks-style and rewritten onto the path MLflow
         // serves it at under its base (`/mlflow/v1/traces`).

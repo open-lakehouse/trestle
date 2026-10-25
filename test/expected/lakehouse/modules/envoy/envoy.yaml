@@ -44,6 +44,22 @@ static_resources:
                                 google_re2: {}
                                 regex: "^/api/2\\x{2E}0/mlflow(.*)$"
                               substitution: "/mlflow/api/2.0/mlflow\\1"
+                        - match: { prefix: "/api/3.0/mlflow" }
+                          route:
+                            cluster: mlflow
+                            regex_rewrite:
+                              pattern:
+                                google_re2: {}
+                                regex: "^/api/3\\x{2E}0/mlflow(.*)$"
+                              substitution: "/mlflow/api/3.0/mlflow\\1"
+                        - match: { prefix: "/api/4.0/mlflow" }
+                          route:
+                            cluster: mlflow
+                            regex_rewrite:
+                              pattern:
+                                google_re2: {}
+                                regex: "^/api/4\\x{2E}0/mlflow(.*)$"
+                              substitution: "/mlflow/api/4.0/mlflow\\1"
                         - match: { prefix: "/unity-catalog" }
                           route:
                             cluster: unitycatalog

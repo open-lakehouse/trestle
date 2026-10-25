@@ -6,6 +6,8 @@
 | --- | --- | --- | --- | --- |
 | shared :9080 | `/api/2.1/unity-catalog` | `unitycatalog` | unitycatalog:8080 | — |
 | shared :9080 | `/api/2.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/2.0/mlflow |
+| shared :9080 | `/api/3.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/3.0/mlflow |
+| shared :9080 | `/api/4.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/4.0/mlflow |
 | shared :9080 | `/unity-catalog` | `unitycatalog` | unitycatalog:8080 | — |
 | shared :9080 | `/api/2.0/otel` | `mlflow` | mlflow:5000 | /mlflow |
 | shared :9080 | `/ai-gateway` | `mlflow` | mlflow:5000 | /mlflow/gateway |
@@ -18,7 +20,7 @@
 | `aws-s3` | `s3` | `object_store` | external `https://s3.us-east-1.amazonaws.com` | s3:443 |
 | `envoy` | `envoy` | `gateway` | container `envoy` | http:10000 |
 | `hosted-postgres` | `db` | `relational_db` | external `tcp://lakehouse.abc123example.us-east-1.rds.amazonaws.com:5432` | sql:5432 |
-| `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, otel:5000, ai_gateway:5000, ui:5000 |
+| `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, tracking_v3:5000, tracking_v4:5000, otel:5000, ai_gateway:5000, ui:5000 |
 | `unity-catalog` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |
 
 ## Hosted resources
