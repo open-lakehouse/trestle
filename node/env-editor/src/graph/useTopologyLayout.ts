@@ -16,6 +16,13 @@
 // the row of each resource it uses. Edges are drawn along ELK's own orthogonal
 // routes (`ElkEdge`).
 //
+// Lateral edges — a component calling a peer's API, e.g. an experiment tracker
+// whose model registry is the data catalog — would otherwise push each callee
+// one column further right. They're laid out without, so peers the gateway
+// exposes share a column, then routed vertically through it (`routeLateral`).
+// One that can't be goes back to ELK as an ordinary edge, and the layout runs
+// again. The gateway's edges keep their fixed west/east rows.
+//
 // Resources an external cloud provides (a managed database, a cloud object
 // store) are drawn inside one dashed frame per cloud: an ELK compound node laid
 // out with the rest of the graph (hierarchy included), and a ReactFlow parent
@@ -38,11 +45,22 @@ import type {
   TopologyEdgeDto,
 } from "../types";
 import type { Point } from "./edges/ElkEdge";
+import {
+  type Box,
+  isLateral,
+  type LateralRoute,
+  routeLateral,
+} from "./lateralEdges";
 import type { CloudGroupNodeData } from "./nodes/CloudGroupNode";
 import type { ComponentNodeData } from "./nodes/ComponentNode";
 import type { GatewayNodeData } from "./nodes/GatewayNode";
 
-const elk = new ELK();
+// Built on first layout, so importing the geometry doesn't start ELK's worker.
+let engine: InstanceType<typeof ELK> | undefined;
+const elk = () => {
+  engine ??= new ELK();
+  return engine;
+};
 
 // Node geometry. MUST match what the nodes render (`NodeHeader`,
 // `ComponentNode`, `ClientsNode`, `GatewayNode`): ELK positions by these sizes
@@ -391,95 +409,97 @@ function visualEdges(graph: GraphDto): VisualEdge[] {
   });
 }
 
+// Lateral edges are laid out without, then routed by `routeLateral`; one it
+// can't route goes back into ELK and the layout runs again. The last pass gives
+// ELK every lateral edge left, so the loop always ends.
+const MAX_PASSES = 3;
+
 /**
- * Compute a positioned ReactFlow graph from a plan's functional `GraphDto`.
- * Edges point from caller to callee (`from → to`), so requests flow
- * left→right.
+ * Lay a plan's functional `GraphDto` out as positioned ReactFlow nodes and
+ * edges. Edges point from caller to callee (`from → to`), so requests flow
+ * left→right; lateral (service-to-service) edges run vertically between peers
+ * in one column where `routeLateral` can route them.
  */
-export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
-  const [flow, setFlow] = useState<TopologyFlow>({ nodes: [], edges: [] });
-  const runRef = useRef(0);
+export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
+  const sectionsOf = new Map<string, GatewaySection[]>(
+    graph.nodes
+      .filter((n) => n.kind === "gateway")
+      .map((n) => [n.id, gatewaySections(n)]),
+  );
+  const gateways = new Set(sectionsOf.keys());
+  const components = new Set(
+    graph.nodes
+      .filter((n) => n.kind === "component" || n.kind === "external")
+      .map((n) => n.id),
+  );
+  const drawn = visualEdges(graph);
+  const checksOf = new Map<string, AccessCheck[]>(
+    [...gateways].map((id) => [id, gatewayChecks(id, graph.edges)]),
+  );
 
-  useEffect(() => {
-    const run = ++runRef.current;
-    if (!graph || graph.nodes.length === 0) {
-      setFlow({ nodes: [], edges: [] });
-      return;
-    }
-
-    const sectionsOf = new Map<string, GatewaySection[]>(
-      graph.nodes
-        .filter((n) => n.kind === "gateway")
-        .map((n) => [n.id, gatewaySections(n)]),
-    );
-    const gateways = new Set(sectionsOf.keys());
-    const components = new Set(
-      graph.nodes
-        .filter((n) => n.kind === "component" || n.kind === "external")
-        .map((n) => n.id),
-    );
-    const drawn = visualEdges(graph);
-    const checksOf = new Map<string, AccessCheck[]>(
-      [...gateways].map((id) => [id, gatewayChecks(id, graph.edges)]),
-    );
-
-    const elkNode = (n: GraphNodeDto): ElkNode => {
-      const sections = sectionsOf.get(n.id);
-      if (sections) {
-        const { ports, height } = gatewayPorts(
-          n.id,
-          sections,
-          checksOf.get(n.id) ?? [],
-        );
-        return {
-          id: n.id,
-          width: GATEWAY_WIDTH,
-          height,
-          layoutOptions: { "elk.portConstraints": "FIXED_POS" },
-          ports,
-        };
-      }
-      if (n.kind === "clients") return { id: n.id, ...CLIENTS_SIZE };
+  const elkNode = (n: GraphNodeDto): ElkNode => {
+    const sections = sectionsOf.get(n.id);
+    if (sections) {
+      const { ports, height } = gatewayPorts(
+        n.id,
+        sections,
+        checksOf.get(n.id) ?? [],
+      );
       return {
         id: n.id,
-        width: COMPONENT_WIDTH,
-        height: componentHeight(n),
+        width: GATEWAY_WIDTH,
+        height,
         layoutOptions: { "elk.portConstraints": "FIXED_POS" },
-        ports: componentPorts(n),
+        ports,
       };
-    };
-
-    // External-cloud resources, grouped by cloud, each group one frame.
-    const clouds = new Map<string, GraphNodeDto[]>();
-    for (const n of graph.nodes) {
-      if (n.cloud == null) continue;
-      clouds.set(n.cloud, [...(clouds.get(n.cloud) ?? []), n]);
     }
-    const children: ElkNode[] = [
-      ...graph.nodes.filter((n) => n.cloud == null).map(elkNode),
-      ...[...clouds].map(([cloud, members]) => ({
-        id: cloudGroupId(cloud),
-        layoutOptions: {
-          "elk.padding": `[top=${CLOUD_GROUP_HEADER + CLOUD_GROUP_PAD / 2},left=${CLOUD_GROUP_PAD},bottom=${CLOUD_GROUP_PAD},right=${CLOUD_GROUP_PAD}]`,
-        },
-        children: members.map(elkNode),
-      })),
-    ];
+    if (n.kind === "clients") return { id: n.id, ...CLIENTS_SIZE };
+    return {
+      id: n.id,
+      width: COMPONENT_WIDTH,
+      height: componentHeight(n),
+      layoutOptions: { "elk.portConstraints": "FIXED_POS" },
+      ports: componentPorts(n),
+    };
+  };
 
-    const elkGraph: ElkNode = {
-      id: "root",
-      // With frames, lay out across the hierarchy (edges cross into them) and
-      // report every route in root (= flow) coordinates.
-      layoutOptions:
-        clouds.size > 0
-          ? {
-              ...LAYOUT_OPTIONS,
-              "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-              "elk.json.edgeCoords": "ROOT",
-            }
-          : LAYOUT_OPTIONS,
-      children,
-      edges: drawn.map(({ id, edge: e, resource }) => {
+  // External-cloud resources, grouped by cloud, each group one frame.
+  const clouds = new Map<string, GraphNodeDto[]>();
+  for (const n of graph.nodes) {
+    if (n.cloud == null) continue;
+    clouds.set(n.cloud, [...(clouds.get(n.cloud) ?? []), n]);
+  }
+  const framed = new Set(
+    graph.nodes.filter((n) => n.cloud != null).map((n) => n.id),
+  );
+  const children: ElkNode[] = [
+    ...graph.nodes.filter((n) => n.cloud == null).map(elkNode),
+    ...[...clouds].map(([cloud, members]) => ({
+      id: cloudGroupId(cloud),
+      layoutOptions: {
+        "elk.padding": `[top=${CLOUD_GROUP_HEADER + CLOUD_GROUP_PAD / 2},left=${CLOUD_GROUP_PAD},bottom=${CLOUD_GROUP_PAD},right=${CLOUD_GROUP_PAD}]`,
+      },
+      children: members.map(elkNode),
+    })),
+  ];
+
+  /** The ELK graph of every drawn edge but those in `omitted`. */
+  const elkGraph = (omitted: Set<string>): ElkNode => ({
+    id: "root",
+    // With frames, lay out across the hierarchy (edges cross into them) and
+    // report every route in root (= flow) coordinates.
+    layoutOptions:
+      clouds.size > 0
+        ? {
+            ...LAYOUT_OPTIONS,
+            "elk.hierarchyHandling": "INCLUDE_CHILDREN",
+            "elk.json.edgeCoords": "ROOT",
+          }
+        : LAYOUT_OPTIONS,
+    children: structuredClone(children),
+    edges: drawn
+      .filter(({ id }) => !omitted.has(id))
+      .map(({ id, edge: e, resource }) => {
         const { source, target } = edgeHandles(
           e,
           gateways,
@@ -492,116 +512,166 @@ export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
           targets: [target ? `${e.to}:${target}` : e.to],
         };
       }),
-    };
+  });
 
-    elk
-      .layout(elkGraph)
-      .then((laidOut) => {
-        if (run !== runRef.current) return; // superseded
-        // Positions are relative to the parent: the root for most nodes, its
-        // frame for an external-cloud resource (as ReactFlow wants a child's).
-        const positioned = new Map<string, { x: number; y: number }>();
-        const frames = new Map<string, ElkNode>();
-        for (const child of laidOut.children ?? []) {
-          positioned.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
-          if (child.children) {
-            frames.set(child.id, child);
-            for (const member of child.children) {
-              positioned.set(member.id, { x: member.x ?? 0, y: member.y ?? 0 });
-            }
-          }
+  let lateral = drawn.filter((v) =>
+    isLateral(v.edge, v.resource, components, framed),
+  );
+  for (let pass = 1; ; pass++) {
+    if (pass === MAX_PASSES) lateral = [];
+    const laidOut = await elk().layout(
+      elkGraph(new Set(lateral.map((v) => v.id))),
+    );
+    // Root children are in flow coordinates: lateral edges never involve a
+    // framed node, so a frame is just an obstacle.
+    const boxes = new Map<string, Box>(
+      (laidOut.children ?? []).map((c) => [
+        c.id,
+        {
+          x: c.x ?? 0,
+          y: c.y ?? 0,
+          width: c.width ?? 0,
+          height: c.height ?? 0,
+        },
+      ]),
+    );
+    const { routes, rejected } = routeLateral(
+      lateral.map(({ id, edge }) => ({ id, from: edge.from, to: edge.to })),
+      boxes,
+    );
+    if (rejected.length === 0) return toFlow(laidOut, routes);
+    lateral = lateral.filter((v) => !rejected.includes(v.id));
+  }
+
+  /** The ReactFlow graph of ELK's layout, with `lateral` routes. */
+  function toFlow(
+    laidOut: ElkNode,
+    lateral: Map<string, LateralRoute>,
+  ): TopologyFlow {
+    // Positions are relative to the parent: the root for most nodes, its
+    // frame for an external-cloud resource (as ReactFlow wants a child's).
+    const positioned = new Map<string, { x: number; y: number }>();
+    const frames = new Map<string, ElkNode>();
+    for (const child of laidOut.children ?? []) {
+      positioned.set(child.id, { x: child.x ?? 0, y: child.y ?? 0 });
+      if (child.children) {
+        frames.set(child.id, child);
+        for (const member of child.children) {
+          positioned.set(member.id, { x: member.x ?? 0, y: member.y ?? 0 });
         }
-        // Every edge lives on the root, and with frames ELK reports routes in
-        // root coordinates (`edgeCoords: ROOT`), so they are flow coordinates.
-        const routes = new Map<string, Point[]>();
-        for (const e of laidOut.edges ?? []) {
-          const section = e.sections?.[0];
-          if (section) {
-            routes.set(e.id, [
-              section.startPoint,
-              ...(section.bendPoints ?? []),
-              section.endPoint,
-            ]);
-          }
-        }
-        const names: Record<string, string> = Object.fromEntries(
-          graph.nodes.map((n) => [n.id, n.display_name ?? n.id]),
+      }
+    }
+    // Every edge lives on the root, and with frames ELK reports routes in
+    // root coordinates (`edgeCoords: ROOT`), so they are flow coordinates.
+    const routes = new Map<string, Point[]>();
+    for (const e of laidOut.edges ?? []) {
+      const section = e.sections?.[0];
+      if (section) {
+        routes.set(e.id, [
+          section.startPoint,
+          ...(section.bendPoints ?? []),
+          section.endPoint,
+        ]);
+      }
+    }
+    const names: Record<string, string> = Object.fromEntries(
+      graph.nodes.map((n) => [n.id, n.display_name ?? n.id]),
+    );
+    const roles: Record<string, string | null | undefined> = Object.fromEntries(
+      graph.nodes.map((n) => [n.id, n.role]),
+    );
+    // Frames first: ReactFlow needs a parent before its children.
+    const frameNodes: Node[] = [...clouds.keys()].map((cloud) => {
+      const id = cloudGroupId(cloud);
+      const frame = frames.get(id);
+      return {
+        id,
+        type: "cloud",
+        position: positioned.get(id) ?? { x: 0, y: 0 },
+        width: frame?.width,
+        height: frame?.height,
+        selectable: false,
+        draggable: false,
+        focusable: false,
+        zIndex: -1,
+        data: { cloud } satisfies CloudGroupNodeData,
+      };
+    });
+    const memberNodes: Node[] = graph.nodes.map((n) => {
+      const position = positioned.get(n.id) ?? { x: 0, y: 0 };
+      const parentId = n.cloud == null ? undefined : cloudGroupId(n.cloud);
+      const sections = sectionsOf.get(n.id);
+      if (sections) {
+        // Only rows a route leaves from get a handle (the identity
+        // provider's portal row is drawn, but sign-in leaves from its
+        // access-control row).
+        const anchored = graph.edges.flatMap((e) =>
+          e.kind === "route" && e.from === n.id
+            ? [routeHandle(e.host_port, e.to)]
+            : [],
         );
-        const roles: Record<string, string | null | undefined> =
-          Object.fromEntries(graph.nodes.map((n) => [n.id, n.role]));
-        // Frames first: ReactFlow needs a parent before its children.
-        const frameNodes: Node[] = [...clouds.keys()].map((cloud) => {
-          const id = cloudGroupId(cloud);
-          const frame = frames.get(id);
-          return {
-            id,
-            type: "cloud",
-            position: positioned.get(id) ?? { x: 0, y: 0 },
-            width: frame?.width,
-            height: frame?.height,
-            selectable: false,
-            draggable: false,
-            focusable: false,
-            zIndex: -1,
-            data: { cloud } satisfies CloudGroupNodeData,
-          };
-        });
-        const memberNodes: Node[] = graph.nodes.map((n) => {
-          const position = positioned.get(n.id) ?? { x: 0, y: 0 };
-          const parentId = n.cloud == null ? undefined : cloudGroupId(n.cloud);
-          const sections = sectionsOf.get(n.id);
-          if (sections) {
-            // Only rows a route leaves from get a handle (the identity
-            // provider's portal row is drawn, but sign-in leaves from its
-            // access-control row).
-            const anchored = graph.edges.flatMap((e) =>
-              e.kind === "route" && e.from === n.id
-                ? [routeHandle(e.host_port, e.to)]
-                : [],
-            );
-            return {
-              id: n.id,
-              type: "gateway",
-              position,
-              data: {
-                node: n,
-                sections,
-                checks: checksOf.get(n.id) ?? [],
-                anchored,
-                names,
-                roles,
-              } satisfies GatewayNodeData,
-            };
-          }
-          return {
-            id: n.id,
-            type: n.kind === "clients" ? "clients" : "component",
-            position,
-            parentId,
-            data: { node: n, names } satisfies ComponentNodeData,
-          };
-        });
-        const nodes = [...frameNodes, ...memberNodes];
-        const edges: Edge<TopologyEdgeData>[] = drawn.map(
-          ({ id, edge: e, resource }) => {
-            const { source, target } = edgeHandles(
-              e,
-              gateways,
-              components,
-              resource,
-            );
-            return {
-              id,
-              source: e.from,
-              target: e.to,
-              sourceHandle: source,
-              targetHandle: target,
-              type: "elk",
-              data: { edge: e, resource, points: routes.get(id) },
-            };
+        return {
+          id: n.id,
+          type: "gateway",
+          position,
+          data: {
+            node: n,
+            sections,
+            checks: checksOf.get(n.id) ?? [],
+            anchored,
+            names,
+            roles,
+          } satisfies GatewayNodeData,
+        };
+      }
+      return {
+        id: n.id,
+        type: n.kind === "clients" ? "clients" : "component",
+        position,
+        parentId,
+        data: { node: n, names } satisfies ComponentNodeData,
+      };
+    });
+    const nodes = [...frameNodes, ...memberNodes];
+    const edges: Edge<TopologyEdgeData>[] = drawn.map(
+      ({ id, edge: e, resource }) => {
+        const routed = lateral.get(id);
+        const { source, target } =
+          routed ?? edgeHandles(e, gateways, components, resource);
+        return {
+          id,
+          source: e.from,
+          target: e.to,
+          sourceHandle: source,
+          targetHandle: target,
+          type: "elk",
+          data: {
+            edge: e,
+            resource,
+            points: routed?.points ?? routes.get(id),
           },
-        );
-        setFlow({ nodes, edges });
+        };
+      },
+    );
+    return { nodes, edges };
+  }
+}
+
+/** Lay `graph` out (see `layoutTopology`), keeping the previous layout until
+ *  the new one resolves. */
+export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
+  const [flow, setFlow] = useState<TopologyFlow>({ nodes: [], edges: [] });
+  const runRef = useRef(0);
+
+  useEffect(() => {
+    const run = ++runRef.current;
+    if (!graph || graph.nodes.length === 0) {
+      setFlow({ nodes: [], edges: [] });
+      return;
+    }
+    layoutTopology(graph)
+      .then((laidOut) => {
+        if (run === runRef.current) setFlow(laidOut);
       })
       .catch(() => {
         if (run === runRef.current) setFlow({ nodes: [], edges: [] });
