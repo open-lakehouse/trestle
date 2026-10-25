@@ -521,13 +521,21 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
     }
 
     // What each component uses by hard requirement rather than by demand (e.g. an agent
-    // platform that gets its models from the experiment tracker's AI gateway): one edge per
-    // required module, labelled with the capability that module provides. The gateway and its
-    // auth/policy providers are skipped — their own edges already connect them.
+    // platform that gets its models from the experiment tracker's AI gateway), or by an
+    // optional integration with a module present in the stack (e.g. an experiment tracker
+    // whose model registry is the data catalog): one edge per such module, labelled with the
+    // capability it provides. The gateway and its auth/policy providers are skipped — their
+    // own edges already connect them.
     let infrastructure = [&gateway_module, &auth_module, &policy_module];
     for module in &plan.graph.nodes {
         let from = module.id().as_str();
-        for required in module.requires() {
+        let integrations = plan
+            .bindings
+            .get(module.id())
+            .map_or_else(Vec::new, |binding| {
+                module.integrates_with_in(&binding.knobs, &plan.stack_facts)
+            });
+        for required in module.requires().iter().chain(&integrations) {
             let to = required.as_str();
             if infrastructure.iter().any(|m| m.as_deref() == Some(to))
                 || uses.iter().any(|e| e.endpoints() == (from, to))
@@ -1068,6 +1076,30 @@ mod tests {
             uses("omnigent", "postgres").as_slice(),
             [TopologyEdgeDto::Uses { role, .. }] if role == "relational_db"
         ));
+    }
+
+    #[test]
+    fn an_optional_integration_draws_a_uses_edge_only_when_present() {
+        // MLflow serves its model registry from Unity Catalog when both are in the stack,
+        // without requiring it.
+        let mlflow_uses_uc = |g: &GraphDto| {
+            g.edges
+                .iter()
+                .filter(|e| {
+                    matches!(e, TopologyEdgeDto::Uses { from, to, .. }
+                        if from == "mlflow" && to == "unity-catalog")
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let with_uc = graph_dto(&plan(&Selection::modules(["mlflow", "unity-catalog"])));
+        assert!(matches!(
+            mlflow_uses_uc(&with_uc).as_slice(),
+            [TopologyEdgeDto::Uses { role, protocol, resources, .. }]
+                if role == "data_catalog" && protocol == "HTTP" && resources.is_empty()
+        ));
+        let alone = graph_dto(&plan(&Selection::modules(["mlflow"])));
+        assert!(mlflow_uses_uc(&alone).is_empty());
     }
 
     #[test]

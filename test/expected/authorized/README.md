@@ -21,7 +21,7 @@ flowchart LR
     n0 -->|":9100"| n2
     n2 -->|"/lineage, /api/v1/lineage 🔒"| n5
     n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7
-    n2 -->|"/api/2.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8
+    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8
     n2 -->|"S3 + STS"| n6
     n2 -.->|"authn"| n1
     n2 -.->|"authz"| n3
@@ -30,6 +30,7 @@ flowchart LR
     n7 -->|"S3: unity"| n6
     n8 -->|"PostgreSQL: mlflow"| n4
     n8 -->|"S3: mlflow"| n6
+    n8 -->|"HTTP"| n7
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb

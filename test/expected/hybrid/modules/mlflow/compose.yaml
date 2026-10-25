@@ -3,6 +3,10 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.17.0-full
     restart: unless-stopped
+    depends_on:
+      # The model registry is Unity Catalog's (see `--registry-store-uri` below).
+      unitycatalog:
+        condition: service_healthy
     command:
       - "mlflow"
       - "server"

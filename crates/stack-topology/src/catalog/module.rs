@@ -990,6 +990,14 @@ pub trait Module: Send + Sync {
         let _ = (knobs, stack);
         Cow::Borrowed(&self.provides().client_env)
     }
+    /// The modules this one integrates with in a stack with the given [`StackFacts`], without
+    /// requiring them (e.g. an experiment tracker serving its model registry from a data
+    /// catalog when one is present). Each draws a uses edge in the environment graph, like a
+    /// [`requires`](Module::requires) entry. Defaults to none.
+    fn integrates_with_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
+        let _ = (knobs, stack);
+        Vec::new()
+    }
     /// The helper containers this module renders with the resolved `knobs`. Defaults to
     /// [`Provides::helpers`]; a module overrides it when a knob turns a helper off.
     fn helpers_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [HelperService]> {

@@ -8,6 +8,9 @@ services:
         condition: service_healthy
       azurite-init:
         condition: service_completed_successfully
+      # The model registry is Unity Catalog's (see `--registry-store-uri` below).
+      unitycatalog:
+        condition: service_healthy
     command:
       - "mlflow"
       - "server"

@@ -18,13 +18,14 @@ flowchart LR
     n0 -->|":9080"| n2
     n0 -->|":9100"| n2
     n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n5
-    n2 -->|"/api/2.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n6
+    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n6
     n2 -->|"S3 + STS"| n4
     n2 -.->|"authn"| n1
     n5 -->|"PostgreSQL: unitycatalog"| n3
     n5 -->|"S3: unity"| n4
     n6 -->|"PostgreSQL: mlflow"| n3
     n6 -->|"S3: mlflow"| n4
+    n6 -->|"HTTP"| n5
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb

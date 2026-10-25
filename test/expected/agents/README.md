@@ -20,7 +20,7 @@ flowchart LR
     n0 -->|":9100"| n1
     n1 -->|"/jaeger, /v1/traces"| n2
     n1 -->|"/api/2.1/unity-catalog, /unity-catalog"| n5
-    n1 -->|"/api/2.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n6
+    n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n6
     n1 -->|"/omnigent"| n7
     n1 -->|"S3 + STS"| n4
     n5 -->|"PostgreSQL: unitycatalog"| n3
@@ -28,6 +28,7 @@ flowchart LR
     n6 -->|"PostgreSQL: mlflow"| n3
     n6 -->|"S3: mlflow"| n4
     n7 -->|"PostgreSQL: omnigent"| n3
+    n6 -->|"HTTP"| n5
     n7 -->|"HTTP"| n6
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed

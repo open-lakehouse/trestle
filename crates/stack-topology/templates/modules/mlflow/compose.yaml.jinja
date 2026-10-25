@@ -3,12 +3,17 @@ services:
   mlflow:
     image: {{ knobs.image }}
     restart: unless-stopped
-{%- if dependencies %}
+{%- if dependencies or "unity-catalog" in stack.modules %}
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: service_{{ dep.readiness }}
 {%- endfor %}
+{%- if "unity-catalog" in stack.modules %}
+      # The model registry is Unity Catalog's (see `--registry-store-uri` below).
+      unitycatalog:
+        condition: service_healthy
+{%- endif %}
 {%- endif %}
     command:
       - "mlflow"

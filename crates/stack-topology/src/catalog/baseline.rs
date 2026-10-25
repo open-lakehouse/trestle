@@ -1278,8 +1278,9 @@ fn mlflow() -> Arc<dyn Module> {
 /// Both serve registered models, and an environment should have one registry. With UC present,
 /// the server's registry store is UC (`--registry-store-uri uc:…`, see the fragment), so
 /// MLflow's own registry API and UI read and write UC models, and clients get
-/// `MLFLOW_REGISTRY_URI` to talk to UC's API directly. UC stays optional: MLflow alone keeps
-/// its registry in its own database.
+/// `MLFLOW_REGISTRY_URI` to talk to UC's API directly (loading a version needs the credentials
+/// UC vends). The graph draws the link as an integration edge, and the server starts after UC.
+/// UC stays optional: MLflow alone keeps its registry in its own database.
 struct Mlflow(DataModule);
 
 impl Module for Mlflow {
@@ -1348,6 +1349,14 @@ impl Module for Mlflow {
             .with_prefix("uc:"),
         );
         Cow::Owned(env)
+    }
+    fn integrates_with_in(&self, _knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
+        // The server's model registry is UC's when both are in the stack.
+        if stack.has("unity-catalog") {
+            vec![ModuleId::from("unity-catalog")]
+        } else {
+            Vec::new()
+        }
     }
 }
 

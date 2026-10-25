@@ -10,6 +10,9 @@ services:
         condition: service_completed_successfully
       gateway-certs:
         condition: service_completed_successfully
+      # The model registry is Unity Catalog's (see `--registry-store-uri` below).
+      unitycatalog:
+        condition: service_healthy
     command:
       - "mlflow"
       - "server"

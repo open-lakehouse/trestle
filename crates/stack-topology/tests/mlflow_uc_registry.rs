@@ -58,6 +58,7 @@ fn mlflow_alone_keeps_its_own_registry() {
     );
     assert!(svc["environment"].get("PYTHONPATH").is_none(), "{svc:?}");
     assert!(svc.get("configs").is_none(), "{svc:?}");
+    assert!(svc["depends_on"].get("unitycatalog").is_none(), "{svc:?}");
     for vantage in [Vantage::Host, Vantage::Container] {
         assert_eq!(p.client_env(vantage).get("MLFLOW_REGISTRY_URI"), None);
     }
@@ -77,6 +78,12 @@ fn with_unity_catalog_the_server_serves_its_registry_from_uc() {
         .position(|a| a == "--registry-store-uri")
         .expect("registry store set");
     assert_eq!(args[at + 1], "uc:http://unitycatalog:8080");
+    // And it starts once UC serves, beside its demanded stores.
+    assert_eq!(
+        svc["depends_on"]["unitycatalog"]["condition"].as_str(),
+        Some("service_healthy")
+    );
+    assert!(svc["depends_on"].get("db").is_some(), "{svc:?}");
 
     // The package registering the `uc` scheme is mounted and on the path.
     let plugins = "/opt/trestle/mlflow-plugins";
