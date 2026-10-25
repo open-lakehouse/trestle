@@ -1,6 +1,13 @@
 import {
   Button,
   cn,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
   Label,
   Switch,
   Tooltip,
@@ -10,7 +17,9 @@ import {
 import { Panel } from "@xyflow/react";
 import {
   AlertTriangle,
+  ChevronDown,
   ClipboardCopy,
+  Download,
   FileArchive,
   FileCode,
   FileImage,
@@ -168,27 +177,21 @@ export function CanvasToolbar({
         <Redo2 className="h-4 w-4" />
       </IconAction>
       <div className="mx-1 h-5 w-px bg-border" />
-      <ExportActions
+      <ExportMenu
         graph={graph}
         files={files}
         deploy={deploy}
         mermaid={mermaid}
         name={exportName}
         onError={onExportError}
+        onDownloadBundle={onDownloadBundle}
+        bundleDisabled={
+          hasError || planning || bundling || componentCount === 0
+        }
+        bundling={bundling}
+        bundleLabel={bundleLabel}
+        compact={bar}
       />
-      {onDownloadBundle && (
-        <IconAction
-          label={bundleLabel}
-          disabled={hasError || planning || bundling || componentCount === 0}
-          onClick={onDownloadBundle}
-        >
-          {bundling ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <FileArchive className="h-4 w-4" />
-          )}
-        </IconAction>
-      )}
       <div className="mx-1 h-5 w-px bg-border" />
       {onToggleGateway && (
         <>
@@ -254,17 +257,23 @@ function GatewayToggle({
 }
 
 /**
- * Save the diagram for use elsewhere: a graph snapshot (what an
- * `EnvironmentDiagram` embed renders), Mermaid for Markdown, or a static
- * SVG/PNG image.
+ * Everything the diagram and its environment save as, behind one Export menu:
+ * a static image (SVG, PNG), Mermaid for Markdown (copied or as `.mmd`), a
+ * graph snapshot (what an `EnvironmentDiagram` embed renders), and the whole
+ * rendered environment as a zip.
  */
-function ExportActions({
+function ExportMenu({
   graph,
   files,
   deploy,
   mermaid,
   name,
   onError,
+  onDownloadBundle,
+  bundleDisabled,
+  bundling,
+  bundleLabel,
+  compact,
 }: {
   graph: GraphDto | undefined;
   files: readonly string[] | undefined;
@@ -272,6 +281,12 @@ function ExportActions({
   mermaid: string | undefined;
   name: string;
   onError?: (message: string) => void;
+  onDownloadBundle?: () => void;
+  bundleDisabled: boolean;
+  bundling: boolean;
+  bundleLabel: string;
+  /** Size the trigger for the flat editor bar. */
+  compact: boolean;
 }) {
   const renderImage = useDiagramImage();
   const empty = !graph || graph.nodes.length === 0;
@@ -313,43 +328,69 @@ function ExportActions({
   };
 
   return (
-    <>
-      <IconAction
-        label="Export snapshot (embed in docs)"
-        disabled={empty}
-        onClick={exportSnapshot}
-      >
-        <FileJson className="h-4 w-4" />
-      </IconAction>
-      <IconAction
-        label="Copy Mermaid (paste into Markdown)"
-        disabled={empty || !mermaid}
-        onClick={copyMermaid}
-      >
-        <ClipboardCopy className="h-4 w-4" />
-      </IconAction>
-      <IconAction
-        label="Export Mermaid (.mmd)"
-        disabled={empty || !mermaid}
-        onClick={exportMermaid}
-      >
-        <FileCode className="h-4 w-4" />
-      </IconAction>
-      <IconAction
-        label="Export SVG"
-        disabled={empty}
-        onClick={() => exportImage("svg")}
-      >
-        <FileImage className="h-4 w-4" />
-      </IconAction>
-      <IconAction
-        label="Export PNG"
-        disabled={empty}
-        onClick={() => exportImage("png")}
-      >
-        <ImageDown className="h-4 w-4" />
-      </IconAction>
-    </>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn("gap-1.5 px-2", compact ? "h-7" : "h-8")}
+          aria-label="Export"
+        >
+          {bundling ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
+          Export
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel>Diagram image</DropdownMenuLabel>
+        <DropdownMenuItem disabled={empty} onSelect={() => exportImage("svg")}>
+          <FileImage />
+          Image
+          <DropdownMenuShortcut>.svg</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={empty} onSelect={() => exportImage("png")}>
+          <ImageDown />
+          Image
+          <DropdownMenuShortcut>.png</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Docs</DropdownMenuLabel>
+        <DropdownMenuItem disabled={empty || !mermaid} onSelect={copyMermaid}>
+          <ClipboardCopy />
+          Copy Mermaid
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={empty || !mermaid} onSelect={exportMermaid}>
+          <FileCode />
+          Mermaid
+          <DropdownMenuShortcut>.mmd</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={empty} onSelect={exportSnapshot}>
+          <FileJson />
+          Snapshot for embeds
+          <DropdownMenuShortcut>.json</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        {onDownloadBundle && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Environment</DropdownMenuLabel>
+            <DropdownMenuItem
+              disabled={bundleDisabled}
+              onSelect={onDownloadBundle}
+              title={bundleLabel}
+            >
+              <FileArchive />
+              Rendered files
+              <DropdownMenuShortcut>.zip</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
