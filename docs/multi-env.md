@@ -123,7 +123,8 @@ The network plan comes in three phases. Each phase keeps the next one open.
    entry and one exit per environment: its Envoy. Workloads stay on their
    private network. The network is declared with a fixed `name:` rather than
    `external: true`, so whichever env starts first creates it and no separate
-   setup step is needed.
+   setup step is needed. `trestle workspace down` removes it once no member
+   runs.
 3. **Workload identity (later).** A workspace-level **platform** stack (its own
    Compose project in the workspace, on the highest slot) runs the SPIRE root
    server on the mesh. Each env runs a nested SPIRE server, chained to the root,

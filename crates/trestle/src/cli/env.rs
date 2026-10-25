@@ -32,8 +32,9 @@ use olai_stack_topology::projection::graph_dto;
 use olai_stack_topology::{
     Catalog, DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployPhase, EnvManifest, GatewaySettings,
     Knob, KnobKind, LocalCredentials, ManifestError, MaterializedOutput, ModuleId, PlanCtx,
-    PlanError, RenderError, SECRETS_ENV_PATH, Secrets, Selection, TargetId, baseline_catalog,
-    baseline_catalog_with, baseline_selection, builtin_targets, graph_mermaid, layout_report,
+    PlanError, RenderError, SECRETS_ENV_PATH, Secrets, Selection, TargetId, WORKSPACE_FILE,
+    WorkspaceEnv, WorkspaceManifest, baseline_catalog, baseline_catalog_with, baseline_selection,
+    builtin_targets, graph_mermaid, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -220,6 +221,32 @@ pub fn run(cmd: EnvCommand) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn run_new(args: EnvNewArgs) -> Result<()> {
+    let out_dir = args
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&args.name));
+    if let Some(parent) = out_dir
+        .parent()
+        .filter(|p| p.join(WORKSPACE_FILE).is_file())
+    {
+        eprintln!(
+            "warning: {} is a workspace; `trestle workspace add {}` gives the environment its \
+             own ports and project name",
+            parent.display(),
+            args.name
+        );
+    }
+    new_env(args, None).map(drop)
+}
+
+/// Create the environment `args` describes, as `trestle env new` does. As a workspace
+/// `member`, the workspace's ports and names override the defaults (see
+/// [`WorkspaceManifest::apply`]). Returns whether the environment was written (the wizard can
+/// be cancelled).
+pub(super) fn new_env(
+    args: EnvNewArgs,
+    member: Option<(&WorkspaceManifest, &WorkspaceEnv)>,
+) -> Result<bool> {
     validate_env_name(&args.name)?;
     let out_dir = args
         .out_dir
@@ -270,6 +297,11 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
         ctx.target = TargetId::from(target.as_str());
     }
     if let Some(port) = args.gateway_host_port {
+        if member.is_some() {
+            return Err(Error::other(
+                "--gateway-host-port can't be used in a workspace: the workspace assigns ports",
+            ));
+        }
         ctx.gateway_host_port = port;
     }
     if let Some(root) = &args.data_root {
@@ -283,6 +315,9 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
                 .map(|p| ModuleId::from(p.as_str()))
                 .collect(),
         );
+    }
+    if let Some((workspace, env)) = member {
+        workspace.apply(env, &mut ctx);
     }
 
     // Interactive: let the wizard pick modules and fill the knobs the user wants
@@ -338,13 +373,13 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
             .map_err(io_err)?;
         if !proceed {
             cliclack::outro_cancel("Cancelled.").map_err(io_err)?;
-            return Ok(());
+            return Ok(false);
         }
     }
 
     write_env(&plan, &selection, &ctx, &out_dir)?;
     report_written(&plan, &out_dir);
-    Ok(())
+    Ok(true)
 }
 
 /// Materialize a plan to `dir` and persist the `env.toml` manifest beside it.
@@ -416,8 +451,18 @@ fn write_manifest(
     ctx: &PlanCtx,
     dir: &std::path::Path,
 ) -> Result<()> {
+    persist_manifest(plan, &EnvManifest::new(selection.clone(), ctx.clone()), dir)
+}
+
+/// Persist `manifest` as the `env.toml` in `dir`, followed by a commented reference of what
+/// `plan` (planned from it) leaves at its defaults.
+fn persist_manifest(
+    plan: &olai_stack_topology::Plan,
+    manifest: &EnvManifest,
+    dir: &std::path::Path,
+) -> Result<()> {
+    let selection = &manifest.selection;
     std::fs::create_dir_all(dir).map_err(|e| Error::io_at(dir, e))?;
-    let manifest = EnvManifest::new(selection.clone(), ctx.clone());
     let manifest_path = dir.join("env.toml");
     manifest
         .write_to(&manifest_path)
@@ -715,33 +760,97 @@ fn read_env_manifest(dir: &Path) -> Result<EnvManifest> {
 }
 
 fn run_render(args: EnvRenderArgs) -> Result<()> {
-    let mut manifest = read_env_manifest(&args.dir)?;
+    let workspace = workspace_of(&args.dir)?;
+    let member = workspace
+        .as_ref()
+        .and_then(|(dir, ws)| Some((ws, member_at(ws, dir, &args.dir)?)));
+    render_env(&args.dir, args.out_dir.as_deref(), args.force, member).map(drop)
+}
 
-    let catalog = load_catalog(&manifest, &args.dir)?;
-    let out_dir = args.out_dir.clone().unwrap_or_else(|| args.dir.clone());
+/// The workspace `dir` belongs to, if its parent holds a [`WORKSPACE_FILE`]: the workspace
+/// directory and its manifest.
+fn workspace_of(dir: &Path) -> Result<Option<(PathBuf, WorkspaceManifest)>> {
+    let Some(parent) = std::fs::canonicalize(dir)
+        .ok()
+        .and_then(|d| d.parent().map(Path::to_path_buf))
+    else {
+        return Ok(None);
+    };
+    let path = parent.join(WORKSPACE_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let manifest = WorkspaceManifest::read_from(&path)
+        .map_err(|e| Error::other(format!("{}: {e}", path.display())))?;
+    Ok(Some((parent, manifest)))
+}
+
+/// The member of `workspace` (in `workspace_dir`) whose directory is `dir`.
+pub(super) fn member_at<'a>(
+    workspace: &'a WorkspaceManifest,
+    workspace_dir: &Path,
+    dir: &Path,
+) -> Option<&'a WorkspaceEnv> {
+    let dir = std::fs::canonicalize(dir).ok()?;
+    workspace
+        .envs
+        .iter()
+        .find(|e| std::fs::canonicalize(workspace_dir.join(&e.path)).ok() == Some(dir.clone()))
+}
+
+/// Re-render the environment in `dir` from its `env.toml` into `out_dir` (default `dir`), as
+/// `trestle env render` does, and return its plan. As a workspace `member`, the workspace's
+/// ports and names are applied first, and saved to `env.toml` when they changed.
+pub(super) fn render_env(
+    dir: &Path,
+    out_dir: Option<&Path>,
+    force: bool,
+    member: Option<(&WorkspaceManifest, &WorkspaceEnv)>,
+) -> Result<olai_stack_topology::Plan> {
+    let mut manifest = read_env_manifest(dir)?;
+
+    let catalog = load_catalog(&manifest, dir)?;
+    let out_dir = out_dir.unwrap_or(dir);
     // The manifest dir is expected to be non-empty (it holds env.toml); only
     // guard a *different* output dir against clobbering unrelated files.
-    if out_dir != args.dir {
-        ensure_writable_dir(&out_dir, args.force)?;
+    if out_dir != dir {
+        ensure_writable_dir(out_dir, force)?;
+    }
+    let mut drifted = false;
+    if let Some((workspace, env)) = member {
+        let before = manifest.context.clone();
+        workspace.apply(env, &mut manifest.context);
+        drifted = manifest.context != before;
     }
 
-    manifest.context.secrets = Some(load_secrets(&args.dir)?);
+    manifest.context.secrets = Some(load_secrets(dir)?);
     let plan = match manifest.plan(&catalog) {
         // The deployment guide creates the hosted resources (and saves their secrets), so
         // write it from a secret-free preview even though the stack can't render yet.
         Err(PlanError::UnresolvedSecrets { vars }) => {
             manifest.context.secrets = None;
             let preview = manifest.plan(&catalog).map_err(map_plan_err)?;
-            write_deploy_guide(&preview, &out_dir)?;
-            return Err(unset_secrets(&vars, &out_dir, "updated README.md"));
+            if drifted {
+                persist_manifest(&preview, &manifest, dir)?;
+            }
+            write_deploy_guide(&preview, out_dir)?;
+            return Err(unset_secrets(&vars, out_dir, "updated README.md"));
         }
         plan => plan.map_err(map_plan_err)?,
     };
+    if drifted {
+        manifest.context.secrets = None;
+        persist_manifest(&plan, &manifest, dir)?;
+        println!(
+            "Updated {} to the workspace's ports and names",
+            dir.join("env.toml").display()
+        );
+    }
 
     println!("{}", layout_report(&plan));
-    write_rendered(&plan, &manifest, &catalog, &out_dir)?;
-    report_written(&plan, &out_dir);
-    Ok(())
+    write_rendered(&plan, &manifest, &catalog, out_dir)?;
+    report_written(&plan, out_dir);
+    Ok(plan)
 }
 
 // ---------------------------------------------------------------------------

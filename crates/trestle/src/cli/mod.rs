@@ -6,6 +6,7 @@ pub mod env;
 pub mod generate;
 pub mod list;
 pub mod new;
+pub mod workspace;
 
 use std::sync::LazyLock;
 
@@ -53,6 +54,9 @@ pub enum Commands {
     /// Create and render composed Docker-Compose lakehouse environments.
     #[command(subcommand)]
     Env(env::EnvCommand),
+    /// Run several environments side by side on one host, each on its own ports.
+    #[command(subcommand)]
+    Workspace(workspace::WorkspaceCommand),
     /// List embedded bases + apps.
     ListTemplates,
     /// Alias for `list-templates` filtered to apps only.
@@ -73,6 +77,7 @@ pub fn run() -> Result<()> {
         Commands::Generate(args) => generate::run(*args),
         Commands::EnrichOpenapi(args) => enrich_openapi::run(args),
         Commands::Env(cmd) => env::run(cmd),
+        Commands::Workspace(cmd) => workspace::run(cmd),
         Commands::ListTemplates => list::run_templates(),
         Commands::ListApps => list::run_apps(),
         Commands::ListComponents(args) => list::run_components(args),

@@ -424,6 +424,22 @@ and gives each a slot. `WorkspaceManifest::apply` writes the slot's values into 
   gateway, joins it under the alias `<env>.mesh`, so cross-environment traffic always passes
   through an Envoy.
 
+The CLI drives it:
+
+```bash
+trestle workspace init demo --mesh   # writes demo/trestle-workspace.toml
+cd demo
+trestle workspace add dev -y         # every `trestle env new` flag works here
+trestle workspace add prod --auth -y # slot 1: gateway on https://prod.localhost:10080
+trestle workspace list               # slot, project, gateway, and whether it runs
+trestle workspace render             # re-render all, then check no port is bound twice
+trestle workspace up [ENV…]          # docker compose up -d --wait, per member
+trestle workspace down [ENV…]        # --volumes to drop their data too
+```
+
+`trestle env render` inside a member applies the workspace's values too, and saves them to
+`env.toml` when a hand edit moved them.
+
 `Plan::host_ports` lists every host port a plan binds. Planning rejects one that is bound twice
 (`PlanError::HostPortCollision`), and `port_conflicts` finds the ports two planned members
 share. The design and the road to SPIFFE/SPIRE are in
