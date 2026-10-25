@@ -1,6 +1,16 @@
 // The workspace editor: several environments sharing one host, edited in an
 // IDE-like shell and persisted through an injected `WorkspaceStore`.
 
+export { Breadcrumb } from "./chrome";
+export { EnvTree, type EnvTreeProps } from "./EnvTree";
+export {
+  closeTab,
+  type EditorTab,
+  neighbourAfterClose,
+  openTab,
+  pruneTabs,
+  tabKey,
+} from "./editors";
 export {
   contextFor,
   type EnvDoc,

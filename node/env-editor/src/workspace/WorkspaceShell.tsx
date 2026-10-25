@@ -1,6 +1,7 @@
 // The workspace editor, laid out like an IDE (Zed, VS Code): an activity bar,
-// a sidebar (the workspace's environments, the module catalog, settings), a tab
-// per open environment hosting the environment editor, a bottom panel
+// a sidebar (the workspace's environments as a tree of diagrams and rendered
+// files, the module catalog, settings), editor tabs (an environment's diagram
+// hosting the environment editor, or one of its files), a bottom panel
 // (problems across the workspace, how to run the active environment) and a
 // status bar. Everything persists through the injected `WorkspaceStore` (see
 // `WorkspaceProvider`); all planning goes through the injected `Planner`.
@@ -8,7 +9,6 @@
 import {
   Button,
   cn,
-  Input,
   ResizeHandle,
   Switch,
   Tooltip,
@@ -23,19 +23,16 @@ import {
   Blocks,
   CircleCheck,
   CircleX,
-  Copy,
-  Download,
   Files,
+  FileText,
   Layers,
   Loader2,
-  Network,
   PanelBottom,
   PanelLeft,
   Pencil,
   Plus,
   Settings,
   Terminal,
-  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -43,13 +40,32 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { buildWorkspaceZip, generateCredentials } from "../artifacts/bundleZip";
+import { CodeViewer } from "../artifacts/CodeViewer";
+import { fileSourceOf } from "../artifacts/fileSource";
 import { downloadBlob } from "../diagram/exportImage";
 import { EnvironmentEditor } from "../EnvironmentEditor";
 import { usePlanner } from "../planner";
 import type { Bundle, CatalogDto } from "../types";
+import {
+  Breadcrumb,
+  EnvStatus,
+  IconButton,
+  NameInput,
+  SidebarHeader,
+} from "./chrome";
+import { EnvTree } from "./EnvTree";
+import {
+  closeTab,
+  type EditorTab,
+  neighbourAfterClose,
+  openTab,
+  pruneTabs,
+  tabKey,
+} from "./editors";
 import {
   contextFor,
   type EnvDoc,
@@ -113,32 +129,49 @@ export function WorkspaceShell({
     invert: true,
   });
 
-  // Open tabs, by env id, and the active one. Members that leave the
-  // workspace close their tab.
-  const [open, setOpen] = useState<string[]>([]);
-  const [active, setActive] = useState<string>();
+  // Open editor tabs (an environment's diagram, or one of its files) and the
+  // active one. A member that leaves the workspace closes its tabs.
+  const [open, setOpen] = useState<EditorTab[]>([]);
+  const [activeKey, setActiveKey] = useState<string>();
   const envs = workspace?.envs ?? [];
+  const started = useRef(false);
   useEffect(() => {
     if (!workspace) return;
     const ids = new Set(workspace.envs.map((e) => e.id));
     setOpen((tabs) => {
-      const kept = tabs.filter((id) => ids.has(id));
-      // Start with the first environment open.
-      if (kept.length === 0 && workspace.envs[0]) return [workspace.envs[0].id];
-      return kept.length === tabs.length ? tabs : kept;
+      // Start with the first environment's diagram open.
+      if (!started.current && workspace.envs[0]) {
+        started.current = true;
+        return [{ env: workspace.envs[0].id }];
+      }
+      return pruneTabs(tabs, ids);
     });
   }, [workspace]);
   useEffect(() => {
-    if (!active || !open.includes(active)) setActive(open.at(-1));
-  }, [open, active]);
-  const openEnv = useCallback((id: string) => {
-    setOpen((tabs) => (tabs.includes(id) ? tabs : [...tabs, id]));
-    setActive(id);
+    if (!activeKey || !open.some((t) => tabKey(t) === activeKey)) {
+      const last = open.at(-1);
+      setActiveKey(last && tabKey(last));
+    }
+  }, [open, activeKey]);
+  const openEditor = useCallback((tab: EditorTab) => {
+    setOpen((tabs) => openTab(tabs, tab));
+    setActiveKey(tabKey(tab));
   }, []);
-  const closeEnv = useCallback((id: string) => {
-    setOpen((tabs) => tabs.filter((t) => t !== id));
-  }, []);
-  const activeEnv = envs.find((e) => e.id === active);
+  const openEnv = useCallback(
+    (id: string) => openEditor({ env: id }),
+    [openEditor],
+  );
+  const closeEditor = useCallback(
+    (key: string) => {
+      setOpen((tabs) => {
+        if (key === activeKey) setActiveKey(neighbourAfterClose(tabs, key));
+        return closeTab(tabs, key);
+      });
+    },
+    [activeKey],
+  );
+  const activeTab = open.find((t) => tabKey(t) === activeKey);
+  const activeEnv = envs.find((e) => e.id === activeTab?.env);
 
   // ⌘B toggles the sidebar, ⌘J the panel, ⌘1…9 switch tabs.
   useEffect(() => {
@@ -152,10 +185,10 @@ export function WorkspaceShell({
         e.preventDefault();
         setPanelOpen((o) => !o);
       } else if (/^[1-9]$/.test(key)) {
-        const id = open[Number(key) - 1];
-        if (id) {
+        const tab = open[Number(key) - 1];
+        if (tab) {
           e.preventDefault();
-          setActive(id);
+          setActiveKey(tabKey(tab));
         }
       }
     };
@@ -250,12 +283,12 @@ export function WorkspaceShell({
                 style={{ width: sidebarWidth }}
               >
                 {view === "explorer" && (
-                  <ExplorerView
+                  <EnvTree
                     workspace={workspace}
                     plans={plans}
                     conflicts={conflicts}
-                    active={active}
-                    onOpen={openEnv}
+                    active={activeTab}
+                    onOpen={openEditor}
                     onDownload={planner.bundle ? downloadWorkspace : undefined}
                     downloading={downloading}
                   />
@@ -273,23 +306,36 @@ export function WorkspaceShell({
           )}
           <main className="flex min-w-0 flex-1 flex-col">
             <TabStrip
-              envs={open
-                .map((id) => envs.find((e) => e.id === id))
-                .filter((e): e is EnvDoc => !!e)}
-              active={active}
+              tabs={open}
+              envs={envs}
+              activeKey={activeKey}
               plans={plans}
-              onSelect={setActive}
-              onClose={closeEnv}
+              onSelect={setActiveKey}
+              onClose={closeEditor}
             />
             <div className="min-h-0 flex-1">
-              {activeEnv ? (
+              {activeEnv && activeTab?.path !== undefined ? (
+                <FileEditor
+                  workspace={workspace}
+                  env={activeEnv}
+                  path={activeTab.path}
+                  plan={plans[activeEnv.id]}
+                />
+              ) : activeEnv ? (
                 <EnvironmentEditor
                   key={activeEnv.id}
+                  chrome="workspace"
                   catalog={catalog}
                   colorMode={colorMode}
                   initialSelection={activeEnv.selection}
                   context={contextFor(workspace, activeEnv)}
                   onSelectionChange={(s) => ws.setSelection(activeEnv.id, s)}
+                  onOpenFile={(path) => openEditor({ env: activeEnv.id, path })}
+                  toolbarLeading={
+                    <Breadcrumb
+                      parts={[workspace.name, activeEnv.name, "Diagram"]}
+                    />
+                  }
                 />
               ) : (
                 <EmptyEditor
@@ -399,290 +445,6 @@ function ActivityBar({
 // Sidebar views
 // ---------------------------------------------------------------------------
 
-function SidebarHeader({
-  title,
-  children,
-}: {
-  title: string;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex h-9 shrink-0 items-center justify-between px-3">
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {title}
-      </span>
-      <div className="flex items-center gap-0.5">{children}</div>
-    </div>
-  );
-}
-
-function IconButton({
-  label,
-  onClick,
-  disabled,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={label}
-          disabled={disabled}
-          onClick={onClick}
-          className="h-6 w-6 [&_svg]:h-3.5 [&_svg]:w-3.5"
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-/** What the explorer is asking a name for. */
-type NameEdit =
-  | { kind: "add" }
-  | { kind: "rename"; id: string }
-  | { kind: "duplicate"; id: string };
-
-function ExplorerView({
-  workspace,
-  plans,
-  conflicts,
-  active,
-  onOpen,
-  onDownload,
-  downloading,
-}: {
-  workspace: WorkspaceDoc;
-  plans: Record<string, MemberPlan>;
-  conflicts: PortConflict[];
-  active: string | undefined;
-  onOpen: (id: string) => void;
-  onDownload?: () => void;
-  downloading: boolean;
-}) {
-  const ws = useWorkspace();
-  const [edit, setEdit] = useState<NameEdit | null>(null);
-  const clashing = new Set(
-    conflicts.flatMap((c) => [c.first.env, c.second.env]),
-  );
-
-  const submit = (name: string): string | undefined => {
-    if (!edit) return undefined;
-    if (edit.kind === "rename") return ws.renameEnv(edit.id, name);
-    const env =
-      edit.kind === "add" ? ws.addEnv(name) : ws.duplicateEnv(edit.id, name);
-    if (typeof env === "string") return env;
-    onOpen(env.id);
-    return undefined;
-  };
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <SidebarHeader title="Environments">
-        <IconButton
-          label="New environment"
-          onClick={() => setEdit({ kind: "add" })}
-        >
-          <Plus />
-        </IconButton>
-        {onDownload && (
-          <IconButton
-            label="Download workspace (.zip) for `trestle workspace`"
-            onClick={onDownload}
-            disabled={downloading}
-          >
-            {downloading ? <Loader2 className="animate-spin" /> : <Download />}
-          </IconButton>
-        )}
-      </SidebarHeader>
-      <div className="flex items-center gap-1.5 px-3 pb-2 text-xs text-muted-foreground">
-        <Layers className="h-3.5 w-3.5" />
-        <span className="truncate font-medium text-foreground">
-          {workspace.name}
-        </span>
-        {workspace.mesh && (
-          <span className="inline-flex items-center gap-1">
-            · <Network className="h-3 w-3" /> mesh
-          </span>
-        )}
-      </div>
-      <ul className="min-h-0 flex-1 overflow-y-auto pb-2">
-        {workspace.envs.map((env) =>
-          edit && edit.kind === "rename" && edit.id === env.id ? (
-            <li key={env.id} className="px-2 py-0.5">
-              <NameInput
-                initial={env.name}
-                onSubmit={submit}
-                onDone={() => setEdit(null)}
-              />
-            </li>
-          ) : (
-            <EnvRow
-              key={env.id}
-              env={env}
-              plan={plans[env.id]}
-              clashing={clashing.has(env.name)}
-              active={env.id === active}
-              onOpen={() => onOpen(env.id)}
-              onRename={() => setEdit({ kind: "rename", id: env.id })}
-              onDuplicate={() => setEdit({ kind: "duplicate", id: env.id })}
-              onRemove={() => {
-                if (
-                  window.confirm(
-                    `Remove \`${env.name}\` from the workspace? Its selection is lost.`,
-                  )
-                ) {
-                  ws.removeEnv(env.id);
-                }
-              }}
-            />
-          ),
-        )}
-        {edit && edit.kind !== "rename" && (
-          <li className="px-2 py-0.5">
-            <NameInput
-              initial={freeName(
-                workspace,
-                edit.kind === "add"
-                  ? workspace.envs.length === 0
-                    ? "dev"
-                    : "prod"
-                  : `${workspace.envs.find((e) => e.id === edit.id)?.name ?? "env"}-copy`,
-              )}
-              onSubmit={submit}
-              onDone={() => setEdit(null)}
-            />
-          </li>
-        )}
-      </ul>
-    </div>
-  );
-}
-
-function EnvRow({
-  env,
-  plan,
-  clashing,
-  active,
-  onOpen,
-  onRename,
-  onDuplicate,
-  onRemove,
-}: {
-  env: EnvDoc;
-  plan: MemberPlan | undefined;
-  clashing: boolean;
-  active: boolean;
-  onOpen: () => void;
-  onRename: () => void;
-  onDuplicate: () => void;
-  onRemove: () => void;
-}) {
-  const port = plan?.plan?.gateway.listeners[0]?.host_port;
-  return (
-    <li
-      className={cn(
-        "group flex h-7 items-center gap-1.5 px-3 text-sm",
-        active ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
-      )}
-    >
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-      >
-        <EnvStatus plan={plan} clashing={clashing} />
-        <span className="truncate">{env.name}</span>
-        <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
-          {port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`}
-        </span>
-      </button>
-      <div className="hidden shrink-0 items-center group-hover:flex">
-        <IconButton label="Rename" onClick={onRename}>
-          <Pencil />
-        </IconButton>
-        <IconButton label="Duplicate (e.g. dev → prod)" onClick={onDuplicate}>
-          <Copy />
-        </IconButton>
-        <IconButton label="Remove" onClick={onRemove}>
-          <Trash2 />
-        </IconButton>
-      </div>
-    </li>
-  );
-}
-
-function EnvStatus({
-  plan,
-  clashing,
-}: {
-  plan: MemberPlan | undefined;
-  clashing?: boolean;
-}) {
-  if (!plan) {
-    return (
-      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-    );
-  }
-  if (plan.error) {
-    return <CircleX className="h-3.5 w-3.5 shrink-0 text-destructive" />;
-  }
-  if (clashing) {
-    return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-ready" />;
-  }
-  return <CircleCheck className="h-3.5 w-3.5 shrink-0 text-success" />;
-}
-
-/** An inline name field: Enter submits (keeping it open on a refusal), Escape
- *  or leaving cancels. */
-function NameInput({
-  initial,
-  onSubmit,
-  onDone,
-}: {
-  initial: string;
-  onSubmit: (name: string) => string | undefined;
-  onDone: () => void;
-}) {
-  const [value, setValue] = useState(initial);
-  const [problem, setProblem] = useState<string>();
-  return (
-    <div>
-      <Input
-        autoFocus
-        value={value}
-        aria-label="Environment name"
-        aria-invalid={!!problem}
-        className="h-7 px-2 text-sm"
-        onFocus={(e) => e.currentTarget.select()}
-        onChange={(e) => {
-          setValue(e.target.value);
-          setProblem(undefined);
-        }}
-        onBlur={onDone}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onDone();
-          if (e.key !== "Enter") return;
-          const refused = onSubmit(value.trim());
-          if (refused) setProblem(refused);
-          else onDone();
-        }}
-      />
-      {problem && <p className="mt-1 text-xs text-destructive">{problem}</p>}
-    </div>
-  );
-}
-
 function ModulesView({ catalog }: { catalog: CatalogDto | undefined }) {
   const groups = useMemo(() => {
     const byCategory = new Map<string, CatalogDto["modules"]>();
@@ -784,60 +546,136 @@ function SettingsView({ workspace }: { workspace: WorkspaceDoc }) {
 // ---------------------------------------------------------------------------
 
 function TabStrip({
+  tabs,
   envs,
-  active,
+  activeKey,
   plans,
   onSelect,
   onClose,
 }: {
+  tabs: EditorTab[];
   envs: EnvDoc[];
-  active: string | undefined;
+  activeKey: string | undefined;
   plans: Record<string, MemberPlan>;
-  onSelect: (id: string) => void;
-  onClose: (id: string) => void;
+  onSelect: (key: string) => void;
+  onClose: (key: string) => void;
 }) {
   return (
     <div
       role="tablist"
-      aria-label="Open environments"
+      aria-label="Open editors"
       className="flex h-9 shrink-0 items-stretch overflow-x-auto border-b bg-sidebar"
     >
-      {envs.map((env) => (
-        <div
-          key={env.id}
-          className={cn(
-            "group flex items-center gap-1.5 border-r pl-3 pr-1 text-sm",
-            env.id === active
-              ? "bg-background text-foreground shadow-[inset_0_2px_0_hsl(var(--primary))]"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={env.id === active}
-            onClick={() => onSelect(env.id)}
-            onAuxClick={(e) => {
-              if (e.button === 1) onClose(env.id);
-            }}
-            className="flex items-center gap-1.5"
-          >
-            <EnvStatus plan={plans[env.id]} />
-            {env.name}
-          </button>
-          <button
-            type="button"
-            aria-label={`Close ${env.name}`}
-            onClick={() => onClose(env.id)}
+      {tabs.map((tab) => {
+        const key = tabKey(tab);
+        const env = envs.find((e) => e.id === tab.env);
+        if (!env) return null;
+        const active = key === activeKey;
+        const label = tab.path
+          ? (tab.path.split("/").at(-1) ?? tab.path)
+          : env.name;
+        return (
+          <div
+            key={key}
+            title={tab.path ? `${env.name}/${tab.path}` : `${env.name} diagram`}
             className={cn(
-              "rounded p-0.5 hover:bg-muted",
-              env.id === active ? "visible" : "invisible group-hover:visible",
+              "group flex items-center gap-1.5 border-r pl-3 pr-1 text-sm",
+              active
+                ? "bg-background text-foreground shadow-[inset_0_2px_0_hsl(var(--primary))]"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onSelect(key)}
+              onAuxClick={(e) => {
+                if (e.button === 1) onClose(key);
+              }}
+              className="flex items-center gap-1.5 whitespace-nowrap"
+            >
+              {tab.path ? (
+                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+              ) : (
+                <EnvStatus plan={plans[env.id]} />
+              )}
+              {label}
+              {tab.path && (
+                <span className="text-xs text-muted-foreground">
+                  {env.name}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              aria-label={`Close ${label}`}
+              onClick={() => onClose(key)}
+              className={cn(
+                "rounded p-0.5 hover:bg-muted",
+                active ? "visible" : "invisible group-hover:visible",
+              )}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A rendered file of `env`, read-only, under a breadcrumb toolbar. */
+function FileEditor({
+  workspace,
+  env,
+  path,
+  plan,
+}: {
+  workspace: WorkspaceDoc;
+  env: EnvDoc;
+  path: string;
+  plan: MemberPlan | undefined;
+}) {
+  const files = plan?.plan?.files;
+  const source = useMemo(
+    () => (files ? fileSourceOf(files) : undefined),
+    [files],
+  );
+  const exists = !!files?.some((f) => f.path === path);
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-10 shrink-0 items-center border-b px-3">
+        <Breadcrumb parts={[workspace.name, env.name, ...path.split("/")]} />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {!plan ? (
+          <Centered>
+            <Loader2 className="h-4 w-4 animate-spin" /> Rendering…
+          </Centered>
+        ) : !source || !exists ? (
+          <Centered>
+            {plan.error
+              ? `${env.name} doesn't plan: ${plan.error}`
+              : `${env.name} no longer renders ${path}.`}
+          </Centered>
+        ) : (
+          <CodeViewer
+            key={path}
+            path={path}
+            read={source.read}
+            header="compact"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Centered({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex h-full items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
+      {children}
     </div>
   );
 }
