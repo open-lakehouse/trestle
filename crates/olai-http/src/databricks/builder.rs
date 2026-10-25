@@ -10,10 +10,10 @@ use super::credential::{
     DatabricksCredential, DatabricksGcpTokenExchangeProvider, DatabricksM2MProvider,
     OidcEnvTokenProvider, OidcFileTokenProvider,
 };
-use crate::azure::credential::{AZURE_DATABRICKS_RESOURCE, ImdsManagedIdentityProvider};
-// AZURE_DATABRICKS_SCOPE is used by the Azure SP two-token flow (Phase 2.5)
-#[allow(unused_imports)]
-use crate::azure::credential::AZURE_DATABRICKS_SCOPE;
+use crate::azure::credential::{
+    AZURE_DATABRICKS_RESOURCE, AZURE_DATABRICKS_SCOPE, AzureCliCredential,
+    ClientSecretOAuthProvider, ImdsManagedIdentityProvider,
+};
 use crate::service::make_service;
 use crate::{
     ClientConfigKey, ClientOptions, CredentialProvider, RequestSigner, Result, RetryConfig,
@@ -82,6 +82,22 @@ pub enum DatabricksConfigKey {
     /// Supported keys: `databricks_azure_resource_id`, `azure_resource_id`
     AzureResourceId,
 
+    /// Azure AD tenant of a service principal. With [`ClientId`] and
+    /// [`ClientSecret`] it selects `azure-client-secret` auth (an Azure AD token
+    /// for Azure Databricks) instead of Databricks OAuth M2M.
+    ///
+    /// Supported keys: `databricks_azure_tenant_id`, `azure_tenant_id`
+    ///
+    /// [`ClientId`]: DatabricksConfigKey::ClientId
+    /// [`ClientSecret`]: DatabricksConfigKey::ClientSecret
+    AzureTenantId,
+
+    /// Azure AD authority host for `azure-client-secret` auth; defaults to the
+    /// public cloud (`https://login.microsoftonline.com`).
+    ///
+    /// Supported keys: `databricks_azure_authority_host`, `azure_authority_host`
+    AzureAuthorityHost,
+
     /// OAuth scope override (defaults to `unity-catalog`).
     ///
     /// Supported keys: `databricks_oauth_scope`, `oauth_scope`
@@ -97,7 +113,8 @@ pub enum DatabricksConfigKey {
     /// Supported keys: `databricks_config_profile`, `config_profile`, `profile`
     ConfigProfile,
 
-    /// Force a specific auth type (e.g. `pat`, `oauth-m2m`, `env-oidc`, `file-oidc`).
+    /// Force a specific auth type: `pat`, `oauth-m2m`, `azure-client-secret`,
+    /// `azure-cli`, `env-oidc`, `file-oidc`, `azure-msi`, or `gcp`.
     ///
     /// Supported keys: `databricks_auth_type`, `auth_type`
     AuthType,
@@ -126,6 +143,8 @@ impl AsRef<str> for DatabricksConfigKey {
             Self::ClientSecret => "databricks_client_secret",
             Self::AccountId => "databricks_account_id",
             Self::AzureResourceId => "databricks_azure_resource_id",
+            Self::AzureTenantId => "databricks_azure_tenant_id",
+            Self::AzureAuthorityHost => "databricks_azure_authority_host",
             Self::Scope => "databricks_oauth_scope",
             Self::ConfigFile => "databricks_config_file",
             Self::ConfigProfile => "databricks_config_profile",
@@ -148,6 +167,10 @@ impl FromStr for DatabricksConfigKey {
             "databricks_client_secret" | "client_secret" => Ok(Self::ClientSecret),
             "databricks_account_id" | "account_id" => Ok(Self::AccountId),
             "databricks_azure_resource_id" | "azure_resource_id" => Ok(Self::AzureResourceId),
+            "databricks_azure_tenant_id" | "azure_tenant_id" => Ok(Self::AzureTenantId),
+            "databricks_azure_authority_host" | "azure_authority_host" => {
+                Ok(Self::AzureAuthorityHost)
+            }
             "databricks_oauth_scope" | "oauth_scope" => Ok(Self::Scope),
             "databricks_config_file" | "config_file" => Ok(Self::ConfigFile),
             "databricks_config_profile" | "config_profile" | "profile" => Ok(Self::ConfigProfile),
@@ -167,14 +190,17 @@ impl FromStr for DatabricksConfigKey {
 /// Auth resolution order (when no `auth_type` is forced):
 /// 1. Explicit `with_credentials(provider)` override.
 /// 2. PAT / static token (`DATABRICKS_TOKEN` / `with_token()`).
-/// 3. OAuth M2M (`DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET`).
-/// 4. `env-oidc` — OIDC token from env var (`DATABRICKS_OIDC_TOKEN_ENV`, default `DATABRICKS_OIDC_TOKEN`).
-/// 5. `file-oidc` — OIDC token from file (`DATABRICKS_OIDC_TOKEN_FILEPATH`).
-/// 6. Azure MSI fallback (if `DATABRICKS_AZURE_RESOURCE_ID` is set).
-/// 7. GCP service account token exchange (if `GOOGLE_APPLICATION_CREDENTIALS` is set).
+/// 3. `azure-client-secret` — an Azure AD service principal
+///    (`DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` + `DATABRICKS_AZURE_TENANT_ID`).
+/// 4. OAuth M2M (`DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET`, no tenant).
+/// 5. `env-oidc` — OIDC token from env var (`DATABRICKS_OIDC_TOKEN_ENV`, default `DATABRICKS_OIDC_TOKEN`).
+/// 6. `file-oidc` — OIDC token from file (`DATABRICKS_OIDC_TOKEN_FILEPATH`).
+/// 7. Azure MSI fallback (if `DATABRICKS_AZURE_RESOURCE_ID` is set).
+/// 8. GCP service account token exchange (if `GOOGLE_APPLICATION_CREDENTIALS` is set).
 ///
 /// If `DATABRICKS_AUTH_TYPE` is set (or `with_auth_type()` called), only the named
 /// auth type is attempted; an error is returned immediately if its required fields are absent.
+/// `azure-cli` (a token from `az account get-access-token`) is only used when forced.
 ///
 /// `.databrickscfg` profile values are loaded as the lowest-priority source — env vars
 /// and code-level setters override them.
@@ -186,6 +212,8 @@ pub struct DatabricksBuilder {
     client_secret: Option<String>,
     account_id: Option<String>,
     azure_resource_id: Option<String>,
+    azure_tenant_id: Option<String>,
+    azure_authority_host: Option<String>,
     scope: Option<String>,
     config_file: Option<String>,
     config_profile: Option<String>,
@@ -277,6 +305,10 @@ impl DatabricksBuilder {
             DatabricksConfigKey::ClientSecret => self.client_secret = Some(value.into()),
             DatabricksConfigKey::AccountId => self.account_id = Some(value.into()),
             DatabricksConfigKey::AzureResourceId => self.azure_resource_id = Some(value.into()),
+            DatabricksConfigKey::AzureTenantId => self.azure_tenant_id = Some(value.into()),
+            DatabricksConfigKey::AzureAuthorityHost => {
+                self.azure_authority_host = Some(value.into())
+            }
             DatabricksConfigKey::Scope => self.scope = Some(value.into()),
             DatabricksConfigKey::ConfigFile => self.config_file = Some(value.into()),
             DatabricksConfigKey::ConfigProfile => self.config_profile = Some(value.into()),
@@ -338,6 +370,37 @@ impl DatabricksBuilder {
         self
     }
 
+    /// `azure-client-secret`: an Azure AD token for the Azure Databricks
+    /// application, from a service principal's client credentials.
+    fn azure_client_secret_provider(
+        &self,
+        runtime: Option<&Handle>,
+    ) -> Result<DatabricksCredentialProvider> {
+        let (Some(client_id), Some(client_secret), Some(tenant_id)) =
+            (&self.client_id, &self.client_secret, &self.azure_tenant_id)
+        else {
+            return Err(crate::Error::Generic {
+                source: "auth_type=azure-client-secret requires DATABRICKS_CLIENT_ID, \
+                         DATABRICKS_CLIENT_SECRET and DATABRICKS_AZURE_TENANT_ID to be set"
+                    .into(),
+            });
+        };
+        let provider = ClientSecretOAuthProvider::new_with_scope(
+            client_id.clone(),
+            client_secret.clone(),
+            tenant_id,
+            self.azure_authority_host.clone(),
+            AZURE_DATABRICKS_SCOPE,
+        );
+        let client = self.client_options.client()?;
+        let service = make_service(client.clone(), runtime);
+        let azure =
+            TokenCredentialProvider::new(provider, client, service, self.retry_config.clone());
+        Ok(Arc::new(AzureToDatabricksBridge {
+            inner: Arc::new(azure),
+        }))
+    }
+
     /// Build a [`DatabricksConfig`].
     ///
     /// If `runtime` is provided, HTTP I/O for credential refresh is spawned on that runtime.
@@ -351,6 +414,7 @@ impl DatabricksBuilder {
         // Determine which auth types are candidates based on available fields.
         let has_pat = self.token.is_some();
         let has_m2m = self.client_id.is_some() && self.client_secret.is_some();
+        let has_azure_sp = has_m2m && self.azure_tenant_id.is_some();
         let has_env_oidc =
             self.oidc_token_env.is_some() || std::env::var(DEFAULT_OIDC_TOKEN_ENV).is_ok();
         let has_file_oidc = self.oidc_token_filepath.is_some();
@@ -382,6 +446,9 @@ impl DatabricksBuilder {
             Arc::new(StaticCredentialProvider::new(DatabricksCredential {
                 bearer: self.token.unwrap(),
             }))
+        } else if has_azure_sp {
+            // 3. Azure AD service principal
+            self.azure_client_secret_provider(runtime)?
         } else if has_m2m {
             // 3. OAuth M2M (AWS/GCP Databricks-hosted)
             let host = self.host.as_deref().unwrap_or("").trim_end_matches('/');
@@ -492,6 +559,10 @@ impl DatabricksBuilder {
         has_gcp: bool,
     ) -> Result<DatabricksCredentialProvider> {
         match auth_type.as_str() {
+            "azure-client-secret" => self.azure_client_secret_provider(runtime),
+            "azure-cli" => Ok(Arc::new(AzureToDatabricksBridge {
+                inner: Arc::new(AzureCliCredential::new_with_scope(AZURE_DATABRICKS_SCOPE)),
+            })),
             "pat" => {
                 if !has_pat {
                     return Err(crate::Error::Generic {

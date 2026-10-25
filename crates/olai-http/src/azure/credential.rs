@@ -47,8 +47,6 @@ pub(crate) const AZURE_STORAGE_RESOURCE: &str = "https://storage.azure.com";
 pub(crate) const AZURE_DATABRICKS_RESOURCE: &str = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d";
 
 /// OIDC scope for Azure Databricks OAuth2 APIs
-// Used by the Azure SP two-token flow (Phase 2.5)
-#[allow(dead_code)]
 pub(crate) const AZURE_DATABRICKS_SCOPE: &str = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default";
 
 #[derive(Debug, thiserror::Error)]
@@ -526,14 +524,24 @@ struct AzureCliTokenResponse {
     pub token_type: String,
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(crate) struct AzureCliCredential {
     cache: TokenCache<Arc<AzureCredential>>,
+    scope: &'static str,
 }
 
 impl AzureCliCredential {
+    /// A credential for Azure Storage.
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self::new_with_scope(AZURE_STORAGE_SCOPE)
+    }
+
+    /// A credential for a custom OAuth scope (e.g. Azure Databricks).
+    pub(crate) fn new_with_scope(scope: &'static str) -> Self {
+        Self {
+            cache: TokenCache::default(),
+            scope,
+        }
     }
 
     async fn fetch_token(&self) -> Result<TemporaryToken<Arc<AzureCredential>>> {
@@ -552,7 +560,7 @@ impl AzureCliCredential {
         args.push("--output");
         args.push("json");
         args.push("--scope");
-        args.push(AZURE_STORAGE_SCOPE);
+        args.push(self.scope);
 
         match Command::new(program).args(args).output() {
             Ok(az_output) if az_output.status.success() => {
