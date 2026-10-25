@@ -14,6 +14,7 @@ import initWasm, { bundle, catalog, init, plan } from "stack-topology-wasm-pkg";
 import type {
   Bundle,
   CatalogDto,
+  PlanContext,
   Planner,
   PlanResult,
   Selection,
@@ -41,6 +42,7 @@ export type {
   HostedModuleDto,
   HostedResource,
   HostedVendor,
+  HostPortDto,
   Knob,
   KnobKind,
   ListenerDto,
@@ -48,6 +50,7 @@ export type {
   ModuleDto,
   NodeKind,
   OutputFile,
+  PlanContext,
   Planner,
   PlanResult,
   PolicyDto,
@@ -87,22 +90,32 @@ export function createWasmPlanner(): Planner {
       await ensureReady();
       return catalog() as CatalogDto;
     },
-    async plan(selection: Selection, target?: string): Promise<PlanResult> {
+    async plan(
+      selection: Selection,
+      target?: string,
+      context?: PlanContext,
+    ): Promise<PlanResult> {
       await ensureReady();
       // The wasm `plan` throws (rejects) with a string message on a plan error;
       // let it propagate so the UI can render it inline.
-      return plan(JSON.stringify(selection), target) as PlanResult;
+      return plan(
+        JSON.stringify(selection),
+        target,
+        context ? JSON.stringify(context) : undefined,
+      ) as PlanResult;
     },
     async bundle(
       selection: Selection,
       target: string | undefined,
       credentials: Record<string, string>,
+      context?: PlanContext,
     ): Promise<Bundle> {
       await ensureReady();
       return bundle(
         JSON.stringify(selection),
         target,
         JSON.stringify(credentials),
+        context ? JSON.stringify(context) : undefined,
       ) as Bundle;
     },
   };

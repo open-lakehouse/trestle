@@ -26,7 +26,13 @@ import { PlannerProvider, usePlanner } from "./planner";
 import { moduleName } from "./selection/catalogIndex";
 import { componentOrigin, describeOrigin } from "./state/origin";
 import { isEmptySelection, useEnvironment } from "./state/useEnvironment";
-import type { CatalogDto, Planner, PlanResult } from "./types";
+import type {
+  CatalogDto,
+  PlanContext,
+  Planner,
+  PlanResult,
+  Selection,
+} from "./types";
 
 export interface EnvironmentEditorProps {
   /**
@@ -40,7 +46,20 @@ export interface EnvironmentEditorProps {
   catalog?: CatalogDto;
   /** Drives the diagram canvas colors; defaults to `"system"`. */
   colorMode?: ColorMode;
+  /** The selection to start from instead of the catalog's default (e.g. a
+   *  saved environment's). Read once: remount (`key`) to load another. */
+  initialSelection?: Selection;
+  /** The environment-level facts to plan under (name, ports, project), e.g. a
+   *  workspace member's; the planner's defaults when omitted. */
+  context?: PlanContext;
+  /** Called with the selection after every edit, e.g. to persist it. */
+  onSelectionChange?: (selection: Selection) => void;
+  /** Called whenever the plan or its error changes, e.g. for a status bar. */
+  onPlanChange?: (plan: PlanResult | null, error: string | null) => void;
 }
+
+/** The host-facing props the editor body reads. */
+type BodyProps = Omit<EnvironmentEditorProps, "planner">;
 
 type WorkspaceTab = "canvas" | "components" | "files";
 
@@ -58,26 +77,38 @@ const NOTICE_MS = 6000;
  */
 export function EnvironmentEditor({
   planner,
-  catalog,
-  colorMode,
+  ...props
 }: EnvironmentEditorProps) {
   if (planner) {
     return (
       <PlannerProvider planner={planner}>
-        <EditorBody catalog={catalog} colorMode={colorMode} />
+        <EditorBody {...props} />
       </PlannerProvider>
     );
   }
-  return <EditorBody catalog={catalog} colorMode={colorMode} />;
+  return <EditorBody {...props} />;
 }
 
 function EditorBody({
   catalog: seededCatalog,
   colorMode = "system",
-}: Pick<EnvironmentEditorProps, "catalog" | "colorMode">) {
+  initialSelection,
+  context,
+  onSelectionChange,
+  onPlanChange,
+}: BodyProps) {
   const planner = usePlanner();
-  const env = useEnvironment(seededCatalog);
+  const env = useEnvironment(seededCatalog, {
+    initialSelection,
+    context,
+    onSelectionChange,
+  });
   const { catalog, selection, plan, error, planning, undo, redo } = env;
+  const reportPlan = useRef(onPlanChange);
+  reportPlan.current = onPlanChange;
+  useEffect(() => {
+    reportPlan.current?.(plan, error);
+  }, [plan, error]);
   const graph = plan?.graph;
   const [tab, setTab] = useState<WorkspaceTab>("canvas");
   const [selectedId, setSelectedId] = useState<string | undefined>();
@@ -121,7 +152,7 @@ function EditorBody({
     setBundling(true);
     const credentials = generateCredentials(catalog?.local_credentials ?? []);
     planner
-      .bundle(selection, undefined, credentials)
+      .bundle(selection, undefined, credentials, context)
       .then((bundle) => {
         const zip = buildBundleZip(bundle);
         downloadBlob(
@@ -139,7 +170,7 @@ function EditorBody({
         setNotice(`Could not prepare the download: ${reason}`);
       })
       .finally(() => setBundling(false));
-  }, [planner, catalog, selection, plansHosted]);
+  }, [planner, catalog, selection, plansHosted, context]);
 
   const originOf = useCallback(
     (id: string) => componentOrigin(id, selection, catalog, graph),

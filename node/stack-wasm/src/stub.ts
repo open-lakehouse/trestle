@@ -9,7 +9,13 @@
 // exact selection.
 
 import { FIXTURE_CATALOG, FIXTURE_PLAN } from "./fixtures";
-import type { CatalogDto, Planner, PlanResult, Selection } from "./types";
+import type {
+  CatalogDto,
+  PlanContext,
+  Planner,
+  PlanResult,
+  Selection,
+} from "./types";
 
 export type {
   AuthDto,
@@ -27,6 +33,7 @@ export type {
   HostedKind,
   HostedModuleDto,
   HostedResource,
+  HostPortDto,
   Knob,
   KnobKind,
   ListenerDto,
@@ -34,6 +41,7 @@ export type {
   ModuleDto,
   NodeKind,
   OutputFile,
+  PlanContext,
   Planner,
   PlanResult,
   PolicyDto,
@@ -61,7 +69,11 @@ export function createWasmPlanner(): Planner {
     async catalog(): Promise<CatalogDto> {
       return FIXTURE_CATALOG;
     },
-    async plan(selection: Selection): Promise<PlanResult> {
+    async plan(
+      selection: Selection,
+      _target?: string,
+      context?: PlanContext,
+    ): Promise<PlanResult> {
       if (
         selection.modules.length === 0 &&
         selection.capabilities.length === 0
@@ -70,7 +82,17 @@ export function createWasmPlanner(): Planner {
           "select at least one technology or capability to generate an environment",
         );
       }
-      return FIXTURE_PLAN;
+      // The fixture's files are fixed; its host ports follow the context, so a
+      // workspace's members still look like they sit on their own slots.
+      const gateway = context?.gateway_host_port ?? 9080;
+      const admin = context?.gateway_admin_port ?? 9901;
+      return {
+        ...FIXTURE_PLAN,
+        host_ports: [
+          { port: gateway, owner: "envoy" },
+          { port: admin, owner: "envoy" },
+        ],
+      };
     },
   };
 }

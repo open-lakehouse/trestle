@@ -23,9 +23,13 @@ declare module "stack-topology-wasm-pkg" {
   export function catalog(): unknown;
 
   /** Plan a JSON-serialized `Selection` for a deploy target (Docker Compose
-   *  when omitted); returns a `PlanResult` object or throws a string message on
+   *  when omitted), under a JSON `PlanCtx` (defaults when omitted); returns a `PlanResult` object or throws a string message on
    *  a deserialization / plan error. */
-  export function plan(selectionJson: string, target?: string | null): unknown;
+  export function plan(
+    selectionJson: string,
+    target?: string | null,
+    contextJson?: string | null,
+  ): unknown;
 
   /** Plan a saved environment manifest (`env.toml` text) with its whole
    *  context; returns a `PlanResult` object or throws a string message. */
@@ -38,5 +42,6 @@ declare module "stack-topology-wasm-pkg" {
     selectionJson: string,
     target: string | null | undefined,
     credentialsJson: string,
+    contextJson?: string | null,
   ): unknown;
 }

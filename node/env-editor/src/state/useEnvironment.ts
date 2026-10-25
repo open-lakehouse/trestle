@@ -9,6 +9,7 @@ import type {
   CatalogDto,
   GatewaySettings,
   HostedResource,
+  PlanContext,
   PlanResult,
   Selection,
 } from "../types";
@@ -66,6 +67,8 @@ interface History {
   future: Selection[];
   /** Coalescing key of the last edit, so typing into one knob is one undo step. */
   lastKey?: string;
+  /** The host supplied the starting selection: skip the catalog default. */
+  seeded?: boolean;
 }
 
 type HistoryAction =
@@ -78,8 +81,13 @@ function historyReducer(h: History, action: HistoryAction): History {
   switch (action.type) {
     case "seed":
       // Seed from the catalog default the first time only.
-      return isEmptySelection(h.present) && h.past.length === 0
-        ? { past: [], present: cloneSelection(action.selection), future: [] }
+      return !h.seeded && isEmptySelection(h.present) && h.past.length === 0
+        ? {
+            past: [],
+            present: cloneSelection(action.selection),
+            future: [],
+            seeded: true,
+          }
         : h;
     case "edit": {
       const next = action.next(h.present);
@@ -92,6 +100,7 @@ function historyReducer(h: History, action: HistoryAction): History {
         present: next,
         future: [],
         lastKey: action.key,
+        seeded: h.seeded,
       };
     }
     case "undo": {
@@ -101,30 +110,68 @@ function historyReducer(h: History, action: HistoryAction): History {
         past: h.past.slice(0, -1),
         present: previous,
         future: [h.present, ...h.future],
+        seeded: h.seeded,
       };
     }
     case "redo": {
       const [next, ...rest] = h.future;
       if (!next) return h;
-      return { past: [...h.past, h.present], present: next, future: rest };
+      return {
+        past: [...h.past, h.present],
+        present: next,
+        future: rest,
+        seeded: h.seeded,
+      };
     }
   }
+}
+
+/** How a host drives {@link useEnvironment} beyond the catalog. */
+export interface EnvironmentOptions {
+  /** The selection to start from, instead of the catalog's default (e.g. a
+   *  saved environment's). */
+  initialSelection?: Selection;
+  /** The environment-level facts to plan under (name, ports, project); the
+   *  planner's defaults when omitted. */
+  context?: PlanContext;
+  /** Called with the selection after every edit (not for the initial one),
+   *  e.g. to persist it. */
+  onSelectionChange?: (selection: Selection) => void;
 }
 
 /**
  * Own the editor's selection, catalog and live plan, all through the
  * `Planner` seam (from the nearest `PlannerProvider`).
  */
-export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
+export function useEnvironment(
+  seededCatalog?: CatalogDto,
+  options: EnvironmentOptions = {},
+): EnvironmentState {
   const planner = usePlanner();
   const [catalog, setCatalog] = useState<CatalogDto | undefined>(seededCatalog);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [history, dispatch] = useReducer(historyReducer, {
-    past: [],
-    present: EMPTY_SELECTION,
-    future: [],
-  });
+  const [history, dispatch] = useReducer(
+    historyReducer,
+    options.initialSelection,
+    (initial): History => ({
+      past: [],
+      // A host-given selection is never replaced by the catalog's default.
+      present: initial ? cloneSelection(initial) : EMPTY_SELECTION,
+      future: [],
+      seeded: !!initial,
+    }),
+  );
   const selection = history.present;
+  // Compare contexts by value, so a host may pass a fresh object each render.
+  const contextKey = JSON.stringify(options.context ?? null);
+  const onSelectionChange = useRef(options.onSelectionChange);
+  onSelectionChange.current = options.onSelectionChange;
+  const reported = useRef(selection);
+  useEffect(() => {
+    if (selection === reported.current) return;
+    reported.current = selection;
+    onSelectionChange.current?.(selection);
+  }, [selection]);
   const [plan, setPlan] = useState<PlanResult | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -162,9 +209,10 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
       return;
     }
     setPlanning(true);
+    const context = JSON.parse(contextKey) as PlanContext | null;
     const timer = setTimeout(() => {
       planner
-        .plan(selection)
+        .plan(selection, undefined, context ?? undefined)
         .then((result) => {
           if (run !== runRef.current) return;
           setPlan(result);
@@ -178,7 +226,7 @@ export function useEnvironment(seededCatalog?: CatalogDto): EnvironmentState {
         });
     }, PLAN_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [planner, selection]);
+  }, [planner, selection, contextKey]);
 
   const add = useCallback((moduleId: string) => {
     dispatch({

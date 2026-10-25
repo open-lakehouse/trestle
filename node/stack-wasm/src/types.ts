@@ -438,6 +438,34 @@ export interface DeployStepDto {
   commands?: string;
 }
 
+/** One host port an environment binds (mirrors `HostPortDto`). */
+export interface HostPortDto {
+  port: number;
+  /** The module publishing it, or `<service>.<endpoint>` for a declared one. */
+  owner: string;
+}
+
+/** The environment-level facts a plan runs under (mirrors the Rust `PlanCtx`;
+ *  every field is optional and falls back to its default). A workspace member
+ *  plans under its slot's values (see `contextFor` in the editor). */
+export interface PlanContext {
+  /** The environment name: its hostnames, and its compose project by default. */
+  env_name?: string;
+  /** The compose project name, when it differs from `env_name`. */
+  project_name?: string;
+  /** The deploy target (Docker Compose when omitted). */
+  target?: string;
+  gateway_host_port?: number;
+  gateway_admin_port?: number;
+  dedicated_listener_ports?: number[];
+  dedicated_listener_port_base?: number;
+  /** Added to every host port a module declares itself. */
+  port_offset?: number;
+  /** A network shared across environments, which only the gateway joins. */
+  mesh_network?: string;
+  data_root?: string;
+}
+
 /** The full plan result (mirrors `PlanResultDto`). */
 export interface PlanResult {
   graph: GraphDto;
@@ -448,6 +476,9 @@ export interface PlanResult {
   files: OutputFile[];
   /** The deployment steps, in order (collected into the root README.md). */
   deploy: DeployStepDto[];
+  /** Every host port the environment binds, sorted by port. Absent from
+   *  planners that predate it. */
+  host_ports?: HostPortDto[];
 }
 
 /**
@@ -460,8 +491,13 @@ export interface Planner {
   /** The selectable catalog for the picker. */
   catalog(): Promise<CatalogDto>;
   /** Plan a selection for a deploy target (default: Docker Compose) into a full
-   *  result, or reject with a `PlanError` message. */
-  plan(selection: Selection, target?: string): Promise<PlanResult>;
+   *  result, or reject with a `PlanError` message. `context` sets the
+   *  environment-level facts (name, ports, project); defaults when omitted. */
+  plan(
+    selection: Selection,
+    target?: string,
+    context?: PlanContext,
+  ): Promise<PlanResult>;
   /** Render every file of a selection's environment, with the in-stack
    *  credentials set to `credentials` (keyed by the catalog's
    *  `local_credentials`; missing ones keep their development defaults), or
@@ -471,5 +507,6 @@ export interface Planner {
     selection: Selection,
     target: string | undefined,
     credentials: Record<string, string>,
+    context?: PlanContext,
   ): Promise<Bundle>;
 }
