@@ -266,26 +266,46 @@ impl CloudClient {
 
     /// Create a new client with Databricks credentials.
     ///
+    /// Options are applied to a fresh [`databricks::DatabricksBuilder`]; unknown
+    /// keys are ignored. Use [`new_databricks_from_builder`] to start from
+    /// [`databricks::DatabricksBuilder::from_env`] instead, which also loads
+    /// `.databrickscfg` profiles.
+    ///
     /// If `runtime` is provided, all HTTP I/O (including credential refresh)
     /// will be spawned on the given runtime handle.
+    ///
+    /// [`new_databricks_from_builder`]: CloudClient::new_databricks_from_builder
     pub fn new_databricks<I, K, V>(options: I, runtime: Option<&Handle>) -> Result<Self>
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
         V: Into<String>,
     {
-        use databricks::DatabricksBuilder;
+        let builder = options.into_iter().fold(
+            databricks::DatabricksBuilder::new(),
+            |builder, (key, value)| match key.as_ref().parse() {
+                Ok(k) => builder.with_config(k, value),
+                Err(_) => builder,
+            },
+        );
+        Self::new_databricks_from_builder(builder, runtime)
+    }
 
-        let config = options
-            .into_iter()
-            .fold(
-                DatabricksBuilder::new(),
-                |builder, (key, value)| match key.as_ref().parse() {
-                    Ok(k) => builder.with_config(k, value),
-                    Err(_) => builder,
-                },
-            )
-            .build(runtime)?;
+    /// Create a new client with Databricks credentials from a configured builder.
+    ///
+    /// Unlike [`new_databricks`], this keeps everything the builder already
+    /// resolved — notably the `.databrickscfg` profile values loaded by
+    /// [`databricks::DatabricksBuilder::from_env`].
+    ///
+    /// If `runtime` is provided, all HTTP I/O (including credential refresh)
+    /// will be spawned on the given runtime handle.
+    ///
+    /// [`new_databricks`]: CloudClient::new_databricks
+    pub fn new_databricks_from_builder(
+        builder: databricks::DatabricksBuilder,
+        runtime: Option<&Handle>,
+    ) -> Result<Self> {
+        let config = builder.build(runtime)?;
 
         let reqwest_client = config.client_options.client()?;
         let service = make_service(reqwest_client.clone(), runtime);
@@ -1388,5 +1408,68 @@ mod retry_integration_tests {
         assert_eq!(resp.text().await.unwrap(), "pong");
         fail.assert_async().await;
         ok.assert_async().await;
+    }
+}
+
+#[cfg(test)]
+mod databricks_client_tests {
+    use super::*;
+    use databricks::{DatabricksBuilder, DatabricksConfigKey};
+
+    /// A pre-configured builder is used as-is: its credential signs requests.
+    #[tokio::test]
+    async fn new_databricks_from_builder_signs_with_builder_credential() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/api/2.1/unity-catalog/catalogs")
+            .match_header("authorization", "Bearer builder-pat")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let builder = DatabricksBuilder::new()
+            .with_config(DatabricksConfigKey::Host, server.url())
+            .with_config(DatabricksConfigKey::Token, "builder-pat")
+            .with_config(
+                DatabricksConfigKey::Client(ClientConfigKey::AllowHttp),
+                "true",
+            );
+        let client = CloudClient::new_databricks_from_builder(builder, None).unwrap();
+
+        let url = format!("{}/api/2.1/unity-catalog/catalogs", server.url());
+        let response = client.get(&url).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        mock.assert_async().await;
+    }
+
+    /// The option-list constructor still parses keys (and ignores unknown ones).
+    #[tokio::test]
+    async fn new_databricks_applies_string_options() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/ping")
+            .match_header("authorization", "Bearer option-pat")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = CloudClient::new_databricks(
+            [
+                ("databricks_host", server.url()),
+                ("databricks_token", "option-pat".to_string()),
+                ("allow_http", "true".to_string()),
+                ("not_a_real_key", "ignored".to_string()),
+            ],
+            None,
+        )
+        .unwrap();
+
+        let response = client
+            .get(format!("{}/ping", server.url()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        mock.assert_async().await;
     }
 }
