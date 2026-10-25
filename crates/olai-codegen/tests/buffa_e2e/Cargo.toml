@@ -50,7 +50,7 @@ futures = "0.3"
 # opt-in only from 0.28 (see `generate_pyo3_impls`).
 pyo3 = { version = "0.28", optional = true }
 pythonize = { version = "0.28", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
