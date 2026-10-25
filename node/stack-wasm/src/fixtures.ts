@@ -922,6 +922,44 @@ export const FIXTURE_CATALOG: CatalogDto = {
       display_name: "Docker Compose",
     },
   ],
+  local_credentials: [
+    {
+      key: "postgres_password",
+      description: "Postgres superuser password",
+      min_len: 8,
+      max_len: 128,
+    },
+    {
+      key: "rustfs_access_key",
+      description: "RustFS root access key",
+      min_len: 3,
+      max_len: 20,
+    },
+    {
+      key: "rustfs_secret_key",
+      description: "RustFS root secret key",
+      min_len: 8,
+      max_len: 40,
+    },
+    {
+      key: "authelia_session_secret",
+      description: "Authelia session secret",
+      min_len: 20,
+      max_len: 128,
+    },
+    {
+      key: "authelia_storage_encryption_key",
+      description: "Authelia storage encryption key",
+      min_len: 20,
+      max_len: 128,
+    },
+    {
+      key: "authelia_jwt_secret",
+      description: "Authelia identity-verification JWT secret",
+      min_len: 20,
+      max_len: 128,
+    },
+  ],
 };
 
 export const FIXTURE_PLAN: PlanResult = {
@@ -1013,6 +1051,20 @@ export const FIXTURE_PLAN: PlanResult = {
                 endpoint: "tracking",
                 kind: "api",
                 prefix: "/api/2.0/mlflow",
+                gated: true,
+              },
+              {
+                module: "mlflow",
+                endpoint: "tracking_v3",
+                kind: "api",
+                prefix: "/api/3.0/mlflow",
+                gated: true,
+              },
+              {
+                module: "mlflow",
+                endpoint: "tracking_v4",
+                kind: "api",
+                prefix: "/api/4.0/mlflow",
                 gated: true,
               },
               {
@@ -1283,10 +1335,19 @@ export const FIXTURE_PLAN: PlanResult = {
         protocol: "S3",
         resources: ["mlflow"],
       },
+      {
+        kind: "uses",
+        key: "uses:mlflow→unity-catalog:data_catalog",
+        from: "mlflow",
+        to: "unity-catalog",
+        role: "data_catalog",
+        protocol: "HTTP",
+        resources: [],
+      },
     ],
   },
   mermaid:
-    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
+    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    n8 -->|"HTTP"| n7\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
   services: {
     authelia: [
       {
@@ -1394,6 +1455,26 @@ export const FIXTURE_PLAN: PlanResult = {
               kind: "api",
             },
             mount_prefix: "/api/2.0/mlflow",
+            rewrite: "inherit",
+          },
+          {
+            id: "tracking_v3",
+            scheme: "http",
+            internal_port: 5000,
+            intent: {
+              kind: "api",
+            },
+            mount_prefix: "/api/3.0/mlflow",
+            rewrite: "inherit",
+          },
+          {
+            id: "tracking_v4",
+            scheme: "http",
+            internal_port: 5000,
+            intent: {
+              kind: "api",
+            },
+            mount_prefix: "/api/4.0/mlflow",
             rewrite: "inherit",
           },
           {
@@ -1555,6 +1636,16 @@ export const FIXTURE_PLAN: PlanResult = {
             rewrite: "/mlflow/api/2.0/mlflow",
           },
           {
+            prefix: "/api/3.0/mlflow",
+            cluster: "mlflow",
+            rewrite: "/mlflow/api/3.0/mlflow",
+          },
+          {
+            prefix: "/api/4.0/mlflow",
+            cluster: "mlflow",
+            rewrite: "/mlflow/api/4.0/mlflow",
+          },
+          {
             prefix: "/unity-catalog",
             cluster: "unitycatalog",
             rewrite: null,
@@ -1691,6 +1782,14 @@ export const FIXTURE_PLAN: PlanResult = {
     },
     {
       order: 2,
+      phase: "configure",
+      id: "local-credentials",
+      title: "Set the services' own credentials",
+      instructions:
+        "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n| RustFS root access key | `LOCAL_RUSTFS_ACCESS_KEY` |\n| RustFS root secret key | `LOCAL_RUSTFS_SECRET_KEY` |\n| Authelia session secret | `LOCAL_AUTHELIA_SESSION_SECRET` |\n| Authelia storage encryption key | `LOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY` |\n| Authelia identity-verification JWT secret | `LOCAL_AUTHELIA_JWT_SECRET` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nLOCAL_RUSTFS_ACCESS_KEY=$(openssl rand -hex 10)\nLOCAL_RUSTFS_SECRET_KEY=$(openssl rand -hex 20)\nLOCAL_AUTHELIA_SESSION_SECRET=$(openssl rand -hex 32)\nLOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY=$(openssl rand -hex 32)\nLOCAL_AUTHELIA_JWT_SECRET=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service.",
+    },
+    {
+      order: 3,
       phase: "start",
       id: "up",
       title: "Start the stack",
@@ -1698,7 +1797,7 @@ export const FIXTURE_PLAN: PlanResult = {
         "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <https://lakehouse.localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address.",
     },
     {
-      order: 3,
+      order: 4,
       phase: "verify",
       id: "trust",
       title: "Trust the gateway's local certificate authority",
