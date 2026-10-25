@@ -1096,17 +1096,6 @@ fn mlflow() -> Arc<dyn Module> {
         "MLFLOW_TRACKING_URI".into(),
         ClientValue::endpoint("mlflow", "tracking", UrlPart::Origin),
     );
-    // Artifacts always go through the server's proxy (`--serve-artifacts`). Without these,
-    // `server-info` makes the client move them with presigned URLs instead, signed for the
-    // object store's in-network endpoint, which a host client can't reach.
-    for key in [
-        "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD",
-        "MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD",
-    ] {
-        provides
-            .client_env
-            .insert(key.into(), ClientValue::literal("false"));
-    }
     // The AI Gateway's base: a client appends the provider surface it speaks, e.g.
     // `/anthropic` (Claude Code's `ANTHROPIC_BASE_URL`) or `/openai/v1`.
     provides.client_env.insert(
@@ -1328,26 +1317,42 @@ impl Module for Mlflow {
         _knobs: &ResolvedKnobs,
         stack: &StackFacts,
     ) -> Cow<'_, BTreeMap<String, ClientValue>> {
-        if !stack.has("unity-catalog") {
+        let hosted_store = stack.is_hosted(Role::OBJECT_STORE);
+        if hosted_store && !stack.has("unity-catalog") {
             return Cow::Borrowed(&self.0.provides.client_env);
         }
-        // The MLflow client's OSS Unity Catalog registry: `uc:` + the origin it appends
-        // `/api/2.1/unity-catalog` to (UC's REST mount sits at the gateway root). The server's
-        // UC store already serves clients that only set the tracking URI, but just for
-        // registering: a version's download URI is UC's raw storage location, which
-        // `--serve-artifacts` doesn't proxy. Loading a version reads it with credentials UC
-        // vends, and only a client whose registry is UC asks UC for them.
         let mut env = self.0.provides.client_env.clone();
-        env.insert(
-            "MLFLOW_REGISTRY_URI".into(),
-            ClientValue::module_endpoint(
-                "unity-catalog",
-                UNITY_CATALOG_SERVICE,
-                "rest",
-                UrlPart::Origin,
-            )
-            .with_prefix("uc:"),
-        );
+        // With the object store in the stack, artifacts go through the server's proxy
+        // (`--serve-artifacts`). Otherwise `server-info` has the client move them with presigned
+        // URLs, signed for the store's in-network endpoint, which a host client can't reach. A
+        // hosted store's URLs are signed for its public endpoint, so they work from anywhere and
+        // stay on.
+        if !hosted_store {
+            for key in [
+                "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD",
+                "MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD",
+            ] {
+                env.insert(key.into(), ClientValue::literal("false"));
+            }
+        }
+        if stack.has("unity-catalog") {
+            // The MLflow client's OSS Unity Catalog registry: `uc:` + the origin it appends
+            // `/api/2.1/unity-catalog` to (UC's REST mount sits at the gateway root). The server's
+            // UC store already serves clients that only set the tracking URI, but just for
+            // registering: a version's download URI is UC's raw storage location, which
+            // `--serve-artifacts` doesn't proxy. Loading a version reads it with credentials UC
+            // vends, and only a client whose registry is UC asks UC for them.
+            env.insert(
+                "MLFLOW_REGISTRY_URI".into(),
+                ClientValue::module_endpoint(
+                    "unity-catalog",
+                    UNITY_CATALOG_SERVICE,
+                    "rest",
+                    UrlPart::Origin,
+                )
+                .with_prefix("uc:"),
+            );
+        }
         Cow::Owned(env)
     }
     fn integrates_with_in(&self, _knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {

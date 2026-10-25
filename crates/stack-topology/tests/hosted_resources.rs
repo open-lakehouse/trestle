@@ -452,3 +452,16 @@ fn hosted_resources_round_trip_through_env_toml() {
     let back = olai_stack_topology::EnvManifest::from_toml(&toml).unwrap();
     assert_eq!(back.selection, manifest.selection);
 }
+
+#[test]
+fn mlflow_clients_keep_presigned_transfers_for_a_hosted_bucket() {
+    // A hosted bucket's presigned URLs are signed for its public endpoint, so MLflow clients
+    // may move artifacts with them directly. Only an in-stack store forces the proxy.
+    let plan = hybrid_plan();
+    for vantage in [Vantage::Host, Vantage::Container] {
+        let env = plan.client_env(vantage);
+        assert_eq!(env.get("MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"), None);
+        assert_eq!(env.get("MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD"), None);
+        assert!(env.get("MLFLOW_REGISTRY_URI").is_some());
+    }
+}

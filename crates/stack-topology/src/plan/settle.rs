@@ -147,6 +147,12 @@ pub(super) fn settle(
     let stack_facts = StackFacts {
         gateway_auth,
         modules: graph.nodes.iter().map(|m| m.id().clone()).collect(),
+        hosted_roles: graph
+            .nodes
+            .iter()
+            .filter(|m| hosted.modules.contains_key(m.id()))
+            .filter_map(|m| m.provider_of().map(str::to_string))
+            .collect(),
     };
     let services = graph
         .nodes

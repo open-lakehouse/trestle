@@ -796,12 +796,20 @@ pub struct StackFacts {
     /// Every module in the resolved graph (auto-provisioned providers included). A module
     /// integrates with an optional partner by checking it here rather than requiring it.
     pub modules: BTreeSet<ModuleId>,
+    /// The resource roles a hosted provider serves (e.g. `"object_store"` for a cloud
+    /// bucket): consumers reach those at a public origin, not on the stack's network.
+    pub hosted_roles: BTreeSet<String>,
 }
 
 impl StackFacts {
     /// Whether the module `id` is in the stack.
     pub fn has(&self, id: &str) -> bool {
         self.modules.iter().any(|m| m.as_str() == id)
+    }
+
+    /// Whether a hosted provider serves the resource `role`.
+    pub fn is_hosted(&self, role: &str) -> bool {
+        self.hosted_roles.contains(role)
     }
 }
 
