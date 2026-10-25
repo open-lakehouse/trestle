@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.1...trestle-diagram-v0.5.2) - 2026-10-25
+
+### Added
+
+- stack lateral partners next to each other in their column (#166)
+- route service-to-service edges vertically between peers (#164)
+
 ## [0.5.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.0...trestle-diagram-v0.5.1) - 2026-10-25
 
 ### Fixed
