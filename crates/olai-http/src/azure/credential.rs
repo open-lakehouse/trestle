@@ -419,6 +419,7 @@ pub(crate) struct WorkloadIdentityOAuthProvider {
     token_url: String,
     client_id: String,
     federated_token_file: String,
+    scope: String,
 }
 
 impl WorkloadIdentityOAuthProvider {
@@ -439,7 +440,14 @@ impl WorkloadIdentityOAuthProvider {
             ),
             client_id: client_id.into(),
             federated_token_file: federated_token_file.into(),
+            scope: AZURE_STORAGE_SCOPE.to_owned(),
         }
+    }
+
+    /// Request tokens for `scope` instead of Azure Storage.
+    pub(crate) fn with_scope(mut self, scope: impl Into<String>) -> Self {
+        self.scope = scope.into();
+        self
     }
 }
 
@@ -476,7 +484,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
                     "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                 ),
                 ("client_assertion", token_str.as_str()),
-                ("scope", AZURE_STORAGE_SCOPE),
+                ("scope", self.scope.as_str()),
                 ("grant_type", "client_credentials"),
             ])
             .retryable(retry, service.clone())
@@ -527,7 +535,7 @@ struct AzureCliTokenResponse {
 #[derive(Debug)]
 pub(crate) struct AzureCliCredential {
     cache: TokenCache<Arc<AzureCredential>>,
-    scope: &'static str,
+    scope: String,
 }
 
 impl AzureCliCredential {
@@ -537,10 +545,10 @@ impl AzureCliCredential {
     }
 
     /// A credential for a custom OAuth scope (e.g. Azure Databricks).
-    pub(crate) fn new_with_scope(scope: &'static str) -> Self {
+    pub(crate) fn new_with_scope(scope: impl Into<String>) -> Self {
         Self {
             cache: TokenCache::default(),
-            scope,
+            scope: scope.into(),
         }
     }
 
@@ -560,7 +568,7 @@ impl AzureCliCredential {
         args.push("--output");
         args.push("json");
         args.push("--scope");
-        args.push(self.scope);
+        args.push(&self.scope);
 
         match Command::new(program).args(args).output() {
             Ok(az_output) if az_output.status.success() => {

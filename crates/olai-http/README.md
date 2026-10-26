@@ -20,6 +20,7 @@ powers `object_store`.
 - **Temporary credentials** — STS AssumeRole (AWS), client-secret / workload-identity (Azure), service-account tokens (GCP)
 - **Azure SAS** — storage-key and user-delegation SAS for blob/container access
 - **Databricks OAuth** — M2M, OIDC, and CLI-profile flows
+- **Bearer tokens for any API** (`bearer` module) — OAuth client credentials against any token endpoint, Azure AD (service principal, managed identity, workload identity, CLI) and GCP ID tokens for a configurable scope/audience, tokens from env vars or files, and RFC 8693 token exchange
 - **Recording mode** — capture HTTP interactions to JSON for test replay (`recording` feature)
 
 ## Usage
@@ -35,6 +36,21 @@ use olai_http::CloudClient;
 // Bearer token (any provider)
 let client = CloudClient::new_with_token("my-token");
 let resp = client.get("https://api.example.com/data").send().await?;
+
+// A token for your own API, from an Azure managed identity, exchanged for the
+// API's access token (RFC 8693)
+use olai_http::bearer::{BearerAuth, TokenExchange};
+let auth = BearerAuth::new();
+let id_token = auth.azure_managed_identity("api://my-api", None, None)?;
+let provider = auth.token_exchange(TokenExchange {
+    endpoint: "https://api.example.com/oauth/token".into(),
+    subject: id_token,
+    subject_token_type: None,
+    requested_token_type: None,
+    audience: None,
+    scope: None,
+})?;
+let client = CloudClient::new_with_bearer(provider, &Default::default(), Default::default(), None)?;
 
 // Provider credentials from a key/value config
 let client = CloudClient::new_aws([("region", "us-east-1")], None)?;

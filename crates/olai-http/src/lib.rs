@@ -69,6 +69,7 @@ pub use self::token::{TemporaryToken, TokenCache};
 pub mod aws;
 pub mod azure;
 mod backoff;
+pub mod bearer;
 mod client;
 mod config;
 #[cfg(feature = "connectrpc")]
@@ -315,6 +316,27 @@ impl CloudClient {
             reqwest_client,
             service,
             retry_config,
+        ))
+    }
+
+    /// Create a client that signs requests with tokens from `provider`.
+    ///
+    /// See [`bearer::BearerAuth`] for providers that work against any API, not
+    /// just Databricks. `options` and `retry` configure requests sent through
+    /// this client; if `runtime` is provided, their I/O is spawned on it.
+    pub fn new_with_bearer(
+        provider: bearer::BearerCredentialProvider,
+        options: &ClientOptions,
+        retry: RetryConfig,
+        runtime: Option<&Handle>,
+    ) -> Result<Self> {
+        let reqwest_client = options.client()?;
+        let service = make_service(reqwest_client.clone(), runtime);
+        Ok(Self::new_with_signer(
+            Arc::new(bearer::BearerProviderSigner(provider)),
+            reqwest_client,
+            service,
+            retry,
         ))
     }
 
