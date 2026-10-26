@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.10...olai-stack-topology-v0.0.11) - 2026-10-26
+
+### Added
+
+- IDE-style workspace shell with a pluggable workspace store (#170)
+- *(trestle)* trestle workspace commands for side-by-side environments (#169)
+- workspace model for side-by-side environments (#168)
+
 ## [0.0.10](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.9...olai-stack-topology-v0.0.10) - 2026-10-25
 
 ### Fixed

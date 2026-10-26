@@ -21,7 +21,7 @@
 
 [package]
 name = "trestle-diagram"
-version = "0.5.2"
+version = "0.5.3"
 description = "Release placeholder for the @open-lakehouse/trestle-diagram npm package"
 publish = false
 readme = "trestle-diagram/README.md"

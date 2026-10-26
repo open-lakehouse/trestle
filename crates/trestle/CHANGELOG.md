@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.14...olai-trestle-v0.0.15) - 2026-10-26
+
+### Added
+
+- *(trestle)* trestle workspace commands for side-by-side environments (#169)
+
 ## [0.0.14](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.13...olai-trestle-v0.0.14) - 2026-10-25
 
 ### Added

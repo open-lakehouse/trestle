@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.6...olai-http-v0.0.7) - 2026-10-26
+
+### Added
+
+- azure-client-secret and azure-cli Databricks auth (#174)
+- [**breaking**] reqwest 0.13 and CloudClient::new_databricks_from_builder (#171)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.5...olai-http-v0.0.6) - 2026-07-14
 
 ### Added
