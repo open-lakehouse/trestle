@@ -15,7 +15,7 @@
 //! | OAuth 2.0 client credentials against any token endpoint | [`BearerAuth::client_credentials`] |
 //! | Token read from an environment variable / a file (e.g. a projected Kubernetes token) | [`BearerAuth::token_env`], [`BearerAuth::token_file`] |
 //! | Azure service principal, managed identity, workload identity, Azure CLI | [`BearerAuth::azure_client_secret`], [`BearerAuth::azure_managed_identity`], [`BearerAuth::azure_workload_identity`], [`BearerAuth::azure_cli`] |
-//! | GCP metadata-server ID token | [`BearerAuth::gcp_id_token`] |
+//! | GCP ID token from the metadata server or a service-account key | [`BearerAuth::gcp_id_token`], [`BearerAuth::gcp_service_account_id_token`] |
 //! | RFC 8693 token exchange of any of the above | [`BearerAuth::token_exchange`] |
 //!
 //! Hand a provider to [`CloudClient::new_with_bearer`] to sign requests with it.
@@ -37,6 +37,7 @@ use crate::azure::credential::{
     AzureCliCredential, AzureCredential, ClientSecretOAuthProvider, ImdsManagedIdentityProvider,
     WorkloadIdentityOAuthProvider,
 };
+use crate::gcp::credential::{ServiceAccountCredentials, ServiceAccountKey};
 use crate::retry::RetryExt;
 use crate::service::{HttpService, make_service};
 use crate::{
@@ -58,6 +59,12 @@ pub const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_tok
 
 /// RFC 8693 token type of a JWT.
 pub const JWT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
+
+/// RFC 7523 JWT-bearer grant type.
+const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+
+/// The token endpoint of Google service accounts that do not name one.
+const GCP_DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 
 const GCP_METADATA_IDENTITY_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity";
@@ -134,6 +141,41 @@ impl fmt::Debug for TokenExchange {
             .field("audience", &self.audience)
             .field("scope", &self.scope)
             .finish()
+    }
+}
+
+/// Azure managed-identity configuration.
+#[derive(Debug, Clone, Default)]
+pub struct AzureManagedIdentity {
+    /// The resource to request a token for, e.g. `api://my-app`.
+    pub resource: String,
+    /// The client id of a user-assigned identity.
+    pub client_id: Option<String>,
+    /// The object id of a user-assigned identity.
+    pub object_id: Option<String>,
+    /// The Azure resource id of a user-assigned identity.
+    pub msi_resource_id: Option<String>,
+    /// Overrides the instance metadata token endpoint.
+    pub endpoint: Option<String>,
+}
+
+/// A GCP service-account key.
+#[derive(Clone)]
+pub enum GcpServiceAccount {
+    /// The path of a service-account JSON key file, e.g. the one named by
+    /// `GOOGLE_APPLICATION_CREDENTIALS`.
+    File(String),
+    /// The contents of a service-account JSON key file. This is secret
+    /// material.
+    Key(String),
+}
+
+impl fmt::Debug for GcpServiceAccount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::File(path) => f.debug_tuple("File").field(path).finish(),
+            Self::Key(_) => f.debug_tuple("Key").field(&"***").finish(),
+        }
     }
 }
 
@@ -226,22 +268,18 @@ impl BearerAuth {
         Ok(azure_bearer(self.azure_fetching(provider, false)?))
     }
 
-    /// An Azure AD token for `resource` (e.g. `api://my-app`) from the managed
-    /// identity of the host, optionally a user-assigned one.
-    ///
-    /// `msi_endpoint` overrides the instance metadata endpoint.
+    /// An Azure AD token from the managed identity of the host, optionally a
+    /// user-assigned one.
     pub fn azure_managed_identity(
         &self,
-        resource: &str,
-        client_id: Option<String>,
-        msi_endpoint: Option<String>,
+        identity: AzureManagedIdentity,
     ) -> Result<BearerCredentialProvider> {
         let provider = ImdsManagedIdentityProvider::new_with_resource(
-            client_id,
-            None,
-            None,
-            msi_endpoint,
-            resource,
+            identity.client_id,
+            identity.object_id,
+            identity.msi_resource_id,
+            identity.endpoint,
+            &identity.resource,
         );
         Ok(azure_bearer(self.azure_fetching(provider, true)?))
     }
@@ -286,6 +324,47 @@ impl BearerAuth {
             endpoint: endpoint.unwrap_or_else(|| GCP_METADATA_IDENTITY_URL.to_string()),
         };
         self.fetching(provider, true)
+    }
+
+    /// An ID token for `audience`, signed for by a service-account key.
+    ///
+    /// The key must be a `service_account` credential: user credentials from
+    /// `gcloud auth application-default login` cannot mint ID tokens for an
+    /// arbitrary audience.
+    pub fn gcp_service_account_id_token(
+        &self,
+        account: GcpServiceAccount,
+        audience: impl Into<String>,
+    ) -> Result<BearerCredentialProvider> {
+        let json = match &account {
+            GcpServiceAccount::File(path) => std::fs::read_to_string(path).map_err(|e| {
+                generic(format!("failed to read service-account key `{path}`: {e}"))
+            })?,
+            GcpServiceAccount::Key(key) => key.clone(),
+        };
+        let value: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| generic(format!("invalid service-account key {account:?}: {e}")))?;
+        if let Some(kind) = value.get("type").and_then(|kind| kind.as_str())
+            && kind != "service_account"
+        {
+            return Err(generic(format!(
+                "{account:?} holds `{kind}` credentials; ID tokens need a service-account key"
+            )));
+        }
+        let credentials: ServiceAccountCredentials = serde_json::from_value(value)
+            .map_err(|e| generic(format!("invalid service-account key {account:?}: {e}")))?;
+        let key = ServiceAccountKey::from_pem(credentials.private_key.as_bytes())?;
+        let token_uri = credentials
+            .token_uri
+            .clone()
+            .unwrap_or_else(|| GCP_DEFAULT_TOKEN_URI.to_string());
+        let provider = GcpServiceAccountIdTokenProvider {
+            credentials,
+            key,
+            token_uri,
+            audience: audience.into(),
+        };
+        self.fetching(provider, false)
     }
 
     /// Exchange the subject token for another token (RFC 8693), e.g. an
@@ -519,6 +598,61 @@ impl TokenProvider for GcpIdTokenProvider {
             .await?
             .trim()
             .to_string();
+        let expiry = jwt_expiry(&token).unwrap_or_else(|| Instant::now() + UNKNOWN_EXPIRY);
+        Ok(TemporaryToken {
+            token: Arc::new(BearerCredential { token }),
+            expiry: Some(expiry),
+        })
+    }
+}
+
+struct GcpServiceAccountIdTokenProvider {
+    credentials: ServiceAccountCredentials,
+    key: ServiceAccountKey,
+    token_uri: String,
+    audience: String,
+}
+
+impl fmt::Debug for GcpServiceAccountIdTokenProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GcpServiceAccountIdTokenProvider")
+            .field("client_email", &self.credentials.client_email)
+            .field("token_uri", &self.token_uri)
+            .field("audience", &self.audience)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl TokenProvider for GcpServiceAccountIdTokenProvider {
+    type Credential = BearerCredential;
+
+    async fn fetch_token(
+        &self,
+        client: &Client,
+        service: &Arc<dyn HttpService>,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<Arc<BearerCredential>>> {
+        #[derive(Deserialize)]
+        struct IdTokenResponse {
+            id_token: String,
+        }
+
+        let assertion =
+            self.credentials
+                .id_token_assertion(&self.key, &self.token_uri, &self.audience)?;
+        let response: IdTokenResponse = client
+            .request(Method::POST, &self.token_uri)
+            .header(ACCEPT, HeaderValue::from_static("application/json"))
+            .form(&[("grant_type", JWT_BEARER_GRANT), ("assertion", &assertion)])
+            .retryable(retry, service.clone())
+            .idempotent(true)
+            .send()
+            .await
+            .map_err(|e| e.error())?
+            .json()
+            .await?;
+        let token = response.id_token;
         let expiry = jwt_expiry(&token).unwrap_or_else(|| Instant::now() + UNKNOWN_EXPIRY);
         Ok(TemporaryToken {
             token: Arc::new(BearerCredential { token }),
@@ -772,14 +906,47 @@ mod tests {
             .await;
 
         let provider = auth()
-            .azure_managed_identity(
-                "api://my-catalog",
-                Some("uami".into()),
-                Some(format!("{}/metadata/identity/oauth2/token", server.url())),
-            )
+            .azure_managed_identity(AzureManagedIdentity {
+                resource: "api://my-catalog".into(),
+                client_id: Some("uami".into()),
+                endpoint: Some(format!("{}/metadata/identity/oauth2/token", server.url())),
+                ..Default::default()
+            })
             .unwrap();
         assert_signs(&mut server, provider, "msi-token").await;
         imds.assert_async().await;
+    }
+
+    #[test]
+    fn gcp_service_account_id_token_rejects_user_credentials() {
+        let key = r#"{"type":"authorized_user","client_id":"id","client_secret":"secret","refresh_token":"refresh"}"#;
+        let err = auth()
+            .gcp_service_account_id_token(GcpServiceAccount::Key(key.into()), "aud")
+            .unwrap_err();
+        assert!(err.to_string().contains("`authorized_user`"), "{err}");
+    }
+
+    #[test]
+    fn gcp_service_account_id_token_validates_the_key() {
+        let missing = auth()
+            .gcp_service_account_id_token(
+                GcpServiceAccount::File("/nonexistent.json".into()),
+                "aud",
+            )
+            .unwrap_err();
+        assert!(
+            missing.to_string().contains("/nonexistent.json"),
+            "{missing}"
+        );
+
+        let key = r#"{"type":"service_account","private_key":"not a key","private_key_id":"kid","client_email":"sa@example.iam.gserviceaccount.com"}"#;
+        assert!(
+            auth()
+                .gcp_service_account_id_token(GcpServiceAccount::Key(key.into()), "aud")
+                .is_err()
+        );
+        let debug = format!("{:?}", GcpServiceAccount::Key(key.into()));
+        assert!(!debug.contains("private_key"), "{debug}");
     }
 
     #[tokio::test]

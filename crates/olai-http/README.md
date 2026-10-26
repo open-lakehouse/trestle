@@ -39,9 +39,12 @@ let resp = client.get("https://api.example.com/data").send().await?;
 
 // A token for your own API, from an Azure managed identity, exchanged for the
 // API's access token (RFC 8693)
-use olai_http::bearer::{BearerAuth, TokenExchange};
+use olai_http::bearer::{AzureManagedIdentity, BearerAuth, TokenExchange};
 let auth = BearerAuth::new();
-let id_token = auth.azure_managed_identity("api://my-api", None, None)?;
+let id_token = auth.azure_managed_identity(AzureManagedIdentity {
+    resource: "api://my-api".into(),
+    ..Default::default()
+})?;
 let provider = auth.token_exchange(TokenExchange {
     endpoint: "https://api.example.com/oauth/token".into(),
     subject: id_token,

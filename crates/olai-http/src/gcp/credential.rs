@@ -273,34 +273,42 @@ impl TokenProvider for SelfSignedJwt {
             exp,
         };
 
-        let jwt_header = b64_encode_obj(&JwtHeader {
-            alg: "RS256",
-            typ: Some("JWT"),
-            kid: Some(&self.key_id),
-            ..Default::default()
-        })?;
-
-        let claim_str = b64_encode_obj(&claims)?;
-        let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; self.private_key.0.public().modulus_len()];
-        self.private_key
-            .0
-            .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
-                message.as_bytes(),
-                &mut sig_bytes,
-            )
-            .map_err(|source| Error::Sign { source })?;
-
-        let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
-        let bearer = [message, signature].join(".");
+        let bearer = sign_jwt(&self.private_key, &self.key_id, &claims)?;
 
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential { bearer }),
             expiry: Some(Instant::now() + Duration::from_secs(3600)),
         })
     }
+}
+
+/// Encode `claims` as a JWT signed with RS256 by `key`.
+fn sign_jwt<T: serde::Serialize>(
+    key: &ServiceAccountKey,
+    key_id: &str,
+    claims: &T,
+) -> Result<String> {
+    let jwt_header = b64_encode_obj(&JwtHeader {
+        alg: "RS256",
+        typ: Some("JWT"),
+        kid: Some(key_id),
+        ..Default::default()
+    })?;
+
+    let claim_str = b64_encode_obj(claims)?;
+    let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
+    let mut sig_bytes = vec![0; key.0.public().modulus_len()];
+    key.0
+        .sign(
+            &ring::signature::RSA_PKCS1_SHA256,
+            &ring::rand::SystemRandom::new(),
+            message.as_bytes(),
+            &mut sig_bytes,
+        )
+        .map_err(|source| Error::Sign { source })?;
+
+    let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
+    Ok([message, signature].join("."))
 }
 
 fn read_credentials_file<T>(service_account_path: impl AsRef<std::path::Path>) -> Result<T>
@@ -341,6 +349,10 @@ pub(crate) struct ServiceAccountCredentials {
     /// Disable oauth and use empty tokens.
     #[serde(default)]
     pub disable_oauth: bool,
+
+    /// The OAuth 2.0 token endpoint of the service account.
+    #[serde(default)]
+    pub token_uri: Option<String>,
 }
 
 impl ServiceAccountCredentials {
@@ -369,6 +381,41 @@ impl ServiceAccountCredentials {
             ServiceAccountKey::from_pem(self.private_key.as_bytes())?,
             DEFAULT_SCOPE.to_string(),
         )?)
+    }
+}
+
+impl ServiceAccountCredentials {
+    /// A signed JWT assertion that the token endpoint exchanges for an ID token
+    /// whose audience is `target_audience`.
+    ///
+    /// # References
+    /// - <https://developers.google.com/identity/protocols/oauth2/service-account#authorizingrequests>
+    pub(crate) fn id_token_assertion(
+        &self,
+        key: &ServiceAccountKey,
+        token_uri: &str,
+        target_audience: &str,
+    ) -> Result<String> {
+        #[derive(serde::Serialize)]
+        struct IdTokenClaims<'a> {
+            iss: &'a str,
+            sub: &'a str,
+            aud: &'a str,
+            target_audience: &'a str,
+            exp: u64,
+            iat: u64,
+        }
+
+        let now = seconds_since_epoch();
+        let claims = IdTokenClaims {
+            iss: &self.client_email,
+            sub: &self.client_email,
+            aud: token_uri,
+            target_audience,
+            iat: now,
+            exp: now + 3600,
+        };
+        sign_jwt(key, &self.private_key_id, &claims)
     }
 }
 
