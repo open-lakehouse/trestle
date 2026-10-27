@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.7...olai-http-v0.0.8) - 2026-10-27
+
+### Added
+
+- GCP service-account ID tokens and user-assigned MSI ids (#177)
+- bearer-token auth for any API (#175)
+
 ## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.6...olai-http-v0.0.7) - 2026-10-26
 
 ### Added
