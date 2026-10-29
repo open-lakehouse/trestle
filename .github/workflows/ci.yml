@@ -150,9 +150,13 @@ jobs:
           toolchain: "1.88"
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Pull emulator images
-        run: docker pull rustfs/rustfs:1.0.1
+        run: |
+          docker pull rustfs/rustfs:1.0.1
+          docker pull mcr.microsoft.com/azure-storage/azurite:3.37.0
       - name: Run emulator tests (olai-storage-credentials)
         run: cargo test --locked -p olai-storage-credentials --features emulator-it --tests
+      - name: Run emulator tests (olai-http)
+        run: cargo test --locked -p olai-http --features emulator-it --tests
 
   postgres:
     name: Postgres backend
