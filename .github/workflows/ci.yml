@@ -68,6 +68,10 @@ jobs:
       # The credential model is shared with browser clients, so it must keep building
       # without the native-only parts of its dependencies (tokio, reqwest, ring).
       - run: cargo check --locked -p olai-storage-credentials --target wasm32-unknown-unknown --all-features
+      # Browser clients build stores from vended credentials too: the core alone, and
+      # with every store backend.
+      - run: cargo check --locked -p olai-vended-store --target wasm32-unknown-unknown --no-default-features
+      - run: cargo check --locked -p olai-vended-store --target wasm32-unknown-unknown --all-features
 
   machete:
     name: Unused Dependencies
@@ -110,6 +114,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-codegen/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-storage-credentials)
         run: cargo msrv verify --manifest-path crates/olai-storage-credentials/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-vended-store)
+        run: cargo msrv verify --manifest-path crates/olai-vended-store/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}
