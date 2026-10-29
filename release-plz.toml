@@ -72,6 +72,11 @@ changelog_path = "crates/stack-topology/CHANGELOG.md"
 [[package]]
 name = "olai-storage-credentials"
 changelog_path = "crates/olai-storage-credentials/CHANGELOG.md"
+# TEMPORARY: a new crate name cannot be created through OIDC trusted publishing, so
+# release-plz would fail publishing it. Hold it out of the release cycle until the
+# one-time bootstrap publish (bootstrap-publish.yml) has created the name and the
+# Trusted Publisher is registered; then delete this line.
+release = false
 
 # The npm package @open-lakehouse/trestle-diagram, through its placeholder crate
 # at node/Cargo.toml. `git_only` takes the previous version from the
