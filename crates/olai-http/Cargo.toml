@@ -58,6 +58,8 @@ tracing = { version = "0.1" }
 url = "2.2"
 
 [dev-dependencies]
+# Emulator tests only (`emulator-it`): SAS signatures validated by Azurite.
+olai-test-emulators = { path = "../olai-test-emulators" }
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
 http-body-util = "0.1"
@@ -71,6 +73,9 @@ recording = []
 # ConnectRPC clients can authenticate against cloud-fronted servers. Pulls in
 # `connectrpc` (raising the effective MSRV to 1.88) only when enabled.
 connectrpc = ["dep:connectrpc", "dep:http-body-util"]
+# Integration tests against containerized emulators (needs Docker). See
+# `olai-test-emulators`.
+emulator-it = []
 
 [package.metadata.cargo-machete]
 ignored = ["rust-ini"]

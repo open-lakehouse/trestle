@@ -10,4 +10,11 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# workspace dependencies (in alphabetical order)
+base64 = { workspace = true }
+reqwest = { workspace = true }
+
+# crates.io dependencies (in alphabetical order)
+# Self-signed TLS certificates for emulators that need HTTPS (Azurite with OAuth).
+rcgen = "0.14"
 testcontainers = { version = "0.28" }

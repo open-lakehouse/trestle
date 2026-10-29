@@ -14,9 +14,6 @@ use crate::{ClientOptions, Result, RetryConfig};
 /// SAS signed version — must be at least 2020-02-10 to support `sdd=` directory depth.
 const SAS_VERSION: &str = "2020-12-06";
 
-/// Signed resource type: "c" = container (prefix restriction via `sdd=` on ADLS Gen2).
-const SAS_SIGNED_RESOURCE: &str = "c";
-
 // ── User Delegation Key ──────────────────────────────────────────────────────
 
 /// Response from the Azure Storage `Get User Delegation Key` endpoint.
@@ -32,22 +29,37 @@ pub(crate) struct UserDelegationKey {
     pub value: String,
 }
 
+/// How to reach the Blob service when fetching a user delegation key.
+#[derive(Debug, Clone, Default)]
+pub struct UserDelegationKeyOptions {
+    /// The Blob service endpoint, including the account path for emulators
+    /// (`https://127.0.0.1:10000/devstoreaccount1`). Defaults to
+    /// `https://<account>.blob.core.windows.net`.
+    pub endpoint: Option<String>,
+    /// HTTP client options for the request (custom root certificates, timeouts, ...).
+    pub client_options: ClientOptions,
+}
+
 /// Fetch a User Delegation Key from Azure Storage using an AAD bearer token.
 pub(crate) async fn fetch_user_delegation_key(
     account: &str,
     bearer_token: &str,
     start: DateTime<Utc>,
     expiry: DateTime<Utc>,
+    options: &UserDelegationKeyOptions,
 ) -> Result<UserDelegationKey> {
-    let url =
-        format!("https://{account}.blob.core.windows.net/?restype=service&comp=userdelegationkey");
+    let endpoint = match &options.endpoint {
+        Some(endpoint) => endpoint.trim_end_matches('/').to_owned(),
+        None => format!("https://{account}.blob.core.windows.net"),
+    };
+    let url = format!("{endpoint}/?restype=service&comp=userdelegationkey");
     let body = format!(
         "<KeyInfo><Start>{}</Start><Expiry>{}</Expiry></KeyInfo>",
         start.to_rfc3339_opts(SecondsFormat::Secs, true),
         expiry.to_rfc3339_opts(SecondsFormat::Secs, true),
     );
 
-    let client = ClientOptions::default().client()?;
+    let client = options.client_options.client()?;
     let service: Arc<dyn HttpService> = make_service(client.clone(), None);
     let retry = RetryConfig::default();
 
@@ -75,7 +87,7 @@ pub(crate) async fn fetch_user_delegation_key(
     })
 }
 
-// ── Directory depth helper ────────────────────────────────────────────────────
+// ── Signed resource ──────────────────────────────────────────────────────────
 
 /// Compute the signed directory depth for a blob prefix path.
 ///
@@ -92,14 +104,116 @@ fn signed_directory_depth(prefix: &str) -> Option<usize> {
     if depth == 0 { None } else { Some(depth) }
 }
 
+/// What a SAS is signed for: a whole container (`sr=c`) or, on ADLS Gen2
+/// (hierarchical namespace) accounts, a directory and everything below it
+/// (`sr=d` with `sdd=<depth>`).
+struct SignedResource {
+    /// The `sr` value.
+    sr: &'static str,
+    /// The canonicalized resource of the string-to-sign.
+    canonicalized: String,
+    /// The `sdd` value, for directory SAS. It is a query parameter only: it is
+    /// not part of the string-to-sign.
+    depth: Option<usize>,
+}
+
+impl SignedResource {
+    fn new(account: &str, container: &str, prefix: &str) -> Self {
+        match signed_directory_depth(prefix) {
+            None => Self {
+                sr: "c",
+                canonicalized: format!("/blob/{account}/{container}"),
+                depth: None,
+            },
+            Some(depth) => Self {
+                sr: "d",
+                canonicalized: format!("/blob/{account}/{container}/{}", prefix.trim_matches('/')),
+                depth: Some(depth),
+            },
+        }
+    }
+}
+
 // ── SAS construction ─────────────────────────────────────────────────────────
+
+/// The string-to-sign of a user delegation SAS (version 2020-12-06 and later).
+///
+/// <https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas#version-2020-12-06-and-later>
+fn user_delegation_string_to_sign(
+    permissions: &str,
+    start: &str,
+    expiry: &str,
+    resource: &SignedResource,
+    key: &UserDelegationKey,
+) -> String {
+    [
+        permissions,
+        start,
+        expiry,
+        &resource.canonicalized,
+        &key.signed_oid,     // signedKeyObjectId
+        &key.signed_tid,     // signedKeyTenantId
+        &key.signed_start,   // signedKeyStart
+        &key.signed_expiry,  // signedKeyExpiry
+        &key.signed_service, // signedKeyService
+        &key.signed_version, // signedKeyVersion
+        "",                  // signedAuthorizedUserObjectId
+        "",                  // signedUnauthorizedUserObjectId
+        "",                  // signedCorrelationId
+        "",                  // signedIP
+        "https",             // signedProtocol
+        SAS_VERSION,         // signedVersion
+        resource.sr,         // signedResource
+        "",                  // signedSnapshotTime
+        "",                  // signedEncryptionScope
+        "",                  // rscc
+        "",                  // rscd
+        "",                  // rsce
+        "",                  // rscl
+        "",                  // rsct
+    ]
+    .join("\n")
+}
+
+/// The string-to-sign of a service SAS (version 2020-12-06 and later).
+///
+/// <https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas#version-2020-12-06-and-later>
+fn service_string_to_sign(
+    permissions: &str,
+    start: &str,
+    expiry: &str,
+    resource: &SignedResource,
+    protocol: &str,
+) -> String {
+    [
+        permissions,
+        start,
+        expiry,
+        &resource.canonicalized,
+        "",          // signedIdentifier
+        "",          // signedIP
+        protocol,    // signedProtocol
+        SAS_VERSION, // signedVersion
+        resource.sr, // signedResource
+        "",          // signedSnapshotTime
+        "",          // signedEncryptionScope
+        "",          // rscc
+        "",          // rscd
+        "",          // rsce
+        "",          // rscl
+        "",          // rsct
+    ]
+    .join("\n")
+}
 
 /// Build a SAS token query string signed with a User Delegation Key.
 ///
-/// When `prefix` is non-empty the SAS is scoped to that ADLS Gen2 directory
-/// path via `sdd=` (requires a Hierarchical Namespace / ADLS Gen2 account).
-/// On flat-namespace Blob Storage the `sdd=` parameter is ignored by the
-/// service and the token remains container-wide.
+/// When `prefix` is non-empty the SAS is a directory SAS (`sr=d`, `sdd=`) for that
+/// path, which requires an ADLS Gen2 (hierarchical namespace) account; flat-namespace
+/// accounts reject it.
+///
+/// The SAS has no start time (`st`), so it is valid as soon as it is issued even when
+/// the local clock runs ahead of the service's.
 ///
 /// Returns the SAS parameters as a query string (without leading `?`).
 pub(crate) fn build_user_delegation_sas(
@@ -110,49 +224,10 @@ pub(crate) fn build_user_delegation_sas(
     expiry: DateTime<Utc>,
     permissions: &str,
 ) -> Result<String> {
-    let start = Utc::now();
-    let start_str = start.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expiry_str = expiry.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let depth = signed_directory_depth(prefix);
-
-    // Canonicalized resource includes the prefix path for ADLS Gen2 directory SAS.
-    let canonicalized_resource = if depth.is_some() && !prefix.is_empty() {
-        let clean = prefix.trim_matches('/');
-        format!("/blob/{account}/{container}/{clean}")
-    } else {
-        format!("/blob/{account}/{container}")
-    };
-
-    // signedDirectoryDepth field — empty string when not scoping to a directory.
-    let sdd_field = depth.map(|d| d.to_string()).unwrap_or_default();
-
-    // String-to-sign for User Delegation SAS (API version 2020-12-06).
-    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas
-    // Field order (each separated by \n):
-    //   signedPermissions, signedStart, signedExpiry, canonicalizedResource,
-    //   signedKeyObjectId, signedKeyTenantId, signedKeyStart, signedKeyExpiry,
-    //   signedKeyService, signedKeyVersion,
-    //   signedAuthorizedUserObjectId (empty), signedUnauthorizedUserObjectId (empty),
-    //   signedCorrelationId (empty), signedIP (empty), signedProtocol,
-    //   signedVersion, signedResource, signedSnapshotTime (empty),
-    //   signedEncryptionScope (empty), rscc (empty), rscd (empty), rsce (empty),
-    //   rscl (empty), rsct (empty), signedDirectoryDepth
-    let string_to_sign = format!(
-        "{permissions}\n{start}\n{expiry}\n{resource}\n{oid}\n{tid}\n{skt}\n{ske}\n{sks}\n{skv}\n\n\n\nhttps\n{version}\n{sr}\n\n\n\n\n\n\n\n{sdd}",
-        permissions = permissions,
-        start = start_str,
-        expiry = expiry_str,
-        resource = canonicalized_resource,
-        oid = key.signed_oid,
-        tid = key.signed_tid,
-        skt = key.signed_start,
-        ske = key.signed_expiry,
-        sks = key.signed_service,
-        skv = key.signed_version,
-        version = SAS_VERSION,
-        sr = SAS_SIGNED_RESOURCE,
-        sdd = sdd_field,
-    );
+    let resource = SignedResource::new(account, container, prefix);
+    let string_to_sign =
+        user_delegation_string_to_sign(permissions, "", &expiry_str, &resource, key);
 
     let key_bytes = BASE64
         .decode(&key.value)
@@ -160,97 +235,61 @@ pub(crate) fn build_user_delegation_sas(
     let signature = BASE64.encode(hmac_sha256(&key_bytes, string_to_sign.as_bytes()).as_ref());
 
     let mut sas = format!(
-        "sv={version}&se={expiry}&sp={permissions}&spr=https&sr={resource}\
-         &skoid={skoid}&sktid={sktid}&skt={skt}&ske={ske}&sks={sks}&skv={skv}\
-         &sig={sig}",
+        "sv={version}&se={expiry}&sp={permissions}&spr=https&sr={sr}\
+         &skoid={skoid}&sktid={sktid}&skt={skt}&ske={ske}&sks={sks}&skv={skv}",
         version = SAS_VERSION,
         expiry = url_encode(&expiry_str),
         permissions = permissions,
-        resource = SAS_SIGNED_RESOURCE,
-        skoid = key.signed_oid,
-        sktid = key.signed_tid,
+        sr = resource.sr,
+        skoid = url_encode(&key.signed_oid),
+        sktid = url_encode(&key.signed_tid),
         skt = url_encode(&key.signed_start),
         ske = url_encode(&key.signed_expiry),
-        sks = key.signed_service,
-        skv = key.signed_version,
-        sig = url_encode(&signature),
+        sks = url_encode(&key.signed_service),
+        skv = url_encode(&key.signed_version),
     );
-
-    if let Some(d) = depth {
+    if let Some(d) = resource.depth {
         sas.push_str(&format!("&sdd={d}"));
     }
-
+    sas.push_str(&format!("&sig={}", url_encode(&signature)));
     Ok(sas)
 }
 
 /// Build a SAS token signed with a storage account key.
 ///
-/// When `prefix` is non-empty the SAS includes `sdd=` for ADLS Gen2
-/// directory scoping. On flat-namespace accounts the parameter is ignored.
+/// When `prefix` is non-empty the SAS is a directory SAS (`sr=d`, `sdd=`) for that
+/// path, which requires an ADLS Gen2 (hierarchical namespace) account.
 ///
 /// When `emulator` is true the SAS targets the Azurite Blob emulator, which is
 /// served over **http** and uses a flat namespace:
 /// - `signedProtocol` is `https,http` instead of `https` (Azurite rejects an
 ///   `https`-only SAS sent over http), and
-/// - `sdd=` directory-depth scoping is omitted (it is an ADLS Gen2 / HNS
-///   feature; including it on Azurite's flat namespace makes the signature
-///   mismatch). Prefix scoping for the emulator is enforced elsewhere (the
-///   object store is rooted at the container + blob prefix).
+/// - the SAS is always container-level, since Azurite has no directory SAS. Prefix
+///   scoping for the emulator is enforced elsewhere (the object store is rooted at
+///   the container + blob prefix).
 ///
 /// Uses the Service SAS signing algorithm (API version 2020-12-06).
 /// <https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas>
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_storage_key_sas(
     account: &str,
     container: &str,
     prefix: &str,
     account_key_b64: &str,
+    start: DateTime<Utc>,
     expiry: DateTime<Utc>,
     permissions: &str,
     emulator: bool,
 ) -> Result<String> {
-    let start = Utc::now();
     let start_str = start.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expiry_str = expiry.to_rfc3339_opts(SecondsFormat::Secs, true);
-    // The emulator uses a flat namespace, so directory-depth scoping does not
-    // apply (and breaks the signature). Only compute `sdd` for real ADLS Gen2.
-    let depth = if emulator {
-        None
-    } else {
-        signed_directory_depth(prefix)
-    };
-
-    let canonicalized_resource = if depth.is_some() && !prefix.is_empty() {
-        let clean = prefix.trim_matches('/');
-        format!("/blob/{account}/{container}/{clean}")
-    } else {
-        format!("/blob/{account}/{container}")
-    };
+    let resource = SignedResource::new(account, container, if emulator { "" } else { prefix });
 
     // Azurite is http; real Azure is https-only. The protocol is part of the
     // string-to-sign, so it must match the emitted `spr=` exactly.
     let protocol = if emulator { "https,http" } else { "https" };
-
-    // String-to-sign for Service SAS (container resource, API version 2020-12-06).
-    // https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas
-    // Field order (each separated by \n):
-    //   signedPermissions, signedStart, signedExpiry, canonicalizedResource,
-    //   signedIdentifier (empty), signedIP (empty), signedProtocol,
-    //   signedVersion, signedResource, signedSnapshotTime (empty),
-    //   signedEncryptionScope (empty), rscc (empty), rscd (empty), rsce (empty),
-    //   rscl (empty), rsct (empty), [signedDirectoryDepth]
-    //
-    // The trailing `signedDirectoryDepth` field is present ONLY when a directory
-    // depth is signed (ADLS Gen2). When absent, the field must be omitted
-    // entirely — an empty trailing field (a stray final `\n`) changes the
-    // signature and the service rejects it (verified against Azurite: a
-    // container-level SAS with a trailing empty `sdd` field 403s).
-    let base_string_to_sign = format!(
-        "{permissions}\n{start_str}\n{expiry_str}\n{canonicalized_resource}\n\n\n{protocol}\n{SAS_VERSION}\n{SAS_SIGNED_RESOURCE}\n\n\n\n\n\n\n",
-    );
-    let string_to_sign = match depth {
-        Some(d) => format!("{base_string_to_sign}\n{d}"),
-        None => base_string_to_sign,
-    };
+    let string_to_sign =
+        service_string_to_sign(permissions, &start_str, &expiry_str, &resource, protocol);
 
     let key_bytes = BASE64
         .decode(account_key_b64)
@@ -261,20 +300,18 @@ pub(crate) fn build_storage_key_sas(
     // appear in the emitted query — the service recomputes the signature from
     // the query parameters, and an absent `st` is signed as empty → mismatch.
     let mut sas = format!(
-        "sv={version}&st={start}&se={expiry}&sp={permissions}&spr={protocol}&sr={resource}&sig={sig}",
+        "sv={version}&st={start}&se={expiry}&sp={permissions}&spr={protocol}&sr={sr}",
         version = SAS_VERSION,
         start = url_encode(&start_str),
         expiry = url_encode(&expiry_str),
         permissions = permissions,
-        protocol = protocol,
-        resource = SAS_SIGNED_RESOURCE,
-        sig = url_encode(&signature),
+        protocol = url_encode(protocol),
+        sr = resource.sr,
     );
-
-    if let Some(d) = depth {
+    if let Some(d) = resource.depth {
         sas.push_str(&format!("&sdd={d}"));
     }
-
+    sas.push_str(&format!("&sig={}", url_encode(&signature)));
     Ok(sas)
 }
 
@@ -306,12 +343,11 @@ pub(crate) fn sas_expiry(ttl_secs: u64) -> DateTime<Utc> {
 // ── Public entry points used by credential_vending ──────────────────────────
 
 /// Generate a User Delegation SAS token scoped to an Azure Blob Storage container
-/// and optionally a directory prefix within it (ADLS Gen2 `sdd=` scoping).
+/// and optionally a directory prefix within it.
 ///
 /// Uses the provided AAD bearer token to fetch a User Delegation Key, then signs
-/// a SAS. When `prefix` is non-empty the `sdd=` parameter restricts access to
-/// that directory path on ADLS Gen2 (Hierarchical Namespace) accounts; on
-/// flat-namespace Blob Storage the parameter is silently ignored by the service.
+/// a SAS. When `prefix` is non-empty the SAS is a directory SAS (`sr=d`, `sdd=`)
+/// for that path, which requires an ADLS Gen2 (hierarchical namespace) account.
 pub async fn generate_user_delegation_sas(
     account: &str,
     container: &str,
@@ -320,15 +356,39 @@ pub async fn generate_user_delegation_sas(
     read_only: bool,
     ttl_secs: u64,
 ) -> Result<String> {
+    generate_user_delegation_sas_with_options(
+        account,
+        container,
+        prefix,
+        bearer_token,
+        read_only,
+        ttl_secs,
+        &UserDelegationKeyOptions::default(),
+    )
+    .await
+}
+
+/// Like [`generate_user_delegation_sas`], with an explicit Blob service endpoint and
+/// HTTP client options for fetching the user delegation key (emulators, custom
+/// certificates).
+pub async fn generate_user_delegation_sas_with_options(
+    account: &str,
+    container: &str,
+    prefix: &str,
+    bearer_token: &str,
+    read_only: bool,
+    ttl_secs: u64,
+    options: &UserDelegationKeyOptions,
+) -> Result<String> {
     let expiry = sas_expiry(ttl_secs);
     let start = Utc::now();
-    let key = fetch_user_delegation_key(account, bearer_token, start, expiry).await?;
+    let key = fetch_user_delegation_key(account, bearer_token, start, expiry, options).await?;
     let permissions = if read_only { SAS_READ } else { SAS_READ_WRITE };
     build_user_delegation_sas(account, container, prefix, &key, expiry, permissions)
 }
 
 /// Generate a service SAS token scoped to an Azure Blob Storage container and
-/// optionally a directory prefix (ADLS Gen2 `sdd=` scoping) using a storage account key.
+/// optionally a directory prefix (an ADLS Gen2 directory SAS) using a storage account key.
 ///
 /// This does not require an AAD token. Set `emulator` to true when signing for
 /// the Azurite Blob emulator (served over http, flat namespace) — see
@@ -349,6 +409,7 @@ pub fn generate_storage_key_sas(
         container,
         prefix,
         account_key_b64,
+        Utc::now(),
         expiry,
         permissions,
         emulator,
@@ -425,6 +486,135 @@ mod tests {
             generate_storage_key_sas("devstoreaccount1", "test", "", TEST_KEY, false, 3600, false)
                 .expect("SAS generation failed");
         assert!(sas.contains("sp=racwdl"), "expected read-write permissions");
+    }
+
+    // Signature vectors. The expected signatures were computed independently (Python
+    // `hmac`) over string-to-sign layouts assembled from the field lists in the Azure
+    // docs (24 fields for user delegation, 16 for service SAS, both ending at `rsct`),
+    // which match object_store's `string_to_sign_*_sas`.
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    fn test_delegation_key() -> UserDelegationKey {
+        UserDelegationKey {
+            signed_oid: "oid-1".into(),
+            signed_tid: "tid-1".into(),
+            signed_start: "2030-01-01T00:00:00Z".into(),
+            signed_expiry: "2030-01-02T00:00:00Z".into(),
+            signed_service: "b".into(),
+            signed_version: "2020-12-06".into(),
+            // base64("0123456789abcdef0123456789abcdef")
+            value: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=".into(),
+        }
+    }
+
+    fn query_param<'a>(sas: &'a str, key: &str) -> Option<&'a str> {
+        sas.split('&')
+            .find_map(|kv| kv.strip_prefix(&format!("{key}=")))
+    }
+
+    fn sig(sas: &str) -> String {
+        percent_encoding::percent_decode_str(query_param(sas, "sig").unwrap())
+            .decode_utf8()
+            .unwrap()
+            .into_owned()
+    }
+
+    #[test]
+    fn user_delegation_string_to_sign_matches_the_spec_layout() {
+        let resource = SignedResource::new("acct", "ctr", "");
+        let s = user_delegation_string_to_sign(
+            "rl",
+            "",
+            "2030-01-01T01:00:00Z",
+            &resource,
+            &test_delegation_key(),
+        );
+        let expected = concat!(
+            "rl\n",                   // signedPermissions
+            "\n",                     // signedStart
+            "2030-01-01T01:00:00Z\n", // signedExpiry
+            "/blob/acct/ctr\n",       // canonicalizedResource
+            "oid-1\ntid-1\n2030-01-01T00:00:00Z\n2030-01-02T00:00:00Z\nb\n2020-12-06\n", // signedKey*
+            "\n\n\n\n",               // authorized/unauthorized OID, correlation id, IP
+            "https\n2020-12-06\nc\n", // protocol, version, resource
+            "\n\n",                   // snapshot time, encryption scope
+            "\n\n\n\n",               // rscc, rscd, rsce, rscl; rsct is the empty tail
+        );
+        assert_eq!(s, expected);
+        assert_eq!(s.split('\n').count(), 24);
+    }
+
+    #[test]
+    fn user_delegation_sas_signature_vectors() {
+        let key = test_delegation_key();
+        let expiry = at("2030-01-01T01:00:00Z");
+
+        let container = build_user_delegation_sas("acct", "ctr", "", &key, expiry, "rl").unwrap();
+        assert_eq!(
+            sig(&container),
+            "iNzhtSmalfcT3w9YZxzT/Cx2jJtF91nz9/hqzv3MCpU="
+        );
+        assert_eq!(query_param(&container, "sr"), Some("c"));
+        assert_eq!(query_param(&container, "sdd"), None);
+        // No start: nothing signed as `st` that the query does not carry.
+        assert_eq!(query_param(&container, "st"), None);
+
+        let dir = build_user_delegation_sas("acct", "ctr", "/warehouse/tab/", &key, expiry, "rl")
+            .unwrap();
+        assert_eq!(sig(&dir), "7Zq1Urkzw7RA0rrvA1cS4mxvqLhXOVr0idg0dv75PW4=");
+        assert_eq!(query_param(&dir, "sr"), Some("d"));
+        assert_eq!(query_param(&dir, "sdd"), Some("2"));
+    }
+
+    #[test]
+    fn service_sas_signature_vectors() {
+        let (start, expiry) = (at("2030-01-01T00:00:00Z"), at("2030-01-01T01:00:00Z"));
+
+        let container =
+            build_storage_key_sas("acct", "ctr", "", TEST_KEY, start, expiry, "rl", false).unwrap();
+        assert_eq!(
+            sig(&container),
+            "GiyaEaEy4mwpc37pguik+xGl/aEBu9Az6SQLmCAQGiU="
+        );
+        assert_eq!(
+            query_param(&container, "st"),
+            Some("2030%2D01%2D01T00%3A00%3A00Z")
+        );
+
+        let dir = build_storage_key_sas(
+            "acct",
+            "ctr",
+            "warehouse/tab",
+            TEST_KEY,
+            start,
+            expiry,
+            "rl",
+            false,
+        )
+        .unwrap();
+        assert_eq!(sig(&dir), "jjax8NezhxgYRaMUAIEOF00D8v+fyhgQPH5g8Lac5BY=");
+        assert_eq!(query_param(&dir, "sr"), Some("d"));
+        assert_eq!(query_param(&dir, "sdd"), Some("2"));
+
+        let emulator = build_storage_key_sas(
+            "devstoreaccount1",
+            "ctr",
+            "warehouse/tab",
+            TEST_KEY,
+            start,
+            expiry,
+            "rl",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            sig(&emulator),
+            "Se3ET4RJND7f0OhqZK5Cvy74Cwn3brvm/E3XoZUkZCo="
+        );
+        assert_eq!(query_param(&emulator, "sr"), Some("c"));
     }
 
     /// The Azurite emulator SAS must allow http (`spr=https,http`) and must not
