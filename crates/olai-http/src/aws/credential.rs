@@ -619,7 +619,7 @@ async fn assume_role(
     endpoint: &str,
     policy: Option<&str>,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let mut query: Vec<(&str, &str)> = vec![
+    let mut params: Vec<(&str, &str)> = vec![
         ("Action", "AssumeRole"),
         ("DurationSeconds", "3600"),
         ("RoleArn", role_arn),
@@ -627,11 +627,14 @@ async fn assume_role(
         ("Version", "2011-06-15"),
     ];
     if let Some(p) = policy {
-        query.push(("Policy", p));
+        params.push(("Policy", p));
     }
+    // Parameters go in a form body, as the AWS SDKs send them: STS-compatible servers
+    // (MinIO, RustFS) reject query-string AssumeRole, and a session policy of up to
+    // 2048 characters does not belong in a URL that lands in access logs.
     let bytes = client
         .request(Method::POST, endpoint)
-        .query(&query)
+        .form(&params)
         .with_aws_sigv4(Some(AwsAuthorizer::new(base_cred, "sts", region)), None)
         .retryable(retry_config, service.clone())
         .idempotent(true)
@@ -1183,14 +1186,22 @@ mod tests {
 
         let sts_endpoint = server.url();
 
+        let policy = r#"{"Version":"2012-10-17","Statement":[]}"#;
         let _mock = server
             .mock("POST", "/")
-            .match_query(mockito::Matcher::AllOf(vec![
+            .match_query(mockito::Matcher::Missing)
+            .match_header("content-type", "application/x-www-form-urlencoded")
+            .match_header(
+                "authorization",
+                mockito::Matcher::Regex("^AWS4-HMAC-SHA256 Credential=BASEKEYID/".into()),
+            )
+            .match_body(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("Action".into(), "AssumeRole".into()),
                 mockito::Matcher::UrlEncoded(
                     "RoleArn".into(),
                     "arn:aws:iam::123456789012:role/AssumedRole".into(),
                 ),
+                mockito::Matcher::UrlEncoded("Policy".into(), policy.into()),
             ]))
             .with_status(200)
             .with_body(STS_ASSUME_ROLE_XML)
@@ -1215,7 +1226,7 @@ mod tests {
             endpoint: format!("{sts_endpoint}/"),
             base_credentials: base_provider,
             region: "us-east-1".into(),
-            policy: None,
+            policy: Some(policy.into()),
         };
 
         let token = provider
