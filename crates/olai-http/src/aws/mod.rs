@@ -4,7 +4,7 @@ use futures::future::BoxFuture;
 
 use crate::service::make_service;
 use crate::token::TemporaryToken;
-use crate::{ClientOptions, RequestSigner, Result, RetryConfig, TokenProvider};
+use crate::{ClientOptions, CloudClient, RequestSigner, Result, RetryConfig, TokenProvider};
 
 use self::credential::{AssumeRoleProvider, AwsAuthorizer, CredentialExt};
 use crate::CredentialProvider;
@@ -49,6 +49,48 @@ impl RequestSigner for AmazonConfig {
             }
         })
     }
+}
+
+/// S3's global endpoint, which answers `HeadBucket` for a bucket in any region.
+pub const S3_GLOBAL_ENDPOINT: &str = "https://s3.amazonaws.com";
+
+/// Discovers the region of an S3 bucket.
+///
+/// Sends a path-style `HeadBucket` for `bucket` to `endpoint` (usually
+/// [`S3_GLOBAL_ENDPOINT`]) and reads the `x-amz-bucket-region` header. S3 sets it whether
+/// or not the caller may access the bucket (`200`, `301` and `403` all carry it), so the
+/// probe needs no credentials. Path-style addressing keeps bucket names with dots
+/// matching S3's certificate.
+///
+/// The probe is always anonymous, whatever `client` signs its own requests with, and is
+/// sent once without retries: it is a best-effort lookup, so the caller decides how to
+/// fall back. `client`'s [`ClientOptions`] (timeouts, proxies) and runtime still apply;
+/// see [`CloudClient::new_unauthenticated_with_options`]. Returns `Ok(None)` when the
+/// response names no region, for example from an S3-compatible store that is not AWS.
+pub async fn bucket_region(
+    client: &CloudClient,
+    endpoint: &str,
+    bucket: &str,
+) -> Result<Option<String>> {
+    let mut url = reqwest::Url::parse(endpoint).map_err(|source| crate::Error::Generic {
+        source: Box::new(source),
+    })?;
+    url.path_segments_mut()
+        .map_err(|()| crate::Error::Generic {
+            source: format!("endpoint `{endpoint}` cannot carry a path").into(),
+        })?
+        .pop_if_empty()
+        .push(bucket);
+    // Straight to the transport: no signer (anonymous) and no retry layer, which
+    // turns the 301 and 403 that carry the header into errors without headers.
+    let request = client.reqwest_client.head(url).build()?;
+    let response = client.service.call(request).await?;
+    Ok(response
+        .headers()
+        .get("x-amz-bucket-region")
+        .and_then(|region| region.to_str().ok())
+        .filter(|region| !region.is_empty())
+        .map(str::to_owned))
 }
 
 /// Assume an AWS IAM role using explicit base credentials.
@@ -125,4 +167,55 @@ pub async fn assume_role(
         .build(None)?
         .credentials;
     assume_role_with_base(role_arn, region, sts_endpoint, policy, base_credentials).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client() -> CloudClient {
+        CloudClient::new_unauthenticated_with_options(
+            &ClientOptions::new().with_allow_http(true),
+            RetryConfig::default(),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn bucket_region_is_read_from_any_status() {
+        let mut server = mockito::Server::new_async().await;
+        for (bucket, status, region) in [
+            ("open", 200, "us-east-1"),
+            ("elsewhere", 301, "eu-west-1"),
+            ("private.with.dots", 403, "ap-south-1"),
+        ] {
+            let mock = server
+                .mock("HEAD", format!("/{bucket}").as_str())
+                .match_header("authorization", mockito::Matcher::Missing)
+                .with_status(status)
+                .with_header("x-amz-bucket-region", region)
+                .create_async()
+                .await;
+            let found = bucket_region(&client(), &server.url(), bucket)
+                .await
+                .unwrap();
+            assert_eq!(found.as_deref(), Some(region), "{bucket}");
+            mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn bucket_region_is_none_without_the_header() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("HEAD", "/missing")
+            .with_status(404)
+            .create_async()
+            .await;
+        let found = bucket_region(&client(), &server.url(), "missing")
+            .await
+            .unwrap();
+        assert_eq!(found, None);
+    }
 }
