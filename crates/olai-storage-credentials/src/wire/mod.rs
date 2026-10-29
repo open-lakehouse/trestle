@@ -20,6 +20,7 @@
 //! | Module | Protocol |
 //! |---|---|
 //! | [`unity`] | Unity Catalog REST `temporary-*-credentials` |
+//! | [`sharing`] | Open Sharing `temporary-*-credentials` |
 
 use chrono::{DateTime, Utc};
 
@@ -29,6 +30,9 @@ use crate::sas;
 
 #[cfg(any(feature = "unity", feature = "sharing"))]
 pub mod common;
+#[cfg(feature = "sharing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sharing")))]
+pub mod sharing;
 #[cfg(feature = "unity")]
 #[cfg_attr(docsrs, doc(cfg(feature = "unity")))]
 pub mod unity;
@@ -103,6 +107,19 @@ pub(crate) mod int64 {
         match v {
             Some(n) => s.serialize_i64(*n),
             None => s.serialize_none(),
+        }
+    }
+
+    /// Writes the proto JSON string form.
+    #[cfg(feature = "sharing")]
+    pub(crate) mod as_string {
+        use serde::Serializer;
+
+        pub(crate) fn serialize<S: Serializer>(v: &Option<i64>, s: S) -> Result<S::Ok, S::Error> {
+            match v {
+                Some(n) => s.serialize_str(&n.to_string()),
+                None => s.serialize_none(),
+            }
         }
     }
 }

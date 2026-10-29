@@ -244,3 +244,75 @@ mod unity_rest {
         }
     }
 }
+
+#[cfg(feature = "sharing")]
+mod open_sharing {
+    use olai_storage_credentials::wire::sharing;
+
+    use super::*;
+
+    fn read(path: &str, ctx: &VendContext) -> VendedCredential {
+        let wire: sharing::SharingTemporaryCredentials = fixture(path);
+        let vended = wire.to_vended(ctx).unwrap();
+        round_trip(
+            &vended,
+            ctx,
+            |v| sharing::SharingTemporaryCredentials::try_from(v).unwrap(),
+            |w, c| w.to_vended(c).unwrap(),
+        );
+        vended
+    }
+
+    #[test]
+    fn volume_credential() {
+        let v = read(
+            "sharing/volume_aws.json",
+            &ctx("s3://bucket/shares/vol", AccessLevel::Read),
+        );
+        assert_eq!(v.credentials, aws("ak-test", Some("st-test")));
+        assert_eq!(v.expires_at, expiry());
+    }
+
+    #[test]
+    fn camel_case_input() {
+        let v = read(
+            "sharing/volume_camel_case.json",
+            &ctx("gs://bucket/shares/vol", AccessLevel::Read),
+        );
+        assert_eq!(
+            v.credentials,
+            StorageCredentials::GcpBearer("ya29.test".into())
+        );
+        assert_eq!(v.expires_at, expiry());
+    }
+
+    #[test]
+    fn r2_and_proto_json_output() {
+        let v = read(
+            "sharing/r2.json",
+            &ctx(
+                "r2://bucket@acct.r2.cloudflarestorage.com/shares/vol",
+                AccessLevel::Read,
+            ),
+        );
+        let json =
+            serde_json::to_value(sharing::SharingTemporaryCredentials::try_from(&v).unwrap())
+                .unwrap();
+        assert_eq!(
+            json["expiration_time"],
+            EXPIRY_MS.to_string(),
+            "int64 as a string"
+        );
+        assert!(json.get("r2_credentials").is_some());
+    }
+
+    #[test]
+    fn cannot_carry_azure_ad() {
+        let v = VendedCredential::new(
+            StorageCredentials::AzureBearer("t".into()),
+            scope("abfss://ctr@acct.dfs.core.windows.net/vol"),
+            AccessLevel::Read,
+        );
+        assert!(sharing::SharingTemporaryCredentials::try_from(&v).is_err());
+    }
+}
