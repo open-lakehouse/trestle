@@ -158,8 +158,12 @@ pub struct VendedCredential {
   model needs: UC REST may omit `url`, and none of the shapes say which access level was
   granted. So the client direction takes the caller's request as context,
   `to_vended(&VendContext { scope, access }) -> Result<Vec<VendedCredential>>`. A prefix
-  in the response may narrow `scope` but never widen it. The server direction is a plain
-  `From<&VendedCredential>`.
+  in the response may narrow `scope` but never widen it: a broader prefix is clamped to
+  `scope`, and a credential for unrelated storage is dropped. The server direction is
+  `From<&VendedCredential>`, or `TryFrom` where the shape cannot carry every credential
+  kind (only UC REST carries Azure AD tokens). It writes config-map prefixes with a
+  trailing `/`, because clients of those protocols often match prefixes as plain
+  strings.
 - Expiry precedence, for every adapter: an explicit wire expiry wins; else the SAS `se=`
   parameter; else `None`. There is no silent default lifetime.
 
