@@ -51,6 +51,7 @@ jobs:
       # `--features sqlite,postgres` combination is covered too).
       - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
 
   wasm:
     name: Wasm32
@@ -131,6 +132,8 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-store --features sqlx
       - name: Run tests (olai-http recording feature)
         run: cargo test --locked --lib --tests -p olai-http --features recording
+      - name: Run tests (olai-storage-credentials wire adapters)
+        run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
 
   emulator-tests:
     name: Emulator tests

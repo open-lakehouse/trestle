@@ -44,6 +44,30 @@ pub fn parse_sas(token: &str) -> Result<Vec<(String, String)>> {
     Ok(pairs)
 }
 
+/// Encodes decoded SAS pairs back into a query string, the inverse of [`parse_sas`].
+///
+/// Everything but RFC 3986 unreserved characters is percent-encoded, so values holding
+/// `&`, `=`, `+` or `/` survive a round trip.
+pub fn encode_sas(pairs: &[(String, String)]) -> String {
+    use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+    const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(k, COMPONENT),
+                utf8_percent_encode(v, COMPONENT)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
 /// The expiry (`se`) of a decoded SAS, if present and well-formed.
 ///
 /// Accepts the ISO 8601 forms Azure documents for `se`: `YYYY-MM-DD`,
@@ -94,6 +118,14 @@ mod tests {
         let p = pairs("sig=a%26b%3Dc&sv=1");
         assert_eq!(p[0], ("sig".to_owned(), "a&b=c".to_owned()));
         assert_eq!(p.len(), 2);
+    }
+
+    #[test]
+    fn encode_inverts_parse() {
+        let token = "sv=2022-11-02&se=2030-01-01T00%3A00%3A00Z&sig=ab%2Bc%2Fd%3D%26";
+        let p = pairs(token);
+        assert_eq!(encode_sas(&p), token);
+        assert_eq!(pairs(&encode_sas(&p)), p);
     }
 
     #[test]

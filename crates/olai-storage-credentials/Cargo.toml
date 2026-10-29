@@ -36,6 +36,13 @@ olai-test-emulators = { path = "../olai-test-emulators" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
+# Wire adapters, one per vending protocol (see `wire`). `olai-vended-store` forwards
+# features of the same names.
+unity = []
+delta-api = []
+iceberg = []
+sharing = []
+wire = ["unity", "delta-api", "iceberg", "sharing"]
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
 emulator-it = []

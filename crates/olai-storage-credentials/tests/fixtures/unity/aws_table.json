@@ -1,0 +1,10 @@
+{
+  "expiration_time": 1893456000000,
+  "url": "s3://bucket/warehouse/catalog/schema/tab",
+  "aws_temp_credentials": {
+    "access_key_id": "ak-test",
+    "secret_access_key": "sk-test",
+    "session_token": "st-test",
+    "access_point": ""
+  }
+}
