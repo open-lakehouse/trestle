@@ -1,7 +1,9 @@
 # Credential vending and `object_store`
 
-Status: **proposed**. This is a design record. The crates it describes do not exist
-yet. Implementation is tracked in #185 and the phased issues listed under [Roadmap](#roadmap).
+Status: **accepted, in progress**. This is a design record. P1
+(`olai-storage-credentials`) and the `olai-http` SAS fix (#178) have landed; the other
+crates do not exist yet. Implementation is tracked in #185 and the phased issues listed
+under [Roadmap](#roadmap).
 
 ## Context
 
@@ -98,11 +100,11 @@ olai-vended-store (2)          olai-credential-vending (3) ──┘
 
   It may not contain catalog browsing, commit coordination or query APIs.
 - **Lean, donatable core.** (1) depends only on `object_store` (no default features),
-  `serde`, `url` and `chrono`, and makes no HTTP calls. (2) depends on `olai-http` directly:
-  it reuses `TokenCache` for refresh and the HTTP client for region discovery and the
-  protocol modules. `olai-http` is a fork of object_store's own client, so this does not
-  block a donation; the two would be proposed together (see [Upstream](#upstream)). (3)
-  depends on `olai-http` freely.
+  `serde`, `url` and `chrono`, and makes no HTTP calls. (2) owns its refresh cache, and
+  depends on `olai-http` (native only) for region discovery and the protocol modules.
+  `olai-http` is a fork of object_store's own client, so this does not block a donation;
+  the two would be proposed together (see [Upstream](#upstream)). (3) depends on
+  `olai-http` freely.
 - **No widening on refresh.** A `CredentialSource` is bound to one securable and one
   access level when it is built, and a refresh replays exactly that request.
 - **Segment-boundary prefixes.** `s3://b/tab` must not cover `s3://b/table2`. There is
@@ -189,7 +191,7 @@ pub trait CredentialSource: Debug + Send + Sync + 'static {
 }
 
 /// `object_store::CredentialProvider` for AwsCredential / AzureCredential / GcpCredential.
-pub struct RefreshingCredentialProvider<T> { /* source, TokenCache<Arc<T>>, margin */ }
+pub struct RefreshingCredentialProvider<T> { /* source, cached credential, margin, clock */ }
 
 pub async fn build_store(
     seed: &VendedCredential,
@@ -206,9 +208,14 @@ pub struct ScopedStore { pub root: Arc<dyn ObjectStore>, pub prefix: Path, pub u
 - `RefreshingCredentialProvider` behaves as follows:
   - It is seeded with the credential that was used to build the store, so the first
     request does not re-vend.
-  - Refreshes are single-flight.
+  - Refreshes are single-flight. A failed refresh is not cached.
   - It re-vends `refresh_margin` before expiry. There is one default, configurable per
     store.
+  - It owns its cache rather than reusing `olai-http`'s `TokenCache`. That cache keys
+    expiry on `std::time::Instant` and holds a tokio mutex, neither of which works on
+    `wasm32`, and it can be neither seeded nor given a margin. This cache compares the
+    credential's own `expires_at` against an injectable clock, so it builds everywhere
+    and is testable without waiting.
   - On `wasm32` it wraps the `!Send` fetch future (`SendWrapper`), so protocol code
     never has to. `CredentialSource` itself is declared
     `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]`, because `olai-http-wasm`
@@ -322,20 +329,15 @@ pub trait CredentialResolver: Send + Sync {
 - Stores without downscoping, Neon object storage for example, get no minter. A
   server backed by one presigns with its own key and never hands the key to clients.
 - The low-level cloud calls (the STS query, SAS string-to-sign and delegation key)
-  stay in `olai-http::{aws,azure,gcp}`, and the minters compose them. Reading
-  `azure::sas::build_user_delegation_sas` shows two defects. Neither has been
-  reproduced against Azure yet:
-  - The string-to-sign has three empty slots before `https` where the spec has four
-    (authorized OID, unauthorized OID, correlation ID, signed IP). As a result
-    `https` lands in the signed-IP slot. Compare object_store's
-    `string_to_sign_user_delegation_sas`.
-  - It signs a non-empty `signedStart` but does not emit `st=`, so the service
-    recomputes the signature with an empty start.
-  - It appends `signedDirectoryDepth` to the string-to-sign. The documented field list
-    for user-delegation SAS ends at `rsct` and does not include it; confirm against a
-    reference implementation.
-
-  Fix both, with a test against a known-good signature, before (3) depends on them.
+  stay in `olai-http::{aws,azure,gcp}`, and the minters compose them. The public entry
+  points today are `aws::assume_role_with_base_and_options`,
+  `azure::generate_user_delegation_sas_with_options` and
+  `azure::generate_storage_key_sas`. (3) needs two additions there: configurable
+  `AssumeRole` parameters (duration, session name, `ExternalId`, `SourceIdentity`,
+  tags), and a public delegation-key fetch so a minter can cache the key.
+- The user-delegation SAS string-to-sign defects found while writing this record
+  (misaligned slots, `st=` signed but not emitted, `sdd` signed) were fixed in #178,
+  with known-good signature vectors and Azurite tests.
 
 ### (4) Downstream
 
@@ -429,12 +431,16 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
   stores that lack STS (handled like Neon: presign, don't mint).
 - Hosting the vending server as a Neon Function, which needs no extra crate surface
   beyond (3).
+- A `wasm32` build of `olai-http`. Today protocol modules would need `olai-http-wasm`
+  on `wasm32`, a second client. Target-gating `olai-http` would let one client serve
+  both and fold `olai-http-wasm` in.
 
 ## Roadmap
 
 | Phase | Scope | Issue |
 |---|---|---|
-| P1 | `olai-storage-credentials`: model, locations, policy builders, wire adapters | #179 |
+| — | `olai-http` user-delegation SAS fix (**done**, #197) | #178 |
+| P1 | `olai-storage-credentials`: model, locations, policy builders, wire adapters (**done**, #192 #193 #194) | #179 |
 | P2 | `olai-vended-store` core: source, refreshing provider, `build_store`, `ScopedStore` | #180 |
 | P2.1 | routing store and presign | #180 |
 | P2a | `unity` protocol module, with the dispatcher and the auth config tiers | #187 |
@@ -442,13 +448,17 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P2c | `iceberg` protocol module | #189 |
 | P2d | `sharing` protocol module | #190 |
 | P2e | `neon` protocol module | #191 |
-| P3 | `olai-credential-vending`: minters, caching, resolver; needs the `olai-http` SAS fix (#178) | #181 |
-
-The critical path for delta-rs is P1 → P2 → P2a. P3 needs only P1 and #178, so it can
-run in parallel with P2. #178 is on mangrove's live Azure path and is not blocked by
-anything here.
+| P3 | `olai-credential-vending`: minters, caching, resolver | #181 |
 | P4 | GCS downscoped minter | #182 |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
 | P6 | mangrove migration | open-lakehouse/mangrove#247 |
 | P7 | delta-rs adopts `olai-vended-store` + `unity` | tracked in #185 (fork has no issues) |
 | P8 | `apache/object_store` proposals | #184 |
+
+The critical path for delta-rs is P1 → P2 → P2a. P3 needs only P1 and #178, so it runs
+in parallel with P2.
+
+The new crates are not published while the series is in progress: they depend on each
+other by path and stay out of the release cycle (`release = false`), so their APIs can
+still change. They are released once the phases above have landed, one crate
+at a time in dependency order.
