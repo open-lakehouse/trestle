@@ -52,6 +52,22 @@ jobs:
       - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
 
+  wasm:
+    name: Wasm32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      # The credential model is shared with browser clients, so it must keep building
+      # without the native-only parts of its dependencies (tokio, reqwest, ring).
+      - run: cargo check --locked -p olai-storage-credentials --target wasm32-unknown-unknown --all-features
+
   machete:
     name: Unused Dependencies
     runs-on: ubuntu-latest
@@ -91,6 +107,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-http/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-codegen)
         run: cargo msrv verify --manifest-path crates/olai-codegen/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-storage-credentials)
+        run: cargo msrv verify --manifest-path crates/olai-storage-credentials/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}
