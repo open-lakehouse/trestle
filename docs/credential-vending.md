@@ -97,15 +97,24 @@ olai-vended-store (2)          olai-credential-vending (3) ──┘
   - its URL grammar.
 
   It may not contain catalog browsing, commit coordination or query APIs.
-- **Donatable core.** The core of (1) and (2) depends on `object_store`, `serde` and
-  `url`, and uses `olai-http` only behind a feature. The protocol features require
-  `olai-http`. This keeps an `apache/object_store` donation of the core open (see
-  [Upstream](#upstream)). (3) may depend on `olai-http` freely.
+- **Lean, donatable core.** (1) depends only on `object_store` (no default features),
+  `serde`, `url` and `chrono`, and makes no HTTP calls. (2) depends on `olai-http` directly:
+  it reuses `TokenCache` for refresh and the HTTP client for region discovery and the
+  protocol modules. `olai-http` is a fork of object_store's own client, so this does not
+  block a donation; the two would be proposed together (see [Upstream](#upstream)). (3)
+  depends on `olai-http` freely.
 - **No widening on refresh.** A `CredentialSource` is bound to one securable and one
   access level when it is built, and a refresh replays exactly that request.
 - **Segment-boundary prefixes.** `s3://b/tab` must not cover `s3://b/table2`. There is
   one implementation of this rule, in (1).
 - **Secrets never print.** Every credential type redacts its `Debug` output.
+- **No clock in (1).** `SystemTime::now()` panics on `wasm32-unknown-unknown`, so (1)
+  stores expiry as `chrono::DateTime<Utc>` and every time-dependent helper takes `now`
+  as an argument.
+- **Vocabulary.** A *vended* credential (`StorageCredentials`, the short-lived secret a
+  client receives) is not a *registered* credential (`RegisteredCredential` in (3), the
+  long-lived principal a server mints from). Mangrove calls the latter
+  `StorageCredential`; the new crates never do.
 
 ### (1) `olai-storage-credentials`: model, locations, wire adapters
 
@@ -126,7 +135,7 @@ pub struct VendedCredential {
     pub credentials: StorageCredentials,
     pub scope: StorageScope,                // the URL prefix the credential covers
     pub access: AccessLevel,
-    pub expires_at: Option<SystemTime>,     // None = does not expire
+    pub expires_at: Option<DateTime<Utc>>,  // None = does not expire
     pub hints: StoreHints,                  // endpoint, region, access point, ...
 }
 ```
@@ -134,13 +143,25 @@ pub struct VendedCredential {
 - `StoreHints` carries the facts each store builder currently re-derives or hardcodes:
   the R2 or Azurite endpoint, the S3 region, the S3 access point, and path-style
   addressing.
-- `location` holds the storage URL parsing and the single longest-prefix match. These
-  are lifted from mangrove `crates/credentials/src/location.rs`.
+- `location` holds the storage URL parsing and the single longest-prefix match. Every
+  spelling of a location (`s3://`, S3 `https://` virtual-host and path-style, `abfss://`,
+  `az://`, Azure `https://` blob and dfs, Azurite, `gs://`, `file://`, `memory://`) parses
+  to one canonical `StorageLocation`, and matching only ever compares canonical forms,
+  segment by segment. Mangrove's `location.rs` is the starting point but is not lifted
+  as-is: its `abfss` container branch is unreachable (`host_str()` drops the
+  `container@` userinfo) and its longest match compares raw URL lengths.
 - `policy` holds the pure downscoping documents: the S3 session policy (built with
   `serde_json` so a crafted prefix cannot break out), SAS permission sets, and GCS
   Credential Access Boundary rules. They are pure functions so they are unit-testable
   without a cloud.
-- `wire::*` are feature-gated adapters, each a `TryFrom`/`From` pair:
+- `wire::*` are feature-gated adapters. A wire response rarely carries everything the
+  model needs: UC REST may omit `url`, and none of the shapes say which access level was
+  granted. So the client direction takes the caller's request as context,
+  `to_vended(&VendContext { scope, access }) -> Result<Vec<VendedCredential>>`. A prefix
+  in the response may narrow `scope` but never widen it. The server direction is a plain
+  `From<&VendedCredential>`.
+- Expiry precedence, for every adapter: an explicit wire expiry wins; else the SAS `se=`
+  parameter; else `None`. There is no silent default lifetime.
 
 | Adapter | Wire shape | Mapping notes |
 |---|---|---|
@@ -185,7 +206,9 @@ pub struct ScopedStore { pub root: Arc<dyn ObjectStore>, pub prefix: Path, pub u
   - It re-vends `refresh_margin` before expiry. There is one default, configurable per
     store.
   - On `wasm32` it wraps the `!Send` fetch future (`SendWrapper`), so protocol code
-    never has to.
+    never has to. `CredentialSource` itself is declared
+    `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]`, because `olai-http-wasm`
+    futures are `!Send` and could not implement a `Send`-bound trait.
 - `build_store` is the single per-cloud builder: S3, R2, Azure, Azurite, GCS and
   local. It reads `StoreHints`, so nothing is hardcoded. It also handles S3 region
   discovery: configured region, then the access-point ARN, then an anonymous
@@ -244,7 +267,9 @@ The modules add two things to the core:
     `databricks` feature, so the core stays vendor-neutral.
 
 Neon differs from the other protocols: its issuer is a control plane, not a catalog,
-and it cannot downscope. Keys are long-lived and branch-scoped, with no STS. The
+and it cannot downscope. It is operator tooling for the owner of the branch, not a
+vending protocol in the sense above: a vending *server* must never hand these keys to
+clients (see (3)). Keys are long-lived and branch-scoped, with no STS. The
 `neon` source therefore returns `StorageCredentials::Aws` with no expiry, plus
 `StoreHints` (endpoint, region, path-style).
 
@@ -302,6 +327,9 @@ pub trait CredentialResolver: Send + Sync {
     `string_to_sign_user_delegation_sas`.
   - It signs a non-empty `signedStart` but does not emit `st=`, so the service
     recomputes the signature with an empty start.
+  - It appends `signedDirectoryDepth` to the string-to-sign. The documented field list
+    for user-delegation SAS ends at `rsct` and does not include it; confirm against a
+    reference implementation.
 
   Fix both, with a test against a known-good signature, before (3) depends on them.
 
@@ -346,9 +374,31 @@ Candidates for `apache/object_store`, most likely first:
    here.
 3. GCS downscoped tokens (Credential Access Boundary).
 
-`olai-http`'s forked client stays here regardless, because object_store's internal
-client is not public. Proposals start only after (1) and (2) have shipped and been
-adopted by mangrove and delta-rs.
+(2) depends on `olai-http`, a fork of object_store's internal client (which is not
+public). A donation of (2) would therefore go together with `olai-http`, or with
+object_store exposing its client. We would work with the community on that rather than
+contort (2) to avoid the dependency. Proposals start only after (1) and (2) have shipped
+and been adopted by mangrove and delta-rs.
+
+## Testing
+
+Downscoping and signing are security properties, so each claim is tested against a
+service that enforces it wherever an emulator can. Golden-output unit tests complement
+these; they do not replace them.
+
+| Cloud | Emulator | Verifies | Cannot verify |
+|---|---|---|---|
+| S3 + STS | RustFS (`rustfs/rustfs`) | `AssumeRole` with an inline session policy, enforced: allowed inside the prefix, denied outside it and on sibling prefixes (`tab` vs `table2`) | AWS-only request keys (`ExternalId`, `SourceIdentity`, tags) |
+| Azure | Azurite, with `--oauth basic` for user-delegation keys | service and user-delegation SAS signatures | directory SAS on HNS (`sr=d`); Azurite has no ADLS Gen2 |
+| GCS | fake-gcs-server | bearer-token store I/O | Credential Access Boundaries; there is no STS emulator |
+
+What no emulator covers runs as opt-in jobs against real cloud accounts. MinIO
+(community edition archived in 2026) and LocalStack (IAM enforcement is a paid feature)
+are not used.
+
+Containers are managed with `testcontainers` from a shared, unpublished
+`olai-test-emulators` crate. Emulator tests sit behind an `emulator-it` feature, so the
+default `cargo test` needs no Docker, and run in a dedicated CI job.
 
 ## Consequences
 
@@ -381,13 +431,18 @@ adopted by mangrove and delta-rs.
 | Phase | Scope | Issue |
 |---|---|---|
 | P1 | `olai-storage-credentials`: model, locations, policy builders, wire adapters | #179 |
-| P2 | `olai-vended-store` core: source, refreshing provider, builders, scoped/routing stores, presign, dispatcher, auth config | #180 |
-| P2a | `unity` protocol module | #187 |
+| P2 | `olai-vended-store` core: source, refreshing provider, `build_store`, `ScopedStore` | #180 |
+| P2.1 | routing store and presign | #180 |
+| P2a | `unity` protocol module, with the dispatcher and the auth config tiers | #187 |
 | P2b | `delta-api` protocol module | #188 |
 | P2c | `iceberg` protocol module | #189 |
 | P2d | `sharing` protocol module | #190 |
 | P2e | `neon` protocol module | #191 |
 | P3 | `olai-credential-vending`: minters, caching, resolver; needs the `olai-http` SAS fix (#178) | #181 |
+
+The critical path for delta-rs is P1 → P2 → P2a. P3 needs only P1 and #178, so it can
+run in parallel with P2. #178 is on mangrove's live Azure path and is not blocked by
+anything here.
 | P4 | GCS downscoped minter | #182 |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
 | P6 | mangrove migration | open-lakehouse/mangrove#247 |
