@@ -46,37 +46,61 @@ apart, for example in their refresh margins (60 s vs 300 s).
 
 ## Decision
 
-We will extract the generic parts into three crates in this repository, next to
-`olai-http`. Each protocol keeps only its own wire call.
+We will extract the pattern into three crates in this repository, next to
+`olai-http`.
+
+The client crate ships the vending protocols themselves, as feature-gated modules. This
+follows the model of `object_store`, which ships a small client for each public
+storage API (S3, Azure Blob, GCS), selected by URL and enabled by a feature. The
+vending protocols are public specs in the same way. Each one needs one or two
+endpoints, auth through `olai-http`, and its wire adapter from (1). With the protocols
+included, `olai-vended-store` works out of the box against any of these vending
+servers, much as `object_store` works against any of those clouds.
 
 ```text
                   olai-http   transport, retry, identity (bearer / cloud / Databricks)
                       │
-        ┌─────────────┼───────────────────────────────┐
-        │             │                               │
-olai-storage-credentials (1)                          │
-  model · locations · wire adapters · policy builders │
-        │                                             │
-        ├───────────────┐                             │
-        │               │                             │
-olai-vended-store (2)   olai-credential-vending (3) ──┘
-  CLIENT                  SERVER
-  source → provider →     principal → minter →
-  store → router →        downscoped credential
-  presign
+        ┌─────────────┼─────────────────────────────────┐
+        │             │                                 │
+olai-storage-credentials (1)                            │
+  model · locations · wire adapters · policy builders   │
+        │                                               │
+        ├──────────────────────┐                        │
+        │                      │                        │
+olai-vended-store (2)          olai-credential-vending (3) ──┘
+  CLIENT                         SERVER
+  core: source → provider →      principal → minter →
+        store → router → presign downscoped credential
+  protocols (features):
+        unity · delta-api · iceberg · sharing · neon
         │
-(4) protocol adapters, owned by each protocol:
-    object_store_unity (delta-rs), mangrove UC / delta-api / sharing sources,
-    a future Iceberg REST source
+(4) downstream: vending *servers* (UC, sharing), catalog-managed commits,
+    catalog browsing, generated catalog clients
 ```
 
 ### Design rules
 
-- **Protocol-neutral.** No crate in (1)–(3) names a catalog type. Protocols convert at
-  their boundary through `wire::*`.
-- **Donatable.** (1) and (2) depend on `object_store`, `serde` and `url`, and use
-  `olai-http` only behind a feature. This keeps an `apache/object_store` donation open
-  (see [Upstream](#upstream)). (3) may depend on `olai-http` freely.
+- **Protocol-neutral core.** No core module in (1)–(3) names a catalog type. The only
+  protocol-specific code is the `wire::*` adapters in (1) and the protocol modules in (2).
+- **One-way dependencies.** In (2) the protocol modules depend on the core, and never
+  the reverse. The core can then be split out mechanically later.
+- **Hand-written protocol clients.** Protocol modules call their few endpoints
+  directly, through `olai-http`, as `object_store` does instead of using the cloud
+  SDKs. They never use the generated catalog clients (`olai-uc-client`, which is
+  generated downstream in mangrove and depends on this repository). Using them would
+  make the dependency graph circular and leak catalog models into a generic crate.
+- **Narrow protocol scope.** A protocol module may contain:
+  - its vend calls;
+  - the minimum metadata lookup needed to turn a name into a storage location (for
+    example GetTable);
+  - its config keys;
+  - its URL grammar.
+
+  It may not contain catalog browsing, commit coordination or query APIs.
+- **Donatable core.** The core of (1) and (2) depends on `object_store`, `serde` and
+  `url`, and uses `olai-http` only behind a feature. The protocol features require
+  `olai-http`. This keeps an `apache/object_store` donation of the core open (see
+  [Upstream](#upstream)). (3) may depend on `olai-http` freely.
 - **No widening on refresh.** A `CredentialSource` is bound to one securable and one
   access level when it is built, and a refresh replays exactly that request.
 - **Segment-boundary prefixes.** `s3://b/tab` must not cover `s3://b/table2`. There is
@@ -189,7 +213,40 @@ pub struct ScopedStore { pub root: Arc<dyn ObjectStore>, pub prefix: Path, pub u
 
 `wasm32`: the model and traits build as-is. The cloud store builders need what the
 mangrove wasm workspace already configures: `getrandom`'s `js`/`wasm_js` backend and
-the object_store wasm HTTP connector.
+the object_store wasm HTTP connector. Protocol modules use `olai-http-wasm` on
+`wasm32`.
+
+#### Protocol modules
+
+Each protocol module implements `CredentialSource` for its securable kinds, and gets
+its auth from a shared config layer.
+
+| Feature | Vending server | Sources | Reference grammar |
+|---|---|---|---|
+| `unity` | Unity Catalog REST | table, volume, path (`temporary-*-credentials`; GetTable/GetVolume to resolve names) | `uc://catalog.schema.table`, `uc://catalog.schema.volume/path` (the delta-rs `object_store_unity` grammar) |
+| `delta-api` | UC Delta API | table (`storage-credentials`; picks the most specific prefix) | via `unity` references |
+| `iceberg` | Iceberg REST | table (`loadTable` `storage-credentials`, refresh via `/credentials`) | builder-only at first (see [Open questions](#open-questions)) |
+| `sharing` | Delta / Open Sharing | volume, other storage-backed assets (`temporary-*-credentials`); auth from a sharing profile | `<profile>#share.schema.asset` (the delta-sharing client convention) |
+| `neon` | Neon control plane | branch storage (endpoint discovery plus reveal or opt-in create of branch credentials) | Neon storage URL plus project and branch config |
+
+The modules add two things to the core:
+
+- **Dispatcher.** `parse_url_opts(url, options) -> (Arc<dyn ObjectStore>, Path)`
+  recognizes each enabled protocol's reference grammar and builds the right source,
+  in the style of `ObjectStoreScheme`. Storage-URL parsing (`s3://`, `abfss://`, …)
+  stays in (1). Securable references are protocol grammar, so each module owns its
+  own.
+- **Config keys, in three tiers:**
+  - generic auth keys in the core (static or file token, OAuth client credentials,
+    token exchange, Azure and Google identity), built on `olai-http`;
+  - per-protocol keys in each module (`unity_*`, `iceberg_*`, `sharing_*`, `neon_*`);
+  - Databricks auto-detection (host, profiles, `DATABRICKS_*`) behind a separate
+    `databricks` feature, so the core stays vendor-neutral.
+
+Neon differs from the other protocols: its issuer is a control plane, not a catalog,
+and it cannot downscope. Keys are long-lived and branch-scoped, with no STS. The
+`neon` source therefore returns `StorageCredentials::Aws` with no expiry, plus
+`StoreHints` (endpoint, region, path-style).
 
 ### (3) `olai-credential-vending`: server side
 
@@ -233,6 +290,8 @@ pub trait CredentialResolver: Send + Sync {
   `u64`-hashed process cache.
 - Server-side presigning (Open Sharing `presigned` access) is minting followed by
   (2)'s `presign`.
+- Stores without downscoping, Neon object storage for example, get no minter. A
+  server backed by one presigns with its own key and never hands the key to clients.
 - The low-level cloud calls (the STS query, SAS string-to-sign and delegation key)
   stay in `olai-http::{aws,azure,gcp}`, and the minters compose them. Reading
   `azure::sas::build_user_delegation_sas` shows two defects. Neither has been
@@ -246,20 +305,34 @@ pub trait CredentialResolver: Send + Sync {
 
   Fix both, with a test against a known-good signature, before (3) depends on them.
 
-### (4) Protocol adapters
+### (4) Downstream
 
-These stay with each protocol and are deliberately small.
+What stays outside this repository:
 
-- **delta-rs `object_store_unity`** keeps the `uc://` reference grammar, the UC REST
-  endpoints, its config keys and auth detection, and its Table/Volume/Path/Delta-API
-  `CredentialSource`s. Models, converters, the provider, builders and routing come from
-  (1)+(2).
+- **Vending servers.** These are the HTTP handlers that implement the UC, Iceberg or
+  Sharing vending APIs. Each server owns its authorization and routing. It uses (3) to
+  mint and the `wire::*` adapters in (1) to serialize.
+- **Catalog behaviour beyond vending.** This covers catalog browsing, commit
+  coordination for catalog-managed tables, and Delta Sharing query and file listing.
+  Delta Sharing's presigned-file mode returns URLs rather than credentials, so it does
+  not map onto a store.
+- **Generated catalog clients**, such as `olai-uc-client`.
+
+Adoption:
+
+- **delta-rs** adopts rather than wraps. It depends on `olai-vended-store` with
+  `unity`, and `object_store_unity` shrinks to a re-export or is dropped. The upstream
+  PR becomes the `deltalake-catalog-unity` integration alone: `uc://` registration,
+  the DataFusion schema provider, and catalog-managed commits.
 - **mangrove**:
   - `olai-uc-credentials` becomes (1)+(3), re-exported or retired.
-  - `olai-uc-object-store` becomes UC `CredentialSource`s over (2).
+  - `olai-uc-object-store` reduces to the `unity` and `delta-api` features, plus
+    whatever mangrove-only glue remains (forwarded-identity headers, storage-proxy
+    access).
   - The DataFusion and wasm catalogs use `VendingRouter`.
-  - The sharing server uses (3) for local access and (2) for delegated access.
-- **Iceberg REST**: the wire adapter exists in (1). A source is one HTTP call.
+  - The sharing server uses (3) for local access and the `unity` sources for delegated
+    access.
+  - The Neon factory planned for mangrove becomes the `neon` feature.
 
 ## Upstream
 
@@ -269,6 +342,8 @@ Candidates for `apache/object_store`, most likely first:
    `object_store::aws`. It only has web identity today.
 2. A refreshing provider over a credential-source trait, plus `RoutingObjectStore`.
    These could go in the core crate or a sibling crate (cf. `object_store_opendal`).
+   This is the core of (2) only. The protocol modules are catalog concepts and stay
+   here.
 3. GCS downscoped tokens (Credential Access Boundary).
 
 `olai-http`'s forked client stays here regardless, because object_store's internal
@@ -279,9 +354,13 @@ adopted by mangrove and delta-rs.
 
 - trestle gains a direct `object_store` dependency (0.13, matching mangrove and
   delta-rs). `olai-http`'s own dependencies are unchanged.
-- The delta-rs `object_store_unity` stack waits for (1)+(2) to be published, then
-  rebases onto them. Its upstream PR gets smaller and protocol-only.
+- The delta-rs `object_store_unity` stack (roeap/delta-rs#331–#335) waits for (1)+(2)
+  with `unity` to be published, then adopts them. The new crate drops out of the
+  upstream PR, so delta-rs takes on a dependency on an Open Lakehouse crate, as it
+  already does for `olai-http`.
 - One place to fix: future credential bugs (encoding, expiry, endpoints) land once.
+- Adding a vending protocol means a feature, a wire adapter and a source, with no new
+  crate.
 
 ## Open questions
 
@@ -289,8 +368,11 @@ adopted by mangrove and delta-rs.
   `olai-credential-vending`.
 - Whether `VendingRouter` and the DataFusion adapter live in (2), or in a fourth crate
   so (2) never sees DataFusion.
+- Iceberg REST has no standard table-reference URL. Options are builder-only
+  configuration, or a convention of ours such as
+  `iceberg+https://host/prefix#namespace.table`.
 - R2 minting through the Cloudflare temporary-credentials API, and S3-compatible
-  stores that lack STS.
+  stores that lack STS (handled like Neon: presign, don't mint).
 - Hosting the vending server as a Neon Function, which needs no extra crate surface
   beyond (3).
 
@@ -299,10 +381,15 @@ adopted by mangrove and delta-rs.
 | Phase | Scope | Issue |
 |---|---|---|
 | P1 | `olai-storage-credentials`: model, locations, policy builders, wire adapters | #179 |
-| P2 | `olai-vended-store`: source, refreshing provider, builders, scoped/routing stores, presign | #180 |
+| P2 | `olai-vended-store` core: source, refreshing provider, builders, scoped/routing stores, presign, dispatcher, auth config | #180 |
+| P2a | `unity` protocol module | #187 |
+| P2b | `delta-api` protocol module | #188 |
+| P2c | `iceberg` protocol module | #189 |
+| P2d | `sharing` protocol module | #190 |
+| P2e | `neon` protocol module | #191 |
 | P3 | `olai-credential-vending`: minters, caching, resolver; needs the `olai-http` SAS fix (#178) | #181 |
 | P4 | GCS downscoped minter | #182 |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
 | P6 | mangrove migration | open-lakehouse/mangrove#247 |
-| P7 | delta-rs `object_store_unity` rebase | tracked in #185 (fork has no issues) |
+| P7 | delta-rs adopts `olai-vended-store` + `unity` | tracked in #185 (fork has no issues) |
 | P8 | `apache/object_store` proposals | #184 |
