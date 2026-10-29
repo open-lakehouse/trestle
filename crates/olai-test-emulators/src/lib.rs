@@ -19,6 +19,8 @@
 //! Locally, any Docker-compatible runtime works (Docker Desktop, OrbStack, colima with
 //! `DOCKER_HOST` set). CI runs these in the `emulator-tests` job.
 
+pub mod azurite;
 pub mod rustfs;
 
+pub use azurite::Azurite;
 pub use rustfs::RustFs;
