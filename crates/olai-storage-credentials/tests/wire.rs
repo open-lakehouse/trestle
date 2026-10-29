@@ -245,6 +245,89 @@ mod unity_rest {
     }
 }
 
+#[cfg(feature = "delta-api")]
+mod delta {
+    use olai_storage_credentials::wire::delta_api;
+
+    use super::*;
+
+    fn read(path: &str, ctx: &VendContext) -> Vec<VendedCredential> {
+        let wire: delta_api::CredentialsResponse = fixture(path);
+        let vended = wire.to_vended(ctx).unwrap();
+        for v in &vended {
+            round_trip(
+                v,
+                ctx,
+                |v| delta_api::StorageCredential::try_from(v).unwrap(),
+                |w, c| w.to_vended(c).unwrap().unwrap(),
+            );
+        }
+        vended
+    }
+
+    #[test]
+    fn staging_table_response() {
+        let ctx = ctx(
+            "s3://bucket/warehouse/catalog/schema/table",
+            AccessLevel::ReadWrite,
+        );
+        let v = read("delta_api/staging_table.json", &ctx);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].credentials, aws("ak-test", Some("st-test")));
+        assert_eq!(v[0].scope, ctx.scope);
+        assert_eq!(v[0].access, AccessLevel::ReadWrite);
+        assert_eq!(v[0].expires_at, expiry());
+    }
+
+    #[test]
+    fn access_comes_from_the_wire() {
+        let v = read(
+            "delta_api/credentials.json",
+            &ctx("s3://bucket/path", AccessLevel::ReadWrite),
+        );
+        assert_eq!(v[0].access, AccessLevel::Read);
+        assert_eq!(v[0].credentials, aws("ak-test", None));
+    }
+
+    #[test]
+    fn null_expiry_falls_back_to_se_and_unrelated_prefixes_are_dropped() {
+        let v = read(
+            "delta_api/azure_and_gcs.json",
+            &ctx(
+                "abfss://ctr@acct.dfs.core.windows.net/warehouse/tab",
+                AccessLevel::Read,
+            ),
+        );
+        assert_eq!(v.len(), 1, "the gs:// credential is unrelated");
+        assert_eq!(
+            v[0].expires_at.unwrap().to_rfc3339(),
+            "2030-01-01T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn rejects_a_response_with_nothing_for_the_request() {
+        let wire: delta_api::CredentialsResponse = fixture("delta_api/credentials.json");
+        assert!(
+            wire.to_vended(&ctx("s3://bucket/other", AccessLevel::Read))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn server_prefixes_end_in_a_slash() {
+        let v = VendedCredential::new(
+            aws("ak-test", None),
+            scope("s3://bucket/tab"),
+            AccessLevel::Read,
+        );
+        let wire = delta_api::StorageCredential::try_from(&v).unwrap();
+        assert_eq!(wire.prefix, "s3://bucket/tab/");
+        assert_eq!(wire.operation, delta_api::Operation::Read);
+        assert!(!format!("{wire:?}").contains("sk-test"));
+    }
+}
+
 #[cfg(feature = "sharing")]
 mod open_sharing {
     use olai_storage_credentials::wire::sharing;

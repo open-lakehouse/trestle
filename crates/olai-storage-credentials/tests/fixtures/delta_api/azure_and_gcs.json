@@ -1,0 +1,16 @@
+{
+  "storage-credentials": [
+    {
+      "prefix": "abfss://ctr@acct.dfs.core.windows.net/warehouse/tab/",
+      "operation": "READ",
+      "config": { "azure.sas-token": "sv=2022-11-02&sp=rl&se=2030-01-01&sig=c2ln" },
+      "expiration-time-ms": null
+    },
+    {
+      "prefix": "gs://bucket/warehouse/tab/",
+      "operation": "READ",
+      "config": { "gcs.oauth-token": "ya29.test" },
+      "expiration-time-ms": 1893456000000
+    }
+  ]
+}

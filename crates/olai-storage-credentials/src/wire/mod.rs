@@ -20,6 +20,7 @@
 //! | Module | Protocol |
 //! |---|---|
 //! | [`unity`] | Unity Catalog REST `temporary-*-credentials` |
+//! | [`delta_api`] | UC Delta API `storage-credentials` |
 //! | [`sharing`] | Open Sharing `temporary-*-credentials` |
 
 use chrono::{DateTime, Utc};
@@ -30,6 +31,9 @@ use crate::sas;
 
 #[cfg(any(feature = "unity", feature = "sharing"))]
 pub mod common;
+#[cfg(feature = "delta-api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "delta-api")))]
+pub mod delta_api;
 #[cfg(feature = "sharing")]
 #[cfg_attr(docsrs, doc(cfg(feature = "sharing")))]
 pub mod sharing;
@@ -63,6 +67,34 @@ impl VendContext {
         } else {
             None
         }
+    }
+}
+
+/// `scope` as a prefix string for the server direction, always ending in `/`.
+///
+/// Clients of the config-map protocols (Iceberg, Delta API) commonly match prefixes as
+/// plain strings; without the trailing `/`, `s3://b/tab` would also match
+/// `s3://b/table2`.
+#[cfg(any(feature = "delta-api", feature = "iceberg"))]
+pub(crate) fn prefix_string(scope: &StorageScope) -> String {
+    let mut prefix = scope.to_string();
+    if !prefix.ends_with('/') {
+        prefix.push('/');
+    }
+    prefix
+}
+
+/// Renders a config map's keys with every value redacted: which keys a server sent is
+/// useful when debugging, and any value, known key or not, may be a secret.
+#[cfg(any(feature = "delta-api", feature = "iceberg"))]
+pub(crate) struct RedactedConfig<'a>(pub(crate) &'a std::collections::BTreeMap<String, String>);
+
+#[cfg(any(feature = "delta-api", feature = "iceberg"))]
+impl std::fmt::Debug for RedactedConfig<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|k| (k, "<redacted>")))
+            .finish()
     }
 }
 
