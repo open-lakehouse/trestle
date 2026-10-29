@@ -1,0 +1,13 @@
+[package]
+name = "olai-test-emulators"
+description = "Containerized cloud storage emulators for integration tests (not published)"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Test-only scaffolding: never published, so release-plz skips it.
+publish = false
+
+[dependencies]
+testcontainers = { version = "0.28" }

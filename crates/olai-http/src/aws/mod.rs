@@ -64,6 +64,30 @@ pub async fn assume_role_with_base(
     policy: Option<String>,
     base_credentials: AwsCredentialProvider,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>> {
+    assume_role_with_base_and_options(
+        role_arn,
+        region,
+        sts_endpoint,
+        policy,
+        base_credentials,
+        &ClientOptions::default(),
+    )
+    .await
+}
+
+/// Like [`assume_role_with_base`], with explicit HTTP [`ClientOptions`] for the STS call.
+///
+/// Use this to reach an STS endpoint the defaults refuse, for example a plain-`http`
+/// emulator (`ClientOptions::new().with_allow_http(true)`), or to set timeouts and
+/// proxies.
+pub async fn assume_role_with_base_and_options(
+    role_arn: &str,
+    region: &str,
+    sts_endpoint: Option<&str>,
+    policy: Option<String>,
+    base_credentials: AwsCredentialProvider,
+    client_options: &ClientOptions,
+) -> Result<TemporaryToken<Arc<AwsCredential>>> {
     let endpoint = sts_endpoint
         .map(|s| s.to_owned())
         .unwrap_or_else(|| format!("https://sts.{region}.amazonaws.com"));
@@ -77,7 +101,7 @@ pub async fn assume_role_with_base(
         policy,
     };
 
-    let client = ClientOptions::default().client()?;
+    let client = client_options.client()?;
     let service = make_service(client.clone(), None);
     provider
         .fetch_token(&client, &service, &RetryConfig::default())

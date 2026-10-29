@@ -24,6 +24,7 @@
 pub mod error;
 pub mod location;
 pub mod model;
+pub mod policy;
 pub mod sas;
 
 pub use error::{Error, Result};
