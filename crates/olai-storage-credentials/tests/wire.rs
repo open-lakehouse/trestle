@@ -328,6 +328,134 @@ mod delta {
     }
 }
 
+#[cfg(feature = "iceberg")]
+mod iceberg_rest {
+    use olai_storage_credentials::wire::iceberg;
+
+    use super::*;
+
+    fn round_trip_all(vended: &[VendedCredential], ctx: &VendContext) {
+        for v in vended {
+            round_trip(
+                v,
+                ctx,
+                |v| iceberg::StorageCredential::try_from(v).unwrap(),
+                |w, c| w.to_vended(c).unwrap().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn load_table_with_s3_storage_credentials() {
+        let ctx = ctx("s3://bucket/warehouse/ns/tab", AccessLevel::ReadWrite);
+        let wire: iceberg::LoadTableCredentials = fixture("iceberg/load_table_s3.json");
+        let v = wire.to_vended(&ctx).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].credentials, aws("ak-test", Some("st-test")));
+        assert_eq!(v[0].expires_at, expiry());
+        assert_eq!(v[0].access, AccessLevel::ReadWrite);
+        assert_eq!(v[0].hints.region.as_deref(), Some("us-west-2"));
+        assert_eq!(
+            v[0].hints.endpoint.as_deref(),
+            Some("https://s3.example.internal")
+        );
+        assert_eq!(v[0].hints.path_style, Some(true));
+        round_trip_all(&v, &ctx);
+    }
+
+    #[test]
+    fn picks_the_sas_for_the_prefix_account() {
+        let ctx = ctx(
+            "abfss://ctr@acct.dfs.core.windows.net/warehouse/ns/tab",
+            AccessLevel::Read,
+        );
+        let wire: iceberg::LoadTableCredentials = fixture("iceberg/load_table_adls.json");
+        let v = wire.to_vended(&ctx).unwrap();
+        assert_eq!(v.len(), 1);
+        let StorageCredentials::AzureSas(pairs) = &v[0].credentials else {
+            panic!("expected a SAS");
+        };
+        assert!(
+            pairs.contains(&("sig".to_owned(), "YWNjdA==".to_owned())),
+            "{pairs:?}"
+        );
+        assert_eq!(v[0].expires_at, expiry(), "the account's expiry companion");
+        round_trip_all(&v, &ctx);
+    }
+
+    #[test]
+    fn legacy_table_config() {
+        let ctx = ctx("gs://bucket/warehouse/ns/tab", AccessLevel::Read);
+        let wire: iceberg::LoadTableCredentials = fixture("iceberg/load_table_legacy_config.json");
+        let v = wire.to_vended(&ctx).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v[0].credentials,
+            StorageCredentials::GcpBearer("ya29.test".into())
+        );
+        assert_eq!(v[0].scope, ctx.scope);
+        assert_eq!(v[0].expires_at, expiry());
+        round_trip_all(&v, &ctx);
+    }
+
+    #[test]
+    fn no_credentials_without_vending() {
+        let wire: iceberg::LoadTableCredentials = fixture("iceberg/load_table_remote_signing.json");
+        let v = wire
+            .to_vended(&ctx("s3://bucket/warehouse/ns/tab", AccessLevel::Read))
+            .unwrap();
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn load_credentials_clamps_and_drops() {
+        let ctx = ctx("s3://bucket/warehouse/ns/tab", AccessLevel::Read);
+        let wire: iceberg::LoadCredentialsResponse = fixture("iceberg/load_credentials.json");
+        let v = wire.to_vended(&ctx).unwrap();
+        // The bucket-wide credential is clamped to the table; the data-prefix one kept
+        // as is; the sibling table and the other bucket are dropped.
+        let scopes: Vec<_> = v.iter().map(|v| v.scope.to_string()).collect();
+        assert_eq!(
+            scopes,
+            [
+                "s3://bucket/warehouse/ns/tab",
+                "s3://bucket/warehouse/ns/tab/data"
+            ]
+        );
+        assert_eq!(v[0].credentials, aws("ak-wide", Some("st-wide")));
+        assert_eq!(v[1].credentials, aws("ak-data", Some("st-data")));
+        round_trip_all(&v, &ctx);
+    }
+
+    #[test]
+    fn server_direction_keys() {
+        let v = VendedCredential::new(
+            StorageCredentials::azure_sas("sv=1&sig=a%2Bb").unwrap(),
+            scope("abfss://ctr@acct.dfs.core.windows.net/tab"),
+            AccessLevel::Read,
+        )
+        .with_expiry(expiry());
+        let wire = iceberg::StorageCredential::try_from(&v).unwrap();
+        assert_eq!(wire.prefix, "abfss://ctr@acct.dfs.core.windows.net/tab/");
+        assert_eq!(
+            wire.config["adls.sas-token.acct.dfs.core.windows.net"],
+            "sv=1&sig=a%2Bb"
+        );
+        assert_eq!(
+            wire.config["adls.sas-token-expires-at-ms.acct.dfs.core.windows.net"],
+            EXPIRY_MS.to_string()
+        );
+        assert!(!format!("{wire:?}").contains("a%2Bb"));
+
+        let bearer = VendedCredential::new(
+            StorageCredentials::AzureBearer("t".into()),
+            scope("abfss://ctr@acct.dfs.core.windows.net/tab"),
+            AccessLevel::Read,
+        );
+        assert!(iceberg::StorageCredential::try_from(&bearer).is_err());
+    }
+}
+
 #[cfg(feature = "sharing")]
 mod open_sharing {
     use olai_storage_credentials::wire::sharing;

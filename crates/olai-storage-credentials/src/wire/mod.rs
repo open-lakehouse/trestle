@@ -21,6 +21,7 @@
 //! |---|---|
 //! | [`unity`] | Unity Catalog REST `temporary-*-credentials` |
 //! | [`delta_api`] | UC Delta API `storage-credentials` |
+//! | [`iceberg`] | Iceberg REST `storage-credentials` and FileIO config keys |
 //! | [`sharing`] | Open Sharing `temporary-*-credentials` |
 
 use chrono::{DateTime, Utc};
@@ -34,6 +35,9 @@ pub mod common;
 #[cfg(feature = "delta-api")]
 #[cfg_attr(docsrs, doc(cfg(feature = "delta-api")))]
 pub mod delta_api;
+#[cfg(feature = "iceberg")]
+#[cfg_attr(docsrs, doc(cfg(feature = "iceberg")))]
+pub mod iceberg;
 #[cfg(feature = "sharing")]
 #[cfg_attr(docsrs, doc(cfg(feature = "sharing")))]
 pub mod sharing;
@@ -82,6 +86,16 @@ pub(crate) fn prefix_string(scope: &StorageScope) -> String {
         prefix.push('/');
     }
     prefix
+}
+
+/// Parses an epoch-milliseconds expiry from a config-map value.
+#[cfg(feature = "iceberg")]
+pub(crate) fn parse_expiry_millis(key: &str, value: &str) -> crate::Result<Option<DateTime<Utc>>> {
+    value
+        .trim()
+        .parse::<i64>()
+        .map(crate::model::expiry_from_epoch_millis)
+        .map_err(|_| crate::Error::invalid_credential(format!("`{key}` is not epoch milliseconds")))
 }
 
 /// Renders a config map's keys with every value redacted: which keys a server sent is
