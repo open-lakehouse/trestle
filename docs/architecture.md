@@ -47,6 +47,9 @@ service actually links against.
 | [`olai-http-wasm`](../crates/olai-http-wasm) | runtime (browser) | The `wasm32` transport for generated clients — same client bodies, browser Fetch backend, browser-managed session. |
 | [`olai-trestle`](../crates/trestle) | tooling | The `trestle` CLI: project scaffolding (`trestle new`) and the codegen entry point (`trestle generate`). |
 
+Proposed runtime crates for vended storage credentials, which build on `olai-http`,
+are described in [Credential vending](credential-vending.md).
+
 ## Key design decisions
 
 - **Proto-driven.** All resource types, field roles, and API surface are derived

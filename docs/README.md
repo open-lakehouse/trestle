@@ -8,6 +8,9 @@ Design records and deeper explanations for Trestle.
 - [Multiple environments](multi-env.md) — running several environments side by
   side as a workspace (ports, project names, the gateway mesh), and the path to
   SPIFFE/SPIRE workload identity.
+- [Credential vending](credential-vending.md) — proposed: protocol-neutral crates
+  for vended storage credentials (model, client-side `object_store` integration,
+  server-side minting) shared by Unity Catalog, Iceberg REST and Open Sharing.
 
 For getting started, see the [top-level README](../README.md). For local
 development and the release process, see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
