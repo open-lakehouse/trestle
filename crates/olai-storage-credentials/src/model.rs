@@ -209,7 +209,8 @@ impl VendedCredential {
 /// Converts a wire expiry in epoch milliseconds into an expiry time.
 ///
 /// Zero or negative values mean "does not expire": UC sends `0` for credentials on
-/// local paths, and some servers send `-1`.
+/// local paths, and some servers send `-1`. So do values past the representable range:
+/// some servers send `i64::MAX` for long-lived credentials.
 pub fn expiry_from_epoch_millis(millis: i64) -> Option<DateTime<Utc>> {
     if millis <= 0 {
         return None;

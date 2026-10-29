@@ -1,0 +1,8 @@
+{
+  "metadata-location": "gs://bucket/warehouse/ns/tab/metadata/00001.metadata.json",
+  "config": {
+    "gcs.oauth2.token": "ya29.test",
+    "gcs.oauth2.token-expires-at": "1893456000000",
+    "gcs.project-id": "project"
+  }
+}

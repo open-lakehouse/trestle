@@ -12,6 +12,11 @@ clients.
   `StorageLocation`. Prefix matching is segment-aware: `s3://b/tab` covers
   `s3://b/tab/x`, never `s3://b/table2`.
 - **SAS**: Azure SAS tokens are decoded exactly once, and their `se=` expiry is read.
+- **Policies**: the S3 session policy, Azure SAS scoping and GCS Credential Access
+  Boundary that downscope a minted credential to one scope.
+- **Wire adapters** (features `unity`, `delta-api`, `iceberg`, `sharing`, or `wire` for
+  all): read each vending protocol's response into the model, and write the model back
+  out for servers.
 
 The crate makes no network calls, never reads the clock, and builds for
 `wasm32-unknown-unknown`. Secret-bearing types redact their `Debug` output.

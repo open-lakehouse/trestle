@@ -1,0 +1,11 @@
+{
+  "expiration_time": null,
+  "url": "s3://bucket/warehouse/tab/",
+  "aws_temp_credentials": {
+    "access_key_id": "ak-test",
+    "secret_access_key": "sk-test",
+    "session_token": "st-test",
+    "access_point": "arn:aws:s3:us-west-2:123456789012:accesspoint/lake"
+  },
+  "some_future_field": 1
+}

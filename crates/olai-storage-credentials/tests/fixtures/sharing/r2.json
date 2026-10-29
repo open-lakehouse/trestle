@@ -1,0 +1,9 @@
+{
+  "expiration_time": "1893456000000",
+  "url": "r2://bucket@acct.r2.cloudflarestorage.com/shares/vol",
+  "r2_credentials": {
+    "access_key_id": "ak-test",
+    "secret_access_key": "sk-test",
+    "session_token": "st-test"
+  }
+}

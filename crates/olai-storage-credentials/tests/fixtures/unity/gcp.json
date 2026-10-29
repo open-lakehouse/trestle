@@ -1,0 +1,5 @@
+{
+  "expiration_time": 1893456000000,
+  "url": "gs://bucket/warehouse/tab",
+  "gcp_oauth_token": { "oauth_token": "ya29.test" }
+}

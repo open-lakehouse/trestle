@@ -1,0 +1,7 @@
+{
+  "expiration_time": "1893456000000",
+  "url": "abfss://ctr@acct.dfs.core.windows.net/warehouse/tab",
+  "azure_user_delegation_sas": {
+    "sas_token": "sv=2022-11-02&sr=d&sdd=2&sp=rl&se=2030-01-01T00%3A00%3A00Z&sig=ab%2Bc%2Fd%3D"
+  }
+}

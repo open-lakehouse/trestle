@@ -1,0 +1,4 @@
+{
+  "metadata-location": "s3://bucket/warehouse/ns/tab/metadata/00001.metadata.json",
+  "config": { "s3.remote-signing-enabled": "true", "s3.signer.uri": "https://catalog.example/" }
+}

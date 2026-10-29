@@ -1,0 +1,12 @@
+{
+  "metadata-location": "abfss://ctr@acct.dfs.core.windows.net/warehouse/ns/tab/metadata/00001.metadata.json",
+  "config": {},
+  "storage-credentials": [{
+    "prefix": "abfss://ctr@acct.dfs.core.windows.net/warehouse/ns/tab/",
+    "config": {
+      "adls.sas-token.other.dfs.core.windows.net": "sv=2022-11-02&sp=rl&sig=b3RoZXI%3D",
+      "adls.sas-token.acct.dfs.core.windows.net": "sv=2022-11-02&sr=d&sdd=3&sp=rl&se=2030-01-01T00%3A00%3A00Z&sig=YWNjdA%3D%3D",
+      "adls.sas-token-expires-at-ms.acct.dfs.core.windows.net": "1893456000000"
+    }
+  }]
+}

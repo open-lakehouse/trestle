@@ -1,0 +1,23 @@
+{
+  "metadata-location": "s3://bucket/warehouse/ns/tab/metadata/00001-abc.metadata.json",
+  "metadata": {
+    "format-version": 2,
+    "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+    "location": "s3://bucket/warehouse/ns/tab",
+    "last-updated-ms": 1700000000000,
+    "properties": {}
+  },
+  "config": { "client.region": "us-west-2", "s3.path-style-access": "true", "s3.endpoint": "https://s3.example.internal" },
+  "storage-credentials": [{
+    "prefix": "s3://bucket/warehouse/ns/tab/",
+    "config": {
+      "s3.access-key-id": "ak-test",
+      "s3.secret-access-key": "sk-test",
+      "s3.session-token": "st-test",
+      "s3.session-token-expires-at-ms": "1893456000000",
+      "client.region": "us-west-2",
+      "s3.endpoint": "https://s3.example.internal",
+      "s3.path-style-access": "true"
+    }
+  }]
+}

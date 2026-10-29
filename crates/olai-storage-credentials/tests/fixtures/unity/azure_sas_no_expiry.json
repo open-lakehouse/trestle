@@ -1,0 +1,6 @@
+{
+  "url": "https://acct.blob.core.windows.net/ctr/warehouse/tab",
+  "azure_user_delegation_sas": {
+    "sas_token": "sv=2022-11-02&sr=c&sp=rl&se=2030-06-01T12%3A00%3A00Z&sig=c2ln"
+  }
+}

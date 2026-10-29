@@ -11,6 +11,9 @@
 //! - [`location`]: canonical [`StorageLocation`]s, the [`StorageScope`] a credential
 //!   covers, and segment-boundary [`longest_match`](location::longest_match).
 //! - [`sas`]: Azure SAS decoding and expiry.
+//! - [`policy`]: the S3, Azure SAS and GCS documents a minter uses to downscope.
+//! - `wire` (features `unity`, `delta-api`, `iceberg`, `sharing`): adapters between
+//!   each vending protocol's wire shape and the model.
 //!
 //! The crate makes no network calls, never reads the clock (callers pass `now`), and
 //! builds for `wasm32-unknown-unknown`. Secret-bearing types redact their `Debug`
@@ -26,6 +29,22 @@ pub mod location;
 pub mod model;
 pub mod policy;
 pub mod sas;
+#[cfg(any(
+    feature = "unity",
+    feature = "delta-api",
+    feature = "iceberg",
+    feature = "sharing"
+))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(any(
+        feature = "unity",
+        feature = "delta-api",
+        feature = "iceberg",
+        feature = "sharing"
+    )))
+)]
+pub mod wire;
 
 pub use error::{Error, Result};
 pub use location::{StorageLocation, StorageProvider, StorageScope};
