@@ -32,22 +32,37 @@ pub(crate) struct UserDelegationKey {
     pub value: String,
 }
 
+/// How to reach the Blob service when fetching a user delegation key.
+#[derive(Debug, Clone, Default)]
+pub struct UserDelegationKeyOptions {
+    /// The Blob service endpoint, including the account path for emulators
+    /// (`https://127.0.0.1:10000/devstoreaccount1`). Defaults to
+    /// `https://<account>.blob.core.windows.net`.
+    pub endpoint: Option<String>,
+    /// HTTP client options for the request (custom root certificates, timeouts, ...).
+    pub client_options: ClientOptions,
+}
+
 /// Fetch a User Delegation Key from Azure Storage using an AAD bearer token.
 pub(crate) async fn fetch_user_delegation_key(
     account: &str,
     bearer_token: &str,
     start: DateTime<Utc>,
     expiry: DateTime<Utc>,
+    options: &UserDelegationKeyOptions,
 ) -> Result<UserDelegationKey> {
-    let url =
-        format!("https://{account}.blob.core.windows.net/?restype=service&comp=userdelegationkey");
+    let endpoint = match &options.endpoint {
+        Some(endpoint) => endpoint.trim_end_matches('/').to_owned(),
+        None => format!("https://{account}.blob.core.windows.net"),
+    };
+    let url = format!("{endpoint}/?restype=service&comp=userdelegationkey");
     let body = format!(
         "<KeyInfo><Start>{}</Start><Expiry>{}</Expiry></KeyInfo>",
         start.to_rfc3339_opts(SecondsFormat::Secs, true),
         expiry.to_rfc3339_opts(SecondsFormat::Secs, true),
     );
 
-    let client = ClientOptions::default().client()?;
+    let client = options.client_options.client()?;
     let service: Arc<dyn HttpService> = make_service(client.clone(), None);
     let retry = RetryConfig::default();
 
@@ -320,9 +335,33 @@ pub async fn generate_user_delegation_sas(
     read_only: bool,
     ttl_secs: u64,
 ) -> Result<String> {
+    generate_user_delegation_sas_with_options(
+        account,
+        container,
+        prefix,
+        bearer_token,
+        read_only,
+        ttl_secs,
+        &UserDelegationKeyOptions::default(),
+    )
+    .await
+}
+
+/// Like [`generate_user_delegation_sas`], with an explicit Blob service endpoint and
+/// HTTP client options for fetching the user delegation key (emulators, custom
+/// certificates).
+pub async fn generate_user_delegation_sas_with_options(
+    account: &str,
+    container: &str,
+    prefix: &str,
+    bearer_token: &str,
+    read_only: bool,
+    ttl_secs: u64,
+    options: &UserDelegationKeyOptions,
+) -> Result<String> {
     let expiry = sas_expiry(ttl_secs);
     let start = Utc::now();
-    let key = fetch_user_delegation_key(account, bearer_token, start, expiry).await?;
+    let key = fetch_user_delegation_key(account, bearer_token, start, expiry, options).await?;
     let permissions = if read_only { SAS_READ } else { SAS_READ_WRITE };
     build_user_delegation_sas(account, container, prefix, &key, expiry, permissions)
 }
