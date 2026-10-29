@@ -1911,6 +1911,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "object_store"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "622acbc9100d3c10e2ee15804b0caa40e55c933d5aa53814cd520805b7958a49"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "http",
+ "humantime",
+ "itertools",
+ "parking_lot",
+ "percent-encoding",
+ "thiserror 2.0.21",
+ "url",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
 name = "olai-codegen"
 version = "0.0.9"
 dependencies = [
@@ -1990,6 +2013,19 @@ dependencies = [
  "sha2",
  "thiserror 2.0.21",
  "toml",
+ "url",
+]
+
+[[package]]
+name = "olai-storage-credentials"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "object_store",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
  "url",
 ]
 
