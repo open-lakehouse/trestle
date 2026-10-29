@@ -1,0 +1,59 @@
+[package]
+name = "olai-vended-store"
+description = "object_store stores backed by vended, auto-refreshing cloud storage credentials"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+
+[dependencies]
+# workspace dependencies (in alphabetical order)
+async-trait = { workspace = true }
+# Default features keep `clock` (for `Utc::now`) and `wasmbind` (which makes `Utc::now`
+# work on wasm32-unknown-unknown).
+chrono = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+
+# crates.io dependencies (in alphabetical order)
+object_store = { version = "0.13", default-features = false }
+
+# in-repo dependencies
+olai-storage-credentials = { path = "../olai-storage-credentials" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# object_store's `CredentialProvider` must return `Send` futures; on wasm32 the
+# protocol clients' futures are not, so the provider wraps them (single-threaded, so
+# this never panics).
+send_wrapper = { version = "0.6", features = ["futures"] }
+# object_store's cloud clients draw randomness through two getrandom majors (0.2 via
+# ring, 0.4 via rand); on wasm32-unknown-unknown each needs its browser backend
+# selected by feature. None of these are `use`d, hence the machete ignore below.
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# object_store's GCS client signs with ring, whose RNG needs its JS backend on wasm32.
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[features]
+default = ["aws", "azure", "gcp"]
+# Store backends, forwarded to object_store.
+aws = ["object_store/aws"]
+azure = ["object_store/azure"]
+gcp = ["object_store/gcp", "dep:ring"]
+
+[package.metadata.cargo-machete]
+ignored = ["getrandom_02", "getrandom_04", "ring"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1425,11 +1425,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2444,6 +2446,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body-util",
+ "httparse",
  "humantime",
  "hyper",
  "itertools",
@@ -2454,6 +2457,7 @@ dependencies = [
  "rand 0.10.3",
  "reqwest 0.12.28",
  "ring",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -2634,6 +2638,23 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "olai-vended-store"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "futures",
+ "getrandom 0.2.17",
+ "getrandom 0.4.2",
+ "object_store",
+ "olai-storage-credentials",
+ "ring",
+ "send_wrapper",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -3642,6 +3663,15 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+
+[[package]]
+name = "send_wrapper"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
+dependencies = [
+ "futures-core",
+]
 
 [[package]]
 name = "serde"
