@@ -11,7 +11,8 @@ use olai_storage_credentials::{
 
 use crate::error::{Error, Result};
 use crate::{
-    AwsStsMinter, AzureAccountKeySasMinter, AzureUserDelegationSasMinter, RegisteredCredential,
+    AwsStsMinter, AzureAccountKeySasMinter, AzureUserDelegationSasMinter, GcsDownscopedMinter,
+    RegisteredCredential,
 };
 
 /// What to mint: access to one scope, for a while.
@@ -69,14 +70,16 @@ pub trait CredentialMinter: Debug + Send + Sync + 'static {
 }
 
 /// The minter for `credential`, with default settings: [`AwsStsMinter`] for IAM roles,
-/// [`AzureUserDelegationSasMinter`] for service principals and managed identities, and
-/// [`AzureAccountKeySasMinter`] for account keys.
+/// [`AzureUserDelegationSasMinter`] for service principals and managed identities,
+/// [`AzureAccountKeySasMinter`] for account keys, and [`GcsDownscopedMinter`] for GCP
+/// service accounts.
 ///
 /// Build the minters directly to set endpoints, client options or audit fields.
 ///
 /// [`AwsStsMinter`]: crate::AwsStsMinter
 /// [`AzureUserDelegationSasMinter`]: crate::AzureUserDelegationSasMinter
 /// [`AzureAccountKeySasMinter`]: crate::AzureAccountKeySasMinter
+/// [`GcsDownscopedMinter`]: crate::GcsDownscopedMinter
 pub fn minter_for(credential: &RegisteredCredential) -> Result<Arc<dyn CredentialMinter>> {
     use RegisteredCredential as R;
     Ok(match credential {
@@ -88,6 +91,7 @@ pub fn minter_for(credential: &RegisteredCredential) -> Result<Arc<dyn Credentia
             AzureUserDelegationSasMinter::from_managed_identity(identity)?,
         ),
         R::AzureStorageKey(key) => Arc::new(AzureAccountKeySasMinter::new(key)),
+        R::GcpServiceAccount(account) => Arc::new(GcsDownscopedMinter::new(account)?),
     })
 }
 
@@ -121,7 +125,8 @@ mod tests {
     use super::*;
     use crate::RegisteredCredential;
     use crate::registered::{
-        AwsIamRole, AzureClientSecret, AzureManagedIdentity, AzureServicePrincipal, AzureStorageKey,
+        AwsIamRole, AzureClientSecret, AzureManagedIdentity, AzureServicePrincipal,
+        AzureStorageKey, GcpServiceAccount, GcpServiceAccountKey,
     };
 
     #[test]
@@ -154,6 +159,15 @@ mod tests {
                     account_key: "a2V5".into(),
                 }),
                 "AzureAccountKeySasMinter",
+            ),
+            (
+                RegisteredCredential::GcpServiceAccount(GcpServiceAccount {
+                    email: "sa@p.iam.gserviceaccount.com".into(),
+                    key: Some(GcpServiceAccountKey::ServiceAccountKey(
+                        r#"{"client_email":"sa@p.iam.gserviceaccount.com"}"#.into(),
+                    )),
+                }),
+                "GcsDownscopedMinter",
             ),
         ];
         for (credential, minter) in cases {

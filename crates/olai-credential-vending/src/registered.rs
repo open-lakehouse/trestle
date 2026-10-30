@@ -12,7 +12,8 @@ const REDACTED: &str = "<redacted>";
 /// Not to be confused with a *vended* credential, the short-lived secret a client
 /// receives. The JSON shape is Unity Catalog's `Credential` without its metadata: an
 /// object with exactly one of `aws_iam_role`, `azure_service_principal`,
-/// `azure_managed_identity` or `azure_storage_key`. Other keys are ignored, so a full
+/// `azure_managed_identity`, `azure_storage_key` or `gcp_service_account` (also read as
+/// Databricks' `databricks_gcp_service_account`). Other keys are ignored, so a full
 /// `Credential` document, or one persisted by mangrove's `StorageCredential`, loads.
 ///
 /// `Debug` redacts every secret.
@@ -28,6 +29,8 @@ pub enum RegisteredCredential {
     AzureManagedIdentity(AzureManagedIdentity),
     /// An Azure storage account key.
     AzureStorageKey(AzureStorageKey),
+    /// A GCP service account.
+    GcpServiceAccount(GcpServiceAccount),
 }
 
 /// An AWS IAM role to assume.
@@ -98,6 +101,31 @@ pub struct AzureStorageKey {
     pub account_key: String,
 }
 
+/// A GCP service account.
+///
+/// Without a [`key`](Self::key), the host's own identity (application default
+/// credentials, the metadata server or workload identity federation) impersonates the
+/// account, and needs `roles/iam.serviceAccountTokenCreator` on it. This is the shape of
+/// Databricks' `databricks_gcp_service_account`, whose other fields are ignored.
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GcpServiceAccount {
+    /// The account's email.
+    pub email: String,
+    /// A key of the account to authenticate with instead of impersonating it.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub key: Option<GcpServiceAccountKey>,
+}
+
+/// A key of a [`GcpServiceAccount`].
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GcpServiceAccountKey {
+    /// The contents of a service-account JSON key file.
+    ServiceAccountKey(String),
+    /// The path of a service-account JSON key file.
+    ServiceAccountKeyFile(String),
+}
+
 impl RegisteredCredential {
     /// The kind, for errors and logs: `aws_iam_role`, `azure_service_principal`, ...
     pub fn kind(&self) -> &'static str {
@@ -106,6 +134,7 @@ impl RegisteredCredential {
             Self::AzureServicePrincipal(_) => "azure_service_principal",
             Self::AzureManagedIdentity(_) => "azure_managed_identity",
             Self::AzureStorageKey(_) => "azure_storage_key",
+            Self::GcpServiceAccount(_) => "gcp_service_account",
         }
     }
 }
@@ -121,6 +150,7 @@ impl fmt::Debug for RegisteredCredential {
                 f.debug_tuple("AzureManagedIdentity").field(c).finish()
             }
             Self::AzureStorageKey(c) => f.debug_tuple("AzureStorageKey").field(c).finish(),
+            Self::GcpServiceAccount(c) => f.debug_tuple("GcpServiceAccount").field(c).finish(),
         }
     }
 }
@@ -187,6 +217,29 @@ impl fmt::Debug for AzureStorageKey {
     }
 }
 
+impl fmt::Debug for GcpServiceAccount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GcpServiceAccount")
+            .field("email", &self.email)
+            .field("key", &self.key)
+            .finish()
+    }
+}
+
+impl fmt::Debug for GcpServiceAccountKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ServiceAccountKey(_) => {
+                f.debug_tuple("ServiceAccountKey").field(&REDACTED).finish()
+            }
+            // A path, not a secret.
+            Self::ServiceAccountKeyFile(path) => {
+                f.debug_tuple("ServiceAccountKeyFile").field(path).finish()
+            }
+        }
+    }
+}
+
 /// The wire shape: one optional field per kind.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -199,6 +252,11 @@ struct Repr {
     azure_managed_identity: Option<AzureManagedIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     azure_storage_key: Option<AzureStorageKey>,
+    #[serde(
+        alias = "databricks_gcp_service_account",
+        skip_serializing_if = "Option::is_none"
+    )]
+    gcp_service_account: Option<GcpServiceAccount>,
 }
 
 impl TryFrom<Repr> for RegisteredCredential {
@@ -211,6 +269,7 @@ impl TryFrom<Repr> for RegisteredCredential {
                 .map(Self::AzureServicePrincipal),
             repr.azure_managed_identity.map(Self::AzureManagedIdentity),
             repr.azure_storage_key.map(Self::AzureStorageKey),
+            repr.gcp_service_account.map(Self::GcpServiceAccount),
         ]
         .into_iter()
         .flatten();
@@ -232,6 +291,7 @@ impl From<RegisteredCredential> for Repr {
             }
             RegisteredCredential::AzureManagedIdentity(c) => repr.azure_managed_identity = Some(c),
             RegisteredCredential::AzureStorageKey(c) => repr.azure_storage_key = Some(c),
+            RegisteredCredential::GcpServiceAccount(c) => repr.gcp_service_account = Some(c),
         }
         repr
     }
@@ -279,6 +339,51 @@ mod tests {
     }
 
     #[test]
+    fn loads_gcp_service_accounts() {
+        let databricks: RegisteredCredential = serde_json::from_value(json!({
+            "name": "gcs",
+            "databricks_gcp_service_account": {
+                "email": "vend@project.iam.gserviceaccount.com",
+                "credential_id": "ignored",
+                "private_key_id": "ignored",
+            },
+        }))
+        .unwrap();
+        let impersonated = RegisteredCredential::GcpServiceAccount(GcpServiceAccount {
+            email: "vend@project.iam.gserviceaccount.com".into(),
+            key: None,
+        });
+        assert_eq!(databricks, impersonated);
+        assert_eq!(
+            serde_json::to_value(&impersonated).unwrap(),
+            json!({ "gcp_service_account": { "email": "vend@project.iam.gserviceaccount.com" } })
+        );
+
+        for (json, key) in [
+            (
+                json!({ "email": "sa@p", "service_account_key": "{}" }),
+                GcpServiceAccountKey::ServiceAccountKey("{}".into()),
+            ),
+            (
+                json!({ "email": "sa@p", "service_account_key_file": "/etc/sa.json" }),
+                GcpServiceAccountKey::ServiceAccountKeyFile("/etc/sa.json".into()),
+            ),
+        ] {
+            let document = json!({ "gcp_service_account": json });
+            let credential: RegisteredCredential =
+                serde_json::from_value(document.clone()).unwrap();
+            assert_eq!(
+                credential,
+                RegisteredCredential::GcpServiceAccount(GcpServiceAccount {
+                    email: "sa@p".into(),
+                    key: Some(key),
+                })
+            );
+            assert_eq!(serde_json::to_value(&credential).unwrap(), document);
+        }
+    }
+
+    #[test]
     fn round_trips_and_rejects_ambiguity() {
         let key = RegisteredCredential::AzureStorageKey(AzureStorageKey {
             account_name: "acct".into(),
@@ -321,6 +426,10 @@ mod tests {
             RegisteredCredential::AzureStorageKey(AzureStorageKey {
                 account_name: "acct".into(),
                 account_key: "SECRET-ACCOUNT".into(),
+            }),
+            RegisteredCredential::GcpServiceAccount(GcpServiceAccount {
+                email: "sa@p".into(),
+                key: Some(GcpServiceAccountKey::ServiceAccountKey("SECRET-KEY".into())),
             }),
         ];
         for credential in credentials {
