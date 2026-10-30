@@ -1,6 +1,8 @@
 //! Configuration keys every protocol builder shares: the stores' S3 region and endpoint,
 //! their HTTP client keys, and the requested access level.
 
+use std::fmt;
+
 use olai_storage_credentials::AccessLevel;
 use url::Url;
 
@@ -15,7 +17,7 @@ use crate::store::StoreOptions;
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for servers backed by an S3-compatible store |
 /// | `allow_local_storage` | Accept `file://` and `memory://` locations the catalog names; see [`StoreOptions::with_local_storage`] |
 /// | client keys (`allow_http`, `timeout`, ...) | Apply to the stores, and to the vending server |
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct StoreKeys {
     aws_region: Option<String>,
     aws_endpoint: Option<String>,
@@ -72,6 +74,27 @@ impl StoreKeys {
     }
 }
 
+impl fmt::Debug for StoreKeys {
+    // Client key values can hold secrets (a proxy URL's password), so only their
+    // names are printed.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut f = f.debug_struct("StoreKeys");
+        f.field("aws_region", &self.aws_region)
+            .field("aws_endpoint", &self.aws_endpoint)
+            .field("allow_local_storage", &self.allow_local_storage);
+        #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+        f.field(
+            "client",
+            &self
+                .client
+                .iter()
+                .map(|(key, _)| key.as_ref())
+                .collect::<Vec<_>>(),
+        );
+        f.finish()
+    }
+}
+
 /// Parses the access-level key `key`: `read` or `read_write`, `None` when unset.
 #[cfg_attr(
     not(any(feature = "unity", feature = "iceberg", feature = "neon")),
@@ -105,4 +128,22 @@ pub(crate) fn parse_base_url(key: &str, value: &str) -> Result<Url> {
     let url =
         Url::parse(value).map_err(|e| Error::Config(format!("invalid `{key}` `{value}`: {e}")))?;
     Ok(crate::api::with_trailing_slash(url))
+}
+
+#[cfg(all(test, any(feature = "aws", feature = "azure", feature = "gcp")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_prints_client_key_names_only() {
+        let mut keys = StoreKeys::default();
+        keys.set("proxy_url", "http://user:SECRET-PASS@proxy:3128");
+        let debug = format!("{keys:?}");
+        assert!(!debug.contains("SECRET-PASS"), "{debug}");
+        assert!(debug.contains("proxy_url"), "{debug}");
+
+        let options = keys.apply(StoreOptions::new());
+        let debug = format!("{options:?}");
+        assert!(!debug.contains("SECRET-PASS"), "{debug}");
+    }
 }

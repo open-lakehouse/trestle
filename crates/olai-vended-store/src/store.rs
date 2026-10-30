@@ -349,13 +349,14 @@ impl StoreOptions {
 }
 
 impl fmt::Debug for StoreOptions {
+    // The client options are left out: their proxy URLs and default headers can hold
+    // secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("StoreOptions");
         f.field("allow_local_storage", &self.allow_local_storage);
         #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
         f.field("refresh_margin", &self.refresh_margin)
-            .field("clock", &self.clock.as_ref().map(|_| "<fn>"))
-            .field("client_options", &self.client_options);
+            .field("clock", &self.clock.as_ref().map(|_| "<fn>"));
         #[cfg(feature = "aws")]
         f.field("aws_region", &self.aws_region)
             .field("s3_endpoint", &self.s3_endpoint);
