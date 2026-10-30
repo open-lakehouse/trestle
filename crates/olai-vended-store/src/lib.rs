@@ -103,7 +103,9 @@ pub use olai_storage_credentials::{
 #[cfg(any(feature = "aws", feature = "azure"))]
 pub use presign::{Presigned, presign};
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-pub use refresh::{Clock, DEFAULT_REFRESH_MARGIN, RefreshingCredentialProvider};
+pub use refresh::{
+    Clock, DEFAULT_REFRESH_MARGIN, REFRESH_RETRY_INTERVAL, RefreshingCredentialProvider,
+};
 #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
 pub use region::BucketRegions;
 pub use routing::RoutingObjectStore;

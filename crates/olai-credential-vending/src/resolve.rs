@@ -17,6 +17,10 @@ use crate::registered::RegisteredCredential;
 #[async_trait]
 pub trait CredentialResolver: Send + Sync {
     /// The credential governing `location`, or [`Error::NotFound`].
+    ///
+    /// A credential minted for `location` covers everything below it, so implementations
+    /// must refuse ([`Error::Overlapping`]) a location containing a more specific one
+    /// that another credential governs.
     async fn resolve(&self, location: &StorageLocation) -> Result<RegisteredCredential>;
 }
 
@@ -26,6 +30,11 @@ pub trait CredentialResolver: Send + Sync {
 /// matched on whole path segments: `s3://b/tab` governs `s3://b/tab/x`, never
 /// `s3://b/table2`. Every spelling of a URL resolves the same way, since matching
 /// compares canonical locations.
+///
+/// Registrations may nest, but a location containing one governed by another
+/// credential resolves to [`Error::Overlapping`]: with `s3://b` and `s3://b/tab`
+/// governed by different credentials, `s3://b` itself is refused, since `s3://b`'s
+/// credential would also reach `tab`.
 #[derive(Clone, Default)]
 pub struct ExternalLocations {
     locations: Vec<(StorageScope, RegisteredCredential)>,
@@ -61,16 +70,25 @@ impl fmt::Debug for ExternalLocations {
 #[async_trait]
 impl CredentialResolver for ExternalLocations {
     async fn resolve(&self, location: &StorageLocation) -> Result<RegisteredCredential> {
-        longest_match(
+        let governing = longest_match(
             self.locations
                 .iter()
                 .map(|(scope, credential)| (scope, credential)),
             location,
         )
-        .cloned()
         .ok_or_else(|| Error::NotFound {
             location: location.to_string(),
-        })
+        })?;
+        let requested = StorageScope::from(location.clone());
+        if let Some((nested, _)) = self.locations.iter().find(|(scope, credential)| {
+            *scope != requested && requested.contains(scope) && credential != governing
+        }) {
+            return Err(Error::Overlapping {
+                location: location.to_string(),
+                nested: nested.to_string(),
+            });
+        }
+        Ok(governing.clone())
     }
 }
 
@@ -150,6 +168,23 @@ mod tests {
                 "{url}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn locations_containing_another_credentials_location_are_refused() {
+        // `s3://bucket`'s credential would also reach `tab`, which `tab`'s governs.
+        for url in ["s3://bucket", "https://bucket.s3.amazonaws.com/"] {
+            assert!(
+                matches!(resolve(url).await, Err(Error::Overlapping { .. })),
+                "{url}"
+            );
+        }
+        // Nesting under the same credential is fine.
+        let same = ExternalLocations::new()
+            .with_location("s3://bucket".parse().unwrap(), role("bucket"))
+            .with_location("s3://bucket/tab".parse().unwrap(), role("bucket"));
+        let resolved = same.resolve(&"s3://bucket".parse().unwrap()).await.unwrap();
+        assert_eq!(arn(&resolved), "bucket");
     }
 
     #[test]

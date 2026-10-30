@@ -221,7 +221,11 @@ impl ScopedStore {
 - `RefreshingCredentialProvider` behaves as follows:
   - It is seeded with the credential that was used to build the store, so the first
     request does not re-vend.
-  - Refreshes are single-flight. A failed refresh is not cached.
+  - Refreshes are single-flight. A failed refresh keeps serving the cached credential
+    until it expires, and only then fails requests; the next vend waits
+    `REFRESH_RETRY_INTERVAL` (10 seconds), so an outage costs one vend per interval,
+    not one per request. A refreshed credential that is already due (clock skew) is
+    kept for that interval too.
   - It re-vends `refresh_margin` before expiry (5 minutes by default, configurable per
     store), or halfway through a lifetime shorter than twice the margin, so short
     grants are not re-vended on every request.
@@ -319,6 +323,9 @@ The modules add two things to the core:
   - Databricks auto-detection (host, profiles, `DATABRICKS_*`) behind a separate
     `databricks` feature, so the core stays vendor-neutral. Only `databricks_`-prefixed
     keys are read, so a shared options map's `token` or `host` is never captured.
+    Detection only applies to a Databricks server (a workspace domain, or the
+    configured Databricks host), so workspace credentials are never sent elsewhere;
+    `<prefix>_auth_type = databricks` forces them.
 - **Read fallback.** With `unity_operation` unset, `UnityCatalog::open` asks for
   read-write and falls back to read only when the vend is denied (HTTP 403 or
   `PERMISSION_DENIED`); any other failure is returned. Iceberg REST cannot request an
@@ -380,7 +387,9 @@ the grant. User delegation keys are cached per storage account.
 - `RegisteredCredential` keeps Unity Catalog's `Credential` JSON shape, so documents
   mangrove persisted as `StorageCredential` load unchanged; unlike mangrove's, its
   `Debug` redacts every secret. `ExternalLocations` is the longest-prefix
-  `CredentialResolver` over a list.
+  `CredentialResolver` over a list; registrations may nest, but a request containing
+  a location governed by another credential is refused (`Error::Overlapping`), since
+  the broader credential would reach into it.
 - `CachingMinter` wraps any minter. It is a bounded TTL cache keyed by the whole
   request (canonical scope, access, lifetime, session name), and replaces mangrove's
   unbounded, `u64`-hashed process cache. One cache serves one principal: `Vendor`

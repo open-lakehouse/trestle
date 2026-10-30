@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -57,8 +57,10 @@ struct Entry {
 ///
 /// - Entries are keyed by the whole request (canonical scope, access, lifetime, session
 ///   name), never by a hash of it, so distinct requests cannot collide.
-/// - An entry is served until [`margin`](Self::with_margin) before its credential
-///   expires; one without an expiry for at most [`max_age`](Self::with_max_age).
+/// - An entry is served for the first half of its credential's lifetime, and never
+///   within [`margin`](Self::with_margin) of its expiry, so a hit always has at least
+///   half the lifetime a fresh mint would; one without an expiry is served for at most
+///   [`max_age`](Self::with_max_age).
 /// - The cache holds at most [`capacity`](Self::with_capacity) entries: when full, stale
 ///   entries go first, then those closest to going stale.
 /// - One cache serves one minter, so one principal: wrap each principal's minter in its
@@ -113,7 +115,7 @@ impl CachingMinter {
 
     /// The number of cached credentials, stale ones included.
     pub fn len(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.entries().len()
     }
 
     /// Whether nothing is cached.
@@ -121,16 +123,32 @@ impl CachingMinter {
         self.len() == 0
     }
 
-    fn insert(&self, key: Key, credential: VendedCredential, now: DateTime<Utc>) {
+    /// The entries; a panic elsewhere never leaves them half-updated, so a poisoned lock
+    /// is still safe to use.
+    fn entries(&self) -> MutexGuard<'_, HashMap<Key, Entry>> {
+        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// When a credential minted at `now` stops being served, or `None` if it is too
+    /// short-lived to serve again.
+    fn stale_at(&self, credential: &VendedCredential, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         let stale_at = match credential.expires_at {
-            Some(expiry) => expiry - self.margin,
-            None => now + self.max_age,
+            Some(expiry) => {
+                let half_life = now.checked_add_signed((expiry - now) / 2)?;
+                expiry.checked_sub_signed(self.margin)?.min(half_life)
+            }
+            None => now
+                .checked_add_signed(self.max_age)
+                .unwrap_or(DateTime::<Utc>::MAX_UTC),
         };
-        if stale_at <= now {
-            // Too short-lived to be worth serving again.
+        (stale_at > now).then_some(stale_at)
+    }
+
+    fn insert(&self, key: Key, credential: VendedCredential, now: DateTime<Utc>) {
+        let Some(stale_at) = self.stale_at(&credential, now) else {
             return;
-        }
-        let mut entries = self.entries.lock().unwrap();
+        };
+        let mut entries = self.entries();
         if entries.len() >= self.capacity && !entries.contains_key(&key) {
             entries.retain(|_, entry| entry.stale_at > now);
             if entries.len() >= self.capacity
@@ -161,7 +179,7 @@ impl CredentialMinter for CachingMinter {
     async fn mint(&self, request: &MintRequest) -> Result<VendedCredential> {
         let key = Key::from(request);
         let now = (self.clock)();
-        if let Some(entry) = self.entries.lock().unwrap().get(&key)
+        if let Some(entry) = self.entries().get(&key)
             && entry.stale_at > now
         {
             return Ok(entry.credential.clone());
@@ -190,6 +208,10 @@ type MakeMinter = dyn Fn(&RegisteredCredential) -> Result<Arc<dyn CredentialMint
 ///
 /// This is the whole server side of a `temporary-*-credentials` endpoint once the
 /// caller is authorized: a location in, a downscoped credential out.
+///
+/// Minters are kept per registered credential, secrets included: when a credential is
+/// rotated or removed, [`forget`](Self::forget) the old one so its secrets and cached
+/// credentials are dropped.
 pub struct Vendor<R> {
     resolver: R,
     minters: Mutex<HashMap<RegisteredCredential, Arc<CachingMinter>>>,
@@ -234,22 +256,42 @@ impl<R: CredentialResolver> Vendor<R> {
         minter.mint(request).await
     }
 
+    /// Drops the minter for `credential` and everything it cached. Returns whether there
+    /// was one.
+    pub fn forget(&self, credential: &RegisteredCredential) -> bool {
+        self.minters().remove(credential).is_some()
+    }
+
+    /// Drops every minter and everything they cached.
+    pub fn clear(&self) {
+        self.minters().clear();
+    }
+
     fn minter(&self, credential: &RegisteredCredential) -> Result<Arc<CachingMinter>> {
-        let mut minters = self.minters.lock().unwrap();
-        if let Some(minter) = minters.get(credential) {
+        if let Some(minter) = self.minters().get(credential) {
             return Ok(Arc::clone(minter));
         }
+        // Built outside the lock: building may read files or fail, and must not hold up
+        // (or, by panicking, poison) vending for other credentials. Of concurrent builds
+        // for the same credential, the first inserted is kept.
         let minter =
             Arc::new(CachingMinter::new((self.make)(credential)?).with_capacity(self.capacity));
-        minters.insert(credential.clone(), Arc::clone(&minter));
-        Ok(minter)
+        Ok(Arc::clone(
+            self.minters().entry(credential.clone()).or_insert(minter),
+        ))
+    }
+}
+
+impl<R> Vendor<R> {
+    fn minters(&self) -> MutexGuard<'_, HashMap<RegisteredCredential, Arc<CachingMinter>>> {
+        self.minters.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl<R> fmt::Debug for Vendor<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Vendor")
-            .field("minters", &self.minters.lock().unwrap().len())
+            .field("minters", &self.minters().len())
             .field("capacity", &self.capacity)
             .finish_non_exhaustive()
     }
@@ -360,17 +402,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn credentials_near_expiry_are_minted_again() {
+    async fn credentials_are_served_for_half_their_lifetime() {
         let inner = Counting::new(Some(3600));
         let (now, clock) = clock();
         let cache = CachingMinter::new(inner.clone()).with_clock(clock);
         cache.mint(&request("s3://b/tab")).await.unwrap();
-        *now.lock().unwrap() = t(3600 - 301);
+        *now.lock().unwrap() = t(1799);
         cache.mint(&request("s3://b/tab")).await.unwrap();
         assert_eq!(inner.mints(), 1);
-        *now.lock().unwrap() = t(3600 - 300);
+        // A caller asking for an hour never gets a credential with under half an hour left.
+        *now.lock().unwrap() = t(1800);
         cache.mint(&request("s3://b/tab")).await.unwrap();
         assert_eq!(inner.mints(), 2);
+    }
+
+    #[tokio::test]
+    async fn credentials_near_expiry_are_minted_again() {
+        let inner = Counting::new(Some(600));
+        let (now, clock) = clock();
+        let cache = CachingMinter::new(inner.clone())
+            .with_clock(clock)
+            .with_margin(Duration::from_secs(400));
+        cache.mint(&request("s3://b/tab")).await.unwrap();
+        *now.lock().unwrap() = t(199);
+        cache.mint(&request("s3://b/tab")).await.unwrap();
+        assert_eq!(inner.mints(), 1);
+        *now.lock().unwrap() = t(200);
+        cache.mint(&request("s3://b/tab")).await.unwrap();
+        assert_eq!(inner.mints(), 2);
+    }
+
+    #[tokio::test]
+    async fn extreme_margins_and_ages_do_not_panic() {
+        let inner = Counting::new(Some(3600));
+        let cache = CachingMinter::new(inner.clone()).with_margin(Duration::MAX);
+        cache.mint(&request("s3://b/tab")).await.unwrap();
+        assert!(cache.is_empty());
+
+        // Cached forever.
+        let inner = Counting::new(None);
+        let (now, clock) = clock();
+        let cache = CachingMinter::new(inner.clone())
+            .with_clock(clock)
+            .with_max_age(Duration::MAX);
+        cache.mint(&request("file:///data/tab")).await.unwrap();
+        *now.lock().unwrap() = t(10 * 365 * 24 * 3600);
+        cache.mint(&request("file:///data/tab")).await.unwrap();
+        assert_eq!(inner.mints(), 1);
     }
 
     #[tokio::test]
@@ -459,5 +537,86 @@ mod tests {
 
         let err = vendor.vend(&request("s3://other/t")).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }), "{err}");
+    }
+
+    fn account_key() -> RegisteredCredential {
+        RegisteredCredential::AzureStorageKey(AzureStorageKey {
+            account_name: "acct".into(),
+            account_key: "a2V5".into(),
+        })
+    }
+
+    #[tokio::test]
+    async fn vendor_mints_with_the_default_minters() {
+        let vendor = Vendor::new(ExternalLocations::new().with_location(
+            "abfss://ctr@acct.dfs.core.windows.net".parse().unwrap(),
+            account_key(),
+        ));
+        let vended = vendor
+            .vend(&request("abfss://ctr@acct.dfs.core.windows.net/t"))
+            .await
+            .unwrap();
+        match &vended.credentials {
+            StorageCredentials::AzureSas(pairs) => {
+                assert!(
+                    pairs.iter().any(|(k, v)| k == "sr" && v == "d"),
+                    "{pairs:?}"
+                )
+            }
+            other => panic!("expected a SAS, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn forgotten_credentials_drop_their_minters() {
+        let vendor = Vendor::new(ExternalLocations::new().with_location(
+            "abfss://ctr@acct.dfs.core.windows.net".parse().unwrap(),
+            account_key(),
+        ));
+        vendor
+            .vend(&request("abfss://ctr@acct.dfs.core.windows.net/t"))
+            .await
+            .unwrap();
+        assert_eq!(vendor.minters().len(), 1);
+        assert!(vendor.forget(&account_key()));
+        assert!(!vendor.forget(&account_key()));
+        assert!(vendor.minters().is_empty());
+
+        vendor
+            .vend(&request("abfss://ctr@acct.dfs.core.windows.net/t"))
+            .await
+            .unwrap();
+        vendor.clear();
+        assert!(vendor.minters().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_panicking_minter_build_does_not_break_the_vendor() {
+        let locations = ExternalLocations::new()
+            .with_location(
+                "s3://bucket".parse().unwrap(),
+                RegisteredCredential::AwsIamRole(AwsIamRole {
+                    role_arn: "arn:aws:iam::1:role/bucket".into(),
+                    ..AwsIamRole::default()
+                }),
+            )
+            .with_location(
+                "abfss://ctr@acct.dfs.core.windows.net".parse().unwrap(),
+                account_key(),
+            );
+        let vendor = Arc::new(
+            Vendor::new(locations).with_minters(|credential| match credential {
+                RegisteredCredential::AwsIamRole(_) => panic!("cannot build"),
+                other => minter_for(other),
+            }),
+        );
+        let panicking = Arc::clone(&vendor);
+        let handle = tokio::spawn(async move { panicking.vend(&request("s3://bucket/t")).await });
+        assert!(handle.await.unwrap_err().is_panic());
+        vendor
+            .vend(&request("abfss://ctr@acct.dfs.core.windows.net/t"))
+            .await
+            .unwrap();
+        assert!(format!("{vendor:?}").contains("minters: 1"));
     }
 }

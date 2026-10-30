@@ -9,7 +9,7 @@ use olai_storage_credentials::{
     AccessLevel, StorageCredentials, StorageLocation, StorageProvider, StorageScope, StoreHints,
     VendedCredential,
 };
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use serde::de::DeserializeOwned;
 use url::Url;
 
@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::source::CredentialSource;
 
 /// Characters escaped in one URL path segment, so a name can never introduce a new
-/// segment.
+/// segment. `\` separates segments in http(s) URLs too.
 const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -27,6 +27,7 @@ const PATH_SEGMENT: &AsciiSet = &CONTROLS
     .add(b'<')
     .add(b'>')
     .add(b'?')
+    .add(b'\\')
     .add(b'`')
     .add(b'{')
     .add(b'}');
@@ -77,13 +78,28 @@ impl ApiClient {
     }
 
     /// The URL of `segments` below the base, each escaped as one path segment.
+    ///
+    /// A `.` or `..` segment is refused: URL resolution would apply it and climb out of
+    /// the base.
     pub(crate) fn url(&self, segments: &[&str]) -> Result<Url> {
+        if let Some(dots) = segments.iter().find(|s| is_dot_segment(s)) {
+            return Err(Error::InvalidReference(format!(
+                "`{dots}` is not a valid name"
+            )));
+        }
         let path = segments
             .iter()
             .map(|s| utf8_percent_encode(s, PATH_SEGMENT).to_string())
             .collect::<Vec<_>>()
             .join("/");
-        self.base_url.join(&path).map_err(Error::vend)
+        let url = self.base_url.join(&path).map_err(Error::vend)?;
+        if !url.as_str().starts_with(self.base_url.as_str()) {
+            return Err(Error::InvalidReference(format!(
+                "`{}` leaves the API base",
+                segments.join("/")
+            )));
+        }
+        Ok(url)
     }
 
     /// A `GET` request for `segments` below the base.
@@ -131,6 +147,12 @@ impl fmt::Debug for ApiClient {
             .field("base_url", &self.base_url.as_str())
             .finish_non_exhaustive()
     }
+}
+
+/// Whether `segment` is `.` or `..`, spelled plainly or percent-encoded in any case.
+fn is_dot_segment(segment: &str) -> bool {
+    let decoded = percent_decode_str(segment).decode_utf8_lossy();
+    matches!(decoded.as_ref(), "." | "..")
 }
 
 /// `url` with a trailing `/` on its path.
@@ -269,14 +291,57 @@ pub(crate) fn storage_root(
 
 /// The credential for local (`file://`) storage, which needs no vend; `None` for other
 /// storage.
-#[cfg_attr(
-    not(any(feature = "unity", feature = "iceberg", feature = "sharing")),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(feature = "unity", feature = "iceberg")), allow(dead_code))]
 pub(crate) fn local_credential(
     scope: &StorageScope,
     access: AccessLevel,
 ) -> Option<VendedCredential> {
     (scope.location().provider() == StorageProvider::Local)
         .then(|| VendedCredential::new(StorageCredentials::None, scope.clone(), access))
+}
+
+#[cfg(test)]
+mod tests {
+    use olai_http::CloudClient;
+
+    use super::*;
+
+    fn client() -> ApiClient {
+        ApiClient::new(
+            CloudClient::new_with_token("t"),
+            "https://uc.example.com/api/2.1/unity-catalog"
+                .parse()
+                .unwrap(),
+            Dialect {
+                service: "test",
+                envelope: |_| None,
+            },
+        )
+    }
+
+    #[test]
+    fn names_stay_one_segment() {
+        let url = client().url(&["tables", r"a\..\..\x", "b/c?d#e"]).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://uc.example.com/api/2.1/unity-catalog/tables/a%5C..%5C..%5Cx/b%2Fc%3Fd%23e"
+        );
+    }
+
+    #[test]
+    fn dot_segments_are_refused() {
+        for name in [".", "..", "%2e", "%2E%2e", ".%2E"] {
+            let err = client().url(&["tables", name, "x"]).unwrap_err();
+            assert!(matches!(err, Error::InvalidReference(_)), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    fn dotted_names_are_kept() {
+        let url = client().url(&["tables", "main.default.t", "..."]).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://uc.example.com/api/2.1/unity-catalog/tables/main.default.t/..."
+        );
+    }
 }

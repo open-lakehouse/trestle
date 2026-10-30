@@ -26,6 +26,7 @@ const TOKEN_EXCHANGE_PATH: &str = "api/1.0/unity-control/auth/tokens";
 /// | `unity_operation` | `read` or `read_write` for every store. Unset: ask for read-write and fall back to read when it is denied |
 /// | `aws_region`, `unity_aws_region` | The region of vended S3 locations, overriding hints and discovery |
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for servers backed by an S3-compatible store |
+/// | `allow_local_storage` | Accept `file://` tables and volumes, as a local development server has; see [`StoreOptions::with_local_storage`] |
 /// | `unity_delta_api` | Vend table credentials through the Delta API (feature `delta-api`), for catalog-managed tables |
 /// | `unity_*` auth keys, `azure_*`, `google_*`, client keys | Authentication; see [`crate::auth`] |
 ///
@@ -263,5 +264,91 @@ mod databricks {
                         .is_some_and(|prefix| prefix.ends_with('.'))
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn url(s: &str) -> Url {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn token_exchange_sits_beside_the_api() {
+        let builder = UnityBuilder::new();
+        let defaults = builder.auth_defaults(&url("https://uc.example.com/api/2.1/unity-catalog/"));
+        assert_eq!(
+            defaults.token_exchange_endpoint.as_deref(),
+            Some("https://uc.example.com/api/1.0/unity-control/auth/tokens")
+        );
+        // Below a path prefix, the root keeps it.
+        let defaults =
+            builder.auth_defaults(&url("https://gw.example.com/uc/api/2.1/unity-catalog/"));
+        assert_eq!(
+            defaults.token_exchange_endpoint.as_deref(),
+            Some("https://gw.example.com/uc/api/1.0/unity-control/auth/tokens")
+        );
+        // An unusual API path falls back to the origin.
+        let defaults = builder.auth_defaults(&url("https://uc.example.com/custom/"));
+        assert_eq!(
+            defaults.token_exchange_endpoint.as_deref(),
+            Some("https://uc.example.com/api/1.0/unity-control/auth/tokens")
+        );
+        assert!(!defaults.databricks);
+        assert_eq!(defaults.oauth_scope, None);
+    }
+
+    #[cfg(feature = "databricks")]
+    #[test]
+    fn databricks_hosts_are_matched_by_domain() {
+        let builder = UnityBuilder::new();
+        let azure = builder.auth_defaults(&url(
+            "https://adb-1.azuredatabricks.net/api/2.1/unity-catalog/",
+        ));
+        assert!(azure.databricks);
+        assert_eq!(azure.oauth_scope.as_deref(), Some(databricks::AZURE_SCOPE));
+        let aws = builder.auth_defaults(&url(
+            "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog/",
+        ));
+        assert!(aws.databricks);
+        assert_eq!(aws.oauth_scope, None);
+        for other in [
+            "https://evilazuredatabricks.net/",
+            "https://azuredatabricks.net.evil.example/",
+            "https://notcloud.databricks.com.example/",
+        ] {
+            let defaults = builder.auth_defaults(&url(other));
+            assert!(!defaults.databricks, "{other}");
+            assert_eq!(defaults.oauth_scope, None, "{other}");
+        }
+    }
+
+    #[cfg(feature = "databricks")]
+    #[test]
+    fn the_api_url_derives_from_the_databricks_host() {
+        for host in ["adb.x", "https://adb.x/", "https://adb.x"] {
+            let builder = UnityBuilder::new().with_option("databricks_host", host);
+            assert_eq!(
+                builder.resolve_url().unwrap().as_str(),
+                "https://adb.x/api/2.1/unity-catalog/",
+                "{host}"
+            );
+        }
+        // An explicit URL wins.
+        let builder = UnityBuilder::new()
+            .with_option("databricks_host", "adb.x")
+            .with_url("https://uc.example.com/api/2.1/unity-catalog");
+        assert_eq!(
+            builder.resolve_url().unwrap().as_str(),
+            "https://uc.example.com/api/2.1/unity-catalog/"
+        );
+    }
+
+    #[test]
+    fn a_url_is_required_without_a_databricks_host() {
+        let err = UnityBuilder::new().resolve_url().unwrap_err();
+        assert!(err.to_string().contains("unity_catalog_url"), "{err}");
     }
 }

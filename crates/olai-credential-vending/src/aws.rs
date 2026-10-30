@@ -138,6 +138,10 @@ impl AwsStsMinter {
         }
     }
 
+    /// The STS region is not the bucket's: on AWS it is left unset, so clients sign for
+    /// the bucket's own region (from the URL, configuration or discovery). An
+    /// S3-compatible endpoint has no region of its own to discover, so it gets the STS
+    /// region.
     fn hints(&self) -> StoreHints {
         match &self.s3_endpoint {
             Some(endpoint) => StoreHints {
@@ -147,10 +151,7 @@ impl AwsStsMinter {
                 allow_http: Some(endpoint.starts_with("http://")),
                 ..StoreHints::default()
             },
-            None => StoreHints {
-                region: Some(self.region.clone()),
-                ..StoreHints::default()
-            },
+            None => StoreHints::default(),
         }
     }
 }
@@ -276,6 +277,26 @@ mod tests {
         assert_eq!(minter("eu-west-1").partition(), "aws");
         assert_eq!(minter("cn-north-1").partition(), "aws-cn");
         assert_eq!(minter("us-gov-west-1").partition(), "aws-us-gov");
+    }
+
+    #[test]
+    fn the_sts_region_is_not_hinted_as_the_bucket_region() {
+        let role = AwsIamRole {
+            region: Some("us-east-1".into()),
+            ..role()
+        };
+        // A bucket in another region must not be signed for the STS region.
+        assert_eq!(
+            AwsStsMinter::new(&role).unwrap().hints(),
+            StoreHints::default()
+        );
+        let hints = AwsStsMinter::new(&role)
+            .unwrap()
+            .with_s3_endpoint("http://127.0.0.1:9000")
+            .hints();
+        assert_eq!(hints.region.as_deref(), Some("us-east-1"));
+        assert_eq!(hints.path_style, Some(true));
+        assert_eq!(hints.allow_http, Some(true));
     }
 
     #[test]

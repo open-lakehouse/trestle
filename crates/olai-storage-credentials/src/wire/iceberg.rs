@@ -19,7 +19,8 @@
 //! ```
 //!
 //! Servers that predate `storage-credentials` put the same keys in the table `config`;
-//! [`LoadTableCredentials`] falls back to it, scoped to the requested location.
+//! [`LoadTableCredentials`] falls back to it, scoped to the requested location. When
+//! both are present, each entry's config is layered over the table `config`.
 //!
 //! One config map may hold credentials for several stores, and Azure SAS tokens are
 //! keyed per account (`adls.sas-token.<account>.dfs.core.windows.net`, as Iceberg Java
@@ -34,7 +35,10 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{RedactedConfig, VendContext, parse_expiry_millis, prefix_string, resolve_expiry};
+use super::{
+    RedactedConfig, VendContext, no_covering_credential, parse_expiry_millis, prefix_string,
+    resolve_expiry,
+};
 use crate::error::{Error, Result};
 use crate::location::{StorageLocation, StorageProvider, StorageScope};
 use crate::model::{StorageCredentials, StoreHints, VendedCredential};
@@ -85,11 +89,15 @@ pub struct StorageCredential {
 impl StorageCredential {
     /// Converts into the model, for the request `ctx`.
     ///
-    /// Returns `Ok(None)` when the prefix is unrelated to `ctx.scope`; a broader prefix
-    /// is clamped to it. Fails if the prefix does not parse or the config lacks a
-    /// credential for the prefix's store.
+    /// Returns `Ok(None)` when the prefix is unrelated to `ctx.scope`, including a
+    /// prefix this crate cannot parse; a broader prefix is clamped to the request. Fails
+    /// if the config lacks a credential for the prefix's store.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<Option<VendedCredential>> {
-        let offered: StorageScope = self.prefix.parse()?;
+        // The request always parses, so storage this crate cannot address is unrelated
+        // to it. Skipping it lets a server also vend for stores we do not know.
+        let Ok(offered) = self.prefix.parse::<StorageScope>() else {
+            return Ok(None);
+        };
         let Some(scope) = ctx.clamp(&offered) else {
             return Ok(None);
         };
@@ -226,14 +234,29 @@ pub struct LoadTableCredentials {
 impl LoadTableCredentials {
     /// Converts the vended credentials related to `ctx.scope`.
     ///
-    /// Uses `storage-credentials` when present. Otherwise reads the table `config` as a
-    /// credential for `ctx.scope` itself, and returns an empty list if it holds none
-    /// (for example, a server using remote signing instead; see
-    /// [`remote_signing`](Self::remote_signing)). Callers must refuse an empty list:
-    /// building a store from nothing would send unsigned requests.
+    /// Uses `storage-credentials` when present, each entry's config layered over the
+    /// table `config` as Iceberg clients do: servers commonly put `s3.endpoint`,
+    /// `client.region` and `s3.path-style-access` only in the table config, and an
+    /// entry's keys win. Otherwise reads the table `config` as a credential for
+    /// `ctx.scope` itself, and returns an empty list if it holds none (for example, a
+    /// server using remote signing instead; see [`remote_signing`](Self::remote_signing)).
+    /// Callers must refuse an empty list: building a store from nothing would send
+    /// unsigned requests.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<Vec<VendedCredential>> {
         if !self.storage_credentials.is_empty() {
-            return convert_all(&self.storage_credentials, ctx);
+            let layered: Vec<StorageCredential> = self
+                .storage_credentials
+                .iter()
+                .map(|credential| {
+                    let mut config = self.config.clone();
+                    config.extend(credential.config.clone());
+                    StorageCredential {
+                        prefix: credential.prefix.clone(),
+                        config,
+                    }
+                })
+                .collect();
+            return convert_all(&layered, ctx);
         }
         Ok(from_config(&self.config, ctx.scope.location())?
             .map(|found| found.into_vended(ctx.scope.clone(), ctx))
@@ -271,10 +294,10 @@ fn convert_all(
         vended.extend(credential.to_vended(ctx)?);
     }
     if vended.is_empty() && !credentials.is_empty() {
-        return Err(Error::invalid_credential(format!(
-            "no credential covers the requested {}",
-            ctx.scope
-        )));
+        return Err(no_covering_credential(
+            credentials.iter().map(|c| c.prefix.as_str()),
+            ctx,
+        ));
     }
     Ok(vended)
 }

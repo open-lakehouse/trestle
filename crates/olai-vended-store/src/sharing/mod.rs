@@ -244,24 +244,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_volumes_need_no_vend() {
-        let mut server = Server::new_async().await;
-        volume(&mut server, "file:///data/shares/vol").await;
-        let vend = server
-            .mock("POST", Matcher::Any)
-            .expect(0)
-            .create_async()
-            .await;
-        let source = sharing(&server)
-            .volume_source("sales", "raw", "vol")
-            .await
-            .unwrap();
-        let vended = source.fetch().await.unwrap();
-        assert_eq!(
-            vended.credentials,
-            olai_storage_credentials::StorageCredentials::None
-        );
-        vend.assert_async().await;
+    async fn local_volumes_are_refused() {
+        for location in ["file:///home/recipient/.aws", "memory:///v"] {
+            let mut server = Server::new_async().await;
+            volume(&mut server, location).await;
+            let vend = server
+                .mock("POST", Matcher::Any)
+                .expect(0)
+                .create_async()
+                .await;
+            // Even when local storage is allowed for catalogs.
+            let err = sharing(&server)
+                .with_store_options(StoreOptions::new().with_local_storage(true))
+                .volume_source("sales", "raw", "vol")
+                .await
+                .unwrap_err();
+            assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+            vend.assert_async().await;
+        }
     }
 
     #[test]
@@ -281,7 +281,7 @@ mod tests {
         let lookup = server
             .mock("GET", "/other/shares/sales/schemas/raw/volumes/vol")
             .match_header("authorization", "Bearer override")
-            .with_body(json!({ "name": "vol", "storage_location": "file:///v" }).to_string())
+            .with_body(json!({ "name": "vol", "storage_location": "s3://bucket/v" }).to_string())
             .expect(1)
             .create_async()
             .await;

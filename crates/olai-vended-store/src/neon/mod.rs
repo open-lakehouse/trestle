@@ -537,6 +537,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn credentials_are_created_without_retries() {
+        let mut server = Server::new_async().await;
+        storage(&mut server).await;
+        // Neon may have created the credential before the gateway failed: a retry would
+        // create another.
+        let create = server
+            .mock("POST", format!("{BRANCH}/credentials").as_str())
+            .with_status(502)
+            .expect(1)
+            .create_async()
+            .await;
+        let err = builder(&server)
+            .with_option("neon_create_credentials", "true")
+            .build()
+            .unwrap()
+            .source("s3://one")
+            .unwrap()
+            .fetch()
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::ApiError::find(&err).and_then(|e| e.status),
+            Some(502),
+            "{err}"
+        );
+        create.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn given_keys_and_storage_need_no_api_key() {
         let neon = NeonBuilder::new()
             .with_options([

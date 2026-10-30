@@ -9,7 +9,8 @@ Sharing hand to clients.
 - **`RefreshingCredentialProvider`** (features `aws`, `azure`, `gcp`): an object_store
   `CredentialProvider` over a source. It is seeded with the credential the store was
   built from, refreshes single-flight, and re-vends a configurable margin (5 minutes by
-  default) before expiry. A failed vend is not cached.
+  default) before expiry. A failed refresh keeps serving the cached credential until
+  it expires, and vends are at least `REFRESH_RETRY_INTERVAL` (10 seconds) apart.
 
 - **`build_store`**, **`RoutingObjectStore`**, **`presign`**: one builder for S3, R2,
   Azure, Azurite, GCS, local and in-memory stores; routing by longest prefix; presigned

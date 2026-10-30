@@ -1,5 +1,5 @@
 {
   "expirationTime": "1893456000000",
   "url": "gs://bucket/shares/vol",
-  "gcpOauthToken": { "oauth_token": "ya29.test" }
+  "gcpOauthToken": { "oauthToken": "ya29.test" }
 }

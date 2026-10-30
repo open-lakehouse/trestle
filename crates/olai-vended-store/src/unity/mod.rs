@@ -186,6 +186,8 @@ impl UnityCatalog {
         source: Resolved,
         sub_path: &str,
     ) -> Result<ScopedStore> {
+        self.options
+            .check_server_storage("Unity Catalog", &seed.scope)?;
         let store = build_store(&seed, Arc::new(source), &self.options).await?;
         store.child(sub_path)
     }
@@ -305,7 +307,6 @@ mod tests {
         .to_string()
     }
 
-    #[cfg(any(feature = "aws", feature = "fs"))]
     async fn mock_table(server: &mut ServerGuard, name: &str, id: &str, location: &str) {
         server
             .mock(
@@ -442,11 +443,24 @@ mod tests {
             .create_async()
             .await;
         let store = catalog(&server)
+            .with_store_options(StoreOptions::new().with_local_storage(true))
             .store_for_url("uc:///Tables/main/default/local", AccessLevel::Read)
             .await
             .unwrap();
         assert_eq!(store.prefix().as_ref(), "tmp/uc/local");
         vend.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn local_tables_are_refused_by_default() {
+        let mut server = Server::new_async().await;
+        mock_table(&mut server, "main.default.local", "tid", "file:///etc").await;
+        let err = catalog(&server)
+            .store_for_url("uc:///Tables/main/default/local", AccessLevel::Read)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+        assert!(err.to_string().contains("with_local_storage"), "{err}");
     }
 
     #[tokio::test]

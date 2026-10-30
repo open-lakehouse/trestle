@@ -171,6 +171,8 @@ impl IcebergCatalog {
     /// Builds the store for `source`, seeded from the `loadTable` response it was
     /// loaded with, so building does not vend again.
     async fn build(&self, loaded: &LoadTable, source: IcebergSource) -> Result<ScopedStore> {
+        self.options
+            .check_server_storage("Iceberg REST", source.scope())?;
         let ctx = VendContext::new(source.scope().clone(), source.access());
         let seed = match local_credential(source.scope(), source.access()) {
             Some(local) => local,
@@ -235,6 +237,28 @@ mod tests {
             olai_storage_credentials::StorageCredentials::Aws { key_id, .. } => key_id,
             other => panic!("expected AWS credentials, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn local_tables_are_refused_by_default() {
+        let mut server = Server::new_async().await;
+        let body = json!({
+            "metadata-location": "file:///etc/tab/metadata/00001.metadata.json",
+            "metadata": { "location": "file:///etc/tab" },
+        })
+        .to_string();
+        load_table(&mut server, &body).await;
+        let err = catalog(&server)
+            .table_store(&["ns"], "tab")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+        #[cfg(feature = "fs")]
+        catalog(&server)
+            .with_store_options(StoreOptions::new().with_local_storage(true))
+            .table_store(&["ns"], "tab")
+            .await
+            .unwrap();
     }
 
     #[cfg(feature = "aws")]

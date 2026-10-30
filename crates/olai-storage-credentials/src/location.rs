@@ -14,10 +14,28 @@ use std::fmt;
 use std::str::FromStr;
 
 use object_store::path::Path;
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use url::Url;
 
 use crate::error::{Error, Result};
 use crate::model::StoreHints;
+
+/// Characters [`StorageLocation::to_url`] escapes in a path segment: what a URL path
+/// cannot carry, `%` (else a key holding `%41` would read back as `A`), and `\` (a
+/// separator in `file:` URLs).
+const PATH_SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'/')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'\\')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
 
 /// Account name the Azurite storage emulator serves by default.
 pub const AZURITE_ACCOUNT: &str = "devstoreaccount1";
@@ -92,7 +110,10 @@ impl StorageLocation {
     /// - `file:///path`, `memory:///path`
     ///
     /// Query strings and fragments are ignored. A generic `https://host/...` URL is
-    /// rejected: without configuration there is no telling which bucket it names.
+    /// rejected: without configuration there is no telling which bucket it names. So is
+    /// a bucket, container or account name holding characters a policy could read as a
+    /// wildcard (`*`, `?`, `$`, `{`), and an Azure host outside `core.windows.net`.
+    /// Account names, and bucket names other than S3's, are lowercased.
     pub fn parse(url: &Url) -> Result<Self> {
         Self::parse_with_hints(url).map(|(location, _)| location)
     }
@@ -100,7 +121,7 @@ impl StorageLocation {
     /// Like [`parse`](Self::parse), and also returns the [`StoreHints`] the URL implies,
     /// such as the S3 region of a regional endpoint or the Azurite endpoint.
     pub fn parse_with_hints(url: &Url) -> Result<(Self, StoreHints)> {
-        let invalid = |reason: &str| Error::invalid_location(url.as_str(), reason);
+        let invalid = |reason: &str| Error::invalid_location(redacted(url), reason);
         let mut hints = StoreHints::default();
 
         let location = match url.scheme() {
@@ -156,9 +177,8 @@ impl StorageLocation {
     }
 
     fn parse_http(url: &Url, hints: &mut StoreHints) -> Result<Self> {
-        let invalid = |reason: &str| Error::invalid_location(url.as_str(), reason);
+        let invalid = |reason: &str| Error::invalid_location(redacted(url), reason);
         let host = host(url)?;
-        let labels: Vec<&str> = host.split('.').collect();
 
         // Azurite serves `http://127.0.0.1:10000/<account>/<container>/<path>`.
         if matches!(host, "127.0.0.1" | "localhost" | "[::1]")
@@ -169,7 +189,8 @@ impl StorageLocation {
             if account.is_empty() || container.is_empty() {
                 return Err(invalid("expected an Azurite /account/container path"));
             }
-            hints.endpoint = Some(url[..url::Position::BeforePath].to_owned());
+            // From the parts, not a slice of the URL, which would keep any userinfo.
+            hints.endpoint = Some(format!("{}://{host}:{AZURITE_BLOB_PORT}", url.scheme()));
             hints.allow_http = Some(url.scheme() == "http");
             return Self::bucketed(StorageProvider::Azure, Some(account), container, path);
         }
@@ -187,18 +208,14 @@ impl StorageLocation {
             return Self::bucketed(StorageProvider::R2, Some(account), bucket, path);
         }
 
-        if host.ends_with(".amazonaws.com") {
-            // The `s3` label separates the bucket (before it, virtual-hosted) from the
-            // regional suffix (after it). `s3-<region>` is the legacy dash form.
-            let Some(s3) = labels
-                .iter()
-                .position(|l| *l == "s3" || is_legacy_regional_s3_label(l))
-            else {
+        if let Some(rest) = host.strip_suffix(".amazonaws.com") {
+            let labels: Vec<&str> = rest.split('.').collect();
+            let Some((s3, region)) = s3_endpoint(&labels) else {
                 return Err(invalid(
                     "not an S3 endpoint (access points and other S3 hosts are configured through hints, not URLs)",
                 ));
             };
-            hints.region = s3_region(&labels[s3..]);
+            hints.region = region.map(str::to_owned);
             return if s3 == 0 {
                 let (bucket, path) = split_first_segment(url.path());
                 Self::bucketed(StorageProvider::Aws, None, bucket, path)
@@ -229,16 +246,36 @@ impl StorageLocation {
         bucket: impl Into<String>,
         url_path: &str,
     ) -> Result<Self> {
-        let bucket = bucket.into();
+        let mut bucket = bucket.into();
         if bucket.is_empty() {
             return Err(Error::invalid_location(
                 url_path,
                 "missing bucket or container",
             ));
         }
+        // Only S3 has (legacy) mixed-case bucket names; the other services' names are
+        // lowercase, so folding case makes `abfss://ctr@ACCT...` equal its https form.
+        if provider != StorageProvider::Aws {
+            bucket.make_ascii_lowercase();
+        }
+        if !valid_bucket(provider, &bucket) {
+            return Err(Error::invalid_location(
+                bucket,
+                "not a valid bucket or container name",
+            ));
+        }
+        let account = match account {
+            Some(account) if !valid_account(account) => {
+                return Err(Error::invalid_location(
+                    account,
+                    "not a valid storage account name",
+                ));
+            }
+            account => account.map(str::to_ascii_lowercase),
+        };
         Ok(Self {
             provider,
-            account: account.map(str::to_owned),
+            account,
             bucket,
             path: url_to_path(url_path)?,
         })
@@ -302,9 +339,14 @@ impl StorageLocation {
             (StorageProvider::Memory, _) => "memory://".to_owned(),
         };
         let mut url = Url::parse(&base).expect("canonical location base is a valid URL");
-        // `set_path` percent-encodes what a URL path cannot carry (`?`, `#`, spaces); the
-        // `%` escapes `Path` already uses pass through unchanged, so `parse` round-trips.
-        url.set_path(&format!("/{}", self.path));
+        // `Path` holds decoded keys, and `set_path` leaves `%` alone, so each part is
+        // escaped here; `parse` decodes it back to the same key.
+        let path: Vec<String> = self
+            .path
+            .parts()
+            .map(|part| utf8_percent_encode(part.as_ref(), PATH_SEGMENT).to_string())
+            .collect();
+        url.set_path(&format!("/{}", path.join("/")));
         url
     }
 }
@@ -319,7 +361,8 @@ impl FromStr for StorageLocation {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let url = Url::parse(s).map_err(|e| Error::invalid_location(s, e.to_string()))?;
+        let url =
+            Url::parse(s).map_err(|e| Error::invalid_location(redacted_str(s), e.to_string()))?;
         Self::parse(&url)
     }
 }
@@ -425,7 +468,39 @@ pub fn longest_match<'a, T>(
 fn host(url: &Url) -> Result<&str> {
     match url.host_str() {
         Some(host) if !host.is_empty() => Ok(host),
-        _ => Err(Error::invalid_location(url.as_str(), "missing host")),
+        _ => Err(Error::invalid_location(redacted(url), "missing host")),
+    }
+}
+
+/// `url` as it may appear in an error message: without the query and fragment (a SAS
+/// URL carries its signature there) or a password, and without a username except
+/// where it is the bucket or container (`r2://bucket@...`, `abfss://container@...`).
+fn redacted(url: &Url) -> String {
+    let mut url = url.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    // Both fail only for URLs that cannot hold userinfo, which then have none.
+    let _ = url.set_password(None);
+    if !matches!(
+        url.scheme(),
+        "r2" | "abfs" | "abfss" | "az" | "adl" | "azure"
+    ) {
+        let _ = url.set_username("");
+    }
+    url.into()
+}
+
+/// [`redacted`] for a string that is not a valid URL: cut at the query or fragment,
+/// with any userinfo replaced.
+fn redacted_str(s: &str) -> String {
+    let s = &s[..s.find(['?', '#']).unwrap_or(s.len())];
+    let Some((scheme, rest)) = s.split_once("://") else {
+        return s.to_owned();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://<redacted>{}", &rest[at..]),
+        None => s.to_owned(),
     }
 }
 
@@ -439,11 +514,50 @@ fn url_to_path(url_path: &str) -> Result<Path> {
     Path::from_url_path(url_path).map_err(|e| Error::invalid_location(url_path, e.to_string()))
 }
 
-/// `account.{blob,dfs}.<suffix>` → `account`.
+/// `account.{blob,dfs}.core.windows.net` → `account`, ignoring case.
+///
+/// Other suffixes are rejected, sovereign clouds (`core.usgovcloudapi.net`, ...)
+/// included: the canonical form names the public cloud, and an account name is unique
+/// only within one cloud, so rewriting the suffix could address someone else's account.
 fn azure_account(host: &str) -> Option<&str> {
-    let mut labels = host.split('.');
-    let account = labels.next().filter(|a| !a.is_empty())?;
-    matches!(labels.next(), Some("blob" | "dfs")).then_some(account)
+    const SUFFIX: &str = ".core.windows.net";
+    let split = host.len().checked_sub(SUFFIX.len())?;
+    if !host.is_char_boundary(split) || !host[split..].eq_ignore_ascii_case(SUFFIX) {
+        return None;
+    }
+    let (account, service) = host[..split].split_once('.')?;
+    (!account.is_empty()
+        && (service.eq_ignore_ascii_case("blob") || service.eq_ignore_ascii_case("dfs")))
+    .then_some(account)
+}
+
+/// Whether `account` is a plausible Azure or R2 account name: ASCII letters and digits.
+fn valid_account(account: &str) -> bool {
+    !account.is_empty() && account.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Whether `bucket` is a plausible bucket (S3, R2, GCS) or container (Azure) name.
+///
+/// Deliberately looser than each service's naming rules (legacy S3 buckets may hold
+/// capitals and `_`), but it rejects everything a policy language could read as a
+/// wildcard or variable (`*`, `?`, `$`, `{`), and percent-escapes, which the path-style
+/// spellings leave undecoded. Azure's reserved `$root`, `$logs` and `$web` containers
+/// are allowed.
+fn valid_bucket(provider: StorageProvider, bucket: &str) -> bool {
+    let well_formed = |extra: &[u8]| {
+        bucket.len() <= 255
+            && bucket
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphanumeric())
+            && bucket
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || extra.contains(&b))
+    };
+    match provider {
+        StorageProvider::Azure => matches!(bucket, "$root" | "$logs" | "$web") || well_formed(b"-"),
+        _ => well_formed(b".-_"),
+    }
 }
 
 /// `account.r2.cloudflarestorage.com` → `account`.
@@ -461,27 +575,40 @@ fn r2_hints(host: &str) -> StoreHints {
     }
 }
 
-/// `s3-us-west-2`, the legacy dash form of a regional endpoint. Excludes
-/// `s3-accesspoint`, `s3-object-lambda` and similar non-bucket endpoints, whose suffix is
-/// not a region (every AWS region name contains a digit).
-fn is_legacy_regional_s3_label(label: &str) -> bool {
-    label
-        .strip_prefix("s3-")
-        .is_some_and(|region| region.bytes().any(|b| b.is_ascii_digit()))
+/// The index of the `s3` label in the labels of an S3 host before `.amazonaws.com`,
+/// and the region the endpoint names.
+///
+/// The endpoint is the last labels: `s3`, `s3.<region>`, `s3.dualstack.<region>`, or the
+/// legacy `s3-<region>`. Whatever precedes it is a virtual-hosted bucket, so matching
+/// from the right lets a bucket be named `s3` or `s3-2024-data`. `None` for other AWS
+/// hosts: access points, website endpoints and other services.
+fn s3_endpoint<'a>(labels: &[&'a str]) -> Option<(usize, Option<&'a str>)> {
+    let n = labels.len();
+    match labels {
+        [.., "s3"] => Some((n - 1, None)),
+        [.., "s3", region] if is_region(region) => Some((n - 2, Some(region))),
+        [.., "s3", "dualstack", region] if is_region(region) => Some((n - 3, Some(region))),
+        [.., legacy] => legacy
+            .strip_prefix("s3-")
+            .filter(|region| is_region(region))
+            .map(|region| (n - 1, Some(region))),
+        [] => None,
+    }
 }
 
-/// The region in an S3 endpoint, given the labels from the `s3` label onward:
-/// `s3.us-west-2.amazonaws.com`, `s3.dualstack.us-west-2.amazonaws.com`,
-/// `s3-us-west-2.amazonaws.com`. `s3.amazonaws.com` names no region.
-fn s3_region(labels: &[&str]) -> Option<String> {
-    let (first, rest) = labels.split_first()?;
-    if let Some(region) = first.strip_prefix("s3-") {
-        return Some(region.to_owned());
-    }
-    rest.iter()
-        .find(|l| **l != "dualstack")
-        .filter(|l| **l != "amazonaws")
-        .map(|l| (*l).to_owned())
+/// Whether `label` has the shape of an AWS region: a two-letter area, then
+/// lowercase words, then a number (`us-west-2`, `us-gov-west-1`). Excludes the
+/// suffixes of `s3-website-us-east-1`, `s3-accesspoint` and `s3-external-1`.
+fn is_region(label: &str) -> bool {
+    let parts: Vec<&str> = label.split('-').collect();
+    parts.len() >= 3
+        && parts[0].len() == 2
+        && parts[0].bytes().all(|b| b.is_ascii_lowercase())
+        && parts[1..parts.len() - 1]
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase()))
+        && parts[parts.len() - 1].bytes().all(|b| b.is_ascii_digit())
+        && !parts[parts.len() - 1].is_empty()
 }
 
 #[cfg(test)]
@@ -643,6 +770,144 @@ mod tests {
     }
 
     #[test]
+    fn errors_redact_queries_fragments_and_userinfo() {
+        for (bad, secrets) in [
+            (
+                "https://acct.files.core.windows.net/ctr/x?sv=1&sig=SECRETSIG",
+                &["SECRETSIG"][..],
+            ),
+            (
+                "https://user:hunter2@example.com/b/k#SECRETFRAG",
+                &["hunter2", "user", "SECRETFRAG"],
+            ),
+            ("s3://key:hunter2@/x", &["hunter2"]),
+            (
+                "abfss://ctr:hunter2@acct.dfs.attacker.example/x?sig=SECRETSIG",
+                &["hunter2", "SECRETSIG"],
+            ),
+            // Not a URL at all: cut at the query and drop the userinfo by hand.
+            (
+                "https://user:hunter2@[bad/x?sig=SECRETSIG",
+                &["hunter2", "user", "SECRETSIG"],
+            ),
+        ] {
+            let message = bad.parse::<StorageLocation>().unwrap_err().to_string();
+            for secret in secrets {
+                assert!(!message.contains(secret), "{message}");
+            }
+        }
+        // A container in userinfo is not a secret, and helps debugging.
+        let message = "abfss://ctr@acct.dfs.attacker.example/x"
+            .parse::<StorageLocation>()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("ctr@acct.dfs.attacker.example"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn azurite_endpoint_hint_drops_userinfo() {
+        let url = Url::parse("http://user:hunter2@127.0.0.1:10000/devstoreaccount1/ctr/k").unwrap();
+        let (_, hints) = StorageLocation::parse_with_hints(&url).unwrap();
+        assert_eq!(hints.endpoint.as_deref(), Some("http://127.0.0.1:10000"));
+    }
+
+    #[test]
+    fn rejects_wildcard_and_malformed_buckets() {
+        // A `*` bucket would become `arn:aws:s3:::*/...` in a session policy, covering
+        // every bucket the role can reach.
+        for bad in [
+            "s3://*/x",
+            "s3://a*/tab",
+            "https://*.s3.amazonaws.com/x",
+            "https://s3.amazonaws.com/*/x",
+            "https://s3.amazonaws.com/b%2A/x",
+            "https://s3.amazonaws.com/b%41/x",
+            "s3://$%7Baws:username%7D/x",
+            "gs://b*/x",
+            "https://storage.googleapis.com/b%3F/y",
+            "r2://b*@acct.r2.cloudflarestorage.com/x",
+            "abfss://c*@acct.dfs.core.windows.net/x",
+            "https://acct.blob.core.windows.net/c%2A/x",
+            "http://127.0.0.1:10000/acct*/ctr/x",
+        ] {
+            assert!(
+                bad.parse::<StorageLocation>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
+        // Real names still parse, including legacy S3 capitals and Azure's `$web`.
+        assert_eq!(loc("s3://Legacy_Bucket/x").bucket(), "Legacy_Bucket");
+        assert_eq!(loc("s3://my.bucket-1/x").bucket(), "my.bucket-1");
+        assert_eq!(
+            loc("https://acct.blob.core.windows.net/$web/x").bucket(),
+            "$web"
+        );
+    }
+
+    #[test]
+    fn azure_hosts_outside_the_public_cloud_are_rejected() {
+        // The canonical form names `core.windows.net`; rewriting another suffix to it
+        // would send the SAS to a different account that happens to share the name.
+        for bad in [
+            "abfss://ctr@acct.dfs.core.usgovcloudapi.net/x",
+            "abfss://ctr@acct.dfs.core.chinacloudapi.cn/x",
+            "abfss://ctr@acct.dfs.attacker.example/x",
+            "az://ctr@acct.blob.evil.windows.net/x",
+            "https://acct.blob.core.windows.net.evil.example/ctr/x",
+            "https://acct.files.core.windows.net/ctr/x",
+            "https://a.b.blob.core.windows.net/ctr/x",
+        ] {
+            assert!(
+                bad.parse::<StorageLocation>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn account_and_bucket_case_is_folded() {
+        // `url` lowercases only http(s) hosts; userinfo and non-special hosts keep case.
+        assert_eq!(
+            loc("abfss://CTR@ACCT.DFS.CORE.WINDOWS.NET/x"),
+            loc("https://acct.dfs.core.windows.net/ctr/x")
+        );
+        assert_eq!(
+            loc("r2://Bucket@ACCT.r2.cloudflarestorage.com/x"),
+            loc("https://acct.r2.cloudflarestorage.com/bucket/x")
+        );
+        assert_eq!(loc("gs://Bucket/x"), loc("gs://bucket/x"));
+        // S3 bucket names are case-sensitive (legacy buckets may hold capitals).
+        assert_ne!(loc("s3://Bucket/x"), loc("s3://bucket/x"));
+    }
+
+    #[test]
+    fn s3_endpoint_is_matched_from_the_right() {
+        // A bucket may itself be named `s3` or look like a legacy regional label.
+        let l = loc("https://s3.s3.us-east-1.amazonaws.com/key/x");
+        assert_eq!((l.bucket(), l.path().as_ref()), ("s3", "key/x"));
+        let l = loc("https://s3-2024-data.s3.amazonaws.com/x");
+        assert_eq!((l.bucket(), l.path().as_ref()), ("s3-2024-data", "x"));
+        let l = loc("https://my.s3.bucket.s3-eu-west-1.amazonaws.com/x");
+        assert_eq!(l.bucket(), "my.s3.bucket");
+
+        for bad in [
+            "https://bucket.s3-website-us-east-1.amazonaws.com/x",
+            "https://bucket.s3-website.us-east-1.amazonaws.com/x",
+            "https://bucket.s3.us-east-1.amazonaws.com.evil.example/x",
+            "https://bucket.s3.evil.amazonaws.com/x",
+            "https://dynamodb.us-east-1.amazonaws.com/b/x",
+        ] {
+            assert!(
+                bad.parse::<StorageLocation>().is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn dot_segments_are_resolved_before_matching() {
         // `url` resolves `.` and `..` (also percent-encoded) while parsing, so a location
         // cannot climb out of a scope by spelling.
@@ -690,14 +955,32 @@ mod tests {
             "s3://b/hash%23/x",
             "s3://b/pct%25/x",
             "gs://b/caf%C3%A9",
+            // A literal `%XX` in a key must not decode a second time.
+            "s3://b/a%2541/x",
+            "s3://b/tab%252F",
+            "s3://b/back%5Cslash",
+            "file:///tmp/back%5Cslash/x",
         ] {
             let l = loc(s);
             assert_eq!(loc(&l.to_string()), l, "{s} round-trips");
+            assert_eq!(
+                l.to_string(),
+                loc(&l.to_string()).to_string(),
+                "{s} is a fixpoint"
+            );
         }
         let l = loc("s3://b/with%20space/x");
         assert_eq!(l.path().parts().next().unwrap().as_ref(), "with space");
         // An encoded space does not sneak past a segment boundary.
         assert!(!scope("s3://b/with").covers(&l));
+
+        let l = loc("s3://b/a%2541/x");
+        assert_eq!(l.path().as_ref(), "a%41/x");
+        assert_eq!(l.to_string(), "s3://b/a%2541/x");
+        // `tab%2F` is one segment, and its scope does not widen to `tab` on re-parse.
+        let l = loc("s3://b/tab%252F");
+        assert_eq!(l.path().as_ref(), "tab%2F");
+        assert_ne!(loc(&l.to_string()), loc("s3://b/tab"));
     }
 
     #[test]

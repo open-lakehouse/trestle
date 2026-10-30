@@ -33,6 +33,10 @@ futures = { workspace = true }
 object_store = { version = "0.13", default-features = false, features = ["aws"] }
 olai-http = { path = "../olai-http", version = "0.0.8" }
 olai-test-emulators = { path = "../olai-test-emulators" }
+# A raw, hand-signed ListObjectsV2: object_store always lists with a trailing `/`, so it
+# cannot probe the bare-prefix case.
+reqwest = { workspace = true }
+ring = { version = "0.17", default-features = false, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]

@@ -20,6 +20,16 @@ pub enum Error {
         location: String,
     },
 
+    /// The requested location contains a more specific registered location that
+    /// another credential governs, so no one credential may mint for all of it.
+    #[error("`{location}` contains `{nested}`, which another credential governs")]
+    Overlapping {
+        /// The requested location.
+        location: String,
+        /// The registered location inside it.
+        nested: String,
+    },
+
     /// The minter cannot mint for this request, for example a location in another cloud.
     #[error("cannot mint for `{location}`: {reason}")]
     Unsupported {

@@ -48,8 +48,23 @@ async fn setup() -> RustFs {
 
 /// A store holding session credentials minted for `scope` at `access`.
 async fn scoped_store(rustfs: &RustFs, scope: &str, access: AccessLevel) -> AmazonS3 {
+    let creds = scoped_credentials(rustfs, scope, access).await;
+    store(
+        rustfs,
+        &creds.key_id,
+        &creds.secret_key,
+        creds.token.as_deref(),
+    )
+}
+
+/// Session credentials minted for `scope` at `access`.
+async fn scoped_credentials(rustfs: &RustFs, scope: &str, access: AccessLevel) -> AwsCredential {
     let scope: StorageScope = scope.parse().unwrap();
-    let policy = session_policy(&scope, access).unwrap();
+    mint(rustfs, session_policy(&scope, access).unwrap()).await
+}
+
+/// Session credentials narrowed by `policy`.
+async fn mint(rustfs: &RustFs, policy: String) -> AwsCredential {
     let root = Arc::new(StaticCredentialProvider::new(AwsCredential {
         key_id: ROOT_ACCESS_KEY.to_owned(),
         secret_key: ROOT_SECRET_KEY.to_owned(),
@@ -69,12 +84,83 @@ async fn scoped_store(rustfs: &RustFs, scope: &str, access: AccessLevel) -> Amaz
     .expect("AssumeRole against RustFS STS");
     let creds = session.token;
     assert!(creds.token.is_some(), "STS returns a session token");
-    store(
-        rustfs,
-        &creds.key_id,
-        &creds.secret_key,
-        creds.token.as_deref(),
-    )
+    AwsCredential {
+        key_id: creds.key_id.clone(),
+        secret_key: creds.secret_key.clone(),
+        token: creds.token.clone(),
+    }
+}
+
+/// `ListObjectsV2` with exactly `prefix`, signed by hand (SigV4), returning the HTTP
+/// status and body.
+async fn raw_list(rustfs: &RustFs, creds: &AwsCredential, prefix: &str) -> (u16, String) {
+    use ring::{digest, hmac};
+
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let sha256 = |data: &[u8]| hex(digest::digest(&digest::SHA256, data).as_ref());
+    let mac = |key: &[u8], data: &str| {
+        hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), data.as_bytes())
+            .as_ref()
+            .to_vec()
+    };
+    // SigV4 query encoding: everything but unreserved characters.
+    let encode = |s: &str| {
+        s.bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{b:02X}"),
+            })
+            .collect::<String>()
+    };
+
+    let endpoint = url::Url::parse(rustfs.endpoint()).unwrap();
+    let host = &endpoint[url::Position::BeforeHost..url::Position::AfterPort];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let now = chrono::DateTime::from_timestamp(now.as_secs() as i64, 0).unwrap();
+    let date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let day = &date[..8];
+    let token = creds.token.as_deref().unwrap();
+    let payload = sha256(b"");
+
+    let path = format!("/{BUCKET}");
+    let query = format!("list-type=2&prefix={}", encode(prefix));
+    let signed_headers = "host;x-amz-content-sha256;x-amz-date;x-amz-security-token";
+    let canonical = format!(
+        "GET\n{path}\n{query}\nhost:{host}\nx-amz-content-sha256:{payload}\n\
+         x-amz-date:{date}\nx-amz-security-token:{token}\n\n{signed_headers}\n{payload}"
+    );
+    let scope = format!("{day}/{REGION}/s3/aws4_request");
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{date}\n{scope}\n{}",
+        sha256(canonical.as_bytes())
+    );
+    let key = [day, REGION, "s3", "aws4_request"].iter().fold(
+        format!("AWS4{}", creds.secret_key).into_bytes(),
+        |key, part| mac(&key, part),
+    );
+    let signature = hex(&mac(&key, &string_to_sign));
+
+    let response = reqwest::Client::new()
+        .get(format!("{}{path}?{query}", rustfs.endpoint().trim_end_matches('/')))
+        .header("x-amz-content-sha256", &payload)
+        .header("x-amz-date", &date)
+        .header("x-amz-security-token", token)
+        .header(
+            "authorization",
+            format!(
+                "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
+                creds.key_id
+            ),
+        )
+        .send()
+        .await
+        .expect("send ListObjectsV2");
+    let status = response.status().as_u16();
+    (status, response.text().await.unwrap_or_default())
 }
 
 /// Whether `err` is an authorization failure. object_store maps a 403 on GET/PUT to
@@ -138,6 +224,31 @@ async fn read_policy_confines_reads_and_listing_to_the_prefix() {
     assert_list(&store, Some("table2"), false).await;
 
     assert_put(&store, "tab/new", false).await;
+}
+
+#[tokio::test]
+async fn bare_prefix_listing_cannot_reveal_sibling_keys() {
+    let rustfs = setup().await;
+    let creds = scoped_credentials(&rustfs, "s3://vend/tab", AccessLevel::Read).await;
+
+    let (status, body) = raw_list(&rustfs, &creds, "tab/").await;
+    assert_eq!(status, 200, "LIST tab/: {body}");
+    assert!(body.contains("tab/a") && !body.contains("table2"), "{body}");
+
+    // `prefix=tab` would match `table2/c` as a string.
+    let (status, body) = raw_list(&rustfs, &creds, "tab").await;
+    assert_eq!(status, 403, "LIST tab must be denied: {body}");
+
+    // Mutation check: with the bare prefix allowed, the same request leaks `table2`, so
+    // the denial above is the policy's doing.
+    let weakened = session_policy(&"s3://vend/tab".parse().unwrap(), AccessLevel::Read)
+        .unwrap()
+        .replace(r#""tab/","tab/*""#, r#""tab","tab/*""#);
+    assert!(weakened.contains(r#""tab","tab/*""#), "{weakened}");
+    let weak = mint(&rustfs, weakened).await;
+    let (status, body) = raw_list(&rustfs, &weak, "tab").await;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("table2/c"), "{body}");
 }
 
 #[tokio::test]

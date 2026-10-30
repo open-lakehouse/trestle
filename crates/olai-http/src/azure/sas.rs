@@ -82,6 +82,27 @@ pub async fn fetch_user_delegation_key(
     expiry: DateTime<Utc>,
     options: &UserDelegationKeyOptions,
 ) -> Result<UserDelegationKey> {
+    fetch_user_delegation_key_with_retry(
+        account,
+        bearer_token,
+        start,
+        expiry,
+        options,
+        &RetryConfig::default(),
+    )
+    .await
+}
+
+/// Like [`fetch_user_delegation_key`], retrying failed requests as `retry` allows
+/// instead of the default (up to three minutes).
+pub async fn fetch_user_delegation_key_with_retry(
+    account: &str,
+    bearer_token: &str,
+    start: DateTime<Utc>,
+    expiry: DateTime<Utc>,
+    options: &UserDelegationKeyOptions,
+    retry: &RetryConfig,
+) -> Result<UserDelegationKey> {
     let endpoint = match &options.endpoint {
         Some(endpoint) => endpoint.trim_end_matches('/').to_owned(),
         None => format!("https://{account}.blob.core.windows.net"),
@@ -95,7 +116,6 @@ pub async fn fetch_user_delegation_key(
 
     let client = options.client_options.client()?;
     let service: Arc<dyn HttpService> = make_service(client.clone(), None);
-    let retry = RetryConfig::default();
 
     let text = client
         .request(Method::POST, &url)
@@ -103,7 +123,7 @@ pub async fn fetch_user_delegation_key(
         .header("x-ms-version", SAS_VERSION)
         .header(reqwest::header::CONTENT_TYPE, "application/xml")
         .body(body)
-        .retryable(&retry, service)
+        .retryable(retry, service)
         .idempotent(true)
         .send()
         .await

@@ -2592,6 +2592,8 @@ dependencies = [
  "olai-http",
  "olai-test-emulators",
  "percent-encoding",
+ "reqwest 0.13.5",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2684,6 +2686,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
 ]
 

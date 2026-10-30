@@ -103,6 +103,7 @@ impl fmt::Debug for ScopedStore {
 /// Cheap to clone; clones share the S3 region cache.
 #[derive(Clone)]
 pub struct StoreOptions {
+    allow_local_storage: bool,
     #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
     refresh_margin: Duration,
     #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
@@ -135,6 +136,7 @@ enum RegionDiscovery {
 impl Default for StoreOptions {
     fn default() -> Self {
         Self {
+            allow_local_storage: false,
             #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
             refresh_margin: crate::refresh::DEFAULT_REFRESH_MARGIN,
             #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
@@ -158,10 +160,52 @@ impl Default for StoreOptions {
 
 impl StoreOptions {
     /// Defaults: a 5 minute refresh margin, S3 region discovery through a process-wide
-    /// cache, and object_store's default HTTP client options.
+    /// cache, object_store's default HTTP client options, and no local storage named by
+    /// a catalog.
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Whether a catalog (Unity Catalog, Iceberg REST) may name local storage
+    /// (`file://`, `memory://`) for a table or volume. Off by default.
+    ///
+    /// Local storage needs no vend, so nothing guards it: a store over `file://` reaches
+    /// whatever the process can, under whatever path the server chose. Allow it only for
+    /// a catalog you trust with the local file system, such as a local development
+    /// server. Open Sharing providers are never trusted with it.
+    pub fn with_local_storage(mut self, allow: bool) -> Self {
+        self.allow_local_storage = allow;
+        self
+    }
+
+    /// Refuses `scope` if a server named it, it is local storage, and that is not
+    /// [allowed](Self::with_local_storage).
+    #[cfg_attr(not(any(feature = "unity", feature = "iceberg")), allow(dead_code))]
+    pub(crate) fn check_server_storage(&self, service: &str, scope: &StorageScope) -> Result<()> {
+        if is_local(scope) && !self.allow_local_storage {
+            return Err(local_storage_refused(service, scope));
+        }
+        Ok(())
+    }
+}
+
+/// Whether `scope` is local storage, which needs no credential.
+pub(crate) fn is_local(scope: &StorageScope) -> bool {
+    matches!(
+        scope.location().provider(),
+        StorageProvider::Local | StorageProvider::Memory
+    )
+}
+
+/// The error for local storage a server named but may not.
+pub(crate) fn local_storage_refused(service: &str, scope: &StorageScope) -> Error {
+    unsupported(
+        scope.location(),
+        format!(
+            "{service} named local storage; it is refused unless allowed with \
+             `StoreOptions::with_local_storage`"
+        ),
+    )
 }
 
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
@@ -305,12 +349,14 @@ impl StoreOptions {
 }
 
 impl fmt::Debug for StoreOptions {
+    // The client options are left out: their proxy URLs and default headers can hold
+    // secrets.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut f = f.debug_struct("StoreOptions");
+        f.field("allow_local_storage", &self.allow_local_storage);
         #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
         f.field("refresh_margin", &self.refresh_margin)
-            .field("clock", &self.clock.as_ref().map(|_| "<fn>"))
-            .field("client_options", &self.client_options);
+            .field("clock", &self.clock.as_ref().map(|_| "<fn>"));
         #[cfg(feature = "aws")]
         f.field("aws_region", &self.aws_region)
             .field("s3_endpoint", &self.s3_endpoint);

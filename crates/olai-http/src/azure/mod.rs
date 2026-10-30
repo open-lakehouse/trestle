@@ -16,7 +16,7 @@ pub use credential::AzureCredential;
 pub use sas::{
     DEFAULT_TTL_SECS, SAS_READ, SAS_READ_WRITE, UserDelegationKey, UserDelegationKeyOptions,
     build_storage_key_sas, build_user_delegation_sas, fetch_user_delegation_key,
-    generate_storage_key_sas, generate_user_delegation_sas,
+    fetch_user_delegation_key_with_retry, generate_storage_key_sas, generate_user_delegation_sas,
     generate_user_delegation_sas_with_options,
 };
 

@@ -1,0 +1,9 @@
+{
+  "expirationTime": "1893456000000",
+  "url": "s3://bucket/shares/vol",
+  "awsTempCredentials": {
+    "accessKeyId": "ak-test",
+    "secretAccessKey": "sk-test",
+    "sessionToken": "st-test"
+  }
+}
