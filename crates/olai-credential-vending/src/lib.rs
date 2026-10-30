@@ -14,6 +14,8 @@
 //!   IAM role with a session policy, [`AzureUserDelegationSasMinter`] and
 //!   [`AzureAccountKeySasMinter`] sign SAS, and [`LocalMinter`] serves local storage.
 //!   [`minter_for`] picks the minter for a registered credential.
+//! - [`CachingMinter`]: a bounded cache of minted credentials, keyed by the whole
+//!   request. [`Vendor`] resolves, mints and caches per registered credential.
 //!
 //! The vocabulary (credentials, locations, scopes, downscoping policies) is
 //! [`olai_storage_credentials`]; the cloud calls are `olai-http`'s. Native only.
@@ -25,6 +27,7 @@
 
 pub mod aws;
 pub mod azure;
+pub mod cache;
 pub mod error;
 pub mod mint;
 pub mod registered;
@@ -32,6 +35,7 @@ pub mod resolve;
 
 pub use aws::AwsStsMinter;
 pub use azure::{AzureAccountKeySasMinter, AzureUserDelegationSasMinter};
+pub use cache::{CachingMinter, Vendor};
 pub use error::{Error, Result};
 pub use mint::{CredentialMinter, LocalMinter, MintRequest, minter_for};
 pub use olai_storage_credentials::{
