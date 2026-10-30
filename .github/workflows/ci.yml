@@ -172,6 +172,8 @@ jobs:
         run: cargo test --locked -p olai-http --features emulator-it --tests
       - name: Run emulator tests (olai-vended-store)
         run: cargo test --locked -p olai-vended-store --features emulator-it,delta-api --tests
+      - name: Run emulator tests (olai-credential-vending)
+        run: cargo test --locked -p olai-credential-vending --features emulator-it --tests
 
   postgres:
     name: Postgres backend
