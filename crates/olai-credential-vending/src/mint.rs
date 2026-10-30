@@ -59,6 +59,31 @@ pub trait CredentialMinter: Debug + Send + Sync + 'static {
     async fn mint(&self, request: &MintRequest) -> Result<VendedCredential>;
 }
 
+/// The minter for `credential`, with default settings: [`AwsStsMinter`] for IAM roles,
+/// [`AzureUserDelegationSasMinter`] for service principals and managed identities, and
+/// [`AzureAccountKeySasMinter`] for account keys.
+///
+/// Build the minters directly to set endpoints, client options or audit fields.
+///
+/// [`AwsStsMinter`]: crate::AwsStsMinter
+/// [`AzureUserDelegationSasMinter`]: crate::AzureUserDelegationSasMinter
+/// [`AzureAccountKeySasMinter`]: crate::AzureAccountKeySasMinter
+pub fn minter_for(
+    credential: &crate::RegisteredCredential,
+) -> Result<std::sync::Arc<dyn CredentialMinter>> {
+    use crate::RegisteredCredential as R;
+    Ok(match credential {
+        R::AwsIamRole(role) => std::sync::Arc::new(crate::AwsStsMinter::new(role)?),
+        R::AzureServicePrincipal(principal) => std::sync::Arc::new(
+            crate::AzureUserDelegationSasMinter::from_service_principal(principal)?,
+        ),
+        R::AzureManagedIdentity(identity) => std::sync::Arc::new(
+            crate::AzureUserDelegationSasMinter::from_managed_identity(identity)?,
+        ),
+        R::AzureStorageKey(key) => std::sync::Arc::new(crate::AzureAccountKeySasMinter::new(key)),
+    })
+}
+
 /// Mints for local (`file://`) and in-memory storage, which need no secret.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LocalMinter;

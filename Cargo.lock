@@ -2508,6 +2508,7 @@ name = "olai-credential-vending"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "chrono",
  "object_store",
  "olai-http",
  "olai-storage-credentials",
@@ -2516,6 +2517,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "url",
 ]
 
 [[package]]
