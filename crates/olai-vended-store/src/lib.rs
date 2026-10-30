@@ -22,8 +22,9 @@
 //!   object_store's per-cloud credential types.
 //!
 //! Vending protocols are modules behind features: `unity` (Unity Catalog REST, with
-//! the UC Delta API behind `delta-api`), `iceberg` (Iceberg REST) and `sharing`
-//! (Delta / Open Sharing volumes and skills).
+//! the UC Delta API behind `delta-api`), `iceberg` (Iceberg REST), `sharing`
+//! (Delta / Open Sharing volumes and skills) and `neon` (Neon branch storage, for the
+//! branch's owner).
 //! [`parse_url_opts`] builds a store from any enabled protocol's URL reference, and
 //! [`auth`] is their shared, key-configured authentication.
 //!
@@ -60,6 +61,9 @@ pub mod error;
     doc(cfg(all(feature = "iceberg", not(target_arch = "wasm32"))))
 )]
 pub mod iceberg;
+#[cfg(all(feature = "neon", not(target_arch = "wasm32")))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "neon", not(target_arch = "wasm32")))))]
+pub mod neon;
 #[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
 mod options;
 #[cfg(any(feature = "aws", feature = "azure"))]

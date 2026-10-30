@@ -250,6 +250,10 @@ pub(crate) async fn fetch_or_read_only<S: CredentialSource>(
 
 /// The storage root a server named for a securable, with the hints its URL implies (an
 /// emulator endpoint, a regional S3 host).
+#[cfg_attr(
+    not(any(feature = "unity", feature = "iceberg", feature = "sharing")),
+    allow(dead_code)
+)]
 pub(crate) fn storage_root(
     service: &str,
     storage_location: &str,
@@ -265,6 +269,10 @@ pub(crate) fn storage_root(
 
 /// The credential for local (`file://`) storage, which needs no vend; `None` for other
 /// storage.
+#[cfg_attr(
+    not(any(feature = "unity", feature = "iceberg", feature = "sharing")),
+    allow(dead_code)
+)]
 pub(crate) fn local_credential(
     scope: &StorageScope,
     access: AccessLevel,
