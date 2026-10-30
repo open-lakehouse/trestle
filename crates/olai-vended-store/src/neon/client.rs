@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use olai_http::CloudClient;
+use olai_http::{CloudClient, RetryConfig};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -38,17 +38,25 @@ const DIALECT: Dialect = Dialect {
 /// `POST .../credentials` to create or reveal a branch credential.
 ///
 /// Authentication (a Neon API key), retries and the I/O runtime belong to the wrapped
-/// [`CloudClient`]. Cheap to clone.
+/// [`CloudClient`]. Creating a credential is never retried: a retry after a lost
+/// response would create another long-lived credential. Cheap to clone.
 #[derive(Clone)]
 pub struct NeonClient {
     api: ApiClient,
+    /// For requests that must not be retried.
+    once: ApiClient,
 }
 
 impl NeonClient {
     /// A client for the Neon API at `api_url` (see [`DEFAULT_API_URL`]).
     pub fn new(client: CloudClient, api_url: Url) -> Self {
+        let once = client.clone().with_retry_config(RetryConfig {
+            max_retries: 0,
+            ..RetryConfig::default()
+        });
         Self {
-            api: ApiClient::new(client, api_url, DIALECT),
+            api: ApiClient::new(client, api_url.clone(), DIALECT),
+            once: ApiClient::new(once, api_url, DIALECT),
         }
     }
 
@@ -88,6 +96,9 @@ impl NeonClient {
     }
 
     /// Creates a branch credential with `scopes` (`storage:read`, `storage:write`).
+    ///
+    /// Sent once, without retries: Neon credentials do not expire, so a retried create
+    /// would leave a credential nobody holds.
     pub async fn create_credential(
         &self,
         project: &str,
@@ -103,14 +114,14 @@ impl NeonClient {
             name: Option<&'a str>,
         }
         let request = self
-            .api
+            .once
             .post(&["projects", project, "branches", branch, "credentials"])?
             .json(&Request {
                 scopes,
                 principal_type: "user",
                 name,
             });
-        self.api.send(request).await
+        self.once.send(request).await
     }
 }
 
