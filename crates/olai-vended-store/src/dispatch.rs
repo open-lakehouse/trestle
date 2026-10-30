@@ -15,6 +15,10 @@ pub enum Protocol {
     /// Unity Catalog REST: `uc://...` and `vol+dbfs:/Volumes/...` (feature `unity`).
     #[cfg(feature = "unity")]
     Unity,
+    /// Open Sharing volumes: `sharing:///share/schema/volume[/path]` (feature
+    /// `sharing`), with the server and token from the `sharing_profile` option.
+    #[cfg(feature = "sharing")]
+    Sharing,
 }
 
 impl Protocol {
@@ -28,6 +32,8 @@ impl Protocol {
         match url.scheme() {
             #[cfg(feature = "unity")]
             "uc" | "vol+dbfs" => Some(Self::Unity),
+            #[cfg(feature = "sharing")]
+            "sharing" => Some(Self::Sharing),
             _ => None,
         }
     }
@@ -42,7 +48,10 @@ impl Protocol {
 ///
 /// Unlike object_store's, this is `async`: it vends a credential.
 // Without a protocol that has a URL grammar, every URL is refused unread.
-#[cfg_attr(not(feature = "unity"), allow(unused_variables))]
+#[cfg_attr(
+    not(any(feature = "unity", feature = "sharing")),
+    allow(unused_variables)
+)]
 pub async fn parse_url_opts<I, K, V>(url: &Url, options: I) -> Result<(Arc<dyn ObjectStore>, Path)>
 where
     I: IntoIterator<Item = (K, V)>,
@@ -53,6 +62,15 @@ where
         #[cfg(feature = "unity")]
         Some(Protocol::Unity) => {
             let store = crate::unity::UnityBuilder::new()
+                .with_options(options)
+                .build()?
+                .open(url.as_str())
+                .await?;
+            Ok((store.root(), store.prefix().clone()))
+        }
+        #[cfg(feature = "sharing")]
+        Some(Protocol::Sharing) => {
+            let store = crate::sharing::SharingBuilder::new()
                 .with_options(options)
                 .build()?
                 .open(url.as_str())
