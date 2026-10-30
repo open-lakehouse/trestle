@@ -6,14 +6,15 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Errors raised while parsing locations, credentials or wire payloads.
 ///
 /// Messages never include secret material: a malformed credential is described by
-/// which field is wrong, not by its value.
+/// which field is wrong, not by its value, and a URL is shown without its query,
+/// fragment or userinfo credentials (where a SAS URL or `user:pass@` carries them).
 #[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
     /// The URL is not a storage location this crate understands.
     #[error("invalid storage location `{url}`: {reason}")]
     InvalidLocation {
-        /// The offending URL.
+        /// The offending URL, redacted (see above), or the part of it that was wrong.
         url: String,
         /// Why it was rejected.
         reason: String,

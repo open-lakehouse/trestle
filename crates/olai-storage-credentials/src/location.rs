@@ -103,7 +103,7 @@ impl StorageLocation {
     /// Like [`parse`](Self::parse), and also returns the [`StoreHints`] the URL implies,
     /// such as the S3 region of a regional endpoint or the Azurite endpoint.
     pub fn parse_with_hints(url: &Url) -> Result<(Self, StoreHints)> {
-        let invalid = |reason: &str| Error::invalid_location(url.as_str(), reason);
+        let invalid = |reason: &str| Error::invalid_location(redacted(url), reason);
         let mut hints = StoreHints::default();
 
         let location = match url.scheme() {
@@ -159,7 +159,7 @@ impl StorageLocation {
     }
 
     fn parse_http(url: &Url, hints: &mut StoreHints) -> Result<Self> {
-        let invalid = |reason: &str| Error::invalid_location(url.as_str(), reason);
+        let invalid = |reason: &str| Error::invalid_location(redacted(url), reason);
         let host = host(url)?;
 
         // Azurite serves `http://127.0.0.1:10000/<account>/<container>/<path>`.
@@ -171,7 +171,8 @@ impl StorageLocation {
             if account.is_empty() || container.is_empty() {
                 return Err(invalid("expected an Azurite /account/container path"));
             }
-            hints.endpoint = Some(url[..url::Position::BeforePath].to_owned());
+            // From the parts, not a slice of the URL, which would keep any userinfo.
+            hints.endpoint = Some(format!("{}://{host}:{AZURITE_BLOB_PORT}", url.scheme()));
             hints.allow_http = Some(url.scheme() == "http");
             return Self::bucketed(StorageProvider::Azure, Some(account), container, path);
         }
@@ -337,7 +338,8 @@ impl FromStr for StorageLocation {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let url = Url::parse(s).map_err(|e| Error::invalid_location(s, e.to_string()))?;
+        let url =
+            Url::parse(s).map_err(|e| Error::invalid_location(redacted_str(s), e.to_string()))?;
         Self::parse(&url)
     }
 }
@@ -443,7 +445,39 @@ pub fn longest_match<'a, T>(
 fn host(url: &Url) -> Result<&str> {
     match url.host_str() {
         Some(host) if !host.is_empty() => Ok(host),
-        _ => Err(Error::invalid_location(url.as_str(), "missing host")),
+        _ => Err(Error::invalid_location(redacted(url), "missing host")),
+    }
+}
+
+/// `url` as it may appear in an error message: without the query and fragment (a SAS
+/// URL carries its signature there) or a password, and without a username except
+/// where it is the bucket or container (`r2://bucket@...`, `abfss://container@...`).
+fn redacted(url: &Url) -> String {
+    let mut url = url.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    // Both fail only for URLs that cannot hold userinfo, which then have none.
+    let _ = url.set_password(None);
+    if !matches!(
+        url.scheme(),
+        "r2" | "abfs" | "abfss" | "az" | "adl" | "azure"
+    ) {
+        let _ = url.set_username("");
+    }
+    url.into()
+}
+
+/// [`redacted`] for a string that is not a valid URL: cut at the query or fragment,
+/// with any userinfo replaced.
+fn redacted_str(s: &str) -> String {
+    let s = &s[..s.find(['?', '#']).unwrap_or(s.len())];
+    let Some((scheme, rest)) = s.split_once("://") else {
+        return s.to_owned();
+    };
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{scheme}://<redacted>{}", &rest[at..]),
+        None => s.to_owned(),
     }
 }
 
@@ -710,6 +744,51 @@ mod tests {
                 "{bad} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn errors_redact_queries_fragments_and_userinfo() {
+        for (bad, secrets) in [
+            (
+                "https://acct.files.core.windows.net/ctr/x?sv=1&sig=SECRETSIG",
+                &["SECRETSIG"][..],
+            ),
+            (
+                "https://user:hunter2@example.com/b/k#SECRETFRAG",
+                &["hunter2", "user", "SECRETFRAG"],
+            ),
+            ("s3://key:hunter2@/x", &["hunter2"]),
+            (
+                "abfss://ctr:hunter2@acct.dfs.attacker.example/x?sig=SECRETSIG",
+                &["hunter2", "SECRETSIG"],
+            ),
+            // Not a URL at all: cut at the query and drop the userinfo by hand.
+            (
+                "https://user:hunter2@[bad/x?sig=SECRETSIG",
+                &["hunter2", "user", "SECRETSIG"],
+            ),
+        ] {
+            let message = bad.parse::<StorageLocation>().unwrap_err().to_string();
+            for secret in secrets {
+                assert!(!message.contains(secret), "{message}");
+            }
+        }
+        // A container in userinfo is not a secret, and helps debugging.
+        let message = "abfss://ctr@acct.dfs.attacker.example/x"
+            .parse::<StorageLocation>()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("ctr@acct.dfs.attacker.example"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn azurite_endpoint_hint_drops_userinfo() {
+        let url = Url::parse("http://user:hunter2@127.0.0.1:10000/devstoreaccount1/ctr/k").unwrap();
+        let (_, hints) = StorageLocation::parse_with_hints(&url).unwrap();
+        assert_eq!(hints.endpoint.as_deref(), Some("http://127.0.0.1:10000"));
     }
 
     #[test]
