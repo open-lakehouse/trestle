@@ -24,6 +24,8 @@ olai-http = { path = "../olai-http", version = "0.0.8" }
 olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.1" }
 
 [dev-dependencies]
+# A stand-in Blob service for user delegation key fetches.
+mockito = "1.4"
 # Emulator tests only: exercise minted credentials through a real S3 client.
 object_store = { version = "0.13", default-features = false, features = ["aws"] }
 olai-test-emulators = { path = "../olai-test-emulators" }

@@ -2509,6 +2509,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "chrono",
+ "mockito",
  "object_store",
  "olai-http",
  "olai-storage-credentials",

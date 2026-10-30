@@ -18,7 +18,8 @@ pub struct MintRequest {
     /// What the credential may do there.
     pub access: AccessLevel,
     /// How long it should live; the minter's default when `None`. Minters clamp it to
-    /// what the cloud allows.
+    /// what the cloud allows, which can lengthen a short request: STS issues at least
+    /// 15 minutes.
     pub ttl: Option<Duration>,
     /// Who the credential is for, for audit: the STS `RoleSessionName`, for example.
     pub session_name: Option<String>,
@@ -85,6 +86,10 @@ pub fn minter_for(
 }
 
 /// Mints for local (`file://`) and in-memory storage, which need no secret.
+///
+/// No [`RegisteredCredential`](crate::RegisteredCredential) governs local storage, so
+/// neither [`minter_for`] nor [`Vendor`](crate::Vendor) returns this minter: a server
+/// that serves local storage calls it directly.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LocalMinter;
 
