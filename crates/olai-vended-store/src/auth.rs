@@ -492,13 +492,9 @@ impl AuthConfig {
             Some(AuthType::TokenFile)
         } else if has(AuthKey::TokenEnv) {
             Some(AuthType::TokenEnv)
-        } else if self.databricks_configured(url, defaults) {
-            #[cfg(feature = "databricks")]
-            return Some(AuthType::Databricks);
-            #[cfg(not(feature = "databricks"))]
-            unreachable!("Databricks is never configured without the `databricks` feature")
         } else {
-            self.detect_cloud_identity(defaults)
+            self.databricks_auth_type(url, defaults)
+                .or_else(|| self.detect_cloud_identity(defaults))
         }
     }
 
@@ -537,21 +533,23 @@ impl AuthConfig {
         None
     }
 
-    /// Whether to detect Databricks credentials for the server at `url`.
+    /// [`AuthType::Databricks`] when Databricks credentials apply to the server at `url`.
     ///
     /// Only for a Databricks server: one the protocol knows to be a workspace, or the
     /// configured Databricks host. Credentials for a workspace are never sent to another
     /// server just because they are configured; `_auth_type = databricks` forces it.
     #[cfg_attr(not(feature = "databricks"), allow(unused_variables))]
-    fn databricks_configured(&self, url: &Url, defaults: &AuthDefaults) -> bool {
+    fn databricks_auth_type(&self, url: &Url, defaults: &AuthDefaults) -> Option<AuthType> {
         #[cfg(feature = "databricks")]
         {
             let target = defaults.databricks || self.is_databricks_host(url);
-            target
-                && (self.has_databricks() || (self.from_env && self.databricks_client(url).is_ok()))
+            (target
+                && (self.has_databricks()
+                    || (self.from_env && self.databricks_client(url).is_ok())))
+            .then_some(AuthType::Databricks)
         }
         #[cfg(not(feature = "databricks"))]
-        false
+        None
     }
 
     /// Whether `url` is on the configured Databricks host.

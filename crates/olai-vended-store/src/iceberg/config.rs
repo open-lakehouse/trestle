@@ -9,7 +9,7 @@ use url::Url;
 use super::{IcebergCatalog, IcebergClient};
 use crate::auth::{AuthConfig, AuthDefaults};
 use crate::error::{Error, Result};
-use crate::options::{StoreKeys, access_key_value, parse_access, parse_base_url};
+use crate::options::{StoreKeys, access_key_value, http_client, parse_access, parse_base_url};
 use crate::store::StoreOptions;
 
 /// The OAuth token endpoint the Iceberg REST spec places below the catalog URI.
@@ -197,10 +197,7 @@ impl IcebergBuilder {
         )?;
         let access = parse_access("iceberg_operation", self.operation.as_deref())?
             .unwrap_or(AccessLevel::Read);
-        let http = match &self.client {
-            Some(client) => client.clone(),
-            None => self.auth.client(&uri, &auth_defaults(&uri))?,
-        };
+        let http = http_client(self.client.as_ref(), &self.auth, &uri, &auth_defaults(&uri))?;
         let client = IcebergClient::new(http, uri);
         let client = match &self.prefix {
             Some(prefix) => client.with_prefix(prefix),

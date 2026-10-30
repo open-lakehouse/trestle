@@ -14,8 +14,8 @@ use object_store::{
 };
 use olai_storage_credentials::{StorageLocation, StorageProvider};
 
-use crate::error::{Error, Result};
-use crate::store::ScopedStore;
+use crate::error::Result;
+use crate::store::{ScopedStore, unsupported};
 
 /// An [`ObjectStore`] that sends each request to the route with the longest matching
 /// prefix.
@@ -80,14 +80,14 @@ impl RoutingObjectStore {
         let mut inner = self.inner.write().unwrap();
         match &inner.bucket {
             Some(existing) if *existing != bucket => {
-                return Err(Error::Unsupported {
-                    location: store.scope().to_string(),
-                    reason: format!(
+                return Err(unsupported(
+                    store.scope(),
+                    format!(
                         "this router serves bucket `{}`; register stores for other buckets \
                          with another router",
                         existing.name
                     ),
-                });
+                ));
             }
             _ => inner.bucket = Some(bucket),
         }
@@ -120,22 +120,18 @@ impl RoutingObjectStore {
         inner.routes.iter().map(|(p, _)| p.clone()).collect()
     }
 
-    /// The store and prefix of the longest route covering `location`.
-    fn route_with_prefix(&self, location: &Path) -> Option<(Path, Arc<dyn ObjectStore>)> {
+    /// The prefix and store of the longest route covering `location`; `NotFound` when
+    /// none does.
+    fn covering_route(
+        &self,
+        location: &Path,
+    ) -> object_store::Result<(Path, Arc<dyn ObjectStore>)> {
         let inner = self.inner.read().unwrap();
         inner
             .routes
             .iter()
             .find(|(prefix, _)| location.prefix_matches(prefix))
             .map(|(p, s)| (p.clone(), Arc::clone(s)))
-    }
-
-    /// Like [`route_with_prefix`](Self::route_with_prefix), but `NotFound` on a miss.
-    fn covering_route(
-        &self,
-        location: &Path,
-    ) -> object_store::Result<(Path, Arc<dyn ObjectStore>)> {
-        self.route_with_prefix(location)
             .ok_or_else(|| object_store::Error::NotFound {
                 path: location.to_string(),
                 source: format!("no route covers `{location}`").into(),
@@ -156,8 +152,8 @@ impl RoutingObjectStore {
     /// The store serving both `from` and `to`, which must share a route.
     fn route_pair(&self, from: &Path, to: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
         let (from_prefix, store) = self.covering_route(from)?;
-        match self.route_with_prefix(to) {
-            Some((to_prefix, _)) if to_prefix == from_prefix => Ok(store),
+        match self.covering_route(to) {
+            Ok((to_prefix, _)) if to_prefix == from_prefix => Ok(store),
             _ => Err(not_implemented("copy or rename across routes")),
         }
     }

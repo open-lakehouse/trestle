@@ -9,6 +9,7 @@ use super::client::{IcebergClient, LoadTable};
 use crate::api::{ApiError, local_credential};
 use crate::error::{Error, Result};
 use crate::source::CredentialSource;
+use crate::store::unsupported;
 
 /// Vends credentials for one Iceberg table, for one prefix of its storage.
 ///
@@ -103,19 +104,16 @@ pub(super) fn vend_from_table(table: &LoadTable, ctx: &VendContext) -> Result<Ve
         return select(&credentials.storage_credentials, ctx);
     }
     if credentials.remote_signing() {
-        return Err(Error::Unsupported {
-            location: ctx.scope.to_string(),
-            reason: "the catalog signs requests remotely instead of vending credentials".to_owned(),
-        });
+        return Err(unsupported(
+            &ctx.scope,
+            "the catalog signs requests remotely instead of vending credentials",
+        ));
     }
     credentials
         .to_vended(ctx)?
         .into_iter()
         .next()
-        .ok_or_else(|| Error::Unsupported {
-            location: ctx.scope.to_string(),
-            reason: "the catalog vended no storage credentials".to_owned(),
-        })
+        .ok_or_else(|| unsupported(&ctx.scope, "the catalog vended no storage credentials"))
 }
 
 /// Of `credentials`, the most specific covering all of `ctx.scope`, clamped to it.

@@ -18,6 +18,9 @@ use crate::source::CredentialSource;
 /// How long before expiry a credential is re-vended, unless configured otherwise.
 pub const DEFAULT_REFRESH_MARGIN: Duration = Duration::from_secs(300);
 
+/// The shortest time between two vends of one provider.
+pub const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+
 /// The current time. Injectable so refresh behaviour is testable without waiting.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
@@ -49,9 +52,6 @@ pub struct RefreshingCredentialProvider<T> {
     state: Mutex<Cached<T>>,
     _credential: PhantomData<fn() -> T>,
 }
-
-/// The shortest time between two vends of one provider.
-pub const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
 struct Cached<T> {
     credential: Arc<T>,

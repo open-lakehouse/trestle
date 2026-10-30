@@ -405,7 +405,7 @@ pub async fn build_store(
     })
 }
 
-pub(crate) fn unsupported(location: &StorageLocation, reason: impl Into<String>) -> Error {
+pub(crate) fn unsupported(location: impl fmt::Display, reason: impl Into<String>) -> Error {
     Error::Unsupported {
         location: location.to_string(),
         reason: reason.into(),

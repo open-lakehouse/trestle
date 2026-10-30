@@ -10,10 +10,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::VendContext;
+use super::{VendContext, resolve_expiry};
 use crate::error::{Error, Result};
 use crate::location::{StorageLocation, StorageProvider, StorageScope};
-use crate::model::{StorageCredentials, StoreHints};
+use crate::model::{StorageCredentials, StoreHints, VendedCredential, expiry_from_epoch_millis};
 use crate::sas;
 
 const REDACTED: &str = "<redacted>";
@@ -129,9 +129,28 @@ impl fmt::Debug for GcpOauthToken {
     }
 }
 
+/// Converts a response carrying at most one of `payloads`, for the storage it names in
+/// `url` and expiring at `expiration_time` (epoch milliseconds), into the model.
+pub(crate) fn to_vended<'a>(
+    url: Option<&str>,
+    payloads: impl IntoIterator<Item = Option<Payload<'a>>>,
+    expiration_time: Option<i64>,
+    ctx: &VendContext,
+) -> Result<VendedCredential> {
+    let scope = scope_for_url(url, ctx)?;
+    let (credentials, hints) = to_credentials(single(payloads)?, scope.location())?;
+    let expiry = resolve_expiry(
+        expiration_time.and_then(expiry_from_epoch_millis),
+        &credentials,
+    );
+    Ok(VendedCredential::new(credentials, scope, ctx.access)
+        .with_expiry(expiry)
+        .with_hints(hints))
+}
+
 /// The scope of a credential whose response named `url`: `url` clamped to the request,
 /// or the requested scope when `url` is absent or empty.
-pub(crate) fn scope_for_url(url: Option<&str>, ctx: &VendContext) -> Result<StorageScope> {
+fn scope_for_url(url: Option<&str>, ctx: &VendContext) -> Result<StorageScope> {
     let Some(url) = url.filter(|u| !u.is_empty()) else {
         return Ok(ctx.scope.clone());
     };
@@ -174,7 +193,7 @@ pub(crate) fn single<'a>(
 
 /// Converts a payload into the model's credentials plus the hints it implies, for a
 /// credential covering `location`.
-pub(crate) fn to_credentials(
+fn to_credentials(
     payload: Option<Payload<'_>>,
     location: &StorageLocation,
 ) -> Result<(StorageCredentials, StoreHints)> {
@@ -243,6 +262,15 @@ pub(crate) fn aws_payload(
         secret_access_key: secret_key.to_owned(),
         session_token: token.clone().unwrap_or_default(),
         access_point: hints.access_point.clone().unwrap_or_default(),
+    }
+}
+
+/// The R2 payload for an AWS payload: the same keys, without the access point.
+pub(crate) fn r2_payload(aws: AwsTempCredentials) -> R2TempCredentials {
+    R2TempCredentials {
+        access_key_id: aws.access_key_id,
+        secret_access_key: aws.secret_access_key,
+        session_token: aws.session_token,
     }
 }
 

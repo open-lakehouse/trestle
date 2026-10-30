@@ -22,10 +22,10 @@ use super::common::{self as c, Payload};
 pub use super::common::{
     AwsTempCredentials, AzureAad, AzureUserDelegationSas, GcpOauthToken, R2TempCredentials,
 };
-use super::{VendContext, int64, resolve_expiry};
+use super::{VendContext, int64};
 use crate::error::Result;
 use crate::location::StorageProvider;
-use crate::model::{StorageCredentials, VendedCredential, expiry_from_epoch_millis};
+use crate::model::{StorageCredentials, VendedCredential};
 
 /// A UC REST temporary credential.
 ///
@@ -64,24 +64,20 @@ impl TemporaryCredential {
     /// request, if more than one credential is set, if none is set for cloud storage,
     /// or if a credential is malformed.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<VendedCredential> {
-        let scope = c::scope_for_url(self.url.as_deref(), ctx)?;
-        let payload = c::single([
-            self.aws_temp_credentials.as_ref().map(Payload::Aws),
-            self.r2_temp_credentials.as_ref().map(Payload::R2),
-            self.azure_user_delegation_sas
-                .as_ref()
-                .map(Payload::AzureSas),
-            self.azure_aad.as_ref().map(Payload::AzureAad),
-            self.gcp_oauth_token.as_ref().map(Payload::Gcp),
-        ])?;
-        let (credentials, hints) = c::to_credentials(payload, scope.location())?;
-        let expiry = resolve_expiry(
-            self.expiration_time.and_then(expiry_from_epoch_millis),
-            &credentials,
-        );
-        Ok(VendedCredential::new(credentials, scope, ctx.access)
-            .with_expiry(expiry)
-            .with_hints(hints))
+        c::to_vended(
+            self.url.as_deref(),
+            [
+                self.aws_temp_credentials.as_ref().map(Payload::Aws),
+                self.r2_temp_credentials.as_ref().map(Payload::R2),
+                self.azure_user_delegation_sas
+                    .as_ref()
+                    .map(Payload::AzureSas),
+                self.azure_aad.as_ref().map(Payload::AzureAad),
+                self.gcp_oauth_token.as_ref().map(Payload::Gcp),
+            ],
+            self.expiration_time,
+            ctx,
+        )
     }
 }
 
@@ -100,11 +96,7 @@ impl From<&VendedCredential> for TemporaryCredential {
             } => {
                 let aws = c::aws_payload(key_id, secret_key, token, &vended.hints);
                 if vended.scope.location().provider() == StorageProvider::R2 {
-                    wire.r2_temp_credentials = Some(R2TempCredentials {
-                        access_key_id: aws.access_key_id,
-                        secret_access_key: aws.secret_access_key,
-                        session_token: aws.session_token,
-                    });
+                    wire.r2_temp_credentials = Some(c::r2_payload(aws));
                 } else {
                     wire.aws_temp_credentials = Some(aws);
                 }

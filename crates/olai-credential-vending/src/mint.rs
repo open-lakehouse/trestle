@@ -1,6 +1,7 @@
 //! Minting a downscoped credential.
 
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -9,9 +10,12 @@ use olai_storage_credentials::{
 };
 
 use crate::error::{Error, Result};
+use crate::{
+    AwsStsMinter, AzureAccountKeySasMinter, AzureUserDelegationSasMinter, RegisteredCredential,
+};
 
 /// What to mint: access to one scope, for a while.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MintRequest {
     /// The storage the credential must cover, and nothing outside it.
     pub scope: StorageScope,
@@ -73,19 +77,17 @@ pub trait CredentialMinter: Debug + Send + Sync + 'static {
 /// [`AwsStsMinter`]: crate::AwsStsMinter
 /// [`AzureUserDelegationSasMinter`]: crate::AzureUserDelegationSasMinter
 /// [`AzureAccountKeySasMinter`]: crate::AzureAccountKeySasMinter
-pub fn minter_for(
-    credential: &crate::RegisteredCredential,
-) -> Result<std::sync::Arc<dyn CredentialMinter>> {
-    use crate::RegisteredCredential as R;
+pub fn minter_for(credential: &RegisteredCredential) -> Result<Arc<dyn CredentialMinter>> {
+    use RegisteredCredential as R;
     Ok(match credential {
-        R::AwsIamRole(role) => std::sync::Arc::new(crate::AwsStsMinter::new(role)?),
-        R::AzureServicePrincipal(principal) => std::sync::Arc::new(
-            crate::AzureUserDelegationSasMinter::from_service_principal(principal)?,
+        R::AwsIamRole(role) => Arc::new(AwsStsMinter::new(role)?),
+        R::AzureServicePrincipal(principal) => Arc::new(
+            AzureUserDelegationSasMinter::from_service_principal(principal)?,
         ),
-        R::AzureManagedIdentity(identity) => std::sync::Arc::new(
-            crate::AzureUserDelegationSasMinter::from_managed_identity(identity)?,
+        R::AzureManagedIdentity(identity) => Arc::new(
+            AzureUserDelegationSasMinter::from_managed_identity(identity)?,
         ),
-        R::AzureStorageKey(key) => std::sync::Arc::new(crate::AzureAccountKeySasMinter::new(key)),
+        R::AzureStorageKey(key) => Arc::new(AzureAccountKeySasMinter::new(key)),
     })
 }
 

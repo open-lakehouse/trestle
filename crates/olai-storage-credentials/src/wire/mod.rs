@@ -111,25 +111,37 @@ pub(crate) fn prefix_string(scope: &StorageScope) -> String {
     prefix
 }
 
-/// The error for a list of prefixed credentials (Iceberg, Delta API) none of which
-/// relates to the request, noting how many prefixes were not locations at all.
+/// Converts every one of a list of prefixed credentials (Iceberg, Delta API) related to
+/// the request, skipping the unrelated ones.
+///
+/// Fails if `credentials` is not empty but none relates to the request, noting how many
+/// prefixes were not locations at all.
 #[cfg(any(feature = "delta-api", feature = "iceberg"))]
-pub(crate) fn no_covering_credential<'a>(
-    prefixes: impl IntoIterator<Item = &'a str>,
+pub(crate) fn convert_related<T>(
+    credentials: &[T],
+    prefix: impl Fn(&T) -> &str,
+    convert: impl Fn(&T) -> crate::Result<Option<crate::VendedCredential>>,
     ctx: &VendContext,
-) -> crate::Error {
-    let unparsed = prefixes
-        .into_iter()
-        .filter(|p| p.parse::<StorageScope>().is_err())
+) -> crate::Result<Vec<crate::VendedCredential>> {
+    let mut vended = Vec::new();
+    for credential in credentials {
+        vended.extend(convert(credential)?);
+    }
+    if !vended.is_empty() || credentials.is_empty() {
+        return Ok(vended);
+    }
+    let unparsed = credentials
+        .iter()
+        .filter(|c| prefix(c).parse::<StorageScope>().is_err())
         .count();
     let note = match unparsed {
         0 => String::new(),
         n => format!(" ({n} prefixes are not storage locations this crate parses)"),
     };
-    crate::Error::invalid_credential(format!(
+    Err(crate::Error::invalid_credential(format!(
         "no credential covers the requested {}{note}",
         ctx.scope
-    ))
+    )))
 }
 
 /// Parses an epoch-milliseconds expiry from a config-map value.

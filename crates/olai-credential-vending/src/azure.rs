@@ -35,7 +35,7 @@ const MAX_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60 - 10 * 60);
 const MAX_KEY_LIFETIME: TimeDelta = TimeDelta::days(7);
 
 /// How long a fetched user delegation key lives, unless a request needs longer.
-const KEY_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
+const KEY_LIFETIME: TimeDelta = TimeDelta::days(1);
 
 /// A key is replaced this long before it can no longer cover a request.
 const KEY_MARGIN: TimeDelta = TimeDelta::minutes(5);
@@ -238,9 +238,8 @@ impl AzureUserDelegationSasMinter {
         }
         let token = self.token.get_credential().await?;
         let now = Utc::now();
-        let lifetime = TimeDelta::from_std(KEY_LIFETIME).unwrap_or(TimeDelta::MAX);
         // Azure refuses keys living past seven days by its own clock, which may be behind.
-        let expiry = (now + lifetime)
+        let expiry = (now + KEY_LIFETIME)
             .max(until + KEY_MARGIN)
             .min(now + MAX_KEY_LIFETIME - CLOCK_SKEW);
         let options = UserDelegationKeyOptions {

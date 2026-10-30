@@ -600,15 +600,18 @@ fn s3_endpoint<'a>(labels: &[&'a str]) -> Option<(usize, Option<&'a str>)> {
 /// lowercase words, then a number (`us-west-2`, `us-gov-west-1`). Excludes the
 /// suffixes of `s3-website-us-east-1`, `s3-accesspoint` and `s3-external-1`.
 fn is_region(label: &str) -> bool {
+    let lowercase = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase());
     let parts: Vec<&str> = label.split('-').collect();
-    parts.len() >= 3
-        && parts[0].len() == 2
-        && parts[0].bytes().all(|b| b.is_ascii_lowercase())
-        && parts[1..parts.len() - 1]
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase()))
-        && parts[parts.len() - 1].bytes().all(|b| b.is_ascii_digit())
-        && !parts[parts.len() - 1].is_empty()
+    match parts.as_slice() {
+        [area, words @ .., number] if !words.is_empty() => {
+            area.len() == 2
+                && lowercase(area)
+                && words.iter().all(|w| lowercase(w))
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
