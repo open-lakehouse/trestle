@@ -26,7 +26,7 @@ const CATALOG_SCOPE: &str = "catalog";
 /// | `iceberg_warehouse` | The warehouse, sent to `GET v1/config` |
 /// | `iceberg_prefix` | The path prefix; when set, `GET v1/config` is skipped |
 /// | `iceberg_operation` | `read` (the default) or `read_write`: the access the stores are declared with. Iceberg REST cannot ask for one; the catalog grants what the principal may do |
-/// | `iceberg_credential` | OAuth client credentials as `client_id:client_secret` |
+/// | `iceberg_credential` | OAuth client credentials as `client_id:client_secret`; a bare secret is refused |
 /// | `iceberg_oauth2_server_uri` | The OAuth token endpoint; default `{uri}/v1/oauth/tokens` |
 /// | `aws_region` | The region of vended S3 locations, overriding hints and discovery |
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for catalogs backed by an S3-compatible store |
@@ -56,6 +56,8 @@ pub struct IcebergBuilder {
     warehouse: Option<String>,
     prefix: Option<String>,
     operation: Option<String>,
+    /// `iceberg_credential` was a bare secret, which is refused on connect.
+    bare_credential: bool,
     store_keys: StoreKeys,
     auth: AuthConfig,
     store_options: StoreOptions,
@@ -95,6 +97,7 @@ impl IcebergBuilder {
             warehouse: None,
             prefix: None,
             operation: None,
+            bare_credential: false,
             store_keys: StoreKeys::default(),
             auth,
             store_options: StoreOptions::default(),
@@ -145,11 +148,11 @@ impl IcebergBuilder {
                 Some((id, secret)) => {
                     self.auth.set("iceberg_client_id", id);
                     self.auth.set("iceberg_client_secret", secret);
+                    self.bare_credential = false;
                 }
-                // The spec allows a bare secret, with the id left to the server.
-                None => {
-                    self.auth.set("iceberg_client_secret", value);
-                }
+                // Other clients accept a bare secret, with the id left to the server;
+                // the client-credentials flow here always sends an id.
+                None => self.bare_credential = true,
             },
             "iceberg_oauth2_server_uri" => {
                 self.auth.set("iceberg_oauth_token_url", value);
@@ -179,6 +182,13 @@ impl IcebergBuilder {
     /// Builds the catalog, fetching its config (`GET v1/config`) for the URI override
     /// and path prefix, unless `iceberg_prefix` is set.
     pub async fn connect(self) -> Result<IcebergCatalog> {
+        if self.bare_credential {
+            return Err(Error::Config(
+                "`iceberg_credential` must be `client_id:client_secret`; a bare secret is \
+                 not supported"
+                    .to_owned(),
+            ));
+        }
         let uri = parse_base_url(
             "iceberg_uri",
             self.uri
@@ -225,5 +235,40 @@ impl fmt::Debug for IcebergBuilder {
             .field("auth", &self.auth)
             .field("client", &self.client.as_ref().map(|_| "CloudClient"))
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bare_credentials_are_refused() {
+        let err = IcebergBuilder::new()
+            .with_options([
+                ("iceberg_uri", "https://catalog.example.com/"),
+                ("iceberg_prefix", "wh"),
+                ("iceberg_credential", "BARE-SECRET"),
+            ])
+            .connect()
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Config(_)), "{err}");
+        assert!(err.to_string().contains("client_id:client_secret"), "{err}");
+        assert!(!err.to_string().contains("BARE-SECRET"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn paired_credentials_configure_client_credentials() {
+        IcebergBuilder::new()
+            .with_options([
+                ("iceberg_uri", "https://catalog.example.com/"),
+                ("iceberg_prefix", "wh"),
+                ("iceberg_credential", "BARE-SECRET"),
+                ("iceberg_credential", "id:secret"),
+            ])
+            .connect()
+            .await
+            .unwrap();
     }
 }
