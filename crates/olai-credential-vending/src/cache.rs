@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
-use olai_storage_credentials::{AccessLevel, StorageScope, VendedCredential};
+use olai_storage_credentials::VendedCredential;
 
 use crate::error::Result;
 use crate::mint::{CredentialMinter, MintRequest, minter_for};
@@ -25,27 +25,6 @@ pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(3600);
 
 /// The current time. Injectable so expiry is testable without waiting.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
-
-/// What a cached credential was minted for: the whole request, structurally, so two
-/// requests share an entry only if they would mint the same grant.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Key {
-    scope: StorageScope,
-    access: AccessLevel,
-    ttl: Option<Duration>,
-    session_name: Option<String>,
-}
-
-impl From<&MintRequest> for Key {
-    fn from(request: &MintRequest) -> Self {
-        Self {
-            scope: request.scope.clone(),
-            access: request.access,
-            ttl: request.ttl,
-            session_name: request.session_name.clone(),
-        }
-    }
-}
 
 struct Entry {
     credential: VendedCredential,
@@ -73,7 +52,7 @@ pub struct CachingMinter {
     margin: TimeDelta,
     max_age: TimeDelta,
     clock: Clock,
-    entries: Mutex<HashMap<Key, Entry>>,
+    entries: Mutex<HashMap<MintRequest, Entry>>,
 }
 
 impl CachingMinter {
@@ -125,7 +104,7 @@ impl CachingMinter {
 
     /// The entries; a panic elsewhere never leaves them half-updated, so a poisoned lock
     /// is still safe to use.
-    fn entries(&self) -> MutexGuard<'_, HashMap<Key, Entry>> {
+    fn entries(&self) -> MutexGuard<'_, HashMap<MintRequest, Entry>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -144,7 +123,7 @@ impl CachingMinter {
         (stale_at > now).then_some(stale_at)
     }
 
-    fn insert(&self, key: Key, credential: VendedCredential, now: DateTime<Utc>) {
+    fn insert(&self, key: MintRequest, credential: VendedCredential, now: DateTime<Utc>) {
         let Some(stale_at) = self.stale_at(&credential, now) else {
             return;
         };
@@ -177,7 +156,7 @@ fn delta(duration: Duration) -> TimeDelta {
 #[async_trait]
 impl CredentialMinter for CachingMinter {
     async fn mint(&self, request: &MintRequest) -> Result<VendedCredential> {
-        let key = Key::from(request);
+        let key = request.clone();
         let now = (self.clock)();
         if let Some(entry) = self.entries().get(&key)
             && entry.stale_at > now
@@ -301,7 +280,7 @@ impl<R> fmt::Debug for Vendor<R> {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use olai_storage_credentials::StorageCredentials;
+    use olai_storage_credentials::{AccessLevel, StorageCredentials};
 
     use super::*;
     use crate::registered::{AwsIamRole, AzureStorageKey};
