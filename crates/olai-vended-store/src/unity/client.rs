@@ -133,6 +133,25 @@ impl UnityClient {
         decode(self.client.get(url).send().await).await
     }
 
+    /// `GET` below the base URL, each of `segments` escaped as one path segment.
+    #[cfg_attr(not(feature = "delta-api"), allow(dead_code))]
+    pub(crate) async fn get_segments<T: DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let path = segments
+            .iter()
+            .map(|s| utf8_percent_encode(s, PATH_SEGMENT).to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+        let mut url = self.url(&path)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+        decode(self.client.get(url).send().await).await
+    }
+
     async fn post<B: Serialize, T: DeserializeOwned>(&self, endpoint: &str, body: &B) -> Result<T> {
         let url = self.url(endpoint)?;
         decode(self.client.post(url).json(body).send().await).await

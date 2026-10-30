@@ -25,6 +25,7 @@ const TOKEN_EXCHANGE_PATH: &str = "api/1.0/unity-control/auth/tokens";
 /// | `unity_operation` | `read` or `read_write` for every store. Unset: ask for read-write and fall back to read when it is denied |
 /// | `aws_region`, `unity_aws_region` | The region of vended S3 locations, overriding hints and discovery |
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for servers backed by an S3-compatible store |
+/// | `unity_delta_api` | Vend table credentials through the Delta API (feature `delta-api`), for catalog-managed tables |
 /// | `unity_*` auth keys, `azure_*`, `google_*`, client keys | Authentication; see [`crate::auth`] |
 ///
 /// Client keys (`allow_http`, `timeout`, ...) apply to the stores too.
@@ -50,6 +51,7 @@ pub struct UnityBuilder {
     operation: Option<String>,
     aws_region: Option<String>,
     aws_endpoint: Option<String>,
+    delta_api: Option<String>,
     #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
     store_client: Vec<(object_store::ClientConfigKey, String)>,
     auth: AuthConfig,
@@ -89,6 +91,7 @@ impl UnityBuilder {
             operation: None,
             aws_region: None,
             aws_endpoint: None,
+            delta_api: None,
             #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
             store_client: Vec::new(),
             auth,
@@ -136,6 +139,7 @@ impl UnityBuilder {
             "unity_operation" => self.operation = Some(value),
             "aws_region" | "unity_aws_region" => self.aws_region = Some(value),
             "aws_endpoint" | "aws_endpoint_url" => self.aws_endpoint = Some(value),
+            "unity_delta_api" => self.delta_api = Some(value),
             _ => {
                 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
                 if let Ok(client_key) = key.parse::<object_store::ClientConfigKey>() {
@@ -202,9 +206,18 @@ impl UnityBuilder {
                 options = options.with_s3_endpoint(endpoint);
             }
         }
-        Ok(UnityCatalog::new(UnityClient::new(client, url))
+        let catalog = UnityCatalog::new(UnityClient::new(client, url))
             .with_store_options(options)
-            .with_default_access(access))
+            .with_default_access(access);
+        match self.delta_api.as_deref().map(crate::auth::is_truthy) {
+            #[cfg(feature = "delta-api")]
+            Some(delta_api) => Ok(catalog.with_delta_api(delta_api)),
+            #[cfg(not(feature = "delta-api"))]
+            Some(true) => Err(Error::Config(
+                "`unity_delta_api` needs the `delta-api` feature".to_owned(),
+            )),
+            _ => Ok(catalog),
+        }
     }
 
     /// The REST API base: explicit, else below the Databricks host.

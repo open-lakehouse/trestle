@@ -84,6 +84,8 @@ unity = [
   "dep:serde",
   "dep:serde_json",
 ]
+# The UC Delta API, for catalog-managed tables; extends `unity`.
+delta-api = ["unity", "olai-storage-credentials/delta-api"]
 
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
