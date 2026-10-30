@@ -71,9 +71,14 @@ gcp = ["object_store/gcp", "dep:ring"]
 fs = ["object_store/fs"]
 # Vending protocols (native only). Each brings its wire adapter from
 # olai-storage-credentials and a hand-written client.
+# Authentication to vending servers from string keys (see `auth`); enabled by every
+# protocol.
+auth = ["dep:olai-http"]
+# The Databricks credential chain as an authentication option.
+databricks = ["auth"]
 unity = [
+  "auth",
   "olai-storage-credentials/unity",
-  "dep:olai-http",
   "dep:percent-encoding",
   "dep:reqwest",
   "dep:serde",

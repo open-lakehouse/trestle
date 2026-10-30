@@ -67,6 +67,10 @@ pub enum Error {
         reason: String,
     },
 
+    /// Configuration is missing, malformed or contradictory.
+    #[error("invalid configuration: {0}")]
+    Config(String),
+
     /// A securable reference (such as a `uc://` URL) is malformed.
     #[error("invalid reference: {0}")]
     InvalidReference(String),

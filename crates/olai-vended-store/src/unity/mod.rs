@@ -23,6 +23,7 @@
 //! ```
 
 mod client;
+mod config;
 mod reference;
 mod source;
 
@@ -34,6 +35,7 @@ use url::Url;
 pub use self::client::{
     ApiError, PathOperation, TableInfo, TableOperation, UnityClient, VolumeInfo, VolumeOperation,
 };
+pub use self::config::UnityBuilder;
 pub use self::reference::UnityReference;
 pub use self::source::{Securable, UnitySource};
 use crate::error::{Error, Result};
@@ -48,6 +50,7 @@ use crate::store::{ScopedStore, StoreOptions, build_store};
 pub struct UnityCatalog {
     client: UnityClient,
     options: StoreOptions,
+    default_access: Option<AccessLevel>,
 }
 
 impl UnityCatalog {
@@ -56,7 +59,20 @@ impl UnityCatalog {
         Self {
             client,
             options: StoreOptions::default(),
+            default_access: None,
         }
+    }
+
+    /// A builder configured from string keys; see [`UnityBuilder`].
+    pub fn builder() -> UnityBuilder {
+        UnityBuilder::new()
+    }
+
+    /// The access [`open`](Self::open) asks for. `None` (the default) asks for
+    /// read-write and falls back to read when that is denied.
+    pub fn with_default_access(mut self, access: Option<AccessLevel>) -> Self {
+        self.default_access = access;
+        self
     }
 
     /// Configures the stores this builds.
@@ -115,8 +131,51 @@ impl UnityCatalog {
         reference: &UnityReference,
         access: AccessLevel,
     ) -> Result<ScopedStore> {
+        let (source, sub_path) = self.resolve(reference, access).await?;
+        let seed = source.fetch().await?;
+        self.build(seed, source, sub_path).await
+    }
+
+    /// Builds the store for `url` at the [default access](Self::with_default_access).
+    ///
+    /// Without one, it asks for read-write, and asks again for read only if the server
+    /// denies that (HTTP 403 or `PERMISSION_DENIED`); any other failure is returned.
+    /// The name is looked up once either way.
+    pub async fn open(&self, url: &str) -> Result<ScopedStore> {
+        let reference = UnityReference::parse(url)?;
+        if let Some(access) = self.default_access {
+            return self.store(&reference, access).await;
+        }
+        let (source, sub_path) = self.resolve(&reference, AccessLevel::ReadWrite).await?;
+        match source.fetch().await {
+            Ok(seed) => self.build(seed, source, sub_path).await,
+            Err(err) if ApiError::find(&err).is_some_and(ApiError::is_permission_denied) => {
+                let source = source.with_access(AccessLevel::Read);
+                let seed = source.fetch().await?;
+                self.build(seed, source, sub_path).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn build(
+        &self,
+        seed: olai_storage_credentials::VendedCredential,
+        source: UnitySource,
+        sub_path: &str,
+    ) -> Result<ScopedStore> {
+        let store = build_store(&seed, Arc::new(source), &self.options).await?;
+        store.child(sub_path)
+    }
+
+    /// The source for `reference`, and the sub-path below its storage root.
+    async fn resolve<'r>(
+        &self,
+        reference: &'r UnityReference,
+        access: AccessLevel,
+    ) -> Result<(UnitySource, &'r str)> {
         let full_name = reference.full_name();
-        let (source, sub_path) = match reference {
+        Ok(match reference {
             UnityReference::Table { .. } => (
                 self.table_source(full_name.as_deref().unwrap_or_default(), access)
                     .await?,
@@ -128,10 +187,7 @@ impl UnityCatalog {
                 path.as_str(),
             ),
             UnityReference::Path(url) => (self.path_source(url, access)?, ""),
-        };
-        let seed = source.fetch().await?;
-        let store = build_store(&seed, Arc::new(source), &self.options).await?;
-        store.child(sub_path)
+        })
     }
 
     /// Builds the store for a URL [`UnityReference`] parses: `uc:///Tables/...`,
@@ -362,6 +418,189 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Credentials(_)), "{err}");
+    }
+
+    fn denied() -> String {
+        json!({ "error_code": "PERMISSION_DENIED", "message": "no MODIFY" }).to_string()
+    }
+
+    fn builder(server: &ServerGuard) -> UnityBuilder {
+        UnityBuilder::new().with_options([
+            (
+                "unity_catalog_url",
+                format!("{}/api/2.1/unity-catalog", server.url()),
+            ),
+            ("unity_token", "uc-token".to_owned()),
+        ])
+    }
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn open_falls_back_to_read_when_write_is_denied() {
+        let mut server = Server::new_async().await;
+        let lookup = server
+            .mock("GET", "/api/2.1/unity-catalog/tables/main.default.t")
+            .with_body(
+                json!({ "table_id": "tid", "storage_location": "s3://bucket/t" }).to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+        let write = server
+            .mock("POST", "/api/2.1/unity-catalog/temporary-table-credentials")
+            .match_body(Matcher::Json(
+                json!({ "table_id": "tid", "operation": "READ_WRITE" }),
+            ))
+            .with_status(403)
+            .with_body(denied())
+            .create_async()
+            .await;
+        let read = server
+            .mock("POST", "/api/2.1/unity-catalog/temporary-table-credentials")
+            .match_body(Matcher::Json(
+                json!({ "table_id": "tid", "operation": "READ" }),
+            ))
+            .with_body(aws_credentials("s3://bucket/t"))
+            .create_async()
+            .await;
+        let store = builder(&server)
+            .with_store_options(StoreOptions::new().without_region_discovery())
+            .build()
+            .unwrap()
+            .open("uc:///Tables/main/default/t")
+            .await
+            .unwrap();
+        assert_eq!(store.prefix().as_ref(), "t");
+        lookup.assert_async().await;
+        write.assert_async().await;
+        read.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn open_does_not_fall_back_on_other_failures() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("GET", "/api/2.1/unity-catalog/tables/main.default.t")
+            .with_body(
+                json!({ "table_id": "tid", "storage_location": "s3://bucket/t" }).to_string(),
+            )
+            .create_async()
+            .await;
+        let vend = server
+            .mock("POST", "/api/2.1/unity-catalog/temporary-table-credentials")
+            .with_status(400)
+            .with_body(json!({ "error_code": "INVALID_PARAMETER_VALUE" }).to_string())
+            .expect(1)
+            .create_async()
+            .await;
+        let err = builder(&server)
+            .build()
+            .unwrap()
+            .open("uc:///Tables/main/default/t")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            ApiError::find(&err).and_then(|e| e.status),
+            Some(400),
+            "{err}"
+        );
+        vend.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn explicit_operation_never_falls_back() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("GET", "/api/2.1/unity-catalog/tables/main.default.t")
+            .with_body(
+                json!({ "table_id": "tid", "storage_location": "s3://bucket/t" }).to_string(),
+            )
+            .create_async()
+            .await;
+        let vend = server
+            .mock("POST", "/api/2.1/unity-catalog/temporary-table-credentials")
+            .with_status(403)
+            .with_body(denied())
+            .expect(1)
+            .create_async()
+            .await;
+        let err = builder(&server)
+            .with_option("unity_operation", "read_write")
+            .build()
+            .unwrap()
+            .open("uc:///Tables/main/default/t")
+            .await
+            .unwrap_err();
+        assert!(
+            ApiError::find(&err).is_some_and(ApiError::is_permission_denied),
+            "{err}"
+        );
+        vend.assert_async().await;
+    }
+
+    #[test]
+    fn builder_validates_its_keys() {
+        let err = UnityBuilder::new()
+            .with_option("unity_token", "t")
+            .build()
+            .unwrap_err();
+        assert!(err.to_string().contains("unity_catalog_url"), "{err}");
+        let err = UnityBuilder::new()
+            .with_options([("unity_url", "https://uc/api"), ("unity_token", "t")])
+            .with_option("unity_operation", "write")
+            .build()
+            .unwrap_err();
+        assert!(err.to_string().contains("unity_operation"), "{err}");
+        let err = UnityBuilder::new()
+            .with_option("unity_url", "https://uc/api")
+            .build()
+            .unwrap_err();
+        assert!(err.to_string().contains("no credentials"), "{err}");
+    }
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn parse_url_opts_dispatches_to_unity() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("GET", "/api/2.1/unity-catalog/volumes/main.default.landing")
+            .match_header("authorization", "Bearer uc-token")
+            .with_body(
+                json!({ "volume_id": "vid", "storage_location": "s3://bucket/vols/landing" })
+                    .to_string(),
+            )
+            .create_async()
+            .await;
+        server
+            .mock(
+                "POST",
+                "/api/2.1/unity-catalog/temporary-volume-credentials",
+            )
+            .match_body(Matcher::Json(
+                json!({ "volume_id": "vid", "operation": "READ_VOLUME" }),
+            ))
+            .with_body(aws_credentials("s3://bucket/vols/landing"))
+            .create_async()
+            .await;
+        let url = "uc:///Volumes/main/default/landing/raw".parse().unwrap();
+        let (store, path) = crate::parse_url_opts(
+            &url,
+            [
+                (
+                    "unity_catalog_url",
+                    format!("{}/api/2.1/unity-catalog", server.url()),
+                ),
+                ("unity_token", "uc-token".to_owned()),
+                ("unity_operation", "read".to_owned()),
+                ("aws_region", "us-east-1".to_owned()),
+                // Keys for other stores are ignored.
+                ("azure_storage_account_name", "acct".to_owned()),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(path, Path::from("vols/landing/raw"));
+        assert_eq!(store.to_string(), "AmazonS3(bucket)");
     }
 
     #[tokio::test]

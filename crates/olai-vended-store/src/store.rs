@@ -106,6 +106,8 @@ pub struct StoreOptions {
     client_options: object_store::ClientOptions,
     #[cfg(feature = "aws")]
     aws_region: Option<String>,
+    #[cfg(feature = "aws")]
+    s3_endpoint: Option<String>,
     #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
     region_discovery: RegionDiscovery,
     #[cfg(all(
@@ -136,6 +138,8 @@ impl Default for StoreOptions {
             client_options: object_store::ClientOptions::default(),
             #[cfg(feature = "aws")]
             aws_region: None,
+            #[cfg(feature = "aws")]
+            s3_endpoint: None,
             #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
             region_discovery: RegionDiscovery::Shared,
             #[cfg(all(
@@ -231,6 +235,17 @@ impl StoreOptions {
         self
     }
 
+    /// Send S3 requests to `endpoint` when the credential names none, for vending servers
+    /// backed by an S3-compatible store whose responses do not say where it is.
+    pub fn with_s3_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.s3_endpoint = Some(endpoint.into());
+        self
+    }
+
+    fn s3_endpoint<'a>(&'a self, seed: &'a VendedCredential) -> Option<&'a String> {
+        seed.hints.endpoint.as_ref().or(self.s3_endpoint.as_ref())
+    }
+
     /// Discover S3 bucket regions through `regions` instead of the process-wide cache.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_bucket_regions(mut self, regions: crate::region::BucketRegions) -> Self {
@@ -267,7 +282,7 @@ impl StoreOptions {
         }
         // A custom endpoint is an S3-compatible store, not AWS: nothing to probe.
         #[cfg(not(target_arch = "wasm32"))]
-        if seed.hints.endpoint.is_none() {
+        if self.s3_endpoint(seed).is_none() {
             let regions = match &self.region_discovery {
                 RegionDiscovery::Shared => crate::region::BucketRegions::shared(),
                 RegionDiscovery::Custom(regions) => Some(regions.clone()),
@@ -292,7 +307,8 @@ impl fmt::Debug for StoreOptions {
             .field("clock", &self.clock.as_ref().map(|_| "<fn>"))
             .field("client_options", &self.client_options);
         #[cfg(feature = "aws")]
-        f.field("aws_region", &self.aws_region);
+        f.field("aws_region", &self.aws_region)
+            .field("s3_endpoint", &self.s3_endpoint);
         #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
         f.field("region_discovery", &self.region_discovery);
         f.finish_non_exhaustive()
@@ -401,7 +417,7 @@ pub(crate) async fn s3_builder(
         if let Some(region) = options.s3_region(seed).await {
             builder = builder.with_region(region);
         }
-        if let Some(endpoint) = &seed.hints.endpoint {
+        if let Some(endpoint) = options.s3_endpoint(seed) {
             builder = builder.with_endpoint(endpoint);
         }
         builder

@@ -22,6 +22,8 @@
 //!   object_store's per-cloud credential types.
 //!
 //! Vending protocols are modules behind features: [`unity`] (Unity Catalog REST).
+//! [`parse_url_opts`] builds a store from any enabled protocol's reference, and
+//! [`auth`] is their shared, key-configured authentication.
 //!
 //! The vocabulary (credentials, locations, scopes) is [`olai_storage_credentials`].
 //! The core builds for `wasm32-unknown-unknown`, where sources may return `!Send`
@@ -32,7 +34,14 @@
 //!
 //! [credential vending design record]: https://github.com/open-lakehouse/trestle/blob/main/docs/credential-vending.md
 
+#[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "auth", not(target_arch = "wasm32")))))]
+pub mod auth;
 pub mod convert;
+// Every protocol module enables this; for now that is `unity`.
+#[cfg(all(feature = "unity", not(target_arch = "wasm32")))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "unity", not(target_arch = "wasm32")))))]
+pub mod dispatch;
 pub mod error;
 #[cfg(any(feature = "aws", feature = "azure"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "aws", feature = "azure"))))]
@@ -54,6 +63,8 @@ pub mod store;
 pub mod unity;
 
 pub use convert::FromStorageCredentials;
+#[cfg(all(feature = "unity", not(target_arch = "wasm32")))]
+pub use dispatch::{Protocol, parse_url_opts};
 pub use error::{Error, Result};
 pub use olai_storage_credentials::{
     AccessLevel, StorageCredentials, StorageLocation, StorageScope, StoreHints, VendedCredential,
