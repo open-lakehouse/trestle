@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.8...olai-http-v0.0.9) - 2026-10-30
+
+### Added
+
+- GCP token calls with wall-clock expiries (#228)
+- AssumeRole options and reusable user delegation keys (#207)
+- build stores from vended credentials (#201)
+- downscoping policies with RustFS emulator tests (#193)
+
+### Fixed
+
+- harden credential vending crates after review (#225)
+- correct user delegation and directory SAS signatures (#197)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.7...olai-http-v0.0.8) - 2026-10-27
 
 ### Added
