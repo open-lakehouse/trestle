@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use olai_storage_credentials::location::AZURITE_ACCOUNT;
 use olai_storage_credentials::{
     AccessLevel, StorageCredentials, StorageProvider, StorageScope, VendedCredential,
 };
@@ -74,6 +75,11 @@ pub trait CredentialMinter: Debug + Send + Sync + 'static {
 /// [`AzureAccountKeySasMinter`] for account keys, and [`GcsDownscopedMinter`] for GCP
 /// service accounts.
 ///
+/// A key for the Azurite emulator's well-known account
+/// ([`AZURITE_ACCOUNT`](olai_storage_credentials::location::AZURITE_ACCOUNT)) gets an
+/// emulator minter, which signs for plain `http` and grants whole containers (see
+/// [`AzureAccountKeySasMinter::with_container_grants`]): Azurite has no directory SAS.
+///
 /// Build the minters directly to set endpoints, client options or audit fields.
 ///
 /// [`AwsStsMinter`]: crate::AwsStsMinter
@@ -89,6 +95,11 @@ pub fn minter_for(credential: &RegisteredCredential) -> Result<Arc<dyn Credentia
         ),
         R::AzureManagedIdentity(identity) => Arc::new(
             AzureUserDelegationSasMinter::from_managed_identity(identity)?,
+        ),
+        R::AzureStorageKey(key) if key.account_name == AZURITE_ACCOUNT => Arc::new(
+            AzureAccountKeySasMinter::new(key)
+                .with_emulator()
+                .with_container_grants(),
         ),
         R::AzureStorageKey(key) => Arc::new(AzureAccountKeySasMinter::new(key)),
         R::GcpServiceAccount(account) => Arc::new(GcsDownscopedMinter::new(account)?),
@@ -174,6 +185,28 @@ mod tests {
             let debug = format!("{:?}", minter_for(&credential).unwrap());
             assert!(debug.starts_with(minter), "{}: {debug}", credential.kind());
         }
+    }
+
+    #[tokio::test]
+    async fn azurite_keys_get_an_emulator_minter() {
+        let key = RegisteredCredential::AzureStorageKey(AzureStorageKey {
+            account_name: AZURITE_ACCOUNT.into(),
+            account_key: "a2V5".into(),
+        });
+        let debug = format!("{:?}", minter_for(&key).unwrap());
+        assert!(debug.contains("emulator: true"), "{debug}");
+        assert!(debug.contains("container_grants: true"), "{debug}");
+
+        // A path-style Azurite URL below its container: minted for the container.
+        let request = MintRequest::new(
+            "http://127.0.0.1:10000/devstoreaccount1/lakehouse/sales/orders"
+                .parse()
+                .unwrap(),
+            AccessLevel::ReadWrite,
+        );
+        let vended = minter_for(&key).unwrap().mint(&request).await.unwrap();
+        assert!(vended.scope.contains(&request.scope));
+        assert_ne!(vended.scope, request.scope);
     }
 
     #[tokio::test]

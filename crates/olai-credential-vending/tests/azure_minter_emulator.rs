@@ -143,3 +143,31 @@ async fn account_key_sas_reach_their_container_at_their_access() {
         "another container"
     );
 }
+
+#[tokio::test]
+async fn minter_for_grants_azurite_containers_for_sub_paths() {
+    let azurite = setup().await;
+    let key = olai_credential_vending::RegisteredCredential::AzureStorageKey(AzureStorageKey {
+        account_name: ACCOUNT.into(),
+        account_key: ACCOUNT_KEY.into(),
+    });
+    let minter = olai_credential_vending::minter_for(&key).unwrap();
+
+    // A request below the container: Azurite has no directory SAS, so the emulator
+    // minter grants the container, signed for plain http.
+    let sub_path = MintRequest::new(
+        format!("abfss://granted@{ACCOUNT}.dfs.core.windows.net/tab/part")
+            .parse()
+            .unwrap(),
+        AccessLevel::Read,
+    );
+    let vended = minter.mint(&sub_path).await.unwrap();
+    assert!(vended.scope.contains(&sub_path.scope));
+    let read = query(&vended);
+    assert_eq!(azurite.get_status("granted/a", &read).await, 200);
+    assert_eq!(
+        azurite.get_status("other/a", &read).await,
+        403,
+        "another container"
+    );
+}
