@@ -2,21 +2,21 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
-use olai_http::ClientOptions;
 use olai_http::azure::{
     UserDelegationKey, UserDelegationKeyOptions, build_storage_key_sas, build_user_delegation_sas,
-    fetch_user_delegation_key,
+    fetch_user_delegation_key_with_retry,
 };
 use olai_http::bearer::{
     AzureManagedIdentity as MsiIdentity, BearerAuth, BearerCredentialProvider,
 };
+use olai_http::{ClientOptions, RetryConfig};
 use olai_storage_credentials::policy::azure::sas_permissions;
 use olai_storage_credentials::{StorageCredentials, StorageProvider, StoreHints, VendedCredential};
-use tokio::sync::Mutex;
 
 use crate::error::{Error, Result};
 use crate::mint::{CredentialMinter, MintRequest};
@@ -27,8 +27,12 @@ use crate::registered::{
 /// The lifetime of a SAS when the request names none.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(3600);
 
-/// The longest SAS minted: user delegation keys live at most seven days.
-const MAX_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// The longest SAS minted: user delegation keys live at most seven days, less the
+/// margin a key must outlive its SAS by and the clock skew allowed.
+const MAX_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60 - 10 * 60);
+
+/// The longest a user delegation key may live: Azure's limit, by its own clock.
+const MAX_KEY_LIFETIME: TimeDelta = TimeDelta::days(7);
 
 /// How long a fetched user delegation key lives, unless a request needs longer.
 const KEY_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
@@ -41,6 +45,36 @@ const CLOCK_SKEW: TimeDelta = TimeDelta::minutes(5);
 
 /// The Azure AD scope of Azure Storage.
 const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
+
+/// Retries for a key fetch: a mint waits on it, so it fails within seconds, not the
+/// default three minutes.
+fn key_retry() -> RetryConfig {
+    RetryConfig {
+        max_retries: 3,
+        retry_timeout: Duration::from_secs(30),
+        ..RetryConfig::default()
+    }
+}
+
+/// The storage account a Blob service endpoint serves, when it names one:
+/// `https://<account>.blob.core.windows.net`, or an emulator's
+/// `https://127.0.0.1:10000/<account>`.
+fn endpoint_account(endpoint: &str) -> Option<&str> {
+    let rest = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest);
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let mut labels = host.split('.');
+    if let (Some(account), Some("blob" | "dfs")) = (labels.next(), labels.next())
+        && !account.is_empty()
+    {
+        return Some(account);
+    }
+    path.split('/').next().filter(|segment| !segment.is_empty())
+}
 
 /// The scope `request` asks for, as account, container and directory prefix. Fails if
 /// the storage is not Azure, or if `flat` and the scope is narrower than a container
@@ -95,7 +129,9 @@ fn vended(
 /// Azure Storage, which fetches a user delegation key; the key signs a SAS for the
 /// requested directory (or container) and permissions. Keys are cached and reused
 /// across mints, per storage account, until they could not cover a request any more,
-/// so minting costs one signature, not a round trip to Azure.
+/// so minting costs one signature, not a round trip to Azure. Each account's key is
+/// fetched at most once at a time, and a slow or failing account never delays minting
+/// for another.
 ///
 /// Directory SAS need a hierarchical-namespace (ADLS Gen2) account; for flat-namespace
 /// accounts, [`with_flat_namespace`](Self::with_flat_namespace) restricts minting to
@@ -106,8 +142,12 @@ pub struct AzureUserDelegationSasMinter {
     client_options: ClientOptions,
     flat: bool,
     /// User delegation keys by storage account: a key signs for its own account only.
-    keys: Mutex<HashMap<String, UserDelegationKey>>,
+    keys: Mutex<HashMap<String, KeySlot>>,
 }
+
+/// One account's cached key. Its async lock is held across that account's fetch only,
+/// so concurrent mints for the account share one fetch.
+type KeySlot = Arc<tokio::sync::Mutex<Option<UserDelegationKey>>>;
 
 impl AzureUserDelegationSasMinter {
     /// A minter for a service principal (client secret or federated token file).
@@ -157,6 +197,10 @@ impl AzureUserDelegationSasMinter {
     /// The Blob service endpoint, including the account path for emulators
     /// (`https://127.0.0.1:10000/devstoreaccount1`). Also passed to clients as a store
     /// hint.
+    ///
+    /// An endpoint serves one account: when it names one
+    /// (`https://<account>.blob.core.windows.net`, or an emulator path), requests for
+    /// any other account are refused instead of minting SAS that would not verify.
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
@@ -177,8 +221,15 @@ impl AzureUserDelegationSasMinter {
     /// A user delegation key for `account` valid until at least `until`, from the
     /// cache when it still is.
     async fn key(&self, account: &str, until: DateTime<Utc>) -> Result<UserDelegationKey> {
-        let mut keys = self.keys.lock().await;
-        if let Some(key) = keys.get(account)
+        let slot = Arc::clone(
+            self.keys
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(account.to_owned())
+                .or_default(),
+        );
+        let mut cached = slot.lock().await;
+        if let Some(key) = cached.as_ref()
             && key
                 .expires_at()
                 .is_some_and(|expiry| expiry - KEY_MARGIN >= until)
@@ -188,17 +239,24 @@ impl AzureUserDelegationSasMinter {
         let token = self.token.get_credential().await?;
         let now = Utc::now();
         let lifetime = TimeDelta::from_std(KEY_LIFETIME).unwrap_or(TimeDelta::MAX);
+        // Azure refuses keys living past seven days by its own clock, which may be behind.
         let expiry = (now + lifetime)
             .max(until + KEY_MARGIN)
-            .min(now + TimeDelta::days(7));
+            .min(now + MAX_KEY_LIFETIME - CLOCK_SKEW);
         let options = UserDelegationKeyOptions {
             endpoint: self.endpoint.clone(),
             client_options: self.client_options.clone(),
         };
-        let key =
-            fetch_user_delegation_key(account, &token.token, now - CLOCK_SKEW, expiry, &options)
-                .await?;
-        keys.insert(account.to_owned(), key.clone());
+        let key = fetch_user_delegation_key_with_retry(
+            account,
+            &token.token,
+            now - CLOCK_SKEW,
+            expiry,
+            &options,
+            &key_retry(),
+        )
+        .await?;
+        *cached = Some(key.clone());
         Ok(key)
     }
 }
@@ -207,8 +265,29 @@ impl AzureUserDelegationSasMinter {
 impl CredentialMinter for AzureUserDelegationSasMinter {
     async fn mint(&self, request: &MintRequest) -> Result<VendedCredential> {
         let (account, container, prefix) = target(request, self.flat)?;
-        let expiry = Utc::now() + ttl(request);
-        let key = self.key(account, expiry).await?;
+        if let Some(served) = self.endpoint.as_deref().and_then(endpoint_account)
+            && !served.eq_ignore_ascii_case(account)
+        {
+            return Err(Error::unsupported(
+                &request.scope,
+                format!("the endpoint serves storage account `{served}`"),
+            ));
+        }
+        let now = Utc::now();
+        let requested = now + ttl(request);
+        let key = self.key(account, requested).await?;
+        // A SAS stops verifying when its key expires, so it never outlives the key Azure
+        // issued, which may live shorter than asked for.
+        let expiry = match key.expires_at() {
+            Some(key_expiry) => requested.min(key_expiry - KEY_MARGIN),
+            None => requested,
+        };
+        if expiry <= now {
+            return Err(Error::unsupported(
+                &request.scope,
+                "the user delegation key expires too soon to sign for",
+            ));
+        }
         let sas = build_user_delegation_sas(
             account,
             container,
@@ -442,6 +521,151 @@ mod tests {
                 .unwrap();
         }
         key.assert_async().await;
+    }
+
+    /// A `Get User Delegation Key` response for a key expiring at `expiry`.
+    fn key_body(expiry: DateTime<Utc>) -> String {
+        format!(
+            "<UserDelegationKey><SignedOid>oid</SignedOid><SignedTid>tid</SignedTid>\
+             <SignedStart>2020-01-01T00:00:00Z</SignedStart><SignedExpiry>{}</SignedExpiry>\
+             <SignedService>b</SignedService><SignedVersion>2020-12-06</SignedVersion>\
+             <Value>a2V5</Value></UserDelegationKey>",
+            expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        )
+    }
+
+    /// Hands out a token, except that the first call waits until `release` is notified.
+    #[derive(Debug, Default)]
+    struct StallingToken {
+        calls: std::sync::atomic::AtomicUsize,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl olai_http::CredentialProvider for StallingToken {
+        type Credential = olai_http::bearer::BearerCredential;
+
+        async fn get_credential(&self) -> olai_http::Result<Arc<Self::Credential>> {
+            if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                self.release.notified().await;
+            }
+            Ok(Arc::new(olai_http::bearer::BearerCredential {
+                token: "t".into(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stalled_account_does_not_block_another() {
+        let mut server = mockito::Server::new_async().await;
+        let fetches = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_body(key_body(Utc::now() + TimeDelta::days(1)))
+            .expect(2)
+            .create_async()
+            .await;
+        let token = Arc::new(StallingToken::default());
+        let minter = Arc::new(
+            AzureUserDelegationSasMinter::with_token_provider(token.clone())
+                .with_endpoint(server.url())
+                .with_client_options(ClientOptions::new().with_allow_http(true)),
+        );
+        let mint = |account: &'static str| {
+            let minter = Arc::clone(&minter);
+            tokio::spawn(async move {
+                let url = format!("abfss://ctr@{account}.dfs.core.windows.net/tab");
+                minter.mint(&request(&url, AccessLevel::Read)).await
+            })
+        };
+
+        // The first fetch for `one` stalls in its token request...
+        let stalled = mint("one");
+        while token.calls.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+        // ...yet `two` mints, and a second mint for `one` waits to share its fetch.
+        let shared = mint("one");
+        tokio::time::timeout(Duration::from_secs(10), mint("two"))
+            .await
+            .expect("minting for another account must not wait")
+            .unwrap()
+            .unwrap();
+        token.release.notify_one();
+        stalled.await.unwrap().unwrap();
+        shared.await.unwrap().unwrap();
+        fetches.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_sas_never_outlives_its_delegation_key() {
+        let mut server = mockito::Server::new_async().await;
+        // Azure may issue a key shorter-lived than asked for.
+        let key_expiry = Utc::now() + TimeDelta::hours(1);
+        server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_body(key_body(key_expiry))
+            .create_async()
+            .await;
+        let minter =
+            AzureUserDelegationSasMinter::with_token_provider(BearerAuth::static_token("t"))
+                .with_endpoint(server.url())
+                .with_client_options(ClientOptions::new().with_allow_http(true));
+        let vended = minter
+            .mint(
+                &request(
+                    "abfss://ctr@acct.dfs.core.windows.net/tab",
+                    AccessLevel::Read,
+                )
+                .with_ttl(Duration::from_secs(3 * 3600)),
+            )
+            .await
+            .unwrap();
+        let expiry = vended.expires_at.unwrap();
+        assert!(
+            expiry <= key_expiry - KEY_MARGIN,
+            "{expiry} vs {key_expiry}"
+        );
+        let se = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        assert_eq!(get(&query(&vended), "se"), Some(se.as_str()));
+    }
+
+    #[test]
+    fn the_longest_sas_leaves_room_for_the_key_margin_and_skew() {
+        let longest = TimeDelta::from_std(MAX_TTL).unwrap();
+        assert!(longest + KEY_MARGIN + CLOCK_SKEW <= MAX_KEY_LIFETIME);
+    }
+
+    #[test]
+    fn endpoints_name_their_account() {
+        for (endpoint, account) in [
+            ("https://acct.blob.core.windows.net", Some("acct")),
+            ("https://acct.dfs.core.windows.net/", Some("acct")),
+            (
+                "https://127.0.0.1:10000/devstoreaccount1",
+                Some("devstoreaccount1"),
+            ),
+            ("http://127.0.0.1:10000", None),
+            ("https://storage.example.com", None),
+        ] {
+            assert_eq!(endpoint_account(endpoint), account, "{endpoint}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_mints_for_its_own_account_only() {
+        let minter =
+            AzureUserDelegationSasMinter::with_token_provider(BearerAuth::static_token("t"))
+                .with_endpoint("https://127.0.0.1:10000/devstoreaccount1");
+        let err = minter
+            .mint(&request(
+                "abfss://ctr@other.dfs.core.windows.net/tab",
+                AccessLevel::Read,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }), "{err}");
     }
 
     #[tokio::test]
