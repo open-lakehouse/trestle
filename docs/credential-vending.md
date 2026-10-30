@@ -549,12 +549,12 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P7 | delta-rs adopts `olai-vended-store` + `unity` | tracked in #185 (fork has no issues) |
 | P8 | `apache/object_store` proposals | #184 |
 
-The delta-rs critical path (P1 → P2 → P2a) has landed; P7 waits only on the release
-below. All protocol modules (P2a–P2e) and every minter (P3, P4) have landed. Next: P5
-(`VendingRouter`).
+The delta-rs critical path (P1 → P2 → P2a) has landed and the crates are released, so
+P7 is unblocked. All protocol modules (P2a–P2e) and every minter (P3, P4) have landed.
+Next: P5 (`VendingRouter`).
 
-The new crates are not published yet: they stay out of the release cycle
-(`release = false`) so their APIs can still change. Their in-repo dependencies name
-both a `path` and a `version`, which release-plz keeps in sync. They are released one
-crate at a time in dependency order: `olai-storage-credentials`, then
-`olai-vended-store`, then `olai-credential-vending`.
+The three crates are on crates.io (first published as 0.0.1) and release through
+release-plz like the rest of the workspace. Their in-repo dependencies name both a
+`path` and a `version`, which release-plz keeps in sync and publishes in dependency
+order: `olai-storage-credentials`, then `olai-vended-store`, then
+`olai-credential-vending`.
