@@ -2,14 +2,12 @@
 
 use async_trait::async_trait;
 use olai_storage_credentials::wire::VendContext;
-use olai_storage_credentials::{
-    AccessLevel, StorageCredentials, StorageLocation, StorageProvider, StorageScope, StoreHints,
-    VendedCredential,
-};
+use olai_storage_credentials::{AccessLevel, StorageScope, StoreHints, VendedCredential};
 use url::Url;
 
 use super::client::UnityClient;
-use crate::error::{Error, Result};
+use crate::api::{local_credential, storage_root};
+use crate::error::Result;
 use crate::source::CredentialSource;
 
 /// Vends credentials for one Unity Catalog securable at one access level.
@@ -46,16 +44,11 @@ impl UnitySource {
         storage_location: &str,
         access: AccessLevel,
     ) -> Result<Self> {
-        let url = Url::parse(storage_location).map_err(|e| {
-            Error::InvalidReference(format!(
-                "Unity Catalog returned an invalid storage location `{storage_location}`: {e}"
-            ))
-        })?;
-        let (location, hints) = StorageLocation::parse_with_hints(&url)?;
+        let (scope, hints) = storage_root("Unity Catalog", storage_location)?;
         Ok(Self {
             client,
             securable,
-            scope: StorageScope::new(location),
+            scope,
             hints,
             access,
         })
@@ -86,12 +79,8 @@ impl UnitySource {
 #[async_trait]
 impl CredentialSource for UnitySource {
     async fn fetch(&self) -> Result<VendedCredential> {
-        if self.scope.location().provider() == StorageProvider::Local {
-            return Ok(VendedCredential::new(
-                StorageCredentials::None,
-                self.scope.clone(),
-                self.access,
-            ));
+        if let Some(local) = local_credential(&self.scope, self.access) {
+            return Ok(local);
         }
         let wire = match &self.securable {
             Securable::Table(id) => {
@@ -111,20 +100,8 @@ impl CredentialSource for UnitySource {
             }
         };
         let mut vended = wire.to_vended(&VendContext::new(self.scope.clone(), self.access))?;
-        // What the storage URL itself implies (an emulator endpoint, a regional S3
-        // host) fills what the response left out.
-        let hints = &mut vended.hints;
-        hints.endpoint = hints
-            .endpoint
-            .take()
-            .or_else(|| self.hints.endpoint.clone());
-        hints.region = hints.region.take().or_else(|| self.hints.region.clone());
-        hints.access_point = hints
-            .access_point
-            .take()
-            .or_else(|| self.hints.access_point.clone());
-        hints.path_style = hints.path_style.or(self.hints.path_style);
-        hints.allow_http = hints.allow_http.or(self.hints.allow_http);
+        // What the storage URL itself implies fills what the response left out.
+        vended.hints.fill_from(&self.hints);
         Ok(vended)
     }
 }

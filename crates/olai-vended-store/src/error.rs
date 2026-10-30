@@ -15,6 +15,12 @@ pub enum Error {
     #[error(transparent)]
     Credentials(#[from] olai_storage_credentials::Error),
 
+    /// A vending server refused the request or could not be reached; see
+    /// [`ApiError`](crate::api::ApiError) for its status and error code.
+    #[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
+    #[error(transparent)]
+    Api(#[from] crate::api::ApiError),
+
     /// The vending server, or the transport to it, failed.
     #[error("credential vending failed: {source}")]
     Vend {
@@ -71,7 +77,7 @@ pub enum Error {
     #[error("invalid configuration: {0}")]
     Config(String),
 
-    /// A securable reference (such as a `uc://` URL) is malformed.
+    /// A securable reference (a protocol's URL or name) is malformed.
     #[error("invalid reference: {0}")]
     InvalidReference(String),
 

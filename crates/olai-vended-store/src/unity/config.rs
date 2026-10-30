@@ -9,6 +9,7 @@ use url::Url;
 use super::{UnityCatalog, UnityClient};
 use crate::auth::{AuthConfig, AuthDefaults};
 use crate::error::{Error, Result};
+use crate::options::{StoreKeys, access_key_value, parse_access, parse_base_url};
 use crate::store::StoreOptions;
 
 /// The UC REST API below a server root.
@@ -49,11 +50,8 @@ const TOKEN_EXCHANGE_PATH: &str = "api/1.0/unity-control/auth/tokens";
 pub struct UnityBuilder {
     url: Option<String>,
     operation: Option<String>,
-    aws_region: Option<String>,
-    aws_endpoint: Option<String>,
     delta_api: Option<String>,
-    #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-    store_client: Vec<(object_store::ClientConfigKey, String)>,
+    store_keys: StoreKeys,
     auth: AuthConfig,
     store_options: StoreOptions,
     client: Option<CloudClient>,
@@ -89,11 +87,8 @@ impl UnityBuilder {
         Self {
             url: None,
             operation: None,
-            aws_region: None,
-            aws_endpoint: None,
             delta_api: None,
-            #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-            store_client: Vec::new(),
+            store_keys: StoreKeys::default(),
             auth,
             store_options: StoreOptions::default(),
             client: None,
@@ -108,13 +103,7 @@ impl UnityBuilder {
 
     /// Asks for `access` for every store, without fallback.
     pub fn with_access(mut self, access: AccessLevel) -> Self {
-        self.operation = Some(
-            match access {
-                AccessLevel::Read => "read",
-                AccessLevel::ReadWrite => "read_write",
-            }
-            .to_owned(),
-        );
+        self.operation = Some(access_key_value(access).to_owned());
         self
     }
 
@@ -137,17 +126,14 @@ impl UnityBuilder {
         match key {
             "unity_catalog_url" | "unity_url" => self.url = Some(value),
             "unity_operation" => self.operation = Some(value),
-            "aws_region" | "unity_aws_region" => self.aws_region = Some(value),
-            "aws_endpoint" | "aws_endpoint_url" => self.aws_endpoint = Some(value),
+            "unity_aws_region" => {
+                self.store_keys.set("aws_region", &value);
+            }
             "unity_delta_api" => self.delta_api = Some(value),
             _ => {
-                #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-                if let Ok(client_key) = key.parse::<object_store::ClientConfigKey>() {
-                    self.store_client
-                        .retain(|(existing, _)| *existing != client_key);
-                    self.store_client.push((client_key, value.clone()));
+                if !self.store_keys.set(key, &value) {
+                    self.auth.set(key, value);
                 }
-                self.auth.set(key, value);
             }
         }
         self
@@ -169,43 +155,13 @@ impl UnityBuilder {
     /// Builds the catalog. No request is sent until a store is asked for.
     pub fn build(self) -> Result<UnityCatalog> {
         let url = self.resolve_url()?;
-        let access = match self.operation.as_deref() {
-            None => None,
-            Some("read") => Some(AccessLevel::Read),
-            Some("read_write") => Some(AccessLevel::ReadWrite),
-            Some(other) => {
-                return Err(Error::Config(format!(
-                    "`unity_operation` must be `read` or `read_write`, got `{other}`"
-                )));
-            }
-        };
+        let access = parse_access("unity_operation", self.operation.as_deref())?;
         let client = match &self.client {
             Some(client) => client.clone(),
             None => self.auth.client(&url, &self.auth_defaults(&url))?,
         };
 
-        #[cfg_attr(
-            not(any(feature = "aws", feature = "azure", feature = "gcp")),
-            allow(unused_mut)
-        )]
-        let mut options = self.store_options.clone();
-        #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-        if !self.store_client.is_empty() {
-            let mut client_options = object_store::ClientOptions::new();
-            for (key, value) in &self.store_client {
-                client_options = client_options.with_config(*key, value);
-            }
-            options = options.with_client_options(client_options);
-        }
-        #[cfg(feature = "aws")]
-        {
-            if let Some(region) = &self.aws_region {
-                options = options.with_aws_region(region);
-            }
-            if let Some(endpoint) = &self.aws_endpoint {
-                options = options.with_s3_endpoint(endpoint);
-            }
-        }
+        let options = self.store_keys.apply(self.store_options.clone());
         let catalog = UnityCatalog::new(UnityClient::new(client, url))
             .with_store_options(options)
             .with_default_access(access);
@@ -237,13 +193,7 @@ impl UnityBuilder {
                 format!("{}/{API_PATH}", host.trim_end_matches('/'))
             }
         };
-        let mut url = Url::parse(&url)
-            .map_err(|e| Error::Config(format!("invalid `unity_catalog_url` `{url}`: {e}")))?;
-        if !url.path().ends_with('/') {
-            let path = format!("{}/", url.path());
-            url.set_path(&path);
-        }
-        Ok(url)
+        parse_base_url("unity_catalog_url", &url)
     }
 
     fn auth_defaults(&self, url: &Url) -> AuthDefaults {
@@ -265,6 +215,7 @@ impl UnityBuilder {
                 || databricks::host_in(url, databricks::AZURE_DOMAINS),
             #[cfg(not(feature = "databricks"))]
             databricks: false,
+            ..AuthDefaults::default()
         }
     }
 }
@@ -274,8 +225,7 @@ impl fmt::Debug for UnityBuilder {
         f.debug_struct("UnityBuilder")
             .field("url", &self.url)
             .field("operation", &self.operation)
-            .field("aws_region", &self.aws_region)
-            .field("aws_endpoint", &self.aws_endpoint)
+            .field("store_keys", &self.store_keys)
             .field("auth", &self.auth)
             .field("client", &self.client.as_ref().map(|_| "CloudClient"))
             .finish_non_exhaustive()

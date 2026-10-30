@@ -119,43 +119,41 @@ enum AuthKey {
 }
 
 impl AuthKey {
+    /// Every key by its name after the prefix; the first name of a key is canonical.
+    const NAMES: &[(&str, Self)] = &[
+        ("auth_type", Self::AuthType),
+        ("allow_unauthenticated", Self::AllowUnauthenticated),
+        ("token", Self::Token),
+        ("access_token", Self::Token),
+        ("token_file", Self::TokenFile),
+        ("token_env", Self::TokenEnv),
+        ("client_id", Self::ClientId),
+        ("client_secret", Self::ClientSecret),
+        ("oauth_token_url", Self::OAuthTokenUrl),
+        ("oauth_scope", Self::OAuthScope),
+        ("oauth_audience", Self::OAuthAudience),
+        ("azure_tenant_id", Self::AzureTenantId),
+        ("azure_authority_host", Self::AzureAuthorityHost),
+        ("token_exchange", Self::TokenExchange),
+        (
+            "token_exchange_subject_token_type",
+            Self::TokenExchangeSubjectTokenType,
+        ),
+    ];
+
     fn parse(suffix: &str) -> Option<Self> {
-        Some(match suffix {
-            "auth_type" => Self::AuthType,
-            "allow_unauthenticated" => Self::AllowUnauthenticated,
-            "token" | "access_token" => Self::Token,
-            "token_file" => Self::TokenFile,
-            "token_env" => Self::TokenEnv,
-            "client_id" => Self::ClientId,
-            "client_secret" => Self::ClientSecret,
-            "oauth_token_url" => Self::OAuthTokenUrl,
-            "oauth_scope" => Self::OAuthScope,
-            "oauth_audience" => Self::OAuthAudience,
-            "azure_tenant_id" => Self::AzureTenantId,
-            "azure_authority_host" => Self::AzureAuthorityHost,
-            "token_exchange" => Self::TokenExchange,
-            "token_exchange_subject_token_type" => Self::TokenExchangeSubjectTokenType,
-            _ => return None,
-        })
+        Self::NAMES
+            .iter()
+            .find(|(name, _)| *name == suffix)
+            .map(|(_, key)| *key)
     }
 
     fn name(self) -> &'static str {
-        match self {
-            Self::AuthType => "auth_type",
-            Self::AllowUnauthenticated => "allow_unauthenticated",
-            Self::Token => "token",
-            Self::TokenFile => "token_file",
-            Self::TokenEnv => "token_env",
-            Self::ClientId => "client_id",
-            Self::ClientSecret => "client_secret",
-            Self::OAuthTokenUrl => "oauth_token_url",
-            Self::OAuthScope => "oauth_scope",
-            Self::OAuthAudience => "oauth_audience",
-            Self::AzureTenantId => "azure_tenant_id",
-            Self::AzureAuthorityHost => "azure_authority_host",
-            Self::TokenExchange => "token_exchange",
-            Self::TokenExchangeSubjectTokenType => "token_exchange_subject_token_type",
-        }
+        Self::NAMES
+            .iter()
+            .find(|(_, key)| *key == self)
+            .map(|(name, _)| *name)
+            .expect("every key has a name")
     }
 
     /// Whether values of this key are secret and must not be printed.
@@ -219,12 +217,20 @@ impl GoogleKey {
 
 /// What a protocol knows about authenticating to its servers.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct AuthDefaults {
     /// The token-exchange endpoint `_token_exchange=true` selects.
     pub token_exchange_endpoint: Option<String>,
     /// The Azure AD scope to request when none is configured, for servers whose scope
     /// is well known.
     pub oauth_scope: Option<String>,
+    /// The OAuth token endpoint for client credentials when `_oauth_token_url` is
+    /// unset, for protocols that define one (Iceberg REST's `v1/oauth/tokens`).
+    pub oauth_token_url: Option<String>,
+    /// The scope client credentials request when `_oauth_scope` is unset (Iceberg
+    /// REST's `catalog`). Unlike [`oauth_scope`](Self::oauth_scope), it never selects
+    /// a cloud identity.
+    pub client_credentials_scope: Option<String>,
     /// Whether the server is known to be a Databricks workspace, so the Databricks
     /// environment may be consulted.
     pub databricks: bool,
@@ -477,7 +483,7 @@ impl AuthConfig {
         let has_client = has(AuthKey::ClientId) && has(AuthKey::ClientSecret);
         if has(AuthKey::Token) {
             Some(AuthType::Bearer)
-        } else if has_client && has(AuthKey::OAuthTokenUrl) {
+        } else if has_client && self.oauth_token_url(defaults).is_some() {
             Some(AuthType::OAuthClientCredentials)
         } else if has_client && self.tenant_id().is_some() {
             Some(AuthType::AzureClientSecret)
@@ -574,6 +580,11 @@ impl AuthConfig {
             .or_else(|| self.azure.get(&AzureKey::AuthorityHost).cloned())
     }
 
+    fn oauth_token_url(&self, defaults: &AuthDefaults) -> Option<String> {
+        self.get(AuthKey::OAuthTokenUrl)
+            .or_else(|| defaults.oauth_token_url.clone())
+    }
+
     fn oauth_scope(&self, defaults: &AuthDefaults) -> Option<String> {
         self.get(AuthKey::OAuthScope)
             .or_else(|| defaults.oauth_scope.clone())
@@ -642,7 +653,7 @@ impl AuthConfig {
             )?),
             AuthType::OAuthClientCredentials => auth.client_credentials(ClientCredentials {
                 token_url: required(
-                    self.get(AuthKey::OAuthTokenUrl),
+                    self.oauth_token_url(defaults),
                     &[key(AuthKey::OAuthTokenUrl)],
                 )?,
                 client_id: required(self.get(AuthKey::ClientId), &[key(AuthKey::ClientId)])?,
@@ -650,7 +661,9 @@ impl AuthConfig {
                     self.get(AuthKey::ClientSecret),
                     &[key(AuthKey::ClientSecret)],
                 )?,
-                scope: self.get(AuthKey::OAuthScope),
+                scope: self
+                    .get(AuthKey::OAuthScope)
+                    .or_else(|| defaults.client_credentials_scope.clone()),
                 audience: self.get(AuthKey::OAuthAudience),
             })?,
             AuthType::AzureClientSecret => auth.azure_client_secret(
@@ -927,6 +940,24 @@ mod tests {
                 .client(&url(), &AuthDefaults::default())
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn protocol_defaults_configure_client_credentials() {
+        let defaults = AuthDefaults {
+            oauth_token_url: Some("https://catalog.example/v1/oauth/tokens".into()),
+            client_credentials_scope: Some("catalog".into()),
+            ..AuthDefaults::default()
+        };
+        let client = [("unity_client_id", "id"), ("unity_client_secret", "s")];
+        assert_eq!(
+            detected(&client, &defaults),
+            Some(AuthType::OAuthClientCredentials)
+        );
+        assert_eq!(detected(&client, &AuthDefaults::default()), None);
+        // The client-credentials scope never selects a cloud identity.
+        assert_eq!(detected(&[("azure_client_id", "id")], &defaults), None);
+        assert!(config(&client).client(&url(), &defaults).is_ok());
     }
 
     #[test]

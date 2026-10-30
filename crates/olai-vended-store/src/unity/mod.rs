@@ -36,11 +36,12 @@ use olai_storage_credentials::AccessLevel;
 use url::Url;
 
 pub use self::client::{
-    ApiError, PathOperation, TableInfo, TableOperation, UnityClient, VolumeInfo, VolumeOperation,
+    PathOperation, TableInfo, TableOperation, UnityClient, VolumeInfo, VolumeOperation,
 };
 pub use self::config::UnityBuilder;
 pub use self::reference::UnityReference;
 pub use self::source::{Securable, UnitySource};
+use crate::api::fetch_or_read_only;
 use crate::error::{Error, Result};
 use crate::source::CredentialSource;
 use crate::store::{ScopedStore, StoreOptions, build_store};
@@ -175,15 +176,8 @@ impl UnityCatalog {
             return self.store(&reference, access).await;
         }
         let (source, sub_path) = self.resolve(&reference, AccessLevel::ReadWrite).await?;
-        match source.fetch().await {
-            Ok(seed) => self.build(seed, source, sub_path).await,
-            Err(err) if ApiError::find(&err).is_some_and(ApiError::is_permission_denied) => {
-                let source = source.with_access(AccessLevel::Read);
-                let seed = source.fetch().await?;
-                self.build(seed, source, sub_path).await
-            }
-            Err(err) => Err(err),
-        }
+        let (source, seed) = fetch_or_read_only(source, Resolved::with_access).await?;
+        self.build(seed, source, sub_path).await
     }
 
     async fn build(
@@ -281,6 +275,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::ApiError;
 
     fn catalog(server: &ServerGuard) -> UnityCatalog {
         let base = format!("{}/api/2.1/unity-catalog", server.url())
