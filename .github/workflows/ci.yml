@@ -379,6 +379,10 @@ jobs:
           components: rustfmt, clippy
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          # Resolving the buf release is a GitHub API call; unauthenticated, it
+          # shares the runner IP's rate limit and fails intermittently.
+          github_token: ${{ github.token }}
       # `examples/golden-path-app` is `connect=on`, so it needs trestle (this
       # working tree) + the local connect/buffa codegen plugins.
       - name: Install trestle + codegen plugins
