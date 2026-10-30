@@ -10,7 +10,8 @@
 //!   requested scope but never widen it: a broader prefix is clamped to the request, and
 //!   a credential for unrelated storage is never used. Shapes that carry one credential
 //!   (UC REST, Open Sharing) reject it; shapes that carry a list (Iceberg, Delta API)
-//!   skip it, and fail if nothing in the list relates. A catalog therefore cannot steer
+//!   skip it, as they skip prefixes that are not locations this crate parses, and fail
+//!   if nothing in the list relates. A catalog therefore cannot steer
 //!   a client's requests for other storage to its credentials (or to an endpoint hint
 //!   of its choosing). Of a list, [`select_covering`] picks the credential for a
 //!   request.
@@ -108,6 +109,27 @@ pub(crate) fn prefix_string(scope: &StorageScope) -> String {
         prefix.push('/');
     }
     prefix
+}
+
+/// The error for a list of prefixed credentials (Iceberg, Delta API) none of which
+/// relates to the request, noting how many prefixes were not locations at all.
+#[cfg(any(feature = "delta-api", feature = "iceberg"))]
+pub(crate) fn no_covering_credential<'a>(
+    prefixes: impl IntoIterator<Item = &'a str>,
+    ctx: &VendContext,
+) -> crate::Error {
+    let unparsed = prefixes
+        .into_iter()
+        .filter(|p| p.parse::<StorageScope>().is_err())
+        .count();
+    let note = match unparsed {
+        0 => String::new(),
+        n => format!(" ({n} prefixes are not storage locations this crate parses)"),
+    };
+    crate::Error::invalid_credential(format!(
+        "no credential covers the requested {}{note}",
+        ctx.scope
+    ))
 }
 
 /// Parses an epoch-milliseconds expiry from a config-map value.

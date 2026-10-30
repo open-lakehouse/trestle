@@ -35,7 +35,10 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{RedactedConfig, VendContext, parse_expiry_millis, prefix_string, resolve_expiry};
+use super::{
+    RedactedConfig, VendContext, no_covering_credential, parse_expiry_millis, prefix_string,
+    resolve_expiry,
+};
 use crate::error::{Error, Result};
 use crate::location::{StorageLocation, StorageProvider, StorageScope};
 use crate::model::{StorageCredentials, StoreHints, VendedCredential};
@@ -86,11 +89,15 @@ pub struct StorageCredential {
 impl StorageCredential {
     /// Converts into the model, for the request `ctx`.
     ///
-    /// Returns `Ok(None)` when the prefix is unrelated to `ctx.scope`; a broader prefix
-    /// is clamped to it. Fails if the prefix does not parse or the config lacks a
-    /// credential for the prefix's store.
+    /// Returns `Ok(None)` when the prefix is unrelated to `ctx.scope`, including a
+    /// prefix this crate cannot parse; a broader prefix is clamped to the request. Fails
+    /// if the config lacks a credential for the prefix's store.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<Option<VendedCredential>> {
-        let offered: StorageScope = self.prefix.parse()?;
+        // The request always parses, so storage this crate cannot address is unrelated
+        // to it. Skipping it lets a server also vend for stores we do not know.
+        let Ok(offered) = self.prefix.parse::<StorageScope>() else {
+            return Ok(None);
+        };
         let Some(scope) = ctx.clamp(&offered) else {
             return Ok(None);
         };
@@ -287,10 +294,10 @@ fn convert_all(
         vended.extend(credential.to_vended(ctx)?);
     }
     if vended.is_empty() && !credentials.is_empty() {
-        return Err(Error::invalid_credential(format!(
-            "no credential covers the requested {}",
-            ctx.scope
-        )));
+        return Err(no_covering_credential(
+            credentials.iter().map(|c| c.prefix.as_str()),
+            ctx,
+        ));
     }
     Ok(vended)
 }

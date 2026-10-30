@@ -306,6 +306,42 @@ mod delta {
     }
 
     #[test]
+    fn unparsable_prefixes_are_unrelated() {
+        // A server may also vend for stores this crate cannot address (MinIO
+        // path-style https, sovereign Azure); that must not fail the whole response.
+        let wire: delta_api::CredentialsResponse = serde_json::from_value(serde_json::json!({
+            "storage-credentials": [
+                {
+                    "prefix": "https://minio.local:9000/b/x/",
+                    "operation": "READ",
+                    "config": { "s3.access-key-id": "ak-other", "s3.secret-access-key": "sk-other" },
+                },
+                {
+                    "prefix": "s3://bucket/path/",
+                    "operation": "READ",
+                    "config": { "s3.access-key-id": "ak-test", "s3.secret-access-key": "sk-test" },
+                },
+            ],
+        }))
+        .unwrap();
+        let v = wire
+            .to_vended(&ctx("s3://bucket/path", AccessLevel::Read))
+            .unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].credentials, aws("ak-test", None));
+
+        // Nothing relates: still an error, which notes the prefix it could not parse.
+        let err = wire
+            .to_vended(&ctx("s3://other/path", AccessLevel::Read))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("1 prefixes are not storage locations"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn rejects_a_response_with_nothing_for_the_request() {
         let wire: delta_api::CredentialsResponse = fixture("delta_api/credentials.json");
         assert!(
@@ -395,6 +431,32 @@ mod iceberg_rest {
             v[0].hints.region.as_deref(),
             Some("us-west-2"),
             "the entry's keys win"
+        );
+    }
+
+    #[test]
+    fn unparsable_prefixes_are_unrelated() {
+        let wire: iceberg::LoadCredentialsResponse = serde_json::from_value(serde_json::json!({
+            "storage-credentials": [
+                {
+                    "prefix": "oss://bucket/warehouse/",
+                    "config": { "s3.access-key-id": "ak-other", "s3.secret-access-key": "sk-other" },
+                },
+                {
+                    "prefix": "s3://bucket/warehouse/ns/tab/",
+                    "config": { "s3.access-key-id": "ak-test", "s3.secret-access-key": "sk-test" },
+                },
+            ],
+        }))
+        .unwrap();
+        let v = wire
+            .to_vended(&ctx("s3://bucket/warehouse/ns/tab", AccessLevel::Read))
+            .unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].credentials, aws("ak-test", None));
+        assert!(
+            wire.to_vended(&ctx("s3://other/tab", AccessLevel::Read))
+                .is_err()
         );
     }
 
