@@ -69,6 +69,13 @@ impl ApiClient {
         &self.base_url
     }
 
+    /// The same client for the API rooted at `base_url`.
+    #[cfg_attr(not(feature = "iceberg"), allow(dead_code))]
+    pub(crate) fn with_base_url(mut self, base_url: Url) -> Self {
+        self.base_url = with_trailing_slash(base_url);
+        self
+    }
+
     /// The URL of `segments` below the base, each escaped as one path segment.
     pub(crate) fn url(&self, segments: &[&str]) -> Result<Url> {
         let path = segments
@@ -85,6 +92,7 @@ impl ApiClient {
     }
 
     /// A `POST` request for `segments` below the base.
+    #[cfg_attr(not(feature = "unity"), allow(dead_code))]
     pub(crate) fn post(&self, segments: &[&str]) -> Result<CloudRequestBuilder> {
         Ok(self.client.post(self.url(segments)?))
     }
@@ -224,6 +232,7 @@ impl StdError for ApiError {}
 ///
 /// This is how protocol modules open a reference without a configured access level:
 /// they look the securable up once, and try the wider grant first.
+#[cfg_attr(not(feature = "unity"), allow(dead_code))]
 pub(crate) async fn fetch_or_read_only<S: CredentialSource>(
     source: S,
     rebind: impl FnOnce(S, AccessLevel) -> S,

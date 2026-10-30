@@ -15,7 +15,7 @@ use crate::source::CredentialSource;
 /// Built by [`UnityCatalog`](super::UnityCatalog), which resolves names to ids and
 /// storage locations once; every [`fetch`](CredentialSource::fetch) then replays the
 /// same `temporary-*-credentials` request. Local (`file://`) storage needs no vend and
-/// gets [`StorageCredentials::None`].
+/// gets [`StorageCredentials::None`](olai_storage_credentials::StorageCredentials::None).
 #[derive(Debug, Clone)]
 pub struct UnitySource {
     client: UnityClient,
