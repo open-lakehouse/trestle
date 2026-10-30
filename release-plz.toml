@@ -41,9 +41,9 @@ pr_draft = false
 # Per-package overrides. All five crates default to publish=true + tag + release.
 # These blocks only pin the changelog path. `olai-trestle`'s directory is still
 # `crates/trestle/` (only the package name changed), hence the path below.
-# `olai-trestle` is the only crate with an intra-workspace dependency
-# (olai-codegen); release-plz auto-syncs its version requirement and publishes
-# olai-codegen first.
+# Intra-workspace dependencies name a `path` and a `version` (see CONTRIBUTING.md);
+# release-plz auto-syncs those version requirements and publishes dependencies
+# first.
 # ---------------------------------------------------------------------------
 [[package]]
 name = "olai-store"

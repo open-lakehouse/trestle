@@ -164,12 +164,26 @@ admits no direct pushes).
 ### Per-crate versioning & the inter-crate dependency
 
 Versions live in each crate's own `[package].version` (not in
-`[workspace.package]`), so crates bump independently. The only intra-workspace
-dependency is `olai-trestle → olai-codegen`. When release-plz bumps
-`olai-codegen`, it automatically rewrites the `version` in `olai-trestle`'s
-dependency on it, bumps `olai-trestle` accordingly, and publishes `olai-codegen`
-first. You only ever maintain the `path` on that dependency; release-plz owns
-the `version`.
+`[workspace.package]`), so crates bump independently.
+
+A dependency on another crate of this repository names both its `path` and its
+`version`, normal, optional and dev-dependencies alike:
+
+```toml
+olai-http = { path = "../olai-http", version = "0.0.8" }
+```
+
+The `path` builds against the code in the repository; the `version` is what
+`cargo publish` writes into the published manifest, which has no paths. When
+release-plz bumps a crate, it rewrites the `version` of every dependency on it,
+bumps the dependents accordingly, and publishes in dependency order. Add the
+`version` once, at the dependency's current version, and leave its updates to
+release-plz.
+
+The exception is crates that are never published (`publish = false`, such as
+`olai-test-emulators`): reference those by `path` only, and only as
+dev-dependencies. `cargo publish` drops path-only dev-dependencies, but would
+look a versioned one up on crates.io and fail.
 
 ### Published crates and the `trestle` / `olai-trestle` naming
 
