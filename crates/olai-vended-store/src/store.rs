@@ -53,6 +53,26 @@ impl ScopedStore {
         self.scope.location().to_url()
     }
 
+    /// The same store, scoped to `path` below [`prefix`](Self::prefix) (for example a
+    /// sub-directory of a volume). An empty `path` returns a clone.
+    pub fn child(&self, path: &str) -> Result<ScopedStore> {
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        if parts.is_empty() {
+            return Ok(self.clone());
+        }
+        let mut url = self.url();
+        url.path_segments_mut()
+            .map_err(|()| unsupported(self.scope.location(), "location cannot carry a path"))?
+            .pop_if_empty()
+            .extend(&parts);
+        let location = StorageLocation::parse(&url)?;
+        Ok(ScopedStore {
+            root: Arc::clone(&self.root),
+            prefix: location.path().clone(),
+            scope: StorageScope::new(location),
+        })
+    }
+
     /// A store whose paths are relative to [`prefix`](Self::prefix).
     pub fn prefixed(&self) -> Arc<dyn ObjectStore> {
         if self.prefix.as_ref().is_empty() {
