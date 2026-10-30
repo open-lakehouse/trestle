@@ -101,10 +101,16 @@ impl RoutingObjectStore {
     }
 
     /// Remove the route registered for exactly `prefix`. Returns whether there was one.
+    ///
+    /// Removing the last route unbinds the bucket, so the router can be reused for
+    /// another.
     pub fn deregister(&self, prefix: &Path) -> bool {
         let mut inner = self.inner.write().unwrap();
         let before = inner.routes.len();
         inner.routes.retain(|(p, _)| p != prefix);
+        if inner.routes.is_empty() {
+            inner.bucket = None;
+        }
         before != inner.routes.len()
     }
 
@@ -124,13 +130,20 @@ impl RoutingObjectStore {
             .map(|(p, s)| (p.clone(), Arc::clone(s)))
     }
 
-    fn route(&self, location: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
+    /// Like [`route_with_prefix`](Self::route_with_prefix), but `NotFound` on a miss.
+    fn covering_route(
+        &self,
+        location: &Path,
+    ) -> object_store::Result<(Path, Arc<dyn ObjectStore>)> {
         self.route_with_prefix(location)
-            .map(|(_, store)| store)
             .ok_or_else(|| object_store::Error::NotFound {
                 path: location.to_string(),
                 source: format!("no route covers `{location}`").into(),
             })
+    }
+
+    fn route(&self, location: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
+        self.covering_route(location).map(|(_, store)| store)
     }
 
     fn route_prefix(&self, prefix: Option<&Path>) -> object_store::Result<Arc<dyn ObjectStore>> {
@@ -142,12 +155,7 @@ impl RoutingObjectStore {
 
     /// The store serving both `from` and `to`, which must share a route.
     fn route_pair(&self, from: &Path, to: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
-        let (from_prefix, store) =
-            self.route_with_prefix(from)
-                .ok_or_else(|| object_store::Error::NotFound {
-                    path: from.to_string(),
-                    source: format!("no route covers `{from}`").into(),
-                })?;
+        let (from_prefix, store) = self.covering_route(from)?;
         match self.route_with_prefix(to) {
             Some((to_prefix, _)) if to_prefix == from_prefix => Ok(store),
             _ => Err(not_implemented("copy or rename across routes")),
@@ -457,5 +465,15 @@ mod tests {
             };
             assert_eq!(router.register(&store).is_ok(), ok, "{url}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_emptied_router_takes_another_bucket() {
+        let router = RoutingObjectStore::new();
+        let first = scoped("memory://b1/t", "x").await;
+        router.register(&first).unwrap();
+        assert!(router.deregister(first.prefix()));
+        let second = scoped("memory://b2/t", "y").await;
+        router.register(&second).unwrap();
     }
 }

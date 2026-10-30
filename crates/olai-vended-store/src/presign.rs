@@ -59,7 +59,12 @@ impl std::fmt::Debug for Presigned {
     }
 }
 
-/// Presigns `locations` for `method`, valid for at most `ttl`. See the module docs.
+/// Presigns `locations` for `method`, valid for at most `ttl` and never past the
+/// credential's expiry. See the module docs.
+///
+/// The exception is a vended Azure SAS: it cannot be shortened, so its URLs are valid
+/// until the SAS expires, whatever `ttl` asks for. [`Presigned::expires_at`] always
+/// states the real expiry.
 ///
 /// `GET` and `HEAD` need [`AccessLevel::Read`]; every other method needs
 /// [`AccessLevel::ReadWrite`]. `options` supplies the clock, S3 region and HTTP client
@@ -103,7 +108,11 @@ pub async fn presign(
         Some(expires_at) => requested.min(expires_at - now),
         None => requested,
     };
-    let expires_at = now.checked_add_signed(lifetime);
+    // An expiry past the representable range would read as "does not expire".
+    let expires_at = Some(
+        now.checked_add_signed(lifetime)
+            .ok_or_else(|| Error::Config(format!("presign lifetime {ttl:?} is out of range")))?,
+    );
     let lifetime = lifetime.to_std().unwrap_or_default();
     let paths: Vec<Path> = locations.iter().map(|l| l.path().clone()).collect();
 
