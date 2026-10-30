@@ -19,7 +19,8 @@
 //! ```
 //!
 //! Servers that predate `storage-credentials` put the same keys in the table `config`;
-//! [`LoadTableCredentials`] falls back to it, scoped to the requested location.
+//! [`LoadTableCredentials`] falls back to it, scoped to the requested location. When
+//! both are present, each entry's config is layered over the table `config`.
 //!
 //! One config map may hold credentials for several stores, and Azure SAS tokens are
 //! keyed per account (`adls.sas-token.<account>.dfs.core.windows.net`, as Iceberg Java
@@ -226,14 +227,29 @@ pub struct LoadTableCredentials {
 impl LoadTableCredentials {
     /// Converts the vended credentials related to `ctx.scope`.
     ///
-    /// Uses `storage-credentials` when present. Otherwise reads the table `config` as a
-    /// credential for `ctx.scope` itself, and returns an empty list if it holds none
-    /// (for example, a server using remote signing instead; see
-    /// [`remote_signing`](Self::remote_signing)). Callers must refuse an empty list:
-    /// building a store from nothing would send unsigned requests.
+    /// Uses `storage-credentials` when present, each entry's config layered over the
+    /// table `config` as Iceberg clients do: servers commonly put `s3.endpoint`,
+    /// `client.region` and `s3.path-style-access` only in the table config, and an
+    /// entry's keys win. Otherwise reads the table `config` as a credential for
+    /// `ctx.scope` itself, and returns an empty list if it holds none (for example, a
+    /// server using remote signing instead; see [`remote_signing`](Self::remote_signing)).
+    /// Callers must refuse an empty list: building a store from nothing would send
+    /// unsigned requests.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<Vec<VendedCredential>> {
         if !self.storage_credentials.is_empty() {
-            return convert_all(&self.storage_credentials, ctx);
+            let layered: Vec<StorageCredential> = self
+                .storage_credentials
+                .iter()
+                .map(|credential| {
+                    let mut config = self.config.clone();
+                    config.extend(credential.config.clone());
+                    StorageCredential {
+                        prefix: credential.prefix.clone(),
+                        config,
+                    }
+                })
+                .collect();
+            return convert_all(&layered, ctx);
         }
         Ok(from_config(&self.config, ctx.scope.location())?
             .map(|found| found.into_vended(ctx.scope.clone(), ctx))

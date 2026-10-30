@@ -364,6 +364,41 @@ mod iceberg_rest {
     }
 
     #[test]
+    fn storage_credentials_layer_over_the_table_config() {
+        // Endpoint, region and path style only in the table config: without layering, a
+        // MinIO/R2 client would sign for, and send its keys to, s3.amazonaws.com.
+        let wire: iceberg::LoadTableCredentials = serde_json::from_value(serde_json::json!({
+            "config": {
+                "s3.endpoint": "http://minio:9000",
+                "s3.path-style-access": "true",
+                "client.region": "eu-west-1",
+            },
+            "storage-credentials": [{
+                "prefix": "s3://bucket/warehouse/ns/tab/",
+                "config": {
+                    "s3.access-key-id": "ak-test",
+                    "s3.secret-access-key": "sk-test",
+                    "s3.session-token": "st-test",
+                    "client.region": "us-west-2",
+                },
+            }],
+        }))
+        .unwrap();
+        let v = wire
+            .to_vended(&ctx("s3://bucket/warehouse/ns/tab", AccessLevel::Read))
+            .unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].credentials, aws("ak-test", Some("st-test")));
+        assert_eq!(v[0].hints.endpoint.as_deref(), Some("http://minio:9000"));
+        assert_eq!(v[0].hints.path_style, Some(true));
+        assert_eq!(
+            v[0].hints.region.as_deref(),
+            Some("us-west-2"),
+            "the entry's keys win"
+        );
+    }
+
+    #[test]
     fn picks_the_sas_for_the_prefix_account() {
         let ctx = ctx(
             "abfss://ctr@acct.dfs.core.windows.net/warehouse/ns/tab",
