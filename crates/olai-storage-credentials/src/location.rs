@@ -14,10 +14,28 @@ use std::fmt;
 use std::str::FromStr;
 
 use object_store::path::Path;
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use url::Url;
 
 use crate::error::{Error, Result};
 use crate::model::StoreHints;
+
+/// Characters [`StorageLocation::to_url`] escapes in a path segment: what a URL path
+/// cannot carry, `%` (else a key holding `%41` would read back as `A`), and `\` (a
+/// separator in `file:` URLs).
+const PATH_SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'/')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'\\')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
 
 /// Account name the Azurite storage emulator serves by default.
 pub const AZURITE_ACCOUNT: &str = "devstoreaccount1";
@@ -321,9 +339,14 @@ impl StorageLocation {
             (StorageProvider::Memory, _) => "memory://".to_owned(),
         };
         let mut url = Url::parse(&base).expect("canonical location base is a valid URL");
-        // `set_path` percent-encodes what a URL path cannot carry (`?`, `#`, spaces); the
-        // `%` escapes `Path` already uses pass through unchanged, so `parse` round-trips.
-        url.set_path(&format!("/{}", self.path));
+        // `Path` holds decoded keys, and `set_path` leaves `%` alone, so each part is
+        // escaped here; `parse` decodes it back to the same key.
+        let path: Vec<String> = self
+            .path
+            .parts()
+            .map(|part| utf8_percent_encode(part.as_ref(), PATH_SEGMENT).to_string())
+            .collect();
+        url.set_path(&format!("/{}", path.join("/")));
         url
     }
 }
@@ -932,14 +955,32 @@ mod tests {
             "s3://b/hash%23/x",
             "s3://b/pct%25/x",
             "gs://b/caf%C3%A9",
+            // A literal `%XX` in a key must not decode a second time.
+            "s3://b/a%2541/x",
+            "s3://b/tab%252F",
+            "s3://b/back%5Cslash",
+            "file:///tmp/back%5Cslash/x",
         ] {
             let l = loc(s);
             assert_eq!(loc(&l.to_string()), l, "{s} round-trips");
+            assert_eq!(
+                l.to_string(),
+                loc(&l.to_string()).to_string(),
+                "{s} is a fixpoint"
+            );
         }
         let l = loc("s3://b/with%20space/x");
         assert_eq!(l.path().parts().next().unwrap().as_ref(), "with space");
         // An encoded space does not sneak past a segment boundary.
         assert!(!scope("s3://b/with").covers(&l));
+
+        let l = loc("s3://b/a%2541/x");
+        assert_eq!(l.path().as_ref(), "a%41/x");
+        assert_eq!(l.to_string(), "s3://b/a%2541/x");
+        // `tab%2F` is one segment, and its scope does not widen to `tab` on re-parse.
+        let l = loc("s3://b/tab%252F");
+        assert_eq!(l.path().as_ref(), "tab%2F");
+        assert_ne!(loc(&l.to_string()), loc("s3://b/tab"));
     }
 
     #[test]
