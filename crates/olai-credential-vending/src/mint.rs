@@ -1,0 +1,99 @@
+//! Minting a downscoped credential.
+
+use std::fmt::Debug;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use olai_storage_credentials::{
+    AccessLevel, StorageCredentials, StorageProvider, StorageScope, VendedCredential,
+};
+
+use crate::error::{Error, Result};
+
+/// What to mint: access to one scope, for a while.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintRequest {
+    /// The storage the credential must cover, and nothing outside it.
+    pub scope: StorageScope,
+    /// What the credential may do there.
+    pub access: AccessLevel,
+    /// How long it should live; the minter's default when `None`. Minters clamp it to
+    /// what the cloud allows.
+    pub ttl: Option<Duration>,
+    /// Who the credential is for, for audit: the STS `RoleSessionName`, for example.
+    pub session_name: Option<String>,
+}
+
+impl MintRequest {
+    /// A request for `access` on `scope` with the minter's default lifetime.
+    pub fn new(scope: StorageScope, access: AccessLevel) -> Self {
+        Self {
+            scope,
+            access,
+            ttl: None,
+            session_name: None,
+        }
+    }
+
+    /// Sets the lifetime.
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Sets the audit session name.
+    pub fn with_session_name(mut self, session_name: impl Into<String>) -> Self {
+        self.session_name = Some(session_name.into());
+        self
+    }
+}
+
+/// Mints downscoped credentials from one registered principal.
+///
+/// A minted credential covers exactly [`MintRequest::scope`] at
+/// [`MintRequest::access`]; the cloud enforces that (an STS session policy, a SAS scoped
+/// to a container or directory, a Credential Access Boundary).
+#[async_trait]
+pub trait CredentialMinter: Debug + Send + Sync + 'static {
+    /// Mints a credential for `request`.
+    async fn mint(&self, request: &MintRequest) -> Result<VendedCredential>;
+}
+
+/// Mints for local (`file://`) and in-memory storage, which need no secret.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LocalMinter;
+
+#[async_trait]
+impl CredentialMinter for LocalMinter {
+    async fn mint(&self, request: &MintRequest) -> Result<VendedCredential> {
+        match request.scope.location().provider() {
+            StorageProvider::Local | StorageProvider::Memory => Ok(VendedCredential::new(
+                StorageCredentials::None,
+                request.scope.clone(),
+                request.access,
+            )),
+            _ => Err(Error::unsupported(
+                &request.scope,
+                "the local minter only serves file:// and memory:// storage",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_minter_serves_local_storage_only() {
+        let local = MintRequest::new("file:///data/tab".parse().unwrap(), AccessLevel::ReadWrite);
+        let vended = LocalMinter.mint(&local).await.unwrap();
+        assert_eq!(vended.credentials, StorageCredentials::None);
+        assert_eq!(vended.scope, local.scope);
+        assert_eq!(vended.expires_at, None);
+
+        let cloud = MintRequest::new("s3://bucket/tab".parse().unwrap(), AccessLevel::Read);
+        let err = LocalMinter.mint(&cloud).await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+    }
+}

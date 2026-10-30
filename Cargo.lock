@@ -2504,6 +2504,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-credential-vending"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "olai-http",
+ "olai-storage-credentials",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "olai-http"
 version = "0.0.8"
 dependencies = [

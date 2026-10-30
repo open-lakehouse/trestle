@@ -1,0 +1,33 @@
+[package]
+name = "olai-credential-vending"
+description = "Server-side minting of downscoped cloud storage credentials from registered principals"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+
+[dependencies]
+# workspace dependencies (in alphabetical order)
+async-trait = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+# in-repo dependencies
+olai-http = { path = "../olai-http" }
+olai-storage-credentials = { path = "../olai-storage-credentials" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+# Integration tests against containerized emulators (needs Docker). See
+# `olai-test-emulators`.
+emulator-it = []
+
+[package.metadata.docs.rs]
+all-features = true
