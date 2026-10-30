@@ -30,8 +30,13 @@ object_store = { version = "0.13", default-features = false }
 olai-storage-credentials = { path = "../olai-storage-credentials" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# S3 bucket region discovery. Native only: olai-http does not build for wasm32.
+# S3 bucket region discovery and the protocol clients. Native only: olai-http does not
+# build for wasm32.
 olai-http = { path = "../olai-http", optional = true }
+percent-encoding = { version = "2.1", optional = true }
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 # `Handle`, to spawn store I/O on a dedicated runtime.
 tokio = { workspace = true, features = ["rt"] }
 
@@ -64,6 +69,16 @@ azure = ["object_store/azure"]
 gcp = ["object_store/gcp", "dep:ring"]
 # `file://` locations (native only).
 fs = ["object_store/fs"]
+# Vending protocols (native only). Each brings its wire adapter from
+# olai-storage-credentials and a hand-written client.
+unity = [
+  "olai-storage-credentials/unity",
+  "dep:olai-http",
+  "dep:percent-encoding",
+  "dep:reqwest",
+  "dep:serde",
+  "dep:serde_json",
+]
 
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.

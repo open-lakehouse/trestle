@@ -21,6 +21,8 @@
 //! - [`FromStorageCredentials`]: the mapping from the canonical credential onto
 //!   object_store's per-cloud credential types.
 //!
+//! Vending protocols are modules behind features: [`unity`] (Unity Catalog REST).
+//!
 //! The vocabulary (credentials, locations, scopes) is [`olai_storage_credentials`].
 //! The core builds for `wasm32-unknown-unknown`, where sources may return `!Send`
 //! futures.
@@ -47,6 +49,9 @@ pub mod region;
 pub mod routing;
 pub mod source;
 pub mod store;
+#[cfg(all(feature = "unity", not(target_arch = "wasm32")))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "unity", not(target_arch = "wasm32")))))]
+pub mod unity;
 
 pub use convert::FromStorageCredentials;
 pub use error::{Error, Result};

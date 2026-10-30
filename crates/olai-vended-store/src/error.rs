@@ -67,6 +67,10 @@ pub enum Error {
         reason: String,
     },
 
+    /// A securable reference (such as a `uc://` URL) is malformed.
+    #[error("invalid reference: {0}")]
+    InvalidReference(String),
+
     /// A location is outside what the credential covers, or needs more access than it
     /// grants.
     #[error("`{location}` is not covered by the credential for `{scope}` with {access:?} access")]
