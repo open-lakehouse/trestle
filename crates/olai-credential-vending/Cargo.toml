@@ -1,7 +1,7 @@
 [package]
 name = "olai-credential-vending"
 description = "Server-side minting of downscoped cloud storage credentials from registered principals"
-version = "0.0.1"
+version = "0.0.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
