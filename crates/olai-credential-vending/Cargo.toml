@@ -29,8 +29,8 @@ object_store = { version = "0.13", default-features = false, features = ["aws"] 
 olai-test-emulators = { path = "../olai-test-emulators" }
 # End-to-end emulator tests: credentials minted here, serialized as UC REST responses
 # and used through the client crate's stores.
-olai-storage-credentials = { path = "../olai-storage-credentials", features = ["unity"] }
-olai-vended-store = { path = "../olai-vended-store" }
+olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.1", features = ["unity"] }
+olai-vended-store = { path = "../olai-vended-store", version = "0.0.1" }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 url = { workspace = true }
