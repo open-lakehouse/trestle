@@ -3,7 +3,8 @@
 //! Both protocols carry the same per-cloud objects (`aws_temp_credentials`,
 //! `azure_user_delegation_sas`, ...) next to an `expiration_time` and a `url`. Every
 //! type here redacts its secrets in `Debug`. Fields default when absent, so a server
-//! that omits empty strings (proto JSON does) still parses.
+//! that omits empty strings (proto JSON does) still parses, and their proto JSON
+//! camelCase names (`accessKeyId`, ...) are accepted on input.
 
 use std::fmt;
 
@@ -22,14 +23,16 @@ const REDACTED: &str = "<redacted>";
 #[serde(default)]
 pub struct AwsTempCredentials {
     /// Access key id.
+    #[serde(alias = "accessKeyId")]
     pub access_key_id: String,
     /// Secret access key.
+    #[serde(alias = "secretAccessKey")]
     pub secret_access_key: String,
     /// Session token; empty or absent for long-lived keys.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(alias = "sessionToken", skip_serializing_if = "String::is_empty")]
     pub session_token: String,
     /// The S3 access point the credential is bound to (UC REST only).
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(alias = "accessPoint", skip_serializing_if = "String::is_empty")]
     pub access_point: String,
 }
 
@@ -52,11 +55,13 @@ impl fmt::Debug for AwsTempCredentials {
 #[serde(default)]
 pub struct R2TempCredentials {
     /// Access key id.
+    #[serde(alias = "accessKeyId")]
     pub access_key_id: String,
     /// Secret access key.
+    #[serde(alias = "secretAccessKey")]
     pub secret_access_key: String,
     /// Session token.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(alias = "sessionToken", skip_serializing_if = "String::is_empty")]
     pub session_token: String,
 }
 
@@ -78,6 +83,7 @@ impl fmt::Debug for R2TempCredentials {
 #[serde(default)]
 pub struct AzureUserDelegationSas {
     /// The SAS query string, percent-encoded.
+    #[serde(alias = "sasToken")]
     pub sas_token: String,
 }
 
@@ -94,6 +100,7 @@ impl fmt::Debug for AzureUserDelegationSas {
 #[serde(default)]
 pub struct AzureAad {
     /// The bearer token.
+    #[serde(alias = "aadToken")]
     pub aad_token: String,
 }
 
@@ -110,6 +117,7 @@ impl fmt::Debug for AzureAad {
 #[serde(default)]
 pub struct GcpOauthToken {
     /// The access token.
+    #[serde(alias = "oauthToken")]
     pub oauth_token: String,
 }
 

@@ -593,6 +593,14 @@ mod open_sharing {
             StorageCredentials::GcpBearer("ya29.test".into())
         );
         assert_eq!(v.expires_at, expiry());
+
+        // camelCase down to the payload fields, as proto JSON writes them.
+        let v = read(
+            "sharing/volume_aws_camel_case.json",
+            &ctx("s3://bucket/shares/vol", AccessLevel::Read),
+        );
+        assert_eq!(v.credentials, aws("ak-test", Some("st-test")));
+        assert_eq!(v.expires_at, expiry());
     }
 
     #[test]
