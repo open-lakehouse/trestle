@@ -48,7 +48,7 @@ pub use self::config::NeonBuilder;
 use crate::api::ApiError;
 use crate::error::{Error, Result};
 use crate::source::CredentialSource;
-use crate::store::{ScopedStore, StoreOptions, build_store};
+use crate::store::{ScopedStore, StoreOptions, build_store, unsupported};
 
 /// Where a branch's S3 credential comes from.
 ///
@@ -230,18 +230,18 @@ impl NeonStorage {
                 .branch_storage(&inner.project, &inner.branch)
                 .await
                 .map_err(|err| match ApiError::find(&err) {
-                    Some(api) if api.status == Some(404) => Error::Unsupported {
-                        location: self.branch_name(),
-                        reason: format!("object storage is not available: {}", api.message),
-                    },
+                    Some(api) if api.status == Some(404) => unsupported(
+                        self.branch_name(),
+                        format!("object storage is not available: {}", api.message),
+                    ),
                     _ => err,
                 })?,
         };
         if !storage.enabled {
-            return Err(Error::Unsupported {
-                location: self.branch_name(),
-                reason: "object storage is not enabled".to_owned(),
-            });
+            return Err(unsupported(
+                self.branch_name(),
+                "object storage is not enabled",
+            ));
         }
         Ok(storage)
     }
@@ -261,14 +261,14 @@ impl NeonStorage {
                 .reveal_credential(&inner.project, &inner.branch, token_id)
                 .await
                 .map_err(|err| match ApiError::find(&err) {
-                    Some(api) if api.status == Some(409) => Error::Unsupported {
-                        location: self.branch_name(),
-                        reason: format!(
+                    Some(api) if api.status == Some(409) => unsupported(
+                        self.branch_name(),
+                        format!(
                             "credential `{token_id}` was issued before secrets could be \
                              revealed; rotate it (`neon credentials rotate {token_id}`) and \
                              reveal it again"
                         ),
-                    },
+                    ),
                     _ => err,
                 })?,
             NeonCredentials::Create { name } => {

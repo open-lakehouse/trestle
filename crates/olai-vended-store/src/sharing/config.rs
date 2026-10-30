@@ -8,7 +8,7 @@ use olai_http::CloudClient;
 use super::{OpenSharing, SharingClient, SharingProfile};
 use crate::auth::{AuthConfig, AuthDefaults};
 use crate::error::{Error, Result};
-use crate::options::{StoreKeys, parse_base_url};
+use crate::options::{StoreKeys, http_client, parse_base_url};
 use crate::store::StoreOptions;
 
 /// Builds an [`OpenSharing`] from configuration keys.
@@ -131,18 +131,18 @@ impl SharingBuilder {
                 Error::Config("missing `sharing_profile` or `sharing_endpoint`".to_owned())
             })?;
         let endpoint = parse_base_url("sharing_endpoint", endpoint)?;
-        let http = match &self.client {
-            Some(client) => client.clone(),
-            None => {
-                let mut auth = self.auth.clone();
-                if !self.auth_configured
-                    && let Some(profile) = &profile
-                {
-                    auth.set("sharing_token", profile.bearer_token.clone());
-                }
-                auth.client(&endpoint, &AuthDefaults::default())?
-            }
-        };
+        let mut auth = self.auth.clone();
+        if !self.auth_configured
+            && let Some(profile) = &profile
+        {
+            auth.set("sharing_token", profile.bearer_token.clone());
+        }
+        let http = http_client(
+            self.client.as_ref(),
+            &auth,
+            &endpoint,
+            &AuthDefaults::default(),
+        )?;
         Ok(OpenSharing::new(SharingClient::new(http, endpoint))
             .with_store_options(self.store_keys.apply(self.store_options.clone())))
     }

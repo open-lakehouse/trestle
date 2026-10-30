@@ -3,9 +3,11 @@
 
 use std::fmt;
 
+use olai_http::CloudClient;
 use olai_storage_credentials::AccessLevel;
 use url::Url;
 
+use crate::auth::{AuthConfig, AuthDefaults};
 use crate::error::{Error, Result};
 use crate::store::StoreOptions;
 
@@ -120,6 +122,20 @@ pub(crate) fn access_key_value(access: AccessLevel) -> &'static str {
     match access {
         AccessLevel::Read => "read",
         AccessLevel::ReadWrite => "read_write",
+    }
+}
+
+/// The HTTP client a builder uses: the caller's `client` if one was set, else one
+/// authenticated for `url` by `auth`.
+pub(crate) fn http_client(
+    client: Option<&CloudClient>,
+    auth: &AuthConfig,
+    url: &Url,
+    defaults: &AuthDefaults,
+) -> Result<CloudClient> {
+    match client {
+        Some(client) => Ok(client.clone()),
+        None => auth.client(url, defaults),
     }
 }
 

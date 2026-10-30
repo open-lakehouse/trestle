@@ -9,7 +9,7 @@ use url::Url;
 use super::{UnityCatalog, UnityClient};
 use crate::auth::{AuthConfig, AuthDefaults};
 use crate::error::{Error, Result};
-use crate::options::{StoreKeys, access_key_value, parse_access, parse_base_url};
+use crate::options::{StoreKeys, access_key_value, http_client, parse_access, parse_base_url};
 use crate::store::StoreOptions;
 
 /// The UC REST API below a server root.
@@ -157,10 +157,12 @@ impl UnityBuilder {
     pub fn build(self) -> Result<UnityCatalog> {
         let url = self.resolve_url()?;
         let access = parse_access("unity_operation", self.operation.as_deref())?;
-        let client = match &self.client {
-            Some(client) => client.clone(),
-            None => self.auth.client(&url, &self.auth_defaults(&url))?,
-        };
+        let client = http_client(
+            self.client.as_ref(),
+            &self.auth,
+            &url,
+            &self.auth_defaults(&url),
+        )?;
 
         let options = self.store_keys.apply(self.store_options.clone());
         let catalog = UnityCatalog::new(UnityClient::new(client, url))

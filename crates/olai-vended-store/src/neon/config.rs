@@ -8,7 +8,7 @@ use olai_storage_credentials::AccessLevel;
 use super::{BranchStorage, DEFAULT_API_URL, Discovery, NeonClient, NeonCredentials, NeonStorage};
 use crate::auth::{AuthConfig, AuthDefaults, is_truthy};
 use crate::error::{Error, Result};
-use crate::options::{StoreKeys, access_key_value, parse_access, parse_base_url};
+use crate::options::{StoreKeys, access_key_value, http_client, parse_access, parse_base_url};
 use crate::store::StoreOptions;
 
 /// Builds a [`NeonStorage`] from configuration keys.
@@ -187,10 +187,12 @@ impl NeonBuilder {
                 "neon_api_url",
                 self.api_url.as_deref().unwrap_or(DEFAULT_API_URL),
             )?;
-            let http = match &self.client {
-                Some(client) => client.clone(),
-                None => self.auth.client(&url, &AuthDefaults::default())?,
-            };
+            let http = http_client(
+                self.client.as_ref(),
+                &self.auth,
+                &url,
+                &AuthDefaults::default(),
+            )?;
             Some(NeonClient::new(http, url))
         } else {
             None

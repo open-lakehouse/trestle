@@ -107,15 +107,7 @@ pub async fn presign(
             scope: credential.scope.to_string(),
         });
     }
-    // SigV4 query signatures and user delegation SAS both live at most 7 days; a longer
-    // URL would be refused when used, while `expires_at` promised more.
-    let requested = TimeDelta::from_std(ttl)
-        .unwrap_or(TimeDelta::MAX)
-        .min(MAX_SIGNED_LIFETIME);
-    let lifetime = match credential.expires_at {
-        Some(expires_at) => requested.min(expires_at - now),
-        None => requested,
-    };
+    let lifetime = signed_lifetime(credential, ttl, now);
     // An expiry past the representable range would read as "does not expire".
     let expires_at = Some(
         now.checked_add_signed(lifetime)
@@ -158,6 +150,19 @@ pub async fn presign(
         }
     };
     Ok(Presigned { urls, expires_at })
+}
+
+/// How long URLs signed at `now` for `ttl` live: at most the 7-day cap, which SigV4 and
+/// user delegation SAS both enforce (a longer URL would be refused when used), and never
+/// past the credential's expiry.
+fn signed_lifetime(credential: &VendedCredential, ttl: Duration, now: DateTime<Utc>) -> TimeDelta {
+    let requested = TimeDelta::from_std(ttl)
+        .unwrap_or(TimeDelta::MAX)
+        .min(MAX_SIGNED_LIFETIME);
+    match credential.expires_at {
+        Some(expires_at) => requested.min(expires_at - now),
+        None => requested,
+    }
 }
 
 #[cfg(feature = "aws")]
