@@ -20,6 +20,10 @@ pub struct MintRequest {
     /// How long it should live; the minter's default when `None`. Minters clamp it to
     /// what the cloud allows, which can lengthen a short request: STS issues at least
     /// 15 minutes.
+    ///
+    /// Through a [`CachingMinter`](crate::CachingMinter), a credential may come from
+    /// the cache with less left: at least half the lifetime it was minted with. Clients
+    /// should refresh on [`VendedCredential::expires_at`], not on the requested `ttl`.
     pub ttl: Option<Duration>,
     /// Who the credential is for, for audit: the STS `RoleSessionName`, for example.
     pub session_name: Option<String>,
@@ -113,6 +117,48 @@ impl CredentialMinter for LocalMinter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RegisteredCredential;
+    use crate::registered::{
+        AwsIamRole, AzureClientSecret, AzureManagedIdentity, AzureServicePrincipal, AzureStorageKey,
+    };
+
+    #[test]
+    fn each_registered_credential_gets_its_minter() {
+        let cases = [
+            (
+                RegisteredCredential::AwsIamRole(AwsIamRole {
+                    role_arn: "arn:aws:iam::1:role/r".into(),
+                    access_key_id: Some("AKID".into()),
+                    secret_access_key: Some("SECRET".into()),
+                    ..AwsIamRole::default()
+                }),
+                "AwsStsMinter",
+            ),
+            (
+                RegisteredCredential::AzureServicePrincipal(AzureServicePrincipal {
+                    directory_id: "tenant".into(),
+                    application_id: "app".into(),
+                    secret: AzureClientSecret::ClientSecret("SECRET".into()),
+                }),
+                "AzureUserDelegationSasMinter",
+            ),
+            (
+                RegisteredCredential::AzureManagedIdentity(AzureManagedIdentity::default()),
+                "AzureUserDelegationSasMinter",
+            ),
+            (
+                RegisteredCredential::AzureStorageKey(AzureStorageKey {
+                    account_name: "acct".into(),
+                    account_key: "a2V5".into(),
+                }),
+                "AzureAccountKeySasMinter",
+            ),
+        ];
+        for (credential, minter) in cases {
+            let debug = format!("{:?}", minter_for(&credential).unwrap());
+            assert!(debug.starts_with(minter), "{}: {debug}", credential.kind());
+        }
+    }
 
     #[tokio::test]
     async fn local_minter_serves_local_storage_only() {
