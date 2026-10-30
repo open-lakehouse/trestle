@@ -405,6 +405,7 @@ mod iceberg_rest {
             .to_vended(&ctx("s3://bucket/warehouse/ns/tab", AccessLevel::Read))
             .unwrap();
         assert!(v.is_empty());
+        assert!(wire.remote_signing());
     }
 
     #[test]
