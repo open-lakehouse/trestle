@@ -76,14 +76,16 @@ fs = ["object_store/fs"]
 auth = ["dep:olai-http"]
 # The Databricks credential chain as an authentication option.
 databricks = ["auth"]
-unity = [
+# What every protocol client shares (the `api` module and the dispatcher). Enabled by
+# the protocol features; not useful on its own.
+protocol = [
   "auth",
-  "olai-storage-credentials/unity",
   "dep:percent-encoding",
   "dep:reqwest",
   "dep:serde",
   "dep:serde_json",
 ]
+unity = ["protocol", "olai-storage-credentials/unity"]
 # The UC Delta API, for catalog-managed tables; extends `unity`.
 delta-api = ["unity", "olai-storage-credentials/delta-api"]
 

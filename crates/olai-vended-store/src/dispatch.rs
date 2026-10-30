@@ -21,8 +21,9 @@ impl Protocol {
     /// The protocol whose reference grammar `url` uses, among the enabled ones.
     ///
     /// Storage URLs (`s3://`, `abfss://`, ...) belong to none: they are not securable
-    /// references. Build their stores with object_store, or through a protocol's path
-    /// credentials (for example [`UnityCatalog::path_source`](crate::unity::UnityCatalog::path_source)).
+    /// references. Build their stores with object_store, or through a protocol that
+    /// vends for paths (Unity Catalog's path credentials, for example). Protocols
+    /// without a URL grammar are configured through their builders only.
     pub fn of(url: &Url) -> Option<Self> {
         match url.scheme() {
             #[cfg(feature = "unity")]
@@ -37,8 +38,7 @@ impl Protocol {
 ///
 /// Returns the bucket-rooted store and the path within it that `url` names, which is
 /// the prefix the vended credential covers. `options` is a storage-options map: each
-/// protocol takes the keys it knows (for Unity Catalog, see
-/// [`UnityBuilder`](crate::unity::UnityBuilder)) and ignores the rest.
+/// protocol takes the keys it knows (see each protocol's builder) and ignores the rest.
 ///
 /// Unlike object_store's, this is `async`: it vends a credential.
 pub async fn parse_url_opts<I, K, V>(url: &Url, options: I) -> Result<(Arc<dyn ObjectStore>, Path)>

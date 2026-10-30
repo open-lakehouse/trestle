@@ -8,17 +8,13 @@
 //! that covers the table at the requested access, and never one for unrelated storage.
 
 use async_trait::async_trait;
-use olai_storage_credentials::location::longest_match;
-use olai_storage_credentials::wire::VendContext;
 use olai_storage_credentials::wire::delta_api::{CredentialsResponse, Operation};
-use olai_storage_credentials::{
-    AccessLevel, StorageCredentials, StorageLocation, StorageProvider, StorageScope, StoreHints,
-    VendedCredential,
-};
+use olai_storage_credentials::wire::{VendContext, select_covering};
+use olai_storage_credentials::{AccessLevel, StorageScope, StoreHints, VendedCredential};
 use serde::Deserialize;
-use url::Url;
 
 use super::UnityClient;
+use crate::api::{local_credential, storage_root};
 use crate::error::{Error, Result};
 use crate::source::CredentialSource;
 
@@ -57,19 +53,13 @@ impl DeltaApiSource {
         let loaded: LoadTable = client
             .get_segments(&table_path(catalog, schema, table), &[])
             .await?;
-        let location = &loaded.metadata.location;
-        let url = Url::parse(location).map_err(|e| {
-            Error::InvalidReference(format!(
-                "the Delta API returned an invalid table location `{location}`: {e}"
-            ))
-        })?;
-        let (location, hints) = StorageLocation::parse_with_hints(&url)?;
+        let (scope, hints) = storage_root("the UC Delta API", &loaded.metadata.location)?;
         Ok(Self {
             client,
             catalog: catalog.to_owned(),
             schema: schema.to_owned(),
             table: table.to_owned(),
-            scope: StorageScope::new(location),
+            scope,
             hints,
             access,
         })
@@ -97,18 +87,16 @@ fn table_path<'a>(catalog: &'a str, schema: &'a str, table: &'a str) -> Vec<&'a 
 /// The credential to use for `ctx`: of those whose prefix covers the requested scope
 /// at the requested access, the one with the most specific prefix, clamped to the scope.
 fn select(response: &CredentialsResponse, ctx: &VendContext) -> Result<VendedCredential> {
-    let mut candidates = Vec::new();
-    for credential in &response.storage_credentials {
-        let prefix: StorageScope = credential.prefix.parse()?;
-        if AccessLevel::from(credential.operation).satisfies(ctx.access) {
-            candidates.push((prefix, credential));
-        }
-    }
-    let chosen = longest_match(
-        candidates.iter().map(|(prefix, c)| (prefix, *c)),
-        ctx.scope.location(),
-    )
-    .ok_or_else(|| {
+    let prefixes = response
+        .storage_credentials
+        .iter()
+        .map(|credential| credential.prefix.parse::<StorageScope>())
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let offered = prefixes
+        .iter()
+        .zip(&response.storage_credentials)
+        .map(|(prefix, credential)| (prefix, AccessLevel::from(credential.operation), credential));
+    let chosen = select_covering(offered, ctx).ok_or_else(|| {
         Error::Credentials(olai_storage_credentials::Error::InvalidCredential(format!(
             "no credential covers {} with {:?} access",
             ctx.scope, ctx.access
@@ -126,12 +114,8 @@ fn select(response: &CredentialsResponse, ctx: &VendContext) -> Result<VendedCre
 #[async_trait]
 impl CredentialSource for DeltaApiSource {
     async fn fetch(&self) -> Result<VendedCredential> {
-        if self.scope.location().provider() == StorageProvider::Local {
-            return Ok(VendedCredential::new(
-                StorageCredentials::None,
-                self.scope.clone(),
-                self.access,
-            ));
+        if let Some(local) = local_credential(&self.scope, self.access) {
+            return Ok(local);
         }
         let mut path = table_path(&self.catalog, &self.schema, &self.table);
         path.push("credentials");
@@ -147,9 +131,7 @@ impl CredentialSource for DeltaApiSource {
             &response,
             &VendContext::new(self.scope.clone(), self.access),
         )?;
-        if vended.hints.is_empty() {
-            vended.hints = self.hints.clone();
-        }
+        vended.hints.fill_from(&self.hints);
         Ok(vended)
     }
 }
@@ -158,6 +140,7 @@ impl CredentialSource for DeltaApiSource {
 mod tests {
     use std::collections::BTreeMap;
 
+    use olai_storage_credentials::StorageCredentials;
     use olai_storage_credentials::wire::delta_api::StorageCredential;
 
     use super::*;

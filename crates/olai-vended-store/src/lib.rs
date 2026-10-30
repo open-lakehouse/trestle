@@ -34,15 +34,26 @@
 //!
 //! [credential vending design record]: https://github.com/open-lakehouse/trestle/blob/main/docs/credential-vending.md
 
+#[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "protocol", not(target_arch = "wasm32"))))
+)]
+pub mod api;
 #[cfg(all(feature = "auth", not(target_arch = "wasm32")))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "auth", not(target_arch = "wasm32")))))]
 pub mod auth;
 pub mod convert;
-// Every protocol module enables this; for now that is `unity`.
-#[cfg(all(feature = "unity", not(target_arch = "wasm32")))]
-#[cfg_attr(docsrs, doc(cfg(all(feature = "unity", not(target_arch = "wasm32")))))]
+// Every protocol feature enables `protocol`.
+#[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "protocol", not(target_arch = "wasm32"))))
+)]
 pub mod dispatch;
 pub mod error;
+#[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
+mod options;
 #[cfg(any(feature = "aws", feature = "azure"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "aws", feature = "azure"))))]
 pub mod presign;
@@ -62,8 +73,10 @@ pub mod store;
 #[cfg_attr(docsrs, doc(cfg(all(feature = "unity", not(target_arch = "wasm32")))))]
 pub mod unity;
 
+#[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
+pub use api::ApiError;
 pub use convert::FromStorageCredentials;
-#[cfg(all(feature = "unity", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
 pub use dispatch::{Protocol, parse_url_opts};
 pub use error::{Error, Result};
 pub use olai_storage_credentials::{

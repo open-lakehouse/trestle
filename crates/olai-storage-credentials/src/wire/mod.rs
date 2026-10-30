@@ -8,9 +8,12 @@
 //!   the Delta API say which access level was granted. So the conversion takes the
 //!   caller's request as [`VendContext`]. A scope in the response may narrow the
 //!   requested scope but never widen it: a broader prefix is clamped to the request, and
-//!   a credential for unrelated storage is dropped. A catalog therefore cannot steer a
-//!   client's requests for other storage to its credentials (or to an endpoint hint of
-//!   its choosing).
+//!   a credential for unrelated storage is never used. Shapes that carry one credential
+//!   (UC REST, Open Sharing) reject it; shapes that carry a list (Iceberg, Delta API)
+//!   skip it, and fail if nothing in the list relates. A catalog therefore cannot steer
+//!   a client's requests for other storage to its credentials (or to an endpoint hint
+//!   of its choosing). Of a list, [`select_covering`] picks the credential for a
+//!   request.
 //! - **server side**, `From<&VendedCredential>` (or `TryFrom`, where the shape cannot
 //!   carry every credential kind): serializing what a minter produced.
 //!
@@ -26,7 +29,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::location::StorageScope;
+use crate::location::{StorageScope, longest_match};
 use crate::model::{AccessLevel, StorageCredentials};
 use crate::sas;
 
@@ -72,6 +75,25 @@ impl VendContext {
             None
         }
     }
+}
+
+/// Of `offered` credentials, as `(prefix, granted access, credential)`, the one with the
+/// most specific prefix that covers all of `ctx.scope` at `ctx.access`.
+///
+/// For protocols that answer with a list of prefixed credentials (Iceberg, Delta API).
+/// Preferring the most specific prefix uses the narrowest grant that serves the
+/// request; credentials for sub-paths or unrelated storage never qualify.
+pub fn select_covering<'a, T>(
+    offered: impl IntoIterator<Item = (&'a StorageScope, AccessLevel, T)>,
+    ctx: &VendContext,
+) -> Option<T> {
+    longest_match(
+        offered
+            .into_iter()
+            .filter(|(_, access, _)| access.satisfies(ctx.access))
+            .map(|(prefix, _, value)| (prefix, value)),
+        ctx.scope.location(),
+    )
 }
 
 /// `scope` as a prefix string for the server direction, always ending in `/`.
@@ -198,6 +220,35 @@ mod tests {
         // Unrelated or a sibling: dropped.
         assert_eq!(c.clamp(&scope("s3://b/warehouse/table2")), None);
         assert_eq!(c.clamp(&scope("s3://other/warehouse/tab")), None);
+    }
+
+    #[test]
+    fn select_covering_prefers_the_narrowest_sufficient_grant() {
+        let offered = [
+            (scope("s3://b"), AccessLevel::ReadWrite, "bucket"),
+            (
+                scope("s3://b/warehouse"),
+                AccessLevel::ReadWrite,
+                "warehouse",
+            ),
+            (scope("s3://b/warehouse/tab"), AccessLevel::Read, "read"),
+            (
+                scope("s3://b/warehouse/tab/part"),
+                AccessLevel::ReadWrite,
+                "part",
+            ),
+        ];
+        let select = |access| {
+            let ctx = VendContext::new(scope("s3://b/warehouse/tab"), access);
+            select_covering(offered.iter().map(|(p, a, v)| (p, *a, *v)), &ctx)
+        };
+        assert_eq!(select(AccessLevel::Read), Some("read"));
+        assert_eq!(select(AccessLevel::ReadWrite), Some("warehouse"));
+        let other = VendContext::new(scope("s3://other/tab"), AccessLevel::Read);
+        assert_eq!(
+            select_covering(offered.iter().map(|(p, a, v)| (p, *a, *v)), &other),
+            None
+        );
     }
 
     #[test]

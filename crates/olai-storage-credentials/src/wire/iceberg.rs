@@ -62,6 +62,9 @@ pub const S3_ACCESS_POINTS_PREFIX: &str = "s3.access-points.";
 pub const ADLS_SAS_TOKEN: &str = "adls.sas-token";
 /// Azure SAS expiry, epoch milliseconds, qualified like [`ADLS_SAS_TOKEN`].
 pub const ADLS_SAS_TOKEN_EXPIRES_AT_MS: &str = "adls.sas-token-expires-at-ms";
+/// Whether the server signs S3 requests for the client (`true`) instead of vending
+/// credentials.
+pub const S3_REMOTE_SIGNING_ENABLED: &str = "s3.remote-signing-enabled";
 /// GCS OAuth2 token.
 pub const GCS_OAUTH2_TOKEN: &str = "gcs.oauth2.token";
 /// GCS OAuth2 token expiry, epoch milliseconds.
@@ -225,7 +228,9 @@ impl LoadTableCredentials {
     ///
     /// Uses `storage-credentials` when present. Otherwise reads the table `config` as a
     /// credential for `ctx.scope` itself, and returns an empty list if it holds none
-    /// (for example, a server using remote signing instead).
+    /// (for example, a server using remote signing instead; see
+    /// [`remote_signing`](Self::remote_signing)). Callers must refuse an empty list:
+    /// building a store from nothing would send unsigned requests.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<Vec<VendedCredential>> {
         if !self.storage_credentials.is_empty() {
             return convert_all(&self.storage_credentials, ctx);
@@ -234,6 +239,17 @@ impl LoadTableCredentials {
             .map(|found| found.into_vended(ctx.scope.clone(), ctx))
             .into_iter()
             .collect())
+    }
+}
+
+impl LoadTableCredentials {
+    /// Whether the server asked for remote signing (`s3.remote-signing-enabled`)
+    /// instead of vending S3 credentials. Clients that cannot remote-sign must refuse
+    /// the table rather than fall back to unsigned requests.
+    pub fn remote_signing(&self) -> bool {
+        self.config
+            .get(S3_REMOTE_SIGNING_ENABLED)
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
     }
 }
 

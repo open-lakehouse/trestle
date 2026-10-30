@@ -142,6 +142,31 @@ impl StoreHints {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
+
+    /// Fills each hint that is unset from `fallback`, field by field.
+    ///
+    /// Sources use it to add what a storage URL itself implies (an emulator endpoint, a
+    /// regional S3 host) to what a vending response said.
+    pub fn fill_from(&mut self, fallback: &StoreHints) {
+        let Self {
+            endpoint,
+            region,
+            access_point,
+            path_style,
+            allow_http,
+        } = self;
+        if endpoint.is_none() {
+            endpoint.clone_from(&fallback.endpoint);
+        }
+        if region.is_none() {
+            region.clone_from(&fallback.region);
+        }
+        if access_point.is_none() {
+            access_point.clone_from(&fallback.access_point);
+        }
+        *path_style = path_style.or(fallback.path_style);
+        *allow_http = allow_http.or(fallback.allow_http);
+    }
 }
 
 /// A short-lived credential for one storage scope.
@@ -221,6 +246,32 @@ pub fn expiry_from_epoch_millis(millis: i64) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hints_fill_only_what_is_unset() {
+        let mut hints = StoreHints {
+            region: Some("eu-west-1".into()),
+            path_style: Some(false),
+            ..StoreHints::default()
+        };
+        hints.fill_from(&StoreHints {
+            endpoint: Some("http://127.0.0.1:9000".into()),
+            region: Some("us-east-1".into()),
+            path_style: Some(true),
+            allow_http: Some(true),
+            ..StoreHints::default()
+        });
+        assert_eq!(
+            hints,
+            StoreHints {
+                endpoint: Some("http://127.0.0.1:9000".into()),
+                region: Some("eu-west-1".into()),
+                access_point: None,
+                path_style: Some(false),
+                allow_http: Some(true),
+            }
+        );
+    }
 
     const SECRETS: &[&str] = &["AKIDSECRET", "s3cr3t", "t0k3n", "sigvalue", "bearer-abc"];
 
