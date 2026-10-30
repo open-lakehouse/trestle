@@ -18,8 +18,8 @@
 //! - **server side**, `From<&VendedCredential>` (or `TryFrom`, where the shape cannot
 //!   carry every credential kind): serializing what a minter produced.
 //!
-//! Expiry follows one rule everywhere: an explicit wire expiry wins, else a SAS `se=`
-//! parameter, else the credential does not expire.
+//! Expiry follows one rule everywhere: the earlier of an explicit wire expiry and a SAS
+//! `se=` parameter, whichever are present; with neither, the credential does not expire.
 //!
 //! | Module | Protocol |
 //! |---|---|
@@ -156,15 +156,21 @@ impl std::fmt::Debug for RedactedConfig<'_> {
     }
 }
 
-/// An explicit wire expiry, else the SAS `se=` of an Azure SAS, else none.
+/// The earlier of an explicit wire expiry and the SAS `se=` of an Azure SAS, whichever
+/// are present. A SAS is dead past its `se=` whatever the server reports, so a later
+/// explicit expiry must not keep it cached.
 pub(crate) fn resolve_expiry(
     explicit: Option<DateTime<Utc>>,
     credentials: &StorageCredentials,
 ) -> Option<DateTime<Utc>> {
-    explicit.or_else(|| match credentials {
+    let sas = match credentials {
         StorageCredentials::AzureSas(pairs) => sas::sas_expiry(pairs),
         _ => None,
-    })
+    };
+    match (explicit, sas) {
+        (Some(explicit), Some(sas)) => Some(explicit.min(sas)),
+        (explicit, sas) => explicit.or(sas),
+    }
 }
 
 /// `Option<i64>` that also reads the string form proto JSON uses for `int64`, and
@@ -277,7 +283,19 @@ mod tests {
     fn expiry_precedence() {
         let sas = StorageCredentials::azure_sas("se=2030-01-01&sig=x").unwrap();
         let explicit = DateTime::from_timestamp(1_000, 0);
-        assert_eq!(resolve_expiry(explicit, &sas), explicit);
+        assert_eq!(resolve_expiry(explicit, &sas), explicit, "earlier explicit");
+        // A server reporting a later expiry than the SAS's own `se=` does not extend it.
+        let later = DateTime::from_timestamp(4_000_000_000, 0);
+        assert_eq!(
+            resolve_expiry(later, &sas)
+                .map(|t| t.to_rfc3339())
+                .as_deref(),
+            Some("2030-01-01T00:00:00+00:00")
+        );
+        assert_eq!(
+            resolve_expiry(later, &StorageCredentials::GcpBearer("t".into())),
+            later
+        );
         assert_eq!(
             resolve_expiry(None, &sas)
                 .map(|t| t.to_rfc3339())
