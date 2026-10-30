@@ -16,7 +16,10 @@ use olai_http::bearer::{
 };
 use olai_http::{ClientOptions, RetryConfig};
 use olai_storage_credentials::policy::azure::sas_permissions;
-use olai_storage_credentials::{StorageCredentials, StorageProvider, StoreHints, VendedCredential};
+use olai_storage_credentials::{
+    StorageCredentials, StorageLocation, StorageProvider, StorageScope, StoreHints,
+    VendedCredential,
+};
 
 use crate::error::{Error, Result};
 use crate::mint::{CredentialMinter, MintRequest};
@@ -99,6 +102,24 @@ fn target(request: &MintRequest, flat: bool) -> Result<(&str, &str, &str)> {
         ));
     }
     Ok((account, location.bucket(), prefix))
+}
+
+/// `request` for the whole container its scope lies in; other storage is left as is,
+/// for [`target`] to refuse.
+fn container_request(request: &MintRequest) -> MintRequest {
+    let location = request.scope.location();
+    if location.provider() != StorageProvider::Azure || location.path().as_ref().is_empty() {
+        return request.clone();
+    }
+    let mut url = location.to_url();
+    url.set_path("/");
+    match StorageLocation::parse(&url) {
+        Ok(container) => MintRequest {
+            scope: StorageScope::new(container),
+            ..request.clone()
+        },
+        Err(_) => request.clone(),
+    }
 }
 
 fn ttl(request: &MintRequest) -> TimeDelta {
@@ -317,6 +338,7 @@ pub struct AzureAccountKeySasMinter {
     endpoint: Option<String>,
     flat: bool,
     emulator: bool,
+    container_grants: bool,
 }
 
 impl AzureAccountKeySasMinter {
@@ -328,6 +350,7 @@ impl AzureAccountKeySasMinter {
             endpoint: None,
             flat: false,
             emulator: false,
+            container_grants: false,
         }
     }
 
@@ -349,11 +372,31 @@ impl AzureAccountKeySasMinter {
         self.emulator = true;
         self.with_flat_namespace()
     }
+
+    /// On the emulator, answer a request below a container with a SAS for the whole
+    /// container, rather than refusing it.
+    ///
+    /// This **widens the grant** to the container: the credential's scope says so, and
+    /// covers the request. It exists because Azurite has no directory SAS, so local
+    /// development against it could otherwise only use container-root locations. It has
+    /// no effect without [`with_emulator`](Self::with_emulator); never use it to serve
+    /// real storage.
+    pub fn with_container_grants(mut self) -> Self {
+        self.container_grants = true;
+        self
+    }
 }
 
 #[async_trait]
 impl CredentialMinter for AzureAccountKeySasMinter {
     async fn mint(&self, request: &MintRequest) -> Result<VendedCredential> {
+        let widened;
+        let request = if self.emulator && self.container_grants {
+            widened = container_request(request);
+            &widened
+        } else {
+            request
+        };
         let (account, container, prefix) = target(request, self.flat)?;
         if account != self.account {
             return Err(Error::unsupported(
@@ -385,6 +428,7 @@ impl fmt::Debug for AzureAccountKeySasMinter {
             .field("endpoint", &self.endpoint)
             .field("flat", &self.flat)
             .field("emulator", &self.emulator)
+            .field("container_grants", &self.container_grants)
             .finish()
     }
 }
@@ -474,6 +518,37 @@ mod tests {
             AzureUserDelegationSasMinter::with_token_provider(BearerAuth::static_token("t"))
                 .with_flat_namespace();
         let err = minter
+            .mint(&request(
+                "abfss://ctr@acct.dfs.core.windows.net/tab",
+                AccessLevel::Read,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+    }
+
+    #[tokio::test]
+    async fn emulator_container_grants_widen_to_the_container() {
+        let vended = key_minter()
+            .with_emulator()
+            .with_container_grants()
+            .mint(&request(
+                "abfss://ctr@acct.dfs.core.windows.net/tab/part",
+                AccessLevel::Read,
+            ))
+            .await
+            .unwrap();
+        let sas = query(&vended);
+        assert_eq!(get(&sas, "sr"), Some("c"));
+        assert_eq!(get(&sas, "spr"), Some("https,http"));
+        // The scope states the real, wider grant.
+        let container: StorageScope = "abfss://ctr@acct.dfs.core.windows.net".parse().unwrap();
+        assert_eq!(vended.scope, container);
+
+        // Without the emulator the opt-in changes nothing: real storage never widens.
+        let err = key_minter()
+            .with_flat_namespace()
+            .with_container_grants()
             .mint(&request(
                 "abfss://ctr@acct.dfs.core.windows.net/tab",
                 AccessLevel::Read,

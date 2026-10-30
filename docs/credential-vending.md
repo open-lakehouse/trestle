@@ -381,6 +381,13 @@ flat-namespace accounts (`with_flat_namespace`, implied for Azurite) the Azure m
 mint for whole containers only: a container SAS for a directory request would widen
 the grant. User delegation keys are cached per storage account.
 
+The one exception is the Azurite emulator, which has no directory SAS at all: a key
+for its well-known account (`devstoreaccount1`) gets an emulator minter from
+`minter_for`, which signs for plain `http` and, opted in with
+`with_container_grants`, answers a request below a container with a SAS for the
+whole container. The credential's scope states the wider grant. Without the
+emulator, the opt-in has no effect, so real storage never widens.
+
 - GCS: a downscoped token cannot outlive the token it is exchanged from, so the
   minter fetches a fresh source token per mint and reports the expiry STS gives, never
   later than the source's. An impersonated token lives as long as `ttl` asks (one
