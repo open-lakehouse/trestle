@@ -52,6 +52,8 @@ jobs:
       - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
+      # The store backends are optional: lint the crate with none of them too.
+      - run: cargo clippy --locked --all-targets -p olai-vended-store --no-default-features -- -D warnings
 
   wasm:
     name: Wasm32
