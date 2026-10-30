@@ -1,9 +1,9 @@
 # Credential vending and `object_store`
 
 Status: **accepted, in progress**. This is a design record. The three crates exist:
-P1 (`olai-storage-credentials`), P2 through P2b (`olai-vended-store` with the `unity`
-and `delta-api` modules) and P3 (`olai-credential-vending`) have landed, with the
-`olai-http` SAS fix (#178). The sketches below follow the code; where the code
+P1 (`olai-storage-credentials`), P2 through P2e (`olai-vended-store` with the `unity`,
+`delta-api`, `iceberg`, `sharing` and `neon` modules) and P3
+(`olai-credential-vending`) have landed, with the `olai-http` SAS fix (#178). The sketches below follow the code; where the code
 settled differently from the first draft, the text says so. Implementation is tracked
 in #185 and the phased issues listed under [Roadmap](#roadmap).
 
@@ -163,7 +163,10 @@ pub struct VendedCredential {
   granted. So the client direction takes the caller's request as context,
   `to_vended(&VendContext { scope, access }) -> Result<Vec<VendedCredential>>`. A prefix
   in the response may narrow `scope` but never widen it: a broader prefix is clamped to
-  `scope`, and a credential for unrelated storage is dropped. The server direction is
+  `scope`, and a credential for unrelated storage is never used. Shapes that carry one
+  credential (UC REST, Sharing) reject it; shapes that carry a list (Iceberg, Delta
+  API) skip it, and fail when nothing relates. Of a list, `wire::select_covering`
+  picks the most specific credential covering the request. The server direction is
   `From<&VendedCredential>`, or `TryFrom` where the shape cannot carry every credential
   kind (only UC REST carries Azure AD tokens). It writes config-map prefixes with a
   trailing `/`, because clients of those protocols often match prefixes as plain
@@ -245,7 +248,9 @@ impl ScopedStore {
 - Azure: a loopback endpoint hint is Azurite, addressed path-style. object_store's
   emulator mode is not used, because it ignores credential providers and the store
   could not refresh.
-- `ScopedStore::root` is bucket-rooted and is what routing registers.
+- `ScopedStore::root` is bucket-rooted and is what routing registers. The credential
+  enforces the prefix and access; stores that need none (`file://`, `memory://`)
+  enforce neither, and are a convenience, not a security boundary.
 - `RoutingObjectStore` sends each request to the store registered under the longest
   matching prefix, on whole segments. All its routes must be in one bucket, since
   paths carry none. It refuses copies and renames across routes, needs a prefix to
@@ -267,7 +272,8 @@ impl ScopedStore {
   method needs, and never outlives the credential:
   - S3 and R2: SigV4 query-signing with the vended keys, for `min(ttl, expiry)`.
   - Azure with a SAS: the SAS appended to the blob URL. A SAS cannot be shortened, so
-    the URLs live as long as the credential, and the returned expiry says so.
+    the URLs live as long as the credential whatever `ttl` asks for, and the returned
+    expiry says so.
   - Azure with an AD token: a user-delegation SAS signed for the requested lifetime.
   - GCS cannot be presigned from a vended OAuth token (signing needs a
     service-account key), so it is refused.
@@ -290,9 +296,9 @@ its auth from a shared config layer.
 |---|---|---|---|
 | `unity` (**done**) | Unity Catalog REST | table, volume, path (`temporary-*-credentials`; one GetTable/GetVolume lookup resolves a name to its id and location) | `uc:///Tables/c/s/t`, `uc:///Volumes/c/s/v[/path]`, `vol+dbfs:/Volumes/...`, the legacy `uc://c.s.t` (the delta-rs `object_store_unity` grammar), and storage URLs for path credentials |
 | `delta-api` (**done**) | UC Delta API | table (`storage-credentials`; the most specific prefix covering the table, then clamped to it); selected with `unity_delta_api` | via `unity` references |
-| `iceberg` | Iceberg REST | table (`loadTable` `storage-credentials`, refresh via `/credentials`) | builder-only at first (see [Open questions](#open-questions)) |
-| `sharing` | Delta / Open Sharing | volume, other storage-backed assets (`temporary-*-credentials`); auth from a sharing profile | `<profile>#share.schema.asset` (the delta-sharing client convention) |
-| `neon` | Neon control plane | branch storage (endpoint discovery plus reveal or opt-in create of branch credentials) | Neon storage URL plus project and branch config |
+| `iceberg` (**done**) | Iceberg REST | table (`loadTable` with `X-Iceberg-Access-Delegation`, `storage-credentials` or legacy config, refresh via `/credentials` with a `loadTable` fallback; one store per vended prefix on request) | builder-only (see [Open questions](#open-questions)) |
+| `sharing` (**done**) | Delta / Open Sharing | volume, agent skill (`temporary-*-credentials`); endpoint and token from a sharing profile | `share.schema.volume[/path]` (the part after a delta-sharing profile's `#`) or `sharing:///share/schema/volume[/path]`; the profile is an option (`sharing_profile`), never part of the URL |
+| `neon` (**done**) | Neon control plane | branch storage (endpoint discovery plus reveal or opt-in create of branch credentials) | builder-only: `s3://bucket[/prefix]` plus project and branch config |
 
 The modules add two things to the core:
 
@@ -315,7 +321,12 @@ The modules add two things to the core:
     keys are read, so a shared options map's `token` or `host` is never captured.
 - **Read fallback.** With `unity_operation` unset, `UnityCatalog::open` asks for
   read-write and falls back to read only when the vend is denied (HTTP 403 or
-  `PERMISSION_DENIED`); any other failure is returned.
+  `PERMISSION_DENIED`); any other failure is returned. Iceberg REST cannot request an
+  access level and Sharing is read-only, so their stores are declared read (Iceberg:
+  `iceberg_operation` to declare read-write).
+- **Shared client plumbing.** The modules share one JSON client (`api`), whose
+  `ApiError` carries the status and the protocol's error code, so callers tell a
+  denial from an outage the same way for every protocol.
 
 Neon differs from the other protocols: its issuer is a control plane, not a catalog,
 and it cannot downscope. It is operator tooling for the owner of the branch, not a
@@ -355,11 +366,12 @@ pub trait CredentialResolver: Send + Sync {
 | `AzureUserDelegationSasMinter` | service principal / managed identity | user-delegation key (cached across mints) → directory/container SAS | **done** |
 | `AzureAccountKeySasMinter` | storage account key | service SAS | **done** |
 | `GcsDownscopedMinter` | service account / workload identity | STS token exchange with a Credential Access Boundary | P4 |
-| `LocalMinter` | — | `StorageCredentials::None` for `file://` and `memory://` | **done** |
+| `LocalMinter` | — | `StorageCredentials::None` for `file://` and `memory://` | **done** (called directly: no registered credential governs local storage, so `minter_for` and `Vendor` never return it) |
 
 `minter_for(&RegisteredCredential)` picks the minter for each registered kind. On
-flat-namespace accounts (and Azurite) the Azure minters mint for whole containers
-only: a container SAS for a directory request would widen the grant.
+flat-namespace accounts (`with_flat_namespace`, implied for Azurite) the Azure minters
+mint for whole containers only: a container SAS for a directory request would widen
+the grant. User delegation keys are cached per storage account.
 
 - The principal (`RegisteredCredential`) supplies the identity used to call the cloud.
   It reuses `olai-http`'s identity flows (`BearerAuth`, the AWS chain, Azure
@@ -451,6 +463,11 @@ What no emulator covers runs as opt-in jobs against real cloud accounts. MinIO
 (community edition archived in 2026) and LocalStack (IAM enforcement is a paid feature)
 are not used.
 
+Protocol modules are tested against recorded server responses (mockito), shared with
+the wire adapter tests where they exist. The sharing module is not tested against
+mangrove's `olai-sharing-server` here, because mangrove depends on this repository;
+that run belongs to mangrove's adoption (P6).
+
 An end-to-end suite in (3) runs the whole path: a `Vendor` mints, the credential is
 serialized as a UC REST response, and the client parses it and builds a store with
 (2)'s `build_store`; the emulators then enforce the grant, across refreshes.
@@ -475,9 +492,14 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 
 - Whether `VendingRouter` and the DataFusion adapter live in (2), or in a fourth crate
   so (2) never sees DataFusion.
-- Iceberg REST has no standard table-reference URL. Options are builder-only
-  configuration, or a convention of ours such as
-  `iceberg+https://host/prefix#namespace.table`.
+- Iceberg REST has no standard table-reference URL. The `iceberg` module is
+  builder-only for now; a convention of ours, such as
+  `iceberg+https://host/prefix#namespace.table`, would let `parse_url_opts` dispatch
+  to it.
+- Open Sharing profiles name the server the API paths are relative to, but
+  mangrove's sharing server writes its Delta Sharing mount (`/api/v1/delta-sharing`)
+  into profiles while serving credentials under `/api/1.0/opensharing`. Until its
+  profiles name the Open Sharing endpoint, clients set `sharing_endpoint`.
 - R2 minting through the Cloudflare temporary-credentials API, and S3-compatible
   stores that lack STS (handled like Neon: presign, don't mint).
 - Hosting the vending server as a Neon Function, which needs no extra crate surface
@@ -496,9 +518,9 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P2.1 | routing store and presign (**done**, #203) | #180 |
 | P2a | `unity` protocol module, with the dispatcher and the auth config tiers (**done**, #204 #205) | #187 |
 | P2b | `delta-api` protocol module (**done**, #206) | #188 |
-| P2c | `iceberg` protocol module | #189 |
-| P2d | `sharing` protocol module | #190 |
-| P2e | `neon` protocol module | #191 |
+| P2c | `iceberg` protocol module (**done**) | #189 |
+| P2d | `sharing` protocol module (**done**) | #190 |
+| P2e | `neon` protocol module (**done**) | #191 |
 | P3 | `olai-credential-vending`: minters, caching, resolver (**done**, #207 #208 #210 #211 #212 #213) | #181 |
 | P4 | GCS downscoped minter | #182 |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
@@ -507,8 +529,8 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P8 | `apache/object_store` proposals | #184 |
 
 The delta-rs critical path (P1 → P2 → P2a) has landed; P7 waits only on the release
-below. Next: P4 (GCS), P5 (`VendingRouter`), and the remaining protocol modules
-(P2c–P2e).
+below. All protocol modules (P2a–P2e) have landed. Next: P4 (GCS) and P5
+(`VendingRouter`).
 
 The new crates are not published yet: they stay out of the release cycle
 (`release = false`) so their APIs can still change. Their in-repo dependencies name
