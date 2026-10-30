@@ -178,7 +178,11 @@ fn parse_securable_segments(segments: &[&str]) -> std::result::Result<UnityRefer
                 catalog: percent_decode(catalog)?,
                 schema: percent_decode(schema)?,
                 volume: percent_decode(volume)?,
-                path: rest.join("/"),
+                path: rest
+                    .iter()
+                    .map(|segment| percent_decode(segment))
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                    .join("/"),
             }),
             _ => Err(
                 "`uc:///Volumes/<catalog>/<schema>/<volume>[/<path>]` requires all three names"
@@ -255,6 +259,26 @@ fn percent_decode(s: &str) -> std::result::Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn volume_sub_paths_are_decoded() {
+        for reference in [
+            "uc:///Volumes/c/s/v/my%20dir/f%2B1.bin",
+            "vol+dbfs:/Volumes/c/s/v/my%20dir/f%2B1.bin",
+        ] {
+            let r = UnityReference::parse(reference).unwrap();
+            assert_eq!(
+                r,
+                UnityReference::Volume {
+                    catalog: "c".into(),
+                    schema: "s".into(),
+                    volume: "v".into(),
+                    path: "my dir/f+1.bin".into(),
+                },
+                "{reference}"
+            );
+        }
+    }
 
     #[test]
     fn parses_volume_with_path() {

@@ -23,6 +23,11 @@ use crate::source::CredentialSource;
 /// keys; this is what a router registers. The credential only authorizes paths below
 /// [`prefix`](Self::prefix). [`prefixed`](Self::prefixed) is a view whose paths are
 /// relative to the prefix.
+///
+/// The prefix and access level are enforced by the storage service, through the
+/// credential. Stores that need no credential (`file://`, `memory://`, anonymous
+/// buckets) enforce neither: a local store reaches whatever the process can. It is a
+/// convenience for the client, not a security boundary.
 #[derive(Clone)]
 pub struct ScopedStore {
     root: Arc<dyn ObjectStore>,
