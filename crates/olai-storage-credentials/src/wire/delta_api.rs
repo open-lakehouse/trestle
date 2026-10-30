@@ -22,7 +22,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::{RedactedConfig, VendContext, no_covering_credential, prefix_string, resolve_expiry};
+use super::{RedactedConfig, VendContext, convert_related, prefix_string, resolve_expiry};
 use crate::error::{Error, Result};
 use crate::location::{StorageProvider, StorageScope};
 use crate::model::{AccessLevel, StorageCredentials, VendedCredential, expiry_from_epoch_millis};
@@ -101,21 +101,19 @@ impl StorageCredential {
             return Ok(None);
         };
         let get = |key: &str| self.config.get(key).filter(|v| !v.is_empty());
-        let missing = |key: &str| Error::invalid_credential(format!("config has no `{key}`"));
+        let require = |key: &str| {
+            get(key).ok_or_else(|| Error::invalid_credential(format!("config has no `{key}`")))
+        };
         let credentials = match scope.location().provider() {
             StorageProvider::Aws | StorageProvider::R2 => StorageCredentials::aws(
-                get(S3_ACCESS_KEY_ID).ok_or_else(|| missing(S3_ACCESS_KEY_ID))?,
-                get(S3_SECRET_ACCESS_KEY).ok_or_else(|| missing(S3_SECRET_ACCESS_KEY))?,
+                require(S3_ACCESS_KEY_ID)?,
+                require(S3_SECRET_ACCESS_KEY)?,
                 get(S3_SESSION_TOKEN).cloned(),
             ),
-            StorageProvider::Azure => StorageCredentials::azure_sas(
-                get(AZURE_SAS_TOKEN).ok_or_else(|| missing(AZURE_SAS_TOKEN))?,
-            )?,
-            StorageProvider::Gcp => StorageCredentials::GcpBearer(
-                get(GCS_OAUTH_TOKEN)
-                    .ok_or_else(|| missing(GCS_OAUTH_TOKEN))?
-                    .clone(),
-            ),
+            StorageProvider::Azure => StorageCredentials::azure_sas(require(AZURE_SAS_TOKEN)?)?,
+            StorageProvider::Gcp => {
+                StorageCredentials::GcpBearer(require(GCS_OAUTH_TOKEN)?.clone())
+            }
             _ => StorageCredentials::None,
         };
         let expiry = resolve_expiry(
@@ -196,16 +194,11 @@ impl CredentialsResponse {
     ///
     /// Fails if the response has credentials but none relates to the request.
     pub fn to_vended(&self, ctx: &VendContext) -> Result<Vec<VendedCredential>> {
-        let mut vended = Vec::new();
-        for credential in &self.storage_credentials {
-            vended.extend(credential.to_vended(ctx)?);
-        }
-        if vended.is_empty() && !self.storage_credentials.is_empty() {
-            return Err(no_covering_credential(
-                self.storage_credentials.iter().map(|c| c.prefix.as_str()),
-                ctx,
-            ));
-        }
-        Ok(vended)
+        convert_related(
+            &self.storage_credentials,
+            |c| &c.prefix,
+            |c| c.to_vended(ctx),
+            ctx,
+        )
     }
 }

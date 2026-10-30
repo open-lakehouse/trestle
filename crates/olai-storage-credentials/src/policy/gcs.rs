@@ -49,12 +49,13 @@ pub fn access_boundary(scope: &StorageScope, access: AccessLevel) -> Result<Valu
         "availablePermissions": [format!("inRole:{}", boundary_role(access))],
     });
     if !prefix.is_empty() {
-        let object = cel_string(&format!("projects/_/buckets/{bucket}/objects/{prefix}"))
-            .ok_or_else(|| invalid("paths containing control characters are not supported"))?;
-        let below = cel_string(&format!("projects/_/buckets/{bucket}/objects/{prefix}/"))
-            .ok_or_else(|| invalid("paths containing control characters are not supported"))?;
-        let list = cel_string(&format!("{prefix}/"))
-            .ok_or_else(|| invalid("paths containing control characters are not supported"))?;
+        let literal = |s: String| {
+            cel_string(&s)
+                .ok_or_else(|| invalid("paths containing control characters are not supported"))
+        };
+        let object = literal(format!("projects/_/buckets/{bucket}/objects/{prefix}"))?;
+        let below = literal(format!("projects/_/buckets/{bucket}/objects/{prefix}/"))?;
+        let list = literal(format!("{prefix}/"))?;
         let expression = format!(
             "resource.name == {object} || resource.name.startsWith({below}) || \
              api.getAttribute('storage.googleapis.com/objectListPrefix', '').startsWith({list})"

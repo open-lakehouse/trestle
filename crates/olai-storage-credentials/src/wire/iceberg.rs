@@ -36,7 +36,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    RedactedConfig, VendContext, no_covering_credential, parse_expiry_millis, prefix_string,
+    RedactedConfig, VendContext, convert_related, parse_expiry_millis, prefix_string,
     resolve_expiry,
 };
 use crate::error::{Error, Result};
@@ -289,17 +289,7 @@ fn convert_all(
     credentials: &[StorageCredential],
     ctx: &VendContext,
 ) -> Result<Vec<VendedCredential>> {
-    let mut vended = Vec::new();
-    for credential in credentials {
-        vended.extend(credential.to_vended(ctx)?);
-    }
-    if vended.is_empty() && !credentials.is_empty() {
-        return Err(no_covering_credential(
-            credentials.iter().map(|c| c.prefix.as_str()),
-            ctx,
-        ));
-    }
-    Ok(vended)
+    convert_related(credentials, |c| &c.prefix, |c| c.to_vended(ctx), ctx)
 }
 
 /// A credential found in a config map, before it is bound to a scope.
