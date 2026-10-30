@@ -2508,8 +2508,10 @@ name = "olai-credential-vending"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "object_store",
  "olai-http",
  "olai-storage-credentials",
+ "olai-test-emulators",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
