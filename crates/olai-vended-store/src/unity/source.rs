@@ -71,6 +71,12 @@ impl UnitySource {
         &self.scope
     }
 
+    /// The same securable at another access level.
+    pub fn with_access(mut self, access: AccessLevel) -> Self {
+        self.access = access;
+        self
+    }
+
     /// The access level every vend asks for.
     pub fn access(&self) -> AccessLevel {
         self.access

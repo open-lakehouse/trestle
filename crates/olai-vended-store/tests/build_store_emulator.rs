@@ -375,3 +375,78 @@ async fn azure_presigned_urls_are_accepted() {
         200
     );
 }
+
+/// `parse_url_opts` against a Unity Catalog that vends RustFS credentials: the server
+/// names no endpoint, so `aws_endpoint` routes the store to the S3-compatible backend.
+#[cfg(feature = "unity")]
+#[tokio::test]
+async fn unity_reference_to_an_s3_compatible_store() {
+    let rustfs = rustfs().await;
+    let source = RustFsSource {
+        endpoint: rustfs.endpoint().to_owned(),
+        scope: format!("s3://{BUCKET}/tab").parse().unwrap(),
+        access: AccessLevel::Read,
+        vends: AtomicUsize::new(0),
+    };
+    let StorageCredentials::Aws {
+        key_id,
+        secret_key,
+        token,
+    } = source.fetch().await.unwrap().credentials
+    else {
+        panic!("RustFS vends AWS credentials");
+    };
+
+    let mut uc = mockito::Server::new_async().await;
+    uc.mock("GET", "/api/2.1/unity-catalog/tables/main.default.tab")
+        .with_body(
+            serde_json::json!({ "table_id": "tid", "storage_location": format!("s3://{BUCKET}/tab") })
+                .to_string(),
+        )
+        .create_async()
+        .await;
+    uc.mock("POST", "/api/2.1/unity-catalog/temporary-table-credentials")
+        .with_body(
+            serde_json::json!({
+                "aws_temp_credentials": {
+                    "access_key_id": key_id,
+                    "secret_access_key": secret_key,
+                    "session_token": token,
+                },
+                "expiration_time": (Utc::now() + Duration::from_secs(3600)).timestamp_millis(),
+                "url": format!("s3://{BUCKET}/tab"),
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let url = "uc:///Tables/main/default/tab".parse().unwrap();
+    let (store, prefix) = olai_vended_store::parse_url_opts(
+        &url,
+        [
+            (
+                "unity_catalog_url",
+                format!("{}/api/2.1/unity-catalog", uc.url()),
+            ),
+            ("unity_allow_unauthenticated", "true".to_owned()),
+            ("unity_operation", "read".to_owned()),
+            ("aws_endpoint", rustfs.endpoint().to_owned()),
+            ("aws_region", REGION.to_owned()),
+            ("allow_http", "true".to_owned()),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(prefix.as_ref(), "tab");
+    let body = store
+        .get(&prefix.clone().join("a"))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), b"x");
+    let err = store.get(&Path::from("table2/b")).await.unwrap_err();
+    assert!(is_denied(&err), "outside the vended prefix: {err}");
+}
