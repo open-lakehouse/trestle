@@ -619,22 +619,80 @@ async fn assume_role(
     endpoint: &str,
     policy: Option<&str>,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let mut params: Vec<(&str, &str)> = vec![
-        ("Action", "AssumeRole"),
-        ("DurationSeconds", "3600"),
-        ("RoleArn", role_arn),
-        ("RoleSessionName", session_name),
-        ("Version", "2011-06-15"),
+    let params = AssumeRoleParams {
+        role_arn,
+        session_name,
+        policy,
+        ..AssumeRoleParams::default()
+    };
+    let (credential, expiration) = assume_role_request(
+        client,
+        service,
+        retry_config,
+        base_cred,
+        region,
+        endpoint,
+        &params,
+    )
+    .await?;
+    let ttl = (expiration - Utc::now()).to_std().unwrap_or_default();
+    Ok(TemporaryToken {
+        token: Arc::new(credential),
+        expiry: Some(Instant::now() + ttl),
+    })
+}
+
+/// The parameters of one `STS:AssumeRole` request.
+#[derive(Debug, Default)]
+pub(crate) struct AssumeRoleParams<'a> {
+    pub role_arn: &'a str,
+    pub session_name: &'a str,
+    /// `DurationSeconds`; STS's own default (one hour) when `None`.
+    pub duration_secs: Option<u64>,
+    pub policy: Option<&'a str>,
+    pub external_id: Option<&'a str>,
+    pub source_identity: Option<&'a str>,
+    pub tags: &'a [(String, String)],
+}
+
+/// Sends `STS:AssumeRole` and returns the session credentials and their expiry.
+pub(crate) async fn assume_role_request(
+    client: &Client,
+    service: &Arc<dyn HttpService>,
+    retry_config: &RetryConfig,
+    base_cred: &AwsCredential,
+    region: &str,
+    endpoint: &str,
+    params: &AssumeRoleParams<'_>,
+) -> Result<(AwsCredential, DateTime<Utc>), StdError> {
+    let duration = params.duration_secs.unwrap_or(3600).to_string();
+    let mut form: Vec<(String, &str)> = vec![
+        ("Action".into(), "AssumeRole"),
+        ("DurationSeconds".into(), &duration),
+        ("RoleArn".into(), params.role_arn),
+        ("RoleSessionName".into(), params.session_name),
+        ("Version".into(), "2011-06-15"),
     ];
-    if let Some(p) = policy {
-        params.push(("Policy", p));
+    if let Some(policy) = params.policy {
+        form.push(("Policy".into(), policy));
+    }
+    if let Some(external_id) = params.external_id {
+        form.push(("ExternalId".into(), external_id));
+    }
+    if let Some(source_identity) = params.source_identity {
+        form.push(("SourceIdentity".into(), source_identity));
+    }
+    for (i, (key, value)) in params.tags.iter().enumerate() {
+        let n = i + 1;
+        form.push((format!("Tags.member.{n}.Key"), key));
+        form.push((format!("Tags.member.{n}.Value"), value));
     }
     // Parameters go in a form body, as the AWS SDKs send them: STS-compatible servers
     // (MinIO, RustFS) reject query-string AssumeRole, and a session policy of up to
     // 2048 characters does not belong in a URL that lands in access logs.
     let bytes = client
         .request(Method::POST, endpoint)
-        .form(&params)
+        .form(&form)
         .with_aws_sigv4(Some(AwsAuthorizer::new(base_cred, "sts", region)), None)
         .retryable(retry_config, service.clone())
         .idempotent(true)
@@ -645,15 +703,9 @@ async fn assume_role(
 
     let resp: AssumeRoleXmlResponse = quick_xml::de::from_reader(bytes.reader())
         .map_err(|e| format!("Invalid AssumeRole response: {e}"))?;
-
     let creds = resp.assume_role_result.credentials;
-    let now = Utc::now();
-    let ttl = (creds.expiration - now).to_std().unwrap_or_default();
-
-    Ok(TemporaryToken {
-        token: Arc::new(creds.into()),
-        expiry: Some(Instant::now() + ttl),
-    })
+    let expiration = creds.expiration;
+    Ok((creds.into(), expiration))
 }
 
 /// XML response for `AssumeRole`.
