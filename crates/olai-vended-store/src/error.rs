@@ -58,13 +58,32 @@ pub enum Error {
         feature: &'static str,
     },
 
-    /// The location cannot be turned into a store.
-    #[error("cannot build a store for `{location}`: {reason}")]
+    /// The location is not supported for the operation.
+    #[error("unsupported for `{location}`: {reason}")]
     Unsupported {
         /// The location.
         location: String,
         /// Why not.
         reason: String,
+    },
+
+    /// A location is outside what the credential covers, or needs more access than it
+    /// grants.
+    #[error("`{location}` is not covered by the credential for `{scope}` with {access:?} access")]
+    NotCovered {
+        /// The location asked for.
+        location: String,
+        /// The credential's scope.
+        scope: String,
+        /// The access the operation needs.
+        access: AccessLevel,
+    },
+
+    /// The credential has expired.
+    #[error("the credential for `{scope}` has expired")]
+    Expired {
+        /// The credential's scope.
+        scope: String,
     },
 
     /// object_store rejected the store configuration.

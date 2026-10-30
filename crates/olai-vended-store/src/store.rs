@@ -179,7 +179,16 @@ impl StoreOptions {
         Ok(provider)
     }
 
-    fn client_options(&self, seed: &VendedCredential) -> object_store::ClientOptions {
+    /// The current time, from the configured clock.
+    #[cfg(any(feature = "aws", feature = "azure"))]
+    pub(crate) fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        match &self.clock {
+            Some(clock) => clock(),
+            None => chrono::Utc::now(),
+        }
+    }
+
+    pub(crate) fn client_options(&self, seed: &VendedCredential) -> object_store::ClientOptions {
         match seed.hints.allow_http {
             Some(allow) => self.client_options.clone().with_allow_http(allow),
             None => self.client_options.clone(),
@@ -459,7 +468,7 @@ fn azure(
 /// object_store's own emulator mode is not used: it ignores credential providers, so
 /// the store could not refresh.
 #[cfg(feature = "azure")]
-fn azure_account_url(endpoint: &str, account: &str) -> String {
+pub(crate) fn azure_account_url(endpoint: &str, account: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');
     let loopback = Url::parse(endpoint).is_ok_and(|url| {
         matches!(url.host(), Some(url::Host::Domain("localhost")))
@@ -548,7 +557,7 @@ mod tests {
     use async_trait::async_trait;
     use object_store::{ObjectStoreExt, PutPayload};
     use olai_storage_credentials::AccessLevel;
-    #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+    #[cfg(any(feature = "aws", feature = "gcp"))]
     use olai_storage_credentials::StoreHints;
 
     use super::*;

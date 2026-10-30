@@ -16,6 +16,8 @@
 //!   [`ScopedStore`].
 //! - [`RoutingObjectStore`]: one store for a bucket that routes each request to the
 //!   [`ScopedStore`] covering its path, for registries keyed by `scheme://bucket`.
+//! - [`presign()`] (features `aws`, `azure`): presigned URLs for locations a
+//!   credential covers, never outliving it.
 //! - [`FromStorageCredentials`]: the mapping from the canonical credential onto
 //!   object_store's per-cloud credential types.
 //!
@@ -30,6 +32,9 @@
 
 pub mod convert;
 pub mod error;
+#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "aws", feature = "azure"))))]
+pub mod presign;
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 #[cfg_attr(
     docsrs,
@@ -48,6 +53,8 @@ pub use error::{Error, Result};
 pub use olai_storage_credentials::{
     AccessLevel, StorageCredentials, StorageLocation, StorageScope, StoreHints, VendedCredential,
 };
+#[cfg(any(feature = "aws", feature = "azure"))]
+pub use presign::{Presigned, presign};
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub use refresh::{Clock, DEFAULT_REFRESH_MARGIN, RefreshingCredentialProvider};
 #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]

@@ -5,6 +5,7 @@
 //!   `table2`), and keeps working across refreshes.
 //! - Azurite: a user-delegation SAS for one container, through the emulator's
 //!   path-style endpoint.
+//! - Routing and presigned URLs over both, fetched with a plain HTTP client.
 //!
 //! Needs Docker; run with `cargo test -p olai-vended-store --features emulator-it`.
 #![cfg(feature = "emulator-it")]
@@ -27,9 +28,10 @@ use olai_test_emulators::azurite::ACCOUNT;
 use olai_test_emulators::rustfs::{REGION, ROOT_ACCESS_KEY, ROOT_SECRET_KEY};
 use olai_test_emulators::{Azurite, RustFs};
 use olai_vended_store::{
-    AccessLevel, CredentialSource, Result, StorageCredentials, StorageScope, StoreHints,
-    StoreOptions, VendedCredential, build_store,
+    AccessLevel, CredentialSource, Result, RoutingObjectStore, StorageCredentials, StorageLocation,
+    StorageScope, StoreHints, StoreOptions, VendedCredential, build_store, presign,
 };
+use reqwest::Method;
 
 const BUCKET: &str = "vend";
 
@@ -250,4 +252,126 @@ async fn azure_store_through_the_azurite_endpoint() {
     let foreign = build_store(&other, source, &options).await.unwrap();
     let err = foreign.prefixed().get(&Path::from("a")).await.unwrap_err();
     assert!(is_denied(&err), "read in another container: {err}");
+}
+
+fn http() -> reqwest::Client {
+    reqwest::Client::builder()
+        // Azurite serves a per-run self-signed certificate.
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap()
+}
+
+/// The full client path: vend, build, route, presign.
+#[tokio::test]
+async fn s3_vend_route_and_presign() {
+    let rustfs = rustfs().await;
+    let source = Arc::new(RustFsSource {
+        endpoint: rustfs.endpoint().to_owned(),
+        scope: format!("s3://{BUCKET}/tab").parse().unwrap(),
+        access: AccessLevel::ReadWrite,
+        vends: AtomicUsize::new(0),
+    });
+    let seed = source.fetch().await.unwrap();
+    let store = build_store(&seed, source.clone(), &StoreOptions::new())
+        .await
+        .unwrap();
+
+    let router = RoutingObjectStore::new();
+    router.register(&store).unwrap();
+    router
+        .put(
+            &Path::from("tab/routed"),
+            PutPayload::from_static(b"via router"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        router.get(&Path::from("table2/b")).await.is_err(),
+        "no route"
+    );
+
+    let location: StorageLocation = format!("s3://{BUCKET}/tab/routed").parse().unwrap();
+    let signed = presign(
+        &seed,
+        Method::GET,
+        std::slice::from_ref(&location),
+        Duration::from_secs(60),
+        &StoreOptions::new(),
+    )
+    .await
+    .unwrap();
+    let response = http().get(signed.urls[0].clone()).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.bytes().await.unwrap().as_ref(), b"via router");
+
+    // The signature binds the path: pointing the URL at another key fails.
+    let mut tampered = signed.urls[0].clone();
+    tampered.set_path(&format!("/{BUCKET}/table2/b"));
+    assert_eq!(http().get(tampered).send().await.unwrap().status(), 403);
+}
+
+#[tokio::test]
+async fn azure_presigned_urls_are_accepted() {
+    let azurite = Azurite::start().await;
+    azurite.create_container("granted").await;
+    azurite.put_blob("granted", "tab/a", b"x").await;
+    let scope = format!("abfss://granted@{ACCOUNT}.dfs.core.windows.net/tab");
+    let location: StorageLocation = format!("{scope}/a").parse().unwrap();
+    let options = StoreOptions::new().with_client_options(
+        object_store::ClientOptions::new().with_allow_invalid_certificates(true),
+    );
+
+    // A vended SAS, appended to the blob URL.
+    let source = AzuriteSource {
+        endpoint: azurite.blob_endpoint().to_owned(),
+        bearer: azurite.bearer_token(),
+        scope: scope.parse().unwrap(),
+    };
+    let sas = source.fetch().await.unwrap();
+    let signed = presign(
+        &sas,
+        Method::GET,
+        std::slice::from_ref(&location),
+        Duration::from_secs(60),
+        &options,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        http()
+            .get(signed.urls[0].clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+
+    // An AD token, from which a user-delegation SAS is signed.
+    let bearer = VendedCredential::new(
+        StorageCredentials::AzureBearer(azurite.bearer_token()),
+        scope.parse().unwrap(),
+        AccessLevel::Read,
+    )
+    .with_expiry(Some(Utc::now() + Duration::from_secs(3600)))
+    .with_hints(sas.hints.clone());
+    let signed = presign(
+        &bearer,
+        Method::GET,
+        std::slice::from_ref(&location),
+        Duration::from_secs(60),
+        &options,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        http()
+            .get(signed.urls[0].clone())
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
 }
