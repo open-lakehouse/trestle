@@ -54,6 +54,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
       - run: cargo clippy --locked --all-targets -p olai-vended-store --no-default-features -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-vended-store --all-features -- -D warnings
 
   wasm:
     name: Wasm32
@@ -142,6 +143,8 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-http --features recording
       - name: Run tests (olai-storage-credentials wire adapters)
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
+      - name: Run tests (olai-vended-store protocol modules)
+        run: cargo test --locked --lib --tests -p olai-vended-store --features unity
 
   emulator-tests:
     name: Emulator tests
