@@ -86,6 +86,14 @@ changelog_path = "crates/olai-vended-store/CHANGELOG.md"
 # released; the crate name then needs the one-time bootstrap publish first.
 release = false
 
+[[package]]
+name = "olai-credential-vending"
+changelog_path = "crates/olai-credential-vending/CHANGELOG.md"
+# TEMPORARY: unreleased while the credential vending series is in progress (its API
+# still moves with olai-storage-credentials). Delete this line when the series is
+# released; the crate name then needs the one-time bootstrap publish first.
+release = false
+
 # The npm package @open-lakehouse/trestle-diagram, through its placeholder crate
 # at node/Cargo.toml. `git_only` takes the previous version from the
 # `trestle-diagram-v*` tags instead of crates.io, and `publish = false` (which
@@ -123,5 +131,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|trestle-diagram|web)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|trestle-diagram|web)\)', replace = "" },
 ]

@@ -119,6 +119,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-storage-credentials/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-vended-store)
         run: cargo msrv verify --manifest-path crates/olai-vended-store/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-credential-vending)
+        run: cargo msrv verify --manifest-path crates/olai-credential-vending/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}
