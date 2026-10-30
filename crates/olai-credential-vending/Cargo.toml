@@ -41,6 +41,9 @@ url = { workspace = true }
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
 emulator-it = []
+# A test against real Google Cloud: Credential Access Boundaries, which no emulator
+# enforces. Needs credentials and env vars; see `tests/gcs_minter_live.rs`.
+gcp-live = []
 
 [package.metadata.docs.rs]
 all-features = true
