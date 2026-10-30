@@ -11,6 +11,9 @@
 //! - [`RefreshingCredentialProvider`] (features `aws`, `azure`, `gcp`): an object_store
 //!   `CredentialProvider` over a source. It is seeded, single-flight, and re-vends a
 //!   configurable margin before expiry.
+//! - [`build_store`]: builds the store for a vended credential (S3, R2, Azure, Azurite,
+//!   GCS, local, in-memory), configured by its [`StoreHints`] and [`StoreOptions`], as a
+//!   [`ScopedStore`].
 //! - [`FromStorageCredentials`]: the mapping from the canonical credential onto
 //!   object_store's per-cloud credential types.
 //!
@@ -31,7 +34,11 @@ pub mod error;
     doc(cfg(any(feature = "aws", feature = "azure", feature = "gcp")))
 )]
 pub mod refresh;
+#[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
+#[cfg_attr(docsrs, doc(cfg(all(feature = "aws", not(target_arch = "wasm32")))))]
+pub mod region;
 pub mod source;
+pub mod store;
 
 pub use convert::FromStorageCredentials;
 pub use error::{Error, Result};
@@ -40,4 +47,7 @@ pub use olai_storage_credentials::{
 };
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 pub use refresh::{Clock, DEFAULT_REFRESH_MARGIN, RefreshingCredentialProvider};
+#[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
+pub use region::BucketRegions;
 pub use source::CredentialSource;
+pub use store::{ScopedStore, StoreOptions, build_store};

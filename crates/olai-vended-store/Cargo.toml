@@ -18,12 +18,19 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
+url = { workspace = true }
 
 # crates.io dependencies (in alphabetical order)
 object_store = { version = "0.13", default-features = false }
 
 # in-repo dependencies
 olai-storage-credentials = { path = "../olai-storage-credentials" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# S3 bucket region discovery. Native only: olai-http does not build for wasm32.
+olai-http = { path = "../olai-http", optional = true }
+# `Handle`, to spawn store I/O on a dedicated runtime.
+tokio = { workspace = true, features = ["rt"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # object_store's `CredentialProvider` must return `Send` futures; on wasm32 the
@@ -39,14 +46,24 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"], optional = true }
 
 [dev-dependencies]
+mockito = "1.4"
+# Emulator tests only: mint credentials from RustFS STS and Azurite.
+olai-http = { path = "../olai-http" }
+olai-test-emulators = { path = "../olai-test-emulators" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
-default = ["aws", "azure", "gcp"]
+default = ["aws", "azure", "gcp", "fs"]
 # Store backends, forwarded to object_store.
-aws = ["object_store/aws"]
+aws = ["object_store/aws", "dep:olai-http"]
 azure = ["object_store/azure"]
 gcp = ["object_store/gcp", "dep:ring"]
+# `file://` locations (native only).
+fs = ["object_store/fs"]
+
+# Integration tests against containerized emulators (needs Docker). See
+# `olai-test-emulators`.
+emulator-it = []
 
 [package.metadata.cargo-machete]
 ignored = ["getrandom_02", "getrandom_04", "ring"]

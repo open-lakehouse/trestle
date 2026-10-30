@@ -47,6 +47,29 @@ pub enum Error {
         /// The access level the store was built for.
         access: AccessLevel,
     },
+
+    /// The credential is for storage this build cannot reach, because the store
+    /// backend's feature is disabled or the platform has none.
+    #[error("{provider} stores need the `{feature}` feature of olai-vended-store")]
+    FeatureDisabled {
+        /// The storage provider.
+        provider: &'static str,
+        /// The feature that enables it.
+        feature: &'static str,
+    },
+
+    /// The location cannot be turned into a store.
+    #[error("cannot build a store for `{location}`: {reason}")]
+    Unsupported {
+        /// The location.
+        location: String,
+        /// Why not.
+        reason: String,
+    },
+
+    /// object_store rejected the store configuration.
+    #[error(transparent)]
+    Store(#[from] object_store::Error),
 }
 
 impl Error {

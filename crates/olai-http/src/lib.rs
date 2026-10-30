@@ -366,6 +366,26 @@ impl CloudClient {
         )
     }
 
+    /// Create an unauthenticated client with explicit HTTP and retry settings.
+    ///
+    /// Like [`new_unauthenticated`](Self::new_unauthenticated), for anonymous calls that
+    /// need timeouts, proxies or a bounded retry budget, such as
+    /// [`aws::bucket_region`]. If `runtime` is provided, all HTTP I/O is spawned on it.
+    pub fn new_unauthenticated_with_options(
+        options: &ClientOptions,
+        retry: RetryConfig,
+        runtime: Option<&Handle>,
+    ) -> Result<Self> {
+        let reqwest_client = options.client()?;
+        let service = make_service(reqwest_client.clone(), runtime);
+        Ok(Self::new_with_signer(
+            Arc::new(NoopSigner),
+            reqwest_client,
+            service,
+            retry,
+        ))
+    }
+
     /// Route all HTTP I/O through the given runtime handle.
     ///
     /// This is useful for simple constructors (`new_with_token`, `new_unauthenticated`)
