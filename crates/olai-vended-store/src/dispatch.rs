@@ -41,6 +41,8 @@ impl Protocol {
 /// protocol takes the keys it knows (see each protocol's builder) and ignores the rest.
 ///
 /// Unlike object_store's, this is `async`: it vends a credential.
+// Without a protocol that has a URL grammar, every URL is refused unread.
+#[cfg_attr(not(feature = "unity"), allow(unused_variables))]
 pub async fn parse_url_opts<I, K, V>(url: &Url, options: I) -> Result<(Arc<dyn ObjectStore>, Path)>
 where
     I: IntoIterator<Item = (K, V)>,

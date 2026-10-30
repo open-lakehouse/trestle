@@ -21,8 +21,9 @@
 //! - [`FromStorageCredentials`]: the mapping from the canonical credential onto
 //!   object_store's per-cloud credential types.
 //!
-//! Vending protocols are modules behind features: [`unity`] (Unity Catalog REST).
-//! [`parse_url_opts`] builds a store from any enabled protocol's reference, and
+//! Vending protocols are modules behind features: `unity` (Unity Catalog REST, with
+//! the UC Delta API behind `delta-api`) and `iceberg` (Iceberg REST).
+//! [`parse_url_opts`] builds a store from any enabled protocol's URL reference, and
 //! [`auth`] is their shared, key-configured authentication.
 //!
 //! The vocabulary (credentials, locations, scopes) is [`olai_storage_credentials`].
@@ -52,6 +53,12 @@ pub mod convert;
 )]
 pub mod dispatch;
 pub mod error;
+#[cfg(all(feature = "iceberg", not(target_arch = "wasm32")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "iceberg", not(target_arch = "wasm32"))))
+)]
+pub mod iceberg;
 #[cfg(all(feature = "protocol", not(target_arch = "wasm32")))]
 mod options;
 #[cfg(any(feature = "aws", feature = "azure"))]

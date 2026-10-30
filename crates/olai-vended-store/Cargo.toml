@@ -88,6 +88,8 @@ protocol = [
 unity = ["protocol", "olai-storage-credentials/unity"]
 # The UC Delta API, for catalog-managed tables; extends `unity`.
 delta-api = ["unity", "olai-storage-credentials/delta-api"]
+# Iceberg REST catalogs.
+iceberg = ["protocol", "olai-storage-credentials/iceberg"]
 
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
