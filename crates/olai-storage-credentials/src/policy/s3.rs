@@ -5,8 +5,9 @@
 //!
 //! - object actions on the scope's exact key and everything below it
 //!   (`arn:aws:s3:::bucket/prefix` and `.../prefix/*`);
-//! - `s3:ListBucket` on the bucket, conditioned on `s3:prefix` being the scope's prefix
-//!   or below it, so a holder cannot enumerate the rest of the bucket;
+//! - `s3:ListBucket` on the bucket, conditioned on `s3:prefix` being below the scope's
+//!   prefix (`prefix/...`), so a holder cannot enumerate the rest of the bucket, sibling
+//!   keys that merely start with the same string included;
 //! - `s3:GetBucketLocation`, which clients use for region discovery.
 //!
 //! [`AccessLevel::ReadWrite`] adds writes and deletes, plus the multipart actions
@@ -53,6 +54,15 @@ pub fn session_policy_in_partition(
         return Err(invalid("S3 session policies apply to s3:// scopes only"));
     }
     let bucket = location.bucket();
+    // Parsing already rejects such buckets; checked again because a wildcard bucket
+    // here would grant the path in every bucket the role can reach.
+    if bucket.is_empty()
+        || !bucket
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        return Err(invalid("not a valid S3 bucket name"));
+    }
     let prefix = location.path().as_ref();
     if prefix.contains(['*', '?']) || prefix.contains("${") {
         return Err(invalid(
@@ -81,8 +91,11 @@ pub fn session_policy_in_partition(
         "Resource": [bucket_arn],
     });
     if !prefix.is_empty() {
+        // Only `prefix/` and below, never the bare `prefix`: S3 matches list prefixes as
+        // plain strings, so `prefix=tab` would also list the keys of `table2/...`.
+        // `object_store` always lists with the trailing `/`.
         list["Condition"] = json!({
-            "StringLike": { "s3:prefix": [prefix, format!("{prefix}/*")] }
+            "StringLike": { "s3:prefix": [format!("{prefix}/"), format!("{prefix}/*")] }
         });
     }
 
@@ -149,7 +162,7 @@ mod tests {
                         "Action": ["s3:ListBucket"],
                         "Resource": ["arn:aws:s3:::bucket"],
                         "Condition": {
-                            "StringLike": { "s3:prefix": ["warehouse/tab", "warehouse/tab/*"] }
+                            "StringLike": { "s3:prefix": ["warehouse/tab/", "warehouse/tab/*"] }
                         },
                     },
                     {
@@ -209,8 +222,8 @@ mod tests {
 
     #[test]
     fn crafted_paths_cannot_break_out() {
-        // A JSON breakout attempt stays inside its resource strings: `Path` keeps `"`
-        // percent-encoded, and `serde_json` would escape it regardless.
+        // A JSON breakout attempt stays inside its resource strings: `serde_json`
+        // escapes the decoded `"`.
         let scope: StorageScope = r#"s3://bucket/x%22%5D,%22Resource%22:%5B%22arn:aws:s3:::other"#
             .parse()
             .unwrap();
@@ -239,6 +252,13 @@ mod tests {
                 "{scope}"
             );
         }
+    }
+
+    #[test]
+    fn list_condition_excludes_the_bare_prefix() {
+        let p = policy("s3://bucket/tab", AccessLevel::Read);
+        let prefixes = &p["Statement"][1]["Condition"]["StringLike"]["s3:prefix"];
+        assert_eq!(prefixes, &json!(["tab/", "tab/*"]));
     }
 
     #[test]
