@@ -13,6 +13,7 @@ keywords.workspace = true
 [dependencies]
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
+bytes = { workspace = true }
 # Default features keep `clock` (for `Utc::now`) and `wasmbind` (which makes `Utc::now`
 # work on wasm32-unknown-unknown).
 chrono = { workspace = true }

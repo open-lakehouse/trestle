@@ -2646,6 +2646,7 @@ name = "olai-vended-store"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "futures",
  "getrandom 0.2.17",

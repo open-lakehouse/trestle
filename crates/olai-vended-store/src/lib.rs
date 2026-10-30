@@ -14,6 +14,8 @@
 //! - [`build_store`]: builds the store for a vended credential (S3, R2, Azure, Azurite,
 //!   GCS, local, in-memory), configured by its [`StoreHints`] and [`StoreOptions`], as a
 //!   [`ScopedStore`].
+//! - [`RoutingObjectStore`]: one store for a bucket that routes each request to the
+//!   [`ScopedStore`] covering its path, for registries keyed by `scheme://bucket`.
 //! - [`FromStorageCredentials`]: the mapping from the canonical credential onto
 //!   object_store's per-cloud credential types.
 //!
@@ -37,6 +39,7 @@ pub mod refresh;
 #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
 #[cfg_attr(docsrs, doc(cfg(all(feature = "aws", not(target_arch = "wasm32")))))]
 pub mod region;
+pub mod routing;
 pub mod source;
 pub mod store;
 
@@ -49,5 +52,6 @@ pub use olai_storage_credentials::{
 pub use refresh::{Clock, DEFAULT_REFRESH_MARGIN, RefreshingCredentialProvider};
 #[cfg(all(feature = "aws", not(target_arch = "wasm32")))]
 pub use region::BucketRegions;
+pub use routing::RoutingObjectStore;
 pub use source::CredentialSource;
 pub use store::{ScopedStore, StoreOptions, build_store};
