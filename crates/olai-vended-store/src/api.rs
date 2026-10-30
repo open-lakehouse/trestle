@@ -291,10 +291,7 @@ pub(crate) fn storage_root(
 
 /// The credential for local (`file://`) storage, which needs no vend; `None` for other
 /// storage.
-#[cfg_attr(
-    not(any(feature = "unity", feature = "iceberg", feature = "sharing")),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(feature = "unity", feature = "iceberg")), allow(dead_code))]
 pub(crate) fn local_credential(
     scope: &StorageScope,
     access: AccessLevel,

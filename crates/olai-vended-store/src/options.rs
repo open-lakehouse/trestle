@@ -13,11 +13,13 @@ use crate::store::StoreOptions;
 /// |---|---|
 /// | `aws_region` | The region of vended S3 locations, overriding hints and discovery |
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for servers backed by an S3-compatible store |
+/// | `allow_local_storage` | Accept `file://` and `memory://` locations the catalog names; see [`StoreOptions::with_local_storage`] |
 /// | client keys (`allow_http`, `timeout`, ...) | Apply to the stores, and to the vending server |
 #[derive(Debug, Clone, Default)]
 pub(crate) struct StoreKeys {
     aws_region: Option<String>,
     aws_endpoint: Option<String>,
+    allow_local_storage: Option<bool>,
     #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
     client: Vec<(object_store::ClientConfigKey, String)>,
 }
@@ -29,6 +31,9 @@ impl StoreKeys {
         match key {
             "aws_region" => self.aws_region = Some(value.to_owned()),
             "aws_endpoint" | "aws_endpoint_url" => self.aws_endpoint = Some(value.to_owned()),
+            "allow_local_storage" => {
+                self.allow_local_storage = Some(crate::auth::is_truthy(value));
+            }
             _ => {
                 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
                 if let Ok(client_key) = key.parse::<object_store::ClientConfigKey>() {
@@ -42,11 +47,10 @@ impl StoreKeys {
     }
 
     /// `options` with these keys applied on top.
-    #[cfg_attr(
-        not(any(feature = "aws", feature = "azure", feature = "gcp")),
-        allow(unused_mut)
-    )]
     pub(crate) fn apply(&self, mut options: StoreOptions) -> StoreOptions {
+        if let Some(allow) = self.allow_local_storage {
+            options = options.with_local_storage(allow);
+        }
         #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
         if !self.client.is_empty() {
             let mut client_options = object_store::ClientOptions::new();

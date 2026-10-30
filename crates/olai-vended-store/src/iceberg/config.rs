@@ -30,6 +30,7 @@ const CATALOG_SCOPE: &str = "catalog";
 /// | `iceberg_oauth2_server_uri` | The OAuth token endpoint; default `{uri}/v1/oauth/tokens` |
 /// | `aws_region` | The region of vended S3 locations, overriding hints and discovery |
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for catalogs backed by an S3-compatible store |
+/// | `allow_local_storage` | Accept `file://` tables, as a local development catalog has; see [`StoreOptions::with_local_storage`] |
 /// | `iceberg_*` auth keys, `azure_*`, `google_*`, client keys | Authentication; see [`crate::auth`]. Client credentials request the scope `catalog` unless `iceberg_oauth_scope` is set |
 ///
 /// Client keys (`allow_http`, `timeout`, ...) apply to the stores too.

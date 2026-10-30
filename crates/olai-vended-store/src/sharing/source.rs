@@ -5,16 +5,18 @@ use olai_storage_credentials::wire::VendContext;
 use olai_storage_credentials::{AccessLevel, StorageScope, StoreHints, VendedCredential};
 
 use super::client::{AssetKind, SharingClient};
-use crate::api::{local_credential, storage_root};
+use crate::api::storage_root;
 use crate::error::{Error, Result};
 use crate::source::CredentialSource;
+use crate::store::{is_local, unsupported};
 
 /// Vends read credentials for one shared volume or skill.
 ///
 /// Built by [`OpenSharing`](super::OpenSharing), which looks the asset up once for its
 /// storage location; every [`fetch`](CredentialSource::fetch) then replays the same
 /// `temporary-*-credentials` request. Sharing is read-only, so the credential is
-/// always for [`AccessLevel::Read`].
+/// always for [`AccessLevel::Read`]. A provider naming local (`file://`, `memory://`)
+/// storage is refused.
 #[derive(Debug, Clone)]
 pub struct SharingSource {
     client: SharingClient,
@@ -42,6 +44,14 @@ impl SharingSource {
             ))
         })?;
         let (scope, hints) = storage_root("Open Sharing", &location)?;
+        // The provider is another party: a local location would hand the recipient a
+        // store over its own files, presented as shared data.
+        if is_local(&scope) {
+            return Err(unsupported(
+                scope.location(),
+                "an Open Sharing provider named local storage",
+            ));
+        }
         Ok(Self {
             client,
             kind,
@@ -67,9 +77,6 @@ impl SharingSource {
 #[async_trait]
 impl CredentialSource for SharingSource {
     async fn fetch(&self) -> Result<VendedCredential> {
-        if let Some(local) = local_credential(&self.scope, AccessLevel::Read) {
-            return Ok(local);
-        }
         let wire = self
             .client
             .temporary_credentials(self.kind, &self.share, &self.schema, &self.name)

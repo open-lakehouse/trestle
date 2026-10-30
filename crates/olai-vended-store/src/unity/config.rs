@@ -26,6 +26,7 @@ const TOKEN_EXCHANGE_PATH: &str = "api/1.0/unity-control/auth/tokens";
 /// | `unity_operation` | `read` or `read_write` for every store. Unset: ask for read-write and fall back to read when it is denied |
 /// | `aws_region`, `unity_aws_region` | The region of vended S3 locations, overriding hints and discovery |
 /// | `aws_endpoint`, `aws_endpoint_url` | The S3 endpoint, for servers backed by an S3-compatible store |
+/// | `allow_local_storage` | Accept `file://` tables and volumes, as a local development server has; see [`StoreOptions::with_local_storage`] |
 /// | `unity_delta_api` | Vend table credentials through the Delta API (feature `delta-api`), for catalog-managed tables |
 /// | `unity_*` auth keys, `azure_*`, `google_*`, client keys | Authentication; see [`crate::auth`] |
 ///
