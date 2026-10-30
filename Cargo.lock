@@ -2646,15 +2646,18 @@ name = "olai-vended-store"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "futures",
  "getrandom 0.2.17",
  "getrandom 0.4.2",
+ "http",
  "mockito",
  "object_store",
  "olai-http",
  "olai-storage-credentials",
  "olai-test-emulators",
+ "reqwest 0.13.5",
  "ring",
  "send_wrapper",
  "thiserror 2.0.21",

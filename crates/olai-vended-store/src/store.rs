@@ -179,7 +179,16 @@ impl StoreOptions {
         Ok(provider)
     }
 
-    fn client_options(&self, seed: &VendedCredential) -> object_store::ClientOptions {
+    /// The current time, from the configured clock.
+    #[cfg(any(feature = "aws", feature = "azure"))]
+    pub(crate) fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        match &self.clock {
+            Some(clock) => clock(),
+            None => chrono::Utc::now(),
+        }
+    }
+
+    pub(crate) fn client_options(&self, seed: &VendedCredential) -> object_store::ClientOptions {
         match seed.hints.allow_http {
             Some(allow) => self.client_options.clone().with_allow_http(allow),
             None => self.client_options.clone(),
@@ -309,7 +318,7 @@ pub async fn build_store(
     })
 }
 
-fn unsupported(location: &StorageLocation, reason: impl Into<String>) -> Error {
+pub(crate) fn unsupported(location: &StorageLocation, reason: impl Into<String>) -> Error {
     Error::Unsupported {
         location: location.to_string(),
         reason: reason.into(),
@@ -322,7 +331,27 @@ async fn s3(
     source: Arc<dyn CredentialSource>,
     options: &StoreOptions,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::aws::{AmazonS3Builder, AwsCredential};
+    use object_store::aws::AwsCredential;
+
+    let mut builder = s3_builder(seed, options).await?;
+    builder = match &seed.credentials {
+        StorageCredentials::None => builder.with_skip_signature(true),
+        _ => builder.with_credentials(Arc::new(options.provider::<AwsCredential>(seed, source)?)),
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(connector) = options.connector() {
+        builder = builder.with_http_connector(connector);
+    }
+    Ok(Arc::new(builder.build()?))
+}
+
+/// An S3 builder for `seed`'s location and hints, without credentials.
+#[cfg(feature = "aws")]
+pub(crate) async fn s3_builder(
+    seed: &VendedCredential,
+    options: &StoreOptions,
+) -> Result<object_store::aws::AmazonS3Builder> {
+    use object_store::aws::AmazonS3Builder;
 
     let location = seed.scope.location();
     let mut builder = AmazonS3Builder::new().with_client_options(options.client_options(seed));
@@ -360,15 +389,7 @@ async fn s3(
     if let Some(path_style) = seed.hints.path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);
     }
-    builder = match &seed.credentials {
-        StorageCredentials::None => builder.with_skip_signature(true),
-        _ => builder.with_credentials(Arc::new(options.provider::<AwsCredential>(seed, source)?)),
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(connector) = options.connector() {
-        builder = builder.with_http_connector(connector);
-    }
-    Ok(Arc::new(builder.build()?))
+    Ok(builder)
 }
 
 #[cfg(not(feature = "aws"))]
@@ -389,7 +410,27 @@ fn azure(
     source: Arc<dyn CredentialSource>,
     options: &StoreOptions,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::azure::{AzureCredential, MicrosoftAzureBuilder};
+    use object_store::azure::AzureCredential;
+
+    let mut builder = azure_builder(seed, options)?;
+    builder = match &seed.credentials {
+        StorageCredentials::None => builder.with_skip_signature(true),
+        _ => builder.with_credentials(Arc::new(options.provider::<AzureCredential>(seed, source)?)),
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(connector) = options.connector() {
+        builder = builder.with_http_connector(connector);
+    }
+    Ok(Arc::new(builder.build()?))
+}
+
+/// An Azure builder for `seed`'s location and hints, without credentials.
+#[cfg(feature = "azure")]
+pub(crate) fn azure_builder(
+    seed: &VendedCredential,
+    options: &StoreOptions,
+) -> Result<object_store::azure::MicrosoftAzureBuilder> {
+    use object_store::azure::MicrosoftAzureBuilder;
 
     let location = seed.scope.location();
     let account = location.account().ok_or_else(|| {
@@ -405,15 +446,7 @@ fn azure(
     if let Some(endpoint) = &seed.hints.endpoint {
         builder = builder.with_endpoint(azure_account_url(endpoint, account));
     }
-    builder = match &seed.credentials {
-        StorageCredentials::None => builder.with_skip_signature(true),
-        _ => builder.with_credentials(Arc::new(options.provider::<AzureCredential>(seed, source)?)),
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(connector) = options.connector() {
-        builder = builder.with_http_connector(connector);
-    }
-    Ok(Arc::new(builder.build()?))
+    Ok(builder)
 }
 
 #[cfg(not(feature = "azure"))]
@@ -435,7 +468,7 @@ fn azure(
 /// object_store's own emulator mode is not used: it ignores credential providers, so
 /// the store could not refresh.
 #[cfg(feature = "azure")]
-fn azure_account_url(endpoint: &str, account: &str) -> String {
+pub(crate) fn azure_account_url(endpoint: &str, account: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');
     let loopback = Url::parse(endpoint).is_ok_and(|url| {
         matches!(url.host(), Some(url::Host::Domain("localhost")))
@@ -524,7 +557,7 @@ mod tests {
     use async_trait::async_trait;
     use object_store::{ObjectStoreExt, PutPayload};
     use olai_storage_credentials::AccessLevel;
-    #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+    #[cfg(any(feature = "aws", feature = "gcp"))]
     use olai_storage_credentials::StoreHints;
 
     use super::*;

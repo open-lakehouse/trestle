@@ -13,10 +13,13 @@ keywords.workspace = true
 [dependencies]
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
+bytes = { workspace = true }
 # Default features keep `clock` (for `Utc::now`) and `wasmbind` (which makes `Utc::now`
 # work on wasm32-unknown-unknown).
 chrono = { workspace = true }
 futures = { workspace = true }
+# `Method`, for presigned URLs.
+http = "1"
 thiserror = { workspace = true }
 url = { workspace = true }
 
@@ -50,6 +53,7 @@ mockito = "1.4"
 # Emulator tests only: mint credentials from RustFS STS and Azurite.
 olai-http = { path = "../olai-http" }
 olai-test-emulators = { path = "../olai-test-emulators" }
+reqwest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]

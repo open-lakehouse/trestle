@@ -19,7 +19,7 @@ pub trait FromStorageCredentials: Sized + Send + Sync + 'static {
 
 /// The variant name of `credentials`, for error messages.
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
-fn kind(credentials: &StorageCredentials) -> &'static str {
+pub(crate) fn kind(credentials: &StorageCredentials) -> &'static str {
     match credentials {
         StorageCredentials::Aws { .. } => "AWS",
         StorageCredentials::AzureSas(_) => "Azure SAS",
