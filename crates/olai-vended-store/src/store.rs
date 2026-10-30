@@ -523,9 +523,13 @@ fn access_point_region(arn: &str) -> Option<&str> {
 mod tests {
     use async_trait::async_trait;
     use object_store::{ObjectStoreExt, PutPayload};
-    use olai_storage_credentials::{AccessLevel, StoreHints};
+    use olai_storage_credentials::AccessLevel;
+    #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+    use olai_storage_credentials::StoreHints;
 
     use super::*;
+    #[cfg(not(any(feature = "aws", feature = "azure", feature = "gcp")))]
+    use olai_storage_credentials::StorageCredentials;
 
     /// A source that must never be asked: building a store is seeded, not vended.
     #[derive(Debug)]
