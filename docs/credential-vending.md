@@ -380,7 +380,9 @@ the grant. User delegation keys are cached per storage account.
 - `RegisteredCredential` keeps Unity Catalog's `Credential` JSON shape, so documents
   mangrove persisted as `StorageCredential` load unchanged; unlike mangrove's, its
   `Debug` redacts every secret. `ExternalLocations` is the longest-prefix
-  `CredentialResolver` over a list.
+  `CredentialResolver` over a list; registrations may nest, but a request containing
+  a location governed by another credential is refused (`Error::Overlapping`), since
+  the broader credential would reach into it.
 - `CachingMinter` wraps any minter. It is a bounded TTL cache keyed by the whole
   request (canonical scope, access, lifetime, session name), and replaces mangrove's
   unbounded, `u64`-hashed process cache. One cache serves one principal: `Vendor`

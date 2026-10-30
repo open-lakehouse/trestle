@@ -9,7 +9,7 @@ to clients.
   Catalog's JSON shape. `Debug` redacts every secret.
 - **`CredentialResolver`**: which registered credential governs a location.
   `ExternalLocations` picks the most specific registered location, on whole path
-  segments.
+  segments, and refuses a location containing one that another credential governs.
 - **`CredentialMinter`**: mints a `VendedCredential` covering exactly the requested
   scope at the requested access. `LocalMinter` serves `file://` and `memory://`.
 
