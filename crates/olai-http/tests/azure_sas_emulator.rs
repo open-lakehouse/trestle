@@ -9,7 +9,8 @@
 
 use olai_http::ClientOptions;
 use olai_http::azure::{
-    UserDelegationKeyOptions, generate_storage_key_sas, generate_user_delegation_sas_with_options,
+    SAS_READ, UserDelegationKeyOptions, build_user_delegation_sas, fetch_user_delegation_key,
+    generate_storage_key_sas, generate_user_delegation_sas_with_options,
 };
 use olai_test_emulators::Azurite;
 use olai_test_emulators::azurite::{ACCOUNT, ACCOUNT_KEY};
@@ -93,4 +94,32 @@ async fn service_sas_is_accepted() {
     );
     assert_eq!(azurite.put_status("vend/tab/new", &sas).await, 403);
     assert_eq!(azurite.get_status("vend/tab/a", &tamper(&sas)).await, 403);
+}
+
+/// One user delegation key signs SAS for several containers, so a server can cache it.
+#[tokio::test]
+async fn one_user_delegation_key_signs_many_sas() {
+    let azurite = setup().await;
+    azurite.create_container("other").await;
+    azurite.put_blob("other", "x", b"y").await;
+    let options = UserDelegationKeyOptions {
+        endpoint: Some(azurite.blob_endpoint().to_owned()),
+        client_options: ClientOptions::new().with_allow_invalid_certificates(true),
+    };
+    let now = chrono::Utc::now();
+    let expiry = now + chrono::Duration::hours(1);
+    let key = fetch_user_delegation_key(ACCOUNT, &azurite.bearer_token(), now, expiry, &options)
+        .await
+        .expect("fetch a user delegation key");
+    assert!(key.expires_at().is_some());
+
+    for (container, blob) in [(CONTAINER, "vend/tab/a"), ("other", "other/x")] {
+        let sas = build_user_delegation_sas(ACCOUNT, container, "", &key, expiry, SAS_READ)
+            .expect("sign");
+        assert_eq!(
+            azurite.get_status(blob, &sas).await,
+            200,
+            "get {blob} with {sas}"
+        );
+    }
 }
