@@ -3,7 +3,8 @@
 Status: **accepted, in progress**. This is a design record. The three crates exist:
 P1 (`olai-storage-credentials`), P2 through P2e (`olai-vended-store` with the `unity`,
 `delta-api`, `iceberg`, `sharing` and `neon` modules) and P3
-(`olai-credential-vending`) have landed, with the `olai-http` SAS fix (#178). The sketches below follow the code; where the code
+(`olai-credential-vending`, with P4's GCS minter) have landed, with the `olai-http` SAS
+fix (#178). The sketches below follow the code; where the code
 settled differently from the first draft, the text says so. Implementation is tracked
 in #185 and the phased issues listed under [Roadmap](#roadmap).
 
@@ -372,7 +373,7 @@ pub trait CredentialResolver: Send + Sync {
 | `AwsStsMinter` | IAM role (+ optional base keys, else ambient chain) | `AssumeRole` + inline session policy; duration, session name, `ExternalId`, `SourceIdentity`, tags | **done** |
 | `AzureUserDelegationSasMinter` | service principal / managed identity | user-delegation key (cached across mints) → directory/container SAS | **done** |
 | `AzureAccountKeySasMinter` | storage account key | service SAS | **done** |
-| `GcsDownscopedMinter` | service account / workload identity | STS token exchange with a Credential Access Boundary | P4 |
+| `GcsDownscopedMinter` | service account, impersonated by the host identity (ADC, metadata server, workload identity) or from a key | STS token exchange with a Credential Access Boundary | **done** |
 | `LocalMinter` | — | `StorageCredentials::None` for `file://` and `memory://` | **done** (called directly: no registered credential governs local storage, so `minter_for` and `Vendor` never return it) |
 
 `minter_for(&RegisteredCredential)` picks the minter for each registered kind. On
@@ -380,13 +381,20 @@ flat-namespace accounts (`with_flat_namespace`, implied for Azurite) the Azure m
 mint for whole containers only: a container SAS for a directory request would widen
 the grant. User delegation keys are cached per storage account.
 
+- GCS: a downscoped token cannot outlive the token it is exchanged from, so the
+  minter fetches a fresh source token per mint and reports the expiry STS gives, never
+  later than the source's. An impersonated token lives as long as `ttl` asks (one
+  minute to `with_max_ttl`, one hour by default); a key's token always lives one hour.
+  GCP has no session name, so `session_name` is ignored.
 - The principal (`RegisteredCredential`) supplies the identity used to call the cloud.
   It reuses `olai-http`'s identity flows (`BearerAuth`, the AWS chain, Azure
   SP/MSI/workload identity, GCP SA/WIF), so the server's own deployment identity and
   the registered principals use one mechanism.
 - `RegisteredCredential` keeps Unity Catalog's `Credential` JSON shape, so documents
   mangrove persisted as `StorageCredential` load unchanged; unlike mangrove's, its
-  `Debug` redacts every secret. `ExternalLocations` is the longest-prefix
+  `Debug` redacts every secret. GCP service accounts are `gcp_service_account`
+  (`email`, optionally `service_account_key` or `service_account_key_file`), and
+  Databricks' `databricks_gcp_service_account` loads as the impersonated form. `ExternalLocations` is the longest-prefix
   `CredentialResolver` over a list; registrations may nest, but a request containing
   a location governed by another credential is refused (`Error::Overlapping`), since
   the broader credential would reach into it.
@@ -403,8 +411,12 @@ the grant. User delegation keys are cached per storage account.
 - The low-level cloud calls (the STS query, SAS string-to-sign and delegation key)
   stay in `olai-http::{aws,azure,gcp}`, and the minters compose them:
   `aws::assume_role_with_options` (every `AssumeRole` parameter, and the wall-clock
-  expiry), and `azure::fetch_user_delegation_key` with `build_user_delegation_sas` /
-  `build_storage_key_sas`, so a minter can fetch one key and sign many SAS.
+  expiry), `azure::fetch_user_delegation_key` with `build_user_delegation_sas` /
+  `build_storage_key_sas`, so a minter can fetch one key and sign many SAS, and
+  `gcp::{impersonate_access_token, service_account_access_token, downscope_token}`,
+  which return wall-clock expiries. A key's token comes from the OAuth JWT-bearer
+  grant: the self-signed JWTs `GoogleBuilder` signs with a key cannot be exchanged at
+  STS.
 - The user-delegation SAS string-to-sign defects found while writing this record
   (misaligned slots, `st=` signed but not emitted, `sdd` signed) were fixed in #178,
   with known-good signature vectors and Azurite tests.
@@ -466,7 +478,7 @@ these; they do not replace them.
 |---|---|---|---|
 | S3 + STS | RustFS (`rustfs/rustfs`) | `AssumeRole` with an inline session policy, enforced: allowed inside the prefix, denied outside it and on sibling prefixes (`tab` vs `table2`) | AWS-only request keys (`ExternalId`, `SourceIdentity`, tags) |
 | Azure | Azurite, with `--oauth basic` for user-delegation keys | service and user-delegation SAS signatures | directory SAS on HNS (`sr=d`); Azurite has no ADLS Gen2 |
-| GCS | fake-gcs-server (not yet wired; a mock endpoint checks bearer signing meanwhile) | bearer-token store I/O | Credential Access Boundaries; there is no STS emulator |
+| GCS | fake-gcs-server (not yet wired; mock endpoints check bearer signing and the minted token end to end, `tests/gcs_minter.rs`) | bearer-token store I/O | Credential Access Boundaries; there is no STS emulator, so a gated live test covers them (`gcp-live`, `tests/gcs_minter_live.rs`) |
 
 What no emulator covers runs as opt-in jobs against real cloud accounts. MinIO
 (community edition archived in 2026) and LocalStack (IAM enforcement is a paid feature)
@@ -531,14 +543,14 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P2d | `sharing` protocol module (**done**) | #190 |
 | P2e | `neon` protocol module (**done**) | #191 |
 | P3 | `olai-credential-vending`: minters, caching, resolver (**done**, #207 #208 #210 #211 #212 #213) | #181 |
-| P4 | GCS downscoped minter | #182 |
+| P4 | GCS downscoped minter (**done**) | #182 |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
 | P6 | mangrove migration | open-lakehouse/mangrove#247 |
 | P7 | delta-rs adopts `olai-vended-store` + `unity` | tracked in #185 (fork has no issues) |
 | P8 | `apache/object_store` proposals | #184 |
 
 The delta-rs critical path (P1 → P2 → P2a) has landed; P7 waits only on the release
-below. All protocol modules (P2a–P2e) have landed. Next: P4 (GCS) and P5
+below. All protocol modules (P2a–P2e) and every minter (P3, P4) have landed. Next: P5
 (`VendingRouter`).
 
 The new crates are not published yet: they stay out of the release cycle
