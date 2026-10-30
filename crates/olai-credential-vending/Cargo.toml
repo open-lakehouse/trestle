@@ -17,8 +17,8 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 # in-repo dependencies
-olai-http = { path = "../olai-http" }
-olai-storage-credentials = { path = "../olai-storage-credentials" }
+olai-http = { path = "../olai-http", version = "0.0.8" }
+olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.1" }
 
 [dev-dependencies]
 serde_json = { workspace = true }
