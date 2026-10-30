@@ -16,7 +16,7 @@ const REDACTED: &str = "<redacted>";
 /// `Credential` document, or one persisted by mangrove's `StorageCredential`, loads.
 ///
 /// `Debug` redacts every secret.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "Repr", into = "Repr")]
 #[non_exhaustive]
 pub enum RegisteredCredential {
@@ -31,7 +31,7 @@ pub enum RegisteredCredential {
 }
 
 /// An AWS IAM role to assume.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AwsIamRole {
     /// The role.
@@ -55,7 +55,7 @@ pub struct AwsIamRole {
 }
 
 /// An Azure service principal.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AzureServicePrincipal {
     /// The tenant (directory) id.
     pub directory_id: String,
@@ -67,7 +67,7 @@ pub struct AzureServicePrincipal {
 }
 
 /// How an [`AzureServicePrincipal`] authenticates.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AzureClientSecret {
     /// A client secret.
@@ -77,7 +77,7 @@ pub enum AzureClientSecret {
 }
 
 /// An Azure managed identity of the host.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AzureManagedIdentity {
     /// The Databricks access connector id, kept for Unity Catalog compatibility.
@@ -89,7 +89,7 @@ pub struct AzureManagedIdentity {
 }
 
 /// An Azure storage account key.
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AzureStorageKey {
     /// The storage account.
