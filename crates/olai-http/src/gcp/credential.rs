@@ -142,7 +142,7 @@ impl ServiceAccountKey {
 /// Wraps an OAuth 2.0 bearer token used to authorize requests against Google
 /// Cloud APIs. The token is a secret; treat it as confidential and avoid
 /// logging the [`bearer`](Self::bearer) field.
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct GcpCredential {
     /// An HTTP bearer token. This is secret material.
     pub bearer: String,
@@ -209,9 +209,9 @@ struct TokenClaims<'a> {
 }
 
 #[derive(serde::Deserialize, Debug)]
-struct TokenResponse {
-    access_token: String,
-    expires_in: u64,
+pub(crate) struct TokenResponse {
+    pub(crate) access_token: String,
+    pub(crate) expires_in: u64,
 }
 
 /// Self-signed JWT (JSON Web Token).
@@ -283,7 +283,7 @@ impl TokenProvider for SelfSignedJwt {
 }
 
 /// Encode `claims` as a JWT signed with RS256 by `key`.
-fn sign_jwt<T: serde::Serialize>(
+pub(crate) fn sign_jwt<T: serde::Serialize>(
     key: &ServiceAccountKey,
     key_id: &str,
     claims: &T,
@@ -424,7 +424,7 @@ impl ServiceAccountCredentials {
 /// Returns 0 if the system clock is set before the Unix epoch (January 1, 1970),
 /// which would cause JWT tokens to have invalid `iat`/`exp` values and be rejected
 /// by the token endpoint.
-fn seconds_since_epoch() -> u64 {
+pub(crate) fn seconds_since_epoch() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
@@ -677,12 +677,12 @@ struct StsTokenResponse {
 
 /// SA impersonation response (`iamcredentials.googleapis.com`).
 #[derive(Debug, Deserialize)]
-struct ImpersonateTokenResponse {
+pub(crate) struct ImpersonateTokenResponse {
     #[serde(rename = "accessToken")]
-    access_token: String,
+    pub(crate) access_token: String,
     /// RFC 3339 expiry time, e.g. `"2099-01-01T00:00:00Z"`
     #[serde(rename = "expireTime")]
-    expire_time: String,
+    pub(crate) expire_time: String,
 }
 
 /// Two-step GCP Workload Identity Federation provider.

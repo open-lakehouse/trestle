@@ -2,14 +2,16 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
-use self::credential::GcpCredential;
 use crate::CredentialProvider;
 use crate::{ClientOptions, RequestSigner, Result, RetryConfig};
 
 pub use builder::*;
+pub use credential::GcpCredential;
+pub use token::*;
 
 mod builder;
 pub(crate) mod credential;
+mod token;
 
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
 
