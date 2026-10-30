@@ -49,7 +49,7 @@ use crate::{
 const UNKNOWN_EXPIRY: Duration = Duration::from_secs(10 * 60);
 
 /// RFC 8693 token-exchange grant type.
-const TOKEN_EXCHANGE_GRANT: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+pub(crate) const TOKEN_EXCHANGE_GRANT: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 
 /// RFC 8693 token type of an OpenID Connect ID token.
 pub const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
@@ -61,7 +61,7 @@ pub const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_tok
 pub const JWT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
 
 /// RFC 7523 JWT-bearer grant type.
-const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+pub(crate) const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 
 /// The token endpoint of Google service accounts that do not name one.
 const GCP_DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
@@ -168,6 +168,48 @@ pub enum GcpServiceAccount {
     /// The contents of a service-account JSON key file. This is secret
     /// material.
     Key(String),
+}
+
+/// A [`GcpServiceAccount`] read and parsed.
+pub(crate) struct LoadedServiceAccount {
+    pub(crate) credentials: ServiceAccountCredentials,
+    pub(crate) key: ServiceAccountKey,
+    /// The key's token endpoint, or Google's.
+    pub(crate) token_uri: String,
+}
+
+impl GcpServiceAccount {
+    /// Reads and parses the key. Fails unless it is a `service_account` credential;
+    /// `purpose` names what needs one, for the error.
+    pub(crate) fn load(&self, purpose: &str) -> Result<LoadedServiceAccount> {
+        let json = match self {
+            Self::File(path) => std::fs::read_to_string(path).map_err(|e| {
+                generic(format!("failed to read service-account key `{path}`: {e}"))
+            })?,
+            Self::Key(key) => key.clone(),
+        };
+        let value: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| generic(format!("invalid service-account key {self:?}: {e}")))?;
+        if let Some(kind) = value.get("type").and_then(|kind| kind.as_str())
+            && kind != "service_account"
+        {
+            return Err(generic(format!(
+                "{self:?} holds `{kind}` credentials; {purpose} need a service-account key"
+            )));
+        }
+        let credentials: ServiceAccountCredentials = serde_json::from_value(value)
+            .map_err(|e| generic(format!("invalid service-account key {self:?}: {e}")))?;
+        let key = ServiceAccountKey::from_pem(credentials.private_key.as_bytes())?;
+        let token_uri = credentials
+            .token_uri
+            .clone()
+            .unwrap_or_else(|| GCP_DEFAULT_TOKEN_URI.to_string());
+        Ok(LoadedServiceAccount {
+            credentials,
+            key,
+            token_uri,
+        })
+    }
 }
 
 impl fmt::Debug for GcpServiceAccount {
@@ -336,28 +378,11 @@ impl BearerAuth {
         account: GcpServiceAccount,
         audience: impl Into<String>,
     ) -> Result<BearerCredentialProvider> {
-        let json = match &account {
-            GcpServiceAccount::File(path) => std::fs::read_to_string(path).map_err(|e| {
-                generic(format!("failed to read service-account key `{path}`: {e}"))
-            })?,
-            GcpServiceAccount::Key(key) => key.clone(),
-        };
-        let value: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| generic(format!("invalid service-account key {account:?}: {e}")))?;
-        if let Some(kind) = value.get("type").and_then(|kind| kind.as_str())
-            && kind != "service_account"
-        {
-            return Err(generic(format!(
-                "{account:?} holds `{kind}` credentials; ID tokens need a service-account key"
-            )));
-        }
-        let credentials: ServiceAccountCredentials = serde_json::from_value(value)
-            .map_err(|e| generic(format!("invalid service-account key {account:?}: {e}")))?;
-        let key = ServiceAccountKey::from_pem(credentials.private_key.as_bytes())?;
-        let token_uri = credentials
-            .token_uri
-            .clone()
-            .unwrap_or_else(|| GCP_DEFAULT_TOKEN_URI.to_string());
+        let LoadedServiceAccount {
+            credentials,
+            key,
+            token_uri,
+        } = account.load("ID tokens")?;
         let provider = GcpServiceAccountIdTokenProvider {
             credentials,
             key,
