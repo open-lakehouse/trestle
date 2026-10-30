@@ -1,5 +1,6 @@
 //! Minting Azure SAS from service principals, managed identities and account keys.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
@@ -93,8 +94,8 @@ fn vended(
 /// The identity (a service principal or the host's managed identity) gets a token for
 /// Azure Storage, which fetches a user delegation key; the key signs a SAS for the
 /// requested directory (or container) and permissions. Keys are cached and reused
-/// across mints until they could not cover a request any more, so minting costs one
-/// signature, not a round trip to Azure.
+/// across mints, per storage account, until they could not cover a request any more,
+/// so minting costs one signature, not a round trip to Azure.
 ///
 /// Directory SAS need a hierarchical-namespace (ADLS Gen2) account; for flat-namespace
 /// accounts, [`with_flat_namespace`](Self::with_flat_namespace) restricts minting to
@@ -104,7 +105,8 @@ pub struct AzureUserDelegationSasMinter {
     endpoint: Option<String>,
     client_options: ClientOptions,
     flat: bool,
-    key: Mutex<Option<UserDelegationKey>>,
+    /// User delegation keys by storage account: a key signs for its own account only.
+    keys: Mutex<HashMap<String, UserDelegationKey>>,
 }
 
 impl AzureUserDelegationSasMinter {
@@ -148,7 +150,7 @@ impl AzureUserDelegationSasMinter {
             endpoint: None,
             client_options: ClientOptions::default(),
             flat: false,
-            key: Mutex::new(None),
+            keys: Mutex::new(HashMap::new()),
         }
     }
 
@@ -175,8 +177,8 @@ impl AzureUserDelegationSasMinter {
     /// A user delegation key for `account` valid until at least `until`, from the
     /// cache when it still is.
     async fn key(&self, account: &str, until: DateTime<Utc>) -> Result<UserDelegationKey> {
-        let mut cached = self.key.lock().await;
-        if let Some(key) = cached.as_ref()
+        let mut keys = self.keys.lock().await;
+        if let Some(key) = keys.get(account)
             && key
                 .expires_at()
                 .is_some_and(|expiry| expiry - KEY_MARGIN >= until)
@@ -196,7 +198,7 @@ impl AzureUserDelegationSasMinter {
         let key =
             fetch_user_delegation_key(account, &token.token, now - CLOCK_SKEW, expiry, &options)
                 .await?;
-        *cached = Some(key.clone());
+        keys.insert(account.to_owned(), key.clone());
         Ok(key)
     }
 }
@@ -235,6 +237,7 @@ pub struct AzureAccountKeySasMinter {
     account: String,
     key: String,
     endpoint: Option<String>,
+    flat: bool,
     emulator: bool,
 }
 
@@ -245,6 +248,7 @@ impl AzureAccountKeySasMinter {
             account: key.account_name.clone(),
             key: key.account_key.clone(),
             endpoint: None,
+            flat: false,
             emulator: false,
         }
     }
@@ -255,18 +259,24 @@ impl AzureAccountKeySasMinter {
         self
     }
 
+    /// The account has a flat namespace: mint only for whole containers.
+    pub fn with_flat_namespace(mut self) -> Self {
+        self.flat = true;
+        self
+    }
+
     /// Sign for the Azurite emulator: plain `http` is allowed and, as Azurite has a flat
     /// namespace, only whole containers are minted for.
     pub fn with_emulator(mut self) -> Self {
         self.emulator = true;
-        self
+        self.with_flat_namespace()
     }
 }
 
 #[async_trait]
 impl CredentialMinter for AzureAccountKeySasMinter {
     async fn mint(&self, request: &MintRequest) -> Result<VendedCredential> {
-        let (account, container, prefix) = target(request, self.emulator)?;
+        let (account, container, prefix) = target(request, self.flat)?;
         if account != self.account {
             return Err(Error::unsupported(
                 &request.scope,
@@ -295,6 +305,7 @@ impl fmt::Debug for AzureAccountKeySasMinter {
             .field("account", &self.account)
             .field("key", &"<redacted>")
             .field("endpoint", &self.endpoint)
+            .field("flat", &self.flat)
             .field("emulator", &self.emulator)
             .finish()
     }
@@ -401,6 +412,57 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+    }
+
+    #[tokio::test]
+    async fn delegation_keys_are_cached_per_account() {
+        let mut server = mockito::Server::new_async().await;
+        let expiry = (Utc::now() + TimeDelta::days(1)).to_rfc3339();
+        let key = server
+            .mock("POST", "/")
+            .match_query(mockito::Matcher::Any)
+            .with_body(format!(
+                "<UserDelegationKey><SignedOid>oid</SignedOid><SignedTid>tid</SignedTid>\
+                 <SignedStart>2020-01-01T00:00:00Z</SignedStart><SignedExpiry>{expiry}</SignedExpiry>\
+                 <SignedService>b</SignedService><SignedVersion>2020-12-06</SignedVersion>\
+                 <Value>a2V5</Value></UserDelegationKey>"
+            ))
+            .expect(2)
+            .create_async()
+            .await;
+        let minter =
+            AzureUserDelegationSasMinter::with_token_provider(BearerAuth::static_token("t"))
+                .with_endpoint(server.url())
+                .with_client_options(ClientOptions::new().with_allow_http(true));
+        for account in ["one", "two", "one"] {
+            let url = format!("abfss://ctr@{account}.dfs.core.windows.net/tab");
+            minter
+                .mint(&request(&url, AccessLevel::Read))
+                .await
+                .unwrap();
+        }
+        key.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn account_keys_can_be_flat_without_emulator_signing() {
+        let minter = key_minter().with_flat_namespace();
+        let err = minter
+            .mint(&request(
+                "abfss://ctr@acct.dfs.core.windows.net/tab",
+                AccessLevel::Read,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Unsupported { .. }), "{err}");
+        let vended = minter
+            .mint(&request(
+                "abfss://ctr@acct.dfs.core.windows.net",
+                AccessLevel::Read,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(get(&query(&vended), "sr"), Some("c"));
     }
 
     #[test]
