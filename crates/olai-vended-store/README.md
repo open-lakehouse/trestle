@@ -31,5 +31,3 @@ Vending protocols are feature-gated, native-only modules with hand-written clien
 The credential model, storage locations and wire adapters live in
 [`olai-storage-credentials`](../olai-storage-credentials). The core builds for
 `wasm32-unknown-unknown`.
-
-See the [credential vending design record](../../docs/credential-vending.md).

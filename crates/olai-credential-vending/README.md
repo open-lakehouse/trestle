@@ -16,5 +16,3 @@ to clients.
 The credential model and downscoping policies live in
 [`olai-storage-credentials`](../olai-storage-credentials); the client side is
 `olai-vended-store`.
-
-See the [credential vending design record](../../docs/credential-vending.md).

@@ -32,5 +32,3 @@ let credential = VendedCredential::new(
 let file: StorageLocation = "https://acct.blob.core.windows.net/ctr/warehouse/tab/part-0.parquet".parse()?;
 assert!(credential.covers(&file, AccessLevel::Read));
 ```
-
-This is phase 1 of the [credential vending design](../../docs/credential-vending.md).
