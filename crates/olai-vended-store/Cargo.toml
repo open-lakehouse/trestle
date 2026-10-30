@@ -34,7 +34,7 @@ olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # S3 bucket region discovery and the protocol clients. Native only: olai-http does not
 # build for wasm32.
-olai-http = { path = "../olai-http", version = "0.0.8", optional = true }
+olai-http = { path = "../olai-http", version = "0.0.9", optional = true }
 percent-encoding = { version = "2.1", optional = true }
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
@@ -59,7 +59,7 @@ ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"], optional = 
 [dev-dependencies]
 mockito = "1.4"
 # Emulator tests only: mint credentials from RustFS STS and Azurite.
-olai-http = { path = "../olai-http", version = "0.0.8" }
+olai-http = { path = "../olai-http", version = "0.0.9" }
 olai-test-emulators = { path = "../olai-test-emulators" }
 reqwest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

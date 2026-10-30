@@ -21,7 +21,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 
 # in-repo dependencies
-olai-http = { path = "../olai-http", version = "0.0.8" }
+olai-http = { path = "../olai-http", version = "0.0.9" }
 olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.1" }
 
 [dev-dependencies]
