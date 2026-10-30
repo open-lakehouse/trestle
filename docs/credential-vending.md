@@ -319,6 +319,9 @@ The modules add two things to the core:
   - Databricks auto-detection (host, profiles, `DATABRICKS_*`) behind a separate
     `databricks` feature, so the core stays vendor-neutral. Only `databricks_`-prefixed
     keys are read, so a shared options map's `token` or `host` is never captured.
+    Detection only applies to a Databricks server (a workspace domain, or the
+    configured Databricks host), so workspace credentials are never sent elsewhere;
+    `<prefix>_auth_type = databricks` forces them.
 - **Read fallback.** With `unity_operation` unset, `UnityCatalog::open` asks for
   read-write and falls back to read only when the vend is denied (HTTP 403 or
   `PERMISSION_DENIED`); any other failure is returned. Iceberg REST cannot request an

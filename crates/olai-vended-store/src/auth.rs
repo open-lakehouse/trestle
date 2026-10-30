@@ -45,7 +45,8 @@ use crate::error::{Error, Result};
 ///
 /// When none is configured it is detected, in this order: a token; client credentials
 /// with a token URL; client credentials with an Azure tenant; a token file or variable;
-/// Databricks credentials (feature `databricks`); the deployment's Azure or Google
+/// Databricks credentials (feature `databricks`), for a server known to be a Databricks
+/// workspace or on the configured Databricks host; the deployment's Azure or Google
 /// identity, once it can be scoped to the server (an OAuth scope or audience is set);
 /// unauthenticated, if allowed. A prefixed key wins over its well-known counterpart,
 /// and a client id and secret are taken as a pair, never one from each.
@@ -536,19 +537,39 @@ impl AuthConfig {
         None
     }
 
+    /// Whether to detect Databricks credentials for the server at `url`.
+    ///
+    /// Only for a Databricks server: one the protocol knows to be a workspace, or the
+    /// configured Databricks host. Credentials for a workspace are never sent to another
+    /// server just because they are configured; `_auth_type = databricks` forces it.
     #[cfg_attr(not(feature = "databricks"), allow(unused_variables))]
     fn databricks_configured(&self, url: &Url, defaults: &AuthDefaults) -> bool {
         #[cfg(feature = "databricks")]
         {
-            let target = defaults.databricks
-                || self.databricks_host().is_some()
-                || (self.from_env
-                    && std::env::vars().any(|(name, _)| name.starts_with("DATABRICKS_")));
-            self.has_databricks()
-                || (self.from_env && target && self.databricks_client(url).is_ok())
+            let target = defaults.databricks || self.is_databricks_host(url);
+            target
+                && (self.has_databricks() || (self.from_env && self.databricks_client(url).is_ok()))
         }
         #[cfg(not(feature = "databricks"))]
         false
+    }
+
+    /// Whether `url` is on the configured Databricks host.
+    #[cfg(feature = "databricks")]
+    fn is_databricks_host(&self, url: &Url) -> bool {
+        let Some(host) = self.databricks_host() else {
+            return false;
+        };
+        let host = if host.contains("://") {
+            host
+        } else {
+            format!("https://{host}")
+        };
+        Url::parse(&host).is_ok_and(|host| {
+            host.host_str()
+                .zip(url.host_str())
+                .is_some_and(|(configured, server)| configured.eq_ignore_ascii_case(server))
+        })
     }
 
     /// The client id: prefixed, else the Azure one, unless only a prefixed secret is
@@ -996,6 +1017,39 @@ mod tests {
                 .get_config_value(&ClientConfigKey::AllowHttp)
                 .as_deref(),
             Some("true")
+        );
+    }
+
+    #[cfg(feature = "databricks")]
+    #[test]
+    fn databricks_credentials_stay_with_databricks() {
+        let token = [("databricks_token", "dapi-secret")];
+        // Configured Databricks credentials are not detected for another server.
+        assert_eq!(detected(&token, &AuthDefaults::default()), None);
+        let workspace = AuthDefaults {
+            databricks: true,
+            ..AuthDefaults::default()
+        };
+        assert_eq!(detected(&token, &workspace), Some(AuthType::Databricks));
+        // Nor is a Databricks host another server's.
+        let elsewhere = [
+            ("databricks_host", "https://adb-1.azuredatabricks.net"),
+            ("databricks_token", "dapi-secret"),
+        ];
+        assert_eq!(detected(&elsewhere, &AuthDefaults::default()), None);
+        let here = [
+            ("databricks_host", "UC.example.com"),
+            ("databricks_token", "dapi-secret"),
+        ];
+        assert_eq!(
+            detected(&here, &AuthDefaults::default()),
+            Some(AuthType::Databricks)
+        );
+        // An explicit auth type still selects it.
+        assert!(
+            config(&[token[0], ("unity_auth_type", "databricks")])
+                .client(&url(), &AuthDefaults::default())
+                .is_ok()
         );
     }
 
