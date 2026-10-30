@@ -92,7 +92,7 @@ impl ApiClient {
     }
 
     /// A `POST` request for `segments` below the base.
-    #[cfg_attr(not(feature = "unity"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "unity", feature = "sharing")), allow(dead_code))]
     pub(crate) fn post(&self, segments: &[&str]) -> Result<CloudRequestBuilder> {
         Ok(self.client.post(self.url(segments)?))
     }

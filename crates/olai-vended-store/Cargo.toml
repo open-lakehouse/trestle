@@ -90,6 +90,8 @@ unity = ["protocol", "olai-storage-credentials/unity"]
 delta-api = ["unity", "olai-storage-credentials/delta-api"]
 # Iceberg REST catalogs.
 iceberg = ["protocol", "olai-storage-credentials/iceberg"]
+# Delta / Open Sharing volumes and agent skills.
+sharing = ["protocol", "olai-storage-credentials/sharing"]
 
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
