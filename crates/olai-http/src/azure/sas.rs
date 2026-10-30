@@ -16,17 +16,50 @@ const SAS_VERSION: &str = "2020-12-06";
 
 // ── User Delegation Key ──────────────────────────────────────────────────────
 
-/// Response from the Azure Storage `Get User Delegation Key` endpoint.
-#[derive(Debug, Deserialize)]
+/// A user delegation key from the Azure Storage `Get User Delegation Key` endpoint.
+///
+/// It signs any number of user delegation SAS until it expires, so a server can fetch
+/// one and reuse it (see [`build_user_delegation_sas`]). `Debug` redacts the key.
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-pub(crate) struct UserDelegationKey {
+pub struct UserDelegationKey {
+    /// The object id of the principal the key was issued to.
     pub signed_oid: String,
+    /// Its tenant.
     pub signed_tid: String,
+    /// When the key becomes valid (RFC 3339).
     pub signed_start: String,
+    /// When the key expires (RFC 3339).
     pub signed_expiry: String,
+    /// The service it is valid for (`b`).
     pub signed_service: String,
+    /// The API version it was issued under.
     pub signed_version: String,
+    /// The base64 key. Secret.
     pub value: String,
+}
+
+impl UserDelegationKey {
+    /// When the key expires, if `signed_expiry` parses.
+    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(&self.signed_expiry)
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
+    }
+}
+
+impl std::fmt::Debug for UserDelegationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserDelegationKey")
+            .field("signed_oid", &self.signed_oid)
+            .field("signed_tid", &self.signed_tid)
+            .field("signed_start", &self.signed_start)
+            .field("signed_expiry", &self.signed_expiry)
+            .field("signed_service", &self.signed_service)
+            .field("signed_version", &self.signed_version)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 /// How to reach the Blob service when fetching a user delegation key.
@@ -40,8 +73,9 @@ pub struct UserDelegationKeyOptions {
     pub client_options: ClientOptions,
 }
 
-/// Fetch a User Delegation Key from Azure Storage using an AAD bearer token.
-pub(crate) async fn fetch_user_delegation_key(
+/// Fetches a user delegation key for `account`, valid from `start` until `expiry` (at
+/// most seven days), with an AAD bearer token for storage.
+pub async fn fetch_user_delegation_key(
     account: &str,
     bearer_token: &str,
     start: DateTime<Utc>,
@@ -216,7 +250,7 @@ fn service_string_to_sign(
 /// the local clock runs ahead of the service's.
 ///
 /// Returns the SAS parameters as a query string (without leading `?`).
-pub(crate) fn build_user_delegation_sas(
+pub fn build_user_delegation_sas(
     account: &str,
     container: &str,
     prefix: &str,
@@ -271,7 +305,7 @@ pub(crate) fn build_user_delegation_sas(
 /// Uses the Service SAS signing algorithm (API version 2020-12-06).
 /// <https://learn.microsoft.com/en-us/rest/api/storageservices/create-service-sas>
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_storage_key_sas(
+pub fn build_storage_key_sas(
     account: &str,
     container: &str,
     prefix: &str,
@@ -321,10 +355,10 @@ fn url_encode(s: &str) -> String {
 }
 
 /// SAS permission string for read-only access (read + list).
-pub(crate) const SAS_READ: &str = "rl";
+pub const SAS_READ: &str = "rl";
 
 /// SAS permission string for read-write access (read, add, create, write, delete, list).
-pub(crate) const SAS_READ_WRITE: &str = "racwdl";
+pub const SAS_READ_WRITE: &str = "racwdl";
 
 /// Default SAS TTL in seconds (1 hour).
 pub const DEFAULT_TTL_SECS: u64 = 3600;
@@ -419,6 +453,25 @@ pub fn generate_storage_key_sas(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_delegation_key_debug_redacts_the_key() {
+        let key = UserDelegationKey {
+            signed_oid: "oid".into(),
+            signed_tid: "tid".into(),
+            signed_start: "2030-01-01T00:00:00Z".into(),
+            signed_expiry: "2030-01-02T00:00:00Z".into(),
+            signed_service: "b".into(),
+            signed_version: "2020-12-06".into(),
+            value: "S2VZU0VDUkVU".into(),
+        };
+        let debug = format!("{key:?}");
+        assert!(!debug.contains("S2VZU0VDUkVU"), "{debug}");
+        assert_eq!(
+            key.expires_at().map(|t| t.to_rfc3339()).as_deref(),
+            Some("2030-01-02T00:00:00+00:00")
+        );
+    }
 
     #[test]
     fn test_signed_directory_depth_empty() {
