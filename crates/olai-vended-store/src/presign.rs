@@ -31,6 +31,9 @@ use url::Url;
 use crate::error::{Error, Result};
 use crate::store::{StoreOptions, unsupported};
 
+/// The longest a signed URL lives: SigV4 and user delegation SAS both cap it at 7 days.
+const MAX_SIGNED_LIFETIME: TimeDelta = TimeDelta::days(7);
+
 /// Presigned URLs for a batch of locations, all valid until the same time.
 ///
 /// The URLs are bearer credentials: `Debug` shows them without their query strings.
@@ -60,7 +63,8 @@ impl std::fmt::Debug for Presigned {
 }
 
 /// Presigns `locations` for `method`, valid for at most `ttl` and never past the
-/// credential's expiry. See the module docs.
+/// credential's expiry or 7 days, the longest a signed S3 URL or user delegation SAS
+/// lives. See the module docs.
 ///
 /// The exception is a vended Azure SAS: it cannot be shortened, so its URLs are valid
 /// until the SAS expires, whatever `ttl` asks for. [`Presigned::expires_at`] always
@@ -103,7 +107,11 @@ pub async fn presign(
             scope: credential.scope.to_string(),
         });
     }
-    let requested = TimeDelta::from_std(ttl).unwrap_or(TimeDelta::MAX);
+    // SigV4 query signatures and user delegation SAS both live at most 7 days; a longer
+    // URL would be refused when used, while `expires_at` promised more.
+    let requested = TimeDelta::from_std(ttl)
+        .unwrap_or(TimeDelta::MAX)
+        .min(MAX_SIGNED_LIFETIME);
     let lifetime = match credential.expires_at {
         Some(expires_at) => requested.min(expires_at - now),
         None => requested,
@@ -279,6 +287,33 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(signed.expires_at, Some(now() + TimeDelta::seconds(60)));
+    }
+
+    #[cfg(feature = "aws")]
+    #[tokio::test]
+    async fn s3_urls_live_at_most_seven_days() {
+        // Static keys do not expire, so only SigV4's limit applies.
+        let credential = VendedCredential::new(
+            StorageCredentials::aws("AKIDEXAMPLE", "secret", None),
+            "s3://bucket/tab".parse().unwrap(),
+            AccessLevel::Read,
+        );
+        let signed = presign(
+            &credential,
+            Method::GET,
+            &[location("s3://bucket/tab/part-0")],
+            Duration::from_secs(30 * 24 * 3600),
+            &fixed_clock(now()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(signed.expires_at, Some(now() + TimeDelta::days(7)));
+        let url = &signed.urls[0];
+        assert!(
+            url.query_pairs()
+                .any(|(k, v)| k == "X-Amz-Expires" && v == "604800"),
+            "{url}"
+        );
     }
 
     #[cfg(feature = "aws")]
