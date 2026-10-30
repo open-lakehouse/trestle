@@ -69,6 +69,10 @@ impl StoreKeys {
 }
 
 /// Parses the access-level key `key`: `read` or `read_write`, `None` when unset.
+#[cfg_attr(
+    not(any(feature = "unity", feature = "iceberg", feature = "neon")),
+    allow(dead_code)
+)]
 pub(crate) fn parse_access(key: &str, value: Option<&str>) -> Result<Option<AccessLevel>> {
     match value {
         None => Ok(None),
@@ -81,6 +85,10 @@ pub(crate) fn parse_access(key: &str, value: Option<&str>) -> Result<Option<Acce
 }
 
 /// The key value of `access`, as [`parse_access`] reads it.
+#[cfg_attr(
+    not(any(feature = "unity", feature = "iceberg", feature = "neon")),
+    allow(dead_code)
+)]
 pub(crate) fn access_key_value(access: AccessLevel) -> &'static str {
     match access {
         AccessLevel::Read => "read",

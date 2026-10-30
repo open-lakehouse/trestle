@@ -37,8 +37,9 @@ percent-encoding = { version = "2.1", optional = true }
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-# `Handle`, to spawn store I/O on a dedicated runtime.
-tokio = { workspace = true, features = ["rt"] }
+# `Handle`, to spawn store I/O on a dedicated runtime; `OnceCell` for Neon's resolved
+# branch credential.
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # object_store's `CredentialProvider` must return `Send` futures; on wasm32 the
@@ -92,6 +93,8 @@ delta-api = ["unity", "olai-storage-credentials/delta-api"]
 iceberg = ["protocol", "olai-storage-credentials/iceberg"]
 # Delta / Open Sharing volumes and agent skills.
 sharing = ["protocol", "olai-storage-credentials/sharing"]
+# Neon branch object storage, through the Neon control plane.
+neon = ["protocol"]
 
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
