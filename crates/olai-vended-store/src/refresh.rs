@@ -30,7 +30,12 @@ pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 ///   shorter than twice the margin is re-vended halfway through instead, so a
 ///   short-lived grant is not re-vended on every request.
 /// - Refreshes are single-flight: concurrent requests wait for one vend.
-/// - A failed vend is not cached; the next request tries again.
+/// - A failed refresh keeps serving the cached credential until it expires, and only
+///   then fails requests. Either way the next vend waits [`REFRESH_RETRY_INTERVAL`],
+///   so an outage costs one vend per interval, not one per request.
+/// - A refreshed credential that is already due (a skewed clock, a server vending
+///   nearly expired credentials) is used for at least [`REFRESH_RETRY_INTERVAL`]
+///   before the next vend.
 /// - A refreshed credential must still cover the seed's scope and access level, or
 ///   the refresh fails with [`Error::RefreshNarrowed`].
 ///
@@ -45,13 +50,30 @@ pub struct RefreshingCredentialProvider<T> {
     _credential: PhantomData<fn() -> T>,
 }
 
+/// The shortest time between two vends of one provider.
+pub const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+
 struct Cached<T> {
     credential: Arc<T>,
     expires_at: Option<DateTime<Utc>>,
     fetched_at: DateTime<Utc>,
+    /// No vend before this time.
+    next_vend_at: Option<DateTime<Utc>>,
+    /// Why the last vend failed, while waiting to retry it.
+    failure: Option<String>,
 }
 
 impl<T> Cached<T> {
+    fn new(credential: Arc<T>, expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Self {
+        Self {
+            credential,
+            expires_at,
+            fetched_at: now,
+            next_vend_at: None,
+            failure: None,
+        }
+    }
+
     /// Whether the credential is due for a re-vend at `now`.
     fn is_due(&self, now: DateTime<Utc>, margin: Duration) -> bool {
         let Some(expires_at) = self.expires_at else {
@@ -61,6 +83,23 @@ impl<T> Cached<T> {
         let lead = margin.min((expires_at - self.fetched_at) / 2);
         now >= expires_at - lead.max(TimeDelta::zero())
     }
+
+    /// Whether the credential has expired at `now`.
+    fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at.is_some_and(|expires_at| now >= expires_at)
+    }
+
+    /// Whether a vend must wait at `now`.
+    fn is_backing_off(&self, now: DateTime<Utc>) -> bool {
+        self.next_vend_at.is_some_and(|at| now < at)
+    }
+}
+
+/// `now` plus [`REFRESH_RETRY_INTERVAL`].
+fn retry_at(now: DateTime<Utc>) -> DateTime<Utc> {
+    let interval = TimeDelta::from_std(REFRESH_RETRY_INTERVAL).unwrap_or(TimeDelta::MAX);
+    now.checked_add_signed(interval)
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 impl<T: FromStorageCredentials> RefreshingCredentialProvider<T> {
@@ -70,11 +109,11 @@ impl<T: FromStorageCredentials> RefreshingCredentialProvider<T> {
     /// against the seed's scope and access level.
     pub fn new(seed: &VendedCredential, source: Arc<dyn CredentialSource>) -> Result<Self> {
         let clock: Clock = Arc::new(Utc::now);
-        let state = Cached {
-            credential: Arc::new(T::from_storage_credentials(&seed.credentials)?),
-            expires_at: seed.expires_at,
-            fetched_at: clock(),
-        };
+        let state = Cached::new(
+            Arc::new(T::from_storage_credentials(&seed.credentials)?),
+            seed.expires_at,
+            clock(),
+        );
         Ok(Self {
             source,
             scope: seed.scope.clone(),
@@ -119,17 +158,48 @@ impl<T: FromStorageCredentials> RefreshingCredentialProvider<T> {
 
     async fn credential(&self) -> Result<Arc<T>> {
         let mut state = self.state.lock().await;
-        if !state.is_due((self.clock)(), self.margin) {
+        let now = (self.clock)();
+        if !state.is_due(now, self.margin) {
             return Ok(Arc::clone(&state.credential));
         }
-        let vended = self.fetch().await?;
-        let credential = Arc::new(T::from_storage_credentials(&vended.credentials)?);
-        *state = Cached {
-            credential: Arc::clone(&credential),
-            expires_at: vended.expires_at,
-            fetched_at: (self.clock)(),
+        if state.is_backing_off(now) {
+            return match &state.failure {
+                Some(failure) if state.is_expired(now) => Err(Error::vend(format!(
+                    "credential for {} expired and its refresh failed: {failure}",
+                    self.scope
+                ))),
+                _ => Ok(Arc::clone(&state.credential)),
+            };
+        }
+        let refreshed = match self.fetch().await {
+            Ok(vended) => T::from_storage_credentials(&vended.credentials)
+                .map(|credential| (Arc::new(credential), vended.expires_at)),
+            Err(err) => Err(err),
         };
-        Ok(credential)
+        let now = (self.clock)();
+        match refreshed {
+            Ok((credential, expires_at)) => {
+                let mut fresh = Cached::new(Arc::clone(&credential), expires_at, now);
+                if fresh.is_due(now, self.margin) {
+                    fresh.next_vend_at = Some(retry_at(now));
+                }
+                *state = fresh;
+                Ok(credential)
+            }
+            Err(err) => {
+                state.next_vend_at = Some(retry_at(now));
+                state.failure = Some(err.to_string());
+                if state.is_expired(now) {
+                    return Err(err);
+                }
+                tracing::warn!(
+                    scope = %self.scope,
+                    error = %err,
+                    "credential refresh failed; serving the cached credential until it expires"
+                );
+                Ok(Arc::clone(&state.credential))
+            }
+        }
     }
 }
 
@@ -349,7 +419,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_vend_is_not_cached() {
+    async fn failed_vend_is_retried_after_the_interval() {
         let clock = TestClock::new();
         let source = ScriptedSource::new(vec![
             Err("server unavailable".into()),
@@ -361,6 +431,81 @@ mod tests {
 
         let err = p.get_credential().await.unwrap_err();
         assert!(err.to_string().contains("server unavailable"), "{err}");
+        // Within the interval the failure is returned without vending again.
+        clock.set(3609);
+        let err = p.get_credential().await.unwrap_err();
+        assert!(err.to_string().contains("server unavailable"), "{err}");
+        assert_eq!(source.fetches(), 1);
+        clock.set(3610);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "fresh");
+        assert_eq!(source.fetches(), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_serves_the_cached_credential_until_expiry() {
+        let clock = TestClock::new();
+        let source = ScriptedSource::new(vec![
+            Err("server unavailable".into()),
+            Err("server unavailable".into()),
+            Ok(vended("fresh", S3, AccessLevel::Read, Some(7200))),
+        ]);
+        let seed = vended("seed", S3, AccessLevel::Read, Some(3600));
+        let p = provider(&seed, Arc::clone(&source), &clock);
+
+        // Inside the margin, a failed refresh keeps the still-valid seed.
+        clock.set(3600 - 240);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "seed");
+        clock.set(3600 - 235);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "seed");
+        assert_eq!(source.fetches(), 1);
+        clock.set(3600 - 230);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "seed");
+        assert_eq!(source.fetches(), 2);
+        clock.set(3600 - 220);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "fresh");
+        assert_eq!(source.fetches(), 3);
+    }
+
+    #[tokio::test]
+    async fn an_outage_costs_one_vend_per_interval() {
+        let clock = TestClock::new();
+        let source = Arc::new(ScriptedSource {
+            delay: Duration::from_millis(20),
+            ..Arc::into_inner(ScriptedSource::new(vec![Err("server unavailable".into())])).unwrap()
+        });
+        let seed = vended("seed", S3, AccessLevel::Read, Some(3600));
+        let p = Arc::new(provider(&seed, Arc::clone(&source), &clock));
+        clock.set(3600);
+
+        let tasks: Vec<_> = (0..16)
+            .map(|_| {
+                let p = Arc::clone(&p);
+                tokio::spawn(async move { p.get_credential().await.is_err() })
+            })
+            .collect();
+        for task in tasks {
+            assert!(task.await.unwrap());
+        }
+        assert_eq!(source.fetches(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_already_due_refresh_is_kept_for_the_interval() {
+        let clock = TestClock::new();
+        // The server's clock is behind: what it vends has already expired here.
+        let source = ScriptedSource::new(vec![
+            Ok(vended("stale", S3, AccessLevel::Read, Some(3500))),
+            Ok(vended("fresh", S3, AccessLevel::Read, Some(7200))),
+        ]);
+        let seed = vended("seed", S3, AccessLevel::Read, Some(3600));
+        let p = provider(&seed, Arc::clone(&source), &clock);
+
+        clock.set(3600);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "stale");
+        clock.set(3609);
+        assert_eq!(p.get_credential().await.unwrap().key_id, "stale");
+        assert_eq!(source.fetches(), 1);
+        clock.set(3610);
         assert_eq!(p.get_credential().await.unwrap().key_id, "fresh");
         assert_eq!(source.fetches(), 2);
     }

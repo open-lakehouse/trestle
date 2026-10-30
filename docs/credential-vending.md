@@ -221,7 +221,11 @@ impl ScopedStore {
 - `RefreshingCredentialProvider` behaves as follows:
   - It is seeded with the credential that was used to build the store, so the first
     request does not re-vend.
-  - Refreshes are single-flight. A failed refresh is not cached.
+  - Refreshes are single-flight. A failed refresh keeps serving the cached credential
+    until it expires, and only then fails requests; the next vend waits
+    `REFRESH_RETRY_INTERVAL` (10 seconds), so an outage costs one vend per interval,
+    not one per request. A refreshed credential that is already due (clock skew) is
+    kept for that interval too.
   - It re-vends `refresh_margin` before expiry (5 minutes by default, configurable per
     store), or halfway through a lifetime shorter than twice the margin, so short
     grants are not re-vended on every request.
