@@ -144,7 +144,7 @@ jobs:
       - name: Run tests (olai-storage-credentials wire adapters)
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-vended-store protocol modules)
-        run: cargo test --locked --lib --tests -p olai-vended-store --features unity,databricks
+        run: cargo test --locked --lib --tests -p olai-vended-store --features delta-api,databricks
 
   emulator-tests:
     name: Emulator tests
@@ -169,7 +169,7 @@ jobs:
       - name: Run emulator tests (olai-http)
         run: cargo test --locked -p olai-http --features emulator-it --tests
       - name: Run emulator tests (olai-vended-store)
-        run: cargo test --locked -p olai-vended-store --features emulator-it,unity --tests
+        run: cargo test --locked -p olai-vended-store --features emulator-it,delta-api --tests
 
   postgres:
     name: Postgres backend
