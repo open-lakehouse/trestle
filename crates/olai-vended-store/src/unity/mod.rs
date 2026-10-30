@@ -24,6 +24,9 @@
 
 mod client;
 mod config;
+#[cfg(feature = "delta-api")]
+#[cfg_attr(docsrs, doc(cfg(feature = "delta-api")))]
+pub mod delta_api;
 mod reference;
 mod source;
 
@@ -51,6 +54,8 @@ pub struct UnityCatalog {
     client: UnityClient,
     options: StoreOptions,
     default_access: Option<AccessLevel>,
+    #[cfg(feature = "delta-api")]
+    delta_api: bool,
 }
 
 impl UnityCatalog {
@@ -60,7 +65,30 @@ impl UnityCatalog {
             client,
             options: StoreOptions::default(),
             default_access: None,
+            #[cfg(feature = "delta-api")]
+            delta_api: false,
         }
+    }
+
+    /// Vend table credentials through the Delta API instead of
+    /// `temporary-table-credentials`, as catalog-managed tables need. Volumes and paths
+    /// are unaffected.
+    #[cfg(feature = "delta-api")]
+    pub fn with_delta_api(mut self, delta_api: bool) -> Self {
+        self.delta_api = delta_api;
+        self
+    }
+
+    /// A Delta API source for the table `catalog.schema.table`.
+    #[cfg(feature = "delta-api")]
+    pub async fn delta_table_source(
+        &self,
+        catalog: &str,
+        schema: &str,
+        table: &str,
+        access: AccessLevel,
+    ) -> Result<delta_api::DeltaApiSource> {
+        delta_api::DeltaApiSource::load(self.client.clone(), catalog, schema, table, access).await
     }
 
     /// A builder configured from string keys; see [`UnityBuilder`].
@@ -161,7 +189,7 @@ impl UnityCatalog {
     async fn build(
         &self,
         seed: olai_storage_credentials::VendedCredential,
-        source: UnitySource,
+        source: Resolved,
         sub_path: &str,
     ) -> Result<ScopedStore> {
         let store = build_store(&seed, Arc::new(source), &self.options).await?;
@@ -173,20 +201,36 @@ impl UnityCatalog {
         &self,
         reference: &'r UnityReference,
         access: AccessLevel,
-    ) -> Result<(UnitySource, &'r str)> {
+    ) -> Result<(Resolved, &'r str)> {
         let full_name = reference.full_name();
         Ok(match reference {
+            #[cfg(feature = "delta-api")]
+            UnityReference::Table {
+                catalog,
+                schema,
+                table,
+            } if self.delta_api => (
+                Resolved::DeltaApi(
+                    self.delta_table_source(catalog, schema, table, access)
+                        .await?,
+                ),
+                "",
+            ),
             UnityReference::Table { .. } => (
-                self.table_source(full_name.as_deref().unwrap_or_default(), access)
-                    .await?,
+                Resolved::Unity(
+                    self.table_source(full_name.as_deref().unwrap_or_default(), access)
+                        .await?,
+                ),
                 "",
             ),
             UnityReference::Volume { path, .. } => (
-                self.volume_source(full_name.as_deref().unwrap_or_default(), access)
-                    .await?,
+                Resolved::Unity(
+                    self.volume_source(full_name.as_deref().unwrap_or_default(), access)
+                        .await?,
+                ),
                 path.as_str(),
             ),
-            UnityReference::Path(url) => (self.path_source(url, access)?, ""),
+            UnityReference::Path(url) => (Resolved::Unity(self.path_source(url, access)?), ""),
         })
     }
 
@@ -194,6 +238,35 @@ impl UnityCatalog {
     /// `uc:///Volumes/...`, the legacy `uc://catalog.schema.table`, or a storage URL.
     pub async fn store_for_url(&self, url: &str, access: AccessLevel) -> Result<ScopedStore> {
         self.store(&UnityReference::parse(url)?, access).await
+    }
+}
+
+/// The source a reference resolved to.
+#[derive(Debug)]
+enum Resolved {
+    Unity(UnitySource),
+    #[cfg(feature = "delta-api")]
+    DeltaApi(delta_api::DeltaApiSource),
+}
+
+impl Resolved {
+    fn with_access(self, access: AccessLevel) -> Self {
+        match self {
+            Self::Unity(source) => Self::Unity(source.with_access(access)),
+            #[cfg(feature = "delta-api")]
+            Self::DeltaApi(source) => Self::DeltaApi(source.with_access(access)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CredentialSource for Resolved {
+    async fn fetch(&self) -> Result<olai_storage_credentials::VendedCredential> {
+        match self {
+            Self::Unity(source) => source.fetch().await,
+            #[cfg(feature = "delta-api")]
+            Self::DeltaApi(source) => source.fetch().await,
+        }
     }
 }
 
