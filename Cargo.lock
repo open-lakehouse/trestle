@@ -2513,6 +2513,7 @@ dependencies = [
  "olai-http",
  "olai-storage-credentials",
  "olai-test-emulators",
+ "olai-vended-store",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
