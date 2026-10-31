@@ -1,17 +1,20 @@
 // @generated — do not edit by hand.
 #![cfg(target_arch = "wasm32")]
 #![allow(unused_mut, unused_imports, dead_code, clippy::all)]
+
 use crate::codegen::greeting::*;
 use crate::models::golden_path_app::v1::*;
 use olai_http_wasm::reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use olai_http_wasm::{CredentialsMode, WasmClient};
 use url::Url;
 use wasm_bindgen::prelude::*;
+
 ///WASM/browser binding for the `greeting` service.
 #[wasm_bindgen]
 pub struct WasmGreetingServiceClient {
     inner: GreetingServiceClient,
 }
+
 #[wasm_bindgen]
 impl WasmGreetingServiceClient {
     #[wasm_bindgen(js_name = "createGreeting")]
@@ -26,6 +29,7 @@ impl WasmGreetingServiceClient {
         serde_wasm_bindgen::to_value(&response)
             .map_err(|e| JsValue::from_str(&format!("invalid response: {e}")))
     }
+
     #[wasm_bindgen(js_name = "getGreeting")]
     pub async fn get_greeting(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request: GetGreetingRequest = serde_wasm_bindgen::from_value(request)
@@ -39,6 +43,7 @@ impl WasmGreetingServiceClient {
             .map_err(|e| JsValue::from_str(&format!("invalid response: {e}")))
     }
 }
+
 /// Optional client options, passed as the second constructor argument from JS.
 ///
 /// All fields are optional; the no-options / base-URL-only call keeps the default
@@ -53,6 +58,7 @@ struct ClientOptions {
     #[serde(default)]
     credentials: Option<String>,
 }
+
 /// Browser entry point: construct from a base URL, then access per-service clients.
 ///
 /// By default the browser manages the session (cookies / auth headers ride along with
@@ -63,6 +69,7 @@ pub struct WasmGoldenPathAppClient {
     client: WasmClient,
     base_url: Url,
 }
+
 #[wasm_bindgen(js_class = "GoldenPathAppClient")]
 impl WasmGoldenPathAppClient {
     /// Construct the client.
@@ -112,6 +119,7 @@ impl WasmGoldenPathAppClient {
         }
         Ok(Self { client, base_url })
     }
+
     ///Access the `greeting` service.
     #[wasm_bindgen(js_name = "greeting")]
     pub fn greeting(&self) -> WasmGreetingServiceClient {
