@@ -559,6 +559,8 @@ fn emit_project_config(
                     transport: Transport::Cloud,
                     transport_type_path: None,
                     dual_transport: false,
+                    resource_features: false,
+                    handler_impls: None,
                     protocols: vec![ClientProtocol::Rest],
                     connect_client_path: None,
                     ignore_unknown_enum_values: false,
