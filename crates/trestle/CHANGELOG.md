@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.17](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.16...olai-trestle-v0.0.17) - 2026-10-31
+
+### Added
+
+- per-resource client features and client handler impls (#237)
+
+### Changed
+
+- [**breaking**] olai codegen (#196)
+
 ## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.14...olai-trestle-v0.0.15) - 2026-10-26
 
 ### Added
