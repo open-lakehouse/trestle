@@ -902,7 +902,11 @@ fn generate_client_main_module(
         .iter()
         .flat_map(|s| &s.methods)
         .any(MethodPlan::formats_path_values)
-        .then(client::encode_path_value_fn);
+        .then(|| {
+            let helper = client::encode_path_value_fn();
+            // With per-resource features, every service that formats path values may be off.
+            quote! { #pagination_allow #helper }
+        });
 
     let tokens = quote! {
         #(#service_modules)*

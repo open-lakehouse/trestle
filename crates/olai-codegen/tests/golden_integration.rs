@@ -135,6 +135,7 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
                 keyword_only: false,
                 public_modules: false,
                 user_agent: None,
+                exports: vec![],
             }),
         }),
     }

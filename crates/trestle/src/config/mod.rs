@@ -418,6 +418,10 @@ pub struct PythonOptions {
     /// Needs the `reqwest` transport.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
+    /// Hand-written classes and functions of the binding crate (Rust paths) that the
+    /// extension module also exports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<String>,
 }
 
 /// The pure-Python package of the generated files.
@@ -719,9 +723,9 @@ mod tests {
         assert!(python.options.public_modules);
         assert!(cfg.validate(false).is_ok());
 
-        // The Python exception classes raise the errors of the client error module.
+        // Without the client error module, the binding crate maps its client's errors.
         cfg.generate.clients.rust.as_mut().unwrap().error_module = None;
-        assert!(cfg.validate(false).is_err());
+        assert!(cfg.validate(false).is_ok());
     }
 
     #[test]

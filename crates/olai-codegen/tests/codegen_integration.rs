@@ -71,6 +71,7 @@ fn make_test_config(
                 keyword_only: false,
                 public_modules: false,
                 user_agent: None,
+                exports: vec![],
             }),
         }),
     }

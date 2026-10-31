@@ -9,13 +9,11 @@
 //! 3. a JS/TS client (`node.ts` / `node.wasm`) ⇒ `bindings.*` identity present
 //! 4. `clients.python` ⇒ `error_type` + `result_type`
 //! 5. `clients.node.napi` ⇒ `error_ext_trait`
-//! 6. `clients.python` ⇒ `clients.rust.error_module` (the Python exception
-//!    classes raise its errors)
 //!
 //! Rules (1)/(2) are *upgradable*: in interactive mode the user is prompted to
 //! switch the proto library to buffa; non-interactively (and on decline) they
-//! are hard errors. Rules (3)–(6) are always hard errors — (3)–(5) are enforced
-//! by the schema being `required`, but checked here too for a friendly message.
+//! are hard errors. Rules (3)–(5) are always hard errors: the schema makes them
+//! `required`, but they are checked here too for a friendly message.
 
 use super::{JsonFieldNames, JsonInt64, ProtoLib, Transport, TrestleConfig};
 use crate::error::{Error, Result};
@@ -81,23 +79,6 @@ impl TrestleConfig {
                 "`transport: reqwest` does not combine with `dual_transport` or \
                  `transport_type_path`",
             ));
-        }
-
-        // The Python bindings need the client error module (the exception classes raise its
-        // errors).
-        if self.generate.clients.python.is_some() {
-            let has_error_module = self
-                .generate
-                .clients
-                .rust
-                .as_ref()
-                .is_some_and(|r| r.error_module.is_some());
-            if !has_error_module {
-                return Err(Error::other(
-                    "`clients.python` needs `clients.rust.error_module`: the Python exception \
-                     classes raise the errors of the client error module",
-                ));
-            }
         }
 
         // Identity / per-client required fields. The schema already makes these

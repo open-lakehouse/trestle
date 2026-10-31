@@ -234,7 +234,8 @@ pub struct BindingsConfig {
 /// (`experimental-inspect`) writes the `.pyi`. The methods block on the Tokio runtime of the
 /// generated `codegen/runtime.rs` (needs `tokio`), which the module also installs for the
 /// `_async` methods. Client errors raise the PyO3 exception classes of the generated
-/// `codegen/error.rs`, which needs [`RestClientOptions::error_module`].
+/// `codegen/error.rs`, which read them through its `ApiErrorAnswer` trait: implemented there for
+/// the error of [`RestClientOptions::error_module`], else by the binding crate.
 #[derive(Debug, Clone)]
 pub struct PythonOptions {
     /// The pure-Python package that gets `_enums.py` and the public modules.
@@ -257,6 +258,9 @@ pub struct PythonOptions {
     /// The `User-Agent` product of the Python client (`<product>/<binding crate version>`).
     /// Needs the `reqwest` transport.
     pub user_agent: Option<String>,
+    /// Hand-written classes and functions of the binding crate (Rust paths, e.g.
+    /// `crate::extras::PyHelper`) that the extension module also exports.
+    pub exports: Vec<String>,
 }
 
 /// Where the generated pure-Python files go.
@@ -594,12 +598,12 @@ impl CodeGenConfig {
             let Some(python) = self.bindings.as_ref().and_then(|b| b.python.as_ref()) else {
                 return needs("CodeGenOutput::python", "`BindingsConfig::python`");
             };
-            if self.rest_client.error_module.is_none() {
-                return needs(
-                    "CodeGenOutput::python",
-                    "`RestClientOptions::error_module` (the Python exception classes raise its \
-                     errors)",
-                );
+            for path in &python.exports {
+                syn::parse_str::<syn::Path>(path).map_err(|source| Error::InvalidRustPath {
+                    path: path.clone(),
+                    message: "PythonOptions::exports".to_string(),
+                    source,
+                })?;
             }
             if python.user_agent.is_some() && !self.uses_reqwest_transport() {
                 return needs(
@@ -627,8 +631,7 @@ impl CodeGenConfig {
     /// - `models_path_template` and `models_path_crate_template` produce valid Rust paths after
     ///   `{service}` substitution.
     /// - `bindings` is `Some` whenever `output.python`, `output.node`, `output.node_ts`, or
-    ///   `output.wasm` is `Some`; `output.python` also needs `BindingsConfig::python` and
-    ///   `RestClientOptions::error_module`.
+    ///   `output.wasm` is `Some`; `output.python` also needs `BindingsConfig::python`.
     /// - the REST client and Python options that need other options have them.
     ///
     /// Call this at construction time to surface misconfiguration early, before generation runs.

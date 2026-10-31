@@ -115,6 +115,7 @@ fn demo_config(out: &Path) -> CodeGenConfig {
                 keyword_only: true,
                 public_modules: false,
                 user_agent: Some("demo-python".into()),
+                exports: vec![],
             }),
         }),
     }

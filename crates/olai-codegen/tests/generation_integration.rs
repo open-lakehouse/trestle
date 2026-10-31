@@ -829,6 +829,10 @@ fn rest_client_and_python_options_generate_valid_code() {
             keyword_only: true,
             public_modules: true,
             user_agent: Some("example-python".into()),
+            exports: vec![
+                "crate::extras::PyHelper".into(),
+                "crate::extras::helper_fn".into(),
+            ],
         }),
     });
     generate_code(&metadata(), &config).expect("generation succeeds");
@@ -874,6 +878,16 @@ fn rest_client_and_python_options_generate_valid_code() {
 
     let bindings = read_all(&python);
     assert!(bindings.contains("_async"), "async twins missing");
+    assert!(
+        bindings.contains("#[pymodule_export]\n    use crate::extras::PyHelper;")
+            && bindings.contains("use crate::extras::helper_fn;"),
+        "hand-written exports missing from the extension module"
+    );
+    assert!(
+        bindings.contains("trait ApiErrorAnswer")
+            && bindings.contains("impl ApiErrorAnswer for ClientError"),
+        "client error mapping missing"
+    );
     assert!(
         bindings.contains("#[pyo3(name = \"_core\", module = \"example\")]")
             && bindings.contains("pub mod extension_module"),

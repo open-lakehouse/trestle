@@ -25,7 +25,10 @@ pub(crate) fn helper_files(config: &crate::codegen::CodeGenConfig) -> Vec<(Strin
         .expect("validated: Python output has a bindings config");
     let python = config.python_options();
     let mut files = vec![
-        ("error.rs".to_string(), errors::generate(bindings, python)),
+        (
+            "error.rs".to_string(),
+            errors::generate(bindings, python, config.rest_client.error_module.is_some()),
+        ),
         (
             "runtime.rs".to_string(),
             runtime::generate(python.async_methods),
