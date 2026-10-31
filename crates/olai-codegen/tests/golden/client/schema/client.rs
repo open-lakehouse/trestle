@@ -1,15 +1,19 @@
 // @generated — do not edit by hand.
 #![allow(unused_imports)]
+
 use olai_http::CloudClient;
 use url::Url;
-use crate::Result;
+use crate::codegen::error::Result;
 use example_common::models::schemas::v1::*;
+use super::super::encode_path_value;
+
 /// HTTP client for service operations
 #[derive(Clone)]
 pub struct SchemaServiceClient {
     pub(crate) client: CloudClient,
     pub(crate) base_url: Url,
 }
+
 impl SchemaServiceClient {
     /// Create a new client instance
     pub fn new(client: CloudClient, mut base_url: Url) -> Self {
@@ -18,26 +22,31 @@ impl SchemaServiceClient {
         }
         Self { client, base_url }
     }
+
     pub async fn create_schema(&self, request: &CreateSchemaRequest) -> Result<Schema> {
         let url = self.base_url.join("schemas")?;
         let response = self.client.post(url).json(request).send().await?;
         if !response.status().is_success() {
-            return Err(crate::error::parse_error_response(response).await);
+            return Err(crate::codegen::error::parse_error_response(response).await);
         }
         let result = response.bytes().await?;
         Ok(serde_json::from_slice(&result)?)
     }
+
     pub async fn get_schema(&self, request: &GetSchemaRequest) -> Result<Schema> {
-        let formatted_path = format!("schemas/{}", request.full_name);
+        let formatted_path = format!(
+            "schemas/{}", encode_path_value(& request.full_name, false)
+        );
         let mut url = self.base_url.join(&formatted_path)?;
         url.query_pairs_mut().append_pair("view", &request.view.to_string());
         let response = self.client.get(url).send().await?;
         if !response.status().is_success() {
-            return Err(crate::error::parse_error_response(response).await);
+            return Err(crate::codegen::error::parse_error_response(response).await);
         }
         let result = response.bytes().await?;
         Ok(serde_json::from_slice(&result)?)
     }
+
     pub async fn list_schemas(
         &self,
         request: &ListSchemasRequest,
@@ -49,30 +58,38 @@ impl SchemaServiceClient {
         url.query_pairs_mut().append_pair("page_token", &request.page_token);
         let response = self.client.get(url).send().await?;
         if !response.status().is_success() {
-            return Err(crate::error::parse_error_response(response).await);
+            return Err(crate::codegen::error::parse_error_response(response).await);
         }
         let result = response.bytes().await?;
         Ok(serde_json::from_slice(&result)?)
     }
+
     pub async fn update_schema(&self, request: &UpdateSchemaRequest) -> Result<Schema> {
-        let formatted_path = format!("schemas/{}", request.full_name);
+        let formatted_path = format!(
+            "schemas/{}", encode_path_value(& request.full_name, false)
+        );
         let url = self.base_url.join(&formatted_path)?;
-        let response = self.client.patch(url).json(request).send().await?;
+        let mut body = request.clone();
+        body.full_name = Default::default();
+        let response = self.client.patch(url).json(&body).send().await?;
         if !response.status().is_success() {
-            return Err(crate::error::parse_error_response(response).await);
+            return Err(crate::codegen::error::parse_error_response(response).await);
         }
         let result = response.bytes().await?;
         Ok(serde_json::from_slice(&result)?)
     }
+
     pub async fn delete_schema(
         &self,
         request: &DeleteSchemaRequest,
     ) -> Result<DeleteSchemaResponse> {
-        let formatted_path = format!("schemas/{}", request.full_name);
+        let formatted_path = format!(
+            "schemas/{}", encode_path_value(& request.full_name, false)
+        );
         let url = self.base_url.join(&formatted_path)?;
         let response = self.client.delete(url).send().await?;
         if !response.status().is_success() {
-            return Err(crate::error::parse_error_response(response).await);
+            return Err(crate::codegen::error::parse_error_response(response).await);
         }
         let result = response.bytes().await?;
         Ok(serde_json::from_slice(&result)?)

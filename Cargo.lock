@@ -2492,6 +2492,7 @@ dependencies = [
  "prost-types",
  "protobuf",
  "quote",
+ "regex",
  "rstest",
  "serde",
  "serde_json",

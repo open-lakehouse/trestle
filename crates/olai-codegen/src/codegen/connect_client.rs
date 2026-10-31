@@ -30,8 +30,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
     let wrapper_ident = service.low_level_client_type(crate::codegen::ClientProtocol::Connect);
     let inner_path = service.connect_inner_client_path()?;
     let mod_path = service.models_path();
-    let result_path: syn::Path =
-        syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
+    let result_path: syn::Path = service.config.client_result_path();
 
     let method_tokens: Vec<TokenStream> = service.methods().map(connect_method).try_collect()?;
 

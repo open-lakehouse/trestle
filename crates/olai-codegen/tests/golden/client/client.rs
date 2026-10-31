@@ -1,5 +1,6 @@
 // @generated — do not edit by hand.
 #![allow(unused_imports)]
+
 use olai_http::CloudClient;
 use url::Url;
 use crate::codegen::catalog::*;
@@ -9,11 +10,13 @@ use crate::codegen::tag_assignments::*;
 use example_common::models::catalog::v1::*;
 use example_common::models::schemas::v1::*;
 use example_common::models::tags::v1::*;
+
 #[derive(Clone)]
 pub struct ExampleClient {
-    client: CloudClient,
-    base_url: Url,
+    pub(crate) client: CloudClient,
+    pub(crate) base_url: Url,
 }
+
 impl ExampleClient {
     /// Create a new aggregate client from a cloud client and base URL.
     ///
@@ -25,14 +28,17 @@ impl ExampleClient {
         }
         Self { client, base_url }
     }
+
     /// Create a new aggregate client with no authentication.
     pub fn new_unauthenticated(base_url: Url) -> Self {
         Self::new(CloudClient::new_unauthenticated(), base_url)
     }
+
     /// Create a new aggregate client authenticating with a bearer token.
     pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
         Self::new(CloudClient::new_with_token(token), base_url)
     }
+
     ///Low-level `catalog` client exposing request/response passthrough methods.
     pub fn catalog_client(&self) -> crate::codegen::catalog::CatalogServiceClient {
         crate::codegen::catalog::CatalogServiceClient::new(
@@ -40,6 +46,7 @@ impl ExampleClient {
             self.base_url.clone(),
         )
     }
+
     ///Low-level `query` client exposing request/response passthrough methods.
     pub fn query_client(&self) -> crate::codegen::query::QueryClient {
         crate::codegen::query::QueryClient::new(
@@ -47,6 +54,7 @@ impl ExampleClient {
             self.base_url.clone(),
         )
     }
+
     ///Low-level `schema` client exposing request/response passthrough methods.
     pub fn schema_client(&self) -> crate::codegen::schema::SchemaServiceClient {
         crate::codegen::schema::SchemaServiceClient::new(
@@ -54,6 +62,7 @@ impl ExampleClient {
             self.base_url.clone(),
         )
     }
+
     ///Low-level `tag_assignments` client exposing request/response passthrough methods.
     pub fn tag_assignments_client(
         &self,
@@ -63,6 +72,7 @@ impl ExampleClient {
             self.base_url.clone(),
         )
     }
+
     pub fn create_catalog(&self) -> CreateCatalogBuilder {
         CreateCatalogBuilder::new(
             crate::codegen::catalog::CatalogServiceClient::new(
@@ -71,6 +81,7 @@ impl ExampleClient {
             ),
         )
     }
+
     pub fn list_catalogs(
         &self,
         max_results: i32,
@@ -85,6 +96,7 @@ impl ExampleClient {
             page_token,
         )
     }
+
     /// Custom POST RPC without path params — covers `RequestType::Custom(Post)`
     /// dispatched as a collection method (the shape used by factory-style
     /// RPCs like `GenerateTemporary*Credentials`).
@@ -100,6 +112,7 @@ impl ExampleClient {
             catalog_id,
         )
     }
+
     /// Access the `catalog` resource scoped to the given name.
     pub fn catalog(&self, catalog_name: impl Into<String>) -> CatalogClient {
         CatalogClient::new(
@@ -110,6 +123,7 @@ impl ExampleClient {
             ),
         )
     }
+
     /// Repeated string query param
     ///
     /// # Arguments
@@ -117,7 +131,7 @@ impl ExampleClient {
     /// * `tags` - becomes repeated query param
     pub fn list_by_tags(
         &self,
-        tags: Vec<impl Into<String>>,
+        tags: Vec<String>,
         max_results: i32,
     ) -> ListByTagsBuilder {
         ListByTagsBuilder::new(
@@ -129,6 +143,7 @@ impl ExampleClient {
             max_results,
         )
     }
+
     /// Enum query param
     ///
     /// # Arguments
@@ -146,6 +161,7 @@ impl ExampleClient {
             catalog_type,
         )
     }
+
     /// # Arguments
     ///
     /// * `name` - Schema's own name (the new component supplied by the caller).
@@ -168,6 +184,7 @@ impl ExampleClient {
             schema_type,
         )
     }
+
     /// # Arguments
     ///
     /// * `catalog_name` - Parent scoping field carrying the child-type reference that makes Schema a child of Catalog.
@@ -187,6 +204,7 @@ impl ExampleClient {
             page_token,
         )
     }
+
     /// Access the `schema` resource scoped to the given name.
     pub fn schema(
         &self,
@@ -202,6 +220,7 @@ impl ExampleClient {
             ),
         )
     }
+
     /// Access the `schema` resource from its dot-joined full name.
     pub fn schema_from_full_name(&self, full_name: impl Into<String>) -> SchemaClient {
         SchemaClient::from_full_name(
@@ -212,6 +231,7 @@ impl ExampleClient {
             ),
         )
     }
+
     /// List assignments for an entity. Path params: entity_type, entity_name.
     pub fn list_tag_assignments(
         &self,
@@ -231,6 +251,7 @@ impl ExampleClient {
             page_token,
         )
     }
+
     /// Create/assign a tag. Path params: entity_type, entity_name; body: tag.
     pub fn create_tag_assignment(
         &self,
@@ -246,6 +267,7 @@ impl ExampleClient {
             entity_name,
         )
     }
+
     /// Get a single assignment. Composite key: entity_type, entity_name, tag_key.
     /// Carries a gnostic `operation_id` to exercise annotation-driven binding method naming
     /// (the binding method should be named `fetch_tag_assignment`, not `get_tag_assignment`).
@@ -265,6 +287,7 @@ impl ExampleClient {
             tag_key,
         )
     }
+
     /// Delete a single assignment. Composite key path params.
     pub fn delete_tag_assignment(
         &self,
@@ -282,6 +305,7 @@ impl ExampleClient {
             tag_key,
         )
     }
+
     /// Custom POST RPC targeting a composite key that returns `Empty` — exercises
     /// the `<()>` / void-return path for a resource-less, path-param'd method.
     pub fn touch_tag_assignment(

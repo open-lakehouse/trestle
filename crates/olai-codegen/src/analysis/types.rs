@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 
 use convert_case::{Case, Casing};
-use quote::format_ident;
 use syn::Ident;
 
 use crate::error::{Error, Result};
@@ -255,6 +254,13 @@ impl MethodPlan {
         })
     }
 
+    /// Whether the REST client formats path parameters into the URL.
+    pub fn formats_path_values(&self) -> bool {
+        self.has_http_route
+            && self.path_parameters().next().is_some()
+            && !self.http_pattern.parameter_names().is_empty()
+    }
+
     pub fn query_parameters(&self) -> impl Iterator<Item = &QueryParam> {
         self.parameters.iter().filter_map(|param| match param {
             RequestParam::Query(query_param) => Some(query_param),
@@ -295,7 +301,7 @@ impl RequestParam {
     }
 
     pub fn field_ident(&self) -> Ident {
-        format_ident!("{}", self.name())
+        crate::utils::field_ident(self.name())
     }
 
     pub fn is_optional(&self) -> bool {
@@ -341,6 +347,8 @@ impl From<PathParam> for RequestParam {
 pub struct QueryParam {
     /// Parameter name
     pub name: String,
+    /// The `json_name` of the field (see [`QueryParam::key`]).
+    pub json_name: Option<String>,
     /// Parsed type of the query parameter
     pub field_type: UnifiedType,
     /// Documentation from protobuf field comments
@@ -354,6 +362,16 @@ pub struct QueryParam {
 }
 
 impl QueryParam {
+    /// The query-string key: the explicit `json_name`, else the lowerCamelCase JSON name with
+    /// `json_names`, else the proto name.
+    pub fn key(&self, json_names: bool) -> std::borrow::Cow<'_, str> {
+        match &self.json_name {
+            Some(json) => json.into(),
+            None if json_names => crate::utils::strings::lower_camel(&self.name).into(),
+            None => self.name.as_str().into(),
+        }
+    }
+
     /// Denotes if the parameter is optional
     pub fn is_optional(&self) -> bool {
         self.field_type.is_optional
@@ -715,6 +733,31 @@ pub fn extract_managed_resources(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn query_key_is_the_proto_name_unless_json_names_are_asked_or_explicit() {
+        let param = |name: &str, json: Option<&str>| QueryParam {
+            name: name.to_string(),
+            json_name: json.map(str::to_string),
+            field_type: crate::parsing::types::UnifiedType {
+                base_type: crate::parsing::types::BaseType::Int32,
+                is_optional: true,
+                is_repeated: false,
+            },
+            documentation: None,
+            resource_reference: None,
+        };
+        // No `json_name` in the proto: the proto name, unless the package sends JSON names.
+        assert_eq!(param("start_index", None).key(false), "start_index");
+        assert_eq!(param("start_index", None).key(true), "startIndex");
+        // A `json_name` that the proto writes out, even when it is the default one.
+        assert_eq!(param("first", Some("startIndex")).key(false), "startIndex");
+        assert_eq!(
+            param("page_token", Some("pageToken")).key(false),
+            "pageToken"
+        );
+    }
+
     use super::*;
 
     fn custom(p: Pattern) -> RequestType {

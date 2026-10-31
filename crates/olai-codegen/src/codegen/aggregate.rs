@@ -96,40 +96,60 @@ pub(crate) fn generate(
     } else {
         quote! {}
     };
-    let cloud_ctors = quote! {
-        #native_cfg
-        /// Create a new aggregate client with no authentication.
-        pub fn new_unauthenticated(base_url: Url) -> Self {
-            Self::new(#transport_ident::new_unauthenticated(), base_url)
-        }
-
-        #native_cfg
-        /// Create a new aggregate client authenticating with a bearer token.
-        // `token` stays `impl ToString` to match `CloudClient::new_with_token`'s own signature.
-        pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
-            Self::new(#transport_ident::new_with_token(token), base_url)
-        }
-    };
-    let wasm_ctor = quote! {
-        #[cfg(target_arch = "wasm32")]
-        /// Create a new aggregate client. The browser supplies the session
-        /// (cookies / forwarded auth) on each request.
-        pub fn new_in_browser(base_url: Url) -> Self {
-            Self::new(#transport_ident::new(), base_url)
-        }
-    };
-
-    let convenience_ctors = if dual {
-        quote! {
-            #cloud_ctors
-            #wasm_ctor
-        }
-    } else if config.uses_default_transport() {
-        // Single cloud transport: emit the cloud ctors bare.
-        cloud_ctors
+    // `new_unauthenticated`/`new_with_token` for the transports that support them; a custom
+    // transport gets only `new(transport, base_url)`.
+    let token_ctors = if dual || config.uses_default_transport() {
+        Some((
+            quote! { #transport_ident::new_unauthenticated() },
+            quote! { #transport_ident::new_with_token(token) },
+        ))
+    } else if config.uses_reqwest_transport() {
+        Some((
+            quote! { #transport_ident::default() },
+            quote! { #transport_ident::default().with_token(token.to_string()) },
+        ))
     } else {
-        // Single custom transport: only the generic `new(transport, base_url)`.
-        quote! {}
+        None
+    };
+    let token_ctors = token_ctors.map(|(unauthenticated, with_token)| {
+        quote! {
+            #native_cfg
+            /// Create a new aggregate client with no authentication.
+            pub fn new_unauthenticated(base_url: Url) -> Self {
+                Self::new(#unauthenticated, base_url)
+            }
+
+            #native_cfg
+            /// Create a new aggregate client authenticating with a bearer token.
+            // `token` stays `impl ToString` to match `CloudClient::new_with_token`'s own signature.
+            pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
+                Self::new(#with_token, base_url)
+            }
+        }
+    });
+    let wasm_ctor = dual.then(|| {
+        quote! {
+            #[cfg(target_arch = "wasm32")]
+            /// Create a new aggregate client. The browser supplies the session
+            /// (cookies / forwarded auth) on each request.
+            pub fn new_in_browser(base_url: Url) -> Self {
+                Self::new(#transport_ident::new(), base_url)
+            }
+        }
+    });
+    let user_agent = config.uses_reqwest_transport().then(|| {
+        quote! {
+            /// The same client, sending `user_agent` as the `User-Agent` of every request.
+            pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
+                self.client = self.client.with_user_agent(user_agent);
+                self
+            }
+        }
+    });
+    let convenience_ctors = quote! {
+        #token_ctors
+        #wasm_ctor
+        #user_agent
     };
 
     let imports = generate_imports(&services, &transport_import);
@@ -144,8 +164,9 @@ pub(crate) fn generate(
 
         #[derive(Clone)]
         pub struct #aggregate_ident {
-            client: #transport_ident,
-            base_url: Url,
+            // `pub(crate)` so the client crate can add hand-written requests.
+            pub(crate) client: #transport_ident,
+            pub(crate) base_url: Url,
         }
 
         impl #aggregate_ident {

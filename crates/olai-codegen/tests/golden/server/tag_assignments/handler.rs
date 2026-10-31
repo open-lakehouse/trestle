@@ -17,6 +17,7 @@
 use async_trait::async_trait;
 use crate::Result;
 use example_common::models::tags::v1::*;
+
 #[async_trait]
 pub trait TagAssignmentHandler<Cx = crate::Context>: Send + Sync + 'static {
     /// List assignments for an entity. Path params: entity_type, entity_name.

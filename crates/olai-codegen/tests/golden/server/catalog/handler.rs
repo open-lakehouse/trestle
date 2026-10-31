@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use crate::Result;
 use example_common::models::catalog::v1::*;
+
 #[async_trait]
 pub trait CatalogHandler<Cx = crate::Context>: Send + Sync + 'static {
     async fn create_catalog(

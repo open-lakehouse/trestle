@@ -9,11 +9,12 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
+use convert_case::{Case, Casing};
 
 use crate::config::{
-    Bindings, Clients, GenerateConfig, Models, NapiBindings, NodeClient, ProjectMeta, ProtoLib,
-    PythonClient, RustClient, Server, Servers, Transport, TrestleConfig, TsBindings, WasmBindings,
-    emit_buf_gen,
+    Bindings, Clients, ErrorModule, GenerateConfig, Models, NapiBindings, NodeClient, ProjectMeta,
+    ProtoLib, PythonClient, PythonPackage, RustClient, Server, Servers, Transport, TrestleConfig,
+    TsBindings, WasmBindings, emit_buf_gen,
 };
 use crate::error::{Error, Result};
 
@@ -147,6 +148,8 @@ fn default_config() -> TrestleConfig {
         generate: GenerateConfig {
             proto_lib: ProtoLib::default(),
             json_field_names: Default::default(),
+            json_field_names_by_package: Default::default(),
+            json_int64: Default::default(),
             descriptors: "api.bin".to_string(),
             servers: Servers::default(),
             clients: Clients::default(),
@@ -185,6 +188,7 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
     }
 
     if !args.clients.is_empty() {
+        let project_name = cfg.project.name.clone();
         let g = &mut cfg.generate;
         if args.clients.contains(&ClientArg::Rust) {
             let transport = match args.rust_transport {
@@ -198,16 +202,15 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
                 dual_transport: false,
                 protocols: vec![crate::config::ClientProtocol::Rest],
                 connect_client_path: None,
+                ignore_unknown_enum_values: false,
+                error_module: None,
+                form_encoded_methods: Vec::new(),
+                path_fields_in_body_methods: Vec::new(),
+                user_agent: None,
             });
         }
         if args.clients.contains(&ClientArg::Python) {
-            g.clients.python = Some(PythonClient {
-                output: "crates/client/python/src".to_string(),
-                error_type: String::new(),
-                result_type: String::new(),
-                typings_package_filter: None,
-                api: None,
-            });
+            g.clients.python = Some(python_client(&project_name));
         }
         if args.clients.contains(&ClientArg::Node) {
             // Default to NAPI when no specific node variant flag is given, so
@@ -237,9 +240,39 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
         }
     }
 
+    require_client_error_module(cfg);
+
     // Ensure a Bindings block exists so derive_defaults can fill it.
     if cfg.generate.bindings.is_none() {
         cfg.generate.bindings = Some(Bindings::default());
+    }
+}
+
+/// The Python client of a new config: its package is named after the project, and the extension
+/// module is the package's `_core`.
+fn python_client(project_name: &str) -> PythonClient {
+    let package = project_name.to_case(Case::Snake);
+    PythonClient {
+        output: "crates/client/python/src".to_string(),
+        error_type: String::new(),
+        result_type: String::new(),
+        module: format!("{package}._core"),
+        package: PythonPackage {
+            dir: format!("crates/client/python/{package}"),
+            name: package,
+        },
+        options: Default::default(),
+    }
+}
+
+/// The Python exception classes raise the errors of the client error module, so a Python client
+/// turns it on.
+fn require_client_error_module(cfg: &mut TrestleConfig) {
+    if cfg.generate.clients.python.is_some()
+        && let Some(rust) = &mut cfg.generate.clients.rust
+        && rust.error_module.is_none()
+    {
+        rust.error_module = Some(ErrorModule::default());
     }
 }
 
@@ -290,17 +323,17 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
             dual_transport: false,
             protocols: vec![crate::config::ClientProtocol::Rest],
             connect_client_path: None,
+            ignore_unknown_enum_values: false,
+            error_module: None,
+            form_encoded_methods: Vec::new(),
+            path_fields_in_body_methods: Vec::new(),
+            user_agent: None,
         });
     }
     if clients.contains(&ClientSel::Python) && cfg.generate.clients.python.is_none() {
-        cfg.generate.clients.python = Some(PythonClient {
-            output: "crates/client/python/src".to_string(),
-            error_type: String::new(),
-            result_type: String::new(),
-            typings_package_filter: None,
-            api: None,
-        });
+        cfg.generate.clients.python = Some(python_client(&cfg.project.name));
     }
+    require_client_error_module(cfg);
     if clients.contains(&ClientSel::Node) && cfg.generate.clients.node.is_none() {
         let wasm = cliclack::confirm("Emit the WASM browser client?")
             .initial_value(false)

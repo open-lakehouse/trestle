@@ -81,6 +81,10 @@ generate:
 The `{service}` placeholder in the path templates is substituted per service
 module.
 
+The `olai-codegen` README lists the opt-in REST client and Python API options
+(`clients.rust.transport: reqwest`, `error_module`, `json_int64: number`,
+`clients.python.options.*`).
+
 ## What you write vs. what's generated
 
 You hand-write **once, then leave stable**:

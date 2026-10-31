@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use olai_codegen::parsing::parse_file_descriptor_set;
-use olai_codegen::{BindingsConfig, CodeGenConfig, CodeGenOutput, generate_code};
+use olai_codegen::{
+    BindingsConfig, CodeGenConfig, CodeGenOutput, PyPackageConfig, PythonOptions,
+    RestClientOptions, generate_code,
+};
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
 use tempfile::TempDir;
@@ -28,17 +31,21 @@ fn make_test_config(
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        // The Python exception classes raise the errors of the client error module.
+        rest_client: RestClientOptions {
+            error_module: Some(Default::default()),
+            ..Default::default()
+        },
         output: CodeGenOutput {
-            common,
+            common: Some(common),
             models: None,
             models_subdir: "_gen".to_string(),
             server: None,
             client: None,
-            python: Some(python),
+            python: Some(python.clone()),
             node: Some(node),
             node_ts: Some(node_ts),
             wasm: None,
-            python_typings_filename: "example_client.pyi".to_string(),
             generate_resource_clients: false,
         },
         generate_resource_enum: false,
@@ -50,11 +57,21 @@ fn make_test_config(
             client_crate_name: "example_client".to_string(),
             py_error_type: "PyExampleError".to_string(),
             py_result_type: "PyExampleResult".to_string(),
-            python_api: olai_codegen::PythonApi::Both,
             napi_error_ext_trait: "NapiErrorExt".to_string(),
-            typings_package_filter: Some(".example.".to_string()),
             ts_error_base_class: "ExampleError".to_string(),
             ts_error_code_prefix: "EX".to_string(),
+            python: Some(PythonOptions {
+                package: PyPackageConfig {
+                    dir: python.join("pkg"),
+                    name: "example".to_string(),
+                },
+                error_base_class: "ExampleError".to_string(),
+                module: "example._core".into(),
+                async_methods: false,
+                keyword_only: false,
+                public_modules: false,
+                user_agent: None,
+            }),
         }),
     }
 }
@@ -248,18 +265,6 @@ fn test_python_emitter_handles_custom_post_rpcs() {
         "Python emitter dropped a `Custom(Post)` RPC; output should expose \
          `generate_catalog_token`"
     );
-
-    // The `.pyi` typings emitter must also include `Custom(Post|Patch)`
-    // RPCs — the runtime bindings and the type stubs must stay in sync.
-    let pyi = py_files
-        .iter()
-        .find(|f| f.contains("class ExampleClient"))
-        .expect("expected ExampleClient stub in generated Python output");
-    assert!(
-        pyi.contains("generate_catalog_token"),
-        "Python `.pyi` emitter dropped a `Custom(Post)` RPC; expected \
-         `generate_catalog_token` in the stub"
-    );
 }
 
 /// Resource-less, composite-key services (e.g. tag assignments) must produce usable bindings:
@@ -284,38 +289,6 @@ fn test_resource_less_service_emits_flat_bindings_with_path_params() {
         node_dir.clone(),
     );
     generate_code(&metadata, &config).expect("generate_code succeeded");
-
-    // The `.pyi` stub must mirror the flat bindings: resource-less methods land on the aggregate
-    // `ExampleClient` with all path params, and there is no phantom scoped class.
-    let pyi = std::fs::read_to_string(python_dir.join("example_client.pyi")).expect("pyi");
-    assert!(
-        pyi.contains(
-            "def fetch_tag_assignment(\n\
-             \n            self,\n\
-             \x20           entity_type: str,\n\
-             \x20           entity_name: str,\n\
-             \x20           tag_key: str\n\
-             \x20       ) -> TagAssignment:"
-        ),
-        "pyi: fetch_tag_assignment must expose all composite path params -> TagAssignment:\n{pyi}"
-    );
-    assert!(
-        pyi.contains(
-            "def touch_tag_assignment(\n\
-             \n            self,\n\
-             \x20           entity_type: str,\n\
-             \x20           entity_name: str,\n\
-             \x20           tag_key: str\n\
-             \x20       ) -> None:"
-        ),
-        "pyi: touch_tag_assignment must take all path params and return None:\n{pyi}"
-    );
-    assert!(
-        !pyi.contains("class TagAssignmentsServiceClient")
-            && !pyi.contains("class TagAssignmentsClient")
-            && !pyi.contains("class TagsClient"),
-        "pyi: resource-less service must not get a phantom scoped class:\n{pyi}"
-    );
 
     let py = std::fs::read_to_string(python_dir.join("mod.rs")).expect("python mod.rs");
     // Composite-key getter exposes ALL path params on the root client (not a scoped client).
@@ -470,88 +443,5 @@ fn generated_python_output_is_valid_rust() {
             checked > 0,
             "expected to parse-check at least one generated .rs file ({runtime:?})"
         );
-    }
-}
-
-/// `BindingsConfig::python_api` selects which client flavors the PyO3 output carries: the
-/// blocking `FooClient` classes, the awaitable `AsyncFooClient` classes, or both. Sync-only
-/// output must not reference `pyo3_async_runtimes` (so consumers don't need the dependency), and
-/// the `.pyi` must mirror the emitted classes (`async def` + `AsyncIterator` pagers).
-#[test]
-fn python_api_selects_client_flavors() {
-    use olai_codegen::PythonApi;
-
-    for api in [PythonApi::Sync, PythonApi::Async, PythonApi::Both] {
-        let descriptor = load_descriptor();
-        let metadata = parse_file_descriptor_set(&descriptor).expect("parse succeeded");
-
-        let tmp = TempDir::new().expect("tempdir");
-        let dirs = ["common", "python", "node_ts", "node"].map(|d| tmp.path().join(d));
-        for dir in &dirs {
-            std::fs::create_dir_all(dir).expect("create dir");
-        }
-        let [common_dir, python_dir, node_ts_dir, node_dir] = dirs;
-        let mut config = make_test_config(common_dir, node_ts_dir, python_dir.clone(), node_dir);
-        config.bindings.as_mut().expect("bindings").python_api = api;
-        generate_code(&metadata, &config).expect("generate_code succeeded");
-
-        let read = |name: &str| {
-            std::fs::read_to_string(python_dir.join(name))
-                .unwrap_or_else(|e| panic!("read {name} ({api:?}): {e}"))
-        };
-        let module = read("mod.rs");
-        let runtime = read("runtime.rs");
-        let typings = read("example_client.pyi");
-        for (name, src) in [("mod.rs", &module), ("runtime.rs", &runtime)] {
-            syn::parse_file(src)
-                .unwrap_or_else(|e| panic!("{name} is not valid Rust ({api:?}): {e}"));
-        }
-
-        let has_sync = module.contains("#[pyclass(name = \"ExampleClient\")]");
-        let has_async = module.contains("#[pyclass(name = \"AsyncExampleClient\")]");
-        assert_eq!(has_sync, api.has_sync(), "sync root client ({api:?})");
-        assert_eq!(has_async, api.has_async(), "async root client ({api:?})");
-        assert!(
-            module.contains("pub mod runtime;") && module.contains("pub fn register_clients("),
-            "mod.rs must declare the runtime and the registration helper ({api:?})"
-        );
-
-        let async_refs = module.contains("pyo3_async_runtimes")
-            || runtime.contains("pyo3_async_runtimes")
-            || runtime.contains("AsyncListIterator");
-        assert_eq!(
-            async_refs,
-            api.has_async(),
-            "pyo3-async-runtimes must be referenced iff async clients are emitted ({api:?})"
-        );
-
-        assert_eq!(
-            typings.contains("class ExampleClient()"),
-            api.has_sync(),
-            "sync .pyi class ({api:?})"
-        );
-        assert_eq!(
-            typings.contains("class AsyncExampleClient()"),
-            api.has_async(),
-            "async .pyi class ({api:?})"
-        );
-        if api.has_sync() {
-            assert!(
-                typings.contains("def list_catalogs(self, max_results: int) -> Iterator[Catalog]:"),
-                "sync list stub returns a lazy Iterator ({api:?}):\n{typings}"
-            );
-        }
-        if api.has_async() {
-            assert!(
-                typings.contains(
-                    "def list_catalogs(self, max_results: int) -> AsyncIterator[Catalog]:"
-                ) && !typings.contains("async def list_catalogs"),
-                "async list stub returns its AsyncIterator directly ({api:?}):\n{typings}"
-            );
-            assert!(
-                typings.contains("async def get(self) -> Catalog:"),
-                "async scoped methods are coroutines ({api:?}):\n{typings}"
-            );
-        }
     }
 }

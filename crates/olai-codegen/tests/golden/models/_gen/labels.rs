@@ -6,6 +6,7 @@ pub enum Resource {
     Catalog(super::catalog::v1::Catalog),
     Schema(super::schemas::v1::Schema),
 }
+
 /// Discriminant label for each resource type.
 #[derive(
     ::strum::AsRefStr,
@@ -34,6 +35,7 @@ pub enum ObjectLabel {
     Catalog,
     Schema,
 }
+
 impl Resource {
     /// Return the discriminant label for this resource.
     pub fn resource_label(&self) -> &ObjectLabel {
@@ -43,11 +45,13 @@ impl Resource {
         }
     }
 }
+
 impl From<super::catalog::v1::Catalog> for Resource {
     fn from(v: super::catalog::v1::Catalog) -> Self {
         Resource::Catalog(v)
     }
 }
+
 impl TryFrom<Resource> for super::catalog::v1::Catalog {
     type Error = crate::Error;
     fn try_from(r: Resource) -> Result<Self, Self::Error> {
@@ -63,11 +67,13 @@ impl TryFrom<Resource> for super::catalog::v1::Catalog {
         }
     }
 }
+
 impl From<super::schemas::v1::Schema> for Resource {
     fn from(v: super::schemas::v1::Schema) -> Self {
         Resource::Schema(v)
     }
 }
+
 impl TryFrom<Resource> for super::schemas::v1::Schema {
     type Error = crate::Error;
     fn try_from(r: Resource) -> Result<Self, Self::Error> {
@@ -83,12 +89,16 @@ impl TryFrom<Resource> for super::schemas::v1::Schema {
         }
     }
 }
+
 #[cfg(feature = "store")]
 use crate::Error;
+
 #[cfg(feature = "store")]
 use crate::models::object::Object;
+
 #[cfg(feature = "store")]
 use crate::models::resources::{ResourceExt, ResourceIdent, ResourceName, ResourceRef};
+
 #[cfg(feature = "store")]
 impl TryFrom<Object> for super::catalog::v1::Catalog {
     type Error = Error;
@@ -101,6 +111,7 @@ impl TryFrom<Object> for super::catalog::v1::Catalog {
         Ok(res)
     }
 }
+
 #[cfg(feature = "store")]
 impl TryFrom<super::catalog::v1::Catalog> for Object {
     type Error = Error;
@@ -120,21 +131,25 @@ impl TryFrom<super::catalog::v1::Catalog> for Object {
         })
     }
 }
+
 #[cfg(feature = "store")]
 impl ResourceExt for super::catalog::v1::Catalog {
     fn resource_name(&self) -> ResourceName {
         ResourceName::new([&self.name])
     }
+
     fn resource_ref(&self) -> ResourceRef {
         ::uuid::Uuid::parse_str(&self.name)
             .ok()
             .map(ResourceRef::Uuid)
             .unwrap_or_else(|| ResourceRef::Name(self.resource_name()))
     }
+
     fn resource_ident(&self) -> ResourceIdent {
         (ObjectLabel::Catalog).to_ident(self.resource_ref())
     }
 }
+
 #[cfg(feature = "store")]
 impl TryFrom<Object> for super::schemas::v1::Schema {
     type Error = Error;
@@ -148,6 +163,7 @@ impl TryFrom<Object> for super::schemas::v1::Schema {
         Ok(res)
     }
 }
+
 #[cfg(feature = "store")]
 impl TryFrom<super::schemas::v1::Schema> for Object {
     type Error = Error;
@@ -170,39 +186,46 @@ impl TryFrom<super::schemas::v1::Schema> for Object {
         })
     }
 }
+
 #[cfg(feature = "store")]
 impl ResourceExt for super::schemas::v1::Schema {
     fn resource_name(&self) -> ResourceName {
         ResourceName::new([&self.catalog_name, &self.name])
     }
+
     fn resource_ref(&self) -> ResourceRef {
         ::uuid::Uuid::parse_str(&self.schema_id)
             .ok()
             .map(ResourceRef::Uuid)
             .unwrap_or_else(|| ResourceRef::Name(self.resource_name()))
     }
+
     fn resource_ident(&self) -> ResourceIdent {
         (ObjectLabel::Schema).to_ident(self.resource_ref())
     }
 }
+
 impl super::catalog::v1::Catalog {
     /// Returns the fully-qualified dot-separated name computed from component fields.
     pub fn qualified_name(&self) -> String {
         self.name.clone()
     }
 }
+
 impl super::schemas::v1::Schema {
     /// Returns the fully-qualified dot-separated name computed from component fields.
     pub fn qualified_name(&self) -> String {
         format!("{}.{}", self.catalog_name, self.name)
     }
 }
+
 #[cfg(feature = "store")]
 impl ::olai_store::Label for ObjectLabel {
     fn as_str(&self) -> &str {
         self.as_ref()
     }
 }
+
 #[cfg(feature = "store")]
 /// Static resource type descriptors derived from proto annotations.
 ///

@@ -67,6 +67,8 @@ components:
 template_context:
   has_app: true
   app_service_name: "{{ project_name | kebab_case }}-server"
+  # Pre-rendered: a `|` filter in a template path is not a valid file name on Windows.
+  project_name_snake: "{{ project_name | snake_case }}"
   app_port: 8080
   # Baked-in defaults that replace the dropped prompts (rust_edition, license).
   rust_edition: "2024"

@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 
 use olai_codegen::parsing::parse_file_descriptor_set;
 use olai_codegen::{
-    BindingsConfig, CodeGenConfig, CodeGenMetadata, CodeGenOutput, Runtime, generate_code,
+    BindingsConfig, CodeGenConfig, CodeGenMetadata, CodeGenOutput, PyPackageConfig, PythonOptions,
+    RestClientOptions, Runtime, generate_code,
 };
 use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
@@ -68,9 +69,19 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
     let server = tmp.join("server");
     let client = tmp.join("client");
     let python = tmp.join("python");
+    let python_package = tmp.join("python_package");
     let node = tmp.join("node");
     let node_ts = tmp.join("node_ts");
-    for d in [&common, &models, &server, &client, &python, &node, &node_ts] {
+    for d in [
+        &common,
+        &models,
+        &server,
+        &client,
+        &python,
+        &python_package,
+        &node,
+        &node_ts,
+    ] {
         std::fs::create_dir_all(d).expect("create dir");
     }
     CodeGenConfig {
@@ -84,8 +95,13 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        // The Python exception classes raise the errors of the client error module.
+        rest_client: RestClientOptions {
+            error_module: Some(Default::default()),
+            ..Default::default()
+        },
         output: CodeGenOutput {
-            common,
+            common: Some(common),
             models: Some(models),
             models_subdir: "_gen".into(),
             server: Some(server),
@@ -94,7 +110,6 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
             node: Some(node),
             node_ts: Some(node_ts),
             wasm: None,
-            python_typings_filename: "client.pyi".into(),
             generate_resource_clients: true,
         },
         generate_resource_enum: true,
@@ -106,11 +121,21 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
             client_crate_name: "example_client".into(),
             py_error_type: "PyExampleError".into(),
             py_result_type: "PyExampleResult".into(),
-            python_api: olai_codegen::PythonApi::Both,
             napi_error_ext_trait: "NapiErrorExt".into(),
-            typings_package_filter: Some(".example.".into()),
             ts_error_base_class: "ExampleError".into(),
             ts_error_code_prefix: "EX".into(),
+            python: Some(PythonOptions {
+                package: PyPackageConfig {
+                    dir: python_package,
+                    name: "example".into(),
+                },
+                error_base_class: "ExampleError".into(),
+                module: "example._core".into(),
+                async_methods: false,
+                keyword_only: false,
+                public_modules: false,
+                user_agent: None,
+            }),
         }),
     }
 }
@@ -151,7 +176,7 @@ fn python_and_ts_output_is_runtime_invariant() {
     generate_code(&metadata(), &full_config(buffa_tmp.path(), Runtime::Buffa))
         .expect("buffa generation succeeds");
 
-    for subtree in ["python", "node_ts"] {
+    for subtree in ["python", "python_package", "node_ts"] {
         let prost_files: BTreeSet<PathBuf> = relative_files(&prost_tmp.path().join(subtree))
             .into_iter()
             .collect();

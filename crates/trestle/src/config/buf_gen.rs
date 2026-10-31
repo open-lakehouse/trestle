@@ -207,6 +207,8 @@ mod tests {
         GenerateConfig {
             proto_lib,
             json_field_names: Default::default(),
+            json_field_names_by_package: Default::default(),
+            json_int64: Default::default(),
             descriptors: "api.bin".into(),
             servers: Servers {
                 rest: true,

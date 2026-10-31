@@ -1,203 +1,337 @@
 // @generated — do not edit by hand.
 #![allow(dead_code, unused_imports, clippy::too_many_arguments)]
-pub mod runtime;
+
 #[allow(dead_code, unused_imports, clippy::too_many_arguments)]
 pub mod catalog;
 #[allow(dead_code, unused_imports, clippy::too_many_arguments)]
 pub mod schema;
+pub mod error;
+pub mod runtime;
 use std::collections::HashMap;
-use futures::stream::StreamExt;
-use pyo3::IntoPyObjectExt;
+use futures::stream::TryStreamExt;
 use pyo3::prelude::*;
-use crate::error::PyExampleError;
-use crate::codegen::runtime::{block_on, ListIterator};
-use crate::codegen::runtime::AsyncListIterator;
 use example_client::ExampleClient;
-use example_common::models::catalog::v1::*;
+use crate::codegen::error::{PyExampleError, PyExampleResult};
 use example_common::models::catalog::v1::*;
 use example_common::models::schemas::v1::*;
 use example_common::models::tags::v1::*;
 use example_common::models::*;
 use crate::codegen::catalog::PyCatalogClient;
-use crate::codegen::catalog::PyAsyncCatalogClient;
 use crate::codegen::schema::PySchemaClient;
-use crate::codegen::schema::PyAsyncSchemaClient;
-#[pyclass(name = "ExampleClient")]
+
+/// A client of the API at one base URL.
+#[pyclass(name = "ExampleClient", module = "example._core")]
 pub struct PyExampleClient {
-    client: ExampleClient,
+    pub(crate) client: ExampleClient,
 }
+
 #[pymethods]
 impl PyExampleClient {
+    /// A client of the API at `base_url`. `token`, when set, goes in every
+    /// request as the bearer token.
     #[new]
     #[pyo3(signature = (base_url, token = None))]
     pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
-        let client = if let Some(token) = token {
-            olai_http::CloudClient::new_with_token(token)
-        } else {
-            olai_http::CloudClient::new_unauthenticated()
-        };
         let base_url = base_url.parse().map_err(PyExampleError::from)?;
-        Ok(Self {
-            client: ExampleClient::new(client, base_url),
-        })
+        let client = match token {
+            Some(token) => ExampleClient::new_with_token(base_url, token),
+            None => ExampleClient::new_unauthenticated(base_url),
+        };
+        Ok(Self { client })
     }
+
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (catalog = None))]
     pub fn create_catalog(
         &self,
-        py: Python<'_>,
+        py: Python,
         catalog: ::core::option::Option<PyCatalog>,
-    ) -> PyResult<PyCatalog> {
-        let mut request = self.client.create_catalog();
-        request = request.with_catalog(catalog.map(::core::convert::Into::into));
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyCatalog::from(result))
+    ) -> PyExampleResult<PyCatalog> {
+        let request = self
+            .client
+            .create_catalog()
+            .with_catalog(catalog.map(::core::convert::Into::into));
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyCatalog::from(result))
+        })
     }
+
+    /// Returns:
+    ///     The items.
     #[pyo3(signature = (max_results))]
-    pub fn list_catalogs(&self, max_results: i32) -> PyResult<ListIterator> {
+    pub fn list_catalogs(
+        &self,
+        py: Python,
+        max_results: i32,
+    ) -> PyExampleResult<::std::vec::Vec<PyCatalog>> {
         let request = self
             .client
             .list_catalogs(max_results, ::std::string::String::new());
-        let items = request
-            .into_stream()
-            .map(|item| {
-                let item = item.map_err(PyExampleError::from)?;
-                Python::attach(|py| PyCatalog::from(item).into_py_any(py))
-            });
-        Ok(ListIterator::new(items))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime
+                .block_on(async move {
+                    request.into_stream().try_collect::<::std::vec::Vec<_>>().await
+                })?;
+            Ok::<
+                _,
+                PyExampleError,
+            >(result.into_iter().map(PyCatalog::from).collect::<::std::vec::Vec<_>>())
+        })
     }
+
+    /// Custom POST RPC without path params — covers `RequestType::Custom(Post)` dispatched as a collection
+    /// method (the shape used by factory-style RPCs like `GenerateTemporary*Credentials`).
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (catalog_id))]
     pub fn generate_catalog_token(
         &self,
-        py: Python<'_>,
+        py: Python,
         catalog_id: String,
-    ) -> PyResult<PyCatalogToken> {
+    ) -> PyExampleResult<PyCatalogToken> {
         let request = self.client.generate_catalog_token(catalog_id);
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyCatalogToken::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyCatalogToken::from(result))
+        })
     }
+
+    /// Repeated string query param
+    ///
+    /// Args:
+    ///     tags: becomes repeated query param
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (tags, max_results))]
     pub fn list_by_tags(
         &self,
-        py: Python<'_>,
-        tags: Option<Vec<String>>,
+        py: Python,
+        tags: Vec<String>,
         max_results: i32,
-    ) -> PyResult<PyListByTagsResponse> {
+    ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_tags(tags, max_results);
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyListByTagsResponse::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
+        })
     }
+
+    /// Enum query param
+    ///
+    /// Args:
+    ///     catalog_type: enum as query param
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (catalog_type))]
     pub fn list_by_catalog_type(
         &self,
-        py: Python<'_>,
+        py: Python,
         catalog_type: PyCatalogType,
-    ) -> PyResult<PyListByTagsResponse> {
+    ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_catalog_type(catalog_type.into());
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyListByTagsResponse::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
+        })
     }
+
+    /// Args:
+    ///     name: Schema's own name (the new component supplied by the caller).
+    ///     catalog_name: Parent catalog name — filled from the parent `CatalogClient`'s captured component.
+    ///     schema_type: Required enum parameter whose type lives in this (schemas) models module —
+    ///                  exercises the child-model import on the parent's generated `create_schema` method.
+    ///
+    /// Returns:
+    ///     A Schema is a child resource of a Catalog. This fixture exercises the generated
+    ///     nested resource-
+    ///     scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+    ///     the cross-
+    ///     module model import for the create method's enum parameter (`SchemaType`).
     #[pyo3(signature = (name, catalog_name, schema_type))]
     pub fn create_schema(
         &self,
-        py: Python<'_>,
+        py: Python,
         name: String,
         catalog_name: String,
         schema_type: PySchemaType,
-    ) -> PyResult<PySchema> {
+    ) -> PyExampleResult<PySchema> {
         let request = self.client.create_schema(name, catalog_name, schema_type.into());
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PySchema::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PySchema::from(result))
+        })
     }
+
+    /// Args:
+    ///     catalog_name: Parent scoping field carrying the child-type reference that makes Schema a child
+    ///                   of Catalog.
+    ///
+    /// Returns:
+    ///     The items.
     #[pyo3(signature = (catalog_name, max_results))]
     pub fn list_schemas(
         &self,
+        py: Python,
         catalog_name: String,
         max_results: i32,
-    ) -> PyResult<ListIterator> {
+    ) -> PyExampleResult<::std::vec::Vec<PySchema>> {
         let request = self
             .client
             .list_schemas(catalog_name, max_results, ::std::string::String::new());
-        let items = request
-            .into_stream()
-            .map(|item| {
-                let item = item.map_err(PyExampleError::from)?;
-                Python::attach(|py| PySchema::from(item).into_py_any(py))
-            });
-        Ok(ListIterator::new(items))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime
+                .block_on(async move {
+                    request.into_stream().try_collect::<::std::vec::Vec<_>>().await
+                })?;
+            Ok::<
+                _,
+                PyExampleError,
+            >(result.into_iter().map(PySchema::from).collect::<::std::vec::Vec<_>>())
+        })
     }
+
+    /// List assignments for an entity. Path params: entity_type, entity_name.
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (entity_type, entity_name, max_results, page_token))]
     pub fn list_tag_assignments(
         &self,
-        py: Python<'_>,
+        py: Python,
         entity_type: String,
         entity_name: String,
         max_results: i32,
         page_token: String,
-    ) -> PyResult<PyListTagAssignmentsResponse> {
+    ) -> PyExampleResult<PyListTagAssignmentsResponse> {
         let request = self
             .client
             .list_tag_assignments(entity_type, entity_name, max_results, page_token);
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyListTagAssignmentsResponse::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyListTagAssignmentsResponse::from(result))
+        })
     }
+
+    /// Create/assign a tag. Path params: entity_type, entity_name; body: tag.
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (entity_type, entity_name, tag = None))]
     pub fn create_tag_assignment(
         &self,
-        py: Python<'_>,
+        py: Python,
         entity_type: String,
         entity_name: String,
         tag: ::core::option::Option<PyTagAssignment>,
-    ) -> PyResult<PyTagAssignment> {
-        let mut request = self.client.create_tag_assignment(entity_type, entity_name);
-        request = request.with_tag(tag.map(::core::convert::Into::into));
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyTagAssignment::from(result))
+    ) -> PyExampleResult<PyTagAssignment> {
+        let request = self
+            .client
+            .create_tag_assignment(entity_type, entity_name)
+            .with_tag(tag.map(::core::convert::Into::into));
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyTagAssignment::from(result))
+        })
     }
+
+    /// Get a single assignment. Composite key: entity_type, entity_name, tag_key. Carries a gnostic
+    /// `operation_id` to exercise annotation-driven binding method naming (the binding method should be
+    /// named `fetch_tag_assignment`, not `get_tag_assignment`).
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (entity_type, entity_name, tag_key))]
     pub fn fetch_tag_assignment(
         &self,
-        py: Python<'_>,
+        py: Python,
         entity_type: String,
         entity_name: String,
         tag_key: String,
-    ) -> PyResult<PyTagAssignment> {
+    ) -> PyExampleResult<PyTagAssignment> {
         let request = self.client.get_tag_assignment(entity_type, entity_name, tag_key);
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyTagAssignment::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyTagAssignment::from(result))
+        })
     }
+
+    /// Delete a single assignment. Composite key path params.
+    ///
+    /// Returns:
+    ///     The requested resource
     #[pyo3(signature = (entity_type, entity_name, tag_key))]
     pub fn delete_tag_assignment(
         &self,
-        py: Python<'_>,
+        py: Python,
         entity_type: String,
         entity_name: String,
         tag_key: String,
-    ) -> PyResult<PyDeleteTagAssignmentResponse> {
+    ) -> PyExampleResult<PyDeleteTagAssignmentResponse> {
         let request = self
             .client
             .delete_tag_assignment(entity_type, entity_name, tag_key);
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PyDeleteTagAssignmentResponse::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PyDeleteTagAssignmentResponse::from(result))
+        })
     }
+
+    /// Custom POST RPC targeting a composite key that returns `Empty` — exercises the `<()>` / void-return
+    /// path for a resource-less, path-param'd method.
     #[pyo3(signature = (entity_type, entity_name, tag_key))]
     pub fn touch_tag_assignment(
         &self,
-        py: Python<'_>,
+        py: Python,
         entity_type: String,
         entity_name: String,
         tag_key: String,
-    ) -> PyResult<()> {
+    ) -> PyExampleResult<()> {
         let request = self
             .client
             .touch_tag_assignment(entity_type, entity_name, tag_key);
-        block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(())
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(result)
+        })
     }
+
+    /// The requests on one `Catalog`. It sends no request itself.
     pub fn catalog(&self, catalog_name: String) -> PyCatalogClient {
         PyCatalogClient {
             client: self.client.catalog(catalog_name),
         }
     }
+
+    /// The requests on one `Schema`. It sends no request itself.
     pub fn schema(&self, catalog_name: String, schema_name: String) -> PySchemaClient {
         let full_name = format!("{}.{}", catalog_name, schema_name);
         PySchemaClient {
@@ -205,255 +339,82 @@ impl PyExampleClient {
         }
     }
 }
-#[pyclass(name = "AsyncExampleClient")]
-pub struct PyAsyncExampleClient {
-    client: ExampleClient,
-}
-#[pymethods]
-impl PyAsyncExampleClient {
-    #[new]
-    #[pyo3(signature = (base_url, token = None))]
-    pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
-        let client = if let Some(token) = token {
-            olai_http::CloudClient::new_with_token(token)
-        } else {
-            olai_http::CloudClient::new_unauthenticated()
+
+/// The extension module, as Python imports it.
+pub const CORE_MODULE: &str = "example._core";
+/// The submodules of the extension module.
+const SUBMODULES: &[&str] = &["catalog", "schemas", "tags"];
+/// The extension module `example._core`.
+#[::pyo3::pymodule]
+#[pyo3(name = "_core", module = "example")]
+pub mod extension_module {
+    use ::pyo3::prelude::*;
+
+    /// The version of the bindings crate.
+    #[pymodule_export]
+    #[allow(non_upper_case_globals)]
+    const __version__: &str = env!("CARGO_PKG_VERSION");
+    #[pymodule_export]
+    use super::PyExampleClient;
+
+    #[pymodule_export]
+    use crate::codegen::error::{
+        ExampleError, BadRequestError, UnauthenticatedError, PermissionDeniedError,
+        NotFoundError, ConflictError, RateLimitError, ServerError,
+    };
+
+    /// The classes of the `catalog` API.
+    #[pymodule]
+    pub mod catalog {
+        #[pymodule_export]
+        use super::super::{
+            PyAzureConfig, PyCatalog, PyCatalogStatus, PyCatalogToken,
+            PyDeleteCatalogResponse, PyListByTagsResponse, PyListCatalogsResponse,
+            PyS3Config, PyStorageConfig, PyCatalogClient,
         };
-        let base_url = base_url.parse().map_err(PyExampleError::from)?;
-        Ok(Self {
-            client: ExampleClient::new(client, base_url),
-        })
     }
-    #[pyo3(signature = (catalog = None))]
-    pub fn create_catalog<'py>(
-        &self,
-        py: Python<'py>,
-        catalog: ::core::option::Option<PyCatalog>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let mut request = self.client.create_catalog();
-        request = request.with_catalog(catalog.map(::core::convert::Into::into));
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyCatalog::from(result))
-            },
-        )
+
+    /// The classes of the `schemas` API.
+    #[pymodule]
+    pub mod schemas {
+        #[pymodule_export]
+        use super::super::{
+            PyDeleteSchemaResponse, PyListSchemasResponse, PySchema, PySchemaClient,
+        };
     }
-    #[pyo3(signature = (max_results))]
-    pub fn list_catalogs(&self, max_results: i32) -> PyResult<AsyncListIterator> {
-        let request = self
-            .client
-            .list_catalogs(max_results, ::std::string::String::new());
-        let items = request
-            .into_stream()
-            .map(|item| {
-                let item = item.map_err(PyExampleError::from)?;
-                Python::attach(|py| PyCatalog::from(item).into_py_any(py))
-            });
-        Ok(AsyncListIterator::new(items))
+
+    /// The classes of the `tags` API.
+    #[pymodule]
+    pub mod tags {
+        #[pymodule_export]
+        use super::super::{
+            PyDeleteTagAssignmentResponse, PyListTagAssignmentsResponse, PyTagAssignment,
+        };
     }
-    #[pyo3(signature = (catalog_id))]
-    pub fn generate_catalog_token<'py>(
-        &self,
-        py: Python<'py>,
-        catalog_id: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.generate_catalog_token(catalog_id);
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyCatalogToken::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (tags, max_results))]
-    pub fn list_by_tags<'py>(
-        &self,
-        py: Python<'py>,
-        tags: Option<Vec<String>>,
-        max_results: i32,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.list_by_tags(tags, max_results);
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyListByTagsResponse::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (catalog_type))]
-    pub fn list_by_catalog_type<'py>(
-        &self,
-        py: Python<'py>,
-        catalog_type: PyCatalogType,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.list_by_catalog_type(catalog_type.into());
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyListByTagsResponse::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (name, catalog_name, schema_type))]
-    pub fn create_schema<'py>(
-        &self,
-        py: Python<'py>,
-        name: String,
-        catalog_name: String,
-        schema_type: PySchemaType,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.create_schema(name, catalog_name, schema_type.into());
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PySchema::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (catalog_name, max_results))]
-    pub fn list_schemas(
-        &self,
-        catalog_name: String,
-        max_results: i32,
-    ) -> PyResult<AsyncListIterator> {
-        let request = self
-            .client
-            .list_schemas(catalog_name, max_results, ::std::string::String::new());
-        let items = request
-            .into_stream()
-            .map(|item| {
-                let item = item.map_err(PyExampleError::from)?;
-                Python::attach(|py| PySchema::from(item).into_py_any(py))
-            });
-        Ok(AsyncListIterator::new(items))
-    }
-    #[pyo3(signature = (entity_type, entity_name, max_results, page_token))]
-    pub fn list_tag_assignments<'py>(
-        &self,
-        py: Python<'py>,
-        entity_type: String,
-        entity_name: String,
-        max_results: i32,
-        page_token: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self
-            .client
-            .list_tag_assignments(entity_type, entity_name, max_results, page_token);
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyListTagAssignmentsResponse::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (entity_type, entity_name, tag = None))]
-    pub fn create_tag_assignment<'py>(
-        &self,
-        py: Python<'py>,
-        entity_type: String,
-        entity_name: String,
-        tag: ::core::option::Option<PyTagAssignment>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let mut request = self.client.create_tag_assignment(entity_type, entity_name);
-        request = request.with_tag(tag.map(::core::convert::Into::into));
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyTagAssignment::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (entity_type, entity_name, tag_key))]
-    pub fn fetch_tag_assignment<'py>(
-        &self,
-        py: Python<'py>,
-        entity_type: String,
-        entity_name: String,
-        tag_key: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.get_tag_assignment(entity_type, entity_name, tag_key);
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyTagAssignment::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (entity_type, entity_name, tag_key))]
-    pub fn delete_tag_assignment<'py>(
-        &self,
-        py: Python<'py>,
-        entity_type: String,
-        entity_name: String,
-        tag_key: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self
-            .client
-            .delete_tag_assignment(entity_type, entity_name, tag_key);
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PyDeleteTagAssignmentResponse::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (entity_type, entity_name, tag_key))]
-    pub fn touch_tag_assignment<'py>(
-        &self,
-        py: Python<'py>,
-        entity_type: String,
-        entity_name: String,
-        tag_key: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self
-            .client
-            .touch_tag_assignment(entity_type, entity_name, tag_key);
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(None::<()>)
-            },
-        )
-    }
-    pub fn catalog(&self, catalog_name: String) -> PyAsyncCatalogClient {
-        PyAsyncCatalogClient {
-            client: self.client.catalog(catalog_name),
-        }
-    }
-    pub fn schema(
-        &self,
-        catalog_name: String,
-        schema_name: String,
-    ) -> PyAsyncSchemaClient {
-        let full_name = format!("{}.{}", catalog_name, schema_name);
-        PyAsyncSchemaClient {
-            client: self.client.schema_from_full_name(full_name),
+
+    /// Put the submodules in `sys.modules`. The import system puts the module there
+    /// before it runs this. Not handed the module, so the stubs still describe the
+    /// module in full.
+    #[pymodule_init]
+    fn init(py: Python<'_>) -> PyResult<()> {
+        let modules = py.import("sys")?.getattr("modules")?;
+        match modules.get_item(super::CORE_MODULE) {
+            Ok(module) => super::add_submodules_to_sys_modules(module.cast()?),
+            Err(_) => Ok(()),
         }
     }
 }
-/// Add every generated client class (and the list pagers) to the extension module `m`.
-///
-/// Call this from the crate's `#[pymodule]` so newly generated clients are exposed
-/// without hand-maintaining an `add_class` list.
-pub fn register_clients(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyExampleClient>()?;
-    m.add_class::<PyCatalogClient>()?;
-    m.add_class::<PySchemaClient>()?;
-    m.add_class::<PyAsyncExampleClient>()?;
-    m.add_class::<PyAsyncCatalogClient>()?;
-    m.add_class::<PyAsyncSchemaClient>()?;
-    m.add_class::<ListIterator>()?;
-    m.add_class::<AsyncListIterator>()?;
+
+/// Put the submodules of the extension module `module` in `sys.modules`, so that
+/// `import <module>.<submodule>` finds them. The module does this on import; call it
+/// for a module made otherwise, such as with `wrap_pymodule!`.
+pub fn add_submodules_to_sys_modules(
+    module: &::pyo3::Bound<'_, ::pyo3::types::PyModule>,
+) -> ::pyo3::PyResult<()> {
+    let modules = module.py().import("sys")?.getattr("modules")?;
+    let name = module.name()?;
+    for submodule in SUBMODULES {
+        modules.set_item(format!("{name}.{submodule}"), module.getattr(*submodule)?)?;
+    }
     Ok(())
 }

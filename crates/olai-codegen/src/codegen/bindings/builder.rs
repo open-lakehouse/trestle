@@ -1,7 +1,8 @@
 //! Shared `with_*` builder-call generation for the binding emitters.
 //!
-//! Both backends walk a method's optional query params and optional body fields and push a
-//! `request = request.with_<field>(<value>)` setter for each. The *iteration + filter skeleton* is
+//! Both backends walk a method's optional query params and optional body fields and chain a
+//! `.with_<field>(<value>)` call for each onto the client call:
+//! `let request = client.method(..).with_a(a).with_b(b);`. The *iteration + filter skeleton* is
 //! identical; only the per-field rendering (NAPI's capability filter and enum/optional wrapping)
 //! differs. The skeleton lives here; the backend supplies the two hooks via [`SetterRender`].
 
@@ -26,9 +27,9 @@ pub(crate) trait SetterRender {
     /// unsupported types; PyO3 accepts everything).
     fn supports(&self, setter: &OptionalSetter<'_>) -> bool;
 
-    /// Render the single `request = request.with_<name>(<value>);` statement, applying any
-    /// language-specific value wrapping (e.g. NAPI enum `try_into`, or an `if let Some` guard for
-    /// maps/repeated fields).
+    /// Render the single chained `.with_<name>(<value>)` call, applying any language-specific
+    /// value wrapping (e.g. NAPI enum `try_into`, or the empty collection for a map or repeated
+    /// field that was left out).
     fn render_setter(
         &self,
         setter: &OptionalSetter<'_>,
@@ -81,7 +82,7 @@ fn is_optional_query(param: &QueryParam, is_list: bool) -> bool {
 }
 
 fn render_one<R: SetterRender>(setter: &OptionalSetter<'_>, render: &R) -> TokenStream {
-    let param_ident = format_ident!("{}", strings::operation_to_method_name(setter.name));
+    let param_ident = crate::utils::field_ident(&strings::operation_to_method_name(setter.name));
     let with_method = format_ident!("with_{}", setter.name);
     render.render_setter(setter, &param_ident, &with_method)
 }

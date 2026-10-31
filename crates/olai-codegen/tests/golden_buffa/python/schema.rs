@@ -1,101 +1,76 @@
 // @generated — do not edit by hand.
 use std::collections::HashMap;
-use futures::stream::StreamExt;
-use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
-use crate::error::PyExampleError;
-use crate::codegen::runtime::{block_on, ListIterator};
-use crate::codegen::runtime::AsyncListIterator;
 use example_client::SchemaClient;
 use example_common::models::schemas::v1::*;
 use example_common::models::*;
-#[pyclass(name = "SchemaClient")]
+use crate::codegen::error::{PyExampleError, PyExampleResult};
+
+/// The requests on one `Schema`.
+#[pyclass(name = "SchemaClient", module = "example._core.schemas")]
 pub struct PySchemaClient {
     pub(crate) client: SchemaClient,
 }
+
 #[pymethods]
 impl PySchemaClient {
+    /// Returns:
+    ///     A Schema is a child resource of a Catalog. This fixture exercises the generated
+    ///     nested resource-
+    ///     scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+    ///     the cross-
+    ///     module model import for the create method's enum parameter (`SchemaType`).
     #[pyo3(signature = (view))]
     pub fn get(
         &self,
-        py: Python<'_>,
+        py: Python,
         view: PyGetSchemaRequestView,
-    ) -> PyResult<PySchema> {
+    ) -> PyExampleResult<PySchema> {
         let request = self.client.get(view.into());
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PySchema::from(result))
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PySchema::from(result))
+        })
     }
+
+    /// Returns:
+    ///     A Schema is a child resource of a Catalog. This fixture exercises the generated
+    ///     nested resource-
+    ///     scoped client: `catalog.schema(name)` navigation, `catalog.create_schema(...)`, and
+    ///     the cross-
+    ///     module model import for the create method's enum parameter (`SchemaType`).
     #[pyo3(signature = (schema = None))]
     pub fn update(
         &self,
-        py: Python<'_>,
+        py: Python,
         schema: ::core::option::Option<PySchema>,
-    ) -> PyResult<PySchema> {
-        let mut request = self.client.update();
-        request = request.with_schema(schema.map(::core::convert::Into::into));
-        let result = block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(PySchema::from(result))
+    ) -> PyExampleResult<PySchema> {
+        let request = self
+            .client
+            .update()
+            .with_schema(schema.map(::core::convert::Into::into));
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(PySchema::from(result))
+        })
     }
-    pub fn delete(&self, py: Python<'_>) -> PyResult<()> {
+
+    pub fn delete(&self, py: Python) -> PyExampleResult<()> {
         let request = self.client.delete();
-        block_on(py, request.into_future())?.map_err(PyExampleError::from)?;
-        Ok(())
+        let runtime = crate::codegen::runtime::rt();
+        py.detach(|| {
+            #[allow(clippy::let_unit_value)]
+            let result = runtime.block_on(request.into_future())?;
+            Ok::<_, PyExampleError>(result)
+        })
     }
 }
+
 impl PySchemaClient {
-    pub fn new(client: SchemaClient) -> Self {
-        Self { client }
-    }
-}
-#[pyclass(name = "AsyncSchemaClient")]
-pub struct PyAsyncSchemaClient {
-    pub(crate) client: SchemaClient,
-}
-#[pymethods]
-impl PyAsyncSchemaClient {
-    #[pyo3(signature = (view))]
-    pub fn get<'py>(
-        &self,
-        py: Python<'py>,
-        view: PyGetSchemaRequestView,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.get(view.into());
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PySchema::from(result))
-            },
-        )
-    }
-    #[pyo3(signature = (schema = None))]
-    pub fn update<'py>(
-        &self,
-        py: Python<'py>,
-        schema: ::core::option::Option<PySchema>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let mut request = self.client.update();
-        request = request.with_schema(schema.map(::core::convert::Into::into));
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                let result = request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(PySchema::from(result))
-            },
-        )
-    }
-    pub fn delete<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let request = self.client.delete();
-        ::pyo3_async_runtimes::tokio::future_into_py(
-            py,
-            async move {
-                request.await.map_err(PyExampleError::from)?;
-                Ok::<_, PyErr>(None::<()>)
-            },
-        )
-    }
-}
-impl PyAsyncSchemaClient {
     pub fn new(client: SchemaClient) -> Self {
         Self { client }
     }

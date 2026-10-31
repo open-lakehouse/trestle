@@ -24,8 +24,8 @@ fn main() {
 
     // 2. trestle client codegen, buffa runtime.
     use olai_codegen::{
-        BindingsConfig, CodeGenConfig, CodeGenOutput, Runtime, generate_code,
-        parse_file_descriptor_set,
+        BindingsConfig, CodeGenConfig, CodeGenOutput, PyPackageConfig, PythonOptions,
+        RestClientOptions, Runtime, generate_code, parse_file_descriptor_set,
     };
     use protobuf::Message;
     use protobuf::descriptor::FileDescriptorSet;
@@ -42,10 +42,14 @@ fn main() {
     // models dir doubles as where that file lands.
     let models_dir = out.join("models_gen");
     let python_dir = out.join("python");
+    // The pure-Python package (`demo/_enums.py`): the enum getters of the wrappers return
+    // members of its `enum.StrEnum` classes, so the tests put `python_pkg` on `sys.path`.
+    let package_dir = out.join("python_pkg").join("demo");
     std::fs::create_dir_all(&client_dir).unwrap();
     std::fs::create_dir_all(&common_dir).unwrap();
     std::fs::create_dir_all(&models_dir).unwrap();
     std::fs::create_dir_all(&python_dir).unwrap();
+    std::fs::create_dir_all(&package_dir).unwrap();
 
     let config = CodeGenConfig {
         context_type_path: "crate::Context".into(),
@@ -55,56 +59,62 @@ fn main() {
         resource_store_crate_name: "olai_store".into(),
         runtime: Runtime::Buffa,
         transport_type_path: olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
-        client_protocols: olai_codegen::ClientProtocols::default(),
         dual_transport: false,
+        client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        // The Python exception classes raise the errors of the client error module, so the
+        // Python output needs it; the client then carries `codegen/error.rs`.
+        rest_client: RestClientOptions {
+            error_module: Some(Default::default()),
+            ..Default::default()
+        },
         output: CodeGenOutput {
-            common: common_dir,
+            common: Some(common_dir),
             models: Some(models_dir),
             models_subdir: "_gen".into(),
             server: None,
             client: Some(client_dir),
             generate_resource_clients: true,
             // Enabling Python output makes the models block emit `pyo3_impls.rs`
-            // (FromPyObject/IntoPyObject for the buffa model types) — the thing
+            // (the `#[pyclass]` wrappers of the buffa model types) — the thing
             // this fixture proves compiles & round-trips against real buffa types.
             python: Some(python_dir.clone()),
             node: None,
             node_ts: None,
             wasm: None,
-            python_typings_filename: "client.pyi".into(),
         },
         generate_resource_enum: false,
         generate_store_integration: false,
         error_type_path: None,
         generate_object_conversions: false,
-        // Python output requires a bindings config. This crate only include!s
-        // `pyo3_impls.rs` from the models dir; the PyO3 client wrappers (which
-        // name this crate as `buffa_e2e`) are compiled by the `py/` member crate.
+        // Python output requires a bindings config with the Python options. We don't
+        // include! the PyO3 client wrappers (they reference a `crate::runtime` we
+        // don't define here) — only `pyo3_impls.rs` from the models dir — but the
+        // config still has to be present for generation to run.
         bindings: Some(BindingsConfig {
             aggregate_client_name: "DemoClient".into(),
             client_crate_name: "buffa_e2e".into(),
             py_error_type: "PyDemoError".into(),
             py_result_type: "PyDemoResult".into(),
-            // `BUFFA_E2E_PYTHON_API=sync|async` builds a single flavor (compile-check it with
-            // `cargo build -p buffa-e2e-py`; the `py` tests drive both and expect the default).
-            python_api: match std::env::var("BUFFA_E2E_PYTHON_API").as_deref() {
-                Ok("sync") => olai_codegen::PythonApi::Sync,
-                Ok("async") => olai_codegen::PythonApi::Async,
-                _ => olai_codegen::PythonApi::Both,
-            },
             napi_error_ext_trait: "NapiErrorExt".into(),
-            typings_package_filter: Some(".demo.".into()),
             ts_error_base_class: "DemoError".into(),
             ts_error_code_prefix: "DEMO".into(),
+            python: Some(PythonOptions {
+                package: PyPackageConfig {
+                    dir: package_dir,
+                    name: "demo".into(),
+                },
+                error_base_class: "DemoError".into(),
+                module: "demo._core".into(),
+                async_methods: false,
+                keyword_only: false,
+                public_modules: false,
+                user_agent: None,
+            }),
         }),
     };
     generate_code(&metadata, &config).unwrap();
 
-    // Hand the generated PyO3 bindings to `py/build.rs` (`DEP_BUFFA_E2E_PYTHON_DIR`).
-    println!("cargo:python_dir={}", python_dir.display());
-
     println!("cargo:rerun-if-changed=proto/svc.bin");
-    println!("cargo:rerun-if-env-changed=BUFFA_E2E_PYTHON_API");
     println!("cargo:rerun-if-changed=proto/exported/svc.proto");
 }

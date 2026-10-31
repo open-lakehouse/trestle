@@ -17,14 +17,13 @@ axum = ["dep:axum"]
 # bindings can pass models across the FFI boundary by their bare type. Enable
 # this when building the Python bindings crate; pure-Rust/WASM consumers leave it
 # off so pyo3 stays out of their dependency tree.
-python = ["dep:pyo3", "dep:pythonize"]
+python = ["dep:pyo3"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 axum = { workspace = true, optional = true }
 pyo3 = { workspace = true, optional = true }
-pythonize = { workspace = true, optional = true }
 {%- if runtime == 'buffa' %}
 buffa = { workspace = true, features = ["json"] }
 buffa-types = { workspace = true }

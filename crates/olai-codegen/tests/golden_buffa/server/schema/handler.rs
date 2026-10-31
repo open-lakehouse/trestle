@@ -12,6 +12,7 @@
 use async_trait::async_trait;
 use crate::Result;
 use example_common::models::schemas::v1::*;
+
 #[async_trait]
 pub trait SchemaHandler<Cx = crate::Context>: Send + Sync + 'static {
     async fn create_schema(

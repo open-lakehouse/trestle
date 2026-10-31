@@ -65,8 +65,9 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        rest_client: Default::default(),
         output: CodeGenOutput {
-            common,
+            common: Some(common),
             models: Some(models),
             models_subdir: "_gen".into(),
             server: Some(server),
@@ -75,7 +76,6 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
             node: None,
             node_ts: None,
             wasm: None,
-            python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },
         generate_resource_enum: true,
@@ -103,11 +103,10 @@ fn wasm_transport_is_substituted_into_generated_clients() {
         client_crate_name: "example_client".into(),
         py_error_type: "PyExampleError".into(),
         py_result_type: "PyExampleResult".into(),
-        python_api: olai_codegen::PythonApi::Both,
         napi_error_ext_trait: "NapiErrorExt".into(),
-        typings_package_filter: None,
         ts_error_base_class: "ExampleError".into(),
         ts_error_code_prefix: "EX".into(),
+        python: Default::default(),
     });
     generate_code(&metadata(), &config).expect("generation succeeds");
 
@@ -185,8 +184,9 @@ fn wasm_bindings_and_dts_are_emitted() {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        rest_client: Default::default(),
         output: CodeGenOutput {
-            common,
+            common: Some(common),
             models: None,
             models_subdir: "_gen".into(),
             server: None,
@@ -195,7 +195,6 @@ fn wasm_bindings_and_dts_are_emitted() {
             node: None,
             node_ts: None,
             wasm: Some(wasm.clone()),
-            python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },
         generate_resource_enum: false,
@@ -207,11 +206,10 @@ fn wasm_bindings_and_dts_are_emitted() {
             client_crate_name: "example_client".into(),
             py_error_type: "PyExampleError".into(),
             py_result_type: "PyExampleResult".into(),
-            python_api: olai_codegen::PythonApi::Both,
             napi_error_ext_trait: "NapiErrorExt".into(),
-            typings_package_filter: None,
             ts_error_base_class: "ExampleError".into(),
             ts_error_code_prefix: "EX".into(),
+            python: Default::default(),
         }),
     };
     generate_code(&metadata(), &config).expect("generation succeeds");
@@ -292,11 +290,10 @@ fn wasm_output_emits_dual_cfg_gated_transport() {
         client_crate_name: "example_client".into(),
         py_error_type: "PyExampleError".into(),
         py_result_type: "PyExampleResult".into(),
-        python_api: olai_codegen::PythonApi::Both,
         napi_error_ext_trait: "NapiErrorExt".into(),
-        typings_package_filter: None,
         ts_error_base_class: "ExampleError".into(),
         ts_error_code_prefix: "EX".into(),
+        python: Default::default(),
     });
     generate_code(&metadata(), &config).expect("generation succeeds");
 
@@ -419,10 +416,14 @@ fn client_methods_build_urls_query_and_error_handling() {
 
     let client = read_all(&tmp.path().join("client"));
 
-    // GET-by-name builds a templated path from the request field.
+    // GET-by-name builds a templated path from the percent-encoded request field.
     assert!(
-        client.contains("format!(\"catalogs/{}\", request.name)"),
+        client.contains("\"catalogs/{}\", encode_path_value(& request.name, false)"),
         "GET path templating missing:\n{client}"
+    );
+    assert!(
+        client.contains("fn encode_path_value("),
+        "path encoding helper missing"
     );
     // Collection POST hits the bare collection URL.
     assert!(
@@ -619,8 +620,9 @@ fn node_ts_bindings_generated() {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        rest_client: Default::default(),
         output: CodeGenOutput {
-            common,
+            common: Some(common),
             models: None,
             models_subdir: "_gen".into(),
             server: None,
@@ -629,7 +631,6 @@ fn node_ts_bindings_generated() {
             node: None,
             node_ts: Some(node_ts.clone()),
             wasm: None,
-            python_typings_filename: "client.pyi".into(),
             generate_resource_clients: false,
         },
         generate_resource_enum: false,
@@ -641,11 +642,10 @@ fn node_ts_bindings_generated() {
             client_crate_name: "example_client".into(),
             py_error_type: "PyExampleError".into(),
             py_result_type: "PyExampleResult".into(),
-            python_api: olai_codegen::PythonApi::Both,
             napi_error_ext_trait: "NapiErrorExt".into(),
-            typings_package_filter: Some(".example.".into()),
             ts_error_base_class: "ExampleError".into(),
             ts_error_code_prefix: "EX".into(),
+            python: Default::default(),
         }),
     };
     generate_code(&metadata(), &config).expect("generation succeeds");
@@ -656,4 +656,156 @@ fn node_ts_bindings_generated() {
         "aggregate client name missing"
     );
     assert!(ts.contains("ExampleError"), "error base class missing");
+}
+
+// ── REST client and Python options ───────────────────────────────────────────
+
+/// Every REST client and Python option at once: the output parses and has the expected parts.
+/// The opt-in `tests/rest_client_e2e` fixture compiles and runs it against a server.
+#[test]
+fn rest_client_and_python_options_generate_valid_code() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.runtime = olai_codegen::Runtime::Buffa;
+    config.transport_type_path = olai_codegen::REQWEST_TRANSPORT_TYPE_PATH.into();
+    config.output.generate_resource_clients = true;
+    let python = tmp.path().join("python");
+    let package = tmp.path().join("pkg");
+    config.output.python = Some(python.clone());
+    config.rest_client = olai_codegen::RestClientOptions {
+        json_int64_as_number: true,
+        ignore_unknown_enum_values: true,
+        error_module: Some(Default::default()),
+        form_encoded_methods: vec![],
+        path_fields_in_body_methods: vec![],
+        json_query_packages: vec![],
+        user_agent: Some("example-client".into()),
+    };
+    config.bindings = Some(BindingsConfig {
+        aggregate_client_name: "ExampleClient".into(),
+        client_crate_name: "example_client".into(),
+        py_error_type: "PyExampleError".into(),
+        py_result_type: "PyExampleResult".into(),
+        napi_error_ext_trait: "NapiErrorExt".into(),
+        ts_error_base_class: "ExampleError".into(),
+        ts_error_code_prefix: "EX".into(),
+        python: Some(olai_codegen::PythonOptions {
+            package: olai_codegen::PyPackageConfig {
+                dir: package.clone(),
+                name: "example".into(),
+            },
+            error_base_class: "ExampleError".into(),
+            module: "example._core".into(),
+            async_methods: true,
+            keyword_only: true,
+            public_modules: true,
+            user_agent: Some("example-python".into()),
+        }),
+    });
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    for dir in ["client", "python", "models"] {
+        for path in walk(&tmp.path().join(dir))
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        {
+            let src = std::fs::read_to_string(&path).unwrap();
+            syn::parse_file(&src)
+                .unwrap_or_else(|e| panic!("generated {} is invalid Rust: {e}", path.display()));
+        }
+    }
+
+    let client = read_all(&tmp.path().join("client"));
+    assert!(
+        client.contains("pub struct HttpClient"),
+        "reqwest transport missing"
+    );
+    assert!(
+        client.contains("pub struct ApiError"),
+        "error module missing"
+    );
+    assert!(client.contains("ignore_unknown_enum_values(true)"));
+    assert!(
+        client.contains("\"example-client/\"") && client.contains("not(target_arch = \"wasm32\")"),
+        "default User-Agent missing"
+    );
+    assert!(client.contains("pub fn with_user_agent("));
+
+    let models = read_all(&tmp.path().join("models"));
+    assert!(
+        models.contains("pub mod json_int64"),
+        "int64 helpers missing"
+    );
+    assert!(models.contains("frozen"), "frozen models missing");
+    assert!(
+        models.contains("const INPUT_TYPE"),
+        "enum type hints missing"
+    );
+    assert!(models.contains("__python_repr"), "Python repr missing");
+
+    let bindings = read_all(&python);
+    assert!(bindings.contains("_async"), "async twins missing");
+    assert!(
+        bindings.contains("#[pyo3(name = \"_core\", module = \"example\")]")
+            && bindings.contains("pub mod extension_module"),
+        "extension module missing"
+    );
+    assert!(bindings.contains("PyFuture"), "PyFuture helper missing");
+    assert!(
+        bindings.contains("\"example-python/\""),
+        "Python User-Agent missing"
+    );
+    assert!(bindings.contains("pub fn rt()"), "runtime missing");
+
+    let enums = std::fs::read_to_string(package.join("_enums.py")).unwrap();
+    assert!(enums.contains("(enum.StrEnum):"), "{enums}");
+    assert!(
+        !enums.contains("_UNSPECIFIED ="),
+        "hidden zero values: {enums}"
+    );
+    let schemas = std::fs::read_to_string(package.join("schemas.py")).unwrap();
+    assert!(
+        schemas.contains("from example._core.schemas import (\n    DeleteSchemaResponse,")
+            && schemas.contains("    SchemaClient,\n)")
+            && schemas.contains("from example._enums import (\n    GetSchemaRequestView,")
+            && schemas.contains("    \"SchemaType\",\n]"),
+        "{schemas}"
+    );
+    assert!(
+        bindings.contains("extends = ExampleError")
+            && bindings.contains("use crate::codegen::error::{\n        ExampleError,"),
+        "PyO3 exception classes missing"
+    );
+}
+
+// ── Without the common (extractor) output ────────────────────────────────────
+
+#[test]
+fn no_common_output_leaves_out_the_extractors() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.output.common = None;
+    config.output.server = None;
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let models = tmp.path().join("models/_gen");
+    assert!(
+        !models.join("extractors").exists(),
+        "no extractors without `common`"
+    );
+    let models_mod = std::fs::read_to_string(models.join("mod.rs")).expect("models mod.rs");
+    assert!(
+        !models_mod.contains("extractors"),
+        "the models mod.rs must not declare the extractors"
+    );
+    syn::parse_file(&models_mod).expect("the models mod.rs is valid Rust");
+}
+
+#[test]
+fn server_output_needs_the_common_output() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.output.common = None;
+    let err = generate_code(&metadata(), &config).expect_err("a server needs `common`");
+    assert!(err.to_string().contains("CodeGenOutput::common"), "{err}");
 }

@@ -4,12 +4,13 @@
 //!
 //! The crate compiling at all is the primary assertion (the generated client in
 //! `client::*` uses `buffa::EnumValue`, `buffa::MessageField`, `proto_name()`,
-//! etc.); the test below adds the JSON round-trip check.
+//! etc., and carries its own `codegen::error` module); the test below adds the
+//! JSON round-trip check.
 
 pub mod models {
     include!(concat!(env!("OUT_DIR"), "/models/_include.rs"));
 
-    // PyO3 boundary conversions for the buffa model types, emitted by trestle into
+    // The PyO3 `#[pyclass]` wrappers of the buffa model types, emitted by trestle into
     // the models output dir. The generated impls address models as
     // `super::demo::v1::Widget`, i.e. relative to the *models module's* parent —
     // exactly as they resolve in the real flow where trestle emits
@@ -28,41 +29,9 @@ pub mod models {
     pub use pyo3_impls::*;
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("http: {0}")]
-    Http(String),
-    #[error("url: {0}")]
-    Url(#[from] url::ParseError),
-    #[error("json: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("api: {0}")]
-    Api(String),
-}
-
-impl From<reqwest::Error> for Error {
-    fn from(e: reqwest::Error) -> Self {
-        Error::Http(e.to_string())
-    }
-}
-
-impl From<olai_http::Error> for Error {
-    fn from(e: olai_http::Error) -> Self {
-        Error::Http(e.to_string())
-    }
-}
-
-pub mod error {
-    use super::Error;
-    pub async fn parse_error_response(resp: reqwest::Response) -> Error {
-        Error::Api(format!("status {}", resp.status()))
-    }
-}
-
 /// The trestle-generated client, emitted for `Runtime::Buffa` against the buffa
-/// models above. If this `include!` fails to compile, the buffa codegen is wrong.
+/// models above, with its error module (`codegen::error`). If this `include!`
+/// fails to compile, the buffa codegen is wrong.
 ///
 /// Named `codegen` because the generated aggregate root client (emitted once a
 /// `bindings` config is present) refers to the per-service clients as
@@ -131,28 +100,37 @@ mod tests {
         assert_eq!(decoded.name, "w");
     }
 
+    /// Put the generated Python package (`python_pkg/demo/_enums.py`) on `sys.path`: the enum
+    /// getters of the wrappers return members of its `enum.StrEnum` classes.
+    #[cfg(feature = "python")]
+    fn add_package_to_path(py: pyo3::Python<'_>) {
+        use pyo3::types::PyAnyMethods;
+        let path = py.import("sys").unwrap().getattr("path").unwrap();
+        path.call_method1("insert", (0, concat!(env!("OUT_DIR"), "/python_pkg")))
+            .unwrap();
+    }
+
     /// The PyO3 wrapper `#[pyclass]` types trestle emits (`pyo3_impls.rs`) must
     /// compile against real buffa models AND expose them as *real Python objects*:
-    /// native attribute access, a keyword constructor, real enum members, and
-    /// `From`/`Into` bridges to the bare model type so the generated client
-    /// bindings can convert at the boundary.
+    /// native attribute access on a frozen class, `enum.StrEnum` members, a
+    /// Python-style `repr`, and `From`/`Into` bridges to the bare model type so the
+    /// generated client bindings can convert at the boundary.
     ///
-    /// This is the gap the wrapper approach closes over the earlier pythonize
-    /// impls, which only ever produced plain Python dicts.
-    ///
-    /// The enum field exercises the wrapper-enum bridge end to end: the buffa field
-    /// is `EnumValue<Color>`, the wrapper getter yields a `PyColor` enum member, and
-    /// the `From`/`Into` impls map through `Color`.
+    /// The enum fields exercise the enum bridge end to end: the buffa field is
+    /// `EnumValue<Color>`, the wrapper getter yields the `demo._enums.Color` member,
+    /// and the wrapper extracts from a member or its name.
     #[cfg(feature = "python")]
     #[test]
     fn buffa_model_wraps_as_real_pyclass() {
         use crate::models::demo::v1::widget::Size;
         use crate::models::pyo3_impls::{PyColor, PyWidget, PyWidgetSize};
         use pyo3::prelude::*;
-        use pyo3::types::{PyAnyMethods, PyType};
+        use pyo3::types::{PyAnyMethods, PyString, PyType};
 
         Python::initialize();
         Python::attach(|py| {
+            add_package_to_path(py);
+
             // Construct via the bare model, then wrap. `size` is a *message-nested*
             // enum (`widget::Size`) — its wrapper must resolve through the snake_case
             // parent module, the case the buffa nested-enum path fix addresses.
@@ -181,43 +159,60 @@ mod tests {
             let name: String = obj.getattr("name").unwrap().extract().unwrap();
             assert_eq!(name, "gizmo");
 
-            // The enum field is a real Python enum member (`Color.GREEN`), and it is
-            // an instance of the `Color` pyclass enum.
-            let color = obj.getattr("color").unwrap();
-            let color_cls = color.get_type();
-            assert_eq!(color_cls.name().unwrap().to_string(), "Color");
-            let color_back: PyColor = color.extract().unwrap();
-            assert_eq!(color_back, PyColor::GREEN);
+            // The class is frozen: no setters.
+            assert!(
+                obj.setattr("name", "other").is_err(),
+                "a frozen model has no setter"
+            );
 
-            // The *nested* enum field is exposed as a real Python enum member. Its
-            // class is parent-qualified (`WidgetSize`) to stay collision-free, and
-            // resolving it proves the snake_case parent-module path works end to end.
+            // The enum field is a member of the `enum.StrEnum` class `demo._enums.Color`:
+            // it equals its name, and it extracts back through the wrapper.
+            let color = obj.getattr("color").unwrap();
+            assert_eq!(color.get_type().name().unwrap().to_string(), "Color");
+            assert!(color.eq("GREEN").unwrap(), "a member equals its name");
+            let color_back: PyColor = color.extract().unwrap();
+            assert_eq!(Color::from(color_back), Color::Green);
+            // A name extracts too.
+            let from_name: PyColor = PyString::new(py, "RED").extract().unwrap();
+            assert_eq!(Color::from(from_name), Color::Red);
+
+            // The *nested* enum field is a member of the parent-qualified class
+            // (`WidgetSize`, collision-free); resolving it proves the snake_case
+            // parent-module path works end to end.
             let size = obj.getattr("size").unwrap();
             assert_eq!(size.get_type().name().unwrap().to_string(), "WidgetSize");
             let size_back: PyWidgetSize = size.extract().unwrap();
-            assert_eq!(size_back, PyWidgetSize::LARGE);
+            assert_eq!(Size::from(size_back), Size::LARGE);
 
             // `From`/`Into` bridge round-trips the data (incl. the nested enum) back to
             // the bare model.
             let back: Widget = wrapper.into();
             assert_eq!(widget, back);
 
-            // The wrapper types register as Python classes.
+            // The zero `*_UNSPECIFIED` value has no member: the field reads as `None`,
+            // and the Python-style repr leaves the `None` fields out.
+            let unspecified: PyWidget = Widget::default().into();
+            let obj = unspecified.into_pyobject(py).unwrap();
+            assert!(obj.getattr("color").unwrap().is_none());
+            assert!(obj.getattr("size").unwrap().is_none());
+            assert_eq!(obj.repr().unwrap().to_string(), "Widget(name='')");
+
+            // The wrapper type registers as a Python class.
             let _ = PyType::new::<PyWidget>(py);
-            let _ = PyType::new::<PyWidgetSize>(py);
         });
     }
 
     /// The PyO3 wrapper `#[new]` constructor must be *oneof-aware* (issue #99):
-    /// a message with a `oneof` exposes one optional keyword arg per variant, per-
-    /// variant getters, and per-variant setters. Setting one variant sets the
-    /// corresponding oneof on the real buffa model; the pyo3 methods are only
-    /// callable through the interpreter, so this drives them via Python — which
-    /// also proves the flattened kwargs reach `#[new]` and the getters round-trip.
+    /// a message with a `oneof` exposes one optional keyword arg per variant and
+    /// per-variant getters. Passing one variant sets the corresponding oneof on the
+    /// real buffa model; the pyo3 methods are only callable through the
+    /// interpreter, so this drives them via Python — which also proves the
+    /// flattened kwargs reach `#[new]` and the getters round-trip.
     ///
     /// Exercises both the boxed-message variant path (buffa boxes every message
     /// oneof variant, e.g. `Shape::Circle(Box<Circle>)`) and the scalar variant
-    /// path (`Shape::Label(String)`) against real buffa types.
+    /// path (`Shape::Label(String)`) against real buffa types. `Shape` is a request
+    /// input (`CreateShapeRequest`), so its class has the constructor.
     #[cfg(feature = "python")]
     #[test]
     fn buffa_oneof_wraps_as_flattened_pyclass_ctor() {
@@ -294,14 +289,10 @@ mod tests {
             let sq: PySquare = both.getattr("square").unwrap().extract().unwrap();
             assert_eq!(Square::from(sq).side, 3.0);
 
-            // Per-variant setter round-trips through the oneof, and clearing the
-            // *active* variant clears the oneof.
-            let m = shape_cls.call((), None).unwrap();
-            m.setattr("label", "octagon").unwrap();
-            let set_label: String = m.getattr("label").unwrap().extract().unwrap();
-            assert_eq!(set_label, "octagon");
-            m.setattr("label", py.None()).unwrap();
-            assert!(m.getattr("label").unwrap().is_none());
+            // No kwarg leaves the oneof unset, and the class is frozen: no setters.
+            let empty = shape_cls.call((), None).unwrap();
+            assert!(empty.getattr("label").unwrap().is_none());
+            assert!(empty.setattr("label", "octagon").is_err());
         });
     }
 }

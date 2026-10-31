@@ -76,6 +76,8 @@ pub struct MessageInfo {
 #[derive(Debug, Clone)]
 pub struct MessageField {
     pub name: String,
+    /// The explicit `json_name` of the field; `None` for protoc's default.
+    pub json_name: Option<String>,
     /// Language-agnostic type; carries `is_optional` and `is_repeated` flags.
     pub unified_type: UnifiedType,
     pub documentation: Option<String>,

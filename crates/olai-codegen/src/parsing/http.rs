@@ -24,12 +24,15 @@ pub struct HttpPattern {
     pub static_prefix: String,
     /// Static suffix (everything after the last parameter)
     pub static_suffix: Option<String>,
+    /// Parameters bound to a multi-segment pattern (`{name=catalogs/*}`, `{path=**}`), whose
+    /// values keep `/` in the URL.
+    pub multi_segment_parameters: Vec<String>,
 }
 
 impl HttpPattern {
     /// Parse an HTTP rule pattern template
     pub fn parse(template: &str) -> Self {
-        let segments = parse_url_segments(template);
+        let (segments, multi_segment_parameters) = parse_url_segments(template);
         let parameters = segments
             .iter()
             .filter_map(|seg| match seg {
@@ -47,7 +50,13 @@ impl HttpPattern {
             parameters,
             static_prefix,
             static_suffix,
+            multi_segment_parameters,
         }
+    }
+
+    /// Whether `name` is bound to a multi-segment pattern, so its value keeps `/`.
+    pub fn is_multi_segment(&self, name: &str) -> bool {
+        self.multi_segment_parameters.iter().any(|p| p == name)
     }
 
     pub fn ends_with_static(&self) -> bool {
@@ -123,9 +132,11 @@ fn normalize_placeholder(raw: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-/// Parse URL template into segments
-fn parse_url_segments(template: &str) -> Vec<UrlSegment> {
+/// Parse URL template into segments, plus the parameters bound to a multi-segment pattern
+/// (`{name=catalogs/*}`, `{path=**}`; `{name}` and `{name=*}` match one segment).
+fn parse_url_segments(template: &str) -> (Vec<UrlSegment>, Vec<String>) {
     let mut segments = Vec::new();
+    let mut multi_segment = Vec::new();
     let mut chars = template.chars().peekable();
     let mut current_static = String::new();
 
@@ -154,7 +165,15 @@ fn parse_url_segments(template: &str) -> Vec<UrlSegment> {
                 .then(|| normalize_placeholder(&raw))
                 .flatten()
             {
-                Some(param_name) => segments.push(UrlSegment::Parameter(param_name)),
+                Some(param_name) => {
+                    if raw
+                        .split_once('=')
+                        .is_some_and(|(_, pattern)| pattern.contains('/') || pattern.contains("**"))
+                    {
+                        multi_segment.push(param_name.clone());
+                    }
+                    segments.push(UrlSegment::Parameter(param_name));
+                }
                 // Unsupported placeholder shape (e.g. a dotted nested path like
                 // `{table.catalog_name}`). Preserve it verbatim as a literal so the URL template
                 // stays intact and no invalid Rust identifier is ever generated from it. A flat
@@ -174,7 +193,7 @@ fn parse_url_segments(template: &str) -> Vec<UrlSegment> {
         segments.push(UrlSegment::Static(current_static));
     }
 
-    segments
+    (segments, multi_segment)
 }
 
 /// Extract static prefix (everything before first parameter)
@@ -394,5 +413,22 @@ mod tests {
         };
 
         assert!(extract_http_rule_pattern(&http_rule).is_none());
+    }
+
+    #[test]
+    fn test_multi_segment_parameters() {
+        let pattern = HttpPattern::parse("/v1/{name=catalogs/*}/schemas/{schema}");
+        assert_eq!(pattern.multi_segment_parameters, vec!["name"]);
+        assert!(pattern.is_multi_segment("name"));
+        assert!(!pattern.is_multi_segment("schema"));
+
+        let pattern = HttpPattern::parse("/files/{path=**}");
+        assert!(pattern.is_multi_segment("path"));
+
+        // `{name=*}` matches one segment, like `{name}`.
+        let pattern = HttpPattern::parse("/catalogs/{name=*}");
+        assert!(!pattern.is_multi_segment("name"));
+        let pattern = HttpPattern::parse("/catalogs/{name}");
+        assert!(pattern.multi_segment_parameters.is_empty());
     }
 }

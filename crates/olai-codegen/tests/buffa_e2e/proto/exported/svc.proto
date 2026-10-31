@@ -58,9 +58,18 @@ message ListWidgetsResponse {
   repeated Widget widgets = 1;
 }
 
+// `Shape` is a request input, so its PyO3 wrapper gets the keyword constructor
+// (only the models that a request takes have one).
+message CreateShapeRequest {
+  Shape shape = 1;
+}
+
 service WidgetService {
   rpc ListWidgets(ListWidgetsRequest) returns (ListWidgetsResponse) {
     option (google.api.http) = { get: "/widgets" };
+  }
+  rpc CreateShape(CreateShapeRequest) returns (Shape) {
+    option (google.api.http) = { post: "/shapes" body: "shape" };
   }
 }
 

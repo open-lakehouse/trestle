@@ -108,39 +108,6 @@ pub enum Runtime {
     Buffa,
 }
 
-/// Which Python client flavors the PyO3 bindings expose.
-///
-/// Both flavors wrap the same Rust client and run on one shared Tokio runtime (see the
-/// generated `codegen/runtime.rs`).
-///
-/// - [`PythonApi::Sync`]: blocking clients only (`ExampleClient`). The generated code depends on
-///   `tokio` but not on `pyo3-async-runtimes`.
-/// - [`PythonApi::Async`]: awaitable clients only (`AsyncExampleClient`), built on
-///   `pyo3_async_runtimes::tokio::future_into_py`.
-/// - [`PythonApi::Both`] (default): both sets of classes side by side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PythonApi {
-    /// Blocking clients only.
-    Sync,
-    /// Awaitable (`asyncio`) clients only.
-    Async,
-    /// Blocking and awaitable clients.
-    #[default]
-    Both,
-}
-
-impl PythonApi {
-    /// Whether the blocking clients are emitted.
-    pub fn has_sync(self) -> bool {
-        matches!(self, Self::Sync | Self::Both)
-    }
-
-    /// Whether the awaitable clients are emitted (and `pyo3-async-runtimes` is required).
-    pub fn has_async(self) -> bool {
-        matches!(self, Self::Async | Self::Both)
-    }
-}
-
 /// Validated model import path derived from a `{service}` template string.
 ///
 /// Constructed once from [`CodeGenConfig`] template fields. `resolve` performs the
@@ -193,6 +160,14 @@ impl ModelsPath {
         })
     }
 
+    /// The template prefix before `{service}`, without the trailing `::` (`crate::models` for
+    /// `crate::models::{service}::v1`). `None` when there is none.
+    pub(crate) fn root(&self) -> Option<&str> {
+        let (prefix, _) = self.template.split_once("{service}")?;
+        let root = prefix.trim_end_matches(':');
+        (!root.is_empty()).then_some(root)
+    }
+
     /// Validate that `service` substitutes into a parseable path. Used up front, per service.
     ///
     /// Validates against the conventional `v1` version; the actual version segment is a plain
@@ -239,25 +214,58 @@ pub struct BindingsConfig {
     /// Fully-qualified Python error type (e.g. `"PyMyServiceError"`).
     pub py_error_type: String,
     /// Fully-qualified Python result alias (e.g. `"PyMyServiceResult"`).
-    ///
-    /// Not referenced by the generated PyO3 client, whose methods return `PyResult` (so they can
-    /// surface Python signals such as `KeyboardInterrupt` alongside `py_error_type` errors).
-    /// Retained for configuration compatibility.
     pub py_result_type: String,
-    /// Which Python client flavors (sync / async / both) to emit. See [`PythonApi`].
-    pub python_api: PythonApi,
     /// Name of the NAPI error extension trait (e.g. `"NapiErrorExt"`).
     pub napi_error_ext_trait: String,
-    /// Optional substring filter for the Python typings package.
-    ///
-    /// When `Some(s)`, only messages/enums whose fully-qualified name contains
-    /// `s` are included in the generated `.pyi` file.  When `None`, all
-    /// reachable types are included.
-    pub typings_package_filter: Option<String>,
     /// Base class name for TypeScript errors (e.g. `"MyServiceError"`).
     pub ts_error_base_class: String,
     /// Prefix used in native NAPI error messages (e.g. `"UC"`).
     pub ts_error_code_prefix: String,
+    /// The Python API. Required with the `python` output; see [`PythonOptions`].
+    pub python: Option<PythonOptions>,
+}
+
+/// Shape of the generated Python (PyO3) API.
+///
+/// The model classes are frozen, `eq`, with a Python-style `repr`, and only the models that a
+/// request takes get a keyword constructor. Enums are `enum.StrEnum` classes (Python 3.11+) in
+/// `<package>/_enums.py`, without the zero `*_UNSPECIFIED` member. The extension module is a
+/// declarative `#[pymodule]` with the proto comments as docs, so PyO3's introspection
+/// (`experimental-inspect`) writes the `.pyi`. The methods block on the Tokio runtime of the
+/// generated `codegen/runtime.rs` (needs `tokio`), which the module also installs for the
+/// `_async` methods. Client errors raise the PyO3 exception classes of the generated
+/// `codegen/error.rs`, which needs [`RestClientOptions::error_module`].
+#[derive(Debug, Clone)]
+pub struct PythonOptions {
+    /// The pure-Python package that gets `_enums.py` and the public modules.
+    pub package: PyPackageConfig,
+    /// Name of the base exception class (e.g. `MyServiceError`): the class with `message`,
+    /// `code`, `status` and `details` that the subclasses per kind of HTTP error status extend.
+    pub error_base_class: String,
+    /// The extension module (e.g. `my_pkg._core`): the generated `#[pymodule]`. Classes of a
+    /// package `a.<service>.v1` go in the submodule `<module>.<service>`, the root client and
+    /// the exceptions in `<module>`.
+    pub module: String,
+    /// Every client method also gets a `<name>_async` twin returning an `asyncio.Future`. Needs
+    /// `pyo3-async-runtimes` with `tokio-runtime`.
+    pub async_methods: bool,
+    /// Optional parameters are keyword-only; constructors take `REQUIRED` fields positionally.
+    pub keyword_only: bool,
+    /// Write `<package>/<service>.py` per submodule of [`module`](Self::module), re-exporting
+    /// its classes and enums.
+    pub public_modules: bool,
+    /// The `User-Agent` product of the Python client (`<product>/<binding crate version>`).
+    /// Needs the `reqwest` transport.
+    pub user_agent: Option<String>,
+}
+
+/// Where the generated pure-Python files go.
+#[derive(Debug, Clone)]
+pub struct PyPackageConfig {
+    /// Directory of the Python package (e.g. `python/my_pkg`).
+    pub dir: PathBuf,
+    /// Import name of the package (e.g. `my_pkg`).
+    pub name: String,
 }
 
 /// Configuration for code generation, including import paths and output directories.
@@ -271,6 +279,8 @@ pub struct CodeGenConfig {
     pub context_type_path: String,
 
     /// Fully-qualified path to the `Result` alias used in generated handler and client code.
+    /// The clients use the `Result` of the generated error module instead when
+    /// [`RestClientOptions::error_module`] is set.
     ///
     /// Default: `"crate::Result"`
     pub result_type_path: String,
@@ -367,6 +377,79 @@ pub struct CodeGenConfig {
     /// Required (non-`None`) whenever Connect is selected and client output is enabled; ignored for
     /// REST-only output.
     pub connect_client_path: Option<String>,
+
+    /// Wire-format and error options of the REST client. See [`RestClientOptions`].
+    pub rest_client: RestClientOptions,
+}
+
+/// Wire-format and error options of the generated REST client. Every option is off by default.
+#[derive(Debug, Clone, Default)]
+pub struct RestClientOptions {
+    /// Write 64-bit integers as JSON numbers instead of proto3-JSON strings, and whole numbers
+    /// of `google.protobuf.Value`/`Struct`/`ListValue` as integers (`1`, not `1.0`). Emits a
+    /// `json_int64` module into the models `mod.rs` that the `trestle` CLI points buffa's helpers
+    /// at (see [`CodeGenConfig::json_int64_module_path`]). Reading accepts both forms. Buffa only.
+    pub json_int64_as_number: bool,
+
+    /// Parse responses with buffa's `ignore_unknown_enum_values`: an unknown enum name becomes
+    /// the zero value instead of failing the response. Buffa only.
+    pub ignore_unknown_enum_values: bool,
+
+    /// Generate the client error module (`error.rs`); the clients then return its `Result`
+    /// instead of [`CodeGenConfig::result_type_path`]. When `None`, the crate supplies
+    /// `crate::error::parse_error_response`.
+    pub error_module: Option<ErrorModuleConfig>,
+
+    /// RPCs (`package.Service.Method`) whose request body is sent form-encoded.
+    pub form_encoded_methods: Vec<String>,
+
+    /// RPCs (`package.Service.Method`) whose request body keeps the path fields, for APIs that
+    /// want them in both places.
+    pub path_fields_in_body_methods: Vec<String>,
+
+    /// Proto packages whose query keys are the JSON (lowerCamelCase) names. Elsewhere a query
+    /// key is the proto name, or the field's explicit `json_name`.
+    pub json_query_packages: Vec<String>,
+
+    /// The `User-Agent` product of the generated `reqwest` transport
+    /// (`<product>/<client crate version>`); not sent in the browser. Needs that transport.
+    pub user_agent: Option<String>,
+}
+
+/// Shape of the JSON error body that the generated error module reads, such as
+/// `{"error_code": "NOT_FOUND", "message": "…", "details": […]}`. A body that is not such an
+/// object becomes the message.
+#[derive(Debug, Clone)]
+pub struct ErrorModuleConfig {
+    /// Key of the error code; its lowerCamelCase form is also read. Default `error_code`.
+    pub code_field: String,
+    /// Key of the message. Default `message`.
+    pub message_field: String,
+    /// Key of the details array. Default `details`.
+    pub details_field: Option<String>,
+    /// Fully-qualified proto enum (e.g. `.my.errors.v1.ErrorCode`) of the error codes. The
+    /// error exposes the code as that enum; an unknown code stays a string.
+    pub code_enum: Option<String>,
+    /// More keys of the code, tried in order (e.g. OAuth's `error`).
+    pub more_code_fields: Vec<String>,
+    /// More keys of the message, tried in order (e.g. OAuth's `error_description`).
+    pub more_message_fields: Vec<String>,
+    /// Keys under which some answers nest the error object (`{"error": {"message": …}}`).
+    pub envelope_fields: Vec<String>,
+}
+
+impl Default for ErrorModuleConfig {
+    fn default() -> Self {
+        Self {
+            code_field: "error_code".into(),
+            message_field: "message".into(),
+            details_field: Some("details".into()),
+            code_enum: None,
+            more_code_fields: Vec::new(),
+            more_message_fields: Vec::new(),
+            envelope_fields: Vec::new(),
+        }
+    }
 }
 
 /// Default transport type path: the cloud client used by native (non-WASM) generated code.
@@ -380,6 +463,18 @@ impl CodeGenConfig {
     /// WASM/browser one) gets only the generic `new(transport, base_url)`.
     pub fn uses_default_transport(&self) -> bool {
         self.transport_type_path == DEFAULT_TRANSPORT_TYPE_PATH
+    }
+
+    /// Whether generated clients use the generated `reqwest` transport
+    /// ([`REQWEST_TRANSPORT_TYPE_PATH`](super::REQWEST_TRANSPORT_TYPE_PATH)).
+    pub fn uses_reqwest_transport(&self) -> bool {
+        !self.dual_transport() && self.transport_type_path == super::REQWEST_TRANSPORT_TYPE_PATH
+    }
+
+    /// Whether the generated client also builds for `wasm32`, where the transport's futures are
+    /// not `Send`, so the builders box them as `Local*` there.
+    pub fn builds_for_wasm(&self) -> bool {
+        self.dual_transport() || self.uses_reqwest_transport()
     }
 
     /// Whether the generated client should carry **both** transports, selected at
@@ -401,13 +496,114 @@ impl CodeGenConfig {
         self.output.wasm.is_some() || self.dual_transport
     }
 
+    /// The crate-local path of the `json_int64` module (e.g. `crate::models::json_int64`), for
+    /// [`ModelRewrites::int64_module`](crate::postprocess::ModelRewrites::int64_module). `None`
+    /// unless [`RestClientOptions::json_int64_as_number`] is set.
+    pub fn json_int64_module_path(&self) -> Option<String> {
+        if !self.rest_client.json_int64_as_number {
+            return None;
+        }
+        let models_path = ModelsPath::from_template(&self.models_path_crate_template);
+        Some(format!("{}::json_int64", models_path.root()?))
+    }
+
+    /// The crate-local path of the `json_value` module (e.g. `crate::models::json_value`), for
+    /// [`ModelRewrites::json_value_module`](crate::postprocess::ModelRewrites::json_value_module).
+    /// `None` unless [`RestClientOptions::json_int64_as_number`] is set.
+    pub fn json_value_module_path(&self) -> Option<String> {
+        if !self.rest_client.json_int64_as_number {
+            return None;
+        }
+        let models_path = ModelsPath::from_template(&self.models_path_crate_template);
+        Some(format!("{}::json_value", models_path.root()?))
+    }
+
+    /// The `Result` type of the generated clients: the generated error module's with
+    /// [`RestClientOptions::error_module`], else [`result_type_path`](Self::result_type_path).
+    pub(crate) fn client_result_path(&self) -> syn::Path {
+        let path = match self.rest_client.error_module {
+            Some(_) => format!("{}::Result", super::error_module::CLIENT_ERROR_MODULE),
+            None => self.result_type_path.clone(),
+        };
+        syn::parse_str(&path).expect("valid result_type_path")
+    }
+
+    /// The module of `parse_error_response`: the generated error module with
+    /// [`RestClientOptions::error_module`], else `crate::error`.
+    pub(crate) fn client_error_module(&self) -> syn::Path {
+        let path = match self.rest_client.error_module {
+            Some(_) => super::error_module::CLIENT_ERROR_MODULE,
+            None => "crate::error",
+        };
+        syn::parse_str(path).expect("valid module path")
+    }
+
+    /// The Python options of the bindings config. Only for the `python` output, which
+    /// [`validate_options`](Self::validate_options) checks has them.
+    pub(crate) fn python_options(&self) -> &PythonOptions {
+        self.bindings
+            .as_ref()
+            .and_then(|b| b.python.as_ref())
+            .expect("validated: the python output has `BindingsConfig::python`")
+    }
+
+    /// Check the options that need other options.
+    pub(crate) fn validate_options(&self) -> Result<()> {
+        let needs = |what: &str, requirement: &str| {
+            Err(Error::Build(format!("`{what}` needs {requirement}")))
+        };
+        if self.output.server.is_some() && self.output.common.is_none() {
+            return needs(
+                "CodeGenOutput::server",
+                "`CodeGenOutput::common` (the Axum extractors)",
+            );
+        }
+        if self.rest_client.user_agent.is_some() && !self.uses_reqwest_transport() {
+            return needs(
+                "RestClientOptions::user_agent",
+                "the generated `reqwest` transport",
+            );
+        }
+        if self.output.python.is_some() {
+            let Some(python) = self.bindings.as_ref().and_then(|b| b.python.as_ref()) else {
+                return needs("CodeGenOutput::python", "`BindingsConfig::python`");
+            };
+            if self.rest_client.error_module.is_none() {
+                return needs(
+                    "CodeGenOutput::python",
+                    "`RestClientOptions::error_module` (the Python exception classes raise its \
+                     errors)",
+                );
+            }
+            if python.user_agent.is_some() && !self.uses_reqwest_transport() {
+                return needs(
+                    "PythonOptions::user_agent",
+                    "the generated `reqwest` transport",
+                );
+            }
+        }
+        if self.rest_client.json_int64_as_number
+            && ModelsPath::from_template(&self.models_path_crate_template)
+                .root()
+                .is_none()
+        {
+            return needs(
+                "RestClientOptions::json_int64_as_number",
+                "a `models_path_crate_template` of the form `<models root>::{service}::...`",
+            );
+        }
+        Ok(())
+    }
+
     /// Validate this config without running code generation.
     ///
     /// Checks that:
     /// - `models_path_template` and `models_path_crate_template` produce valid Rust paths after
     ///   `{service}` substitution.
     /// - `bindings` is `Some` whenever `output.python`, `output.node`, `output.node_ts`, or
-    ///   `output.wasm` is `Some`.
+    ///   `output.wasm` is `Some`; `output.python` also needs `BindingsConfig::python` and
+    ///   `RestClientOptions::error_module`.
+    /// - the REST client and Python options that need other options have them.
     ///
     /// Call this at construction time to surface misconfiguration early, before generation runs.
     pub fn validate(&self) -> Result<()> {
@@ -432,19 +628,20 @@ impl CodeGenConfig {
         if wants_bindings && !self.client_protocols.rest {
             return Err(Error::BindingsRequireRest);
         }
-        Ok(())
+        self.validate_options()
     }
 }
 
 /// Output directory configuration for code generation.
 ///
-/// Only `common` is required. All other outputs are optional — set to `None` to skip that
-/// output entirely. For example, a server-only crate can omit `client`, and a client-only
-/// crate can omit `server`.
+/// All outputs are optional — set to `None` to skip that output entirely. For example, a
+/// server-only crate can omit `client`, and a client-only crate can omit `server` and
+/// `common`.
 #[derive(Debug, Clone)]
 pub struct CodeGenOutput {
-    /// Output directory for common (shared extractor) code.
-    pub common: PathBuf,
+    /// Output directory for the Axum request extractors. Generation is skipped when `None`; the
+    /// `server` output needs it.
+    pub common: Option<PathBuf>,
     /// Parent models directory (e.g. `crates/common/src/models`).
     ///
     /// When `Some`, the generator writes `labels.rs`, `pyo3_impls.rs`, and `mod.rs`
@@ -483,10 +680,6 @@ pub struct CodeGenOutput {
     /// objects via `serde-wasm-bindgen`, so this pairs with `runtime: Buffa` (serde-native models)
     /// and `transport_type_path = "olai_http_wasm::WasmClient"`.
     pub wasm: Option<PathBuf>,
-    /// Filename for the generated Python typings stub.
-    ///
-    /// Default: `"client.pyi"`
-    pub python_typings_filename: String,
 }
 
 impl CodeGenOutput {

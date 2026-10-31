@@ -44,9 +44,9 @@ async-trait = "0.1"
 # PyO3 boundary conversions for the generated models (emitted as
 # `models/_gen/pyo3_impls.rs` when Python bindings are generated). Pulled in only
 # when the `common` crate's `python` feature is enabled, so non-Python consumers
-# never compile pyo3.
-pyo3 = "0.26"
-pythonize = "0.26"
+# never compile pyo3. The wrappers declare their stub types, which need
+# `experimental-inspect`.
+pyo3 = { version = "0.30", features = ["experimental-inspect"] }
 {%- if with_connect %}
 # ConnectRPC server runtime + the http-body trait its generated client refers to.
 connectrpc = { version = "0.7", features = ["server", "axum"] }

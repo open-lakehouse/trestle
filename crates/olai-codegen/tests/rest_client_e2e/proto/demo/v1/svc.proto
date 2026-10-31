@@ -1,0 +1,252 @@
+syntax = "proto3";
+package demo.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/struct.proto";
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  GREEN = 2;
+}
+
+// The error codes of the demo server.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  WIDGET_NOT_FOUND = 1;
+  INVALID_ARGUMENT = 2;
+}
+
+// A widget.
+message Widget {
+  option (google.api.resource) = {
+    type: "demo.io/Widget"
+    pattern: "widgets/{widget}"
+    plural: "widgets"
+    singular: "widget"
+  };
+
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+  // The color of the widget.
+  Color color = 2;
+  // The creation time, in epoch milliseconds.
+  optional int64 created_at = 3;
+  // The size, in bytes.
+  int64 size_bytes = 4;
+  // Key-value properties.
+  map<string, string> properties = 5;
+  // A name to show.
+  string display_name = 6;
+  // A field with an explicit JSON name, kept as is.
+  string metadata_location = 7 [json_name = "metadata-location"];
+  // Free-form attributes: any JSON object.
+  google.protobuf.Struct attributes = 8;
+  // A free-form value: any JSON value.
+  google.protobuf.Value extra = 9;
+  // Free-form values.
+  repeated google.protobuf.Value notes = 10;
+  // Rows of free-form values, by table.
+  map<string, google.protobuf.ListValue> rows = 11;
+  // The kind of widget: a field named after a Rust keyword.
+  optional string type = 12;
+  // Sizes, as 64-bit integers.
+  repeated int64 sizes = 13;
+  // Counts by name, as 64-bit integers.
+  map<string, int64> counts = 14;
+  // Labels by key: a map of messages.
+  map<string, Label> labels_by_key = 15;
+}
+
+message ListWidgetsRequest {
+  // The maximum number of widgets to return.
+  optional int32 max_results = 1 [(google.api.field_behavior) = OPTIONAL];
+  // The page to return.
+  optional string page_token = 2 [(google.api.field_behavior) = OPTIONAL];
+  // Only the widgets of this color.
+  optional Color color = 3 [(google.api.field_behavior) = OPTIONAL];
+  // Index of the first widget, from 1. Sent under its explicit JSON name.
+  optional int32 first = 4 [json_name = "startIndex"];
+  // The order of the widgets. Sent under its explicit JSON name, though it is the default one.
+  optional string order_by = 5 [json_name = "orderBy"];
+}
+
+// A label of a widget. An input-only model: the only one with a Python constructor.
+message Label {
+  // The key.
+  string key = 1 [(google.api.field_behavior) = REQUIRED];
+  // The value.
+  string value = 2;
+  // A secret, hidden in the Python repr.
+  optional string secret = 3 [debug_redact = true];
+}
+
+message ListWidgetsResponse {
+  repeated Widget widgets = 1;
+  optional string next_page_token = 2;
+}
+
+message CreateWidgetRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // The creation time, in epoch milliseconds.
+  optional int64 created_at = 2 [(google.api.field_behavior) = OPTIONAL];
+  // A name to show.
+  optional string display_name = 3 [(google.api.field_behavior) = OPTIONAL];
+  // Labels to set.
+  repeated Label labels = 4 [(google.api.field_behavior) = OPTIONAL];
+  // Free-form attributes: any JSON object.
+  google.protobuf.Struct attributes = 5 [(google.api.field_behavior) = OPTIONAL];
+  // The kind of widget.
+  optional string type = 6 [(google.api.field_behavior) = OPTIONAL];
+  // Where the widget comes from. Sent under its explicit JSON name.
+  optional string source_url = 7 [json_name = "sourceUrl"];
+  // Tags.
+  repeated string tags = 8;
+  // Labels by key.
+  map<string, Label> labels_by_key = 9;
+  // Free-form notes.
+  repeated google.protobuf.Value notes = 10;
+}
+
+message GetWidgetRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message DeleteWidgetRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message Empty {}
+
+message ExchangeTokenRequest {
+  string grant_type = 1 [(google.api.field_behavior) = REQUIRED];
+  string subject_token = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ExchangeTokenResponse {
+  string access_token = 1;
+  int64 expires_in = 2;
+}
+
+// Manage widgets.
+service WidgetService {
+  // List widgets.
+  rpc ListWidgets(ListWidgetsRequest) returns (ListWidgetsResponse) {
+    option (google.api.http) = {get: "/api/v1/widgets"};
+  }
+
+  // Create a widget.
+  rpc CreateWidget(CreateWidgetRequest) returns (Widget) {
+    option (google.api.http) = {
+      post: "/api/v1/widgets"
+      body: "*"
+    };
+  }
+
+  // Get a widget.
+  rpc GetWidget(GetWidgetRequest) returns (Widget) {
+    option (google.api.http) = {get: "/api/v1/widgets/{name}"};
+  }
+
+  // Delete a widget.
+  rpc DeleteWidget(DeleteWidgetRequest) returns (Empty) {
+    option (google.api.http) = {delete: "/api/v1/widgets/{name}"};
+  }
+}
+
+message WidgetExistsRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message SearchWidgetsRequest {
+  // The start of the names to find.
+  string prefix = 1 [(google.api.field_behavior) = REQUIRED];
+  // The tags of the widgets to find.
+  repeated string tags = 2 [(google.api.field_behavior) = REQUIRED];
+  // Free-form filters by field.
+  map<string, google.protobuf.ListValue> filters = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+message TagWidgetRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // The tag to add.
+  string tag = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message RenameWidgetRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // The new name.
+  string new_name = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetBlobRequest {
+  // The path of the blob, over several segments.
+  string path = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// A blob.
+message Blob {
+  // The path of the blob.
+  string path = 1;
+}
+
+// Less common `google.api.http` shapes.
+service ProbeService {
+  // Whether a widget exists: a `HEAD` request.
+  rpc WidgetExists(WidgetExistsRequest) returns (Empty) {
+    option (google.api.http) = {
+      custom: {
+        kind: "HEAD"
+        path: "/api/v1/widgets/{name}"
+      }
+    };
+  }
+
+  // Find widgets: a `GET` with a JSON body.
+  rpc SearchWidgets(SearchWidgetsRequest) returns (ListWidgetsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/search"
+      body: "*"
+    };
+  }
+
+  // Tag a widget: a body that leaves the path value out.
+  rpc TagWidget(TagWidgetRequest) returns (Empty) {
+    option (google.api.http) = {
+      post: "/api/v1/widgets/{name}/tags"
+      body: "*"
+    };
+  }
+
+  // Rename a widget: a body that keeps the path value (`path_fields_in_body_methods`).
+  rpc RenameWidget(RenameWidgetRequest) returns (Empty) {
+    option (google.api.http) = {
+      post: "/api/v1/widgets/{name}/rename"
+      body: "*"
+    };
+  }
+
+  // Read a blob, at a multi-segment path.
+  rpc GetBlob(GetBlobRequest) returns (Blob) {
+    option (google.api.http) = {get: "/api/v1/blobs/{path=**}"};
+  }
+}
+
+// Exchange tokens.
+service TokenService {
+  // Exchange a token for an access token.
+  rpc ExchangeToken(ExchangeTokenRequest) returns (ExchangeTokenResponse) {
+    option (google.api.http) = {
+      post: "/auth/tokens"
+      body: "*"
+    };
+  }
+}

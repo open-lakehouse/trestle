@@ -245,23 +245,6 @@ fn type_name_from_filename(filename: &str) -> Option<String> {
     Some(stem[start..].to_string())
 }
 
-/// Convert snake_case to camelCase.
-fn snake_to_camel(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut capitalise_next = false;
-    for ch in s.chars() {
-        if ch == '_' {
-            capitalise_next = true;
-        } else if capitalise_next {
-            result.push(ch.to_ascii_uppercase());
-            capitalise_next = false;
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
-
 /// Resolve a `#/$defs/<key>` reference within a bundle's $defs map.
 fn resolve_ref<'a>(
     ref_str: &str,
@@ -339,7 +322,7 @@ fn enrich_schema(
     if let Some(js_props) = json_schema.get("properties").and_then(|v| v.as_object()) {
         for (snake_key, js_prop) in js_props {
             let lookup_key = if camel_case {
-                snake_to_camel(snake_key)
+                crate::utils::strings::lower_camel(snake_key)
             } else {
                 snake_key.clone()
             };

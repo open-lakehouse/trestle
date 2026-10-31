@@ -121,13 +121,14 @@ let metadata = parse_file_descriptor_set(&fds)?;
 let config = CodeGenConfig {
     context_type_path: "crate::RequestContext".into(),
     result_type_path: "crate::Result".into(),
-    output: CodeGenOutput { common: "src/gen/common".into(), ..Default::default() },
+    output: CodeGenOutput { common: Some("src/gen/common".into()), ..Default::default() },
     ..Default::default()
 };
 generate_code(&metadata, &config)?;
 ```
 
-See the rustdoc for the full `CodeGenConfig` / `CodeGenOutput` field reference.
+See the rustdoc for the full `CodeGenConfig` / `CodeGenOutput` field reference. A client-only
+crate sets `common` to `None` to skip the Axum extractors; the `server` output needs them.
 
 ## WASM / browser clients
 
@@ -138,58 +139,64 @@ Generated clients are decoupled from their HTTP transport via
 add `output.wasm` + `runtime: buffa` to also emit `#[wasm_bindgen]` JS bindings
 and a `client.d.ts`. See the `olai-http-wasm` README for details.
 
-## Python clients (sync and async)
+## REST client options
 
-`output.python` emits a PyO3 binding module into the Python crate's `src/codegen/`. Each
-client comes in up to two flavors, chosen with `BindingsConfig::python_api` (`python.api:
-sync | async | both` in `trestle.yaml`, default `both`):
+`CodeGenConfig::rest_client` (`clients.rust` in `trestle.yaml`) shapes the REST client. Every
+option is off by default.
 
-```python
-from my_service import ExampleClient, AsyncExampleClient
+| Option | `trestle.yaml` | Effect |
+|---|---|---|
+| `transport_type_path = REQWEST_TRANSPORT_TYPE_PATH` | `transport: reqwest` | Emit `transport.rs`: an `HttpClient` over `reqwest::Client` with an optional bearer token. No cloud credential providers, no retries; builds for native and `wasm32`. |
+| `error_module` | `error_module: { code_field, message_field, details_field, code_enum }` | Emit `error.rs`: `Error`, `Result`, `ApiError` (HTTP status, code, message, details of the JSON error body) and `parse_error_response`. The clients return this `Result`; `result_type` stays the server's. A code not in `code_enum` is kept as a string. Required with the Python bindings. |
+| `json_int64_as_number` | `json_int64: number` (under `generate`) | 64-bit integers are JSON numbers, not proto3-JSON strings, and the whole numbers of `google.protobuf.Value`/`Struct`/`ListValue` fields are integers (`1`, not `1.0`). Reading accepts both. |
+| `ignore_unknown_enum_values` | `ignore_unknown_enum_values: true` | An unknown enum name in a response becomes the zero value instead of failing the response. |
+| `form_encoded_methods` | `form_encoded_methods: [pkg.Service.Method]` | Send the request body of these RPCs form-encoded. |
+| `path_fields_in_body_methods` | `path_fields_in_body_methods: [pkg.Service.Method]` | Keep the path values in the request body of these RPCs too, for APIs that check that both match. |
+| `json_query_packages` | `json_field_names_by_package: {pkg: json}` | Send the query parameters of these packages by their JSON name (`startIndex`), as their bodies. Elsewhere a query key is the proto name, or a `json_name` that differs from the default. |
 
-client = ExampleClient("https://api.example.com", token="...")
-catalog = client.catalog("main").get()          # blocks, GIL released
-for c in client.list_catalogs(max_results=50):  # lazy pager: pages fetched on demand
-    print(c.name)
+Path values are percent-encoded (`/` too, except in multi-segment patterns such as
+`{name=catalogs/*}`) and left out of the request body, as `google.api.http` specifies. With
+`json_field_names: proto`, an explicit `json_name` is kept, and `json_field_names_by_package`
+overrides the style per proto package.
 
-async def main():
-    aclient = AsyncExampleClient("https://api.example.com", token="...")
-    catalog = await aclient.catalog("main").get()
-    async for c in aclient.list_catalogs(max_results=50):
-        print(c.name)
-```
+## Python API
 
-Both flavors wrap the same Rust client and run on **one** process-wide multi-thread Tokio
-runtime, emitted into `codegen/runtime.rs` (you no longer hand-write a `runtime.rs`):
+`BindingsConfig::python` (`clients.python` in `trestle.yaml`) shapes the PyO3 API. The bindings
+crate and the models crate depend on `pyo3` 0.30 with the `experimental-inspect` feature, the
+bindings crate also on `tokio`, and the Rust client needs the `error_module` above: the Python
+exception classes raise its errors.
 
-- With async enabled, it is `pyo3-async-runtimes`' runtime, so awaitables
-  (`future_into_py`) and blocking calls share it and its connection pool. To tune it, call
-  `pyo3_async_runtimes::tokio::init(builder)` in your `#[pymodule]` before the first call;
-  the builder must enable I/O and timers (`enable_all`).
-- Sync-only output builds its own runtime lazily on first use.
-- Blocking calls release the GIL and wake every 100ms to run Python signal handlers, so
-  Ctrl-C interrupts an in-flight request. Cancelling an asyncio task drops its request.
-- The runtime starts on the first call, not at import. A process forked *after* that must
-  not keep using clients created before the fork.
+The generated API:
 
-List methods return lazy pagers (`ListIterator` / `AsyncListIterator`, typed as
-`Iterator[T]` / `AsyncIterator[T]` in the `.pyi`) rather than lists; wrap them in
-`list(...)` when you need `len()` or indexing.
+- Model classes are frozen, `eq`, with a `repr()` of `Name(field=value, …)` without the `None`
+  fields. Only the models that a request takes get a keyword constructor.
+- Enums are `enum.StrEnum` classes (Python 3.11+) in `<package>/_enums.py`; parameters take a
+  member or a name. The zero `*_UNSPECIFIED` value is not a member; a field that holds it reads
+  as `None`.
+- The extension module is a declarative `#[pymodule]`, `codegen::extension_module`, with the
+  proto comments as docstrings. PyO3's introspection writes the `.pyi` from the built library:
+  `maturin generate-stubs` (maturin 1.16+), or the `pyo3-introspection` crate. The module
+  also has `__version__`, the version of the bindings crate. Its init puts the
+  submodules in `sys.modules`; for a module made with `wrap_pymodule!`, call
+  `codegen::add_submodules_to_sys_modules`.
+- `codegen/error.rs` holds the PyO3 exception classes: a base class (`error_base_class`;
+  `bindings.error_base_class` in `trestle.yaml`) with `message`, `code`, `status` and `details`,
+  and one subclass per kind of HTTP error status.
+- The methods block on the Tokio runtime of `codegen/runtime.rs` (`rt()`, made on first use; it
+  panics in a forked child). With `async_methods`, the module installs it in
+  `pyo3-async-runtimes`.
 
-You hand-write the crate's `error` module (the configured `py_error_type`, with `From`
-impls from your client `Error` and `url::ParseError`, and into `PyErr`) and the
-`#[pymodule]`, which can register everything with one call:
+| Option | Effect |
+|---|---|
+| `package` | Where `_enums.py` and the public modules go: `{ dir, name }`. Required. |
+| `module` | The extension module (e.g. `my_pkg._core`). Classes go in `<module>.<service>`, the root client and the exceptions in `<module>`. Request messages get no class. Required. |
+| `async_methods` | Each method gets a `<name>_async` twin that returns an `asyncio.Future` (needs `pyo3-async-runtimes`). |
+| `keyword_only` | Optional parameters are keyword-only. |
+| `public_modules` | A module `<package>/<service>.py` per submodule of `module`, re-exporting its classes and enums. |
 
-```rust,ignore
-#[pymodule]
-fn my_service(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    codegen::register_clients(m)
-}
-```
-
-The binding crate depends on `pyo3`, `tokio` (`rt-multi-thread`, `sync`, `time`),
-`futures`, and, unless `python_api` is `Sync`, `pyo3-async-runtimes` with the
-`tokio-runtime` feature (keep it on the same minor version as `pyo3`).
+In `trestle.yaml`, `package` and `module` sit under `clients.python` and the rest under
+`clients.python.options`. `tests/rest_client_e2e` runs a client and Python bindings with all of
+these against a server.
 
 ## Examples
 

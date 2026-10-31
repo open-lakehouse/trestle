@@ -45,7 +45,9 @@ pub(crate) fn format_tokens(tokens: TokenStream) -> Result<String> {
         tokens: tokens_string,
         source,
     })?;
-    Ok(prettyplease::unparse(&syntax_tree))
+    Ok(crate::postprocess::space_items(&prettyplease::unparse(
+        &syntax_tree,
+    )))
 }
 
 /// Pretty-print `tokens` known to be statically valid (fixed hand-written templates).

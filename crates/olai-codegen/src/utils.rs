@@ -39,9 +39,36 @@ pub fn extract_qualified_type_name(name: &str) -> String {
     }
 }
 
+/// `name` with the leading `.` that the [`CodeGenMetadata`](crate::parsing::CodeGenMetadata)
+/// tables are keyed by (field types carry it without).
+pub(crate) fn metadata_key(name: &str) -> String {
+    if name.starts_with('.') {
+        name.to_string()
+    } else {
+        format!(".{name}")
+    }
+}
+
 /// String manipulation utilities
 pub mod strings {
     use super::*;
+
+    /// The proto3 JSON name of a proto field name: `storage_root` → `storageRoot`.
+    pub fn lower_camel(name: &str) -> String {
+        let mut out = String::with_capacity(name.len());
+        let mut upper_next = false;
+        for ch in name.chars() {
+            if ch == '_' {
+                upper_next = true;
+            } else if upper_next {
+                out.push(ch.to_ascii_uppercase());
+                upper_next = false;
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
 
     /// Convert service name to handler trait name
     /// e.g., "CatalogsService" -> "CatalogHandler", "TagPoliciesService" -> "TagPolicyHandler"
@@ -79,6 +106,23 @@ pub mod strings {
         } else {
             service_name.to_case(Case::Snake)
         }
+    }
+}
+
+/// The Rust identifier of a proto field: raw (`r#type`) for a keyword, as buffa and prost name
+/// such fields.
+pub(crate) fn field_ident(name: &str) -> proc_macro2::Ident {
+    const KEYWORDS: &[&str] = &[
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do",
+        "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in",
+        "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+        "return", "static", "struct", "trait", "true", "try", "type", "typeof", "unsafe",
+        "unsized", "use", "virtual", "where", "while", "yield",
+    ];
+    if KEYWORDS.contains(&name) {
+        proc_macro2::Ident::new_raw(name, proc_macro2::Span::call_site())
+    } else {
+        proc_macro2::Ident::new(name, proc_macro2::Span::call_site())
     }
 }
 

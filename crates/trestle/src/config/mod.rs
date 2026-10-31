@@ -24,6 +24,7 @@ mod validate;
 
 pub use buf_gen::{emit_buf_gen, merge_buf_gen};
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -120,6 +121,28 @@ pub enum JsonFieldNames {
     Proto,
 }
 
+impl JsonFieldNames {
+    /// Lower to the codegen crate's [`JsonFieldNames`](olai_codegen::postprocess::JsonFieldNames).
+    pub fn lower(self) -> olai_codegen::postprocess::JsonFieldNames {
+        match self {
+            JsonFieldNames::Json => olai_codegen::postprocess::JsonFieldNames::Json,
+            JsonFieldNames::Proto => olai_codegen::postprocess::JsonFieldNames::Proto,
+        }
+    }
+}
+
+/// How 64-bit integers (`int64`, `uint64` and their variants) are written in JSON, for
+/// [`ProtoLib::Buffa`] models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonInt64 {
+    /// Quoted decimal strings, per the proto3 JSON spec (buffa's default).
+    #[default]
+    String,
+    /// JSON numbers, as most REST APIs send them. Reading still accepts strings.
+    Number,
+}
+
 /// Code-generation configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -132,6 +155,15 @@ pub struct GenerateConfig {
     /// (lowerCamelCase); set `proto` for snake_case wire-compat (e.g. Unity Catalog).
     #[serde(default)]
     pub json_field_names: JsonFieldNames,
+
+    /// Per-package overrides of `json_field_names`, keyed by proto package (e.g. a camelCase
+    /// package in a snake_case project). Buffa only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub json_field_names_by_package: BTreeMap<String, JsonFieldNames>,
+
+    /// How 64-bit integers are written in JSON (buffa only): `string` (default) or `number`.
+    #[serde(default)]
+    pub json_int64: JsonInt64,
 
     /// Path to the compiled `FileDescriptorSet` — the foundational codegen input.
     /// Defaults to `api.bin`.
@@ -181,7 +213,7 @@ pub struct Clients {
     /// Rust client (olai-codegen).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<RustClient>,
-    /// Python (PyO3) client + `.pyi` typings.
+    /// Python (PyO3) client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python: Option<PythonClient>,
     /// Node.js clients (NAPI / TypeScript / WASM browser).
@@ -198,6 +230,9 @@ pub enum Transport {
     Cloud,
     /// `olai_http_wasm::WasmClient` — browser-buildable transport. Requires buffa.
     Wasm,
+    /// A generated plain `reqwest` transport (`codegen/transport.rs`) with an optional bearer
+    /// token; builds for native and `wasm32`.
+    Reqwest,
 }
 
 /// Wire protocol a generated Rust client speaks.
@@ -241,6 +276,75 @@ pub struct RustClient {
     /// `"my_proto::connect_gen::my::pkg::v1"`). Required when `protocols` includes `connect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_client_path: Option<String>,
+    /// An unknown enum name in a response becomes the zero value instead of failing. Buffa only.
+    #[serde(default)]
+    pub ignore_unknown_enum_values: bool,
+    /// Generate the client error module (`codegen/error.rs`). Without it, the crate supplies
+    /// `crate::error::parse_error_response`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_module: Option<ErrorModule>,
+    /// RPCs (`package.Service.Method`) whose request body is sent form-encoded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub form_encoded_methods: Vec<String>,
+    /// RPCs (`package.Service.Method`) whose request body keeps the path fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_fields_in_body_methods: Vec<String>,
+    /// The `User-Agent` product of the `reqwest` transport (`<product>/<client crate version>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+}
+
+/// The JSON error body that the generated error module reads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorModule {
+    /// Key of the error code; its lowerCamelCase form is also read.
+    #[serde(default = "default_code_field")]
+    pub code_field: String,
+    /// Key of the message.
+    #[serde(default = "default_message_field")]
+    pub message_field: String,
+    /// Key of the details array, or `null`.
+    #[serde(default = "default_details_field")]
+    pub details_field: Option<String>,
+    /// Fully-qualified proto enum of the error codes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_enum: Option<String>,
+    /// More keys of the code, tried in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more_code_fields: Vec<String>,
+    /// More keys of the message, tried in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more_message_fields: Vec<String>,
+    /// Keys under which some answers nest the error object (`{"error": {...}}`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub envelope_fields: Vec<String>,
+}
+
+impl Default for ErrorModule {
+    fn default() -> Self {
+        Self {
+            code_field: default_code_field(),
+            message_field: default_message_field(),
+            details_field: default_details_field(),
+            code_enum: None,
+            more_code_fields: Vec::new(),
+            more_message_fields: Vec::new(),
+            envelope_fields: Vec::new(),
+        }
+    }
+}
+
+fn default_code_field() -> String {
+    "error_code".to_string()
+}
+
+fn default_message_field() -> String {
+    "message".to_string()
+}
+
+fn default_details_field() -> Option<String> {
+    Some("details".to_string())
 }
 
 fn default_protocols() -> Vec<ClientProtocol> {
@@ -248,6 +352,12 @@ fn default_protocols() -> Vec<ClientProtocol> {
 }
 
 /// Python (PyO3) client config.
+///
+/// The generated API is frozen model classes with a Python-style `repr`, keyword constructors on
+/// the input models, `enum.StrEnum` enums (Python 3.11+) in `<package>/_enums.py`, a declarative
+/// `#[pymodule]` that PyO3's introspection writes the `.pyi` from, a Tokio runtime that the
+/// methods block on, and PyO3 exception classes for the client errors, which need
+/// `clients.rust.error_module`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PythonClient {
@@ -258,37 +368,44 @@ pub struct PythonClient {
     pub error_type: String,
     /// Fully-qualified Python result type. Required.
     pub result_type: String,
-    /// Substring filter for which packages get a `.pyi` stub.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub typings_package_filter: Option<String>,
-    /// Which client flavors to emit: blocking (`sync`), awaitable (`async`), or `both`
-    /// (the default when unset).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api: Option<PythonApi>,
+    /// The pure-Python package that gets `_enums.py` and the `public_modules`. Required.
+    pub package: PythonPackage,
+    /// The extension module (e.g. `my_pkg._core`); classes go in `<module>.<service>`.
+    /// Required.
+    pub module: String,
+    /// Shape of the generated Python API. Every option is off by default.
+    #[serde(default)]
+    pub options: PythonOptions,
 }
 
-/// Python client flavors: `ExampleClient` (blocking) and/or `AsyncExampleClient` (awaitable).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PythonApi {
-    /// Blocking clients only; the binding crate needs no `pyo3-async-runtimes`.
-    Sync,
-    /// Awaitable (`asyncio`) clients only.
-    Async,
-    /// Both flavors side by side.
-    #[default]
-    Both,
+/// Shape of the generated Python API (see `olai_codegen::PythonOptions`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonOptions {
+    /// Every client method also gets an `_async` twin that returns an `asyncio.Future`.
+    #[serde(default)]
+    pub async_methods: bool,
+    /// Optional parameters are keyword-only.
+    #[serde(default)]
+    pub keyword_only: bool,
+    /// A public module `<package>/<service>.py` per submodule of `module`, re-exporting its
+    /// classes and enums.
+    #[serde(default)]
+    pub public_modules: bool,
+    /// The `User-Agent` product of the Python client (`<product>/<binding crate version>`).
+    /// Needs the `reqwest` transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
 }
 
-impl PythonApi {
-    /// Lower to the codegen crate's [`PythonApi`](olai_codegen::PythonApi).
-    pub fn to_codegen(self) -> olai_codegen::PythonApi {
-        match self {
-            PythonApi::Sync => olai_codegen::PythonApi::Sync,
-            PythonApi::Async => olai_codegen::PythonApi::Async,
-            PythonApi::Both => olai_codegen::PythonApi::Both,
-        }
-    }
+/// The pure-Python package of the generated files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonPackage {
+    /// Directory of the package (e.g. `python/my_pkg`).
+    pub dir: String,
+    /// Import name of the package (e.g. `my_pkg`).
+    pub name: String,
 }
 
 /// Node.js client config (NAPI / TypeScript / WASM browser variants).
@@ -478,30 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn python_api_parses_and_defaults_to_both() {
-        let yaml = |api: &str| {
-            format!(
-                "{}  clients:\n    python:\n      output: crates/client/python/src\n      \
-                 error_type: PyDemoError\n      result_type: PyDemoResult\n{api}",
-                minimal_yaml()
-            )
-        };
-        let api_of = |yaml: &str| {
-            let cfg: TrestleConfig = serde_yaml::from_str(yaml).unwrap();
-            cfg.generate.clients.python.unwrap().api
-        };
-        assert_eq!(api_of(&yaml("")), None);
-        assert_eq!(
-            PythonApi::default().to_codegen(),
-            olai_codegen::PythonApi::Both
-        );
-        assert_eq!(api_of(&yaml("      api: sync\n")), Some(PythonApi::Sync));
-        assert_eq!(api_of(&yaml("      api: async\n")), Some(PythonApi::Async));
-        assert_eq!(api_of(&yaml("      api: both\n")), Some(PythonApi::Both));
-        assert!(serde_yaml::from_str::<TrestleConfig>(&yaml("      api: threads\n")).is_err());
-    }
-
-    #[test]
     fn future_version_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("trestle.yaml");
@@ -522,6 +615,65 @@ mod tests {
         assert!(uuid::Uuid::parse_str(&id).is_ok());
         cfg.ensure_id();
         assert_eq!(cfg.project.id.as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn parses_rest_client_and_python_options() {
+        let yaml = "version: 1\n\
+             project:\n  name: demo\n\
+             generate:\n\
+             \x20 proto_lib: buffa\n\
+             \x20 json_field_names: proto\n\
+             \x20 json_field_names_by_package:\n\
+             \x20   demo.scim.v2: json\n\
+             \x20 json_int64: number\n\
+             \x20 models:\n    dir: crates/client/src/models\n\
+             \x20 clients:\n\
+             \x20   rust:\n\
+             \x20     output: crates/client/src\n\
+             \x20     transport: reqwest\n\
+             \x20     ignore_unknown_enum_values: true\n\
+             \x20     error_module:\n\
+             \x20       code_enum: demo.v1.ErrorCode\n\
+             \x20     form_encoded_methods: [demo.v1.TokenService.ExchangeToken]\n\
+             \x20     path_fields_in_body_methods: [demo.v1.UserService.ReplaceUser]\n\
+             \x20   python:\n\
+             \x20     output: python/client/src\n\
+             \x20     error_type: PyDemoError\n\
+             \x20     result_type: PyDemoResult\n\
+             \x20     package:\n\
+             \x20       dir: python/client/demo\n\
+             \x20       name: demo\n\
+             \x20     module: demo._core\n\
+             \x20     options:\n\
+             \x20       public_modules: true\n";
+        let mut cfg: TrestleConfig = serde_yaml::from_str(yaml).unwrap();
+        let g = &cfg.generate;
+        assert_eq!(g.json_int64, JsonInt64::Number);
+        assert_eq!(
+            g.json_field_names_by_package.get("demo.scim.v2"),
+            Some(&JsonFieldNames::Json)
+        );
+        let rust = g.clients.rust.as_ref().unwrap();
+        assert_eq!(rust.transport, Transport::Reqwest);
+        assert!(rust.ignore_unknown_enum_values);
+        let errors = rust.error_module.as_ref().unwrap();
+        assert_eq!(errors.code_field, "error_code");
+        assert_eq!(errors.details_field.as_deref(), Some("details"));
+        assert_eq!(errors.code_enum.as_deref(), Some("demo.v1.ErrorCode"));
+        assert_eq!(
+            rust.path_fields_in_body_methods,
+            ["demo.v1.UserService.ReplaceUser"]
+        );
+        let python = g.clients.python.as_ref().unwrap();
+        assert_eq!(python.package.name, "demo");
+        assert_eq!(python.module, "demo._core");
+        assert!(python.options.public_modules);
+        assert!(cfg.validate(false).is_ok());
+
+        // The Python exception classes raise the errors of the client error module.
+        cfg.generate.clients.rust.as_mut().unwrap().error_module = None;
+        assert!(cfg.validate(false).is_err());
     }
 
     #[test]

@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::Runtime;
-use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
+use crate::utils::extract_simple_type_name;
 
 /// Context for rendering types in different situations
 #[derive(Debug, Clone, Copy)]
@@ -37,9 +37,8 @@ pub enum RenderContext {
 
 /// Trait for rendering a [`UnifiedType`] into a language-specific string.
 ///
-/// Each language backend provides a concrete impl. The four existing free functions
-/// (`unified_to_rust`, `unified_to_python_type`, `unified_to_napi`, `unified_to_typescript`)
-/// are kept as thin wrappers so call-sites don't change.
+/// Each language backend provides a concrete impl over its free function (`unified_to_rust`,
+/// `unified_to_napi`, `unified_to_typescript`).
 pub trait TypeRenderer {
     fn render(&self, ty: &UnifiedType) -> String;
 }
@@ -50,15 +49,6 @@ pub struct RustRenderer(pub RenderContext);
 impl TypeRenderer for RustRenderer {
     fn render(&self, ty: &UnifiedType) -> String {
         unified_to_rust(ty, self.0)
-    }
-}
-
-/// Python type annotation renderer.
-pub struct PythonRenderer;
-
-impl TypeRenderer for PythonRenderer {
-    fn render(&self, ty: &UnifiedType) -> String {
-        unified_to_python_type(ty)
     }
 }
 
@@ -91,7 +81,11 @@ impl TypeRenderer for TypeScriptRenderer {
 pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> String {
     let base_type_str = match &unified_type.base_type {
         BaseType::String => {
-            if matches!(context, RenderContext::Constructor) && !unified_type.is_optional {
+            // A repeated string stays a plain `Vec<String>`.
+            if matches!(context, RenderContext::Constructor)
+                && !unified_type.is_optional
+                && !unified_type.is_repeated
+            {
                 "impl Into<String>".to_string()
             } else {
                 "String".to_string()
@@ -104,7 +98,10 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
         BaseType::Float32 => "f32".to_string(),
         BaseType::Bytes => "Vec<u8>".to_string(),
         BaseType::Unit => "()".to_string(),
-        BaseType::Message(name) => extract_simple_type_name(name),
+        BaseType::Message(name) => match JsonType::of(name) {
+            Some(json) => json.rust_path().to_string(),
+            None => extract_simple_type_name(name),
+        },
         BaseType::Enum(name) => {
             if matches!(
                 context,
@@ -118,7 +115,11 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
         BaseType::OneOf(name) => extract_simple_type_name(name),
         BaseType::Map(key_type, value_type) => {
             if matches!(context, RenderContext::Constructor) && !unified_type.is_optional {
-                "impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>".to_string()
+                let value = match value_type.base_type {
+                    BaseType::String => "impl Into<String>".to_string(),
+                    _ => unified_to_rust(value_type, RenderContext::Parameter),
+                };
+                format!("impl IntoIterator<Item = (impl Into<String>, {value})>")
             } else {
                 let key_str = unified_to_rust(key_type, context);
                 let value_str = unified_to_rust(value_type, context);
@@ -186,7 +187,10 @@ pub fn field_assignment(
         return flexible_optional_field_assignment(unified_type, field_ident, runtime);
     }
     match &unified_type.base_type {
-        BaseType::String if !unified_type.is_optional => quote! { #field_ident.into() },
+        // A single string is an `impl Into<String>`; a repeated one is already `Vec<String>`.
+        BaseType::String if !unified_type.is_optional && !unified_type.is_repeated => {
+            quote! { #field_ident.into() }
+        }
         BaseType::Enum(_) => match runtime {
             Runtime::Prost if unified_type.is_repeated => {
                 quote! { #field_ident.into_iter().map(|v| v as i32).collect() }
@@ -197,6 +201,13 @@ pub fn field_assignment(
             }
             Runtime::Buffa => quote! { buffa::EnumValue::Known(#field_ident) },
         },
+        // Only string map values go through `.into()`; others already have the field's type.
+        BaseType::Map(_, value)
+            if matches!(ctx, RenderContext::Constructor)
+                && !matches!(value.base_type, BaseType::String) =>
+        {
+            quote! { #field_ident.into_iter().map(|(k, v)| (k.into(), v)).collect() }
+        }
         BaseType::Map(_, _) => quote! {
             #field_ident.into_iter().map(|(k, v)| (k.into(), v.into())).collect()
         },
@@ -215,41 +226,6 @@ pub fn field_assignment(
         },
         _ => quote! { #field_ident },
     }
-}
-
-/// Convert a unified type to a Python type annotation string
-pub fn unified_to_python_type(unified_type: &UnifiedType) -> String {
-    let base_type_str = match &unified_type.base_type {
-        BaseType::String => "str".to_string(),
-        BaseType::Int32 | BaseType::Int64 => "int".to_string(),
-        BaseType::Bool => "bool".to_string(),
-        BaseType::Float64 | BaseType::Float32 => "float".to_string(),
-        BaseType::Bytes => "bytes".to_string(),
-        BaseType::Unit => "None".to_string(),
-        // Python typings emit flat classes, so nested types use the parent-qualified name (e.g.
-        // `GenerateTemporaryTableCredentialsRequestOperation`) to stay collision-free. Top-level
-        // types are unaffected (qualified == simple).
-        BaseType::Message(name) => extract_qualified_type_name(name),
-        BaseType::Enum(name) => extract_qualified_type_name(name),
-        BaseType::OneOf(name) => extract_qualified_type_name(name),
-        BaseType::Map(key_type, value_type) => {
-            let key_str = unified_to_python_type(key_type);
-            let value_str = unified_to_python_type(value_type);
-            format!("Dict[{key_str}, {value_str}]")
-        }
-    };
-
-    let mut result = base_type_str;
-
-    if unified_type.is_repeated {
-        result = format!("List[{result}]");
-    }
-
-    if unified_type.is_optional {
-        result = format!("Optional[{result}]");
-    }
-
-    result
 }
 
 /// Convert a unified type to a Rust NAPI parameter type string.
@@ -467,6 +443,57 @@ pub struct UnifiedType {
     pub is_repeated: bool,
 }
 
+/// A free-form JSON type of `google/protobuf/struct.proto`: buffa's type in Rust, a plain
+/// object in Python.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonType {
+    /// `google.protobuf.Value`: any JSON value.
+    Value,
+    /// `google.protobuf.Struct`: a JSON object.
+    Struct,
+    /// `google.protobuf.ListValue`: a JSON array.
+    ListValue,
+}
+
+impl JsonType {
+    /// The JSON type of the proto message `name`, if it is one.
+    pub fn of(name: &str) -> Option<Self> {
+        match name.trim_start_matches('.') {
+            "google.protobuf.Value" => Some(Self::Value),
+            "google.protobuf.Struct" => Some(Self::Struct),
+            "google.protobuf.ListValue" => Some(Self::ListValue),
+            _ => None,
+        }
+    }
+
+    /// The JSON type of a field type: the type itself, or the value type of a map.
+    pub fn of_field(ty: &UnifiedType) -> Option<Self> {
+        match &ty.base_type {
+            BaseType::Message(name) => Self::of(name),
+            BaseType::Map(_, value) => Self::of_field(value),
+            _ => None,
+        }
+    }
+
+    /// The path of the buffa type.
+    pub fn rust_path(self) -> &'static str {
+        match self {
+            Self::Value => "::buffa_types::google::protobuf::Value",
+            Self::Struct => "::buffa_types::google::protobuf::Struct",
+            Self::ListValue => "::buffa_types::google::protobuf::ListValue",
+        }
+    }
+
+    /// The suffix of the type's conversion functions: `value`, `struct`, `list`.
+    pub fn fn_suffix(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::Struct => "struct",
+            Self::ListValue => "list",
+        }
+    }
+}
+
 /// The underlying category of a [`UnifiedType`], independent of optional/repeated wrapping.
 ///
 /// Scalars map directly to a primitive in each target language; the named variants
@@ -518,6 +545,11 @@ impl UnifiedType {
             BaseType::Map(_, _) => "HashMap",
         };
         quote::format_ident!("{}", name)
+    }
+
+    /// A singular `bytes` value: not repeated.
+    pub fn is_singular_bytes(&self) -> bool {
+        matches!(self.base_type, BaseType::Bytes) && !self.is_repeated
     }
 
     /// Create a simple string type

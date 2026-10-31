@@ -1,118 +1,113 @@
 //! Python code generation module
 //!
-//! Split into submodules:
-//! - `bindings`: PyO3 binding generation (Rust → Python wrapper structs)
-//! - `runtime`: the shared Tokio runtime, `block_on`, and list pagers (`codegen/runtime.rs`)
-//! - `typings`: `.pyi` type stub generation for Python IDE support
+//! - `bindings`: the PyO3 client classes
+//! - `model_conversions`: the `#[pyclass]` wrappers of the models
+//! - `errors`, `future`, `runtime`: the helper files of the bindings crate
+//! - `package`: the pure-Python files (`_enums.py`, the public modules)
+//! - `docs`: the docstrings of the methods
 
 mod bindings;
+mod docs;
+mod errors;
+mod future;
 mod model_conversions;
+mod package;
 mod runtime;
-mod typings;
 
 pub(crate) use bindings::{generate, main_module};
 pub(crate) use model_conversions::generate_pyo3_impls;
-pub(crate) use runtime::generate_runtime;
-pub(crate) use typings::generate_typings;
 
-use proc_macro2::Ident;
-use quote::format_ident;
+/// The helper files of the Python bindings (error module, `PyFuture`, runtime), by file name.
+pub(crate) fn helper_files(config: &crate::codegen::CodeGenConfig) -> Vec<(String, String)> {
+    let bindings = config
+        .bindings
+        .as_ref()
+        .expect("validated: Python output has a bindings config");
+    let python = config.python_options();
+    let mut files = vec![
+        ("error.rs".to_string(), errors::generate(bindings, python)),
+        (
+            "runtime.rs".to_string(),
+            runtime::generate(python.async_methods),
+        ),
+    ];
+    if python.async_methods {
+        files.push(("py_future.rs".to_string(), future::generate()));
+    }
+    files
+}
+
+/// The pure-Python package files (`_enums.py`, the public modules), by file name.
+pub(crate) fn package_files(
+    config: &crate::codegen::CodeGenConfig,
+    plan: &crate::analysis::GenerationPlan,
+    metadata: &crate::parsing::CodeGenMetadata,
+) -> Vec<(String, String)> {
+    let python = config.python_options();
+    let services: Vec<_> = plan.services.iter().collect();
+    let classes = model_conversions::ModelClasses::new(&services, metadata);
+    let mut files = Vec::new();
+    if !classes.enums.is_empty() {
+        files.push((
+            "_enums.py".to_string(),
+            package::enums_py(metadata, &classes.enums),
+        ));
+    }
+    if python.public_modules {
+        let handlers: Vec<_> = plan
+            .services
+            .iter()
+            .map(|plan| crate::codegen::ServiceHandler {
+                plan,
+                metadata,
+                config,
+            })
+            .collect();
+        let clients = handlers
+            .iter()
+            .filter(|s| s.emits_scoped_binding())
+            .map(|s| {
+                (
+                    package_segment(&s.plan.package),
+                    s.client_type().to_string(),
+                )
+            });
+        files.extend(package::public_modules(
+            &python.module,
+            &python.package.name,
+            classes.public_names(),
+            clients,
+        ));
+    }
+    files
+}
+
+/// The `module = "…",` argument of a `#[pyclass]`: [`PythonOptions::module`], or its submodule
+/// `segment`. The classes are defined outside the `#[pymodule]`, which sets it only for its own.
+fn module_arg(options: &PythonOptions, segment: Option<&str>) -> TokenStream {
+    let root = &options.module;
+    let module = match segment {
+        Some(segment) => format!("{root}.{segment}"),
+        None => root.clone(),
+    };
+    quote! { module = #module, }
+}
+
+/// The Python submodule segment of a proto package (`a.catalogs.v1` → `catalogs`).
+fn package_segment(package: &str) -> &str {
+    crate::codegen::package_models_segment(package).unwrap_or(package)
+}
+
+use proc_macro2::TokenStream;
+use quote::quote;
 
 use crate::analysis::RequestType;
-use crate::codegen::{MethodHandler, PythonApi};
-use crate::parsing::types::UnifiedType;
-use crate::utils::extract_simple_type_name;
+use crate::codegen::{MethodHandler, PythonOptions};
 
 static DOCS_TARGET_WIDTH: usize = 100;
 
-/// Whether a generated client class blocks the calling thread or returns awaitables.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PyFlavor {
-    /// Methods block (with the GIL released) and return the result.
-    Sync,
-    /// Methods return an `asyncio` awaitable (via `pyo3_async_runtimes::tokio::future_into_py`).
-    Async,
-}
-
-impl PyFlavor {
-    /// The flavors enabled by `api`, sync first.
-    pub(super) fn enabled(api: PythonApi) -> impl Iterator<Item = Self> {
-        [
-            api.has_sync().then_some(Self::Sync),
-            api.has_async().then_some(Self::Async),
-        ]
-        .into_iter()
-        .flatten()
-    }
-
-    /// The Python-visible class-name prefix (`""` / `"Async"`).
-    pub(super) fn prefix(self) -> &'static str {
-        match self {
-            Self::Sync => "",
-            Self::Async => "Async",
-        }
-    }
-
-    /// The Rust wrapper struct ident for a Rust client name (`CatalogClient` → `PyCatalogClient` /
-    /// `PyAsyncCatalogClient`).
-    pub(super) fn class_ident(self, rust_client: &str) -> Ident {
-        format_ident!("Py{}{}", self.prefix(), rust_client)
-    }
-
-    /// The Python-visible class name (`CatalogClient` / `AsyncCatalogClient`).
-    pub(super) fn class_name(self, rust_client: &str) -> String {
-        format!("{}{}", self.prefix(), rust_client)
-    }
-}
-
-/// Extract parameter names from a `ResourceDescriptor` pattern string.
-///
-/// For example, `"catalogs/{catalog}/schemas/{schema}"` yields
-/// `["catalog_name", "schema_name"]`.
-///
-/// A single-parameter resource returns `["name"]` for brevity.
-pub(super) fn resource_pattern_params(pattern: &str) -> Vec<String> {
-    let params: Vec<String> = pattern
-        .split('/')
-        .filter(|seg| seg.starts_with('{') && seg.ends_with('}'))
-        .map(|seg| {
-            let inner = &seg[1..seg.len() - 1];
-            format!("{inner}_name")
-        })
-        .collect();
-
-    if params.len() == 1 {
-        vec!["name".to_string()]
-    } else {
-        params
-    }
-}
-
 fn is_list_method(method: &MethodHandler<'_>) -> bool {
     matches!(method.plan.request_type, RequestType::List)
-}
-
-fn python_type_annotation(unified_type: &UnifiedType) -> String {
-    crate::parsing::types::unified_to_python_type(unified_type)
-}
-
-fn python_type_annotation_from_ident(ident: &syn::Ident) -> String {
-    let type_str = ident.to_string();
-    match type_str.as_str() {
-        "String" => "str".to_string(),
-        "i32" | "i64" => "int".to_string(),
-        "f32" | "f64" => "float".to_string(),
-        "bool" => "bool".to_string(),
-        "Vec < u8 >" => "bytes".to_string(),
-        "()" => "None".to_string(),
-        _ => {
-            if let Some(simple_name) = type_str.split("::").last() {
-                simple_name.trim().to_string()
-            } else {
-                type_str
-            }
-        }
-    }
 }
 
 fn sanitize_python_field_name(field_name: &str) -> String {

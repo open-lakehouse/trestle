@@ -1,7 +1,9 @@
 // @generated — do not edit by hand.
 #![allow(unused_mut, unused_imports)]
+
 use crate::models::tags::v1::*;
 use axum::{RequestExt, RequestPartsExt};
+
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListTagAssignmentsRequest {
     type Rejection = axum::response::Response;
     async fn from_request_parts(
@@ -29,6 +31,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ListTagAssignmentsRe
         })
     }
 }
+
 impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateTagAssignmentRequest {
     type Rejection = axum::response::Response;
     async fn from_request(
@@ -53,6 +56,7 @@ impl<S: Send + Sync> axum::extract::FromRequest<S> for CreateTagAssignmentReques
         })
     }
 }
+
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetTagAssignmentRequest {
     type Rejection = axum::response::Response;
     async fn from_request_parts(
@@ -70,6 +74,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for GetTagAssignmentRequ
         })
     }
 }
+
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteTagAssignmentRequest {
     type Rejection = axum::response::Response;
     async fn from_request_parts(
@@ -87,6 +92,7 @@ impl<S: Send + Sync> axum::extract::FromRequestParts<S> for DeleteTagAssignmentR
         })
     }
 }
+
 impl<S: Send + Sync> axum::extract::FromRequest<S> for TouchTagAssignmentRequest {
     type Rejection = axum::response::Response;
     async fn from_request(

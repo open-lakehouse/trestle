@@ -1,0 +1,31 @@
+# The Python bindings of the fixture, tested in an embedded interpreter. Needs a Python with its
+# shared library: set `PYO3_PYTHON` when the default `python3` is too old or a uv standalone build.
+[package]
+name = "rest-client-e2e-py"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+# The cdylib is the extension module that `tests/extension_module.rs` imports and writes the
+# stubs of.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rest-client-e2e = { path = "..", features = ["python"] }
+
+futures = "0.3"
+pyo3 = { version = "0.30", features = ["experimental-inspect"] }
+pyo3-async-runtimes = { version = "0.30", features = ["tokio-runtime"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+url = "2"
+
+[dev-dependencies]
+axum = "0.8"
+pyo3-introspection = "0.30"
+
+[build-dependencies]
+olai-codegen = { path = "../../../" }
+
+protobuf = "3"

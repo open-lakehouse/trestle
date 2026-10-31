@@ -18,20 +18,20 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::Path;
 
-/// Generate a `#[doc = "..."]` attribute for a field or method.
+/// Generate the `#[doc = "..."]` attributes for a field or method, one per line.
 ///
 /// Uses `doc` if present; otherwise generates a default `"Set <field_name>"` message.
 fn field_doc_attr(doc: Option<&str>, field_name: &str) -> TokenStream {
-    if let Some(doc) = doc {
-        let doc_spaced = format!(" {}", doc.trim_start());
-        quote! { #[doc = #doc_spaced] }
-    } else {
-        let set_msg = format!(" Set {field_name}");
-        quote! { #[doc = #set_msg] }
+    match doc.filter(|d| !d.trim().is_empty()) {
+        Some(doc) => doc_tokens(Some(doc)),
+        None => {
+            let set_msg = format!(" Set {field_name}");
+            quote! { #[doc = #set_msg] }
+        }
     }
 }
 
-use super::format_tokens;
+use super::{doc_tokens, format_tokens};
 use crate::analysis::{BodyField, RequestParam, RequestType};
 use crate::codegen::config::Runtime;
 use crate::codegen::{MethodHandler, ServiceHandler};
@@ -78,8 +78,8 @@ fn generate_builders_module(
         })
         .collect::<crate::error::Result<_>>()?;
     let mod_path: Path = service.models_path();
-    let result_path: Path =
-        syn::parse_str(&service.config.result_type_path).expect("valid result_type_path");
+    let foreign_models = service.foreign_models_imports();
+    let result_path: Path = service.config.client_result_path();
 
     // The streaming machinery (`into_stream`, `stream_paginated`, the futures
     // `Stream` traits) is emitted only for `List` methods. Pull its imports in
@@ -89,11 +89,11 @@ fn generate_builders_module(
         .any(|m| matches!(m.plan.request_type, RequestType::List));
 
     // Boxed future/stream aliases the `IntoFuture` / `into_stream` impls return.
-    // Natively they're `Send` (`BoxFuture`/`BoxStream`). In dual-transport (WASM)
-    // mode the browser transport's futures are `!Send`, so on wasm32 we alias to
+    // Natively they're `Send` (`BoxFuture`/`BoxStream`). When the client also builds
+    // for wasm32 the browser transport's futures are `!Send`, so on wasm32 we alias to
     // the `Local*` (non-Send) variants — keeping one set of impls that compile
     // for both targets.
-    let box_aliases = if service.config.dual_transport() {
+    let box_aliases = if service.config.builds_for_wasm() {
         let stream_alias = if has_list {
             quote! {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -142,6 +142,7 @@ fn generate_builders_module(
         use std::future::IntoFuture;
         use #result_path;
         use #mod_path::*;
+        #(#foreign_models)*
         use super::client::*;
 
         #(#builder_tokens)*
@@ -163,7 +164,7 @@ fn generate_request_builder(
             method.plan.handler_function_name
         ))
     })?;
-    let output_type_ident = method.output_type();
+    let result_type = method.result_type();
     let client_type_ident = service.low_level_client_type(protocol);
     let method_name = format_ident!("{}", method.plan.handler_function_name);
 
@@ -229,12 +230,7 @@ fn generate_request_builder(
     };
 
     // Generate IntoFuture implementation
-    let into_future_impl = generate_into_future_impl(
-        &builder_ident,
-        &client_type_ident,
-        output_type_ident.as_ref(),
-        &method_name,
-    );
+    let into_future_impl = generate_into_future_impl(&builder_ident, &result_type, &method_name);
 
     let tokens = quote! {
         #[doc = #builder_doc]
@@ -334,20 +330,21 @@ fn generate_with_methods(
 }
 
 fn builder_with_impl(method: &MethodHandler<'_>, field: &BodyField) -> TokenStream {
-    let field_ident = format_ident!("{}", field.name);
+    let field_ident = crate::utils::field_ident(&field.name);
     let method_name = format_ident!("with_{}", field.name);
     let field_name = &field.name;
 
     let doc_attr = field_doc_attr(field.documentation.as_deref(), field_name);
 
-    if matches!(field.field_type.base_type, BaseType::Map(_, _)) {
+    if let BaseType::Map(_, value) = &field.field_type.base_type {
+        let value_type = method.field_type(value, RenderContext::BuilderMethod);
         quote! {
             #doc_attr
             pub fn #method_name<I, K, V>(mut self, #field_ident: I) -> Self
             where
                 I: IntoIterator<Item = (K, V)>,
                 K: Into<String>,
-                V: Into<String>,
+                V: Into<#value_type>,
             {
                 self.request.#field_ident = #field_ident
                     .into_iter()
@@ -429,7 +426,7 @@ fn generate_oneof_variant_methods(
     let Some(variants) = field.oneof_variants.as_ref() else {
         return Ok(Vec::new());
     };
-    let oneof_field_ident = format_ident!("{}", field.name);
+    let oneof_field_ident = crate::utils::field_ident(&field.name);
 
     let enum_type_tokens = method.field_type(&field.field_type, RenderContext::BuilderMethod);
 
@@ -471,34 +468,18 @@ fn generate_oneof_variant_methods(
 /// Generate IntoFuture implementation
 fn generate_into_future_impl(
     builder_ident: &proc_macro2::Ident,
-    _client_type_ident: &proc_macro2::Ident,
-    output_type_ident: Option<&proc_macro2::Ident>,
+    result_type: &TokenStream,
     method_name: &proc_macro2::Ident,
 ) -> TokenStream {
-    if let Some(out_ident) = output_type_ident {
-        quote! {
-            impl IntoFuture for #builder_ident {
-                type Output = Result<#out_ident>;
-                type IntoFuture = BoxFut<'static, Self::Output>;
+    quote! {
+        impl IntoFuture for #builder_ident {
+            type Output = Result<#result_type>;
+            type IntoFuture = BoxFut<'static, Self::Output>;
 
-                fn into_future(self) -> Self::IntoFuture {
-                    let client = self.client;
-                    let request = self.request;
-                    Box::pin(async move { client.#method_name(&request).await })
-                }
-            }
-        }
-    } else {
-        quote! {
-            impl IntoFuture for #builder_ident {
-                type Output = Result<()>;
-                type IntoFuture = BoxFut<'static, Self::Output>;
-
-                fn into_future(self) -> Self::IntoFuture {
-                    let client = self.client;
-                    let request = self.request;
-                    Box::pin(async move { client.#method_name(&request).await })
-                }
+            fn into_future(self) -> Self::IntoFuture {
+                let client = self.client;
+                let request = self.request;
+                Box::pin(async move { client.#method_name(&request).await })
             }
         }
     }
@@ -549,12 +530,12 @@ fn generate_into_stream_impl(
             method.plan.handler_function_name
         ))
     })?;
-    let item_field_ident = format_ident!("{}", items_field.name);
+    let item_field_ident = crate::utils::field_ident(&items_field.name);
     let output_type_ident = items_field.unified_type.type_ident();
 
     // The browser stream is `!Send`, so on wasm32 box it with `boxed_local()`
     // (→ `LocalBoxStream`, the `BoxStr` alias resolves to). Natively, `boxed()`.
-    let boxer = if method.config.dual_transport() {
+    let boxer = if method.config.builds_for_wasm() {
         quote! {
             #[cfg(not(target_arch = "wasm32"))]
             let stream = stream.boxed();
@@ -572,8 +553,13 @@ fn generate_into_stream_impl(
             let remaining = self.request.max_results;
             let stream = stream_paginated((self, remaining), move |(mut builder, mut remaining), page_token| async move {
                 builder.request.page_token = page_token;
-                let res = builder.client.#client_method_name(&builder.request).await?;
+                // Request only the items still wanted, and keep no more than that.
+                if remaining.is_some() {
+                    builder.request.max_results = remaining;
+                }
+                let mut res = builder.client.#client_method_name(&builder.request).await?;
                 if let Some(ref mut rem) = remaining {
+                    res.#item_field_ident.truncate((*rem).max(0) as usize);
                     *rem -= res.#item_field_ident.len() as i32;
                 }
                 let next_page_token = if remaining.is_some_and(|r| r <= 0) {
@@ -605,6 +591,7 @@ mod tests {
         let fields = vec![
             MessageField {
                 name: "name".to_string(),
+                json_name: None,
                 unified_type: UnifiedType {
                     base_type: BaseType::String,
                     is_optional: false,
@@ -618,6 +605,7 @@ mod tests {
             },
             MessageField {
                 name: "comment".to_string(),
+                json_name: None,
                 unified_type: UnifiedType {
                     base_type: BaseType::String,
                     is_optional: true,
@@ -631,6 +619,7 @@ mod tests {
             },
             MessageField {
                 name: "properties".to_string(),
+                json_name: None,
                 unified_type: UnifiedType {
                     base_type: BaseType::Map(
                         Box::new(UnifiedType {

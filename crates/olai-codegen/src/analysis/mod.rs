@@ -464,7 +464,9 @@ pub(crate) fn analyze_method(
         .chain(body_fields.into_iter().map(Into::into))
         .collect();
 
-    let has_request_body = types::request_has_body(&request_type);
+    // A method whose HTTP rule names a body has one, whatever the verb.
+    let has_request_body =
+        types::request_has_body(&request_type) || !method.http_rule.body.is_empty();
     let needs_request_parts = types::request_needs_request_parts(&request_type);
     let scoped_verb = types::scoped_verb(&request_type);
 
@@ -693,6 +695,7 @@ fn extract_request_fields(
         } else {
             query_params.push(QueryParam {
                 name: field.name.clone(),
+                json_name: field.json_name.clone(),
                 field_type: field.unified_type.clone(),
                 documentation: field.documentation.clone(),
                 resource_reference: field.resource_reference.clone(),
@@ -947,6 +950,7 @@ mod tests {
         use crate::parsing::types::BaseType;
         MessageField {
             name: name.to_string(),
+            json_name: None,
             unified_type: UnifiedType {
                 base_type: BaseType::String,
                 is_optional: optional,
@@ -964,6 +968,7 @@ mod tests {
         use crate::parsing::types::BaseType;
         MessageField {
             name: name.to_string(),
+            json_name: None,
             unified_type: UnifiedType {
                 base_type: BaseType::String,
                 is_optional: false,
@@ -1155,6 +1160,7 @@ mod tests {
                 name: "ListSchemasRequest".to_string(),
                 fields: vec![MessageField {
                     name: "catalog_name".to_string(),
+                    json_name: None,
                     unified_type: UnifiedType {
                         base_type: BaseType::String,
                         is_optional: false,
@@ -1182,6 +1188,7 @@ mod tests {
                 fields: vec![
                     MessageField {
                         name: "catalog_name".to_string(),
+                        json_name: None,
                         unified_type: UnifiedType {
                             base_type: BaseType::String,
                             is_optional: false,
@@ -1198,6 +1205,7 @@ mod tests {
                     },
                     MessageField {
                         name: "schema_name".to_string(),
+                        json_name: None,
                         unified_type: UnifiedType {
                             base_type: BaseType::String,
                             is_optional: false,

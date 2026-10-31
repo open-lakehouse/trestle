@@ -104,8 +104,16 @@ pub(super) fn process_message(
         // Extract resource_reference annotation (ext 1055)
         let resource_reference = extract_resource_reference(field)?;
 
+        // protoc fills in `json_name` for every field; only an explicit one has a source location
+        // (field 10 of the field descriptor).
+        let json_name_path = [field_path.as_slice(), &[10]].concat();
+        let json_name = source_code_info
+            .is_some_and(|info| info.location.iter().any(|l| l.path == json_name_path))
+            .then(|| field.json_name().to_string());
+
         let field_info = MessageField {
             name: field.name().to_string(),
+            json_name,
             unified_type,
             documentation,
             field_behavior,
@@ -129,6 +137,7 @@ pub(super) fn process_message(
 
         let oneof_field = MessageField {
             name: oneof_field_name.clone(),
+            json_name: None,
             unified_type: UnifiedType {
                 base_type: BaseType::OneOf(enum_type_name.clone()),
                 is_optional: true, // oneof fields are always Option<enum>

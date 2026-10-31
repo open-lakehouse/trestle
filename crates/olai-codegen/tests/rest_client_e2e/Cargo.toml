@@ -1,0 +1,38 @@
+# Opt-in end-to-end test of the generated REST client against a local axum server. Excluded from
+# the root workspace like buffa_e2e; needs `protoc` on PATH. See README.md.
+[workspace]
+members = ["py"]
+
+[package]
+name = "rest-client-e2e"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+# The PyO3 wrappers of the models, used by the `py` crate.
+python = ["dep:pyo3"]
+
+[dependencies]
+buffa = { version = "0.7", features = ["json"] }
+buffa-types = { version = "0.7", features = ["json"] }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+pyo3 = { version = "0.30", features = ["experimental-inspect"], optional = true }
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+
+[build-dependencies]
+olai-codegen = { path = "../../" }
+
+buffa-build = "0.7"
+protobuf = "3"
+
+[package.metadata.cargo-machete]
+# Used only by the generated code.
+ignored = ["buffa-types", "futures", "serde", "pyo3"]

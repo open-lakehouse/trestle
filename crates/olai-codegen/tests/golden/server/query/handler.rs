@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 use crate::Result;
 use example_common::models::catalog::v1::*;
+
 #[async_trait]
 pub trait QueryHandler<Cx = crate::Context>: Send + Sync + 'static {
     /// Repeated string query param

@@ -10,12 +10,13 @@
 //! got *real objects*: no attribute access (`catalog.name`), no `isinstance`, no
 //! `__repr__`, and enums arrived as bare proto-name strings.
 //!
-//! Instead we emit, for every project message, a newtype `#[pyclass]` wrapper
-//! (`PyCatalog(Catalog)`) with native, typed getters/setters, a keyword
-//! constructor, and `__repr__`/`__eq__`. The wrapper is *local* to the model
-//! crate (orphan rule satisfied), and `From`/`Into` conversions bridge it to the
-//! bare model type so the generated client bindings can convert at the boundary.
-//! Enums get their own `#[pyclass(eq, eq_int)]` wrapper (see [`enum_wrappers`]).
+//! Instead we emit, for every project message, a frozen newtype `#[pyclass]` wrapper
+//! (`PyCatalog(Catalog)`) with native, typed getters, a keyword constructor on the
+//! models that a request takes, and `__repr__`/`__eq__`. The wrapper is *local* to
+//! the model crate (orphan rule satisfied), and `From`/`Into` conversions bridge it
+//! to the bare model type so the generated client bindings can convert at the
+//! boundary. Enums are `enum.StrEnum` classes in the Python package; their wrapper
+//! converts a member or its name (see [`str_enum_wrapper`]).
 //!
 //! Everything is emitted into a sibling `pyo3_impls.rs` of the generated models
 //! module and gated behind `#[cfg(feature = "python")]`, so pure-Rust /
@@ -41,12 +42,14 @@ use convert_case::{Case, Casing};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use super::super::format_tokens;
-use crate::analysis::GenerationPlan;
-use crate::codegen::Runtime;
-use crate::parsing::types::{BaseType, UnifiedType};
-use crate::parsing::{CodeGenMetadata, EnumInfo, MessageField, MessageInfo, OneofVariant};
-use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
+use super::super::{doc_tokens, format_tokens};
+use crate::analysis::{GenerationPlan, ServicePlan};
+use crate::codegen::{CodeGenConfig, PythonOptions, Runtime};
+use crate::parsing::types::{BaseType, JsonType, UnifiedType};
+use crate::parsing::{
+    CodeGenMetadata, EnumInfo, EnumValue, MessageField, MessageInfo, OneofVariant,
+};
+use crate::utils::{extract_qualified_type_name, extract_simple_type_name, metadata_key};
 
 /// Generate the `pyo3_impls.rs` content: a `#[pyclass]` wrapper for every message
 /// and enum defined in the project's own packages, plus their `From`/`Into`
@@ -57,47 +60,45 @@ use crate::utils::{extract_qualified_type_name, extract_simple_type_name};
 pub(crate) fn generate_pyo3_impls(
     plan: &GenerationPlan,
     metadata: &CodeGenMetadata,
-    runtime: Runtime,
+    config: &CodeGenConfig,
 ) -> crate::error::Result<String> {
-    // The project's own packages, taken straight from the plan's services — the
-    // same set whose model modules `generate_models_mod` emits. Types in any other
-    // package (google/gnostic/etc.) are not in our crate and must be skipped
-    // (orphan rule + they have no in-crate path).
-    let project_packages: BTreeSet<&str> =
-        plan.services.iter().map(|s| s.package.as_str()).collect();
+    let runtime = config.runtime;
+    let options = config.python_options();
+    let services: Vec<&ServicePlan> = plan.services.iter().collect();
+    let classes = ModelClasses::new(&services, metadata);
+    let ctx = Ctx {
+        options,
+        classes: &classes,
+        enums_module: format!("{}._enums", options.package.name),
+    };
 
     let mut items: Vec<TokenStream> = Vec::new();
 
     // Enums first so message getters can reference the enum wrappers.
-    let mut enum_names: Vec<&String> = metadata.enums.keys().collect();
-    enum_names.sort();
-    for name in enum_names {
-        let Some(rust_path) = type_rust_path(name, &project_packages) else {
+    for name in &classes.enums {
+        let Some(rust_path) = type_rust_path(name, &classes.packages) else {
             continue;
         };
-        let info = &metadata.enums[name];
-        // An enum with no values has no representable wrapper; skip it.
-        if info.values.is_empty() {
-            continue;
-        }
-        items.push(enum_wrapper(name, info, &rust_path, runtime)?);
+        let info = &metadata.enums[*name];
+        items.push(str_enum_wrapper(name, info, &rust_path, runtime, &ctx)?);
     }
 
-    // Emit a wrapper for *every* message in the project's own packages, not just
-    // resource-annotated ones: request/response and other non-resource messages
-    // also cross the FFI boundary. Sort by name for deterministic output.
-    let mut msg_names: Vec<&String> = metadata.messages.keys().collect();
-    msg_names.sort();
-    for name in msg_names {
-        let Some(rust_path) = type_rust_path(name, &project_packages) else {
+    for name in &classes.messages {
+        let Some(rust_path) = type_rust_path(name, &classes.packages) else {
             continue;
         };
-        let info = &metadata.messages[name];
-        items.push(message_wrapper(name, info, &rust_path, runtime, metadata)?);
+        let info = &metadata.messages[*name];
+        items.push(message_wrapper(
+            name, info, &rust_path, runtime, metadata, &ctx,
+        )?);
     }
 
     if items.is_empty() {
         return Ok(String::new());
+    }
+    items.push(python_repr_fn());
+    if runtime == Runtime::Buffa && crate::codegen::metadata_has_json_fields(metadata) {
+        items.push(json_conversions());
     }
 
     // No file-level inner attributes (`#![..]`) or inner doc comments (`//!`):
@@ -108,15 +109,233 @@ pub(crate) fn generate_pyo3_impls(
     let tokens = quote! {
         // PyO3 wrapper `#[pyclass]` types for the generated models.
         //
-        // Each model message/enum gets a newtype wrapper exposing native, typed
-        // getters/setters and a keyword constructor, plus `From`/`Into` bridges to
-        // the bare model type. Mounted under the `python` feature; see the model
-        // module's `mod.rs`.
+        // Each model message gets a frozen newtype wrapper exposing native, typed
+        // getters and, for an input model, a keyword constructor; each enum a wrapper
+        // of its `enum.StrEnum` class; plus `From`/`Into` bridges to the bare model
+        // type. Mounted under the `python` feature; see the model module's `mod.rs`.
 
         #(#items)*
     };
 
     format_tokens(tokens)
+}
+
+/// Convert the Python object `value` (a `Bound<PyAny>`) into the free-form JSON field type `ty`.
+/// For a method argument (`arg`), a list or map is collected into a `Vec`, as the client takes
+/// an `impl IntoIterator` that leaves nothing to infer the collection from.
+pub(crate) fn json_from_py(
+    json: JsonType,
+    ty: &UnifiedType,
+    value: TokenStream,
+    arg: bool,
+) -> TokenStream {
+    let from_py = format_ident!("json_{}_from_py", json.fn_suffix());
+    if ty.is_repeated {
+        let collection = if arg {
+            quote! { ::std::vec::Vec<_> }
+        } else {
+            quote! { _ }
+        };
+        quote! {{
+            let items: ::std::vec::Vec<::pyo3::Bound<'_, ::pyo3::PyAny>> =
+                ::pyo3::types::PyAnyMethods::extract(&#value)?;
+            items.iter().map(#from_py).collect::<::pyo3::PyResult<#collection>>()?
+        }}
+    } else if matches!(ty.base_type, BaseType::Map(..)) {
+        let collection = if arg {
+            quote! { ::std::vec::Vec<_> }
+        } else {
+            quote! { _ }
+        };
+        quote! {{
+            let items: ::std::collections::HashMap<::std::string::String, ::pyo3::Bound<'_, ::pyo3::PyAny>> =
+                ::pyo3::types::PyAnyMethods::extract(&#value)?;
+            items
+                .iter()
+                .map(|(key, item)| ::core::result::Result::Ok((key.clone(), #from_py(item)?)))
+                .collect::<::pyo3::PyResult<#collection>>()?
+        }}
+    } else {
+        quote! { ::buffa::MessageField::some(#from_py(&#value)?) }
+    }
+}
+
+/// Conversions between Python objects and buffa's `google.protobuf.Value`/`Struct`/`ListValue`,
+/// and `PyJson`, the typed return value of a JSON getter.
+fn json_conversions() -> TokenStream {
+    quote! {
+        /// The type hint of a JSON getter.
+        pub trait JsonTypeHint {
+            /// The hint.
+            const HINT: ::pyo3::inspect::PyStaticExpr;
+        }
+
+        /// `typing.Any`.
+        pub struct JsonAny;
+
+        impl JsonTypeHint for JsonAny {
+            const HINT: ::pyo3::inspect::PyStaticExpr = ::pyo3::type_hint_identifier!("typing", "Any");
+        }
+
+        /// `dict[str, V]`.
+        pub struct JsonDict<V>(::core::marker::PhantomData<V>);
+
+        impl<V: JsonTypeHint> JsonTypeHint for JsonDict<V> {
+            const HINT: ::pyo3::inspect::PyStaticExpr = ::pyo3::type_hint_subscript!(
+                ::pyo3::type_hint_identifier!("builtins", "dict"),
+                ::pyo3::type_hint_identifier!("builtins", "str"),
+                V::HINT
+            );
+        }
+
+        /// `list[V]`.
+        pub struct JsonList<V>(::core::marker::PhantomData<V>);
+
+        impl<V: JsonTypeHint> JsonTypeHint for JsonList<V> {
+            const HINT: ::pyo3::inspect::PyStaticExpr = ::pyo3::type_hint_subscript!(
+                ::pyo3::type_hint_identifier!("builtins", "list"),
+                V::HINT
+            );
+        }
+
+        /// The Python object of a JSON getter, typed `H` in the stubs.
+        pub struct PyJson<H>(::pyo3::Py<::pyo3::PyAny>, ::core::marker::PhantomData<H>);
+
+        impl<H> PyJson<H> {
+            fn new(object: ::pyo3::Py<::pyo3::PyAny>) -> Self {
+                Self(object, ::core::marker::PhantomData)
+            }
+        }
+
+        impl<'py, H: JsonTypeHint> ::pyo3::IntoPyObject<'py> for PyJson<H> {
+            type Target = ::pyo3::PyAny;
+            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
+            type Error = ::core::convert::Infallible;
+            const OUTPUT_TYPE: ::pyo3::inspect::PyStaticExpr = H::HINT;
+
+            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::core::result::Result<Self::Output, Self::Error> {
+                ::core::result::Result::Ok(self.0.into_bound(py))
+            }
+        }
+
+        /// A JSON value as a Python object: `None`, `bool`, `int` for a whole number, `float`,
+        /// `str`, `list` or `dict`.
+        pub fn json_value_to_py(
+            py: ::pyo3::Python<'_>,
+            value: &::buffa_types::google::protobuf::Value,
+        ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+            use ::buffa_types::google::protobuf::value::Kind;
+            use ::pyo3::IntoPyObjectExt;
+            match &value.kind {
+                ::core::option::Option::None | ::core::option::Option::Some(Kind::NullValue(_)) => {
+                    ::core::result::Result::Ok(py.None())
+                }
+                ::core::option::Option::Some(Kind::BoolValue(b)) => b.into_py_any(py),
+                ::core::option::Option::Some(Kind::NumberValue(n))
+                    if n.fract() == 0.0 && n.abs() <= 9_007_199_254_740_992.0 =>
+                {
+                    (*n as i64).into_py_any(py)
+                }
+                ::core::option::Option::Some(Kind::NumberValue(n)) => n.into_py_any(py),
+                ::core::option::Option::Some(Kind::StringValue(s)) => s.into_py_any(py),
+                ::core::option::Option::Some(Kind::StructValue(s)) => json_struct_to_py(py, s),
+                ::core::option::Option::Some(Kind::ListValue(l)) => json_list_to_py(py, l),
+            }
+        }
+
+        /// A JSON object as a Python `dict`.
+        pub fn json_struct_to_py(
+            py: ::pyo3::Python<'_>,
+            value: &::buffa_types::google::protobuf::Struct,
+        ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+            let dict = ::pyo3::types::PyDict::new(py);
+            for (key, item) in &value.fields {
+                ::pyo3::types::PyDictMethods::set_item(&dict, key, json_value_to_py(py, item)?)?;
+            }
+            ::core::result::Result::Ok(dict.into_any().unbind())
+        }
+
+        /// A JSON array as a Python `list`.
+        pub fn json_list_to_py(
+            py: ::pyo3::Python<'_>,
+            value: &::buffa_types::google::protobuf::ListValue,
+        ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+            let items = value
+                .values
+                .iter()
+                .map(|item| json_value_to_py(py, item))
+                .collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?;
+            ::core::result::Result::Ok(::pyo3::types::PyList::new(py, items)?.into_any().unbind())
+        }
+
+        /// A Python object as a JSON value. It takes `None`, `bool`, `int`, `float`, `str`, and
+        /// `list`, `tuple` and `dict` of those.
+        pub fn json_value_from_py(
+            obj: &::pyo3::Bound<'_, ::pyo3::PyAny>,
+        ) -> ::pyo3::PyResult<::buffa_types::google::protobuf::Value> {
+            use ::buffa_types::google::protobuf::Value;
+            use ::pyo3::types::{PyAnyMethods, PyTypeMethods};
+            if obj.is_none() {
+                return ::core::result::Result::Ok(Value::null());
+            }
+            // `bool` before `int`: a Python `bool` is an `int`.
+            if obj.is_instance_of::<::pyo3::types::PyBool>() {
+                return ::core::result::Result::Ok(Value::from(obj.extract::<bool>()?));
+            }
+            if obj.is_instance_of::<::pyo3::types::PyInt>()
+                || obj.is_instance_of::<::pyo3::types::PyFloat>()
+            {
+                let number = obj.extract::<f64>()?;
+                if !number.is_finite() {
+                    return ::core::result::Result::Err(::pyo3::exceptions::PyValueError::new_err(
+                        ::std::format!("not a JSON number: {number}"),
+                    ));
+                }
+                return ::core::result::Result::Ok(Value::from(number));
+            }
+            if obj.is_instance_of::<::pyo3::types::PyString>() {
+                return ::core::result::Result::Ok(Value::from(obj.extract::<::std::string::String>()?));
+            }
+            if obj.is_instance_of::<::pyo3::types::PyDict>() {
+                return ::core::result::Result::Ok(Value::from(json_struct_from_py(obj)?));
+            }
+            if obj.is_instance_of::<::pyo3::types::PyList>()
+                || obj.is_instance_of::<::pyo3::types::PyTuple>()
+            {
+                return ::core::result::Result::Ok(Value::from(json_list_from_py(obj)?));
+            }
+            ::core::result::Result::Err(::pyo3::exceptions::PyTypeError::new_err(::std::format!(
+                "not a JSON value: {}",
+                obj.get_type().name()?
+            )))
+        }
+
+        /// A Python `dict` with `str` keys as a JSON object.
+        pub fn json_struct_from_py(
+            obj: &::pyo3::Bound<'_, ::pyo3::PyAny>,
+        ) -> ::pyo3::PyResult<::buffa_types::google::protobuf::Struct> {
+            let items: ::std::collections::HashMap<::std::string::String, ::pyo3::Bound<'_, ::pyo3::PyAny>> =
+                ::pyo3::types::PyAnyMethods::extract(obj)?;
+            let mut value = ::buffa_types::google::protobuf::Struct::default();
+            for (key, item) in &items {
+                value.fields.insert(key.clone(), json_value_from_py(item)?);
+            }
+            ::core::result::Result::Ok(value)
+        }
+
+        /// A Python `list` or `tuple` as a JSON array.
+        pub fn json_list_from_py(
+            obj: &::pyo3::Bound<'_, ::pyo3::PyAny>,
+        ) -> ::pyo3::PyResult<::buffa_types::google::protobuf::ListValue> {
+            let items: ::std::vec::Vec<::pyo3::Bound<'_, ::pyo3::PyAny>> =
+                ::pyo3::types::PyAnyMethods::extract(obj)?;
+            let mut value = ::buffa_types::google::protobuf::ListValue::default();
+            for item in &items {
+                value.values.push(json_value_from_py(item)?);
+            }
+            ::core::result::Result::Ok(value)
+        }
+    }
 }
 
 /// The `Py`-prefixed wrapper ident for a fully-qualified proto type name, using
@@ -126,111 +345,325 @@ fn wrapper_ident(fq_name: &str) -> proc_macro2::Ident {
 }
 
 /// The Python-visible class name (no `Py` prefix) for a fully-qualified proto name.
-fn python_class_name(fq_name: &str) -> String {
+pub(crate) fn python_class_name(fq_name: &str) -> String {
     extract_qualified_type_name(fq_name)
+}
+
+/// The models that the bindings wrap, shared by `pyo3_impls.rs`, the `#[pymodule]` and
+/// `_enums.py`.
+pub(crate) struct ModelClasses<'a> {
+    /// The project's own packages (those of the plan's services). Types of other packages
+    /// (google, gnostic, ...) get no wrapper: orphan rule, and no in-crate path.
+    packages: BTreeSet<&'a str>,
+    /// The project enums that have values, sorted by name.
+    pub(crate) enums: Vec<&'a String>,
+    /// The project messages that Python sees (see [`surfaced_messages`]), sorted by name.
+    messages: Vec<&'a String>,
+    /// Messages that a request takes; see [`input_messages`].
+    inputs: BTreeSet<String>,
+}
+
+impl<'a> ModelClasses<'a> {
+    pub(crate) fn new(services: &[&'a ServicePlan], metadata: &'a CodeGenMetadata) -> Self {
+        let packages: BTreeSet<&str> = services.iter().map(|s| s.package.as_str()).collect();
+        let mut enums: Vec<&String> = metadata
+            .enums
+            .iter()
+            .filter(|(name, info)| {
+                !info.values.is_empty() && type_rust_path(name, &packages).is_some()
+            })
+            .map(|(name, _)| name)
+            .collect();
+        enums.sort();
+        let inputs = input_messages(services, metadata);
+        let surfaced = surfaced_messages(services, metadata, &inputs);
+        let mut messages: Vec<&String> = metadata
+            .messages
+            .keys()
+            .filter(|name| type_rust_path(name, &packages).is_some() && surfaced.contains(*name))
+            .collect();
+        messages.sort();
+        Self {
+            packages,
+            enums,
+            messages,
+            inputs,
+        }
+    }
+
+    /// The `#[pyclass]` wrappers with their package segment: the messages (the enums are `str`
+    /// classes).
+    pub(crate) fn pyclasses(&self) -> impl Iterator<Item = (&'a str, proc_macro2::Ident)> {
+        self.messages.iter().filter_map(|name| {
+            let package = package_of(name, &self.packages)?;
+            Some((super::package_segment(package), wrapper_ident(name)))
+        })
+    }
+
+    /// The Python class names with their package segment and whether they are enums.
+    pub(crate) fn public_names(&self) -> impl Iterator<Item = (&'a str, String, bool)> {
+        let enums = self.enums.iter().map(|name| (*name, true));
+        let messages = self.messages.iter().map(|name| (*name, false));
+        enums.chain(messages).filter_map(|(name, is_enum)| {
+            let package = package_of(name, &self.packages)?;
+            Some((
+                super::package_segment(package),
+                python_class_name(name),
+                is_enum,
+            ))
+        })
+    }
+}
+
+/// Whether an enum value has no Python member: the zero `*_UNSPECIFIED` value, which a field
+/// holding it reads as `None`.
+pub(crate) fn hidden_value(value: &EnumValue) -> bool {
+    value.number == 0 && value.name.ends_with("_UNSPECIFIED")
+}
+
+fn has_hidden_zero(info: &EnumInfo) -> bool {
+    info.values.iter().any(hidden_value)
+}
+
+/// The longest project package that prefixes `fq_name`.
+fn package_of<'a>(fq_name: &str, project_packages: &BTreeSet<&'a str>) -> Option<&'a str> {
+    let stripped = fq_name.strip_prefix('.').unwrap_or(fq_name);
+    project_packages
+        .iter()
+        .filter(|pkg| {
+            stripped
+                .strip_prefix(**pkg)
+                .is_some_and(|rest| rest.starts_with('.'))
+        })
+        .max_by_key(|pkg| pkg.len())
+        .copied()
+}
+
+/// The messages that a request takes: the message types of the RPC input fields and everything
+/// reachable from them. The input messages themselves become method parameters, not classes.
+fn input_messages(services: &[&ServicePlan], metadata: &CodeGenMetadata) -> BTreeSet<String> {
+    let mut queue = Vec::new();
+    for method in services.iter().flat_map(|s| &s.methods) {
+        if let Some(info) = metadata
+            .messages
+            .get(&metadata_key(&method.metadata.input_type))
+        {
+            push_field_messages(info, &mut queue);
+        }
+    }
+    reachable(queue, metadata)
+}
+
+/// The messages that Python sees: the `inputs`, the RPC outputs, and everything reachable from
+/// those outputs.
+fn surfaced_messages(
+    services: &[&ServicePlan],
+    metadata: &CodeGenMetadata,
+    inputs: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let outputs = services
+        .iter()
+        .flat_map(|s| &s.methods)
+        .map(|m| metadata_key(&m.metadata.output_type))
+        .filter(|name| !name.ends_with(".Empty"))
+        .collect();
+    let mut surfaced = reachable(outputs, metadata);
+    surfaced.extend(inputs.iter().cloned());
+    surfaced
+}
+
+/// `start` and every message reachable from it.
+fn reachable(start: Vec<String>, metadata: &CodeGenMetadata) -> BTreeSet<String> {
+    let mut queue = start;
+    let mut seen = BTreeSet::new();
+    while let Some(name) = queue.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some(info) = metadata.messages.get(&name) {
+            push_field_messages(info, &mut queue);
+        }
+    }
+    seen
+}
+
+/// Push the message types of the fields of `info` (including map values and oneof variants).
+fn push_field_messages(info: &MessageInfo, queue: &mut Vec<String>) {
+    for field in &info.fields {
+        let types = std::iter::once(&field.unified_type)
+            .chain(field.oneof_variants.iter().flatten().map(|v| &v.field_type));
+        for ty in types {
+            let ty = match &ty.base_type {
+                BaseType::Map(_, value) => value,
+                _ => ty,
+            };
+            if let BaseType::Message(name) = &ty.base_type {
+                queue.push(metadata_key(name));
+            }
+        }
+    }
+}
+
+/// What the wrappers of one generation run share.
+struct Ctx<'a> {
+    options: &'a PythonOptions,
+    classes: &'a ModelClasses<'a>,
+    /// Import name of the `_enums` module (`<package>._enums`).
+    enums_module: String,
+}
+
+impl Ctx<'_> {
+    /// The `module = "…",` argument of `#[pyclass]` for a type, with its trailing comma.
+    fn module_arg(&self, fq_name: &str) -> Option<TokenStream> {
+        let package = package_of(fq_name, &self.classes.packages)?;
+        Some(super::module_arg(
+            self.options,
+            Some(super::package_segment(package)),
+        ))
+    }
+
+    /// Whether the class of message `fq_name` gets a keyword constructor: the models that a
+    /// request takes do; a model that only comes back in responses does not.
+    fn has_constructor(&self, fq_name: &str) -> bool {
+        self.classes.inputs.contains(&metadata_key(fq_name))
+    }
+}
+
+/// The shared helper of the Python-style `__repr__`.
+fn python_repr_fn() -> TokenStream {
+    quote! {
+        /// `Name(field=value, …)` without the `None` fields; a redacted field shows `'***'`.
+        fn __python_repr(
+            obj: &::pyo3::Bound<'_, ::pyo3::PyAny>,
+            fields: &[(&str, bool)],
+        ) -> ::pyo3::PyResult<::std::string::String> {
+            use ::pyo3::types::{PyAnyMethods, PyTypeMethods};
+            let mut shown = ::std::vec::Vec::with_capacity(fields.len());
+            for (field, redact) in fields {
+                let value = obj.getattr(*field)?;
+                if value.is_none() {
+                    continue;
+                }
+                if *redact {
+                    shown.push(::std::format!("{field}='***'"));
+                } else {
+                    shown.push(::std::format!("{field}={}", value.repr()?));
+                }
+            }
+            Ok(::std::format!("{}({})", obj.get_type().name()?, shown.join(", ")))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Enum wrappers
 // ---------------------------------------------------------------------------
 
-/// Emit a `#[pyclass(eq, eq_int)]` enum mirroring a proto enum, plus `From`
-/// conversions to/from the bare Rust enum.
-///
-/// The wrapper is an integer-valued Python enum (so `==` and `int()` work). The
-/// boundary to the buffa/prost runtime is by proto value: each variant carries
-/// its proto number, and `From`/`Into` map through the runtime enum's `i32` repr.
-fn enum_wrapper(
+/// Emit the bridge of a proto enum to its `enum.StrEnum` class in `_enums.py`: a newtype that
+/// extracts from a member or a name and converts back into a member.
+fn str_enum_wrapper(
     fq_name: &str,
     info: &EnumInfo,
     rust_path: &str,
     runtime: Runtime,
+    ctx: &Ctx<'_>,
 ) -> crate::error::Result<TokenStream> {
     let wrapper = wrapper_ident(fq_name);
     let class_name = python_class_name(fq_name);
     let inner: syn::Path = parse_path(rust_path, fq_name)?;
+    let enums_module = ctx.enums_module.as_str();
 
-    // Variant idents mirror the proto value names (UPPER_SNAKE), which are valid
-    // Python identifiers and stay stable regardless of the runtime's own variant
-    // renaming (prost PascalCases + strips the type prefix; buffa keeps the proto
-    // name). We therefore never reference the *runtime* enum's variant idents —
-    // conversions go through the proto `i32` value, which both runtimes expose.
-    let variants: Vec<proc_macro2::Ident> = info
-        .values
+    let shown: Vec<&EnumValue> = info.values.iter().filter(|v| !hidden_value(v)).collect();
+    let names: Vec<&str> = shown.iter().map(|v| v.name.as_str()).collect();
+    let numbers: Vec<proc_macro2::Literal> = shown
         .iter()
-        .map(|v| format_ident!("{}", v.name))
+        .map(|v| proc_macro2::Literal::i32_suffixed(v.number))
         .collect();
-    // pyo3's `#[pyclass(eq_int)]` enums require `isize` discriminants.
-    let numbers: Vec<proc_macro2::Literal> = info
-        .values
-        .iter()
-        .map(|v| proc_macro2::Literal::isize_suffixed(v.number as isize))
-        .collect();
+    let invalid = format!(
+        "invalid {class_name}: {{:?}}; expected one of: {}",
+        names.join(", ")
+    );
+    let no_member = format!("{class_name} value {{}} has no Python member");
 
-    // The wrapper -> i32 arms and i32 -> wrapper arms (shared by both runtimes).
-    let to_i32_arms = info.values.iter().map(|v| {
-        let id = format_ident!("{}", v.name);
-        let n = proc_macro2::Literal::i32_suffixed(v.number);
-        quote! { #wrapper::#id => #n }
-    });
-    let from_i32_arms = info.values.iter().map(|v| {
-        let id = format_ident!("{}", v.name);
-        let n = proc_macro2::Literal::i32_suffixed(v.number);
-        quote! { #n => #wrapper::#id }
-    });
-    let fallback = &variants[0];
-
-    // Runtime-specific bridges between the wrapper's `i32` and the bare model enum.
-    // buffa exposes `Enumeration::{to_i32, from_i32}`; prost enums are
-    // `TryFrom<i32>` + `as i32`.
     let (inner_to_i32, i32_to_inner): (TokenStream, TokenStream) = match runtime {
         Runtime::Buffa => (
-            quote! { <#inner as ::buffa::Enumeration>::to_i32(&value) },
+            quote! { <#inner as ::buffa::Enumeration>::to_i32(&self.0) },
             quote! { <#inner as ::buffa::Enumeration>::from_i32(n).unwrap_or_default() },
         ),
         Runtime::Prost => (
-            quote! { value as i32 },
+            quote! { self.0 as i32 },
             quote! { <#inner as ::core::convert::TryFrom<i32>>::try_from(n).unwrap_or_default() },
         ),
     };
 
+    let doc = format!(" A member of `{enums_module}.{class_name}`, or its name.");
     Ok(quote! {
-        // Variant idents mirror the proto value names (UPPER_SNAKE), which trip the
-        // camel-case lint; the conversions are intentionally exhaustive.
-        #[allow(non_camel_case_types)]
-        // `from_py_object`: `Clone` + pyo3 0.28's opt-in `FromPyObject` (see the message
-        // wrapper emitter). Keep the derive explicit to preserve pre-0.28 behavior.
-        #[::pyo3::pyclass(eq, eq_int, name = #class_name, from_py_object)]
+        #[doc = #doc]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-        pub enum #wrapper {
-            #(#variants = #numbers,)*
-        }
+        pub struct #wrapper(pub #inner);
 
         impl #wrapper {
-            fn __to_proto_i32(self) -> i32 {
-                match self {
-                    #(#to_i32_arms,)*
-                }
-            }
-            fn __from_proto_i32(value: i32) -> Self {
-                match value {
-                    #(#from_i32_arms,)*
-                    // Unknown values fall back to the first declared variant.
-                    _ => #wrapper::#fallback,
+            /// The name of the value, or `None` for a value without a Python member.
+            fn __name(&self) -> ::core::option::Option<&'static str> {
+                match #inner_to_i32 {
+                    #(#numbers => ::core::option::Option::Some(#names),)*
+                    _ => ::core::option::Option::None,
                 }
             }
         }
 
         impl ::core::convert::From<#inner> for #wrapper {
             fn from(value: #inner) -> Self {
-                #wrapper::__from_proto_i32(#inner_to_i32)
+                Self(value)
             }
         }
 
         impl ::core::convert::From<#wrapper> for #inner {
             fn from(value: #wrapper) -> Self {
-                let n = value.__to_proto_i32();
-                #i32_to_inner
+                value.0
+            }
+        }
+
+        impl<'a, 'py> ::pyo3::FromPyObject<'a, 'py> for #wrapper {
+            type Error = ::pyo3::PyErr;
+            const INPUT_TYPE: ::pyo3::inspect::PyStaticExpr = {
+                // The macro calls itself without a path.
+                use ::pyo3::type_hint_union;
+                type_hint_union!(
+                    ::pyo3::type_hint_identifier!(#enums_module, #class_name),
+                    ::pyo3::type_hint_identifier!("builtins", "str")
+                )
+            };
+
+            fn extract(obj: ::pyo3::Borrowed<'a, 'py, ::pyo3::PyAny>) -> ::pyo3::PyResult<Self> {
+                let name: ::pyo3::pybacked::PyBackedStr = ::pyo3::types::PyAnyMethods::extract(&*obj)?;
+                let n: i32 = match &*name {
+                    #(#names => #numbers,)*
+                    other => {
+                        return ::core::result::Result::Err(
+                            ::pyo3::exceptions::PyValueError::new_err(::std::format!(#invalid, other)),
+                        );
+                    }
+                };
+                ::core::result::Result::Ok(Self(#i32_to_inner))
+            }
+        }
+
+        impl<'py> ::pyo3::IntoPyObject<'py> for #wrapper {
+            type Target = ::pyo3::PyAny;
+            type Output = ::pyo3::Bound<'py, ::pyo3::PyAny>;
+            type Error = ::pyo3::PyErr;
+            const OUTPUT_TYPE: ::pyo3::inspect::PyStaticExpr =
+                ::pyo3::type_hint_identifier!(#enums_module, #class_name);
+
+            fn into_pyobject(self, py: ::pyo3::Python<'py>) -> ::pyo3::PyResult<Self::Output> {
+                static CLASS: ::pyo3::sync::PyOnceLock<::pyo3::Py<::pyo3::types::PyType>> =
+                    ::pyo3::sync::PyOnceLock::new();
+                let class = CLASS.import(py, #enums_module, #class_name)?;
+                let name = self.__name().ok_or_else(|| {
+                    ::pyo3::exceptions::PyValueError::new_err(::std::format!(#no_member, #inner_to_i32))
+                })?;
+                ::pyo3::types::PyAnyMethods::getattr(class.as_any(), name)
             }
         }
     })
@@ -240,15 +673,16 @@ fn enum_wrapper(
 // Message wrappers
 // ---------------------------------------------------------------------------
 
-/// Emit a newtype `#[pyclass]` wrapping a model message: keyword constructor,
-/// native typed getters/setters per field, `__repr__`/`__eq__`, and the
-/// `From`/`Into` bridges to the bare model type.
+/// Emit a frozen newtype `#[pyclass]` wrapping a model message: a keyword constructor for an
+/// input model, native typed getters per field, `__repr__`/`__eq__`, and the `From`/`Into`
+/// bridges to the bare model type.
 fn message_wrapper(
     fq_name: &str,
     info: &MessageInfo,
     rust_path: &str,
     runtime: Runtime,
     metadata: &CodeGenMetadata,
+    ctx: &Ctx<'_>,
 ) -> crate::error::Result<TokenStream> {
     let wrapper = wrapper_ident(fq_name);
     let class_name = python_class_name(fq_name);
@@ -275,7 +709,21 @@ fn message_wrapper(
         .iter()
         .map(|f| {
             let is_boxed = boxed.contains(&(fq_name.to_string(), f.name.clone()));
-            FieldAccessor::new(f, runtime, &packages, &project_pkg_refs, is_boxed)
+            let hidden_zero = match &f.unified_type.base_type {
+                BaseType::Enum(n) => metadata
+                    .enums
+                    .get(&metadata_key(n))
+                    .is_some_and(has_hidden_zero),
+                _ => false,
+            };
+            FieldAccessor::new(
+                f,
+                runtime,
+                &packages,
+                &project_pkg_refs,
+                is_boxed,
+                hidden_zero,
+            )
         })
         .collect();
 
@@ -289,18 +737,37 @@ fn message_wrapper(
         .collect();
 
     let getters = accessors.iter().map(FieldAccessor::getter);
-    let setters = accessors.iter().map(FieldAccessor::setter);
     let oneof_getters = oneofs.iter().flat_map(OneofAccessor::variant_getters);
-    let oneof_setters = oneofs.iter().flat_map(OneofAccessor::variant_setters);
-    let ctor = constructor(&accessors, &oneofs, &inner);
+    let ctor = ctx
+        .has_constructor(fq_name)
+        .then(|| constructor(&accessors, &oneofs, &inner, ctx.options.keyword_only));
+
+    // `r#type` is `type` in Python.
+    let repr_fields = accessors
+        .iter()
+        .map(|a| (a.ident.clone(), a.sensitive))
+        .chain(
+            oneofs
+                .iter()
+                .flat_map(OneofAccessor::variant_param_idents)
+                .map(|ident| (ident, false)),
+        )
+        .map(|(ident, redact)| {
+            let name = syn::ext::IdentExt::unraw(&ident).to_string();
+            quote! { (#name, #redact) }
+        });
+
+    let module_arg = ctx.module_arg(fq_name);
+    let doc = doc_tokens(info.documentation.as_deref());
 
     Ok(quote! {
+        #doc
         // `from_py_object`: these wrappers are `Clone`, and pyo3 0.28 made the auto
         // `FromPyObject` derive for `Clone` `#[pyclass]` types opt-in. Keep the pre-0.28
         // behavior (derive it) explicitly so Python callers can still pass a wrapper into
         // Rust-side functions and to silence the deprecation under `-D warnings`.
-        #[::pyo3::pyclass(name = #class_name, from_py_object)]
-        #[derive(Clone, Debug)]
+        #[::pyo3::pyclass(name = #class_name, eq, frozen, #module_arg from_py_object)]
+        #[derive(Clone, Debug, PartialEq)]
         pub struct #wrapper(pub #inner);
 
         #[allow(clippy::too_many_arguments, clippy::useless_conversion)]
@@ -309,16 +776,10 @@ fn message_wrapper(
             #ctor
 
             #(#getters)*
-            #(#setters)*
             #(#oneof_getters)*
-            #(#oneof_setters)*
 
-            fn __repr__(&self) -> ::std::string::String {
-                ::std::format!("{:?}", self.0)
-            }
-
-            fn __eq__(&self, other: &Self) -> bool {
-                self.0 == other.0
+            fn __repr__(slf: &::pyo3::Bound<'_, Self>) -> ::pyo3::PyResult<::std::string::String> {
+                __python_repr(slf.as_any(), &[#(#repr_fields),*])
             }
         }
 
@@ -431,6 +892,18 @@ struct FieldAccessor {
     /// `Option<Box<T>>` (it sits on a recursion cycle). Drives whether the read
     /// path derefs the box and the write path re-boxes. Always `false` for buffa.
     is_boxed: bool,
+    /// Whether the field is an enum whose zero value has no Python member (see
+    /// [`hidden_value`]).
+    hidden_zero: bool,
+    /// The proto field comment, for the getter.
+    documentation: Option<String>,
+    /// The free-form JSON type of the field (buffa only).
+    json: Option<JsonType>,
+    /// Whether the proto marks the field `REQUIRED` (a positional constructor argument with
+    /// [`PythonOptions::keyword_only`](crate::PythonOptions::keyword_only)).
+    required: bool,
+    /// Whether the proto marks the field `debug_redact` (hidden in the Python repr).
+    sensitive: bool,
 }
 
 impl FieldAccessor {
@@ -440,9 +913,15 @@ impl FieldAccessor {
         packages: &BTreeSet<String>,
         project_pkg_refs: &BTreeSet<&str>,
         is_boxed: bool,
+        hidden_zero: bool,
     ) -> Self {
-        let ident = format_ident!("{}", super::sanitize_python_field_name(&field.name));
-        let in_project = match &field.unified_type.base_type {
+        let ident = crate::utils::field_ident(&super::sanitize_python_field_name(&field.name));
+        // A map is in the project when its values are.
+        let element = match &field.unified_type.base_type {
+            BaseType::Map(_, value) => &value.base_type,
+            base => base,
+        };
+        let in_project = match element {
             BaseType::Message(n) | BaseType::Enum(n) => is_in_project(n, packages),
             _ => false,
         };
@@ -461,10 +940,87 @@ impl FieldAccessor {
             in_project,
             inner_rust_path,
             is_boxed,
+            hidden_zero,
+            documentation: field.documentation.clone(),
+            json: JsonType::of_field(&field.unified_type).filter(|_| runtime == Runtime::Buffa),
+            required: field
+                .field_behavior
+                .contains(&crate::google::api::FieldBehavior::Required),
+            sensitive: field.is_sensitive,
         }
     }
 
-    /// The Python-visible Rust type for this field (the getter return / setter
+    /// The `#[getter]` of a free-form JSON field, which returns a plain Python object typed by
+    /// a [`json_conversions`] hint: `typing.Any`, `dict[str, typing.Any]` or `list[typing.Any]`,
+    /// in a `list` or `dict` for a repeated or map field.
+    fn json_getter(&self, json: JsonType) -> TokenStream {
+        let ident = &self.ident;
+        let doc = doc_tokens(self.documentation.as_deref());
+        let to_py = format_ident!("json_{}_to_py", json.fn_suffix());
+        let item = match json {
+            JsonType::Value => quote! { JsonAny },
+            JsonType::Struct => quote! { JsonDict<JsonAny> },
+            JsonType::ListValue => quote! { JsonList<JsonAny> },
+        };
+        let (ret, body) = if self.ty.is_repeated {
+            (
+                quote! { PyJson<JsonList<#item>> },
+                quote! {
+                    let items = self.0.#ident
+                        .iter()
+                        .map(|value| #to_py(py, value))
+                        .collect::<::pyo3::PyResult<::std::vec::Vec<_>>>()?;
+                    ::core::result::Result::Ok(PyJson::new(
+                        ::pyo3::types::PyList::new(py, items)?.into_any().unbind(),
+                    ))
+                },
+            )
+        } else if matches!(self.ty.base_type, BaseType::Map(..)) {
+            (
+                quote! { PyJson<JsonDict<#item>> },
+                quote! {
+                    let dict = ::pyo3::types::PyDict::new(py);
+                    for (key, value) in &self.0.#ident {
+                        ::pyo3::types::PyDictMethods::set_item(&dict, key, #to_py(py, value)?)?;
+                    }
+                    ::core::result::Result::Ok(PyJson::new(dict.into_any().unbind()))
+                },
+            )
+        } else if json == JsonType::Value {
+            // A JSON value is `typing.Any`, `None` included.
+            (
+                quote! { PyJson<#item> },
+                quote! {
+                    let value = self.0.#ident.as_option().map(|value| #to_py(py, value)).transpose()?;
+                    ::core::result::Result::Ok(PyJson::new(value.unwrap_or_else(|| py.None())))
+                },
+            )
+        } else {
+            (
+                quote! { ::core::option::Option<PyJson<#item>> },
+                quote! {
+                    self.0.#ident
+                        .as_option()
+                        .map(|value| #to_py(py, value).map(PyJson::new))
+                        .transpose()
+                },
+            )
+        };
+        quote! {
+            #doc
+            #[getter]
+            fn #ident(&self, py: ::pyo3::Python<'_>) -> ::pyo3::PyResult<#ret> {
+                #body
+            }
+        }
+    }
+
+    /// Convert the Python object `value` into the field's free-form JSON type.
+    fn json_store(&self, json: JsonType) -> TokenStream {
+        json_from_py(json, &self.ty, quote! { value }, false)
+    }
+
+    /// The Python-visible Rust type for this field (the getter return / constructor
     /// arg). Messages/enums map to their `Py`-prefixed wrapper; collections wrap
     /// in `Vec`/`HashMap`; optional non-collection fields wrap in `Option`.
     fn py_type(&self) -> TokenStream {
@@ -486,10 +1042,27 @@ impl FieldAccessor {
         // Explicit-presence scalars/enums (proto3 `optional`) are stored as
         // `Option<T>` by both the buffa and prost model plugins, so the wrapper
         // surfaces them as `Optional[...]` too.
-        if self.is_optional_scalar() {
+        if self.is_optional_scalar() || self.is_hidden_zero_enum() {
             return quote! { ::core::option::Option<#base> };
         }
         base
+    }
+
+    /// A singular, non-`optional` enum field with a hidden zero value: `Optional[...]` in Python.
+    fn is_hidden_zero_enum(&self) -> bool {
+        self.hidden_zero && !self.ty.is_repeated && !self.ty.is_optional
+    }
+
+    /// The `.filter(..)` that drops a hidden zero value from an `Option` or iterator of the
+    /// bare Rust enum.
+    fn hidden_zero_filter(&self) -> Option<TokenStream> {
+        let inner = self.inner_rust_path.as_ref();
+        self.hidden_zero.then(|| match self.runtime {
+            Runtime::Buffa => {
+                quote! { .filter(|e| <#inner as ::buffa::Enumeration>::to_i32(e) != 0) }
+            }
+            Runtime::Prost => quote! { .filter(|e| *e as i32 != 0) },
+        })
     }
 
     fn base_py_type(&self) -> TokenStream {
@@ -505,7 +1078,7 @@ impl FieldAccessor {
     /// singular message or an explicit-presence scalar/enum. Such fields must not be
     /// re-wrapped in the keyword constructor (would yield ambiguous `Option<Option<T>>`).
     fn py_type_is_optional(&self) -> bool {
-        self.is_singular_message() || self.is_optional_scalar()
+        self.is_singular_message() || self.is_optional_scalar() || self.is_hidden_zero_enum()
     }
 
     /// An explicit-presence scalar or enum (proto3 `optional`): stored as
@@ -522,10 +1095,17 @@ impl FieldAccessor {
 
     /// `#[getter]` returning the field as its Python-visible type.
     fn getter(&self) -> TokenStream {
+        if let Some(json) = self.json {
+            return self.json_getter(json);
+        }
         let ident = &self.ident;
-        let ret = self.py_type();
-        let body = self.read_expr();
+        let (ret, body) = match self.ty.is_singular_bytes() {
+            true => self.bytes_getter(),
+            false => (self.py_type(), self.read_expr()),
+        };
+        let doc = doc_tokens(self.documentation.as_deref());
         quote! {
+            #doc
             #[getter]
             fn #ident(&self) -> #ret {
                 #body
@@ -533,17 +1113,35 @@ impl FieldAccessor {
         }
     }
 
-    /// `#[setter]` accepting the Python-visible type and storing into the inner.
-    fn setter(&self) -> TokenStream {
+    /// The return type and body of a singular `bytes` getter: a borrowed `Cow`, which PyO3 copies
+    /// into `bytes` once.
+    fn bytes_getter(&self) -> (TokenStream, TokenStream) {
         let ident = &self.ident;
-        let setter_name = format_ident!("set_{}", self.ident);
-        let arg = self.py_type();
-        let store = self.write_expr();
-        quote! {
-            #[setter(#ident)]
-            fn #setter_name(&mut self, value: #arg) {
-                self.0.#ident = #store;
-            }
+        match self.is_optional_scalar() {
+            true => (
+                quote! { ::core::option::Option<::std::borrow::Cow<'_, [u8]>> },
+                quote! { self.0.#ident.as_deref().map(::std::borrow::Cow::Borrowed) },
+            ),
+            false => (
+                quote! { ::std::borrow::Cow<'_, [u8]> },
+                quote! { ::std::borrow::Cow::Borrowed(&self.0.#ident) },
+            ),
+        }
+    }
+
+    /// The type a constructor argument takes: [`Self::py_type`], but `PyBackedBytes` for `bytes`.
+    fn input_type(&self) -> TokenStream {
+        match self.ty.is_singular_bytes() {
+            true => super::bindings::py_bytes_input(self.is_optional_scalar()),
+            false => self.py_type(),
+        }
+    }
+
+    /// [`Self::input_type`] without its `Option`, for a required constructor argument.
+    fn input_base_type(&self) -> TokenStream {
+        match self.ty.is_singular_bytes() {
+            true => super::bindings::py_bytes_input(false),
+            false => self.base_py_type(),
         }
     }
 
@@ -580,16 +1178,23 @@ impl FieldAccessor {
         let base = self.base_py_type();
         let inner = self.inner_rust_path.as_ref();
         match &self.ty.base_type {
-            BaseType::Enum(_) => match self.runtime {
-                // buffa repeated enum: Vec<EnumValue<E>>; keep known values only.
-                Runtime::Buffa => quote! {
-                    #access.iter().filter_map(|e| e.as_known().map(#base::from)).collect()
-                },
-                // prost repeated enum: Vec<i32>; map through the bare Rust enum.
-                Runtime::Prost => quote! {
-                    #access.iter().filter_map(|&v| <#inner as ::core::convert::TryFrom<i32>>::try_from(v).ok().map(#base::from)).collect()
-                },
-            },
+            BaseType::Enum(_) => {
+                let hidden = self.hidden_zero_filter();
+                match self.runtime {
+                    // buffa repeated enum: Vec<EnumValue<E>>; keep known values only.
+                    Runtime::Buffa => quote! {
+                        #access.iter().filter_map(|e| e.as_known()) #hidden .map(#base::from).collect()
+                    },
+                    // prost repeated enum: Vec<i32>; map through the bare Rust enum.
+                    Runtime::Prost => quote! {
+                        #access.iter()
+                            .filter_map(|&v| <#inner as ::core::convert::TryFrom<i32>>::try_from(v).ok())
+                            #hidden
+                            .map(#base::from)
+                            .collect()
+                    },
+                }
+            }
             BaseType::Message(_) => quote! {
                 #access.iter().cloned().map(#base::from).collect()
             },
@@ -601,6 +1206,15 @@ impl FieldAccessor {
     fn read_enum(&self, access: &TokenStream) -> TokenStream {
         let base = self.base_py_type();
         let inner = self.inner_rust_path.as_ref();
+        if self.is_hidden_zero_enum() {
+            let hidden = self.hidden_zero_filter();
+            return match self.runtime {
+                Runtime::Buffa => quote! { #access.as_known() #hidden .map(#base::from) },
+                Runtime::Prost => quote! {
+                    <#inner as ::core::convert::TryFrom<i32>>::try_from(#access).ok() #hidden .map(#base::from)
+                },
+            };
+        }
         match self.runtime {
             // buffa: EnumValue<E> -> Option<E> via as_known(); fall back to the inner
             // enum's Default (the zero/unspecified variant), then to the wrapper.
@@ -642,15 +1256,19 @@ impl FieldAccessor {
         let inner = self.inner_rust_path.as_ref();
         match &self.ty.base_type {
             // buffa: Option<EnumValue<E>>; prost: Option<i32>.
-            BaseType::Enum(_) => match self.runtime {
-                Runtime::Buffa => quote! {
-                    #access.as_ref().and_then(|e| e.as_known()).map(#base::from)
-                },
-                Runtime::Prost => quote! {
-                    #access.and_then(|v| <#inner as ::core::convert::TryFrom<i32>>::try_from(v).ok())
-                        .map(#base::from)
-                },
-            },
+            BaseType::Enum(_) => {
+                let hidden = self.hidden_zero_filter();
+                match self.runtime {
+                    Runtime::Buffa => quote! {
+                        #access.as_ref().and_then(|e| e.as_known()) #hidden .map(#base::from)
+                    },
+                    Runtime::Prost => quote! {
+                        #access.and_then(|v| <#inner as ::core::convert::TryFrom<i32>>::try_from(v).ok())
+                            #hidden
+                            .map(#base::from)
+                    },
+                }
+            }
             // Option<{int,bool,float}>: the inner scalar is `Copy`, so the `Option`
             // copies by value — `.clone()` here would trip `clippy::clone_on_copy`.
             BaseType::Int32
@@ -669,8 +1287,16 @@ impl FieldAccessor {
         if self.ty.is_repeated {
             return self.write_repeated();
         }
-        if let BaseType::Map(_, _) = &self.ty.base_type {
-            return quote! { value };
+        if self.ty.is_singular_bytes() {
+            return super::bindings::bytes_to_vec(quote! { value }, self.is_optional_scalar());
+        }
+        if let BaseType::Map(_, value) = &self.ty.base_type {
+            // Message values arrive as their wrappers.
+            return if self.in_project && matches!(value.base_type, BaseType::Message(_)) {
+                quote! { value.into_iter().map(|(k, v)| (k, ::core::convert::Into::into(v))).collect() }
+            } else {
+                quote! { value }
+            };
         }
         if self.is_optional_scalar() {
             return self.write_optional_scalar();
@@ -724,6 +1350,19 @@ impl FieldAccessor {
 
     fn write_enum(&self) -> TokenStream {
         let inner = self.inner_rust_path.as_ref();
+        // A hidden-zero field takes `Option<base>`; `None` stores the zero value.
+        if self.is_hidden_zero_enum() {
+            return match self.runtime {
+                Runtime::Buffa => quote! {
+                    value
+                        .map(|e| ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(e)))
+                        .unwrap_or_default()
+                },
+                Runtime::Prost => quote! {
+                    value.map(|e| <#inner as ::core::convert::From<_>>::from(e) as i32).unwrap_or(0)
+                },
+            };
+        }
         match self.runtime {
             Runtime::Buffa => quote! {
                 ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(value))
@@ -760,8 +1399,8 @@ impl FieldAccessor {
 // ---------------------------------------------------------------------------
 
 /// A proto `oneof`, resolved into the tokens needed to expose it across the PyO3
-/// boundary. Each oneof is *flattened*: one optional keyword arg + one
-/// `set_<variant>` setter + one `<variant>` getter per member (issue #99).
+/// boundary. Each oneof is *flattened*: one optional keyword arg + one `<variant>`
+/// getter per member (issue #99).
 ///
 /// The inner model stores a oneof as `Option<Enum>` where `Enum` has one tuple
 /// variant per member. buffa reaches the enum through a natural-path re-export in
@@ -787,8 +1426,6 @@ struct OneofVariantAccessor {
     variant_ident: proc_macro2::Ident,
     /// The flattened keyword-arg / accessor ident (the proto field name, e.g. `s3`).
     param_ident: proc_macro2::Ident,
-    /// The setter ident (`set_<param>`).
-    setter_ident: proc_macro2::Ident,
     /// The Python-visible payload wrapper type (e.g. `PyS3Config`, `i64`).
     payload_ty: TokenStream,
     /// Whether the payload is an in-project message (needs `.into()`/`From` bridge)
@@ -808,7 +1445,8 @@ impl OneofAccessor {
         runtime: Runtime,
         packages: &BTreeSet<String>,
     ) -> Self {
-        let field_ident = format_ident!("{}", super::sanitize_python_field_name(&field.name));
+        let field_ident =
+            crate::utils::field_ident(&super::sanitize_python_field_name(&field.name));
 
         // The oneof enum's name in the IR is already `<msg_snake>::<OneofPascal>`
         // (built in `parsing/message.rs`); it lives in the message's parent module.
@@ -837,10 +1475,10 @@ impl OneofAccessor {
     }
 
     /// The flattened keyword-arg idents (proto field names), for the `#[pyo3(signature)]`.
-    fn variant_param_idents(&self) -> Vec<String> {
+    fn variant_param_idents(&self) -> Vec<proc_macro2::Ident> {
         self.variants
             .iter()
-            .map(|v| v.param_ident.to_string())
+            .map(|v| v.param_ident.clone())
             .collect()
     }
 
@@ -868,43 +1506,6 @@ impl OneofAccessor {
                 quote! {
                     if let ::core::option::Option::Some(value) = #param {
                         inner.#field_ident = ::core::option::Option::Some(#store);
-                    }
-                }
-            })
-            .collect()
-    }
-
-    /// A `#[setter]` per variant: setting one variant to `Some` replaces the oneof;
-    /// setting it to `None` clears the oneof only if that variant is currently active.
-    fn variant_setters(&self) -> Vec<TokenStream> {
-        let field_ident = &self.field_ident;
-        self.variants
-            .iter()
-            .map(|v| {
-                let setter = &v.setter_ident;
-                let param = &v.param_ident;
-                let ty = &v.payload_ty;
-                let variant = &v.variant_ident;
-                let enum_path = &self.enum_path;
-                let store = v.write_variant(enum_path, self.runtime);
-                quote! {
-                    #[setter(#param)]
-                    fn #setter(&mut self, value: ::core::option::Option<#ty>) {
-                        match value {
-                            ::core::option::Option::Some(value) => {
-                                self.0.#field_ident = ::core::option::Option::Some(#store);
-                            }
-                            // Clearing this variant only clears the oneof when it is
-                            // the active one; leave a different active variant intact.
-                            ::core::option::Option::None => {
-                                if ::core::matches!(
-                                    self.0.#field_ident,
-                                    ::core::option::Option::Some(#enum_path::#variant(_))
-                                ) {
-                                    self.0.#field_ident = ::core::option::Option::None;
-                                }
-                            }
-                        }
                     }
                 }
             })
@@ -948,8 +1549,7 @@ impl OneofAccessor {
 impl OneofVariantAccessor {
     fn new(variant: &OneofVariant, packages: &BTreeSet<String>) -> Self {
         let param_ident =
-            format_ident!("{}", super::sanitize_python_field_name(&variant.field_name));
-        let setter_ident = format_ident!("set_{param_ident}");
+            crate::utils::field_ident(&super::sanitize_python_field_name(&variant.field_name));
         let variant_ident = format_ident!("{}", variant.variant_name);
 
         let (is_message, is_enum) = match &variant.field_type.base_type {
@@ -963,7 +1563,6 @@ impl OneofVariantAccessor {
         Self {
             variant_ident,
             param_ident,
-            setter_ident,
             payload_ty,
             is_message,
             is_enum,
@@ -1088,16 +1687,19 @@ fn read_map(access: &TokenStream, value: &UnifiedType, in_project: bool) -> Toke
     }
 }
 
-/// The keyword `#[new]` constructor: every plain field is an optional keyword
-/// argument defaulting to `None`, and each oneof is *flattened* into one optional
-/// keyword arg per variant (matching the hand-written constructors downstream
-/// adopters used, see issue #99). Provided values are stored; omitted ones fall
-/// back to the inner type's `Default`. If more than one variant of the same oneof
-/// is supplied, the last one in proto declaration order wins.
+/// `let value = <argument>;` for the store expressions; nothing for an argument named `value`.
+fn bind_value(ident: &proc_macro2::Ident) -> Option<TokenStream> {
+    (ident != "value").then(|| quote! { let value = #ident; })
+}
+
+/// The keyword `#[new]` constructor: every plain field is an optional keyword argument, and each
+/// oneof is flattened into one optional argument per variant (the last one given wins). With
+/// `keyword_only`, the `REQUIRED` fields come first as positional arguments.
 fn constructor(
     accessors: &[FieldAccessor],
     oneofs: &[OneofAccessor],
     inner: &syn::Path,
+    keyword_only: bool,
 ) -> TokenStream {
     if accessors.is_empty() && oneofs.is_empty() {
         return quote! {
@@ -1108,43 +1710,103 @@ fn constructor(
         };
     }
 
-    // Plain-field params: fields whose Python type is *already* `Option<..>`
-    // (singular messages, explicit-presence scalars) must not be double-wrapped —
-    // `Option<Option<T>>` makes pyo3's `#[new]` arg-coercion ambiguous. For those
-    // the single `Option` already encodes the "omitted/None" keyword default.
-    let field_params = accessors.iter().map(|a| {
+    let is_required = |a: &&FieldAccessor| keyword_only && a.required;
+    let (required, optional): (Vec<&FieldAccessor>, Vec<&FieldAccessor>) =
+        accessors.iter().partition(is_required);
+
+    // A required argument takes the bare type, without the `Option` of a singular message or
+    // explicit-presence scalar.
+    let required_params = required.iter().map(|a| {
         let ident = &a.ident;
-        let ty = a.py_type();
+        if a.json.is_some() {
+            return quote! { #ident: ::pyo3::Bound<'_, ::pyo3::PyAny> };
+        }
+        let ty = if a.py_type_is_optional() {
+            a.input_base_type()
+        } else {
+            a.input_type()
+        };
+        quote! { #ident: #ty }
+    });
+    // A field whose Python type is already `Option<..>` is not wrapped again: pyo3 cannot coerce
+    // an `Option<Option<T>>` argument.
+    let optional_params = optional.iter().map(|a| {
+        let ident = &a.ident;
+        if a.json.is_some() {
+            return quote! { #ident: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>> };
+        }
+        let ty = a.input_type();
         if a.py_type_is_optional() {
             quote! { #ident: #ty }
         } else {
             quote! { #ident: ::core::option::Option<#ty> }
         }
     });
-    // One `Option<PyPayload>` param per oneof variant, flattened across all oneofs.
     let oneof_params = oneofs.iter().flat_map(OneofAccessor::ctor_params);
-    let params = field_params.chain(oneof_params);
+    let params = required_params.chain(optional_params).chain(oneof_params);
 
-    // `<name> = None` for every plain field then every oneof variant, in order.
-    let sig_parts = accessors
+    // Signature: the required arguments, `*` with `keyword_only`, then `<name> = None` for the
+    // other fields and the oneof variants.
+    let optional_idents: Vec<proc_macro2::Ident> = optional
         .iter()
-        .map(|a| a.ident.to_string())
+        .map(|a| a.ident.clone())
         .chain(oneofs.iter().flat_map(OneofAccessor::variant_param_idents))
-        .map(|ident| format!("{ident} = None"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sig: TokenStream = sig_parts.parse().expect("field idents are valid tokens");
+        .collect();
+    let mut sig_parts: Vec<TokenStream> = required
+        .iter()
+        .map(|a| {
+            let ident = &a.ident;
+            quote! { #ident }
+        })
+        .collect();
+    if keyword_only && !optional_idents.is_empty() {
+        sig_parts.push(quote! { * });
+    }
+    sig_parts.extend(optional_idents.iter().map(|ident| quote! { #ident = None }));
+    let sig = quote! { #(#sig_parts),* };
 
-    let assigns = accessors.iter().map(|a| {
+    let required_assigns = required.iter().map(|a| {
         let ident = &a.ident;
-        // Reuse the setter's write expression by binding `value`.
-        let store = a.write_expr();
-        if a.py_type_is_optional() {
-            // `value` is the whole (already-`Option`) argument; store unconditionally
-            // (an omitted kwarg arrives as `None`, the field's natural absent value).
+        let store = match a.json {
+            Some(json) => a.json_store(json),
+            None => a.write_expr(),
+        };
+        // The store expression of an `Option` field reads an `Option`.
+        if a.json.is_none() && a.py_type_is_optional() {
             quote! {
                 {
-                    let value = #ident;
+                    let value = ::core::option::Option::Some(#ident);
+                    inner.#ident = #store;
+                }
+            }
+        } else {
+            let bind = bind_value(ident);
+            quote! {
+                {
+                    #bind
+                    inner.#ident = #store;
+                }
+            }
+        }
+    });
+    let optional_assigns = optional.iter().map(|a| {
+        let ident = &a.ident;
+        if let Some(json) = a.json {
+            let store = a.json_store(json);
+            return quote! {
+                if let ::core::option::Option::Some(value) = #ident {
+                    inner.#ident = #store;
+                }
+            };
+        }
+        // Bind `value` for the store expression.
+        let store = a.write_expr();
+        if a.py_type_is_optional() {
+            // The whole `Option` argument is stored; an omitted one is `None`.
+            let bind = bind_value(ident);
+            quote! {
+                {
+                    #bind
                     inner.#ident = #store;
                 }
             }
@@ -1157,15 +1819,25 @@ fn constructor(
         }
     });
     let oneof_assigns = oneofs.iter().flat_map(OneofAccessor::ctor_assigns);
+    // A free-form JSON argument can fail to convert.
+    let (ret, result) = if accessors.iter().any(|a| a.json.is_some()) {
+        (
+            quote! { ::pyo3::PyResult<Self> },
+            quote! { ::core::result::Result::Ok(Self(inner)) },
+        )
+    } else {
+        (quote! { Self }, quote! { Self(inner) })
+    };
 
     quote! {
         #[new]
         #[pyo3(signature = (#sig))]
-        fn new(#(#params,)*) -> Self {
+        fn new(#(#params,)*) -> #ret {
             let mut inner = <#inner as ::core::default::Default>::default();
-            #(#assigns)*
+            #(#required_assigns)*
+            #(#optional_assigns)*
             #(#oneof_assigns)*
-            Self(inner)
+            #result
         }
     }
 }
@@ -1205,17 +1877,7 @@ fn is_in_project(fq_name: &str, packages: &BTreeSet<String>) -> bool {
 /// google/gnostic types), which have no in-crate path and must be skipped.
 fn type_rust_path(fq_name: &str, project_packages: &BTreeSet<&str>) -> Option<String> {
     let stripped = fq_name.strip_prefix('.').unwrap_or(fq_name);
-
-    let package = project_packages
-        .iter()
-        .filter(|pkg| {
-            stripped == **pkg
-                || stripped
-                    .strip_prefix(**pkg)
-                    .is_some_and(|rest| rest.starts_with('.'))
-        })
-        .max_by_key(|pkg| pkg.len())?;
-
+    let package = package_of(fq_name, project_packages)?;
     let remainder = stripped.strip_prefix(package)?.trim_start_matches('.');
     if remainder.is_empty() {
         return None;
@@ -1343,6 +2005,7 @@ mod tests {
     fn msg_field(name: &str, ty: UnifiedType) -> MessageField {
         MessageField {
             name: name.to_string(),
+            json_name: None,
             unified_type: ty,
             documentation: None,
             oneof_variants: None,
