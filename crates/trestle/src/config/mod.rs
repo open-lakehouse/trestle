@@ -292,6 +292,28 @@ pub struct RustClient {
     /// The `User-Agent` product of the `reqwest` transport (`<product>/<client crate version>`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
+    /// Gate each service behind a cargo feature named after its model package
+    /// (`my.catalogs.v1` → `catalogs`). The client crate declares the features.
+    #[serde(default)]
+    pub resource_features: bool,
+    /// Implement the server handler traits for the per-service clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler_impls: Option<RustClientHandlerImpls>,
+}
+
+/// `impl <Handler> for <ServiceClient>` per service (`clients.rust.handler_impls`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RustClientHandlerImpls {
+    /// The crate with the handler traits, as the client crate names it. A service's trait is
+    /// `<crate>::<service base path>::<Handler>`, the result type `<crate>::Result`.
+    #[serde(rename = "crate")]
+    pub crate_path: String,
+    /// The client crate feature that enables the impls.
+    pub feature: String,
+    /// Services (by base path, e.g. `temporary_credentials`) whose impl the crate writes by hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<String>,
 }
 
 /// The JSON error body that the generated error module reads.
@@ -592,6 +614,32 @@ mod tests {
         assert_eq!(cfg.generate.proto_lib, ProtoLib::Prost);
         assert_eq!(cfg.generate.models.dir, "crates/common/src/models");
         assert!(!cfg.generate.servers.rest);
+    }
+
+    #[test]
+    fn rust_client_features_and_handler_impls_parse() {
+        let yaml = format!(
+            "{}  clients:\n    rust:\n      output: crates/client/src\n      \
+             resource_features: true\n      handler_impls:\n        crate: demo_handlers\n        \
+             feature: handlers\n        skip: [credentials]\n",
+            minimal_yaml()
+        );
+        let cfg: TrestleConfig = serde_yaml::from_str(&yaml).unwrap();
+        let rust = cfg.generate.clients.rust.unwrap();
+        assert!(rust.resource_features);
+        let impls = rust.handler_impls.unwrap();
+        assert_eq!(impls.crate_path, "demo_handlers");
+        assert_eq!(impls.feature, "handlers");
+        assert_eq!(impls.skip, ["credentials"]);
+
+        // Both default off.
+        let cfg: TrestleConfig = serde_yaml::from_str(&format!(
+            "{}  clients:\n    rust:\n      output: crates/client/src\n",
+            minimal_yaml()
+        ))
+        .unwrap();
+        let rust = cfg.generate.clients.rust.unwrap();
+        assert!(!rust.resource_features && rust.handler_impls.is_none());
     }
 
     #[test]

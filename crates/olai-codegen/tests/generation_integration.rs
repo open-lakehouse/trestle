@@ -448,6 +448,134 @@ fn client_methods_build_urls_query_and_error_handling() {
     assert!(client.contains(".delete(url)"), "DELETE verb missing");
 }
 
+// ── Per-resource client features + client handler impls ──────────────────────
+
+/// A client config that also emits the aggregate and resource-scoped clients, so every gated
+/// site (service modules, aggregate accessors, child navigators) is exercised.
+fn full_client_config(tmp: &Path) -> CodeGenConfig {
+    let mut config = rust_config(tmp);
+    config.output.generate_resource_clients = true;
+    config.bindings = Some(BindingsConfig {
+        aggregate_client_name: "ExampleClient".into(),
+        client_crate_name: "example_client".into(),
+        py_error_type: "PyExampleError".into(),
+        py_result_type: "PyExampleResult".into(),
+        napi_error_ext_trait: "NapiErrorExt".into(),
+        ts_error_base_class: "ExampleError".into(),
+        ts_error_code_prefix: "EX".into(),
+        python: Default::default(),
+    });
+    config
+}
+
+fn assert_client_files_parse(client_dir: &Path) {
+    for path in walk(client_dir)
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+    {
+        let src = std::fs::read_to_string(&path).expect("read generated file");
+        syn::parse_file(&src)
+            .unwrap_or_else(|e| panic!("generated {} is invalid Rust: {e}", path.display()));
+    }
+}
+
+#[test]
+fn client_resource_features_gate_services_on_model_package() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    config.rest_client.resource_features = true;
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let codegen = tmp.path().join("client");
+    let root = std::fs::read_to_string(codegen.join("mod.rs")).unwrap();
+    // Features are named after the model package, not the service: both catalog-package services
+    // share `catalog`.
+    for (feature, module) in [
+        ("catalog", "catalog"),
+        ("catalog", "query"),
+        ("schemas", "schema"),
+        ("tags", "tag_assignments"),
+    ] {
+        let gated = format!("#[cfg(feature = \"{feature}\")]\npub mod {module};");
+        assert!(root.contains(&gated), "missing `{gated}` in:\n{root}");
+    }
+
+    // Each service's aggregate accessors live in their own gated impl block.
+    let aggregate = std::fs::read_to_string(codegen.join("client.rs")).unwrap();
+    assert!(
+        aggregate.contains("#[cfg(feature = \"schemas\")]\nimpl ExampleClient"),
+        "aggregate accessors are not gated per service:\n{aggregate}"
+    );
+
+    // A parent's child navigators carry the child's gate.
+    let catalog_resource = std::fs::read_to_string(codegen.join("catalog/resource.rs")).unwrap();
+    assert!(
+        catalog_resource.contains("#[cfg(feature = \"schemas\")]"),
+        "child navigators are not gated on the child's feature:\n{catalog_resource}"
+    );
+
+    assert_client_files_parse(&tmp.path().join("client"));
+}
+
+#[test]
+fn client_output_is_ungated_by_default() {
+    let tmp = TempDir::new().unwrap();
+    generate_code(&metadata(), &full_client_config(tmp.path())).expect("generation succeeds");
+
+    let client_src = read_all(&tmp.path().join("client"));
+    assert!(
+        !client_src.contains("cfg(feature"),
+        "default client output must not carry feature gates"
+    );
+    assert!(
+        !walk(&tmp.path().join("client"))
+            .iter()
+            .any(|p| p.ends_with("handler.rs")),
+        "handler impls must be opt-in"
+    );
+}
+
+#[test]
+fn client_handler_impls_forward_to_service_clients() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    config.rest_client.handler_impls = Some(olai_codegen::ClientHandlerImpls {
+        crate_path: "example_handlers".into(),
+        feature: "handlers".into(),
+        skip: vec!["tag_assignments".into()],
+    });
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let catalogs = tmp.path().join("client/catalog");
+    let module = std::fs::read_to_string(catalogs.join("mod.rs")).unwrap();
+    assert!(
+        module.contains(
+            "#[cfg(all(feature = \"handlers\", not(target_arch = \"wasm32\")))]\nmod handler;"
+        ),
+        "handler module is not mounted behind the feature:\n{module}"
+    );
+
+    let handler = std::fs::read_to_string(catalogs.join("handler.rs")).unwrap();
+    assert!(
+        handler.contains("example_handlers::catalog::CatalogHandler<Cx>")
+            && handler.contains("for CatalogServiceClient"),
+        "missing handler impl for the service client:\n{handler}"
+    );
+    assert!(
+        handler.contains("CatalogServiceClient::get_catalog(self, &request)")
+            && handler.contains("-> example_handlers::Result<"),
+        "trait methods must forward to the inherent client method:\n{handler}"
+    );
+
+    assert!(
+        !tmp.path()
+            .join("client/tag_assignments/handler.rs")
+            .exists(),
+        "skipped services must not get a generated impl"
+    );
+    assert_client_files_parse(&tmp.path().join("client"));
+}
+
 // ── Handler trait generation ─────────────────────────────────────────────────
 
 #[test]
@@ -680,6 +808,7 @@ fn rest_client_and_python_options_generate_valid_code() {
         path_fields_in_body_methods: vec![],
         json_query_packages: vec![],
         user_agent: Some("example-client".into()),
+        ..Default::default()
     };
     config.bindings = Some(BindingsConfig {
         aggregate_client_name: "ExampleClient".into(),

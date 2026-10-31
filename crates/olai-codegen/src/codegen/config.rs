@@ -414,6 +414,32 @@ pub struct RestClientOptions {
     /// The `User-Agent` product of the generated `reqwest` transport
     /// (`<product>/<client crate version>`); not sent in the browser. Needs that transport.
     pub user_agent: Option<String>,
+
+    /// Gate each service behind a cargo feature named after its model package
+    /// (`my.catalogs.v1` → `catalogs`): the service modules, the aggregate client's accessors
+    /// and imports, and the child navigators of resource clients (on the child's feature). The
+    /// client crate declares the features.
+    pub resource_features: bool,
+
+    /// Implement the server handler traits for the per-service clients. See
+    /// [`ClientHandlerImpls`].
+    pub handler_impls: Option<ClientHandlerImpls>,
+}
+
+/// `impl <Handler> for <ServiceClient>` per service, forwarding each trait method to the client
+/// method of the same name, so a client serves its service from an upstream server. The impls
+/// go in `<service>/handler.rs`, gated on [`feature`](Self::feature) and left out on `wasm32`
+/// (the client futures are not `Send` there). The client error must convert into the handler
+/// error (`impl From<client::Error> for handlers::Error`). The request context is ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientHandlerImpls {
+    /// The crate with the handler traits (e.g. `my_handlers`). A service's trait is
+    /// `<crate_path>::<service base path>::<Handler>`, the result type `<crate_path>::Result`.
+    pub crate_path: String,
+    /// The client crate feature that enables the impls.
+    pub feature: String,
+    /// Services (by base path, e.g. `temporary_credentials`) whose impl the crate writes by hand.
+    pub skip: Vec<String>,
 }
 
 /// Shape of the JSON error body that the generated error module reads, such as

@@ -41,6 +41,7 @@ mod aggregate;
 mod bindings;
 mod builder;
 mod client;
+mod client_handler;
 mod config;
 mod connect_client;
 mod error_module;
@@ -56,9 +57,9 @@ mod transport;
 mod wasm;
 
 pub use config::{
-    BindingsConfig, ClientProtocol, ClientProtocols, CodeGenConfig, CodeGenOutput,
-    DEFAULT_TRANSPORT_TYPE_PATH, ErrorModuleConfig, ModelsPath, PyPackageConfig, PythonOptions,
-    RestClientOptions, Runtime,
+    BindingsConfig, ClientHandlerImpls, ClientProtocol, ClientProtocols, CodeGenConfig,
+    CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, ErrorModuleConfig, ModelsPath, PyPackageConfig,
+    PythonOptions, RestClientOptions, Runtime,
 };
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 pub use transport::REQWEST_TRANSPORT_TYPE_PATH;
@@ -584,11 +585,28 @@ fn generate_client_code(
                     .is_some();
 
             if has_resource_client && let Some(scoped) = handler.scoped_client_type() {
-                resource_clients.push((prefix.clone(), scoped));
+                resource_clients.push((prefix.clone(), scoped, handler.client_feature_cfg()));
             }
+
+            // Handler-trait impls forward to the REST client, so only it gets them.
+            let handler_impl = config
+                .rest_client
+                .handler_impls
+                .as_ref()
+                .filter(|impls| {
+                    protocol == ClientProtocol::Rest && !impls.skip.contains(&service.base_path)
+                })
+                .map(|impls| {
+                    client_handler::generate(&handler, impls).map(|code| {
+                        files.insert(format!("{prefix}/handler.rs"), code);
+                        impls.feature.as_str()
+                    })
+                })
+                .transpose()?;
+
             files.insert(
                 format!("{prefix}/mod.rs"),
-                generate_client_module(has_resource_client),
+                generate_client_module(has_resource_client, handler_impl),
             );
             emitted_resource_client |= has_resource_client;
         }
@@ -627,7 +645,7 @@ fn generate_client_code(
 
     files.insert(
         "mod.rs".to_string(),
-        generate_client_main_module(&plan.services, config, has_aggregate, &resource_clients),
+        generate_client_main_module(plan, metadata, config, has_aggregate, &resource_clients),
     );
 
     Ok(GeneratedCode { files })
@@ -673,7 +691,9 @@ fn generate_server_module(service: &ServicePlan) -> String {
     format_tokens_static(tokens)
 }
 
-fn generate_client_module(has_resource_client: bool) -> String {
+/// `handler_impl` is the cargo feature gating the service's handler-trait impl module, when one
+/// was generated for it.
+fn generate_client_module(has_resource_client: bool, handler_impl: Option<&str>) -> String {
     // Emit the scoped resource client module only when it was generated for this service.
     // Generated client modules structurally trip a few lints: the full client
     // surface is emitted whether or not a given consumer calls every builder
@@ -699,12 +719,22 @@ fn generate_client_module(has_resource_client: bool) -> String {
     } else {
         quote! {}
     };
+    // The impls are trait impls only (nothing to re-export). Client futures aren't `Send` on
+    // wasm32, which `async_trait` handler traits require, so the module is native-only.
+    let handler_module = match handler_impl {
+        Some(feature) => quote! {
+            #[cfg(all(feature = #feature, not(target_arch = "wasm32")))]
+            mod handler;
+        },
+        None => quote! {},
+    };
     let tokens = quote! {
         #reexport_allow
         pub use client::*;
         #reexport_allow
         pub use builders::*;
         #resource_module
+        #handler_module
 
         #allow
         pub mod client;
@@ -749,27 +779,35 @@ pub fn main_module(services: &[ServicePlan]) -> String {
     format_tokens_static(tokens)
 }
 
-/// The client root `mod.rs`. It re-exports the `resource_clients` (module path and type) so a
-/// crate can export the whole client with `pub use codegen::*;`.
+/// The client root `mod.rs`. It re-exports the `resource_clients` (module path, type and the
+/// service's feature gate) so a crate can export the whole client with `pub use codegen::*;`.
 fn generate_client_main_module(
-    services: &[ServicePlan],
+    plan: &GenerationPlan,
+    metadata: &CodeGenMetadata,
     config: &CodeGenConfig,
     has_aggregate: bool,
-    resource_clients: &[(String, Ident)],
+    resource_clients: &[(String, Ident, TokenStream)],
 ) -> String {
+    let services = &plan.services;
     let result_path = config.client_result_path();
     let service_modules: Vec<TokenStream> = services
         .iter()
         .map(|s| {
             let module_name = format_ident!("{}", s.base_path);
-            quote! { pub mod #module_name; }
+            let cfg = ServiceHandler {
+                plan: s,
+                metadata,
+                config,
+            }
+            .client_feature_cfg();
+            quote! { #cfg pub mod #module_name; }
         })
         .collect();
     let resource_exports: Vec<TokenStream> = resource_clients
         .iter()
-        .map(|(path, scoped)| {
+        .map(|(path, scoped, cfg)| {
             let segments = path.split('/').map(|segment| format_ident!("{}", segment));
-            quote! { pub use #(#segments::)*#scoped; }
+            quote! { #cfg pub use #(#segments::)*#scoped; }
         })
         .collect();
 
@@ -795,10 +833,17 @@ fn generate_client_main_module(
         .iter()
         .flat_map(|s| s.methods.iter())
         .any(|m| matches!(m.request_type, RequestType::List));
+    // With per-resource features, every List-bearing service may be disabled.
+    let pagination_allow = if config.rest_client.resource_features {
+        quote! { #[allow(dead_code)] }
+    } else {
+        quote! {}
+    };
     let pagination = if has_list {
         quote! {
             use futures::Future;
 
+            #pagination_allow
             pub(super) fn stream_paginated<F, Fut, S, T>(
                 state: S,
                 op: F,
@@ -1353,6 +1398,20 @@ impl ServiceHandler<'_> {
     pub(crate) fn models_path_crate(&self) -> syn::Path {
         ModelsPath::from_template(&self.config.models_path_crate_template)
             .resolve(&self.models_segment(), &self.models_version())
+    }
+
+    /// The `#[cfg(feature = "<model package>")]` gate for this service's client items, or no
+    /// tokens when [`RestClientOptions::resource_features`] is off.
+    ///
+    /// The feature is named after the model package segment (see [`Self::models_segment`]), so
+    /// services sharing a package (e.g. two tag services over `tags.v1`) share a feature.
+    pub(crate) fn client_feature_cfg(&self) -> TokenStream {
+        if self.config.rest_client.resource_features {
+            let feature = self.models_segment();
+            quote! { #[cfg(feature = #feature)] }
+        } else {
+            quote! {}
+        }
     }
 
     /// The models *root* module path — the prefix of [`Self::models_path`] before the
