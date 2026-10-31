@@ -59,27 +59,36 @@ pub(crate) fn generate(
     services.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
 
     // --- Methods: collection constructors, flat constructors, resource accessors. ---
-    let methods = services.iter().flat_map(|s| service_methods(s));
+    let methods = services
+        .iter()
+        .flat_map(|s| service_methods(s))
+        .collect_vec();
 
     // --- Low-level passthrough accessors: `<base>_client(&self) -> <LowLevelClient>`. ---
-    // These build a fresh per-service low-level client (cheap: `CloudClient`/`Url` are O(1) to
-    // clone) so callers (e.g. a hybrid proxy server, or hand-written ergonomic wrappers) can drive
-    // requests directly.
-    let passthrough_accessors = services.iter().map(|s| {
-        let accessor = format_ident!("{}_client", s.plan.base_path);
-        let client_ty = low_level_client_path(s);
-        let ctor = low_level_client_ctor(s);
-        let doc = format!(
-            "Low-level `{}` client exposing request/response passthrough methods.",
-            s.plan.base_path
-        );
-        quote! {
-            #[doc = #doc]
-            pub fn #accessor(&self) -> #client_ty {
-                #ctor
-            }
-        }
-    });
+    let passthrough_accessors = services.iter().map(passthrough_accessor).collect_vec();
+
+    // With per-resource features, each service's accessors move into their own `impl` block behind
+    // the service's feature gate; the main block then keeps only the constructors.
+    let (passthrough_accessors, methods, gated_blocks) = if config.rest_client.resource_features {
+        let blocks = services
+            .iter()
+            .map(|s| {
+                let cfg = s.client_feature_cfg();
+                let accessor = passthrough_accessor(s);
+                let methods = service_methods(s);
+                quote! {
+                    #cfg
+                    impl #aggregate_ident {
+                        #accessor
+                        #(#methods)*
+                    }
+                }
+            })
+            .collect_vec();
+        (Vec::new(), Vec::new(), blocks)
+    } else {
+        (passthrough_accessors, methods, Vec::new())
+    };
 
     let (transport_import, transport_ident) = super::client::transport_tokens(config);
 
@@ -187,9 +196,32 @@ pub(crate) fn generate(
 
             #(#methods)*
         }
+
+        #(#gated_blocks)*
     };
 
     Ok(Some(format_tokens(tokens)?))
+}
+
+/// The low-level passthrough accessor `<base>_client(&self) -> <LowLevelClient>`.
+///
+/// It builds a fresh per-service low-level client (cheap: `CloudClient`/`Url` are O(1) to clone) so
+/// callers (e.g. a hybrid proxy server, or hand-written ergonomic wrappers) can drive requests
+/// directly.
+fn passthrough_accessor(service: &ServiceHandler<'_>) -> TokenStream {
+    let accessor = format_ident!("{}_client", service.plan.base_path);
+    let client_ty = low_level_client_path(service);
+    let ctor = low_level_client_ctor(service);
+    let doc = format!(
+        "Low-level `{}` client exposing request/response passthrough methods.",
+        service.plan.base_path
+    );
+    quote! {
+        #[doc = #doc]
+        pub fn #accessor(&self) -> #client_ty {
+            #ctor
+        }
+    }
 }
 
 /// The fully-qualified path to a service's generated low-level per-service client,
@@ -217,17 +249,20 @@ fn generate_imports(
     // Per-service low-level clients and their builders both live under `crate::codegen::<base>`.
     let codegen_imports = services.iter().map(|s| {
         let module = format_ident!("{}", s.plan.base_path);
+        let cfg = s.client_feature_cfg();
         quote! {
+            #cfg
             use crate::codegen::#module::*;
         }
     });
 
     // Models, for enum/message parameter types that appear in builder `::new` signatures.
+    // Services sharing a models path share its feature too, so deduping keeps the right gate.
     let model_imports = services
         .iter()
-        .map(|s| s.models_path())
-        .unique_by(|p| quote! { #p }.to_string())
-        .map(|mod_path| quote! { use #mod_path::*; });
+        .map(|s| (s.models_path(), s.client_feature_cfg()))
+        .unique_by(|(p, _)| quote! { #p }.to_string())
+        .map(|(mod_path, cfg)| quote! { #cfg use #mod_path::*; });
 
     // The generated scoped clients (`CatalogClient`, …) live alongside the low-level clients and
     // builders under `crate::codegen::<base>`, so the `codegen_imports` globs above already bring

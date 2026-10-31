@@ -56,7 +56,16 @@ pub(crate) fn class_idents(python: &PythonOptions) -> Vec<proc_macro2::Ident> {
 }
 
 /// The `error.rs` file of the Python bindings.
-pub(crate) fn generate(bindings: &BindingsConfig, python: &PythonOptions) -> String {
+///
+/// The exception classes read a client error through the generated `ApiErrorAnswer` trait.
+/// With `generated_client_errors` (the client has the generated error module) the file also
+/// implements it for that error; otherwise the binding crate implements it for its client's
+/// error type.
+pub(crate) fn generate(
+    bindings: &BindingsConfig,
+    python: &PythonOptions,
+    generated_client_errors: bool,
+) -> String {
     let error = format_ident!("{}", bindings.py_error_type);
     let result = format_ident!("{}", bindings.py_result_type);
     let client_crate = format_ident!("{}", bindings.client_crate_name);
@@ -102,6 +111,23 @@ pub(crate) fn generate(bindings: &BindingsConfig, python: &PythonOptions) -> Str
         };
         quote! { #pattern => Bound::new(py, base.add_subclass(#ident))?.into_any(), }
     });
+    let generated_impl = generated_client_errors.then(|| {
+        quote! {
+            impl ApiErrorAnswer for ClientError {
+                fn into_api_error(self) -> ::core::result::Result<ApiErrorParts, Self> {
+                    match self {
+                        ClientError::Api(api) => Ok(ApiErrorParts {
+                            message: api.message,
+                            code: api.code,
+                            status: api.status,
+                            details: api.details,
+                        }),
+                        other => Err(other),
+                    }
+                }
+            }
+        }
+    });
     let tokens = quote! {
         //! Errors of the Python bindings.
 
@@ -114,6 +140,27 @@ pub(crate) fn generate(bindings: &BindingsConfig, python: &PythonOptions) -> Str
 
         /// The result of a binding call.
         pub type #result<T> = ::core::result::Result<T, #error>;
+
+        /// An error answer of the server, as the exception classes show it.
+        pub struct ApiErrorParts {
+            /// The error message.
+            pub message: String,
+            /// The error code of the answer, if any.
+            pub code: Option<String>,
+            /// The HTTP status of the answer.
+            pub status: u16,
+            /// The details of the answer.
+            pub details: ::std::vec::Vec<::serde_json::Value>,
+        }
+
+        /// Reads the server's error answer out of a client error, for the exception classes.
+        /// Any other error is raised with its message and causes.
+        pub trait ApiErrorAnswer: Sized {
+            /// The error answer, or the error itself when it is not one.
+            fn into_api_error(self) -> ::core::result::Result<ApiErrorParts, Self>;
+        }
+
+        #generated_impl
 
         #[doc = #error_doc]
         #[derive(Debug)]
@@ -263,9 +310,9 @@ pub(crate) fn generate(bindings: &BindingsConfig, python: &PythonOptions) -> Str
 
         /// The exception of a client error: the subclass of its HTTP status.
         fn client_exception(py: Python<'_>, e: ClientError) -> PyResult<PyErr> {
-            let (message, code, status, details) = match e {
-                ClientError::Api(api) => (api.message, api.code, Some(api.status), api.details),
-                other => {
+            let (message, code, status, details) = match e.into_api_error() {
+                Ok(api) => (api.message, api.code, Some(api.status), api.details),
+                Err(other) => {
                     // Python has no cause chain, so append the causes `Display` does not show.
                     let mut message = other.to_string();
                     let mut cause = ::std::error::Error::source(&other).and_then(::std::error::Error::source);

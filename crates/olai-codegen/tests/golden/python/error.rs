@@ -9,6 +9,41 @@ use pyo3::types::{PyDict, PyList, PyString};
 type ClientError = example_client::error::Error;
 /// The result of a binding call.
 pub type PyExampleResult<T> = ::core::result::Result<T, PyExampleError>;
+/// An error answer of the server, as the exception classes show it.
+pub struct ApiErrorParts {
+    /// The error message.
+    pub message: String,
+    /// The error code of the answer, if any.
+    pub code: Option<String>,
+    /// The HTTP status of the answer.
+    pub status: u16,
+    /// The details of the answer.
+    pub details: ::std::vec::Vec<::serde_json::Value>,
+}
+
+/// Reads the server's error answer out of a client error, for the exception classes.
+/// Any other error is raised with its message and causes.
+pub trait ApiErrorAnswer: Sized {
+    /// The error answer, or the error itself when it is not one.
+    fn into_api_error(self) -> ::core::result::Result<ApiErrorParts, Self>;
+}
+
+impl ApiErrorAnswer for ClientError {
+    fn into_api_error(self) -> ::core::result::Result<ApiErrorParts, Self> {
+        match self {
+            ClientError::Api(api) => {
+                Ok(ApiErrorParts {
+                    message: api.message,
+                    code: api.code,
+                    status: api.status,
+                    details: api.details,
+                })
+            }
+            other => Err(other),
+        }
+    }
+}
+
 /// The error of a binding call: a client error (raised as a `ExampleError`) or a Python error.
 #[derive(Debug)]
 pub enum PyExampleError {
@@ -329,9 +364,9 @@ impl ServerError {
 
 /// The exception of a client error: the subclass of its HTTP status.
 fn client_exception(py: Python<'_>, e: ClientError) -> PyResult<PyErr> {
-    let (message, code, status, details) = match e {
-        ClientError::Api(api) => (api.message, api.code, Some(api.status), api.details),
-        other => {
+    let (message, code, status, details) = match e.into_api_error() {
+        Ok(api) => (api.message, api.code, Some(api.status), api.details),
+        Err(other) => {
             let mut message = other.to_string();
             let mut cause = ::std::error::Error::source(&other)
                 .and_then(::std::error::Error::source);

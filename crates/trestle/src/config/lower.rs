@@ -163,6 +163,14 @@ impl GenerateConfig {
                 .map(|(package, _)| package.clone())
                 .collect(),
             user_agent: rust.and_then(|r| r.user_agent.clone()),
+            resource_features: rust.is_some_and(|r| r.resource_features),
+            handler_impls: rust.and_then(|r| r.handler_impls.as_ref()).map(|h| {
+                olai_codegen::ClientHandlerImpls {
+                    crate_path: h.crate_path.clone(),
+                    feature: h.feature.clone(),
+                    skip: h.skip.clone(),
+                }
+            }),
         }
     }
 
@@ -312,6 +320,7 @@ fn lower_python(
         keyword_only: options.keyword_only,
         public_modules: options.public_modules,
         user_agent: options.user_agent.clone(),
+        exports: options.exports.clone(),
     })
 }
 

@@ -117,6 +117,14 @@ impl<'a> PyBackend<'a> {
                 }
             }
         });
+        // Paths are validated by `CodeGenConfig::validate`.
+        let exports = self.python.exports.iter().map(|path| {
+            let path: syn::Path = syn::parse_str(path).expect("validated export path");
+            quote! {
+                #[pymodule_export]
+                use #path;
+            }
+        });
         let init_async = self
             .python
             .async_methods
@@ -144,6 +152,8 @@ impl<'a> PyBackend<'a> {
 
                 #[pymodule_export]
                 use crate::codegen::error::{#(#exceptions),*};
+
+                #(#exports)*
 
                 #(#submodules)*
 

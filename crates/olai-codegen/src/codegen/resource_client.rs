@@ -139,7 +139,8 @@ fn child_model_import_paths(
         if key == own_str || !seen.insert(key) {
             continue;
         }
-        imports.push(quote! { use #path::*; });
+        let cfg = child.client_feature_cfg();
+        imports.push(quote! { #cfg use #path::*; });
     }
     imports
 }
@@ -169,15 +170,14 @@ fn child_methods(
             config: service.config,
         };
 
-        if let Some(nav) = child_nav_method(&child, link, parent_components) {
-            out.push(nav);
-        }
-        if let Some(create) = child_create_method(&child, link, parent_components) {
-            out.push(create);
-        }
-        if let Some(list) = child_list_method(&child, link, parent_components) {
-            out.push(list);
-        }
+        // Child methods name the child's client and builders, so they share its feature gate.
+        let cfg = child.client_feature_cfg();
+        let methods = [
+            child_nav_method(&child, link, parent_components),
+            child_create_method(&child, link, parent_components),
+            child_list_method(&child, link, parent_components),
+        ];
+        out.extend(methods.into_iter().flatten().map(|m| quote! { #cfg #m }));
     }
     out
 }

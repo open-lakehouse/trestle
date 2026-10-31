@@ -110,6 +110,7 @@ fn main() {
                 keyword_only: false,
                 public_modules: false,
                 user_agent: None,
+                exports: vec![],
             }),
         }),
     };
