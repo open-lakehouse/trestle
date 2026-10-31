@@ -55,9 +55,8 @@ buffa-build = "0.7"
 protobuf = "3"
 
 # cargo-machete can't see these: they're exercised through code generated at
-# build time (the buffa client traits + models) rather than referenced directly
-# in this crate's source, so its static scan reports them as unused.
+# build time (the buffa client traits + models, and the client's error module)
+# rather than referenced directly in this crate's source, so its static scan
+# reports them as unused.
 [package.metadata.cargo-machete]
-# pyo3 is exercised only through the build-time-generated `pyo3_impls.rs` (under
-# the `python` feature), so machete's static scan can't see it.
-ignored = ["async-trait", "buffa-types", "futures", "serde", "pyo3"]
+ignored = ["async-trait", "buffa-types", "futures", "olai-http", "reqwest", "serde", "url"]

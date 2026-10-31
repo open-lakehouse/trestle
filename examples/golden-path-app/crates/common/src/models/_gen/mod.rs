@@ -4,13 +4,19 @@
 #![allow(clippy::useless_borrows_in_formatting)]
 #![allow(non_camel_case_types)]
 #![allow(clippy::derivable_impls)]
+#![allow(clippy::match_single_binding)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::doc_lazy_continuation)]
+
 use std::collections::HashMap;
 pub use golden_path_app::v1::Greeting;
+
 pub type PropertyMap = HashMap<String, serde_json::Value>;
 pub mod golden_path_app {
     pub mod v1 {
         include!("./golden_path_app.v1.rs");
     }
 }
+
 #[cfg(feature = "axum")]
 pub mod extractors;
