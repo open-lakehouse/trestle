@@ -29,3 +29,7 @@ pyo3-introspection = "0.30"
 olai-codegen = { path = "../../../" }
 
 protobuf = "3"
+
+[package.metadata.cargo-machete]
+# Used only by the generated bindings.
+ignored = ["futures", "pyo3-async-runtimes", "rest-client-e2e", "url"]

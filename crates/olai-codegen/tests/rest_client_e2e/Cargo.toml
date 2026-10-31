@@ -35,4 +35,4 @@ protobuf = "3"
 
 [package.metadata.cargo-machete]
 # Used only by the generated code.
-ignored = ["buffa-types", "futures", "serde", "pyo3"]
+ignored = ["pyo3", "reqwest", "serde"]
