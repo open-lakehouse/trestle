@@ -42,7 +42,7 @@ use crate::name::ResourceName;
 use crate::object::{Association, Object};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, StoreExec, StoreTx, Transactional,
+    ObjectStoreReader, Precondition, StoreTx, Transactional, TxnFn,
 };
 use crate::{Error, Result};
 
@@ -1846,14 +1846,7 @@ impl<L: Label> Transactional<L> for SqlStore<L> {
             error.type = tracing::field::Empty,
         )
     )]
-    async fn transaction<'a, T>(
-        &'a self,
-        f: Box<
-            dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> futures::future::BoxFuture<'t, Result<T>>
-                + Send
-                + 'a,
-        >,
-    ) -> Result<T>
+    async fn transaction<'a, T>(&'a self, f: TxnFn<'a, L, T>) -> Result<T>
     where
         T: Send + 'a,
     {
