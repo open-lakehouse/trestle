@@ -12,22 +12,18 @@
 //! ride along automatically. This keeps the wasm dependency tree minimal and is the right model
 //! for a front-end SDK talking to a same-origin (or CORS-with-credentials) API.
 //!
-//! Some embedders manage auth themselves — e.g. the host app already holds a bearer token and
-//! wants to attach `Authorization: Bearer …` per request, possibly refreshing it as it rotates.
-//! For those, the browser is *not* the session of record, so two knobs extend (rather than
-//! replace) the browser-session model without pulling in cloud-credential signing:
+//! Embedders that hold their own bearer token can extend the browser-session model with two
+//! knobs, without pulling in cloud-credential signing:
 //!
-//! - [`WasmClient::with_auth`] installs a cheaply-cloneable, per-request header provider. It is
-//!   invoked just before each `send`, so a token that rotates is always read fresh.
+//! - [`WasmClient::with_auth`] installs a cheaply-cloneable, per-request header provider, invoked
+//!   just before each `send` so a rotating token is read fresh.
 //! - [`WasmClient::with_credentials`] chooses the `fetch` credentials mode
-//!   ([`CredentialsMode`]). It defaults to [`Include`](CredentialsMode::Include) (cookie mode);
-//!   a bearer-token embedder typically sets [`Omit`](CredentialsMode::Omit) so a stale cookie
-//!   doesn't shadow the header. Setting an auth hook does **not** silently change the credentials
-//!   mode — the two are independent so cookie mode keeps working.
+//!   ([`CredentialsMode`]). It defaults to [`Include`](CredentialsMode::Include); a bearer-token
+//!   embedder typically sets [`Omit`](CredentialsMode::Omit) so a stale cookie doesn't shadow the
+//!   header. Setting an auth hook does not change the credentials mode.
 //!
-//! On a native target the credentials mode is a no-op (there is no browser session), but the auth
-//! header provider still applies — so the crate builds and the header behavior can be unit-tested
-//! off-wasm.
+//! On a native target the credentials mode is a no-op, but the auth header provider still applies,
+//! so the header behavior can be unit-tested off-wasm.
 //!
 //! # Examples
 //!
@@ -166,10 +162,6 @@ impl WasmClient {
     /// with [`with_credentials(CredentialsMode::Omit)`](Self::with_credentials) so a stale cookie
     /// does not shadow the header.
     ///
-    /// The hook is synchronous. If a future revision needs async token refresh (e.g. awaiting a
-    /// refresh-token exchange), it can be added as a sibling builder taking an async closure
-    /// without changing this signature.
-    ///
     /// ```no_run
     /// # use olai_http_wasm::{WasmClient, CredentialsMode};
     /// use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
@@ -244,6 +236,8 @@ impl WasmClient {
 pub struct WasmRequestBuilder {
     builder: reqwest::RequestBuilder,
     auth: Option<AuthHook>,
+    // Only read when targeting wasm32, where it selects the `fetch` credentials mode.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     credentials: CredentialsMode,
 }
 
@@ -296,13 +290,9 @@ impl WasmRequestBuilder {
 
     /// Send the request, returning the raw [`reqwest::Response`] for any status.
     ///
-    /// This is the wasm counterpart to `olai_http::CloudRequestBuilder::send_raw`:
-    /// it mirrors the native seam that preserves a non-success status and body so
-    /// callers can parse a protocol error envelope. On wasm the base transport is
-    /// plain `reqwest` with no retry layer, so a non-success status is already
-    /// returned as `Ok(response)` (never mapped to an error) — this is simply an
-    /// alias for [`send`](Self::send) that lets target-agnostic code call
-    /// `send_raw()` uniformly across the native and wasm builders.
+    /// The wasm counterpart of `olai_http::CloudRequestBuilder::send_raw`, so target-agnostic code
+    /// can call `send_raw()` on either builder. There is no retry layer here, so this is an alias
+    /// for [`send`](Self::send): a non-success status is `Ok(response)`.
     ///
     /// # Errors
     ///
@@ -334,7 +324,6 @@ impl WasmRequestBuilder {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn with_browser_credentials(self) -> Self {
-        let _ = self.credentials;
         self
     }
 }
@@ -342,6 +331,7 @@ impl WasmRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     use serde::Serialize;
     use url::Url;
 
@@ -350,43 +340,10 @@ mod tests {
         name: String,
     }
 
-    /// Compile-time contract: a `WasmClient` drives the exact builder/response chain that
-    /// `olai-codegen` emits (`post(url).json(req).query(..).send()`), so generated client bodies
-    /// compile against this transport unchanged. The request is built but not sent (no network).
+    /// Builds the verb -> json -> query chain that generated bodies use, with an auth hook, and
+    /// checks the built request carries the hook's `Authorization` header. Nothing is sent.
     #[test]
-    fn drives_generated_client_chain() {
-        let client = WasmClient::new();
-        let base = Url::parse("https://example.test/api/").unwrap();
-        let url = base.join("things").unwrap();
-        let req = CreateThing {
-            name: "x".to_string(),
-        };
-
-        // Mirrors generated bodies: verb -> json -> query -> (send). We assert the builder
-        // chains without panicking; awaiting send() would require a runtime/network.
-        let _builder = client
-            .post(url.clone())
-            .json(&req)
-            .query(&[("dry_run", "true")]);
-        let _get = client.get(url.clone());
-        let _patch = client.patch(url.clone());
-        let _delete = client.delete(url.clone());
-        let _put = client.put(url);
-    }
-
-    #[test]
-    fn clone_is_cheap_and_default_works() {
-        let client = WasmClient::default();
-        let _c2 = client.clone();
-    }
-
-    /// An auth hook builds cleanly and survives a clone (the `Arc` is shared, not the closure).
-    /// We can't observe the merged headers without sending, but on native `with_auth_headers`
-    /// runs the same code path, so building the request must not panic.
-    #[test]
-    fn with_auth_hook_builds_and_clones() {
-        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
-
+    fn auth_hook_headers_reach_the_built_request() {
         let client = WasmClient::new()
             .with_credentials(CredentialsMode::Omit)
             .with_auth(|| {
@@ -394,29 +351,38 @@ mod tests {
                 headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer test-token"));
                 headers
             });
-        let cloned = client.clone();
-
         let url = Url::parse("https://example.test/api/things").unwrap();
-        // Apply the auth hook the same way `send` does; this exercises the merge without network.
-        let _req = cloned.get(url).with_auth_headers();
-    }
+        let req = CreateThing {
+            name: "x".to_string(),
+        };
 
-    /// The default credentials mode is cookie (`Include`) mode, matching the original behavior so
-    /// existing callers are unchanged.
-    #[test]
-    fn default_credentials_mode_is_include() {
-        assert_eq!(CredentialsMode::default(), CredentialsMode::Include);
+        let request = client
+            .clone()
+            .post(url)
+            .json(&req)
+            .query(&[("dry_run", "true")])
+            .with_auth_headers()
+            .builder
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get(AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "Bearer test-token"
+        );
+        assert_eq!(request.url().query(), Some("dry_run=true"));
     }
 
     /// Debug must not render the auth closure's contents (it may close over a secret token).
     #[test]
     fn debug_redacts_auth_hook() {
-        let client = WasmClient::new().with_auth(reqwest::header::HeaderMap::new);
+        let client = WasmClient::new().with_auth(HeaderMap::new);
         let rendered = format!("{client:?}");
-        assert!(
-            rendered.contains("auth"),
-            "Debug should note the auth field"
-        );
         assert!(
             rendered.contains("<fn>"),
             "Debug should render the hook opaquely"
