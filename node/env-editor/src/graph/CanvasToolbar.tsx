@@ -44,6 +44,7 @@ import {
   GRAPH_SNAPSHOT_EXTENSION,
   stringifyGraphSnapshot,
 } from "../diagram/snapshot";
+import { errorMessage } from "../errors";
 import type { DeployStepDto, GraphDto } from "../types";
 
 export interface CanvasToolbarProps {
@@ -308,8 +309,7 @@ function ExportMenu({
         navigator.clipboard.writeText(`\`\`\`mermaid\n${mermaid}\`\`\`\n`),
       )
       .catch((e: unknown) => {
-        const reason = e instanceof Error ? e.message : String(e);
-        onError?.(`Could not copy the Mermaid diagram: ${reason}`);
+        onError?.(`Could not copy the Mermaid diagram: ${errorMessage(e)}`);
       });
   };
   const exportMermaid = () => {
@@ -320,9 +320,8 @@ function ExportMenu({
     renderImage({ format })
       .then((url) => downloadUrl(url, `${name}.${format}`))
       .catch((e: unknown) => {
-        const reason = e instanceof Error ? e.message : String(e);
         onError?.(
-          `Could not export the diagram as ${format.toUpperCase()}: ${reason}`,
+          `Could not export the diagram as ${format.toUpperCase()}: ${errorMessage(e)}`,
         );
       });
   };

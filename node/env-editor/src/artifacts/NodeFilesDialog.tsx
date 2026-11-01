@@ -1,11 +1,7 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { ExternalLink, FileCode2, X } from "lucide-react";
-import {
-  type CSSProperties,
-  type KeyboardEvent,
-  useEffect,
-  useRef,
-} from "react";
+import { type KeyboardEvent, useEffect, useRef } from "react";
+import { DIALOG_STYLE } from "../dialogStyle";
 import { ModuleIcon } from "../graph/projectIcons";
 import { roleStyle } from "../graph/roleTheme";
 import type { GraphNodeDto } from "../types";
@@ -25,23 +21,6 @@ export interface NodeFilesDialogProps {
   /** Show the file in a full file explorer; without it there's no such button. */
   onOpenInExplorer?: (path: string) => void;
 }
-
-// The dialog element is only the top-layer frame (a native modal `<dialog>`
-// draws above everything, an expanded diagram included); the overlay inside it
-// is ordinary content, so the surrounding style scope applies.
-const DIALOG_STYLE: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  width: "100vw",
-  height: "100vh",
-  maxWidth: "none",
-  maxHeight: "none",
-  margin: 0,
-  padding: 0,
-  border: 0,
-  background: "transparent",
-  overflow: "hidden",
-};
 
 /**
  * A node's rendered config files in a modal: a tab per file over a

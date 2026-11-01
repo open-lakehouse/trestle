@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 import type { FileSource } from "../artifacts/fileSource";
+import { DIALOG_STYLE } from "../dialogStyle";
+import { errorMessage } from "../errors";
 import {
   ConnectionLegend,
   MarkitectureCanvas,
@@ -106,7 +108,7 @@ export function EnvironmentDiagram({
       const parsed = parseGraphSnapshot(snapshot);
       return { graph: parsed.graph, title: parsed.title, files: parsed.files };
     } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) };
+      return { error: errorMessage(e) };
     }
   }, [snapshot, graph, files]);
   const source = useFileSource(
@@ -295,22 +297,6 @@ function FitViewport() {
 
   return null;
 }
-
-// The dialog element itself sits outside the style scope (so does the host
-// portal inside it); it is only the top-layer frame, sized inline.
-const DIALOG_STYLE: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  width: "100vw",
-  height: "100vh",
-  maxWidth: "none",
-  maxHeight: "none",
-  margin: 0,
-  padding: 0,
-  border: 0,
-  background: "transparent",
-  overflow: "hidden",
-};
 
 const OVERLAY_STYLE: CSSProperties = {
   display: "flex",

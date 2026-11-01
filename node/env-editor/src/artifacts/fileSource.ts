@@ -26,7 +26,7 @@ export function fileSourceOf(files: readonly OutputFile[]): FileSource {
 }
 
 /** The directory a module's own files are rendered under. */
-export function moduleDir(id: string): string {
+function moduleDir(id: string): string {
   return `modules/${id}/`;
 }
 

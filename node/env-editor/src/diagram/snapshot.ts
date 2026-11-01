@@ -3,7 +3,13 @@
 // it was when exported — with no planner, catalog, or wasm on the page. Later
 // planner changes never redraw an existing snapshot.
 
-import type { DeployStepDto, GraphDto, TopologyEdgeDto } from "../types";
+import type {
+  DeployPhase,
+  DeployStepDto,
+  GraphDto,
+  TopologyEdgeDto,
+  TopologyEdgeKind,
+} from "../types";
 
 /** The `format` tag every snapshot carries. */
 export const GRAPH_SNAPSHOT_FORMAT = "trestle-graph";
@@ -97,13 +103,16 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
       `graph snapshot: expected format "${GRAPH_SNAPSHOT_FORMAT}", got ${JSON.stringify(input.format)}`,
     );
   }
-  if (
-    typeof input.version !== "number" ||
-    !SUPPORTED_GRAPH_SNAPSHOT_VERSIONS.includes(input.version)
-  ) {
+  if (!isSupportedVersion(input.version)) {
     throw new Error(
       `graph snapshot: unsupported version ${JSON.stringify(input.version)} (this build reads version ${SUPPORTED_GRAPH_SNAPSHOT_VERSIONS.join(", ")}); re-export it or upgrade @open-lakehouse/trestle-diagram`,
     );
+  }
+  if (input.generator !== undefined && typeof input.generator !== "string") {
+    throw new Error("graph snapshot: `generator` must be a string");
+  }
+  if (input.title !== undefined && typeof input.title !== "string") {
+    throw new Error("graph snapshot: `title` must be a string");
   }
   const { graph } = input;
   if (
@@ -128,11 +137,10 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
   }
 
   const keys = new Set<string>();
-  const edges = graph.edges.map((edge: unknown, i: number) => {
+  const edges = graph.edges.map((edge: unknown, i: number): TopologyEdgeDto => {
     if (
       !isRecord(edge) ||
-      typeof edge.kind !== "string" ||
-      !EDGE_KINDS.has(edge.kind) ||
+      !isEdgeKind(edge.kind) ||
       typeof edge.from !== "string" ||
       typeof edge.to !== "string"
     ) {
@@ -147,16 +155,15 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
         );
       }
     }
-    const keyed = (
-      typeof edge.key === "string"
-        ? edge
-        : { ...edge, key: edgeKey(edge as unknown as TopologyEdgeDto) }
-    ) as TopologyEdgeDto;
-    if (keys.has(keyed.key)) {
-      throw new Error(`graph snapshot: duplicate edge key "${keyed.key}"`);
+    // Only the envelope and endpoints are checked; the kind's other fields are
+    // the planner's, read as they are.
+    const body = edge as UnkeyedEdge;
+    const key = typeof edge.key === "string" ? edge.key : edgeKey(body);
+    if (keys.has(key)) {
+      throw new Error(`graph snapshot: duplicate edge key "${key}"`);
     }
-    keys.add(keyed.key);
-    return keyed;
+    keys.add(key);
+    return { ...body, key };
   });
 
   if (input.files !== undefined) checkManifest(input.files);
@@ -166,13 +173,25 @@ export function parseGraphSnapshot(input: unknown): GraphSnapshot {
   }
 
   return {
-    ...input,
-    graph: { ...graph, edges },
-  } as unknown as GraphSnapshot;
+    format: GRAPH_SNAPSHOT_FORMAT,
+    version: input.version,
+    generator: input.generator,
+    title: input.title,
+    graph: { nodes: graph.nodes, edges },
+    files: input.files,
+    deploy: input.deploy,
+    mermaid: input.mermaid,
+  };
+}
+
+function isSupportedVersion(
+  value: unknown,
+): value is typeof GRAPH_SNAPSHOT_VERSION {
+  return SUPPORTED_GRAPH_SNAPSHOT_VERSIONS.some((v) => v === value);
 }
 
 /** A manifest lists unique relative paths that stay inside the render. */
-function checkManifest(files: unknown): void {
+function checkManifest(files: unknown): asserts files is string[] {
   if (!Array.isArray(files)) {
     throw new Error("graph snapshot: `files` must be an array of paths");
   }
@@ -199,7 +218,7 @@ function checkManifest(files: unknown): void {
 }
 
 /** Deployment steps carry an order, a phase, an id, a title and instructions. */
-function checkDeploy(deploy: unknown): void {
+function checkDeploy(deploy: unknown): asserts deploy is DeployStepDto[] {
   if (!Array.isArray(deploy)) {
     throw new Error("graph snapshot: `deploy` must be an array of steps");
   }
@@ -207,7 +226,7 @@ function checkDeploy(deploy: unknown): void {
     if (
       !isRecord(step) ||
       typeof step.order !== "number" ||
-      !DEPLOY_PHASES.has(step.phase as string) ||
+      !isDeployPhase(step.phase) ||
       typeof step.id !== "string" ||
       typeof step.title !== "string" ||
       typeof step.instructions !== "string"
@@ -219,30 +238,45 @@ function checkDeploy(deploy: unknown): void {
   }
 }
 
-const DEPLOY_PHASES: ReadonlySet<string> = new Set<DeployStepDto["phase"]>([
+const DEPLOY_PHASES: readonly DeployPhase[] = [
   "provision",
   "configure",
   "start",
   "verify",
-]);
+];
+
+function isDeployPhase(value: unknown): value is DeployPhase {
+  return DEPLOY_PHASES.some((phase) => phase === value);
+}
+
+/** A topology edge before its `key` is derived. */
+type UnkeyedEdge = DistributiveOmit<TopologyEdgeDto, "key">;
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
 
 /**
  * The key the planner assigns `edge` (Rust `TopologyEdgeDto::derive_key`):
  * `kind:from→to:qualifier`, where the qualifier is the capability for a
  * `uses` edge and the surface's host port for the gateway's edges.
  */
-export function edgeKey(edge: TopologyEdgeDto): string {
+export function edgeKey(edge: UnkeyedEdge): string {
   const qualifier = edge.kind === "uses" ? edge.role : String(edge.host_port);
   return `${edge.kind}:${edge.from}→${edge.to}:${qualifier}`;
 }
 
-const EDGE_KINDS: ReadonlySet<string> = new Set<TopologyEdgeDto["kind"]>([
+const EDGE_KINDS: readonly TopologyEdgeKind[] = [
   "access",
   "route",
   "authenticates",
   "authorizes",
   "uses",
-]);
+];
+
+function isEdgeKind(value: unknown): value is TopologyEdgeKind {
+  return EDGE_KINDS.some((kind) => kind === value);
+}
 
 /** Serialize a snapshot the way the editor saves it (stable, diff-friendly). */
 export function stringifyGraphSnapshot(snapshot: GraphSnapshot): string {

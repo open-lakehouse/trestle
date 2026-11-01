@@ -3,6 +3,7 @@
 // host port — including the ones not open in a tab.
 
 import { useEffect, useState } from "react";
+import { errorMessage } from "../errors";
 import { usePlanner } from "../planner";
 import type { CatalogDto, PlanResult } from "../types";
 import { contextFor, type WorkspaceDoc } from "./model";
@@ -38,10 +39,7 @@ export function useMemberPlans(
             );
             return [env.id, { plan }];
           } catch (e) {
-            return [
-              env.id,
-              { error: e instanceof Error ? e.message : String(e) },
-            ];
+            return [env.id, { error: errorMessage(e) }];
           }
         }),
       ).then((entries) => {
