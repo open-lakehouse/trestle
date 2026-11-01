@@ -420,7 +420,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     continue;
                 };
                 let (host_port, shared) = match route.listener {
-                    Listener::Shared => (shared_port.unwrap_or_default(), true),
+                    Listener::Shared => (shared_port.expect("shared listener planned"), true),
                     Listener::Dedicated { port } => (port, false),
                 };
                 exposes.push((
@@ -441,7 +441,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             && auth_id == id
         {
             exposes.push((
-                shared_port.unwrap_or_default(),
+                shared_port.expect("shared listener planned"),
                 ExposedDto {
                     module: id.to_string(),
                     endpoint: "portal".to_string(),
@@ -510,7 +510,12 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             let (resource, consumers) =
                 match consumers_of.get(&(provider.as_str().to_string(), name.clone())) {
                     Some((kind, consumers)) => (kind.clone(), consumers.clone()),
-                    None => (own_kind.clone().unwrap_or_default(), Vec::new()),
+                    None => (
+                        own_kind
+                            .clone()
+                            .expect("a provisioning module declares a resource kind"),
+                        Vec::new(),
+                    ),
                 };
             list.push(ProvisionedDto {
                 resource,
@@ -751,7 +756,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 key: String::new(),
                 from: gw.clone(),
                 to: idp.clone(),
-                host_port: shared_port.unwrap_or_default(),
+                host_port: shared_port.expect("shared listener planned"),
                 portal_prefix: a.portal_prefix.clone(),
             });
         }
@@ -761,7 +766,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 key: String::new(),
                 from: gw.clone(),
                 to: engine.clone(),
-                host_port: shared_port.unwrap_or_default(),
+                host_port: shared_port.expect("shared listener planned"),
             });
         }
     }
