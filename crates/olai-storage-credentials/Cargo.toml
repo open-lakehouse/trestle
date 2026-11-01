@@ -31,7 +31,7 @@ futures = { workspace = true }
 # Emulator tests only: mint session credentials from RustFS STS and exercise them
 # through a real S3 client.
 object_store = { version = "0.13", default-features = false, features = ["aws"] }
-olai-http = { path = "../olai-http", version = "0.0.10" }
+olai-http = { path = "../olai-http" }
 olai-test-emulators = { path = "../olai-test-emulators" }
 # A raw, hand-signed ListObjectsV2: object_store always lists with a trailing `/`, so it
 # cannot probe the bare-prefix case.
