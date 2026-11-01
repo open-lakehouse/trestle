@@ -57,19 +57,27 @@ fi
 
 root="$("$here/upstream-root.sh" "$repo")"
 # name<TAB>crate dir of every publishable package in the upstream workspace.
-crates="$(cargo metadata --no-deps --offline --format-version 1 --manifest-path "$root/Cargo.toml" |
-    jq -r '.packages[] | select(.publish != []) | "\(.name)\t\(.manifest_path | sub("/Cargo.toml$"; ""))"')"
+crates="$(published_crates "$root" | tr ' ' '\t')"
 
 if [[ $# -gt 0 ]]; then
     wanted="$*"
 else
-    # Every upstream crate a committed lock resolves from crates.io, or already
-    # resolves from a patch. Git-pinned crates bypass the proxy and are skipped.
-    used="$(while IFS= read -r lock; do lock_packages "$lock"; done < <(consumer_locks) |
-        awk '$3 == "-" || $3 ~ /^registry\+/ {print $1}' | sort -u)"
+    # Every upstream crate the consumer uses from crates.io: declared as a registry
+    # dependency in a workspace manifest (which covers a git pin just switched to a
+    # version, before the lock can resolve it), or resolved from crates.io or an
+    # earlier patch in a committed lock (which covers transitive use). Git-pinned
+    # crates bypass the proxy and are skipped.
+    used="$({
+        while IFS= read -r lock; do
+            lock_packages "$lock"
+            cargo metadata --no-deps --offline --format-version 1 \
+                --manifest-path "$(dirname "$lock")/Cargo.toml" 2>/dev/null |
+                jq -r '.packages[].dependencies[] | select(.source // "" | startswith("registry+")) | "\(.name) - registry+"'
+        done < <(consumer_locks)
+    } | awk '$3 == "-" || $3 ~ /^registry\+/ {print $1}' | sort -u)"
     wanted="$(grep -Fxf <(cut -f1 <<<"$crates") <<<"$used" | tr '\n' ' ' || true)"
 fi
-[[ -n "${wanted// /}" ]] || die "no $repo crates found in the committed Cargo.lock files; name them explicitly"
+[[ -n "${wanted// /}" ]] || die "the consumer uses no $repo crate from crates.io (git pins are skipped); name them explicitly"
 
 {
     echo "$marker (written by trestle/scripts/crates-proxy/patch.sh; never commit)"

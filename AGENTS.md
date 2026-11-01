@@ -125,7 +125,9 @@ Run `cargo clean` in a worktree before removing it.
 
 ## Sibling repos and the crates.io proxy
 
-mangrove, distributary, hydrofoil and headwaters consume these crates from
-crates.io, and the local crates.io proxy hides releases for 7 days.
-[`docs/crates-proxy.md`](docs/crates-proxy.md) explains how to build against a
-fresh release anyway, using `scripts/crates-proxy/`.
+The local crates.io proxy hides releases for 7 days. That affects every crate
+our repos publish to each other (trestle's `olai-*` and mangrove's `olai-uc-*`,
+but also breakwater's, distributary's and so on), in whichever direction they're
+consumed. trestle hosts the shared tooling for it:
+[`docs/crates-proxy.md`](docs/crates-proxy.md) explains how to build against any
+fresh sibling release anyway, using `scripts/crates-proxy/`.
