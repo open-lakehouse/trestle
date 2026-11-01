@@ -126,17 +126,18 @@ impl MethodPlan {
 ///
 /// | Field | Contents |
 /// |-------|----------|
-/// | `output.common` | Axum extractor code, per-service `mod.rs` (always written) |
-/// | `output.models_gen` | `labels.rs` resource-enum file (falls back to `common` if `None`) |
+/// | `output.common` | Axum request extractors (`extractors/<service>/`) and their `mod.rs` |
+/// | `output.models` | `labels.rs` (with `generate_resource_enum`), `pyo3_impls.rs` (with `output.python`) and the `mod.rs` mounting the models, in the `models_subdir` |
 /// | `output.server` | Handler trait + Axum route wiring per service |
-/// | `output.client` | HTTP client structs and request builders per service |
-/// | `output.python` | PyO3 binding wrappers |
+/// | `output.client` | HTTP (and/or ConnectRPC) client structs and request builders per service, plus the aggregate client |
+/// | `output.python` | PyO3 binding wrappers (and the Python package files) |
 /// | `output.node` | NAPI binding wrappers |
-/// | `output.node_ts` | TypeScript client (`client.ts`) |
+/// | `output.node_ts` | TypeScript client (`client.ts`, `models/index.ts`) |
+/// | `output.wasm` | `#[wasm_bindgen]` bindings (`mod.rs`) and `client.d.ts` |
 ///
 /// # Required fields
 ///
-/// - `output.common` is always required.
+/// - `output.server` needs `output.common` (the extractors).
 /// - `bindings` must be `Some` when any of `output.python`, `output.node`, or `output.node_ts`
 ///   is `Some`; otherwise returns [`Error::MissingBindingsConfig`].
 /// - `models_path_template` and `models_path_crate_template` must be valid Rust path templates
@@ -355,7 +356,7 @@ fn generate_common_code(
         let server_code = server::generate_common(&handler)?;
         // Nest the extractors under an `extractors/` subdir so their per-service
         // module names can't collide with the co-located model package modules
-        // (e.g. a `unitycatalog.agent_skills.v0alpha1` package yields a model
+        // (e.g. a `example.agent_skills.v0alpha1` package yields a model
         // module `agent_skills` that would otherwise clash with the `agent_skills`
         // service extractor module).
         files.insert(
@@ -896,8 +897,8 @@ pub fn generate_models_mod(
     // emitting one `pub mod`/`pub use` block per service would produce duplicate modules and
     // imports (E0428). Group by package first, then emit once per package.
     //
-    // package = "unitycatalog.catalogs.v1"
-    // parts   = ["unitycatalog", "catalogs", "v1"]
+    // package = "example.catalogs.v1"
+    // parts   = ["example", "catalogs", "v1"]
     // service module = second-to-last segment ("catalogs"); version = last segment ("v1").
     let mod_segments = |svc: &ServicePlan| -> (String, String) {
         let parts: Vec<&str> = svc.package.split('.').collect();
@@ -1180,15 +1181,13 @@ impl ServiceHandler<'_> {
     /// `None` for resource-less services.
     ///
     /// All four accessor emitters (Rust aggregate, Python, Node, TypeScript) render from this single
-    /// spec rather than re-deriving the param list and nesting decision, which previously diverged
-    /// between the Rust aggregate and the bindings.
+    /// spec rather than re-deriving the param list and nesting decision, so they can't diverge.
     pub(crate) fn accessor_spec(&self) -> Option<AccessorSpec> {
         let resource = self.resource()?;
         let params = self.plan.resource_accessor_params.clone()?;
         // A resource is nested when its accessor params include parent components beyond its own
-        // name; its full name is then the dot-joined components. This is the single, converged
-        // nesting rule — previously the Rust aggregate used `len > 1` while Python/Node also gated
-        // on `name_field`, which could disagree.
+        // name; its full name is then the dot-joined components. This is the single nesting rule
+        // of every accessor emitter.
         let nested = params.len() > 1;
         Some(AccessorSpec {
             singular: resource.descriptor.singular.clone(),
@@ -1318,7 +1317,7 @@ impl ServiceHandler<'_> {
 
     /// The module segment under which this service's generated models live.
     ///
-    /// Models are emitted per proto *package* (e.g. `unitycatalog.tags.v1` → module `tags`),
+    /// Models are emitted per proto *package* (e.g. `example.tags.v1` → module `tags`),
     /// which is not always the same as the service's `base_path` (derived from the service
     /// *name*, e.g. `TagPoliciesService` → `tag_policies`). Use the package's leaf-before-version
     /// segment so the models import path matches where the proto plugin actually wrote the types.
@@ -1483,10 +1482,9 @@ impl MethodHandler<'_> {
     /// Whether this method is emitted as an instance method on a resource-scoped client
     /// (`get`/`update`/`delete` or a resource-targeted custom `POST`/`PATCH`).
     ///
-    /// This is the exact set the bindings previously matched in their `resource_client_method`
-    /// dispatch: standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
+    /// The set is standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
     /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
-    /// deliberately **not** surfaced on the scoped client, matching prior behavior.
+    /// deliberately **not** surfaced on the scoped client.
     pub(crate) fn is_scoped_instance_method(&self) -> bool {
         // Standard instance verbs are always scoped.
         if matches!(
@@ -1508,10 +1506,9 @@ impl MethodHandler<'_> {
 
     /// The ordered binding parameter list for `mode`, with shared filtering applied once.
     ///
-    /// Required params come before optional ones (matching the previous
-    /// `required_parameters().chain(optional_parameters())` order). Filtering reproduces exactly what
-    /// the old per-language `collection_method_parameters` / `resource_method_parameters` did,
-    /// keyed on [`EmitShape`]:
+    /// Required params come before optional ones (the
+    /// `required_parameters().chain(optional_parameters())` order). Filtering is keyed on
+    /// [`EmitShape`]:
     ///
     /// - **collection shapes** (`List`, `Create`): never drop path params (collection methods live
     ///   on the root client and pass everything); drop `page_token` for `List` (streaming handles

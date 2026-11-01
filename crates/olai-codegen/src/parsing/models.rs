@@ -91,9 +91,9 @@ pub struct MessageField {
     /// Resource reference annotation from `google.api.resource_reference` (ext 1055).
     ///
     /// - `child_type` non-empty: this field identifies a parent container for the named resource
-    ///   (e.g. `catalog_name` with `child_type = "unitycatalog.io/Schema"`).
+    ///   (e.g. `catalog_name` with `child_type = "example.io/Schema"`).
     /// - `r#type` non-empty: this field directly identifies a resource of that type
-    ///   (e.g. `full_name` with `type = "unitycatalog.io/Table"`).
+    ///   (e.g. `full_name` with `type = "example.io/Table"`).
     pub resource_reference: Option<ResourceReference>,
 }
 
@@ -135,7 +135,7 @@ pub struct EnumValue {
 #[derive(Debug, Clone)]
 pub struct ServiceInfo {
     pub name: String,
-    /// Proto package name (e.g. `"unitycatalog.catalogs.v1"`).
+    /// Proto package name (e.g. `"example.catalogs.v1"`).
     pub package: String,
     pub documentation: Option<String>,
     pub methods: Vec<MethodMetadata>,

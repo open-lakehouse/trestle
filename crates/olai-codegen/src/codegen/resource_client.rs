@@ -14,7 +14,7 @@
 //!   (`catalog.list_schemas(…) -> ListSchemasBuilder`, with `.into_stream()` for pagination) for each
 //!   direct child resource, reusing the parent's captured components as the filter/path values.
 //!
-//! This replaces the previously hand-written scoped clients in consuming crates. The struct (with
+//! Consuming crates don't hand-write scoped clients. The struct (with
 //! `pub(crate)` fields) is generated into the consuming crate's source tree alongside the low-level
 //! client and builders, so hand-written extension `impl` blocks (pagination streams, bespoke
 //! helpers) in that crate compose with it as additional inherent-impl blocks and can read the

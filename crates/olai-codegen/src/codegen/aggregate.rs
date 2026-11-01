@@ -1,6 +1,6 @@
 //! Generation of the Rust *aggregate root client* (e.g. `ExampleClient`).
 //!
-//! The aggregate client is the hand-written-no-more root the language bindings call into.
+//! The aggregate client is the generated root the language bindings call into.
 //! Generated Python/Node aggregate bindings invoke `self.client.<method>(...)` where `self.client`
 //! is this aggregate; the method surface emitted here is built to EXACTLY MATCH those call sites
 //! (see [`super::python::bindings::collection_client_struct`] and

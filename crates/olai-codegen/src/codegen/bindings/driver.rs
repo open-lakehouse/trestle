@@ -1,8 +1,8 @@
 //! The shared dispatch skeleton: which methods land where, and how each shape is assembled.
 //!
-//! These functions were previously copy-pasted (byte-for-byte) into `python/bindings.rs` and
-//! `node/bindings.rs`. They are now the single source of truth; each backend calls them to obtain
-//! the scoped-client and root-client method token vecs, then wraps those in its own module scaffold.
+//! The single source of truth for the Python and Node backends: each calls these to obtain the
+//! scoped-client and root-client method token vecs (and the shared accessor and import pieces),
+//! then wraps those in its own module scaffold.
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
@@ -26,10 +26,9 @@ fn shape_parts<'a>(
     }
 }
 
-/// Dispatch a single method to the backend's body builder for its [`EmitShape`]. The single dispatch
-/// point that replaced the per-(scoped/collection/flat) `match request_type` arms — those only ever
-/// varied in *which* methods they emitted (decided by [`scoped_instance_method`]/[`root_method`]),
-/// not in the per-shape emit logic.
+/// Dispatch a single method to the backend's body builder for its [`EmitShape`]. *Which* methods
+/// are emitted is decided by [`scoped_instance_method`]/[`root_method`]; the per-shape emit logic is
+/// the same for every client.
 fn emit_for_shape(
     backend: &dyn BindingBackend,
     method: &MethodHandler<'_>,

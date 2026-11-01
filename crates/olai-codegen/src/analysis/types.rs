@@ -38,15 +38,14 @@ pub enum RequestType {
 ///
 /// Computed once during analysis from the method's [`RequestType`], name, and whether the owning
 /// service manages a `google.api.resource`. This makes the scoped/flat and collection/instance
-/// decisions explicit on the IR so emitters stop re-deriving them (replacing the old
-/// `MethodHandler::is_collection_method()` + `BindingMode` logic scattered across emit sites).
+/// decisions explicit on the IR, so emitters don't re-derive them.
 ///
 /// The three cases map onto the binding layout:
 /// - [`MethodShape::CollectionScoped`] and [`MethodShape::InstanceScoped`] both belong to a
 ///   resource-scoped service; collection methods live on the root client, instance methods on the
 ///   per-resource scoped client.
 /// - [`MethodShape::Unbound`] belongs to a resource-less service; every method lives on the root
-///   client and passes all params (the old "flat" lowering).
+///   client and passes all params (the "flat" lowering).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodShape {
     /// Collection-style operation on a resource service (list / create / factory RPC). Lives on the
@@ -84,15 +83,13 @@ pub enum EmitShape {
 
 /// Classify a method's [`EmitShape`] from its request type and proto name.
 ///
-/// Mirrors **exactly** the per-impl dispatch the bindings previously each performed inline (the
-/// `match request_type` arms in `collection_client_method` / `flat_client_method` /
-/// `resource_client_method`), so emit shape is decided in one place without behavior drift.
+/// The single place the emit shape is decided, for every client and binding emitter.
 ///
 /// `is_collection` (from [`is_collection_method`]) only distinguishes a collection-style custom
 /// `POST`/`PATCH` factory (→ [`EmitShape::Create`]) from a resource-targeted custom `POST`/`PATCH`
 /// (→ [`EmitShape::GetUpdate`]). Note a resource-less `Custom(Get)` named `List*` is **not**
-/// List-shaped here: the old flat dispatch routed it through the `Custom(_) => get_update` arm
-/// (returning the full response message, keeping `page_token`), and only a true
+/// List-shaped here: it is [`EmitShape::GetUpdate`] (returning the full response message, keeping
+/// `page_token`), and only a true
 /// [`RequestType::List`] gets streamed/`List` emit. Collection *routing* (which client a method
 /// lands on) is a separate decision driven by [`is_collection_method`].
 pub(crate) fn emit_shape(request_type: &RequestType, is_collection: bool) -> EmitShape {
@@ -143,7 +140,7 @@ pub struct ServicePlan {
     pub handler_name: String,
     /// Base URL path for this service (e.g., "catalogs")
     pub base_path: String,
-    /// Proto package name (e.g., "unitycatalog.catalogs.v1")
+    /// Proto package name (e.g., "example.catalogs.v1")
     pub package: String,
     /// Methods to generate for this service
     pub methods: Vec<MethodPlan>,
@@ -357,7 +354,7 @@ pub struct QueryParam {
     /// Resource reference annotation, if present on the corresponding proto field.
     ///
     /// - `child_type` non-empty: this param scopes a parent of that resource type
-    ///   (e.g. `catalog_name` with `child_type = "unitycatalog.io/Schema"`).
+    ///   (e.g. `catalog_name` with `child_type = "example.io/Schema"`).
     /// - `r#type` non-empty: this param directly identifies a resource of that type.
     pub resource_reference: Option<crate::google::api::ResourceReference>,
 }
@@ -453,13 +450,13 @@ pub struct ManagedResource {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ResourceHierarchy {
-    /// The service's managed resource type string (e.g. `"unitycatalog.io/Table"`).
+    /// The service's managed resource type string (e.g. `"example.io/Table"`).
     ///
     /// Note: on flat APIs this equals the `child_type` annotation value, but the *actual*
     /// resource type of the ancestor is `parent_resource_type`, which may differ.
     pub child_resource_type: String,
     /// The actual resource type of the ancestor identified by `parent_field_name`
-    /// (e.g. `"unitycatalog.io/Catalog"` for the `catalog_name` field on ListTablesRequest).
+    /// (e.g. `"example.io/Catalog"` for the `catalog_name` field on ListTablesRequest).
     ///
     /// This may differ from `child_resource_type` for grandparent fields on flat APIs
     /// (e.g. `catalog_name` on ListTablesRequest has `child_type = Table` but the field
@@ -674,7 +671,7 @@ pub(crate) fn method_shape(
 
 /// The verb to call on a resource-scoped client for standard instance operations, or `None`.
 ///
-/// Single source of truth for the scoped-verb mapping the binding emitters previously re-derived.
+/// Single source of truth for the scoped-verb mapping.
 pub(crate) fn scoped_verb(request_type: &RequestType) -> Option<String> {
     match request_type {
         RequestType::Get => Some("get".to_string()),
@@ -923,7 +920,7 @@ mod tests {
         );
 
         // A custom GET (even named `List*`, is_collection=true) is NOT List-shaped — it returns the
-        // full response message, matching the old flat dispatch's `Custom(_) => get_update` arm.
+        // full response message.
         assert_eq!(
             emit_shape(&custom(Pattern::Get(String::new())), true),
             EmitShape::GetUpdate
@@ -932,7 +929,7 @@ mod tests {
             emit_shape(&custom(Pattern::Get(String::new())), false),
             EmitShape::GetUpdate
         );
-        // A custom DELETE is GetUpdate-shaped (the old flat `Custom(_)` arm), not Delete.
+        // A custom DELETE is GetUpdate-shaped, not Delete.
         assert_eq!(
             emit_shape(&custom(Pattern::Delete(String::new())), false),
             EmitShape::GetUpdate

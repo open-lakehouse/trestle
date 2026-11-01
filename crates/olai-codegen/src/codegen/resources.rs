@@ -47,7 +47,7 @@ pub(crate) fn generate_resource_enum(
         return Ok(String::new());
     }
 
-    // Infer package prefix from service packages (e.g. "unitycatalog.catalogs.v1" → ".unitycatalog.")
+    // Infer package prefix from service packages (e.g. "example.catalogs.v1" → ".example.")
     let package_prefix = infer_package_prefix(
         &plan
             .services
@@ -738,9 +738,8 @@ fn build_qualified_name_expr(path_names: &[String], is_string: &[bool]) -> Token
         })
         .collect();
 
-    // Single-segment resources return the leaf directly (no `format!`), matching the prior
-    // behavior and avoiding a needless borrow: `clone()` for a `String` leaf, `to_string()`
-    // for a non-string one.
+    // Single-segment resources return the leaf directly (no `format!`), avoiding a needless
+    // borrow: `clone()` for a `String` leaf, `to_string()` for a non-string one.
     if let [only] = field_exprs.as_slice() {
         let leaf_is_string = is_string.first().copied().unwrap_or(true);
         return if leaf_is_string {
@@ -773,15 +772,15 @@ fn infer_package_prefix(packages: &[&str]) -> String {
 /// Convert a fully-qualified protobuf message name to a Rust type path relative to
 /// `labels.rs` inside the models subdirectory.
 ///
-/// `prefix` is stripped from the message name (e.g. `".unitycatalog."`).
+/// `prefix` is stripped from the message name (e.g. `".example."`).
 /// One `super::` hop is prepended since `labels.rs` is a sibling of the service modules
 /// inside the same generated subdirectory.
 ///
-/// Examples (prefix = `".unitycatalog."`):
-/// - `.unitycatalog.catalogs.v1.Catalog` → `super::catalogs::v1::Catalog`
-/// - `.unitycatalog.external_locations.v1.ExternalLocation` → `super::external_locations::v1::ExternalLocation`
+/// Examples (prefix = `".example."`):
+/// - `.example.catalogs.v1.Catalog` → `super::catalogs::v1::Catalog`
+/// - `.example.external_locations.v1.ExternalLocation` → `super::external_locations::v1::ExternalLocation`
 fn message_name_to_rust_path(name: &str, prefix: &str, super_levels: u32) -> Option<String> {
-    // Strip leading prefix (e.g. ".unitycatalog.")
+    // Strip leading prefix (e.g. ".example.")
     let without_prefix = name.strip_prefix(prefix)?;
     // Split remaining parts and join with `::`
     let parts: Vec<&str> = without_prefix.split('.').collect();
@@ -936,8 +935,7 @@ fn generate_resource_registry(
 }
 
 // ---------------------------------------------------------------------------
-// Object conversion helpers (emit the impl blocks formerly produced by
-// olai_derive::object_conversions!)
+// Object conversion helpers (emit the `TryFrom<Object>` / `ResourceExt` impl blocks)
 // ---------------------------------------------------------------------------
 
 fn emit_from_object(

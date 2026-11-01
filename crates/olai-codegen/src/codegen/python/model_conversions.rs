@@ -24,7 +24,7 @@
 //!
 //! ## Runtime differences
 //!
-//! Unlike the old pythonize impls, the wrapper *bodies* are runtime-aware: buffa
+//! The wrapper *bodies* are runtime-aware: buffa
 //! stores singular messages as `MessageField<T>` and enums as `EnumValue<E>`,
 //! while prost uses `Option<T>` (or `Option<Box<T>>` for fields prost boxes to
 //! break a recursion cycle) and bare `i32`. The accessor expressions are selected
@@ -1834,7 +1834,7 @@ fn constructor(
 }
 
 // ---------------------------------------------------------------------------
-// Path helpers (shared with the former pythonize impl)
+// Path helpers
 // ---------------------------------------------------------------------------
 
 fn parse_path(rust_path: &str, fq_name: &str) -> crate::error::Result<syn::Path> {

@@ -220,7 +220,7 @@ function parseNativeError(e: unknown): never {{
 ///
 /// `client.ts` imports message and response types from `"./models"`, so this barrel must surface
 /// both `*_pb` files. The path for each is derived from the service's proto package
-/// (e.g. `unitycatalog.tags.v1` → `./gen/unitycatalog/tags/v1/{models_pb,svc_pb}`).
+/// (e.g. `example.tags.v1` → `./gen/example/tags/v1/{models_pb,svc_pb}`).
 pub(crate) fn generate_models_barrel(services: &[ServiceHandler<'_>]) -> String {
     let mut paths: Vec<String> = services
         .iter()
