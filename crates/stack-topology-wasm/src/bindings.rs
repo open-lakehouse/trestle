@@ -1,7 +1,7 @@
 //! The `#[wasm_bindgen]` surface consumed by `@open-lakehouse/stack-wasm`.
 //!
-//! Thin wrappers over the pure projection in [`dto`](crate::dto): deserialize JSON in, run the
-//! planner, serialize the DTO out. All the interesting logic (and its tests) lives in `dto`; this
+//! Thin wrappers over the projection in [`dto`](crate::dto): deserialize JSON in, run the
+//! planner, serialize the DTO out. The logic and its tests live in `olai_stack_topology`; this
 //! file is `wasm32`-only glue, so native `cargo test`/`clippy` never pull the wasm toolchain.
 
 use olai_stack_topology::{PlanCtx, Selection, TargetId};

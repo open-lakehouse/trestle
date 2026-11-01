@@ -165,7 +165,7 @@ fn provider_connection_is_resolved_for_the_consumer_without_binding() {
         .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
         .unwrap();
 
-    // No coordinate is injected into UC's env — the old `UC_DATABASE_URL` round-trip is gone.
+    // No coordinate is injected into UC's env.
     let uc_env = p.injected.get(&ModuleId::from("unity-catalog")).unwrap();
     assert_eq!(uc_env.get("UC_DATABASE_URL"), None);
     assert_eq!(p.env.get("UC_DATABASE_URL"), None);
@@ -357,8 +357,6 @@ fn demand_chain_resolves_to_a_fixed_point() {
         );
     }
 }
-
-// ---- Abstract `object_store` role: planner picks the provider --------------------
 
 /// A `PlanCtx` that prefers Azurite over RustFS for the object store.
 fn azurite_preferred() -> PlanCtx {
@@ -606,8 +604,7 @@ fn same_role_demands_pinning_different_providers_conflict() {
 #[test]
 fn binding_a_field_the_connection_lacks_errors() {
     // An object_store connection has no `url` field; binding it must fail at plan time,
-    // naming the unbound field — the typed replacement for the old contract/coordinate
-    // errors.
+    // naming the unbound field.
     let app = consumer(
         "needs-store",
         vec![ResourceDemand {
@@ -654,8 +651,6 @@ fn two_unpinned_object_store_providers_in_one_env_is_rejected() {
         "expected ConflictingRoleProviders for the unpinned object_store pair, got {err:?}"
     );
 }
-
-// --- environment-level extra resources (provisioned, never bound) ---
 
 /// An extra bucket with no object_store-demanding module still pulls in a provider and is
 /// provisioned: nothing in the selection needs an object store, yet rustfs joins the graph

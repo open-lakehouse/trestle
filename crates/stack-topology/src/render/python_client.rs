@@ -28,12 +28,8 @@ pub fn python_client_files(plan: &Plan) -> Vec<OutputFile> {
     let Some(workspace) = &plan.python_client else {
         return Vec::new();
     };
-    let generated = |name: &str, contents: String| OutputFile {
-        path: format!("{PYTHON_CLIENT_DIR}/{name}"),
-        contents,
-        sensitive: false,
-        preserve: false,
-        moved_from: None,
+    let generated = |name: &str, contents: String| {
+        OutputFile::plain(format!("{PYTHON_CLIENT_DIR}/{name}"), contents)
     };
     let notebook = |file: &str, contents: &str| OutputFile {
         path: format!("{PYTHON_CLIENT_DIR}/notebooks/{file}"),

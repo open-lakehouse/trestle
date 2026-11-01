@@ -9,19 +9,13 @@
 //!
 //! The projection itself (planner types → `#[derive(Serialize)]` DTOs, and the pure
 //! `plan_result` core) lives in [`olai_stack_topology::projection`], so the native CLI and the
-//! browser share one implementation. [`dto`] and [`topology`] re-export it under the paths this
-//! crate has always exposed; [`bindings`] holds the thin `#[wasm_bindgen]` JSON-in / JsValue-out
-//! wrappers, compiled only on `wasm32` so native builds never need the wasm-bindgen toolchain.
+//! browser share one implementation. [`dto`] re-exports it under the path this crate has always
+//! exposed. [`bindings`] holds the thin `#[wasm_bindgen]` JSON-in / JsValue-out wrappers, compiled
+//! only on `wasm32` so native builds never need the wasm-bindgen toolchain.
 
 /// The serializable projection (re-exported from [`olai_stack_topology::projection`]).
 pub mod dto {
     pub use olai_stack_topology::projection::*;
-}
-
-/// The functional topology behind the diagram (re-exported from
-/// [`olai_stack_topology::projection::topology`]).
-pub mod topology {
-    pub use olai_stack_topology::projection::topology::*;
 }
 
 #[cfg(target_arch = "wasm32")]

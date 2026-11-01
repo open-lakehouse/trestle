@@ -424,47 +424,28 @@ mod tests {
             .to_string()
     }
 
-    /// [`ServiceRef::address_direct`] as a string (an empty plan gateways nothing).
-    fn direct(from: Vantage, to: &ServiceSpec, ep: &str) -> String {
-        let facts = facts();
-        let empty = RoutePlan::new();
-        ServiceRef::new(to, &empty, &facts)
-            .address_direct(from, ep)
-            .unwrap()
-            .to_string()
-    }
-
-    // --- Direct addresses: the cross-vantage matrix. With an empty plan nothing is
-    // gatewayed, so the default resolution is direct. ---
-
     #[test]
-    fn container_to_host_catalog_uses_host_docker_internal() {
-        // A container reaching a host-bound service crosses the boundary via host.docker.internal.
+    fn host_bound_catalog_is_reached_from_each_vantage() {
         let uc = host_catalog(54321);
-        assert_eq!(
-            addr(Vantage::Container, &uc, "rest", &RoutePlan::new()),
-            "http://host.docker.internal:54321/api/2.1/unity-catalog/"
-        );
-    }
-
-    #[test]
-    fn in_process_to_host_catalog_uses_loopback() {
-        // An in-process caller reaches a host-bound sidecar on loopback.
-        let uc = host_catalog(54321);
-        assert_eq!(
-            addr(Vantage::InProcess, &uc, "rest", &RoutePlan::new()),
-            "http://127.0.0.1:54321/api/2.1/unity-catalog/"
-        );
-    }
-
-    #[test]
-    fn host_to_host_catalog_uses_loopback() {
-        // A host-side caller reaches a host-bound sidecar on loopback.
-        let uc = host_catalog(54321);
-        assert_eq!(
-            addr(Vantage::Host, &uc, "rest", &RoutePlan::new()),
-            "http://127.0.0.1:54321/api/2.1/unity-catalog/"
-        );
+        let cases = [
+            // A container crosses the boundary via host.docker.internal.
+            (
+                Vantage::Container,
+                "http://host.docker.internal:54321/api/2.1/unity-catalog/",
+            ),
+            // In-process and host-side callers reach a host-bound sidecar on loopback.
+            (
+                Vantage::InProcess,
+                "http://127.0.0.1:54321/api/2.1/unity-catalog/",
+            ),
+            (
+                Vantage::Host,
+                "http://127.0.0.1:54321/api/2.1/unity-catalog/",
+            ),
+        ];
+        for (from, want) in cases {
+            assert_eq!(addr(from, &uc, "rest", &RoutePlan::new()), want, "{from:?}");
+        }
     }
 
     #[test]
@@ -488,9 +469,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, AddressError::NoHostPort { .. }));
     }
-
-    // --- Gateway-by-default: when the coordinator's plan assigns a route, the
-    // endpoint resolves through the gateway with no caller opt-in. ---
 
     #[test]
     fn in_process_to_marquez_defaults_through_gateway() {
@@ -517,9 +495,6 @@ mod tests {
             "http://envoy:10000/api/v1/lineage"
         );
     }
-
-    // --- UI routes: the planner chose the base path; the UI serves itself under
-    // it so links resolve. ---
 
     #[test]
     fn ui_route_fronts_at_assigned_base_path() {
@@ -575,18 +550,21 @@ mod tests {
         );
     }
 
-    // --- Escape hatch: address_direct bypasses the gateway even for a planned
-    // endpoint. ---
-
     #[test]
     fn address_direct_bypasses_gateway() {
-        // Marquez may be gatewayed, but address_direct reaches its container
-        // directly regardless of the plan.
+        // Marquez is gatewayed in this plan, but address_direct reaches its container directly.
         let marquez = container_marquez();
+        let mut plan = RoutePlan::new();
+        plan.assign("marquez", "lineage", api_route("/api/v1/lineage"));
         assert_eq!(
-            direct(Vantage::Container, &marquez, "lineage"),
-            "http://marquez-api:5000/"
+            addr(Vantage::Container, &marquez, "lineage", &plan),
+            "http://envoy:10000/api/v1/lineage"
         );
+        let facts = facts();
+        let direct = ServiceRef::new(&marquez, &plan, &facts)
+            .address_direct(Vantage::Container, "lineage")
+            .unwrap();
+        assert_eq!(direct.to_string(), "http://marquez-api:5000/");
     }
 
     #[test]

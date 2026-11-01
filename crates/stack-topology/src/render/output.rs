@@ -40,6 +40,19 @@ pub struct OutputFile {
     pub moved_from: Option<String>,
 }
 
+impl OutputFile {
+    /// A plain file: neither sensitive nor operator-owned, and not moved from anywhere.
+    pub fn plain(path: impl Into<String>, contents: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            contents: contents.into(),
+            sensitive: false,
+            preserve: false,
+            moved_from: None,
+        }
+    }
+}
+
 /// Every file a rendered [`Plan`](crate::Plan) produces, flattened to write-ready
 /// `(path, contents)` pairs in the deploy target's layout. For Docker Compose
 /// ([`compose::materialize`](crate::render::compose::materialize)) that is the top-level

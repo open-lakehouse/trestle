@@ -1,19 +1,15 @@
-//! The environment **topology & addressing** framework for Lakehouse
-//! reference-architecture environments.
+//! Topology and addressing for Lakehouse reference-architecture environments.
 //!
-//! A Lakehouse dev environment is a set of services — a catalog, an object store,
-//! a gateway, lineage, query engines — wired together. *Which* service reaches
-//! *which*, and at *what address*, depends on where each one runs relative to the
-//! other: in the same process, on the host, or in a container, and whether the
-//! traffic goes through the gateway or direct. Computed by hand at each call site
-//! those rules duplicate and drift; this crate makes them one tested model.
+//! Which service reaches which, and at what address, depends on where each one runs (in the
+//! same process, on the host, or in a container) and on whether the traffic goes through the
+//! gateway. This crate models those rules once, so callers don't recompute them.
 //!
 //! # The model, in six pieces
 //!
 //! - [`Role`] / [`ServiceSpec`] — a service declares the *role* it fills
 //!   (`data_catalog`, `object_store`, `gateway`, …) independent of *which*
 //!   implementation fills it. The role set is open, and implementation names
-//!   (Unity Catalog, Azurite, …) are *data*, never types — so a new catalog or a
+//!   (Unity Catalog, Azurite, …) are catalog data, so a new catalog or a
 //!   hybrid drops in without a framework change.
 //! - [`Placement`] / [`Vantage`] — where a service runs and where a caller sits.
 //! - [`Endpoint`] / [`RouteIntent`] — what a service offers (port, scheme) and its
@@ -33,7 +29,7 @@
 //!   when the plan assigns a route ([`address_direct`](ServiceRef::address_direct) is the
 //!   explicit escape hatch).
 //!
-//! # The crate's shape: five phases, five module groups
+//! # The crate's shape: six phases, six module groups
 //!
 //! The public surface mirrors the phases an environment goes through, and the
 //! source is grouped to match:
@@ -49,16 +45,15 @@
 //!   each turning a plan into its own files.
 //! - [`mod@address`] — resolving the URL to reach a service from a given [`Vantage`].
 //!
-//! # Purity: rendering is pure, only I/O lives in the consumer
+//! # Purity: rendering is pure, disk I/O is opt-in
 //!
-//! The whole crate is pure: no filesystem access, no process spawning. *Rendering*
-//! is part of that purity — the render phase produces **strings and relative
-//! filenames in memory** ([`Artifacts`], [`RenderOutput`], [`RenderFile`]); the crate
-//! never writes them. Persisting those strings to disk (or, in a browser,
-//! visualizing them without persisting) is the **consumer's** job. That is why
-//! rendering is always available and not feature-gated: the only WASM-incompatible
-//! step — disk I/O — is not in this crate at all, so the rendering path (MiniJinja
-//! included) compiles to `wasm32` cleanly.
+//! Planning and rendering touch no filesystem and spawn no processes. The render phase
+//! produces **strings and relative filenames in memory** ([`Artifacts`], [`RenderOutput`],
+//! [`RenderFile`]), and the crate never writes them. Persisting those strings to disk (or, in
+//! a browser, visualizing them without persisting) is the **consumer's** job. Rendering is
+//! always available and not feature-gated, so the rendering path (MiniJinja included) compiles
+//! to `wasm32`. The two features that do touch disk are `std-io` (`MaterializedOutput::write_to`
+//! and the manifest's `read_from`/`write_to`) and `catalog` (loading `module.yaml` manifests).
 //!
 //! Runtime facts the resolver needs — a dynamically-allocated catalog port, the
 //! gateway's host-published port — are supplied at plan time. Catalog loading from
@@ -68,12 +63,10 @@
 //! # Persisting choices and re-planning
 //!
 //! [`EnvManifest`] persists a user's environment choices (the [`Selection`] plus the
-//! environment-level [`PlanCtx`]) as TOML and re-creates the same [`Plan`] from them — so the
+//! environment-level [`PlanCtx`]) as TOML and re-creates the same [`Plan`] from them, so the
 //! **gateway host port and each service's route stay stable when the selection is edited** (the
 //! shared listener is stable by construction; see [`mod@manifest`]). [`layout_report`] renders a
-//! plan's gateway layout as a terse Markdown summary. Both are pure and WASM-clean — TOML
-//! (de)serialization and the report produce / consume strings; only the manifest's
-//! `read_from`/`write_to` (behind `std-io`) touch disk, exactly like the materialized output.
+//! plan's gateway layout as a terse Markdown summary. Both produce and consume strings only.
 
 pub mod address;
 pub mod catalog;
@@ -86,7 +79,6 @@ pub mod report;
 pub mod target;
 pub mod workspace;
 
-// --- model: the vocabulary types ---
 pub use model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
 };
@@ -94,7 +86,6 @@ pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, RouteOptions, Scheme};
 pub use model::placement::{Placement, Vantage};
 pub use model::role::{Role, ServiceSpec};
 
-// --- catalog: the module set + how a module is defined ---
 pub use catalog::credentials::{
     LOCAL_CREDENTIALS, LocalCredential, LocalCredentialError, LocalCredentials,
 };
@@ -111,7 +102,6 @@ pub use catalog::{
     baseline_catalog_with, baseline_selection,
 };
 
-// --- plan: the producer + the resolved environment ---
 pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, resolve_with};
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
@@ -123,7 +113,6 @@ pub use plan::{
     TlsVirtualHost, is_valid_resource_name, resource_name_rule,
 };
 
-// --- render: the planner↔template handshake + the stack artifacts ---
 pub use render::compose::{
     Artifacts, ComposeInclude, ConfigDecl, HeadFile, SecretDecl, render_all, render_compose,
     render_modules,
@@ -139,23 +128,17 @@ pub use render::output::{
 pub use render::python_client::{PYTHON_CLIENT_DIR, python_client_files};
 pub use render::{InjectedEnv, RenderError, RenderFile, RenderOutput};
 
-// --- target: what an environment deploys to ---
 pub use target::{Compose, DeployTarget, TargetId, builtin_targets};
 
-// --- address: the addressing resolver ---
 pub use address::{AddressError, ServiceRef};
 
-// --- manifest: persist a user's choices, re-plan deterministically ---
 pub use manifest::{CatalogSource, EnvManifest, ManifestError, pin_dedicated_ports};
 
-// --- workspace: several environments on one host ---
 pub use workspace::{
     MAX_SLOT, PortConflict, SLOT_PORT_STRIDE, WORKSPACE_FILE, WorkspaceEnv, WorkspaceError,
     WorkspaceManifest, port_conflicts,
 };
 
-// --- report: a human-readable layout summary ---
 pub use report::layout_report;
 
-// --- projection: the topology as Mermaid, for Markdown ---
 pub use projection::graph_mermaid;

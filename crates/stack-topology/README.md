@@ -20,8 +20,9 @@ callers). This crate makes the topology a single, tested model:
 - **Role / implementation** — a service declares the *role* it fills
   (`data_catalog`, `object_store`, `gateway`, …) independent of *which*
   implementation fills it, so a catalog can be Unity Catalog today and an Iceberg
-  REST Catalog tomorrow without a framework change. **No implementation names
-  appear in this crate's types** — they live only in catalog data.
+  REST Catalog tomorrow without a framework change. Implementation names live in catalog
+  data. The hosted-provider types are the exception: `HostedVendor` names the managed
+  services it knows.
 - **Placement / vantage** — where a service runs and where a caller sits.
 - **Endpoint / route intent** — what a service offers (port, scheme) and its
   *intent*, declared once and vantage-free. A module declares only intent, never
@@ -42,11 +43,10 @@ callers). This crate makes the topology a single, tested model:
   this model's.
 - **`address(from, to, endpoint, plan, ctx)`** — the single pure function that
   turns all of the above into one concrete `Url`, routing **through the gateway**
-  whenever the plan assigns the endpoint a route (the platform's "one unified
-  surface" posture). `address_direct(…)` is the explicit escape hatch for the rare
+  whenever the plan assigns the endpoint a route. `address_direct(…)` is the explicit escape hatch for the rare
   endpoint that must be reached directly.
-- **Surface mode** — the "one unified platform surface" Lakehouse invariant, with
-  the in-process desktop variant expressed in-model rather than forked.
+- **Surface mode** — the in-process desktop variant is expressed in the model rather than
+  forked.
 
 The core (model + resolver) is pure: `serde`, `url`, `thiserror`, no I/O (the `plan.json`
 export adds `serde_json` and `sha2`). Rendering is

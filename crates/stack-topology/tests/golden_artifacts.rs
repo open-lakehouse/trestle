@@ -1,18 +1,15 @@
 //! End-to-end validation that the planner + renderers materialize *working* artifacts
-//! — the compose, Postgres init, `.env`, and Envoy gateway config a Lakehouse dev
-//! environment needs — matching what trestle ships today.
+//! (the compose, Postgres init, `.env`, and Envoy gateway config a Lakehouse dev
+//! environment needs).
 //!
-//! The bar is **behavioral equivalence**, not byte-identity: the planner improves on
-//! trestle's hand-authored output (routes ordered most-specific-first; cluster names
-//! derived systematically), so these tests compare the *meaning* of the rendered
-//! artifacts against the captured trestle fixtures (parsed Envoy routes/clusters, the
-//! database set, the env-var set, the include list) and assert the rendered YAML is
-//! valid.
+//! The bar is **behavioral equivalence**, not byte-identity: the planner orders routes
+//! most-specific-first and derives cluster names systematically, so these tests compare the
+//! *meaning* of the rendered artifacts against the captured fixtures (parsed Envoy
+//! routes/clusters, the database set, the env-var set, the include list) and assert the
+//! rendered YAML is valid.
 //!
-//! Fixtures under `tests/fixtures/default/` were captured by running the real
-//! `trestle new` for the default lakehouse selection (envoy + seaweedfs + postgres +
-//! unity-catalog + mlflow). RustFS has since replaced SeaweedFS as the S3 store, so the
-//! fixture's include list names `rustfs`.
+//! Fixtures under `tests/fixtures/default/` are captured output for the default lakehouse
+//! selection, with RustFS as the S3 store (the fixture's include list names `rustfs`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -86,7 +83,7 @@ fn parse_envoy(yaml: &str) -> (RouteMap, Vec<String>, BTreeMap<String, String>) 
 fn envoy_routes_and_clusters_match_trestle_semantically() {
     let arts = render(&default_selection());
     let (got, order, got_clusters) = parse_envoy(&arts.envoy);
-    let (want, _, _) = parse_envoy(ENVOY_FIXTURE);
+    let (want, _, want_clusters) = parse_envoy(ENVOY_FIXTURE);
 
     // Same set of client prefixes fronted.
     let got_prefixes: BTreeSet<_> = got.keys().cloned().collect();
@@ -98,15 +95,11 @@ fn envoy_routes_and_clusters_match_trestle_semantically() {
 
     // Each prefix routes to the same upstream service and applies the same rewrite
     // (matching by cluster's host:port, since the planner names clusters by service).
-    let fixture_cluster_target = {
-        let (_, _, c) = parse_envoy(ENVOY_FIXTURE);
-        c
-    };
     for (prefix, (got_cluster, got_rewrite)) in &got {
         let (want_cluster, want_rewrite) = &want[prefix];
         assert_eq!(
             got_clusters.get(got_cluster),
-            fixture_cluster_target.get(want_cluster),
+            want_clusters.get(want_cluster),
             "prefix {prefix} routes to a different upstream than trestle"
         );
         assert_eq!(
@@ -234,8 +227,8 @@ fn env_file_emits_only_keys_referenced_as_compose_substitutions() {
         );
     }
 
-    // Concretely-consumed coordinates that used to round-trip through `.env` are now gone:
-    // they are read straight from the resolved connection in the fragments.
+    // Concretely-consumed coordinates are read straight from the resolved connection in the
+    // fragments, so they are not emitted into `.env`.
     for k in [
         "MLFLOW_ARTIFACTS_DESTINATION",
         "MLFLOW_BACKEND_STORE_URI",
@@ -256,9 +249,8 @@ fn compose_includes_the_same_fragments() {
     // Valid YAML.
     let _: Value =
         serde_yaml::from_str(&arts.compose).expect("rendered compose must be valid YAML");
-    // Compare the *set of modules* included, not raw paths: the layout moved from trestle's
-    // `./docker/compose/<id>.yaml` to a per-module `./modules/<id>/compose.yaml`, so derive the
-    // module id from each include path on both sides.
+    // Compare the *set of modules* included, not raw paths: derive the module id from each
+    // include path (`./modules/<id>/compose.yaml`) on both sides.
     let module_ids = |s: &str| -> BTreeSet<String> {
         s.lines()
             .filter_map(|l| l.trim().strip_prefix("- path: "))
@@ -336,7 +328,7 @@ fn compose_declares_config_aliases_for_mounted_files() {
         pg.contains("source: postgres_init"),
         "postgres fragment mounts the init script by alias: {pg}"
     );
-    // No stale `docker/` bind-mount paths remain.
+    // No `docker/` bind-mount paths.
     assert!(
         !envoy.contains("docker/envoy") && !pg.contains("docker/postgres"),
         "fragments should no longer reference the old docker/ layout"
