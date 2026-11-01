@@ -39,6 +39,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use crate::filter::Filter;
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
@@ -316,6 +317,28 @@ impl<L: Label, S: ObjectStoreReader<L>> ObjectStoreReader<L> for ManagedObjectSt
         let (mut objects, token) = self
             .inner
             .list(label, namespace, max_results, page_token)
+            .await?;
+        for object in &mut objects {
+            self.inject_fields(object);
+        }
+        Ok((objects, token))
+    }
+
+    /// Forwards to the inner store, so a backend that pushes filters into its query (and serves
+    /// them from a declared [`PropertyIndex`](crate::PropertyIndex)) keeps doing so behind the
+    /// managed layer. The filter sees the stored payload; see the
+    /// [module docs](self#searchability-of-managed-fields).
+    async fn search(
+        &self,
+        label: L,
+        namespace: Option<&ResourceName>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Object<L>>, Option<String>)> {
+        let (mut objects, token) = self
+            .inner
+            .search(label, namespace, filter, max_results, page_token)
             .await?;
         for object in &mut objects {
             self.inject_fields(object);
@@ -748,6 +771,45 @@ mod tests {
         assert!(!raw_map.contains_key("id"));
         assert!(!raw_map.contains_key("created_at"));
         assert_eq!(raw_map["color"], serde_json::json!("red"));
+    }
+
+    /// `search` goes to the inner store, so it filters the stored payload (where injected fields
+    /// don't exist) and hands back objects with their fields injected, like `list`.
+    #[tokio::test]
+    async fn search_filters_the_stored_payload_and_injects_on_read() {
+        let store = ManagedObjectStore::new(InMemoryStore::<TestLabel>::new(), registry());
+        let created = store
+            .create(
+                TestLabel::Widget,
+                &rn("w1"),
+                props(serde_json::json!({ "color": "red" })),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let id = created.id.to_string();
+
+        let (found, _) = store
+            .search(
+                TestLabel::Widget,
+                None,
+                &Filter::eq("color", "red"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        let map = found[0].properties.as_ref().unwrap().as_object().unwrap();
+        assert_eq!(map["id"], serde_json::json!(id));
+
+        // The identifier is only injected on read, so it isn't searchable.
+        let (found, _) = store
+            .search(TestLabel::Widget, None, &Filter::eq("id", id), None, None)
+            .await
+            .unwrap();
+        assert!(found.is_empty());
     }
 
     #[tokio::test]
