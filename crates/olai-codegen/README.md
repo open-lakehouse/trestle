@@ -96,8 +96,8 @@ The config is `trestle.yaml`, a **nested** schema (proto library × servers ×
 clients). See `trestle config --help` to author it, or the `TrestleConfig`
 documentation in the `olai-trestle` crate for the full field reference — this
 README intentionally does not duplicate the schema. `trestle new
-databricks-app-rust` scaffolds a project already wired in the recommended
-four-crate layout (`common` / `server` / `client` + proto) with a ready
+<name> --app databricks-app-rust` scaffolds a project already wired in the
+recommended layout (`common` / `server` / `client` crates + `proto/`) with a ready
 `trestle.yaml`, so you rarely author it by hand.
 
 ## What you write vs. generate

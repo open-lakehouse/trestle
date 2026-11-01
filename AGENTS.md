@@ -9,32 +9,35 @@ contributor detail (release mechanics, publishing, auth) lives in
 
 Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
 
-- `crates/trestle/` — the CLI, published as `olai-trestle` (`trestle` binary):
+- `crates/trestle/`: the CLI, published as `olai-trestle` (`trestle` binary):
   `new` / `init` / `config` / `generate` / `env` / `workspace` / `enrich-openapi`,
   plus the embedded
   project templates in `crates/trestle/templates/` (excluded from the workspace)
-- `crates/olai-codegen/` — proto-driven code generation (REST handlers, clients,
+- `crates/olai-codegen/`: proto-driven code generation (REST handlers, clients,
   bindings, resource registries)
-- `crates/olai-store/` — generic resource store (Object, Association, Label,
+- `crates/olai-store/`: generic resource store (Object, Association, Label,
   Registry; in-memory, SQLite and Postgres backends)
-- `crates/olai-http/` — cloud credentials and HTTP client (AWS, Azure, GCP,
-  Databricks) · `crates/olai-http-wasm/` — browser/WASM transport for generated
+- `crates/olai-http/`: cloud credentials and HTTP client (AWS, Azure, GCP,
+  Databricks) · `crates/olai-http-wasm/`: browser/WASM transport for generated
   clients
 - `crates/olai-storage-credentials/`, `crates/olai-vended-store/`,
-  `crates/olai-credential-vending/` — storage credential vending (model,
+  `crates/olai-credential-vending/`: storage credential vending (model,
   client-side `object_store` integration, server-side minting; see
   [`docs/credential-vending.md`](docs/credential-vending.md))
-- `crates/stack-topology/` (`olai-stack-topology`) — environment planner and
-  renderer behind `trestle env` · `crates/stack-topology-wasm/` — its wasm build
+- `crates/stack-topology/` (`olai-stack-topology`): environment planner and
+  renderer behind `trestle env` · `crates/stack-topology-wasm/`: its wasm build
   for the web UI
-- `crates/olai-test-emulators/` — testcontainers storage emulators (test-only,
+- `crates/olai-test-emulators/`: testcontainers storage emulators (test-only,
   unpublished)
-- `node/` — Bun workspace: env editor, diagram package
-  (`@open-lakehouse/trestle-diagram`), UI kit · `examples/` — standalone example
-  workspaces · `test/` — env scenarios and golden fixtures
+- `node/`: Bun workspace: env editor, diagram package
+  (`@open-lakehouse/trestle-diagram`), UI kit · `examples/`: standalone example
+  workspaces · `test/`: env scenarios and golden fixtures
 
-`trestle new` scaffolds the four-crate project layout described in
-[`crates/olai-codegen/README.md`](crates/olai-codegen/README.md).
+`trestle new <name> --app databricks-app-rust` scaffolds a project with three Rust
+crates (`common`, `server`, `client`) and a `proto/` directory. Generated code lives
+under `gen/` and `_gen/`. See
+[`crates/olai-codegen/README.md`](crates/olai-codegen/README.md) for the codegen
+side.
 
 ## Commands
 

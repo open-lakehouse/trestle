@@ -1,6 +1,8 @@
 # Multiple environments on one host
 
-Status: design, first slice in progress.
+Status: the workspace model, slots, the gateway mesh (`mesh = true`), project
+names, the `trestle workspace` CLI and the workspace editor have landed. Phase 3
+(SPIRE workload identity, below) is design only.
 
 `trestle env new` renders one environment (one directory holding `env.toml`,
 `compose.yaml` and the module fragments). This document covers running **several
@@ -9,8 +11,8 @@ start and stop independently, and the path from there to cross-environment
 governance: separated networks, then workload identity with SPIFFE/SPIRE and
 Envoy.
 
-SPIRE is not part of this work. It is described here because it shapes the
-decisions made now.
+SPIRE is not part of the implemented work. It is described here because it shapes
+the decisions made now.
 
 ## What is already isolated
 
@@ -27,7 +29,7 @@ Each environment is its own Compose project. The head `compose.yaml` sets
 | Hosted resource names (`trestle-<env>`) | Derived from the env name. |
 | Bind mounts | Under `DATA_ROOT`, by default `./.data` relative to each env directory. |
 
-## What collides today
+## What collides between environments
 
 | Collision | Cause | Resolution |
 |---|---|---|
@@ -86,11 +88,11 @@ Each env gets a **slot**. Slot `n` shifts every host port the env publishes by
 | Dedicated listeners | 9100+ | 10100+ | 11100+ |
 | PuppyGraph Bolt | 7687 | 8687 | 9687 |
 
-Slot 0 keeps today's ports, so a single env, or the first member of a workspace,
+Slot 0 keeps the single-environment ports, so a single env, or the first member of a workspace,
 is unchanged.
 
 The gateway, admin and dedicated-listener ports are absolute values in
-`[context]`, as they are today (and dedicated ports stay pinnable with
+`[context]`, as they were before slots existed (dedicated ports stay pinnable with
 `pin_dedicated_ports`). The workspace writes the slot's values there. Host ports
 that a module declares itself have no context field, so `[context] port_offset`
 shifts them instead. That covers PuppyGraph's Bolt and Gremlin ports, Jaeger's
@@ -115,9 +117,9 @@ pick distinct names.
 
 The network plan comes in three phases. Each phase keeps the next one open.
 
-1. **Private per env (today).** Each project has its own default network.
+1. **Private per env (the default).** Each project has its own default network.
    Services in `dev` cannot reach `prod` at all.
-2. **Gateway mesh (this work).** With `mesh = true`, every member's gateway, and
+2. **Gateway mesh (implemented).** With `mesh = true`, every member's gateway, and
    only its gateway, also joins a shared network `trestle-<workspace>-mesh`
    under the alias `<env>.mesh`. Cross-env traffic therefore has exactly one
    entry and one exit per environment: its Envoy. Workloads stay on their
@@ -140,7 +142,7 @@ The network plan comes in three phases. Each phase keeps the next one open.
    - One trust domain per env, federated. Closer to real cross-organisation
      setups, at more configuration cost.
 
-Choices made now with phase 3 in mind:
+Choices made with phase 3 in mind:
 
 - Only gateways join the mesh, so the mesh listener is the single place mTLS
   goes later.

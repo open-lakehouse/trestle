@@ -1,12 +1,9 @@
 # Credential vending and `object_store`
 
-Status: **accepted, in progress**. This is a design record. The three crates exist:
-P1 (`olai-storage-credentials`), P2 through P2e (`olai-vended-store` with the `unity`,
-`delta-api`, `iceberg`, `sharing` and `neon` modules) and P3
-(`olai-credential-vending`, with P4's GCS minter) have landed, with the `olai-http` SAS
-fix (#178). The sketches below follow the code; where the code
-settled differently from the first draft, the text says so. Implementation is tracked
-in #185 and the phased issues listed under [Roadmap](#roadmap).
+Status: **accepted, in progress**. This is a design record. The per-phase status is
+in the [Roadmap](#roadmap) table, which is the only status source in this document.
+The sketches below follow the code. Where the code settled differently from the first
+draft, the text says so.
 
 ## Context
 
@@ -532,9 +529,9 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
   stores that lack STS (handled like Neon: presign, don't mint).
 - Hosting the vending server as a Neon Function, which needs no extra crate surface
   beyond (3).
-- A `wasm32` build of `olai-http`. Protocol modules are native only today; on
-  `wasm32` they would need `olai-http-wasm`, a second client. Target-gating `olai-http` would let one client serve
-  both and fold `olai-http-wasm` in.
+- A `wasm32` build of `olai-http`. Protocol modules are native only today. On
+  `wasm32` they would need `olai-http-wasm`, a second client. Target-gating
+  `olai-http` would let one client serve both and fold `olai-http-wasm` in.
 
 ## Roadmap
 
@@ -556,12 +553,11 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P7 | delta-rs adopts `olai-vended-store` + `unity` | tracked in #185 (fork has no issues) |
 | P8 | `apache/object_store` proposals | #184 |
 
-The delta-rs critical path (P1 → P2 → P2a) has landed and the crates are released, so
-P7 is unblocked. All protocol modules (P2a–P2e) and every minter (P3, P4) have landed.
-Next: P5 (`VendingRouter`).
+P7 (delta-rs) is unblocked, because the critical path P1, P2 and P2a is released. P5
+(`VendingRouter`) is the next phase in this repo.
 
-The three crates are on crates.io (first published as 0.0.1) and release through
-release-plz like the rest of the workspace. Their in-repo dependencies name both a
+The three crates are on crates.io and release through release-plz like the rest of
+the workspace. Their in-repo dependencies name both a
 `path` and a `version`, which release-plz keeps in sync and publishes in dependency
 order: `olai-storage-credentials`, then `olai-vended-store`, then
 `olai-credential-vending`.
