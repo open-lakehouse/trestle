@@ -24,7 +24,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::{MethodHandler, ServiceHandler, doc_tokens, format_tokens};
-use crate::analysis::{GenerationPlan, RequestParam, RequestType};
+use crate::analysis::{ChildLink, GenerationPlan, RequestParam, RequestType};
 use crate::error::Result;
 
 /// Generate the `resource.rs` module for one resource-scoped service.
@@ -121,15 +121,7 @@ fn child_model_import_paths(
 
     let mut seen = std::collections::BTreeSet::new();
     let mut imports = Vec::new();
-    for link in &service.plan.direct_children {
-        let Some(child_plan) = plan
-            .services
-            .iter()
-            .find(|s| s.base_path == link.child_base_path)
-        else {
-            continue;
-        };
-        let child = service.with_plan(child_plan);
+    for (_, child) in direct_children(service, plan) {
         let path = child.models_path();
         let key = quote! { #path }.to_string();
         if key == own_str || !seen.insert(key) {
@@ -150,28 +142,34 @@ fn child_methods(
     plan: &GenerationPlan,
     parent_components: &[proc_macro2::Ident],
 ) -> Vec<TokenStream> {
+    // Names of the parent's captured components, for matching the child builders' params.
+    let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
     let mut out = Vec::new();
-    for link in &service.plan.direct_children {
-        // Resolve the child service's plan to build a handler for its client/builder idents.
-        let Some(child_plan) = plan
-            .services
-            .iter()
-            .find(|s| s.base_path == link.child_base_path)
-        else {
-            continue;
-        };
-        let child = service.with_plan(child_plan);
-
+    for (link, child) in direct_children(service, plan) {
         // Child methods name the child's client and builders, so they share its feature gate.
         let cfg = child.client_feature_cfg();
         let methods = [
             child_nav_method(&child, link, parent_components),
-            child_create_method(&child, link, parent_components),
-            child_list_method(&child, link, parent_components),
+            child_builder_method(&child, link, &parent_names, RequestType::Create),
+            child_builder_method(&child, link, &parent_names, RequestType::List),
         ];
         out.extend(methods.into_iter().flatten().map(|m| quote! { #cfg #m }));
     }
     out
+}
+
+/// Each direct child of `service` with a handler for its plan (children without one are skipped).
+fn direct_children<'a>(
+    service: &ServiceHandler<'a>,
+    plan: &'a GenerationPlan,
+) -> impl Iterator<Item = (&'a ChildLink, ServiceHandler<'a>)> {
+    service.plan.direct_children.iter().filter_map(move |link| {
+        let child_plan = plan
+            .services
+            .iter()
+            .find(|s| s.base_path == link.child_base_path)?;
+        Some((link, service.with_plan(child_plan)))
+    })
 }
 
 /// `pub fn <child>(&self, <leaf>: impl Into<String>) -> crate::codegen::<base>::<Child>Client`.
@@ -180,7 +178,7 @@ fn child_methods(
 /// scoped-client `new`, building the child's low-level client from this client's cloud client + URL.
 fn child_nav_method(
     child: &ServiceHandler<'_>,
-    link: &crate::analysis::ChildLink,
+    link: &ChildLink,
     parent_components: &[proc_macro2::Ident],
 ) -> Option<TokenStream> {
     let child_scoped = child.scoped_client_type()?;
@@ -208,74 +206,48 @@ fn child_nav_method(
     })
 }
 
-/// `pub fn create_<child>(&self, <args>) -> crate::codegen::<base>::Create<Child>Builder`.
+/// The child's Create or List builder constructor, or `None` when the child has no such method:
 ///
-/// Reuses the parent's captured components for the child Create builder's matching path params; the
-/// child's own name + other required fields become method arguments, in the builder's `::new` order.
-fn child_create_method(
+/// - `pub fn create_<child>(&self, <args>) -> crate::codegen::<base>::Create<Child>Builder`: the
+///   child's own name + other required fields become method arguments.
+/// - `pub fn list_<children>(&self, <args>) -> crate::codegen::<base>::List<Child>Builder` (the
+///   aggregate's list method name): lists the child resource scoped to this resource. The returned
+///   builder has `into_stream()` for paginated iteration.
+///
+/// The builder's `::new` takes the method's required params in order. The parent's captured
+/// components (`parent_names`) pre-fill the matching path or filter params (e.g. `catalog_name`);
+/// the rest (e.g. a required `max_results`) become method args, in the builder's `::new` order.
+/// When the proto marks pagination fields `optional`, they're `with_*` setters and drop out here.
+fn child_builder_method(
     child: &ServiceHandler<'_>,
-    link: &crate::analysis::ChildLink,
-    parent_components: &[proc_macro2::Ident],
+    link: &ChildLink,
+    parent_names: &[String],
+    request_type: RequestType,
 ) -> Option<TokenStream> {
-    let create = child
+    let method = child
         .methods()
-        .find(|m| m.plan.request_type == RequestType::Create)?;
+        .find(|m| m.plan.request_type == request_type)?;
+    let (method_name, doc) = match request_type {
+        RequestType::List => (
+            method.binding_method_name(),
+            format!(
+                " List `{}` resources within this resource.",
+                link.child_singular
+            ),
+        ),
+        _ => (
+            format_ident!("create_{}", link.child_singular),
+            format!(" Create a `{}` within this resource.", link.child_singular),
+        ),
+    };
     let child_low_level = child.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let module = format_ident!("{}", link.child_base_path);
-    let builder_ty = create.builder_type();
-    let method_name = format_ident!("create_{}", link.child_singular);
+    let builder_ty = method.builder_type();
 
-    // Names of the parent's captured components, for matching the child Create builder's params.
-    let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
-    let required: Vec<&RequestParam> = create.required_parameters().collect();
-    let (new_args, method_param_defs) =
-        render_child_builder_args(&create, &required, &parent_names);
+    let required: Vec<&RequestParam> = method.required_parameters().collect();
+    let (new_args, method_param_defs) = render_child_builder_args(&method, &required, parent_names);
 
     let low_level = child_low_level_ctor(&module, &child_low_level);
-    let doc = format!(" Create a `{}` within this resource.", link.child_singular);
-    Some(quote! {
-        #[doc = #doc]
-        pub fn #method_name(&self, #(#method_param_defs),*) -> crate::codegen::#module::#builder_ty {
-            crate::codegen::#module::#builder_ty::new(
-                #low_level,
-                #(#new_args),*
-            )
-        }
-    })
-}
-
-/// `pub fn list_<child>(&self, <args>) -> crate::codegen::<base>::List<Child>Builder`.
-///
-/// Lists the child resource scoped to this resource: the parent's captured components pre-fill the
-/// child List request's matching filter param(s) (e.g. `catalog_name`); pagination/other required
-/// params become method args. The returned builder has `into_stream()` for paginated iteration.
-/// Returns `None` when the child has no `List` method.
-fn child_list_method(
-    child: &ServiceHandler<'_>,
-    link: &crate::analysis::ChildLink,
-    parent_components: &[proc_macro2::Ident],
-) -> Option<TokenStream> {
-    let list = child
-        .methods()
-        .find(|m| m.plan.request_type == RequestType::List)?;
-    let child_low_level = child.low_level_client_type(crate::codegen::ClientProtocol::Rest);
-    let module = format_ident!("{}", link.child_base_path);
-    let builder_ty = list.builder_type();
-    // Match the aggregate's list method name (e.g. `list_schemas`).
-    let method_name = list.binding_method_name();
-
-    // The builder's `::new` takes the List method's required params in order. Parent-filter params
-    // are filled from `self`; the rest (e.g. a required `max_results`) become method args. When the
-    // proto marks pagination fields `optional`, they're `with_*` setters and drop out here.
-    let parent_names: Vec<String> = parent_components.iter().map(|c| c.to_string()).collect();
-    let required: Vec<&RequestParam> = list.required_parameters().collect();
-    let (new_args, method_param_defs) = render_child_builder_args(&list, &required, &parent_names);
-
-    let low_level = child_low_level_ctor(&module, &child_low_level);
-    let doc = format!(
-        " List `{}` resources within this resource.",
-        link.child_singular
-    );
     Some(quote! {
         #[doc = #doc]
         pub fn #method_name(&self, #(#method_param_defs),*) -> crate::codegen::#module::#builder_ty {
@@ -349,21 +321,28 @@ fn render_child_builder_args(
     {
         match source {
             BuilderArg::ParentComponent => {
-                let field = crate::utils::field_ident(param.name());
+                let field = param.field_ident();
                 new_args.push(quote! { &self.#field });
             }
             BuilderArg::MethodArg => {
-                let ident = param.field_ident();
-                let ty = method.field_type(
-                    param.field_type(),
-                    crate::parsing::types::RenderContext::Constructor,
-                );
-                method_param_defs.push(quote! { #ident: #ty });
-                new_args.push(quote! { #ident });
+                let (def, arg) = method_arg(method, param);
+                method_param_defs.push(def);
+                new_args.push(arg);
             }
         }
     }
     (new_args, method_param_defs)
+}
+
+/// A caller-supplied builder argument: its method parameter definition (`<ident>: <ty>`, typed like
+/// the builder's constructor expects) and the forwarded argument.
+fn method_arg(method: &MethodHandler<'_>, param: &RequestParam) -> (TokenStream, TokenStream) {
+    let ident = param.field_ident();
+    let ty = method.field_type(
+        param.field_type(),
+        crate::parsing::types::RenderContext::Constructor,
+    );
+    (quote! { #ident: #ty }, quote! { #ident })
 }
 
 /// The struct's captured-component fields (each a `String`).
@@ -536,15 +515,10 @@ fn instance_method(
                 path_param_count,
             ));
         } else {
-            // A required non-path field (e.g. a required body field) becomes a method argument,
-            // typed like the builder's constructor expects.
-            let ident = param.field_ident();
-            let ty = method.field_type(
-                param.field_type(),
-                crate::parsing::types::RenderContext::Constructor,
-            );
-            method_param_defs.push(quote! { #ident: #ty });
-            new_args.push(quote! { #ident });
+            // A required non-path field (e.g. a required body field) becomes a method argument.
+            let (def, arg) = method_arg(method, param);
+            method_param_defs.push(def);
+            new_args.push(arg);
         }
     }
 
@@ -612,7 +586,7 @@ mod tests {
     }
 
     fn join_format(n: usize) -> String {
-        std::iter::repeat_n("{}", n).collect::<Vec<_>>().join(".")
+        crate::codegen::dot_format(n)
     }
 
     /// Flat resource: one component, one path param named `name` (mismatch with the component name)

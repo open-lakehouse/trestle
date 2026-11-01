@@ -15,9 +15,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::analysis::{GenerationPlan, RequestType, is_standard_list_field};
-use crate::google::api::FieldBehavior;
-use crate::parsing::CodeGenMetadata;
+use crate::google::api::{FieldBehavior, ResourceDescriptor};
 use crate::parsing::types::BaseType;
+use crate::parsing::{CodeGenMetadata, MessageInfo};
 
 use super::{CodeGenConfig, format_tokens};
 
@@ -106,7 +106,6 @@ pub(crate) fn generate_resource_enum(
             None => (None, false),
         };
 
-        // Derive path_names from the service plan for this resource.
         // A resource is hierarchical if its descriptor explicitly sets name_field (any value)
         // OR if the message has a full_name field (server-computed dot-joined composite).
         let full_name_field = info.fields.iter().find(|f| f.name == "full_name");
@@ -116,92 +115,7 @@ pub(crate) fn generate_resource_enum(
         let full_name_is_optional = full_name_field
             .map(|f| f.unified_type.is_optional)
             .unwrap_or(false);
-        // The leaf name component. Defaults to `name`, but `google.api.resource.name_field`
-        // may point at a different scalar leaf field (e.g. `tag_key`). `full_name` is excluded:
-        // it denotes a composite full name that is *decomposed* into parents + leaf, not the leaf
-        // itself.
-        let leaf_name = if !rd.name_field.is_empty()
-            && rd.name_field != "full_name"
-            && info.fields.iter().any(|f| f.name == rd.name_field)
-        {
-            rd.name_field.clone()
-        } else {
-            "name".to_string()
-        };
-        let derived_path_names = derive_path_names(
-            &rd.singular,
-            !rd.name_field.is_empty() || message_has_full_name,
-            &leaf_name,
-            plan,
-            metadata,
-        );
-        // `derive_path_names` returns *request*-derived field names (e.g. a `full_name`
-        // path param). The `ResourceName` and `qualified_name()` impls, however, read
-        // fields off the resource *message*. When a derived segment names a field that
-        // does not exist on the message but the message carries the standard decomposed
-        // name components (`catalog_name` / `schema_name`), rewrite the segment list to
-        // those message fields so the emitted accessors type-check. This lets a resource
-        // whose HTTP identity is a composite `{full_name}` (e.g. model versions, keyed by
-        // `catalog.schema.model` + an integer `version`) still key off its own fields.
-        let message_field_names: std::collections::HashSet<&str> =
-            info.fields.iter().map(|f| f.name.as_str()).collect();
-        // The `ResourceName` / `qualified_name()` impls read fields off the resource *message*,
-        // whereas `derive_path_names` returns *request*-derived segments. Two cases force a
-        // rewrite of the segment list to the message's own decomposed name components:
-        //
-        //  1. A derived segment names a field the message lacks — the resource's HTTP identity is
-        //     a composite `{full_name}` path param, which is not a message field. Rebuild so the
-        //     emitted accessors reference real fields and type-check.
-        //  2. The resource is hierarchical (it declares a `name_field` or carries a `full_name`)
-        //     but `derive_path_names` could not recover its parent chain from request params — so
-        //     the derived path is a bare leaf (e.g. a model version's `[version]`) that omits the
-        //     `catalog_name` / `schema_name` prefix the message exposes. Rebuild the full
-        //     hierarchy (`catalog.schema.model.version`) from the message fields.
-        //
-        // A *non-hierarchical* resource is left untouched even when it carries `catalog_name` /
-        // `schema_name` as data: it can deliberately key its identity off a flat name (e.g. a
-        // staging table, whose proto `pattern` is `staging-tables/{staging_table}` and which sets
-        // no `name_field`). Forcing the prefix there would wrongly key it as a schema child and break
-        // lookups (the delta staging → createTable flow 404s).
-        let is_hierarchical = !rd.name_field.is_empty() || message_has_full_name;
-        let derived_are_message_fields = derived_path_names
-            .iter()
-            .all(|n| message_field_names.contains(n.as_str()));
-        let missing_expected_prefix = ["catalog_name", "schema_name"]
-            .iter()
-            .any(|c| message_field_names.contains(c) && !derived_path_names.iter().any(|n| n == c));
-        let needs_rebuild =
-            !derived_are_message_fields || (is_hierarchical && missing_expected_prefix);
-        let path_names: Vec<String> = if !needs_rebuild {
-            derived_path_names
-        } else {
-            let mut segments: Vec<String> = Vec::new();
-            for candidate in ["catalog_name", "schema_name"] {
-                if message_field_names.contains(candidate) {
-                    segments.push(candidate.to_string());
-                }
-            }
-            // Any remaining `*_name` component on the message is an ancestor segment
-            // between the catalog/schema prefix and the leaf, e.g. `model_name` for a
-            // model version (whose parent registered model is named by `model_name`
-            // even though the parent's resource singular is `registered_model`). These
-            // sit in message field order, which mirrors the resource hierarchy.
-            for f in &info.fields {
-                if f.name == leaf_name
-                    || f.name == "catalog_name"
-                    || f.name == "schema_name"
-                    || f.name == "full_name"
-                {
-                    continue;
-                }
-                if f.name.ends_with("_name") && matches!(f.unified_type.base_type, BaseType::String)
-                {
-                    segments.push(f.name.clone());
-                }
-            }
-            segments.push(leaf_name.clone());
-            segments
-        };
+        let path_names = resource_path_names(rd, info, message_has_full_name, plan, metadata);
         // Parallel to `path_names`: whether each segment field is a plain `String` (emit
         // `&self.field`) or some other scalar such as `int64` (emit `&self.field.to_string()`),
         // so non-string leaves like a model version's integer `version` render correctly.
@@ -212,37 +126,13 @@ pub(crate) fn generate_resource_enum(
                     .iter()
                     .find(|f| &f.name == n)
                     .map(|f| matches!(f.unified_type.base_type, BaseType::String))
-                    // Unknown fields (shouldn't happen after the rewrite above) default to
-                    // string handling to preserve prior behavior.
+                    // Unknown fields (shouldn't happen after the rewrite in
+                    // `resource_path_names`) default to string handling.
                     .unwrap_or(true)
             })
             .collect();
 
-        // Compute field descriptors with roles for the resource registry.
-        let known_managed_fields: &[&str] =
-            &["created_at", "updated_at", "created_by", "updated_by"];
-        let field_descriptors: Vec<FieldDescriptorEntry> = info
-            .fields
-            .iter()
-            .map(|f| {
-                let role = if f.field_behavior.contains(&FieldBehavior::Identifier) {
-                    FieldRoleEntry::Identifier
-                } else if f.is_sensitive {
-                    FieldRoleEntry::Sensitive
-                } else if f.field_behavior.contains(&FieldBehavior::OutputOnly)
-                    && known_managed_fields.contains(&f.name.as_str())
-                {
-                    FieldRoleEntry::Managed
-                } else {
-                    FieldRoleEntry::Data
-                };
-                FieldDescriptorEntry {
-                    name: f.name.clone(),
-                    role,
-                }
-            })
-            .collect();
-
+        let field_descriptors = field_descriptors(info);
         resources.push(ResourceEntry {
             variant_name,
             rust_path,
@@ -713,6 +603,121 @@ fn derive_path_names(
     }
 }
 
+/// The ordered name components of a resource (parents then leaf), as fields of the resource
+/// *message*.
+fn resource_path_names(
+    rd: &ResourceDescriptor,
+    info: &MessageInfo,
+    message_has_full_name: bool,
+    plan: &GenerationPlan,
+    metadata: &CodeGenMetadata,
+) -> Vec<String> {
+    let is_hierarchical = !rd.name_field.is_empty() || message_has_full_name;
+    // The leaf name component. Defaults to `name`, but `google.api.resource.name_field`
+    // may point at a different scalar leaf field (e.g. `tag_key`). `full_name` is excluded:
+    // it denotes a composite full name that is *decomposed* into parents + leaf, not the leaf
+    // itself.
+    let leaf_name = if !rd.name_field.is_empty()
+        && rd.name_field != "full_name"
+        && info.fields.iter().any(|f| f.name == rd.name_field)
+    {
+        rd.name_field.clone()
+    } else {
+        "name".to_string()
+    };
+    let derived_path_names =
+        derive_path_names(&rd.singular, is_hierarchical, &leaf_name, plan, metadata);
+    let message_field_names: std::collections::HashSet<&str> =
+        info.fields.iter().map(|f| f.name.as_str()).collect();
+    // The `ResourceName` / `qualified_name()` impls read fields off the resource *message*,
+    // whereas `derive_path_names` returns *request*-derived segments. Two cases force a
+    // rewrite of the segment list to the message's own decomposed name components:
+    //
+    //  1. A derived segment names a field the message lacks — the resource's HTTP identity is
+    //     a composite `{full_name}` path param, which is not a message field. Rebuild so the
+    //     emitted accessors reference real fields and type-check.
+    //  2. The resource is hierarchical (it declares a `name_field` or carries a `full_name`)
+    //     but `derive_path_names` could not recover its parent chain from request params — so
+    //     the derived path is a bare leaf (e.g. a model version's `[version]`) that omits the
+    //     `catalog_name` / `schema_name` prefix the message exposes. Rebuild the full
+    //     hierarchy (`catalog.schema.model.version`) from the message fields.
+    //
+    // A *non-hierarchical* resource is left untouched even when it carries `catalog_name` /
+    // `schema_name` as data: it can deliberately key its identity off a flat name (e.g. a
+    // staging table, whose proto `pattern` is `staging-tables/{staging_table}` and which sets
+    // no `name_field`). Forcing the prefix there would wrongly key it as a schema child and break
+    // lookups (the delta staging → createTable flow 404s).
+    let derived_are_message_fields = derived_path_names
+        .iter()
+        .all(|n| message_field_names.contains(n.as_str()));
+    let missing_expected_prefix = ["catalog_name", "schema_name"]
+        .iter()
+        .any(|c| message_field_names.contains(c) && !derived_path_names.iter().any(|n| n == c));
+    let needs_rebuild = !derived_are_message_fields || (is_hierarchical && missing_expected_prefix);
+    if !needs_rebuild {
+        derived_path_names
+    } else {
+        let mut segments: Vec<String> = Vec::new();
+        for candidate in ["catalog_name", "schema_name"] {
+            if message_field_names.contains(candidate) {
+                segments.push(candidate.to_string());
+            }
+        }
+        // Any remaining `*_name` component on the message is an ancestor segment
+        // between the catalog/schema prefix and the leaf, e.g. `model_name` for a
+        // model version (whose parent registered model is named by `model_name`
+        // even though the parent's resource singular is `registered_model`). These
+        // sit in message field order, which mirrors the resource hierarchy.
+        for f in &info.fields {
+            if f.name == leaf_name
+                || f.name == "catalog_name"
+                || f.name == "schema_name"
+                || f.name == "full_name"
+            {
+                continue;
+            }
+            if f.name.ends_with("_name") && matches!(f.unified_type.base_type, BaseType::String) {
+                segments.push(f.name.clone());
+            }
+        }
+        segments.push(leaf_name);
+        segments
+    }
+}
+
+/// The resource registry's field descriptors (with roles) of a resource message.
+fn field_descriptors(info: &MessageInfo) -> Vec<FieldDescriptorEntry> {
+    let known_managed_fields: &[&str] = &["created_at", "updated_at", "created_by", "updated_by"];
+    info.fields
+        .iter()
+        .map(|f| {
+            let role = if f.field_behavior.contains(&FieldBehavior::Identifier) {
+                FieldRoleEntry::Identifier
+            } else if f.is_sensitive {
+                FieldRoleEntry::Sensitive
+            } else if f.field_behavior.contains(&FieldBehavior::OutputOnly)
+                && known_managed_fields.contains(&f.name.as_str())
+            {
+                FieldRoleEntry::Managed
+            } else {
+                FieldRoleEntry::Data
+            };
+            FieldDescriptorEntry {
+                name: f.name.clone(),
+                role,
+            }
+        })
+        .collect()
+}
+
+/// The variant name of the resource whose singular is `singular`.
+fn variant_for_singular(resources: &[ResourceEntry], singular: &str) -> Option<String> {
+    resources
+        .iter()
+        .find(|candidate| candidate.singular == singular)
+        .map(|candidate| candidate.variant_name.clone())
+}
+
 /// Build a `qualified_name()` return expression from the ordered path field names and a
 /// parallel flag marking which are plain `String` fields (vs. other scalars like an `int64`
 /// `version` that must be stringified).
@@ -745,11 +750,7 @@ fn build_qualified_name_expr(path_names: &[String], is_string: &[bool]) -> Token
         };
     }
 
-    let format_str = field_exprs
-        .iter()
-        .map(|_| "{}")
-        .collect::<Vec<_>>()
-        .join(".");
+    let format_str = super::dot_format(field_exprs.len());
     quote! { format!(#format_str, #(#field_exprs),*) }
 }
 
@@ -836,23 +837,15 @@ fn generate_resource_registry(
                 .map(|rd| rd.r#type.as_str())
                 .unwrap_or("");
             if !resource_type.is_empty() {
-                for service in &plan.services {
-                    for h in &service.hierarchy {
-                        if h.child_resource_type == resource_type
-                            && let Some(ref parent_sing) = h.parent_singular
-                        {
-                            let found = resources.iter().find_map(|candidate| {
-                                if candidate.singular == *parent_sing {
-                                    Some(candidate.variant_name.clone())
-                                } else {
-                                    None
-                                }
-                            });
-                            if found.is_some() {
-                                return found;
-                            }
-                        }
-                    }
+                let annotated = plan
+                    .services
+                    .iter()
+                    .flat_map(|service| &service.hierarchy)
+                    .filter(|h| h.child_resource_type == resource_type)
+                    .filter_map(|h| h.parent_singular.as_deref())
+                    .find_map(|parent| variant_for_singular(resources, parent));
+                if annotated.is_some() {
+                    return annotated;
                 }
             }
 
@@ -861,13 +854,7 @@ fn generate_resource_registry(
             let parent_singular = parent_path_component
                 .strip_suffix("_name")
                 .unwrap_or(parent_path_component);
-            resources.iter().find_map(|candidate| {
-                if candidate.singular == parent_singular {
-                    Some(candidate.variant_name.clone())
-                } else {
-                    None
-                }
-            })
+            variant_for_singular(resources, parent_singular)
         })
         .collect();
 

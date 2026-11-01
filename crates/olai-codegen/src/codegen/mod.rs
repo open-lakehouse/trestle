@@ -98,10 +98,13 @@ impl AccessorSpec {
     /// The `format!` template for joining the params into a composite full name
     /// (e.g. `"{}.{}"` for two params). Only meaningful when [`Self::nested`] is true.
     pub(crate) fn join_format(&self) -> String {
-        std::iter::repeat_n("{}", self.params.len())
-            .collect::<Vec<_>>()
-            .join(".")
+        dot_format(self.params.len())
     }
+}
+
+/// The `format!` template joining `n` values with dots (`"{}.{}"` for two).
+pub(crate) fn dot_format(n: usize) -> String {
+    std::iter::repeat_n("{}", n).collect::<Vec<_>>().join(".")
 }
 
 impl MethodPlan {
