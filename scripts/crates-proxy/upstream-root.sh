@@ -8,7 +8,7 @@
 #
 # Usage: upstream-root.sh <repo>
 set -euo pipefail
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 repo="${1:?usage: upstream-root.sh <repo>}"

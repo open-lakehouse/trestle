@@ -14,7 +14,7 @@
 # lost the crates' registry source/checksum lines, and CI (--locked) rejects it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 source "$here/lib.sh"
 
 remove=0
@@ -46,7 +46,11 @@ rest="$(awk -v b="$marker" -v e="$end" 'index($0, b) == 1 {skip = 1} !skip {prin
     sed '/./,$!d')"
 
 if [[ $remove -eq 1 ]]; then
-    printf '%s\n' "$rest" | sed '/./,$!d' >"$config"
+    if [[ -n "$rest" ]]; then
+        printf '%s\n' "$rest" >"$config"
+    else
+        rm "$config"
+    fi
     echo "Removed the $repo patch block from $config"
     exit 0
 fi
