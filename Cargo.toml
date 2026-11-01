@@ -77,6 +77,24 @@ uuid = { version = "1", features = ["serde"] }
 wasm-bindgen = "=0.2.126"
 zeroize = { version = "1.8", features = ["derive"] }
 
+# Local dev/test builds: line tables for workspace crates, so panics and
+# backtraces keep file:line, and no debug info for dependencies, which is most of
+# target/. Many parallel worktrees each carry a target/, so this matters on disk.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Full debug info for a debugger: `cargo build --profile debugging`
+# (builds into target/debugging/, separate from the dev artifacts).
+[profile.debugging]
+inherits = "dev"
+debug = true
+
+[profile.debugging.package."*"]
+debug = true
+
 [profile.release]
 lto = true
 strip = true
