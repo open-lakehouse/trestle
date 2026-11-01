@@ -11,6 +11,9 @@ Design records and deeper explanations for Trestle.
 - [Credential vending](credential-vending.md) — proposed: protocol-neutral crates
   for vended storage credentials (model, client-side `object_store` integration,
   server-side minting) shared by Unity Catalog, Iceberg REST and Open Sharing.
+- [crates.io proxy delay](crates-proxy.md) — building the sibling repos against a
+  fresh trestle or mangrove release while the proxy still hides it, with the
+  `scripts/crates-proxy/` tooling.
 
 For getting started, see the [top-level README](../README.md). For local
 development and the release process, see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
