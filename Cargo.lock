@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "convert_case",
  "glob",
@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "olai-credential-vending"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http-wasm"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "futures",
  "reqwest 0.12.28",
@@ -2572,7 +2572,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "olai-storage-credentials"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "chrono",
  "futures",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "olai-store"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.18"
+version = "0.0.19"
 dependencies = [
  "clap",
  "cliclack",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "olai-vended-store"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4771,7 +4771,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.5.3"
+version = "0.5.4"
 
 [[package]]
 name = "try-lock"

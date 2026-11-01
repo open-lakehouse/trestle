@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.11...olai-stack-topology-v0.0.12) - 2026-11-01
+
+### Changed
+
+- remove AI slop from docs, helpers and tests (#248)
+
+### Fixed
+
+- expect planner invariants in topology projection (#249)
+
 ## [0.0.11](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.10...olai-stack-topology-v0.0.11) - 2026-10-26
 
 ### Added

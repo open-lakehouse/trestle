@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # Depend on the pure planner ONLY — `catalog` (serde_yaml) and `std-io` (disk I/O) stay OFF so
 # the dependency tree is wasm32-clean. `baseline_catalog()` is built in Rust and needs neither.
-olai-stack-topology = { path = "../stack-topology", version = "0.0.11", default-features = false }
+olai-stack-topology = { path = "../stack-topology", version = "0.0.12", default-features = false }
 
 # The JS-facing glue is only needed when actually targeting wasm32. Keeping it off native builds
 # means `cargo test`/`cargo clippy` on the host never pull the wasm-bindgen toolchain, and the

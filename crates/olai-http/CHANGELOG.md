@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.9...olai-http-v0.0.10) - 2026-11-01
+
+### Changed
+
+- share JWT/expiry helpers and drop narration (#250)
+
+### Fixed
+
+- error on unparsable GCP impersonation expiry (#251)
+
 ## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.8...olai-http-v0.0.9) - 2026-10-30
 
 ### Added
