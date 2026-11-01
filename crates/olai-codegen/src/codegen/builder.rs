@@ -58,25 +58,14 @@ pub(crate) fn generate(
         return Ok(String::new());
     }
 
-    let builder_code = generate_builders_module(service, &builder_impls)?;
-
-    Ok(builder_code)
+    generate_builders_module(service, &builder_impls)
 }
 
 /// Generate the complete builders module
 fn generate_builders_module(
     service: &ServiceHandler<'_>,
-    builders: &[String],
+    builder_tokens: &[TokenStream],
 ) -> crate::error::Result<String> {
-    let builder_tokens: Vec<TokenStream> = builders
-        .iter()
-        .map(|b| {
-            syn::parse_str::<TokenStream>(b).map_err(|source| crate::error::Error::GeneratedParse {
-                tokens: b.clone(),
-                source,
-            })
-        })
-        .collect::<crate::error::Result<_>>()?;
     let mod_path: Path = service.models_path();
     let foreign_models = service.foreign_models_imports();
     let result_path: Path = service.config.client_result_path();
@@ -93,35 +82,34 @@ fn generate_builders_module(
     // for wasm32 the browser transport's futures are `!Send`, so on wasm32 we alias to
     // the `Local*` (non-Send) variants — keeping one set of impls that compile
     // for both targets.
-    let box_aliases = if service.config.builds_for_wasm() {
-        let stream_alias = if has_list {
+    let builds_for_wasm = service.config.builds_for_wasm();
+    let box_alias = |name: TokenStream, native: TokenStream, local: TokenStream| {
+        if builds_for_wasm {
             quote! {
                 #[cfg(not(target_arch = "wasm32"))]
-                type BoxStr<'a, T> = ::futures::stream::BoxStream<'a, T>;
+                type #name<'a, T> = #native<'a, T>;
                 #[cfg(target_arch = "wasm32")]
-                type BoxStr<'a, T> = ::futures::stream::LocalBoxStream<'a, T>;
+                type #name<'a, T> = #local<'a, T>;
             }
         } else {
-            quote! {}
-        };
-        quote! {
-            #[cfg(not(target_arch = "wasm32"))]
-            type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
-            #[cfg(target_arch = "wasm32")]
-            type BoxFut<'a, T> = ::futures::future::LocalBoxFuture<'a, T>;
-            #stream_alias
-        }
-    } else {
-        let stream_alias = if has_list {
-            quote! { type BoxStr<'a, T> = ::futures::stream::BoxStream<'a, T>; }
-        } else {
-            quote! {}
-        };
-        quote! {
-            type BoxFut<'a, T> = ::futures::future::BoxFuture<'a, T>;
-            #stream_alias
+            quote! { type #name<'a, T> = #native<'a, T>; }
         }
     };
+    let future_alias = box_alias(
+        quote! { BoxFut },
+        quote! { ::futures::future::BoxFuture },
+        quote! { ::futures::future::LocalBoxFuture },
+    );
+    let stream_alias = if has_list {
+        box_alias(
+            quote! { BoxStr },
+            quote! { ::futures::stream::BoxStream },
+            quote! { ::futures::stream::LocalBoxStream },
+        )
+    } else {
+        quote! {}
+    };
+    let box_aliases = quote! { #future_alias #stream_alias };
     let stream_helper_imports = if has_list {
         quote! {
             use futures::{TryStreamExt, StreamExt};
@@ -156,7 +144,7 @@ fn generate_request_builder(
     method: MethodHandler<'_>,
     service: &ServiceHandler<'_>,
     protocol: crate::codegen::ClientProtocol,
-) -> crate::error::Result<String> {
+) -> crate::error::Result<TokenStream> {
     let builder_ident = method.builder_type();
     let request_type_ident = method.input_type().ok_or_else(|| {
         crate::Error::Build(format!(
@@ -232,7 +220,7 @@ fn generate_request_builder(
     // Generate IntoFuture implementation
     let into_future_impl = generate_into_future_impl(&builder_ident, &result_type, &method_name);
 
-    let tokens = quote! {
+    Ok(quote! {
         #[doc = #builder_doc]
         pub struct #builder_ident {
             client: #client_type_ident,
@@ -248,9 +236,7 @@ fn generate_request_builder(
         }
 
         #into_future_impl
-    };
-
-    format_tokens(tokens)
+    })
 }
 
 /// Generate the constructor for the builder
@@ -360,13 +346,13 @@ fn builder_with_impl(method: &MethodHandler<'_>, field: &BodyField) -> TokenStre
             &field_ident,
             &RenderContext::BuilderMethod,
         );
-        quote! {
-            #doc_attr
-            pub fn #method_name(mut self, #field_ident: impl Into<Option<#enum_ident>>) -> Self {
-                self.request.#field_ident = #assignment;
-                self
-            }
-        }
+        option_setter(
+            &doc_attr,
+            &method_name,
+            &field_ident,
+            &enum_ident,
+            &assignment,
+        )
     } else {
         let field_type = method.field_type(&field.field_type, RenderContext::BuilderMethod);
         if field.repeated {
@@ -405,13 +391,31 @@ fn builder_with_impl(method: &MethodHandler<'_>, field: &BodyField) -> TokenStre
                 } else {
                     quote! { #field_ident.into() }
                 };
-            quote! {
-                #doc_attr
-                pub fn #method_name(mut self, #field_ident: impl Into<Option<#field_type>>) -> Self {
-                    self.request.#field_ident = #assignment;
-                    self
-                }
-            }
+            option_setter(
+                &doc_attr,
+                &method_name,
+                &field_ident,
+                &field_type,
+                &assignment,
+            )
+        }
+    }
+}
+
+/// `pub fn <method_name>(mut self, <field>: impl Into<Option<<field_type>>>) -> Self`, setting the
+/// request field to `assignment`.
+fn option_setter(
+    doc_attr: &TokenStream,
+    method_name: &proc_macro2::Ident,
+    field_ident: &proc_macro2::Ident,
+    field_type: &syn::Type,
+    assignment: &TokenStream,
+) -> TokenStream {
+    quote! {
+        #doc_attr
+        pub fn #method_name(mut self, #field_ident: impl Into<Option<#field_type>>) -> Self {
+            self.request.#field_ident = #assignment;
+            self
         }
     }
 }
@@ -497,28 +501,22 @@ fn generate_simple_with_method(method: &MethodHandler<'_>, param: &RequestParam)
     let field_type = method.field_type(param.field_type(), RenderContext::BuilderMethod);
 
     // Enum fields must be cast to i32 at the FFI boundary
-    if matches!(param.field_type().base_type, BaseType::Enum(_)) {
-        let assignment = method.field_assignment(
+    let assignment = if matches!(param.field_type().base_type, BaseType::Enum(_)) {
+        method.field_assignment(
             param.field_type(),
             &field_ident,
             &RenderContext::BuilderMethod,
-        );
-        quote! {
-            #doc_attr
-            pub fn #method_name(mut self, #field_ident: impl Into<Option<#field_type>>) -> Self {
-                self.request.#field_ident = #assignment;
-                self
-            }
-        }
+        )
     } else {
-        quote! {
-            #doc_attr
-            pub fn #method_name(mut self, #field_ident: impl Into<Option<#field_type>>) -> Self {
-                self.request.#field_ident = #field_ident.into();
-                self
-            }
-        }
-    }
+        quote! { #field_ident.into() }
+    };
+    option_setter(
+        &doc_attr,
+        &method_name,
+        &field_ident,
+        &field_type,
+        &assignment,
+    )
 }
 
 fn generate_into_stream_impl(

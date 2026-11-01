@@ -530,22 +530,23 @@ impl CodeGenConfig {
     /// [`ModelRewrites::int64_module`](crate::postprocess::ModelRewrites::int64_module). `None`
     /// unless [`RestClientOptions::json_int64_as_number`] is set.
     pub fn json_int64_module_path(&self) -> Option<String> {
-        if !self.rest_client.json_int64_as_number {
-            return None;
-        }
-        let models_path = ModelsPath::from_template(&self.models_path_crate_template);
-        Some(format!("{}::json_int64", models_path.root()?))
+        self.json_number_module_path("json_int64")
     }
 
     /// The crate-local path of the `json_value` module (e.g. `crate::models::json_value`), for
     /// [`ModelRewrites::json_value_module`](crate::postprocess::ModelRewrites::json_value_module).
     /// `None` unless [`RestClientOptions::json_int64_as_number`] is set.
     pub fn json_value_module_path(&self) -> Option<String> {
+        self.json_number_module_path("json_value")
+    }
+
+    /// `<models root>::<module>`, unless [`RestClientOptions::json_int64_as_number`] is off.
+    fn json_number_module_path(&self, module: &str) -> Option<String> {
         if !self.rest_client.json_int64_as_number {
             return None;
         }
         let models_path = ModelsPath::from_template(&self.models_path_crate_template);
-        Some(format!("{}::json_value", models_path.root()?))
+        Some(format!("{}::{module}", models_path.root()?))
     }
 
     /// The `Result` type of the generated clients: the generated error module's with
@@ -571,10 +572,20 @@ impl CodeGenConfig {
     /// The Python options of the bindings config. Only for the `python` output, which
     /// [`validate_options`](Self::validate_options) checks has them.
     pub(crate) fn python_options(&self) -> &PythonOptions {
+        self.bindings_python()
+            .expect("validated: the python output has `BindingsConfig::python`")
+    }
+
+    /// The bindings config. Only for the language-binding outputs, which [`validate`](Self::validate)
+    /// checks have it.
+    pub(crate) fn bindings_config(&self) -> &BindingsConfig {
         self.bindings
             .as_ref()
-            .and_then(|b| b.python.as_ref())
-            .expect("validated: the python output has `BindingsConfig::python`")
+            .expect("validated: language-binding output has a bindings config")
+    }
+
+    fn bindings_python(&self) -> Option<&PythonOptions> {
+        self.bindings.as_ref()?.python.as_ref()
     }
 
     /// Check the options that need other options.
@@ -595,7 +606,7 @@ impl CodeGenConfig {
             );
         }
         if self.output.python.is_some() {
-            let Some(python) = self.bindings.as_ref().and_then(|b| b.python.as_ref()) else {
+            let Some(python) = self.bindings_python() else {
                 return needs("CodeGenOutput::python", "`BindingsConfig::python`");
             };
             for path in &python.exports {

@@ -36,6 +36,8 @@ use crate::analysis::{
 use crate::output;
 use crate::parsing::types::{self, RenderContext, UnifiedType};
 use crate::parsing::{CodeGenMetadata, MessageField, MessageInfo};
+use crate::utils::last_segment;
+use crate::utils::strings::operation_to_method_name;
 
 mod aggregate;
 mod bindings;
@@ -96,10 +98,13 @@ impl AccessorSpec {
     /// The `format!` template for joining the params into a composite full name
     /// (e.g. `"{}.{}"` for two params). Only meaningful when [`Self::nested`] is true.
     pub(crate) fn join_format(&self) -> String {
-        std::iter::repeat_n("{}", self.params.len())
-            .collect::<Vec<_>>()
-            .join(".")
+        dot_format(self.params.len())
     }
+}
+
+/// The `format!` template joining `n` values with dots (`"{}.{}"` for two).
+pub(crate) fn dot_format(n: usize) -> String {
+    std::iter::repeat_n("{}", n).collect::<Vec<_>>().join(".")
 }
 
 impl MethodPlan {
@@ -121,17 +126,18 @@ impl MethodPlan {
 ///
 /// | Field | Contents |
 /// |-------|----------|
-/// | `output.common` | Axum extractor code, per-service `mod.rs` (always written) |
-/// | `output.models_gen` | `labels.rs` resource-enum file (falls back to `common` if `None`) |
+/// | `output.common` | Axum request extractors (`extractors/<service>/`) and their `mod.rs` |
+/// | `output.models` | `labels.rs` (with `generate_resource_enum`), `pyo3_impls.rs` (with `output.python`) and the `mod.rs` mounting the models, in the `models_subdir` |
 /// | `output.server` | Handler trait + Axum route wiring per service |
-/// | `output.client` | HTTP client structs and request builders per service |
-/// | `output.python` | PyO3 binding wrappers |
+/// | `output.client` | HTTP (and/or ConnectRPC) client structs and request builders per service, plus the aggregate client |
+/// | `output.python` | PyO3 binding wrappers (and the Python package files) |
 /// | `output.node` | NAPI binding wrappers |
-/// | `output.node_ts` | TypeScript client (`client.ts`) |
+/// | `output.node_ts` | TypeScript client (`client.ts`, `models/index.ts`) |
+/// | `output.wasm` | `#[wasm_bindgen]` bindings (`mod.rs`) and `client.d.ts` |
 ///
 /// # Required fields
 ///
-/// - `output.common` is always required.
+/// - `output.server` needs `output.common` (the extractors).
 /// - `bindings` must be `Some` when any of `output.python`, `output.node`, or `output.node_ts`
 ///   is `Some`; otherwise returns [`Error::MissingBindingsConfig`].
 /// - `models_path_template` and `models_path_crate_template` must be valid Rust path templates
@@ -215,75 +221,8 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
         output::write_generated_code(&common_code, common_dir)?;
     }
 
-    if config.output.models.is_some() {
-        let subdir = config
-            .output
-            .models_subdir_path()
-            .expect("models is Some so subdir is Some");
-        std::fs::create_dir_all(&subdir).map_err(Error::Io)?;
-
-        if config.generate_resource_enum {
-            let resource_enum = resources::generate_resource_enum(
-                &plan,
-                metadata,
-                config,
-                config.error_type_path.as_deref(),
-            )?;
-            let mut models_files = GeneratedCode {
-                files: std::collections::HashMap::new(),
-            };
-            models_files
-                .files
-                .insert("labels.rs".to_string(), resource_enum);
-            output::write_generated_code(&models_files, &subdir)?;
-        }
-
-        // When Python bindings are generated, the bindings pass model types
-        // across the FFI boundary by their bare type, so the model crate must
-        // carry `FromPyObject`/`IntoPyObject` impls. Emit them here (orphan rule:
-        // the model types are local to this crate). Gated on the `python` feature
-        // in the generated `mod.rs`.
-        let mut include_pyo3_impls = false;
-        if config.output.python.is_some() {
-            let pyo3_impls = python::generate_pyo3_impls(&plan, metadata, config)?;
-            if !pyo3_impls.is_empty() {
-                let mut pyo3_files = GeneratedCode {
-                    files: std::collections::HashMap::new(),
-                };
-                pyo3_files
-                    .files
-                    .insert("pyo3_impls.rs".to_string(), pyo3_impls);
-                output::write_generated_code(&pyo3_files, &subdir)?;
-                include_pyo3_impls = true;
-            }
-        }
-
-        let include_labels = config.generate_resource_enum;
-        // The Axum extractors are co-located in this same directory (the common
-        // generator wrote `<svc>/server.rs` + `<svc>/mod.rs` here), and this
-        // `mod.rs` overwrites the common generator's top-level `mod.rs` — so it
-        // re-declares the per-service extractor submodules it emitted.
-        let mut mod_content = generate_models_mod(
-            &plan.services,
-            include_labels,
-            include_pyo3_impls,
-            config.output.common.is_some(),
-            metadata,
-            config.runtime,
-        );
-        if config.rest_client.json_int64_as_number {
-            mod_content.push_str(&json_int64::module());
-            if metadata_has_json_fields(metadata) {
-                mod_content.push_str(&json_int64::value_module());
-            }
-        }
-        // Route through write_generated_code so the `// @generated` header is prepended like
-        // every other emitted file, rather than writing it raw.
-        let mut mod_files = GeneratedCode {
-            files: std::collections::HashMap::new(),
-        };
-        mod_files.files.insert("mod.rs".to_string(), mod_content);
-        output::write_generated_code(&mod_files, &subdir)?;
+    if let Some(subdir) = config.output.models_subdir_path() {
+        write_models(&plan, metadata, config, &subdir)?;
     }
 
     if let Some(ref server_dir) = config.output.server {
@@ -327,6 +266,66 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
     Ok(())
 }
 
+/// Write the models `_gen` subdir: `labels.rs`, `pyo3_impls.rs` and the `mod.rs` that mounts them
+/// alongside the per-service model and extractor modules.
+fn write_models(
+    plan: &GenerationPlan,
+    metadata: &CodeGenMetadata,
+    config: &CodeGenConfig,
+    subdir: &std::path::Path,
+) -> Result<()> {
+    std::fs::create_dir_all(subdir)?;
+
+    if config.generate_resource_enum {
+        let resource_enum = resources::generate_resource_enum(
+            plan,
+            metadata,
+            config,
+            config.error_type_path.as_deref(),
+        )?;
+        output::write_generated_code(&GeneratedCode::single("labels.rs", resource_enum), subdir)?;
+    }
+
+    // When Python bindings are generated, the bindings pass model types
+    // across the FFI boundary by their bare type, so the model crate must
+    // carry `FromPyObject`/`IntoPyObject` impls. Emit them here (orphan rule:
+    // the model types are local to this crate). Gated on the `python` feature
+    // in the generated `mod.rs`.
+    let mut include_pyo3_impls = false;
+    if config.output.python.is_some() {
+        let pyo3_impls = python::generate_pyo3_impls(plan, metadata, config)?;
+        if !pyo3_impls.is_empty() {
+            output::write_generated_code(
+                &GeneratedCode::single("pyo3_impls.rs", pyo3_impls),
+                subdir,
+            )?;
+            include_pyo3_impls = true;
+        }
+    }
+
+    // The Axum extractors are co-located in this same directory (the common
+    // generator wrote `<svc>/server.rs` + `<svc>/mod.rs` here), and this
+    // `mod.rs` overwrites the common generator's top-level `mod.rs` — so it
+    // re-declares the per-service extractor submodules it emitted.
+    let mut mod_content = generate_models_mod(
+        &plan.services,
+        config.generate_resource_enum,
+        include_pyo3_impls,
+        config.output.common.is_some(),
+        metadata,
+        config.runtime,
+    );
+    if config.rest_client.json_int64_as_number {
+        mod_content.push_str(&json_int64::module());
+        if metadata_has_json_fields(metadata) {
+            mod_content.push_str(&json_int64::value_module());
+        }
+    }
+    // Route through write_generated_code so the `// @generated` header is prepended like
+    // every other emitted file, rather than writing it raw.
+    output::write_generated_code(&GeneratedCode::single("mod.rs", mod_content), subdir)
+}
+
 /// Whether a project message has a free-form JSON field (`google.protobuf.Value`, `Struct`,
 /// `ListValue`), also as a map value or oneof variant.
 pub(crate) fn metadata_has_json_fields(metadata: &CodeGenMetadata) -> bool {
@@ -352,16 +351,12 @@ fn generate_common_code(
 ) -> Result<GeneratedCode> {
     let mut files = HashMap::new();
 
-    for service in &plan.services {
-        let handler = ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        };
+    for handler in ServiceHandler::for_plan(plan, metadata, config) {
+        let service = handler.plan;
         let server_code = server::generate_common(&handler)?;
         // Nest the extractors under an `extractors/` subdir so their per-service
         // module names can't collide with the co-located model package modules
-        // (e.g. a `unitycatalog.agent_skills.v0alpha1` package yields a model
+        // (e.g. a `example.agent_skills.v0alpha1` package yields a model
         // module `agent_skills` that would otherwise clash with the `agent_skills`
         // service extractor module).
         files.insert(
@@ -394,12 +389,8 @@ fn generate_server_code(
 ) -> Result<GeneratedCode> {
     let mut files = HashMap::new();
 
-    for service in &plan.services {
-        let handler = ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        };
+    for handler in ServiceHandler::for_plan(plan, metadata, config) {
+        let service = handler.plan;
         let trait_code = handler::generate(&handler)?;
         files.insert(format!("{}/handler.rs", service.base_path), trait_code);
         let server_code = server::generate_server(&handler)?;
@@ -421,15 +412,7 @@ fn generate_python_code(
 ) -> Result<GeneratedCode> {
     let mut files = HashMap::new();
 
-    let handlers = plan
-        .services
-        .iter()
-        .map(|service| ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        })
-        .collect_vec();
+    let handlers = ServiceHandler::for_plan(plan, metadata, config);
 
     // Per-service scoped client modules are only meaningful for services with a scoped binding.
     // The methods of resource-less and flat-lowered services live on the root client (emitted by
@@ -453,15 +436,7 @@ fn generate_node_code(
 ) -> Result<GeneratedCode> {
     let mut files = HashMap::new();
 
-    let handlers = plan
-        .services
-        .iter()
-        .map(|service| ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        })
-        .collect_vec();
+    let handlers = ServiceHandler::for_plan(plan, metadata, config);
 
     // See `generate_python_code`: only services with a scoped binding get a per-service scoped
     // module; resource-less and flat-lowered services' methods live on the root client.
@@ -481,15 +456,7 @@ fn generate_node_ts_code(
     metadata: &CodeGenMetadata,
     config: &CodeGenConfig,
 ) -> Result<GeneratedCode> {
-    let handlers = plan
-        .services
-        .iter()
-        .map(|service| ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        })
-        .collect_vec();
+    let handlers = ServiceHandler::for_plan(plan, metadata, config);
 
     let ts_code = node::typescript::generate_client_ts(&handlers);
     let mut files = HashMap::new();
@@ -514,15 +481,7 @@ fn generate_wasm_code(
     metadata: &CodeGenMetadata,
     config: &CodeGenConfig,
 ) -> Result<GeneratedCode> {
-    let handlers = plan
-        .services
-        .iter()
-        .map(|service| ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        })
-        .collect_vec();
+    let handlers = ServiceHandler::for_plan(plan, metadata, config);
 
     let mut files = HashMap::new();
     // Emit as `mod.rs` so the client crate mounts the bindings with a plain
@@ -544,18 +503,13 @@ fn generate_client_code(
     // Module path and type of each resource-scoped client, for the root re-exports.
     let mut resource_clients = Vec::new();
 
-    for service in &plan.services {
-        let handler = ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        };
+    for handler in ServiceHandler::for_plan(plan, metadata, config) {
+        let service = handler.plan;
 
         // Emit each selected protocol's low-level client + builders. With a single protocol the
         // files are flat under `<service>/`; with both they go under `<service>/<protocol>/` to
         // avoid the two `client.rs`/`builders.rs` colliding. The shared builder layer binds to the
         // protocol's low-level client and only calls `client.<method>(&request)`.
-        let mut emitted_resource_client = false;
         for &protocol in &protocols {
             let prefix = if multi {
                 format!("{}/{}", service.base_path, protocol.subdir())
@@ -576,39 +530,38 @@ fn generate_client_code(
             // Ergonomic resource-scoped clients are a REST-only feature (driven by
             // `google.api.resource` hierarchies). ConnectRPC-only protos rarely carry those, so the
             // Connect client emits just the flat per-service client + builders.
-            let has_resource_client = protocol == ClientProtocol::Rest
-                && config.output.generate_resource_clients
-                && resource_client::generate(&handler, plan)?
-                    .map(|code| {
-                        files.insert(format!("{prefix}/resource.rs"), code);
-                    })
-                    .is_some();
+            let resource_code =
+                if protocol == ClientProtocol::Rest && config.output.generate_resource_clients {
+                    resource_client::generate(&handler, plan)?
+                } else {
+                    None
+                };
+            let has_resource_client = resource_code.is_some();
+            if let Some(code) = resource_code {
+                files.insert(format!("{prefix}/resource.rs"), code);
+            }
 
             if has_resource_client && let Some(scoped) = handler.scoped_client_type() {
                 resource_clients.push((prefix.clone(), scoped, handler.client_feature_cfg()));
             }
 
             // Handler-trait impls forward to the REST client, so only it gets them.
-            let handler_impl = config
-                .rest_client
-                .handler_impls
-                .as_ref()
-                .filter(|impls| {
-                    protocol == ClientProtocol::Rest && !impls.skip.contains(&service.base_path)
-                })
-                .map(|impls| {
-                    client_handler::generate(&handler, impls).map(|code| {
-                        files.insert(format!("{prefix}/handler.rs"), code);
-                        impls.feature.as_str()
-                    })
-                })
-                .transpose()?;
+            let handler_impls = config.rest_client.handler_impls.as_ref().filter(|impls| {
+                protocol == ClientProtocol::Rest && !impls.skip.contains(&service.base_path)
+            });
+            let handler_impl = match handler_impls {
+                Some(impls) => {
+                    let code = client_handler::generate(&handler, impls)?;
+                    files.insert(format!("{prefix}/handler.rs"), code);
+                    Some(impls.feature.as_str())
+                }
+                None => None,
+            };
 
             files.insert(
                 format!("{prefix}/mod.rs"),
                 generate_client_module(has_resource_client, handler_impl),
             );
-            emitted_resource_client |= has_resource_client;
         }
 
         // When both protocols are emitted under subdirs, the `<service>/mod.rs` mounts and re-exports
@@ -619,16 +572,15 @@ fn generate_client_code(
                 generate_protocol_split_module(&protocols),
             );
         }
-        let _ = emitted_resource_client;
     }
 
-    // Top-level aggregate root client (e.g. `UnityCatalogClient`), emitted only when a bindings
+    // Top-level aggregate root client (e.g. `ExampleClient`), emitted only when a bindings
     // config (which carries the aggregate name) is present.
-    let has_aggregate = aggregate::generate(plan, metadata, config)?
-        .map(|aggregate_code| {
-            files.insert("client.rs".to_string(), aggregate_code);
-        })
-        .is_some();
+    let aggregate_code = aggregate::generate(plan, metadata, config)?;
+    let has_aggregate = aggregate_code.is_some();
+    if let Some(code) = aggregate_code {
+        files.insert("client.rs".to_string(), code);
+    }
 
     if config.uses_reqwest_transport() {
         files.insert(
@@ -693,17 +645,10 @@ fn generate_server_module(service: &ServicePlan) -> String {
 
 /// `handler_impl` is the cargo feature gating the service's handler-trait impl module, when one
 /// was generated for it.
+///
+/// Emit the scoped resource client module only when it was generated for this service.
 fn generate_client_module(has_resource_client: bool, handler_impl: Option<&str>) -> String {
-    // Emit the scoped resource client module only when it was generated for this service.
-    // Generated client modules structurally trip a few lints: the full client
-    // surface is emitted whether or not a given consumer calls every builder
-    // (`dead_code`), flat methods can exceed the arg-count threshold
-    // (`too_many_arguments`), and proto comment prose may wrap list items
-    // (`doc_lazy_continuation`). Allow these on the module so consumers' own
-    // `-D warnings` builds stay clean; genuine issues are fixed in the generator.
-    let allow = quote! {
-        #[allow(dead_code, clippy::too_many_arguments, clippy::doc_lazy_continuation)]
-    };
+    let allow = client_module_allow();
     // Glob re-exports of the per-service submodules. Not every submodule
     // contributes a name that the parent's consumers use directly, so a
     // `pub use <mod>::*` can trip `unused_imports` under `-D warnings` (notably
@@ -744,6 +689,17 @@ fn generate_client_module(has_resource_client: bool, handler_impl: Option<&str>)
     format_tokens_static(tokens)
 }
 
+/// The lints generated client modules structurally trip: the full client surface is emitted whether
+/// or not a given consumer calls every builder (`dead_code`), flat methods can exceed the
+/// arg-count threshold (`too_many_arguments`), and proto comment prose may wrap list items
+/// (`doc_lazy_continuation`). Allowed on the module so consumers' own `-D warnings` builds stay
+/// clean; genuine issues are fixed in the generator.
+fn client_module_allow() -> TokenStream {
+    quote! {
+        #[allow(dead_code, clippy::too_many_arguments, clippy::doc_lazy_continuation)]
+    }
+}
+
 /// The `<service>/mod.rs` for a service that emits **both** protocols: mount each protocol's client
 /// as its own submodule (`pub mod rest;` / `pub mod connect;`).
 ///
@@ -751,9 +707,7 @@ fn generate_client_module(has_resource_client: bool, handler_impl: Option<&str>)
 /// types (`GetThingBuilder`, …), so a flat re-export would collide. Callers disambiguate by module
 /// (`read::rest::GetThingBuilder` vs `read::connect::GetThingBuilder`).
 fn generate_protocol_split_module(protocols: &[ClientProtocol]) -> String {
-    let allow = quote! {
-        #[allow(dead_code, clippy::too_many_arguments, clippy::doc_lazy_continuation)]
-    };
+    let allow = client_module_allow();
     let mods: Vec<TokenStream> = protocols
         .iter()
         .map(|p| {
@@ -794,12 +748,7 @@ fn generate_client_main_module(
         .iter()
         .map(|s| {
             let module_name = format_ident!("{}", s.base_path);
-            let cfg = ServiceHandler {
-                plan: s,
-                metadata,
-                config,
-            }
-            .client_feature_cfg();
+            let cfg = ServiceHandler::new(s, metadata, config).client_feature_cfg();
             quote! { #cfg pub mod #module_name; }
         })
         .collect();
@@ -948,8 +897,8 @@ pub fn generate_models_mod(
     // emitting one `pub mod`/`pub use` block per service would produce duplicate modules and
     // imports (E0428). Group by package first, then emit once per package.
     //
-    // package = "unitycatalog.catalogs.v1"
-    // parts   = ["unitycatalog", "catalogs", "v1"]
+    // package = "example.catalogs.v1"
+    // parts   = ["example", "catalogs", "v1"]
     // service module = second-to-last segment ("catalogs"); version = last segment ("v1").
     let mod_segments = |svc: &ServicePlan| -> (String, String) {
         let parts: Vec<&str> = svc.package.split('.').collect();
@@ -983,11 +932,7 @@ pub fn generate_models_mod(
             if msg_info.resource_descriptor.is_some()
                 && (fq_name.starts_with(&fq_prefix) || fq_name.starts_with(&fq_pkg))
             {
-                let simple = fq_name
-                    .rfind('.')
-                    .map(|i| &fq_name[i + 1..])
-                    .unwrap_or(fq_name.as_str());
-                type_names.insert(simple.to_string());
+                type_names.insert(last_segment(fq_name).to_string());
             }
         }
     }
@@ -1143,25 +1088,13 @@ pub struct GeneratedCode {
     pub files: HashMap<String, String>,
 }
 
-impl CodeGenMetadata {
-    fn get_message_meta(&self, message_name: &str) -> Option<MessageMeta<'_>> {
-        self.messages.get(message_name).map(|info| MessageMeta {
-            info,
-            metadata: self,
-        })
+impl GeneratedCode {
+    /// A single generated file.
+    fn single(path: &str, content: String) -> Self {
+        Self {
+            files: HashMap::from([(path.to_string(), content)]),
+        }
     }
-}
-
-/// A protobuf message paired with the metadata needed to resolve its references.
-///
-/// Wraps a single [`MessageInfo`](crate::parsing::MessageInfo) together with a borrow of the whole
-/// [`CodeGenMetadata`] it came from, so the generators can look up a message's fields while still
-/// being able to resolve types that point at other messages in the same descriptor set. Obtained
-/// via `CodeGenMetadata::get_message_meta`.
-pub(crate) struct MessageMeta<'a> {
-    info: &'a MessageInfo,
-    #[allow(dead_code)]
-    metadata: &'a CodeGenMetadata,
 }
 
 /// The per-service generation context shared by every code generator.
@@ -1176,6 +1109,37 @@ pub(crate) struct ServiceHandler<'a> {
     pub(crate) plan: &'a ServicePlan,
     pub(crate) metadata: &'a CodeGenMetadata,
     pub(crate) config: &'a CodeGenConfig,
+}
+
+impl<'a> ServiceHandler<'a> {
+    pub(crate) fn new(
+        plan: &'a ServicePlan,
+        metadata: &'a CodeGenMetadata,
+        config: &'a CodeGenConfig,
+    ) -> Self {
+        Self {
+            plan,
+            metadata,
+            config,
+        }
+    }
+
+    /// A handler per service of `plan`, in plan order.
+    pub(crate) fn for_plan(
+        plan: &'a GenerationPlan,
+        metadata: &'a CodeGenMetadata,
+        config: &'a CodeGenConfig,
+    ) -> Vec<Self> {
+        plan.services
+            .iter()
+            .map(|service| Self::new(service, metadata, config))
+            .collect()
+    }
+
+    /// The handler of another service, with this one's metadata and config.
+    pub(crate) fn with_plan(&self, plan: &'a ServicePlan) -> Self {
+        Self::new(plan, self.metadata, self.config)
+    }
 }
 
 impl ServiceHandler<'_> {
@@ -1217,15 +1181,13 @@ impl ServiceHandler<'_> {
     /// `None` for resource-less services.
     ///
     /// All four accessor emitters (Rust aggregate, Python, Node, TypeScript) render from this single
-    /// spec rather than re-deriving the param list and nesting decision, which previously diverged
-    /// between the Rust aggregate and the bindings.
+    /// spec rather than re-deriving the param list and nesting decision, so they can't diverge.
     pub(crate) fn accessor_spec(&self) -> Option<AccessorSpec> {
         let resource = self.resource()?;
         let params = self.plan.resource_accessor_params.clone()?;
         // A resource is nested when its accessor params include parent components beyond its own
-        // name; its full name is then the dot-joined components. This is the single, converged
-        // nesting rule — previously the Rust aggregate used `len > 1` while Python/Node also gated
-        // on `name_field`, which could disagree.
+        // name; its full name is then the dot-joined components. This is the single nesting rule
+        // of every accessor emitter.
         let nested = params.len() > 1;
         Some(AccessorSpec {
             singular: resource.descriptor.singular.clone(),
@@ -1355,7 +1317,7 @@ impl ServiceHandler<'_> {
 
     /// The module segment under which this service's generated models live.
     ///
-    /// Models are emitted per proto *package* (e.g. `unitycatalog.tags.v1` → module `tags`),
+    /// Models are emitted per proto *package* (e.g. `example.tags.v1` → module `tags`),
     /// which is not always the same as the service's `base_path` (derived from the service
     /// *name*, e.g. `TagPoliciesService` → `tag_policies`). Use the package's leaf-before-version
     /// segment so the models import path matches where the proto plugin actually wrote the types.
@@ -1520,10 +1482,9 @@ impl MethodHandler<'_> {
     /// Whether this method is emitted as an instance method on a resource-scoped client
     /// (`get`/`update`/`delete` or a resource-targeted custom `POST`/`PATCH`).
     ///
-    /// This is the exact set the bindings previously matched in their `resource_client_method`
-    /// dispatch: standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
+    /// The set is standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
     /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
-    /// deliberately **not** surfaced on the scoped client, matching prior behavior.
+    /// deliberately **not** surfaced on the scoped client.
     pub(crate) fn is_scoped_instance_method(&self) -> bool {
         // Standard instance verbs are always scoped.
         if matches!(
@@ -1545,10 +1506,9 @@ impl MethodHandler<'_> {
 
     /// The ordered binding parameter list for `mode`, with shared filtering applied once.
     ///
-    /// Required params come before optional ones (matching the previous
-    /// `required_parameters().chain(optional_parameters())` order). Filtering reproduces exactly what
-    /// the old per-language `collection_method_parameters` / `resource_method_parameters` did,
-    /// keyed on [`EmitShape`]:
+    /// Required params come before optional ones (the
+    /// `required_parameters().chain(optional_parameters())` order). Filtering is keyed on
+    /// [`EmitShape`]:
     ///
     /// - **collection shapes** (`List`, `Create`): never drop path params (collection methods live
     ///   on the root client and pass everything); drop `page_token` for `List` (streaming handles
@@ -1585,17 +1545,26 @@ impl MethodHandler<'_> {
         (required, optional)
     }
 
-    pub(crate) fn output_message(&self) -> Option<MessageMeta<'_>> {
+    pub(crate) fn output_message(&self) -> Option<&MessageInfo> {
         if self.plan.metadata.output_type.ends_with("Empty") {
             return None;
         }
-        self.metadata
-            .get_message_meta(&self.plan.metadata.output_type)
+        self.metadata.messages.get(&self.plan.metadata.output_type)
     }
 
     pub(crate) fn output_type(&self) -> Option<Ident> {
-        self.output_message()
-            .map(|t| extract_type_ident(&t.info.name))
+        self.output_message().map(|t| extract_type_ident(&t.name))
+    }
+
+    /// The success type of the handler-trait method: the output message, or `()` without a
+    /// response.
+    pub(crate) fn handler_output_type(&self) -> TokenStream {
+        if self.plan.has_response {
+            let output = self.output_type();
+            quote! { #output }
+        } else {
+            quote! { () }
+        }
     }
 
     /// The type a client call resolves to: the output message, `bool` for an existence check,
@@ -1615,23 +1584,20 @@ impl MethodHandler<'_> {
 
     pub(crate) fn list_output_field(&self) -> Option<&MessageField> {
         self.output_message()?
-            .info
             .fields
             .iter()
             .find(|f| !f.name.contains("page_token"))
     }
 
-    pub(crate) fn input_message(&self) -> Option<MessageMeta<'_>> {
+    pub(crate) fn input_message(&self) -> Option<&MessageInfo> {
         if self.plan.metadata.input_type == "Empty" {
             return None;
         }
-        self.metadata
-            .get_message_meta(&self.plan.metadata.input_type)
+        self.metadata.messages.get(&self.plan.metadata.input_type)
     }
 
     pub(crate) fn input_type(&self) -> Option<Ident> {
-        self.input_message()
-            .map(|t| extract_type_ident(&t.info.name))
+        self.input_message().map(|t| extract_type_ident(&t.name))
     }
 
     pub(crate) fn builder_type(&self) -> Ident {
@@ -1656,9 +1622,15 @@ impl MethodHandler<'_> {
     /// stay consistent with the snake→camel name NAPI derives for the native method.
     pub(crate) fn binding_method_name_str(&self) -> String {
         match self.plan.metadata.operation.as_ref() {
-            Some(op) if !op.operation_id.is_empty() => op.operation_id.to_case(Case::Snake),
+            Some(op) if !op.operation_id.is_empty() => operation_to_method_name(&op.operation_id),
             _ => self.plan.handler_function_name.clone(),
         }
+    }
+
+    /// The camelCase binding method name JS sees (the name NAPI and `js_name` derive from
+    /// [`Self::binding_method_name_str`]).
+    pub(crate) fn js_method_name(&self) -> String {
+        self.binding_method_name_str().to_case(Case::Camel)
     }
 
     /// Get type representation for rust depending on context

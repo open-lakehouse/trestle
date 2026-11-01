@@ -6,6 +6,12 @@
 //! - `package`: the pure-Python files (`_enums.py`, the public modules)
 //! - `docs`: the docstrings of the methods
 
+use proc_macro2::TokenStream;
+use quote::quote;
+
+use crate::analysis::RequestType;
+use crate::codegen::{MethodHandler, PythonOptions};
+
 mod bindings;
 mod docs;
 mod errors;
@@ -19,10 +25,7 @@ pub(crate) use model_conversions::generate_pyo3_impls;
 
 /// The helper files of the Python bindings (error module, `PyFuture`, runtime), by file name.
 pub(crate) fn helper_files(config: &crate::codegen::CodeGenConfig) -> Vec<(String, String)> {
-    let bindings = config
-        .bindings
-        .as_ref()
-        .expect("validated: Python output has a bindings config");
+    let bindings = config.bindings_config();
     let python = config.python_options();
     let mut files = vec![
         (
@@ -57,15 +60,7 @@ pub(crate) fn package_files(
         ));
     }
     if python.public_modules {
-        let handlers: Vec<_> = plan
-            .services
-            .iter()
-            .map(|plan| crate::codegen::ServiceHandler {
-                plan,
-                metadata,
-                config,
-            })
-            .collect();
+        let handlers = crate::codegen::ServiceHandler::for_plan(plan, metadata, config);
         let clients = handlers
             .iter()
             .filter(|s| s.emits_scoped_binding())
@@ -101,13 +96,7 @@ fn package_segment(package: &str) -> &str {
     crate::codegen::package_models_segment(package).unwrap_or(package)
 }
 
-use proc_macro2::TokenStream;
-use quote::quote;
-
-use crate::analysis::RequestType;
-use crate::codegen::{MethodHandler, PythonOptions};
-
-static DOCS_TARGET_WIDTH: usize = 100;
+const DOCS_TARGET_WIDTH: usize = 100;
 
 fn is_list_method(method: &MethodHandler<'_>) -> bool {
     matches!(method.plan.request_type, RequestType::List)

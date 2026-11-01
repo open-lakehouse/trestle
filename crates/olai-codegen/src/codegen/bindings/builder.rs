@@ -41,8 +41,7 @@ pub(crate) trait SetterRender {
 /// Generate the `with_*` builder calls for a method's optional query params and body fields.
 ///
 /// `is_list` drops the `page_token` query param for list methods (pagination is driven by the
-/// streaming/collecting wrapper, not a caller-supplied token) — matching the prior behavior in both
-/// emitters.
+/// streaming/collecting wrapper, not a caller-supplied token), in both emitters.
 pub(crate) fn generate_builder_pattern<R: SetterRender>(
     method: &MethodHandler<'_>,
     is_list: bool,

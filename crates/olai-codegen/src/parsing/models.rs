@@ -4,6 +4,7 @@ use crate::gnostic::openapi::v3::Operation;
 use crate::google::api::{FieldBehavior, HttpRule, ResourceDescriptor, ResourceReference};
 use crate::parsing::http::HttpPattern;
 use crate::parsing::types::{BaseType, UnifiedType};
+use crate::utils::last_segment;
 
 /// Collected metadata for code generation
 #[derive(Debug, Default)]
@@ -53,8 +54,7 @@ impl CodeGenMetadata {
 
         // Fall back to simple-name suffix match
         self.messages.iter().find_map(|(key, info)| {
-            let simple = key.rfind('.').map(|i| &key[i + 1..]).unwrap_or(key);
-            if simple == type_name {
+            if last_segment(key) == type_name {
                 info.resource_descriptor.as_ref()
             } else {
                 None
@@ -91,9 +91,9 @@ pub struct MessageField {
     /// Resource reference annotation from `google.api.resource_reference` (ext 1055).
     ///
     /// - `child_type` non-empty: this field identifies a parent container for the named resource
-    ///   (e.g. `catalog_name` with `child_type = "unitycatalog.io/Schema"`).
+    ///   (e.g. `catalog_name` with `child_type = "example.io/Schema"`).
     /// - `r#type` non-empty: this field directly identifies a resource of that type
-    ///   (e.g. `full_name` with `type = "unitycatalog.io/Table"`).
+    ///   (e.g. `full_name` with `type = "example.io/Table"`).
     pub resource_reference: Option<ResourceReference>,
 }
 
@@ -135,7 +135,7 @@ pub struct EnumValue {
 #[derive(Debug, Clone)]
 pub struct ServiceInfo {
     pub name: String,
-    /// Proto package name (e.g. `"unitycatalog.catalogs.v1"`).
+    /// Proto package name (e.g. `"example.catalogs.v1"`).
     pub package: String,
     pub documentation: Option<String>,
     pub methods: Vec<MethodMetadata>,

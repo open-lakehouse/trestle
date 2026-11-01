@@ -99,8 +99,7 @@ pub(super) fn generate_server(service: &ServiceHandler<'_>) -> crate::error::Res
 /// Generate extractor implementation for a specific method.
 ///
 /// Path/query-only methods use `FromRequestParts`; body-bearing methods use `FromRequest`. The
-/// split is precomputed on the plan (`needs_request_parts`) so this no longer re-matches the
-/// `RequestType` enum.
+/// split is precomputed on the plan (`needs_request_parts`).
 fn from_request_extractor(method: &MethodHandler<'_>) -> TokenStream {
     if method.plan.needs_request_parts {
         from_request_parts_impl(method)

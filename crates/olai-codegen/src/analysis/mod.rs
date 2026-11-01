@@ -38,7 +38,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use convert_case::{Case, Casing};
 use tracing::warn;
 
 use crate::Result;
@@ -78,13 +77,10 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
     let mut service_infos: Vec<_> = metadata.services.values().collect();
     service_infos.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut plans = Vec::new();
-    let mut skipped_methods = Vec::new();
-    for service_info in service_infos {
-        let (plan, skipped) = analyze_service(metadata, service_info)?;
-        plans.push(plan);
-        skipped_methods.extend(skipped);
-    }
+    let plans = service_infos
+        .into_iter()
+        .map(|service_info| analyze_service(metadata, service_info))
+        .collect::<Result<Vec<_>>>()?;
 
     // Phase 2: build the cross-service global parent map, then assign depth-sorted hierarchies
     // and (once the hierarchy is known) the resource accessor param list.
@@ -104,7 +100,7 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
 
     Ok(GenerationPlan {
         services,
-        skipped_methods,
+        skipped_methods: Vec::new(),
     })
 }
 
@@ -377,24 +373,18 @@ fn assign_direct_children(services: &mut [ServicePlan]) {
 }
 
 /// Analyze a single service and create a service plan.
-///
-/// Returns the plan and a list of methods that were skipped due to incomplete metadata.
-fn analyze_service(
-    metadata: &CodeGenMetadata,
-    info: &ServiceInfo,
-) -> Result<(ServicePlan, Vec<SkippedMethod>)> {
+fn analyze_service(metadata: &CodeGenMetadata, info: &ServiceInfo) -> Result<ServicePlan> {
     let handler_name = strings::service_to_handler_name(&info.name);
     let base_path = strings::service_to_base_path(&info.name);
 
     // Analysis is protocol-agnostic: every method gets a plan. Methods without an HTTP annotation
     // get the routeless shape (`has_http_route == false`); the REST emitters skip them while the
     // ConnectRPC emitter uses them. So no method is dropped at analysis time.
-    let mut method_plans = Vec::new();
-    let skipped = Vec::new();
-
-    for method in &info.methods {
-        method_plans.push(analyze_method(metadata, method)?);
-    }
+    let mut method_plans = info
+        .methods
+        .iter()
+        .map(|method| analyze_method(metadata, method))
+        .collect::<Result<Vec<_>>>()?;
 
     let managed_resources = types::extract_managed_resources(metadata, &method_plans);
 
@@ -410,21 +400,18 @@ fn analyze_service(
         );
     }
 
-    Ok((
-        ServicePlan {
-            service_name: info.name.clone(),
-            handler_name,
-            base_path,
-            package: info.package.clone(),
-            methods: method_plans,
-            managed_resources,
-            documentation: info.documentation.clone(),
-            hierarchy: vec![],              // filled in Phase 2 of analyze_metadata
-            resource_accessor_params: None, // filled in Phase 2 of analyze_metadata
-            direct_children: vec![],        // filled in Phase 2b of analyze_metadata
-        },
-        skipped,
-    ))
+    Ok(ServicePlan {
+        service_name: info.name.clone(),
+        handler_name,
+        base_path,
+        package: info.package.clone(),
+        methods: method_plans,
+        managed_resources,
+        documentation: info.documentation.clone(),
+        hierarchy: vec![],              // filled in Phase 2 of analyze_metadata
+        resource_accessor_params: None, // filled in Phase 2 of analyze_metadata
+        direct_children: vec![],        // filled in Phase 2b of analyze_metadata
+    })
 }
 
 /// Analyze a single method and create a method plan.
@@ -472,7 +459,7 @@ pub(crate) fn analyze_method(
 
     Ok(MethodPlan {
         metadata: method.clone(),
-        handler_function_name: method.method_name.to_case(Case::Snake),
+        handler_function_name: strings::operation_to_method_name(&method.method_name),
         http_method,
         parameters,
         has_response,
@@ -517,7 +504,7 @@ fn analyze_routeless_method(
 
     Ok(MethodPlan {
         metadata: method.clone(),
-        handler_function_name: method.method_name.to_case(Case::Snake),
+        handler_function_name: strings::operation_to_method_name(&method.method_name),
         http_method: String::new(),
         parameters: body_fields.into_iter().map(Into::into).collect(),
         has_response,
@@ -540,48 +527,49 @@ fn analyze_routeless_method(
 /// `google.api.field_behavior` REQUIRED — mirroring the `body: "*"` branch of
 /// [`extract_request_fields`], minus the path/query split that ConnectRPC has no notion of.
 fn routeless_body_fields(input_fields: &[MessageField]) -> Vec<BodyField> {
-    let mut body_fields = Vec::new();
-    for field in input_fields {
-        if field.field_behavior.contains(&FieldBehavior::OutputOnly) {
-            continue;
-        }
+    input_fields
+        .iter()
+        .filter(|field| !field.field_behavior.contains(&FieldBehavior::OutputOnly))
+        .map(body_field)
+        .collect()
+}
 
-        if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
-            body_fields.push(BodyField {
-                name: field.name.clone(),
-                field_type: field.unified_type.clone().optional(),
-                repeated: false,
-                required: false,
-                oneof_variants: field.oneof_variants.clone(),
-                documentation: field.documentation.clone(),
-            });
-            continue;
-        }
-
-        let required = field.field_behavior.contains(&FieldBehavior::Required);
-        // Match the REST body branch: mark non-required singular message bodies optional on the
-        // type so they become `with_*(impl Into<Option<T>>)` setters rather than required args.
-        let needs_optional_marker = !required
-            && !field.unified_type.is_repeated
-            && matches!(
-                field.unified_type.base_type,
-                BaseType::Message(_) | BaseType::OneOf(_)
-            );
-        let field_type = if needs_optional_marker {
-            field.unified_type.clone().optional()
-        } else {
-            field.unified_type.clone()
-        };
-        body_fields.push(BodyField {
+/// The body field for a request field.
+///
+/// A oneof is always optional and keeps its variants. Otherwise `required` comes from
+/// `google.api.field_behavior` REQUIRED, and a non-required singular message is marked optional on
+/// the type so it becomes a `with_*(impl Into<Option<T>>)` setter (and an `Option<T>` with a
+/// `= None` default in FFI bindings) rather than a required argument. Scalars and collections are
+/// unaffected (their optionality is already correct).
+fn body_field(field: &MessageField) -> BodyField {
+    if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
+        return BodyField {
             name: field.name.clone(),
-            field_type,
-            repeated: field.unified_type.is_repeated,
-            required,
-            oneof_variants: None,
+            field_type: field.unified_type.clone().optional(),
+            repeated: false,
+            required: false,
+            oneof_variants: field.oneof_variants.clone(),
             documentation: field.documentation.clone(),
-        });
+        };
     }
-    body_fields
+
+    let required = field.field_behavior.contains(&FieldBehavior::Required);
+    let needs_optional_marker = !required
+        && !field.unified_type.is_repeated
+        && matches!(field.unified_type.base_type, BaseType::Message(_));
+    let field_type = if needs_optional_marker {
+        field.unified_type.clone().optional()
+    } else {
+        field.unified_type.clone()
+    };
+    BodyField {
+        name: field.name.clone(),
+        field_type,
+        repeated: field.unified_type.is_repeated,
+        required,
+        oneof_variants: None,
+        documentation: field.documentation.clone(),
+    }
 }
 
 /// Extract and classify request fields from an input message into path, query, and body buckets.
@@ -649,14 +637,7 @@ fn extract_request_fields(
 
         // Oneof fields are always body fields and always optional.
         if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
-            body_fields.push(BodyField {
-                name: field.name.clone(),
-                field_type: field.unified_type.clone().optional(),
-                repeated: false,
-                required: false,
-                oneof_variants: field.oneof_variants.clone(),
-                documentation: field.documentation.clone(),
-            });
+            body_fields.push(body_field(field));
             processed_fields.insert(field_name);
             continue;
         }
@@ -668,30 +649,7 @@ fn extract_request_fields(
         };
 
         if is_body {
-            let required = field.field_behavior.contains(&FieldBehavior::Required);
-            // Mark non-required singular message/oneof bodies as optional on the type so FFI
-            // bindings render them as `Option<T>` (matching their `= None` default). Required
-            // bodies keep the bare type and become required constructor params. Scalars and
-            // collections are unaffected (their optionality is already correct).
-            let needs_optional_marker = !required
-                && !field.unified_type.is_repeated
-                && matches!(
-                    field.unified_type.base_type,
-                    BaseType::Message(_) | BaseType::OneOf(_)
-                );
-            let field_type = if needs_optional_marker {
-                field.unified_type.clone().optional()
-            } else {
-                field.unified_type.clone()
-            };
-            body_fields.push(BodyField {
-                name: field.name.clone(),
-                field_type,
-                repeated: field.unified_type.is_repeated,
-                required,
-                oneof_variants: None,
-                documentation: field.documentation.clone(),
-            });
+            body_fields.push(body_field(field));
         } else {
             query_params.push(QueryParam {
                 name: field.name.clone(),
@@ -767,9 +725,8 @@ mod tests {
             documentation: None,
             methods: vec![make_get_method()],
         };
-        let (service_plan, skipped) = analyze_service(&metadata, &service_info).unwrap();
+        let service_plan = analyze_service(&metadata, &service_info).unwrap();
 
-        assert!(skipped.is_empty());
         assert_eq!(service_plan.managed_resources.len(), 1);
         assert_eq!(service_plan.managed_resources[0].type_name, "Catalog");
         assert_eq!(
@@ -811,7 +768,7 @@ mod tests {
             documentation: None,
             methods: vec![make_get_method(), update_method],
         };
-        let (service_plan, _skipped) = analyze_service(&metadata, &service_info).unwrap();
+        let service_plan = analyze_service(&metadata, &service_info).unwrap();
 
         assert_eq!(service_plan.managed_resources.len(), 1);
         assert_eq!(service_plan.managed_resources[0].type_name, "Catalog");
@@ -1359,7 +1316,7 @@ mod tests {
         let (metadata, catalog_svc, schema_svc, table_svc) = make_three_level_metadata();
         let mut plans = Vec::new();
         for svc in &[&catalog_svc, &schema_svc, &table_svc] {
-            let (plan, _) = analyze_service(&metadata, svc).unwrap();
+            let plan = analyze_service(&metadata, svc).unwrap();
             plans.push(plan);
         }
         (plans, metadata)

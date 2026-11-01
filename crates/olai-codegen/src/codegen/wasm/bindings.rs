@@ -22,8 +22,9 @@ use crate::codegen::ServiceHandler;
 pub(crate) fn generate_bindings(services: &[ServiceHandler<'_>]) -> crate::error::Result<String> {
     let bindings = services
         .first()
-        .and_then(|s| s.config.bindings.as_ref())
-        .expect("bindings config required for wasm output");
+        .expect("binding output has a service")
+        .config
+        .bindings_config();
 
     let aggregate_js_name = bindings.aggregate_client_name.clone();
     let wasm_aggregate_ident = format_ident!("Wasm{}", bindings.aggregate_client_name);
@@ -173,8 +174,7 @@ fn service_wrapper(service: &ServiceHandler<'_>) -> TokenStream {
         let inner_call = method.plan.base_method_ident();
         // Rust fn keeps the snake_case binding name; JS sees the camelCase name via `js_name`.
         let rust_name = method.binding_method_name();
-        let js_name = method.binding_method_name_str().to_case(Case::Camel);
-        let has_body = method.plan.has_request_body || method.input_type().is_some();
+        let js_name = method.js_method_name();
 
         // Request: deserialize a JS object into the typed request, or default for no-input RPCs.
         let (req_param, req_build) = if let Some(input_ty) = method.input_type() {
@@ -186,7 +186,6 @@ fn service_wrapper(service: &ServiceHandler<'_>) -> TokenStream {
                 },
             )
         } else {
-            let _ = has_body;
             (quote! {}, quote! { let request = Default::default(); })
         };
 

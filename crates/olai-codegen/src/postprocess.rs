@@ -16,7 +16,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
+use crate::utils::last_segment;
 use crate::utils::strings::lower_camel;
 
 /// The entries of the models directory that trestle writes itself.
@@ -74,7 +75,7 @@ pub fn field_options(
             .take_while(|s| s.starts_with(|c: char| c.is_ascii_lowercase()))
             .collect::<Vec<_>>()
             .join(".");
-        let simple = name.rsplit('.').next().unwrap_or(name);
+        let simple = last_segment(name);
         for field in &message.fields {
             let key = format!("{simple}.{}", field.name);
             if let Some(json) = &field.json_name {
@@ -89,6 +90,16 @@ pub fn field_options(
     packages
 }
 
+/// The entry of `by_package` for the model file `file_name`: `<package>.rs` (the buf plugin) or
+/// `<package>.<proto file>.rs` (buffa-build).
+fn package_entry<'a, T>(by_package: &'a BTreeMap<String, T>, file_name: &str) -> Option<&'a T> {
+    let stem = file_name.strip_suffix(".rs")?;
+    let parent = stem.rsplit_once('.').map(|(package, _)| package);
+    by_package
+        .get(stem)
+        .or_else(|| parent.and_then(|package| by_package.get(package)))
+}
+
 impl ModelRewrites {
     /// Whether any rewrite is enabled.
     pub fn is_empty(&self) -> bool {
@@ -99,27 +110,16 @@ impl ModelRewrites {
             && self.fields.is_empty()
     }
 
-    /// The field-name style of the model file `file_name`: `<package>.rs` (the buf plugin) or
-    /// `<package>.<proto file>.rs` (buffa-build).
+    /// The field-name style of the model file `file_name` (see [`package_entry`]).
     fn field_names_for(&self, file_name: &str) -> JsonFieldNames {
-        let Some(stem) = file_name.strip_suffix(".rs") else {
-            return self.field_names;
-        };
-        let parent = stem.rsplit_once('.').map(|(package, _)| package);
-        self.packages
-            .get(stem)
-            .or_else(|| parent.and_then(|package| self.packages.get(package)))
+        package_entry(&self.packages, file_name)
             .copied()
             .unwrap_or(self.field_names)
     }
 
-    /// The [`PackageFields`] of the model file `file_name` (see [`Self::field_names_for`]).
+    /// The [`PackageFields`] of the model file `file_name` (see [`package_entry`]).
     fn fields_for(&self, file_name: &str) -> Option<&PackageFields> {
-        let stem = file_name.strip_suffix(".rs")?;
-        let parent = stem.rsplit_once('.').map(|(package, _)| package);
-        self.fields
-            .get(stem)
-            .or_else(|| parent.and_then(|package| self.fields.get(package)))
+        package_entry(&self.fields, file_name)
     }
 
     /// Rewrite the source of the model file `file_name`.
@@ -149,14 +149,14 @@ impl ModelRewrites {
         }
         let mut changed = 0;
         for path in model_files(dir)? {
-            let src = std::fs::read_to_string(&path).map_err(Error::Io)?;
+            let src = std::fs::read_to_string(&path)?;
             let file_name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or_default();
             let rewritten = self.rewrite(file_name, &src);
             if rewritten != src {
-                std::fs::write(&path, rewritten).map_err(Error::Io)?;
+                std::fs::write(&path, rewritten)?;
                 changed += 1;
             }
         }
@@ -169,8 +169,8 @@ fn model_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        for entry in std::fs::read_dir(&d).map_err(Error::Io)? {
-            let path = entry.map_err(Error::Io)?.path();
+        for entry in std::fs::read_dir(&d)? {
+            let path = entry?.path();
             let trestle_file = d == dir
                 && path
                     .file_name()
@@ -289,7 +289,12 @@ fn apply_field_options(src: &str, fields: &PackageFields) -> String {
         }
         out.push(line.to_string());
     }
-    let mut out = out.join("\n");
+    join_lines_like(&out, src)
+}
+
+/// `lines` joined by newlines, with a trailing newline when `src` has one.
+fn join_lines_like(lines: &[String], src: &str) -> String {
+    let mut out = lines.join("\n");
     if src.ends_with('\n') {
         out.push('\n');
     }
@@ -327,11 +332,7 @@ fn int64_containers_to(src: &str, module: &str) -> String {
             out[j] = out[j].replace(from, &format!("{module}::{to}"));
         }
     }
-    let mut out = out.join("\n");
-    if src.ends_with('\n') {
-        out.push('\n');
-    }
-    out
+    join_lines_like(&out, src)
 }
 
 /// The field declaration at line `start`, whitespace collapsed (`pub a: Vec<i64>,`), and the
@@ -365,10 +366,11 @@ fn json_value_serializers(src: &str, module: &str) -> String {
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim_start();
-        if trimmed.starts_with("pub ") && trimmed.contains(": ") && line.contains(JSON) || {
-            // A type that rustfmt broke onto the next lines.
-            trimmed.starts_with("pub ") && trimmed.ends_with('<')
-        } {
+        let is_field = trimmed.starts_with("pub ");
+        let json_field_on_one_line = is_field && trimmed.contains(": ") && line.contains(JSON);
+        // A type that rustfmt broke onto the next lines.
+        let field_type_continues = is_field && trimmed.ends_with('<');
+        if json_field_on_one_line || field_type_continues {
             let (decl, end) = declaration(&lines, i);
             let kind = if !decl.contains(JSON) {
                 None

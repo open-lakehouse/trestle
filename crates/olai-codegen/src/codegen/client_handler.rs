@@ -55,13 +55,7 @@ fn forward_method(
 ) -> Result<TokenStream> {
     let method_name = method.plan.base_method_ident();
     let input_type = method.input_type();
-    // Same rule as the trait method signature in `handler.rs`.
-    let output_type = if method.plan.has_response {
-        let output = method.output_type();
-        quote! { #output }
-    } else {
-        quote! { () }
-    };
+    let output_type = method.handler_output_type();
     let not_found = if method.is_existence_check() {
         if method.config.rest_client.error_module.is_none() {
             return Err(crate::Error::Build(format!(

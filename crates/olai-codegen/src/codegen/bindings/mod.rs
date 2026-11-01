@@ -16,7 +16,7 @@
 pub(crate) mod builder;
 pub(crate) mod driver;
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 
 use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
 
@@ -33,6 +33,17 @@ pub(crate) struct ShapeParts<'a> {
     /// The `self.client.<method>(<args>)` call into the underlying Rust client, with per-arg
     /// marshaling applied by [`BindingBackend::client_call`].
     pub(crate) client_call: TokenStream,
+}
+
+impl ShapeParts<'_> {
+    /// The name of a get, update or delete binding method: the resource-client method name on a
+    /// scoped client, the binding method name on the root client.
+    pub(crate) fn unary_method_name(&self) -> Ident {
+        match self.mode {
+            BindingMode::Scoped => self.method.plan.resource_client_method(),
+            BindingMode::Flat => self.method.binding_method_name(),
+        }
+    }
 }
 
 /// Language-specific hooks for a binding emitter. The driver supplies the shared dispatch and

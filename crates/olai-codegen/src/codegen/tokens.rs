@@ -40,11 +40,11 @@ pub(crate) fn doc_tokens(documentation: Option<&str>) -> TokenStream {
 /// generated tokens don't parse — surfacing generator bugs instead of silently emitting an
 /// empty/comment-only module that hides them behind uncompilable output.
 pub(crate) fn format_tokens(tokens: TokenStream) -> Result<String> {
-    let tokens_string = tokens.to_string();
-    let syntax_tree = syn::parse2::<File>(tokens).map_err(|source| Error::GeneratedParse {
-        tokens: tokens_string,
-        source,
-    })?;
+    let syntax_tree =
+        syn::parse2::<File>(tokens.clone()).map_err(|source| Error::GeneratedParse {
+            tokens: tokens.to_string(),
+            source,
+        })?;
     Ok(crate::postprocess::space_items(&prettyplease::unparse(
         &syntax_tree,
     )))
