@@ -1,7 +1,7 @@
 [package]
 name = "olai-credential-vending"
 description = "Server-side minting of downscoped cloud storage credentials from registered principals"
-version = "0.0.3"
+version = "0.0.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -22,7 +22,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 # in-repo dependencies
 olai-http = { path = "../olai-http", version = "0.0.10" }
-olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.2" }
+olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.3" }
 
 [dev-dependencies]
 # A stand-in Blob service for user delegation key fetches.
@@ -32,7 +32,7 @@ object_store = { version = "0.13", default-features = false, features = ["aws"] 
 olai-test-emulators = { path = "../olai-test-emulators" }
 # End-to-end emulator tests: credentials minted here, serialized as UC REST responses
 # and used through the client crate's stores.
-olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.2", features = ["unity"] }
+olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.3", features = ["unity"] }
 olai-vended-store = { path = "../olai-vended-store" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 url = { workspace = true }

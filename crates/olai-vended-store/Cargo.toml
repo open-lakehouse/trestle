@@ -1,7 +1,7 @@
 [package]
 name = "olai-vended-store"
 description = "object_store stores backed by vended, auto-refreshing cloud storage credentials"
-version = "0.0.2"
+version = "0.0.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -29,7 +29,7 @@ url = { workspace = true }
 object_store = { version = "0.13", default-features = false }
 
 # in-repo dependencies
-olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.2" }
+olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.3" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # S3 bucket region discovery and the protocol clients. Native only: olai-http does not
