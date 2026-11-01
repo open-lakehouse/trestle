@@ -79,6 +79,8 @@ fn demo_config(out: &Path) -> CodeGenConfig {
             path_fields_in_body_methods: vec!["demo.v1.ProbeService.RenameWidget".into()],
             json_query_packages: vec![],
             user_agent: Some("demo-client".into()),
+            resource_features: false,
+            handler_impls: None,
         },
         output: CodeGenOutput {
             common: Some(gen_dir.clone()),
