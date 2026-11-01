@@ -75,3 +75,20 @@ config_patches() {
     [[ -f "$config" ]] || return 0
     sed -nE 's|^patch\.crates-io\.([A-Za-z0-9_-]+) = \{ path = "([^"]+)" \}$|\1 \2|p' "$config"
 }
+
+# `name dir` of every publishable crate of a cargo workspace.
+published_crates() {
+    cargo metadata --no-deps --offline --format-version 1 --manifest-path "$1/Cargo.toml" 2>/dev/null |
+        jq -r '.packages[] | select(.publish != []) | "\(.name) \(.manifest_path | sub("/Cargo.toml$"; ""))"'
+}
+
+# `name dir` of every publishable crate of every upstream patched in .cargo/config.toml.
+# Wider than config_patches: a patched crate pulls its upstream siblings in through
+# their path dependencies, so they resolve from the checkout too without being named.
+patched_upstream_crates() {
+    config_patches | while read -r _ dir; do
+        git -C "$dir" rev-parse --show-toplevel
+    done | sort -u | while IFS= read -r root; do
+        published_crates "$root"
+    done
+}

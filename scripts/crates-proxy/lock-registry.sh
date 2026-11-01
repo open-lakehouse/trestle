@@ -7,8 +7,10 @@
 # CDN. So the checksum of a published version can be computed from the tarball
 # without the index, and the entry written as if Cargo had resolved it from crates.io.
 #
-# For each package that is patched in .cargo/config.toml (or, without a patch block,
-# any non-member path package), this:
+# Works for any upstream (trestle, mangrove, breakwater, ...). For each non-member
+# path package published by an upstream patched in .cargo/config.toml (including
+# siblings the patched crates pull in by path), or, without a patch block, any
+# non-member path package, this:
 #   - fails if <name>-<version>.crate isn't on crates.io (use a git pin instead)
 #   - warns if the local crate differs from its release tag, since the lock's
 #     dependency list comes from the local source and must match the published one
@@ -27,7 +29,7 @@ else
     while IFS= read -r lock; do locks+=("$lock"); done < <(consumer_locks)
 fi
 
-patches="$(config_patches)"
+patches="$(patched_upstream_crates)"
 
 for lock in "${locks[@]}"; do
     [[ -f "$lock" ]] || die "$lock not found"
@@ -57,14 +59,10 @@ for lock in "${locks[@]}"; do
         dir="$(awk -v n="$name" '$1 == n {print $2}' <<<"$patches")"
         if [[ -n "$dir" ]]; then
             upstream="$(git -C "$dir" rev-parse --show-toplevel)"
-            tag=""
-            for t in "$name-v$ver" "v$ver"; do
-                if git -C "$upstream" rev-parse -q --verify "refs/tags/$t" >/dev/null; then
-                    tag=$t
-                    break
-                fi
-            done
-            if [[ -z "$tag" ]]; then
+            # release-plz's per-crate tag. A bare `v<ver>` is ambiguous in a
+            # multi-crate repo (mangrove's old workspace tags), so it isn't used.
+            tag="$name-v$ver"
+            if ! git -C "$upstream" rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
                 echo "warning: no release tag for $name $ver in $upstream (git fetch --tags?); can't check the local crate matches it" >&2
             elif ! git -C "$upstream" diff --quiet "$tag" -- "$dir"; then
                 echo "warning: local $name differs from $tag; if its dependencies changed, CI --locked will reject this lock" >&2
