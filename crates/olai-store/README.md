@@ -4,13 +4,6 @@ Generic, TAO-inspired resource store for typed objects and associations — the
 async storage layer for services built with the
 [Trestle](https://github.com/open-lakehouse/trestle) framework.
 
-> [!WARNING]
-> This store is built to get a Trestle project running quickly: it favours
-> simplicity over features and performance. It's a fine default for bootstrapping,
-> prototypes, and demos — but it is **not** intended for serious production
-> workloads. For those, back the [traits](#store-traits) below with your own
-> production-grade storage engine.
-
 It defines the core traits and types for a graph-based store: objects (nodes),
 associations (edges), field-role enforcement, and secret management. Typed
 resource enums and field descriptors are usually generated from your `.proto`
@@ -77,8 +70,7 @@ backends are a taxonomy-blind blob layer it wraps. With the `encryption` feature
 `Sensitive` fields are sealed by an injectable `EnvelopeEncryptor` (AES-256-GCM
 envelope encryption; pluggable `KeyProvider` for a local KEK or a cloud KMS) and
 stored — atomically with the object — in a nullable `sensitive` blob column.
-Writing a resource that *has* sensitive fields through a store with no encryptor is
-a hard error, never a silent drop. See the rustdoc for the full API.
+See the rustdoc for the full API.
 
 ## License
 

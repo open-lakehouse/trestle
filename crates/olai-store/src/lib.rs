@@ -20,17 +20,10 @@
 //!   sensitive): stripping store-owned fields, injecting them back on read, and
 //!   sealing/redacting sensitive fields. Encryption is optional — build it with
 //!   [`new`](ManagedObjectStore::new) for a store with no sensitive fields, or
-//!   `with_encryptor` (the `encryption`
-//!   feature) to seal them. Writing a resource that *has* sensitive fields through
-//!   a store with no encryptor is a hard error, never a silent drop.
+//!   `with_encryptor` (the `encryption` feature) to seal them.
 //!
 //! Most callers construct a `ManagedObjectStore` and use it through the
 //! `ObjectStore` trait; the raw backends are the pluggable layer underneath.
-//!
-//! **Note:** this store favours simplicity over features and performance. It's a
-//! good default for bootstrapping Trestle projects, prototypes, and demos, but is
-//! not intended for serious production workloads — back these traits with your
-//! own production-grade engine for those.
 //!
 //! # Examples
 //!

@@ -856,10 +856,7 @@ impl<L: Label, T: AssociationStore<L>> AssociationStore<L> for Arc<T> {
 
 #[async_trait::async_trait]
 impl<L: Label, T: Transactional<L>> Transactional<L> for Arc<T> {
-    async fn transaction<'a, U>(
-        &'a self,
-        f: Box<dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> BoxFuture<'t, Result<U>> + Send + 'a>,
-    ) -> Result<U>
+    async fn transaction<'a, U>(&'a self, f: TxnFn<'a, L, U>) -> Result<U>
     where
         U: Send + 'a,
     {
@@ -914,6 +911,11 @@ pub trait StoreTx<L: Label>: StoreExec<L> {
     async fn rollback(self: Box<Self>) -> Result<()>;
 }
 
+/// The closure a [`Transactional`] backend runs inside one transaction. Spelled out
+/// once so every implementation shares the same higher-ranked signature.
+pub(crate) type TxnFn<'a, L, T> =
+    Box<dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> BoxFuture<'t, Result<T>> + Send + 'a>;
+
 /// A store that can run several operations as one atomic unit of work.
 ///
 /// Two entry points, both backed by a real backend transaction:
@@ -954,10 +956,7 @@ pub trait Transactional<L: Label>: Send + Sync + 'static {
     ///
     /// Surfaces the closure's error (after rolling back), or a backend error
     /// from begin/commit.
-    async fn transaction<'a, T>(
-        &'a self,
-        f: Box<dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> BoxFuture<'t, Result<T>> + Send + 'a>,
-    ) -> Result<T>
+    async fn transaction<'a, T>(&'a self, f: TxnFn<'a, L, T>) -> Result<T>
     where
         T: Send + 'a;
 

@@ -1,14 +1,7 @@
 //! Registry-aware object store decorator that enforces field roles.
 //!
-//! [`ManagedObjectStore`] wraps an [`ObjectStore`] and uses a [`ResourceRegistry`] to
-//! automatically:
-//!
-//! - Strip [`FieldRole::Identifier`] and [`FieldRole::Managed`] fields on create/update
-//!   (the store is the source of truth for these)
-//! - Route [`FieldRole::Sensitive`] fields into an envelope-encrypted blob stored *inline* on
-//!   the object row (see below), with the `encryption` feature
-//! - Inject Identifier and Managed fields back into properties on read
-//! - Redact Sensitive fields on read (unless [`get_with_secrets`] is used)
+//! [`ManagedObjectStore`] wraps an [`ObjectStore`] and uses a [`ResourceRegistry`] to decide
+//! how each [`FieldRole`] is handled on CRUD.
 //!
 //! # Sensitive fields
 //!
@@ -52,7 +45,7 @@ use crate::object::{Association, Object};
 use crate::registry::{FieldRole, ResourceRegistry};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, SecretObjectReader, StoreExec, StoreTx, Transactional,
+    ObjectStoreReader, Precondition, SecretObjectReader, StoreTx, Transactional, TxnFn,
 };
 use crate::{Error, Result};
 
@@ -165,9 +158,7 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
                         sensitive_map.insert(field.name.to_string(), value);
                     }
                 }
-                FieldRole::Data => {
-                    // Keep as-is
-                }
+                FieldRole::Data => {}
             }
         }
 
@@ -224,19 +215,15 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
                                 );
                             }
                         }
-                        _ => {
-                            // Other managed fields (created_by, updated_by) — leave as-is
-                            // if already present, don't overwrite
-                        }
+                        // `created_by` / `updated_by` are left as the caller set them.
+                        _ => {}
                     }
                 }
                 FieldRole::Sensitive => {
                     // Redact: ensure sensitive fields are absent from the response
                     map.remove(field.name);
                 }
-                FieldRole::Data => {
-                    // Already in properties
-                }
+                FieldRole::Data => {}
             }
         }
     }
@@ -253,6 +240,7 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
     ///
     /// Serialization of the map to bytes happens here so the crypto layer only ever sees opaque
     /// bytes.
+    #[cfg(feature = "encryption")]
     async fn resolve_sensitive_blob(
         &self,
         id: &Uuid,
@@ -262,21 +250,35 @@ impl<L: Label, S> ManagedObjectStore<L, S> {
         let Some(map) = sensitive else {
             return Ok(None);
         };
-
-        #[cfg(feature = "encryption")]
-        if let Some(encryptor) = self.encryptor.as_ref() {
-            let plaintext = serde_json::to_vec(&serde_json::Value::Object(map))?;
-            let blob = encryptor.seal(&secret_name(id), &plaintext).await?;
-            return Ok(Some(bytes::Bytes::from(blob)));
-        }
-
-        let _ = (id, &map);
-        Err(Error::invalid_argument(format!(
-            "resource '{label}' has sensitive field(s) but the store has no encryptor configured \
-             to seal them; build the store with `ManagedObjectStore::with_encryptor` (requires the \
-             `encryption` feature)"
-        )))
+        let Some(encryptor) = self.encryptor.as_ref() else {
+            return Err(missing_encryptor(&label));
+        };
+        let plaintext = serde_json::to_vec(&serde_json::Value::Object(map))?;
+        let blob = encryptor.seal(&secret_name(id), &plaintext).await?;
+        Ok(Some(bytes::Bytes::from(blob)))
     }
+
+    #[cfg(not(feature = "encryption"))]
+    async fn resolve_sensitive_blob(
+        &self,
+        _id: &Uuid,
+        label: L,
+        sensitive: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<Option<bytes::Bytes>> {
+        match sensitive {
+            None => Ok(None),
+            Some(_) => Err(missing_encryptor(&label)),
+        }
+    }
+}
+
+/// The error for a sensitive write on a store that cannot seal the fields.
+fn missing_encryptor<L: Label>(label: &L) -> Error {
+    Error::invalid_argument(format!(
+        "resource '{label}' has sensitive field(s) but the store has no encryptor configured \
+         to seal them; build the store with `ManagedObjectStore::with_encryptor` (requires the \
+         `encryption` feature)"
+    ))
 }
 
 /// The AAD name a sensitive blob is bound to: the object's stable [`Uuid`].
@@ -561,14 +563,7 @@ impl<L: Label, S: ObjectStore<L>> SecretObjectReader<L> for ManagedObjectStore<L
 // path.
 #[async_trait::async_trait]
 impl<L: Label, S: Transactional<L>> Transactional<L> for ManagedObjectStore<L, S> {
-    async fn transaction<'a, T>(
-        &'a self,
-        f: Box<
-            dyn for<'t> FnOnce(&'t dyn StoreExec<L>) -> futures::future::BoxFuture<'t, Result<T>>
-                + Send
-                + 'a,
-        >,
-    ) -> Result<T>
+    async fn transaction<'a, T>(&'a self, f: TxnFn<'a, L, T>) -> Result<T>
     where
         T: Send + 'a,
     {
@@ -585,6 +580,7 @@ mod tests {
     use super::*;
     use crate::InMemoryStore;
     use crate::registry::{ResourceFieldDescriptor, ResourceTypeDescriptor};
+    use crate::store::StoreExec;
     use std::str::FromStr;
 
     use crate::Error;
@@ -1251,8 +1247,7 @@ mod tests {
         }
     }
 
-    /// A failed lazy-rotation writeback must not fail the read, and must be surfaced as a `warn`
-    /// (replacing the old silent `let _ = …`).
+    /// A failed lazy-rotation writeback must not fail the read, and must be surfaced as a `warn`.
     #[cfg(feature = "encryption")]
     #[tokio::test]
     #[tracing_test::traced_test]
