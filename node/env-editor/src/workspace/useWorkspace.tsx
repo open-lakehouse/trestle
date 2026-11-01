@@ -10,6 +10,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { errorMessage } from "../errors";
 import type { Selection } from "../types";
 import { type EnvDoc, nameProblem, nextSlot, type WorkspaceDoc } from "./model";
 import type { WorkspaceStore } from "./store";
@@ -74,7 +75,7 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
           }
         })
         .catch((e: unknown) => {
-          if (!cancelled) setError(message(e));
+          if (!cancelled) setError(errorMessage(e));
         });
     void load();
     const unsubscribe = store.subscribe?.(() => void load());
@@ -91,7 +92,7 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
         if (!current) return current;
         const next = change(current);
         if (next !== current) {
-          store.save(next).catch((e: unknown) => setError(message(e)));
+          store.save(next).catch((e: unknown) => setError(errorMessage(e)));
         }
         return next;
       });
@@ -145,7 +146,7 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
         const env = current?.envs.find((e) => e.id === id);
         if (!current || !env) return current;
         const next = { ...env, selection };
-        store.saveEnv(next).catch((e: unknown) => setError(message(e)));
+        store.saveEnv(next).catch((e: unknown) => setError(errorMessage(e)));
         return {
           ...current,
           envs: current.envs.map((e) => (e.id === id ? next : e)),
@@ -219,8 +220,4 @@ export function useWorkspace(): WorkspaceState {
     throw new Error("useWorkspace must be used within a <WorkspaceProvider>");
   }
   return state;
-}
-
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }

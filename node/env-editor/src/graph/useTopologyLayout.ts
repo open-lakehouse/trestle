@@ -1,43 +1,26 @@
-// ELK-driven layout for the environment "markitecture". The graph is the
-// plan's *functional* topology (see `crates/stack-topology/src/projection/topology.rs`):
-// one node per component, read in request direction — clients → gateway →
-// the components it exposes → the capabilities they use — laid out
-// left-to-right with ELK's `layered` algorithm (the same engine + tuning the
-// sibling headwaters lineage UI uses).
+// ELK layout for the environment diagram. The graph is the plan's functional
+// topology: one node per component, read in request direction (clients →
+// gateway → the components it exposes → the capabilities they use), laid out
+// left to right with ELK's `layered` algorithm.
 //
-// The gateway is drawn as a card with one section per surface (listener): the
-// platform's Lakehouse API, then each service endpoint (e.g. S3) — locally
-// separate ports, hosted separate subdomains — and last its access control:
-// the request checks it delegates (sign-in, then authorization). Clients enter
-// each surface section through its own port, and each backend row and check
-// row leaves through its own port, all at fixed ELK positions so edges start at
-// their row and ELK orders the targets to match. A provider's card lists what
-// it provisions, one row per database / bucket, and a consumer's edge enters
-// the row of each resource it uses. Edges are drawn along ELK's own orthogonal
-// routes (`ElkEdge`).
+// The gateway is a card with a section per surface (listener) and a row per
+// backend, then its access checks. Every row and check has a fixed port, so an
+// edge leaves its own row and ELK orders the targets to match. A provider lists
+// the databases or buckets it provisions, and a consumer's edge enters the row
+// of each one it uses.
 //
-// Lateral edges — a component calling a peer's API, e.g. an experiment tracker
-// whose model registry is the data catalog — would otherwise push each callee
-// one column further right. They're laid out without, so peers the gateway
-// exposes share a column, regrouped so partners are neighbours
-// (`arrangeColumns`, then a second ELK run that keeps that order), and routed
-// vertically through it (`routeLateral`).
-// One that can't be goes back to ELK as an ordinary edge, and the layout runs
-// again. The gateway's edges keep their fixed west/east rows.
+// A lateral edge (a component calling a peer's API) would push its callee a
+// column further right, so those are laid out without, regrouped so partners
+// sit together, and routed vertically (`lateralEdges.ts`). Resources an external
+// cloud provides sit in one frame per cloud, an ELK compound node.
 //
-// Resources an external cloud provides (a managed database, a cloud object
-// store) are drawn inside one dashed frame per cloud: an ELK compound node laid
-// out with the rest of the graph (hierarchy included), and a ReactFlow parent
-// node whose children are positioned relative to it.
-//
-// The hook is async — ELK resolves to positioned ReactFlow nodes + edges. Until
-// it resolves it keeps the previous layout, so the canvas never flashes
-// unpositioned nodes. A monotonic `runRef` guards against a stale layout
-// overwriting a newer one.
+// The hook is async and keeps the previous layout until a new one resolves. A
+// monotonic `runRef` drops a stale result.
 
 import type { Edge, Node } from "@xyflow/react";
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import { useEffect, useRef, useState } from "react";
+import { errorMessage } from "../errors";
 import type {
   ExposedDto,
   GraphDto,
@@ -65,6 +48,9 @@ const elk = () => {
   return engine;
 };
 
+/** The id the planner gives the clients node. */
+export const CLIENTS_NODE_ID = "@clients";
+
 // Node geometry. MUST match what the nodes render (`NodeHeader`,
 // `ComponentNode`, `ClientsNode`, `GatewayNode`): ELK positions by these sizes
 // (and places the gateway's row ports from them), and ReactFlow anchors handles
@@ -75,7 +61,7 @@ export const NODE_HEADER = 52;
 // A component card: the header, then one labeled line per fact (see
 // `componentFacts`), so its height grows with what it offers and provisions.
 export const COMPONENT_WIDTH = 240;
-export const FACT_PAD = 8;
+const FACT_PAD = 8;
 export const FACT_LINE = 18;
 // A provider lists what it provisions in one section per resource kind: a
 // header, then one row per database / bucket, each with its own port so a
@@ -93,10 +79,10 @@ export const GATEWAY_ENDPOINT_LINE = 16;
 export const GATEWAY_CHECK_ROW = 40;
 // An external-cloud frame: its title strip, then padding around its cards.
 export const CLOUD_GROUP_HEADER = 32;
-export const CLOUD_GROUP_PAD = 16;
+const CLOUD_GROUP_PAD = 16;
 
 /** The canvas id of the frame around the external cloud `cloud`'s resources. */
-export const cloudGroupId = (cloud: string) => `@cloud:${cloud}`;
+const cloudGroupId = (cloud: string) => `@cloud:${cloud}`;
 
 const LAYOUT_OPTIONS: Record<string, string> = {
   "elk.algorithm": "layered",
@@ -112,7 +98,7 @@ const LAYOUT_OPTIONS: Record<string, string> = {
 };
 
 /** One backend's endpoints within a gateway surface. */
-export interface GatewayRow {
+interface GatewayRow {
   module: string;
   exposes: ExposedDto[];
 }
@@ -133,7 +119,7 @@ export interface AccessCheck {
 }
 
 /** One labeled line on a component card. */
-export interface Fact {
+interface Fact {
   label: string;
   value: string;
 }
@@ -262,13 +248,13 @@ export interface TopologyEdgeData {
   [key: string]: unknown;
 }
 
-export interface TopologyFlow {
+interface TopologyFlow {
   nodes: Node[];
   edges: Edge<TopologyEdgeData>[];
 }
 
 /** Group each gateway surface into one row per backend, in surface order. */
-export function gatewaySections(gateway: GraphNodeDto): GatewaySection[] {
+function gatewaySections(gateway: GraphNodeDto): GatewaySection[] {
   return gateway.surfaces.map((surface) => {
     const rows: GatewayRow[] = [];
     for (const e of surface.exposes) {
@@ -284,10 +270,7 @@ const CHECK_ORDER: AccessCheckKind[] = ["authenticates", "authorizes"];
 
 /** The checks gateway `id` delegates (its outgoing authenticates/authorizes
  *  edges), sign-in first. */
-export function gatewayChecks(
-  id: string,
-  edges: TopologyEdgeDto[],
-): AccessCheck[] {
+function gatewayChecks(id: string, edges: TopologyEdgeDto[]): AccessCheck[] {
   const checks: AccessCheck[] = [];
   for (const e of edges) {
     if (
@@ -612,10 +595,10 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
     lateral = lateral.filter((v) => !rejected.includes(v.id));
   }
 
-  /** The ReactFlow graph of ELK's layout, with `lateral` routes. */
+  /** The ReactFlow graph of ELK's layout, with the `lateralRoutes`. */
   function toFlow(
     laidOut: ElkNode,
-    lateral: Map<string, LateralRoute>,
+    lateralRoutes: Map<string, LateralRoute>,
   ): TopologyFlow {
     // Positions are relative to the parent: the root for most nodes, its
     // frame for an external-cloud resource (as ReactFlow wants a child's).
@@ -704,7 +687,7 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
     const nodes = [...frameNodes, ...memberNodes];
     const edges: Edge<TopologyEdgeData>[] = drawn.map(
       ({ id, edge: e, resource }) => {
-        const routed = lateral.get(id);
+        const routed = lateralRoutes.get(id);
         const { source, target } =
           routed ?? edgeHandles(e, gateways, components, resource);
         return {
@@ -727,25 +710,31 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
 }
 
 /** Lay `graph` out (see `layoutTopology`), keeping the previous layout until
- *  the new one resolves. */
-export function useTopologyLayout(graph: GraphDto | undefined): TopologyFlow {
-  const [flow, setFlow] = useState<TopologyFlow>({ nodes: [], edges: [] });
+ *  the new one resolves. A failed layout keeps the previous one too and reports
+ *  its message as `error`. */
+export function useTopologyLayout(
+  graph: GraphDto | undefined,
+): TopologyFlow & { error: string | null } {
+  const [layout, setLayout] = useState<TopologyFlow & { error: string | null }>(
+    { nodes: [], edges: [], error: null },
+  );
   const runRef = useRef(0);
 
   useEffect(() => {
     const run = ++runRef.current;
     if (!graph || graph.nodes.length === 0) {
-      setFlow({ nodes: [], edges: [] });
+      setLayout({ nodes: [], edges: [], error: null });
       return;
     }
     layoutTopology(graph)
       .then((laidOut) => {
-        if (run === runRef.current) setFlow(laidOut);
+        if (run === runRef.current) setLayout({ ...laidOut, error: null });
       })
-      .catch(() => {
-        if (run === runRef.current) setFlow({ nodes: [], edges: [] });
+      .catch((e: unknown) => {
+        if (run === runRef.current)
+          setLayout((prev) => ({ ...prev, error: errorMessage(e) }));
       });
   }, [graph]);
 
-  return flow;
+  return layout;
 }

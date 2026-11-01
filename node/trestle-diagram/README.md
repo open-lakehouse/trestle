@@ -51,7 +51,7 @@ import snapshot from "./lakehouse.trestle-graph.json";
 <EnvironmentDiagram snapshot={snapshot} colorMode="dark" />;
 ```
 
-| Prop | Default | |
+| Prop | Default | Description |
 | --- | --- | --- |
 | `snapshot` | — | The parsed snapshot JSON (validated; a bad or newer-version file renders an error box). |
 | `graph` | — | A `GraphDto` to draw directly, instead of a snapshot. |

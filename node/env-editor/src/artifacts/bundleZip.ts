@@ -5,6 +5,7 @@
 // them: credential files owner-only, deploy scripts executable.
 
 import { zipSync } from "fflate";
+import { downloadBlob } from "../diagram/exportImage";
 import type { Bundle, LocalCredentialDto } from "../types";
 
 /** The longest generated value, even when a service accepts more. */
@@ -84,4 +85,12 @@ export function buildWorkspaceZip(
     addBundle(entries, `${name}/${bundle.env_name}`, bundle);
   }
   return zipSync(entries, { level: 6 });
+}
+
+/** Save a zip from {@link buildBundleZip} or {@link buildWorkspaceZip}. */
+export function downloadZip(bytes: Uint8Array, filename: string): void {
+  downloadBlob(
+    new Blob([bytes.slice()], { type: "application/zip" }),
+    filename,
+  );
 }

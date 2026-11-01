@@ -17,15 +17,20 @@ import {
   useRef,
   useState,
 } from "react";
-import { buildBundleZip, generateCredentials } from "./artifacts/bundleZip";
+import {
+  buildBundleZip,
+  downloadZip,
+  generateCredentials,
+} from "./artifacts/bundleZip";
 import { FilesPanel } from "./artifacts/FilesPanel";
 import { fileSourceOf } from "./artifacts/fileSource";
-import { downloadBlob } from "./diagram/exportImage";
+import { errorMessage } from "./errors";
 import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar";
 import { ComponentPalette } from "./graph/ComponentPalette";
 import type { CanvasActions } from "./graph/canvasActions";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
 import type { NodeFilesTarget } from "./graph/nodeFiles";
+import { CLIENTS_NODE_ID } from "./graph/useTopologyLayout";
 import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { ConfigPanel } from "./layout/ConfigPanel";
@@ -176,11 +181,7 @@ function EditorBody({
     planner
       .bundle(selection, undefined, credentials, context)
       .then((bundle) => {
-        const zip = buildBundleZip(bundle);
-        downloadBlob(
-          new Blob([zip as BlobPart], { type: "application/zip" }),
-          `${bundle.env_name}.zip`,
-        );
+        downloadZip(buildBundleZip(bundle), `${bundle.env_name}.zip`);
         if (plansHosted) {
           setNotice(
             "The hosted resources' secrets aren't in the download: its README.md says how to set them.",
@@ -188,8 +189,7 @@ function EditorBody({
         }
       })
       .catch((e: unknown) => {
-        const reason = e instanceof Error ? e.message : String(e);
-        setNotice(`Could not prepare the download: ${reason}`);
+        setNotice(`Could not prepare the download: ${errorMessage(e)}`);
       })
       .finally(() => setBundling(false));
   }, [planner, catalog, selection, plansHosted, context]);
@@ -374,7 +374,8 @@ function EditorBody({
     redo,
   ]);
 
-  const inspected = selectedId && selectedId !== "@clients" ? selectedId : null;
+  const inspected =
+    selectedId && selectedId !== CLIENTS_NODE_ID ? selectedId : null;
   // On the canvas, plan errors show on the canvas itself.
   const showErrorCard = !!error && (tab !== "canvas" || !catalog);
 

@@ -160,6 +160,9 @@ const EDGE_STYLE: Record<
   },
 };
 
+/** The edge kinds, in the order the legend lists them. */
+const EDGE_KINDS = Object.keys(EDGE_STYLE) as TopologyEdgeKind[];
+
 /** A short label for an edge. The cards already detail the rest: the gateway
  *  rows list routes, and a provider lists what it offers. */
 function edgeLabel(e: TopologyEdgeDto): string | undefined {
@@ -245,7 +248,7 @@ function MarkitectureFlow({
   onOpenInExplorer,
   children,
 }: MarkitectureCanvasProps) {
-  const { nodes, edges } = useTopologyLayout(graph);
+  const { nodes, edges, error: layoutError } = useTopologyLayout(graph);
   const { fitView, getInternalNode, getZoom, setCenter } = useReactFlow();
   const [hoveredId, setHoveredId] = useState<string | undefined>();
   const leaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -392,11 +395,6 @@ function MarkitectureFlow({
     [hover],
   );
 
-  const kinds = useMemo(
-    () => new Set(graph?.edges.map((e) => e.kind) ?? []),
-    [graph],
-  );
-
   return (
     <CanvasContext.Provider value={context}>
       <NodeSlotsContext.Provider value={slots}>
@@ -434,7 +432,17 @@ function MarkitectureFlow({
             {interactive && <Controls showInteractive={false} />}
             {legend && (
               <Panel position="top-right">
-                <Legend kinds={kinds} />
+                <Legend graph={graph} />
+              </Panel>
+            )}
+            {layoutError && (
+              <Panel position="bottom-center">
+                <div
+                  role="alert"
+                  className="max-w-xl rounded-lg border border-destructive/40 bg-card px-3 py-2 text-sm text-destructive shadow-sm"
+                >
+                  Could not lay out the environment: {layoutError}
+                </div>
               </Panel>
             )}
             {children}
@@ -544,27 +552,20 @@ export function ConnectionLegend({
   graph: GraphDto | undefined;
   layout?: "card" | "row";
 }) {
+  return <Legend graph={graph} layout={layout} />;
+}
+
+function Legend({
+  graph,
+  layout = "card",
+}: {
+  graph: GraphDto | undefined;
+  layout?: "card" | "row";
+}) {
   const kinds = useMemo(
     () => new Set(graph?.edges.map((e) => e.kind) ?? []),
     [graph],
   );
-  return <Legend kinds={kinds} layout={layout} />;
-}
-
-function Legend({
-  kinds,
-  layout = "card",
-}: {
-  kinds: Set<TopologyEdgeKind>;
-  layout?: "card" | "row";
-}) {
-  const order: TopologyEdgeKind[] = [
-    "access",
-    "route",
-    "authenticates",
-    "authorizes",
-    "uses",
-  ];
   const row = layout === "row";
   return (
     <div
@@ -583,29 +584,25 @@ function Legend({
       >
         Connections
       </div>
-      {order
-        .filter((k) => kinds.has(k))
-        .map((k) => {
-          const look = EDGE_STYLE[k];
-          return (
-            <div key={k} className="flex items-center gap-2 py-0.5">
-              <svg width="28" height="8" aria-hidden="true">
-                <line
-                  x1="0"
-                  y1="4"
-                  x2="28"
-                  y2="4"
-                  stroke={look.stroke}
-                  strokeWidth="2"
-                  strokeDasharray={
-                    look.dash ?? (look.animated ? "5" : undefined)
-                  }
-                />
-              </svg>
-              {look.label}
-            </div>
-          );
-        })}
+      {EDGE_KINDS.filter((k) => kinds.has(k)).map((k) => {
+        const look = EDGE_STYLE[k];
+        return (
+          <div key={k} className="flex items-center gap-2 py-0.5">
+            <svg width="28" height="8" aria-hidden="true">
+              <line
+                x1="0"
+                y1="4"
+                x2="28"
+                y2="4"
+                stroke={look.stroke}
+                strokeWidth="2"
+                strokeDasharray={look.dash ?? (look.animated ? "5" : undefined)}
+              />
+            </svg>
+            {look.label}
+          </div>
+        );
+      })}
     </div>
   );
 }

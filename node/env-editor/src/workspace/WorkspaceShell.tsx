@@ -43,11 +43,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { buildWorkspaceZip, generateCredentials } from "../artifacts/bundleZip";
+import {
+  buildWorkspaceZip,
+  downloadZip,
+  generateCredentials,
+} from "../artifacts/bundleZip";
 import { CodeViewer } from "../artifacts/CodeViewer";
 import { fileSourceOf } from "../artifacts/fileSource";
-import { downloadBlob } from "../diagram/exportImage";
 import { EnvironmentEditor } from "../EnvironmentEditor";
+import { errorMessage } from "../errors";
 import { usePlanner } from "../planner";
 import type { Bundle, CatalogDto } from "../types";
 import {
@@ -103,12 +107,19 @@ export function WorkspaceShell({
   const ws = useWorkspace();
   const workspace = ws.workspace;
   const [catalog, setCatalog] = useState<CatalogDto | undefined>(seededCatalog);
+  const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     if (seededCatalog) return;
     let cancelled = false;
-    planner.catalog().then((c) => {
-      if (!cancelled) setCatalog(c);
-    });
+    planner
+      .catalog()
+      .then((c) => {
+        if (!cancelled) setCatalog(c);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled)
+          setNotice(`Could not load the module catalog: ${errorMessage(e)}`);
+      });
     return () => {
       cancelled = true;
     };
@@ -207,10 +218,9 @@ export function WorkspaceShell({
     [envs, plans],
   );
   const failing = envs.filter((e) => plans[e.id]?.error);
-  const problemCount = conflicts.length + failing.length;
+  const problemCount = conflicts.length + failing.length + (notice ? 1 : 0);
 
   const [downloading, setDownloading] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
   const downloadWorkspace = useCallback(() => {
     if (!workspace || !catalog || !planner.bundle) return;
     const bundle = planner.bundle.bind(planner);
@@ -227,21 +237,14 @@ export function WorkspaceShell({
       ),
     )
       .then((bundles) => {
-        const zip = buildWorkspaceZip(
-          workspace.name,
-          workspaceToml(workspace),
-          bundles,
-        );
-        downloadBlob(
-          new Blob([zip as BlobPart], { type: "application/zip" }),
+        downloadZip(
+          buildWorkspaceZip(workspace.name, workspaceToml(workspace), bundles),
           `${workspace.name}.zip`,
         );
         setNotice(null);
       })
       .catch((e: unknown) =>
-        setNotice(
-          `Could not prepare the download: ${e instanceof Error ? e.message : String(e)}`,
-        ),
+        setNotice(`Could not prepare the download: ${errorMessage(e)}`),
       )
       .finally(() => setDownloading(false));
   }, [workspace, catalog, planner]);

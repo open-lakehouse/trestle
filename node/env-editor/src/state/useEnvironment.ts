@@ -4,6 +4,7 @@
 // good one on screen next to the error, so the diagram never blanks mid-edit.
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { errorMessage } from "../errors";
 import { usePlanner } from "../planner";
 import type {
   CatalogDto,
@@ -428,10 +429,4 @@ function withoutKey<T>(record: Record<string, T>, key: string) {
   if (!(key in record)) return record;
   const { [key]: _, ...rest } = record;
   return rest;
-}
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  return String(e);
 }

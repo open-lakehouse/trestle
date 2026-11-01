@@ -185,3 +185,28 @@ describe("snapshot Mermaid diagram", () => {
     expect(() => roundTrip(snapshot)).toThrow(/`mermaid` must be a string/);
   });
 });
+
+describe("snapshot title and generator", () => {
+  test("reads back the title and generator it was saved with", () => {
+    const snapshot = createGraphSnapshot(FIXTURE_PLAN.graph, {
+      title: "Lakehouse",
+      generator: "example-tool",
+    });
+    const parsed = roundTrip(snapshot);
+    expect(parsed.title).toBe("Lakehouse");
+    expect(parsed.generator).toBe("example-tool");
+  });
+
+  test("rejects a non-string title", () => {
+    const snapshot = { ...createGraphSnapshot(FIXTURE_PLAN.graph), title: 3 };
+    expect(() => roundTrip(snapshot)).toThrow(/`title` must be a string/);
+  });
+
+  test("rejects a non-string generator", () => {
+    const snapshot = {
+      ...createGraphSnapshot(FIXTURE_PLAN.graph),
+      generator: null,
+    };
+    expect(() => roundTrip(snapshot)).toThrow(/`generator` must be a string/);
+  });
+});
