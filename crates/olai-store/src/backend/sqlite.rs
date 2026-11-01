@@ -37,6 +37,7 @@ use sqlx::{Sqlite, SqliteConnection};
 use uuid::Uuid;
 
 use crate::filter::{CompareOp, Filter, Predicate};
+use crate::index::PropertyIndex;
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
@@ -46,7 +47,7 @@ use crate::store::{
 };
 use crate::{Error, Result};
 
-use super::sql_common::{InverseResolver, merge, record_err};
+use super::sql_common::{Hint, InverseResolver, distinct_paths, index_hints, merge, record_err};
 
 /// The OpenTelemetry `db.system` value for this backend's operation spans.
 const DB_SYSTEM: &str = "sqlite";
@@ -135,6 +136,7 @@ pub async fn migrate(pool: &SqlitePool) -> Result<()> {
 pub struct SqlStore<L: Label> {
     pool: SqlitePool,
     inverse: InverseResolver,
+    indexes: Arc<[PropertyIndex]>,
     _label: std::marker::PhantomData<L>,
 }
 
@@ -156,6 +158,7 @@ impl<L: Label> SqlStore<L> {
         Self {
             pool,
             inverse: Arc::new(|_| None),
+            indexes: Arc::from([]),
             _label: std::marker::PhantomData,
         }
     }
@@ -183,6 +186,43 @@ impl<L: Label> SqlStore<L> {
     ) -> Self {
         self.inverse = Arc::new(resolver);
         self
+    }
+
+    /// Use `indexes` to serve string comparisons in [`search`](ObjectStoreReader::search).
+    /// Chainable onto either constructor.
+    ///
+    /// This only changes the SQL `search` emits. The indexes themselves are created by
+    /// [`ensure_property_indexes`](Self::ensure_property_indexes); until then the queries are
+    /// still correct, just unindexed. See [`crate::index`].
+    #[must_use]
+    pub fn with_property_indexes(
+        mut self,
+        indexes: impl IntoIterator<Item = PropertyIndex>,
+    ) -> Self {
+        self.indexes = indexes.into_iter().collect();
+        self
+    }
+
+    /// Create the expression index for every declared property path, if it doesn't exist yet.
+    ///
+    /// Like [`migrate`], this is DDL and an explicit step: [`connect`](Self::connect) never
+    /// runs it. It is idempotent. Labels that declare the same path share one
+    /// `(label, json_extract(properties, '$.<path>'))` index, and indexes for paths no longer
+    /// declared are left in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if creating an index fails.
+    pub async fn ensure_property_indexes(&self) -> Result<()> {
+        for idx in distinct_paths(&self.indexes) {
+            let ddl = format!(
+                r#"CREATE INDEX IF NOT EXISTS "{}" ON objects (label, {})"#,
+                idx.index_name(),
+                index_expr(idx)
+            );
+            sqlx::query(&ddl).execute(&self.pool).await?;
+        }
+        Ok(())
     }
 
     /// Open a migrated in-memory SQLite database (handy for tests).
@@ -570,6 +610,84 @@ fn bind_comparand(qb: &mut sqlx::QueryBuilder<'_, Sqlite>, value: &serde_json::V
     }
 }
 
+/// The indexed expression for a declared property path: `json_extract(properties, '$.a.b')`.
+///
+/// Shared by [`SqlStore::ensure_property_indexes`] and [`push_hint`], because SQLite only uses
+/// an expression index when the query repeats the expression exactly. The path is written as a
+/// literal; [`PropertyIndex::new`] has validated every segment as an identifier.
+fn index_expr(idx: &PropertyIndex) -> String {
+    format!("json_extract(properties, '{}')", json_path(idx.path()))
+}
+
+/// Emit an index hint as `json_extract(properties, '$.k') <op> ?` or `… IN (?, …)`. SQLite's
+/// default BINARY collation compares text bytewise, matching the reference evaluator.
+fn push_hint(qb: &mut sqlx::QueryBuilder<'_, Sqlite>, hint: &Hint<'_>) {
+    match hint {
+        Hint::Cmp { index, op, value } => {
+            qb.push(index_expr(index));
+            qb.push(" ");
+            qb.push(sql_op(*op));
+            qb.push(" ");
+            qb.push_bind(value.to_string());
+        }
+        Hint::In { index, values } => {
+            qb.push(index_expr(index));
+            qb.push(" IN (");
+            let mut list = qb.separated(", ");
+            for v in values {
+                list.push_bind(v.to_string());
+            }
+            qb.push(")");
+        }
+    }
+}
+
+/// Build the pushed-down search query, after `prefix` (empty, or `EXPLAIN QUERY PLAN ` in tests).
+///
+/// `WHERE label = ? AND <index hints> AND <filter>`: the hints are implied by the filter, so
+/// they only steer the planner onto a declared [`PropertyIndex`]. Without a namespace, SQL pages
+/// directly: bounded by the keyset cursor, over-fetching one row to detect "has more". With a
+/// namespace, every filter-matching row is fetched and paged after the Rust prefix filter (the
+/// prefix can't be pushed and must not run behind a `LIMIT`).
+///
+/// Precondition: `is_pushable(filter)` is `true`.
+fn search_query<'a, L: Label>(
+    prefix: &str,
+    label: L,
+    namespace: Option<&ResourceName>,
+    filter: &'a Filter,
+    indexes: &'a [PropertyIndex],
+    cursor: Option<Uuid>,
+    max_results: Option<usize>,
+) -> sqlx::QueryBuilder<'a, Sqlite> {
+    let mut qb = sqlx::QueryBuilder::<Sqlite>::new(prefix);
+    qb.push(
+        r#"SELECT id, label, name, properties, version, created_at, updated_at
+           FROM objects WHERE label = "#,
+    );
+    qb.push_bind(label.as_str().to_string());
+    for hint in index_hints(filter, label.as_str(), indexes) {
+        qb.push(" AND ");
+        push_hint(&mut qb, &hint);
+    }
+    qb.push(" AND ");
+    build_where(&mut qb, filter);
+    if namespace.is_none()
+        && let Some(k) = cursor
+    {
+        qb.push(" AND id > ");
+        qb.push_bind(k.hyphenated().to_string());
+    }
+    qb.push(" ORDER BY id");
+    if namespace.is_none() {
+        let limit = max_results.unwrap_or(usize::MAX);
+        let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
+        qb.push(" LIMIT ");
+        qb.push_bind(fetch);
+    }
+    qb
+}
+
 /// Search objects by payload, pushing the filter into SQL when it translates faithfully.
 ///
 /// - Fully pushable **and** no namespace: a single `WHERE label = ? AND <filter>` query with
@@ -584,6 +702,7 @@ async fn op_search_objects<L: Label>(
     label: L,
     namespace: Option<&ResourceName>,
     filter: &Filter,
+    indexes: &[PropertyIndex],
     max_results: Option<usize>,
     page_token: Option<String>,
 ) -> Result<(Vec<Object<L>>, Option<String>)> {
@@ -606,32 +725,7 @@ async fn op_search_objects<L: Label>(
         ));
     }
 
-    let limit = max_results.unwrap_or(usize::MAX);
-    let label_s = label.as_str().to_string();
-
-    let mut qb = sqlx::QueryBuilder::<Sqlite>::new(
-        r#"SELECT id, label, name, properties, version, created_at, updated_at
-           FROM objects WHERE label = "#,
-    );
-    qb.push_bind(label_s);
-    qb.push(" AND ");
-    build_where(&mut qb, filter);
-    // Without a namespace, SQL can page directly: bound by the keyset cursor and over-fetch one
-    // row to detect "has more". With a namespace, fetch every filter-matching row and page after
-    // the Rust prefix filter (the prefix can't be pushed and must not run behind a `LIMIT`).
-    if namespace.is_none()
-        && let Some(k) = cursor
-    {
-        qb.push(" AND id > ");
-        qb.push_bind(k.hyphenated().to_string());
-    }
-    qb.push(" ORDER BY id");
-    if namespace.is_none() {
-        let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
-        qb.push(" LIMIT ");
-        qb.push_bind(fetch);
-    }
-
+    let mut qb = search_query("", label, namespace, filter, indexes, cursor, max_results);
     let rows = qb.build().fetch_all(conn).await?;
     let mut objects = rows
         .into_iter()
@@ -1222,8 +1316,16 @@ impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut conn = self.pool.acquire().await?;
-        let out =
-            op_search_objects(&mut conn, label, namespace, filter, max_results, page_token).await;
+        let out = op_search_objects(
+            &mut conn,
+            label,
+            namespace,
+            filter,
+            &self.indexes,
+            max_results,
+            page_token,
+        )
+        .await;
         record_err(&out);
         out
     }
@@ -1500,6 +1602,7 @@ impl<L: Label> AssociationStore<L> for SqlStore<L> {
 pub struct SqlTx<L: Label> {
     tx: tokio::sync::Mutex<sqlx::Transaction<'static, Sqlite>>,
     inverse: InverseResolver,
+    indexes: Arc<[PropertyIndex]>,
     _label: std::marker::PhantomData<L>,
 }
 
@@ -1566,6 +1669,42 @@ impl<L: Label> ObjectStoreReader<L> for SqlTx<L> {
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut tx = self.tx.lock().await;
         let out = op_list_objects(&mut tx, label, namespace, max_results, page_token).await;
+        record_err(&out);
+        out
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.search",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "search",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
+    async fn search(
+        &self,
+        label: L,
+        namespace: Option<&ResourceName>,
+        filter: &Filter,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<(Vec<Object<L>>, Option<String>)> {
+        let mut tx = self.tx.lock().await;
+        let out = op_search_objects(
+            &mut tx,
+            label,
+            namespace,
+            filter,
+            &self.indexes,
+            max_results,
+            page_token,
+        )
+        .await;
         record_err(&out);
         out
     }
@@ -1854,6 +1993,7 @@ impl<L: Label> Transactional<L> for SqlStore<L> {
         let handle = SqlTx::<L> {
             tx: tokio::sync::Mutex::new(tx),
             inverse: self.inverse.clone(),
+            indexes: self.indexes.clone(),
             _label: std::marker::PhantomData,
         };
         match f(&handle).await {
@@ -1882,6 +2022,7 @@ impl<L: Label> Transactional<L> for SqlStore<L> {
         Ok(Box::new(SqlTx::<L> {
             tx: tokio::sync::Mutex::new(tx),
             inverse: self.inverse.clone(),
+            indexes: self.indexes.clone(),
             _label: std::marker::PhantomData,
         }))
     }
@@ -1905,6 +2046,7 @@ mod tests {
         conformance::transaction_commit(&fresh().await).await;
         conformance::sensitive_blob_roundtrip(&fresh().await).await;
         conformance::search_object_predicates(&fresh().await).await;
+        conformance::search_indexed_path_shapes(&fresh().await).await;
         conformance::search_object_pagination_filters_completely(&fresh().await).await;
         conformance::search_namespace_and_filter(&fresh().await).await;
         conformance::edge_filter_predicates(&fresh().await).await;
@@ -1927,6 +2069,138 @@ mod tests {
             .unwrap()
             .with_inverse(conformance::parent_child_inverse);
         conformance::inverse_edges(&inv).await;
+    }
+
+    /// The paths the search conformance checks compare strings on, declared for `Node`.
+    fn conformance_indexes() -> Vec<PropertyIndex> {
+        ["location_key", "owner", "state"]
+            .into_iter()
+            .map(|p| PropertyIndex::new(ConformanceLabel::Node, p).unwrap())
+            .collect()
+    }
+
+    async fn fresh_indexed() -> SqlStore<ConformanceLabel> {
+        let store = fresh().await.with_property_indexes(conformance_indexes());
+        store.ensure_property_indexes().await.unwrap();
+        store
+    }
+
+    /// Declared indexes change the emitted SQL but never the results.
+    #[tokio::test]
+    async fn indexed_store_passes_search_conformance() {
+        conformance::search_object_predicates(&fresh_indexed().await).await;
+        conformance::search_indexed_path_shapes(&fresh_indexed().await).await;
+        conformance::search_object_pagination_filters_completely(&fresh_indexed().await).await;
+        conformance::search_namespace_and_filter(&fresh_indexed().await).await;
+        conformance::search_fallback_predicates_agree(&fresh_indexed().await).await;
+    }
+
+    #[tokio::test]
+    async fn ensure_property_indexes_is_idempotent() {
+        let store = fresh_indexed().await;
+        store.ensure_property_indexes().await.unwrap();
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'objects_prop_%' ORDER BY name",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            names,
+            [
+                "objects_prop_location_key",
+                "objects_prop_owner",
+                "objects_prop_state"
+            ]
+        );
+    }
+
+    /// A transaction's search pushes down (with hints) rather than scanning in Rust.
+    #[tokio::test]
+    async fn transaction_search_uses_pushdown() {
+        let store = fresh_indexed().await;
+        for (name, key) in [("a", "s3://b/a/"), ("b", "s3://c/")] {
+            store
+                .create(
+                    ConformanceLabel::Node,
+                    &name.parse().unwrap(),
+                    Some(serde_json::json!({ "location_key": key })),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let tx = store.begin().await.unwrap();
+        let (hits, _) = tx
+            .search(
+                ConformanceLabel::Node,
+                None,
+                &Filter::eq("location_key", "s3://c/"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name.to_string(), "b");
+        tx.rollback().await.unwrap();
+    }
+
+    /// The `search` SQL and its `EXPLAIN QUERY PLAN` detail for `filter` on `label`.
+    async fn search_plan(
+        store: &SqlStore<ConformanceLabel>,
+        label: ConformanceLabel,
+        filter: &Filter,
+    ) -> (String, String) {
+        use sqlx::Row;
+        let mut qb = search_query(
+            "EXPLAIN QUERY PLAN ",
+            label,
+            None,
+            filter,
+            &store.indexes,
+            None,
+            None,
+        );
+        let sql = qb.sql().to_owned();
+        let rows = qb.build().fetch_all(&store.pool).await.unwrap();
+        let plan = rows
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        (sql, plan)
+    }
+
+    /// The three shapes mangrove issues on `location_key` (exact, IN-list, prefix range) are
+    /// served by the declared index; an undeclared label gets no hint.
+    #[tokio::test]
+    async fn declared_paths_use_their_index() {
+        let store = fresh_indexed().await;
+        let expr = "json_extract(properties, '$.location_key')";
+        for filter in [
+            Filter::eq("location_key", "s3://b/a/"),
+            Filter::any([
+                Filter::eq("location_key", "s3://b/"),
+                Filter::eq("location_key", "s3://b/a/"),
+            ]),
+            Filter::all([
+                Filter::ge("location_key", "s3://b/a/"),
+                Filter::lt("location_key", "s3://b/a0"),
+            ]),
+        ] {
+            let (sql, plan) = search_plan(&store, ConformanceLabel::Node, &filter).await;
+            assert!(sql.contains(expr), "{sql}");
+            assert!(
+                plan.contains("USING INDEX objects_prop_location_key (label=? AND"),
+                "{filter:?} plan: {plan}"
+            );
+        }
+
+        let filter = Filter::eq("location_key", "s3://b/a/");
+        let (sql, _) = search_plan(&store, ConformanceLabel::Other, &filter).await;
+        assert!(!sql.contains(expr), "undeclared label got a hint: {sql}");
     }
 
     /// A stale-version conditional write is disambiguated as a conflict and surfaced as a

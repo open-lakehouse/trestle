@@ -72,6 +72,25 @@ envelope encryption; pluggable `KeyProvider` for a local KEK or a cloud KMS) and
 stored — atomically with the object — in a nullable `sensitive` blob column.
 See the rustdoc for the full API.
 
+## Indexed property paths
+
+`search` pushes filters into SQL, but by default no index can serve them. To make
+string lookups on a hot payload field indexable, declare it per label on
+`SqlStore` / `PgStore`, then create the indexes as an explicit step, like
+migrations:
+
+```rust,ignore
+use olai_store::PropertyIndex;
+
+let store = PgStore::connect(pool)
+    .with_property_indexes([PropertyIndex::new(Kind::Table, "location_key")?]);
+store.ensure_property_indexes().await?; // idempotent CREATE INDEX IF NOT EXISTS
+```
+
+Exact matches, `Or` lists of `eq`, and ranges (`ge` + `lt`, e.g. a bytewise
+prefix) on a declared path then use a `(label, <path expression>)` index.
+Results don't change; only the query plan does.
+
 ## License
 
 Apache-2.0

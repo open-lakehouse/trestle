@@ -51,8 +51,9 @@ use sqlx::types::Json;
 use sqlx::{PgConnection, Postgres};
 use uuid::Uuid;
 
-use super::sql_common::{InverseResolver, merge, record_err};
+use super::sql_common::{Hint, InverseResolver, distinct_paths, index_hints, merge, record_err};
 use crate::filter::{CompareOp, Filter, Predicate};
+use crate::index::PropertyIndex;
 use crate::label::Label;
 use crate::name::ResourceName;
 use crate::object::{Association, Object};
@@ -134,6 +135,7 @@ pub async fn migrate(pool: &PgPool) -> Result<()> {
 pub struct PgStore<L: Label> {
     pool: PgPool,
     inverse: InverseResolver,
+    indexes: std::sync::Arc<[PropertyIndex]>,
     _label: std::marker::PhantomData<L>,
 }
 
@@ -153,6 +155,7 @@ impl<L: Label> PgStore<L> {
         Self {
             pool,
             inverse: std::sync::Arc::new(|_| None),
+            indexes: std::sync::Arc::from([]),
             _label: std::marker::PhantomData,
         }
     }
@@ -179,6 +182,47 @@ impl<L: Label> PgStore<L> {
     ) -> Self {
         self.inverse = std::sync::Arc::new(resolver);
         self
+    }
+
+    /// Use `indexes` to serve string comparisons in [`search`](ObjectStoreReader::search).
+    /// Chainable onto either constructor.
+    ///
+    /// This only changes the SQL `search` emits. The indexes themselves are created by
+    /// [`ensure_property_indexes`](Self::ensure_property_indexes); until then the queries are
+    /// still correct, just unindexed. See [`crate::index`].
+    #[must_use]
+    pub fn with_property_indexes(
+        mut self,
+        indexes: impl IntoIterator<Item = PropertyIndex>,
+    ) -> Self {
+        self.indexes = indexes.into_iter().collect();
+        self
+    }
+
+    /// Create the expression index for every declared property path, if it doesn't exist yet.
+    ///
+    /// Like [`migrate`], this is DDL and an explicit step: [`connect`](Self::connect) never
+    /// runs it. It is idempotent. Labels that declare the same path share one
+    /// `(label, ((properties #>> '{<path>}') COLLATE "C"))` btree index, and indexes for paths
+    /// no longer declared are left in place.
+    ///
+    /// The index is built with a plain `CREATE INDEX`, which blocks writes to `objects` while it
+    /// builds. On a large live table, create it yourself with `CREATE INDEX CONCURRENTLY` and the
+    /// same name and expression first; this call then finds it and does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend error if creating an index fails.
+    pub async fn ensure_property_indexes(&self) -> Result<()> {
+        for idx in distinct_paths(&self.indexes) {
+            let ddl = format!(
+                r#"CREATE INDEX IF NOT EXISTS "{}" ON objects (label, {})"#,
+                idx.index_name(),
+                index_expr(idx)
+            );
+            sqlx::query(&ddl).execute(&self.pool).await?;
+        }
+        Ok(())
     }
 }
 
@@ -538,6 +582,85 @@ fn bind_comparison(
     }
 }
 
+/// The indexed expression for a declared property path: `((properties #>> '{a,b}') COLLATE "C")`.
+///
+/// Shared by [`PgStore::ensure_property_indexes`] and [`push_hint`], because the planner only
+/// matches an expression index when the query repeats the expression, with the path as a
+/// constant rather than a bound `text[]`. [`PropertyIndex::new`] has validated every segment as
+/// an identifier, so the array literal needs no quoting. `COLLATE "C"` gives the bytewise order
+/// the reference evaluator uses (see [`bind_comparison`]).
+fn index_expr(idx: &PropertyIndex) -> String {
+    format!(
+        r#"((properties #>> '{{{}}}') COLLATE "C")"#,
+        idx.path().segments().join(",")
+    )
+}
+
+/// Emit an index hint as `<index_expr> <op> $n`, or `<index_expr> = ANY($n)` with a `text[]`.
+fn push_hint(qb: &mut sqlx::QueryBuilder<'_, Postgres>, hint: &Hint<'_>) {
+    match hint {
+        Hint::Cmp { index, op, value } => {
+            qb.push(index_expr(index));
+            qb.push(" ");
+            qb.push(sql_op(*op));
+            qb.push(" ");
+            qb.push_bind(value.to_string());
+        }
+        Hint::In { index, values } => {
+            qb.push(index_expr(index));
+            qb.push(" = ANY(");
+            qb.push_bind(values.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+            qb.push(")");
+        }
+    }
+}
+
+/// Build the pushed-down search query, after `prefix` (empty, or `EXPLAIN ` in tests).
+///
+/// `WHERE label = $1 AND <index hints> AND <filter>`: the hints are implied by the filter, so
+/// they only steer the planner onto a declared [`PropertyIndex`]. Without a namespace, SQL pages
+/// directly: bounded by the keyset cursor (a native `uuid`), over-fetching one row to detect
+/// "has more". With a namespace, every filter-matching row is fetched and paged after the Rust
+/// prefix filter.
+///
+/// Precondition: `is_pushable(filter)` is `true`.
+fn search_query<'a, L: Label>(
+    prefix: &str,
+    label: L,
+    namespace: Option<&ResourceName>,
+    filter: &'a Filter,
+    indexes: &'a [PropertyIndex],
+    cursor: Option<Uuid>,
+    max_results: Option<usize>,
+) -> sqlx::QueryBuilder<'a, Postgres> {
+    let mut qb = sqlx::QueryBuilder::<Postgres>::new(prefix);
+    qb.push(
+        r#"SELECT id, label, name, properties, version, created_at, updated_at
+           FROM objects WHERE label = "#,
+    );
+    qb.push_bind(label.as_str().to_string());
+    for hint in index_hints(filter, label.as_str(), indexes) {
+        qb.push(" AND ");
+        push_hint(&mut qb, &hint);
+    }
+    qb.push(" AND ");
+    build_where(&mut qb, filter);
+    if namespace.is_none()
+        && let Some(k) = cursor
+    {
+        qb.push(" AND id > ");
+        qb.push_bind(k);
+    }
+    qb.push(" ORDER BY id");
+    if namespace.is_none() {
+        let limit = max_results.unwrap_or(usize::MAX);
+        let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
+        qb.push(" LIMIT ");
+        qb.push_bind(fetch);
+    }
+    qb
+}
+
 /// Search objects by payload, pushing the filter into SQL when it translates faithfully.
 /// Mirrors the SQLite backend's `op_search_objects` structure; only the emitted SQL differs.
 async fn op_search_objects<L: Label>(
@@ -545,6 +668,7 @@ async fn op_search_objects<L: Label>(
     label: L,
     namespace: Option<&ResourceName>,
     filter: &Filter,
+    indexes: &[PropertyIndex],
     max_results: Option<usize>,
     page_token: Option<String>,
 ) -> Result<(Vec<Object<L>>, Option<String>)> {
@@ -567,32 +691,7 @@ async fn op_search_objects<L: Label>(
         ));
     }
 
-    let limit = max_results.unwrap_or(usize::MAX);
-    let label_s = label.as_str().to_string();
-
-    let mut qb = sqlx::QueryBuilder::<Postgres>::new(
-        r#"SELECT id, label, name, properties, version, created_at, updated_at
-           FROM objects WHERE label = "#,
-    );
-    qb.push_bind(label_s);
-    qb.push(" AND ");
-    build_where(&mut qb, filter);
-    // Without a namespace, SQL can page directly: bound by the keyset cursor (a native `uuid`)
-    // and over-fetch one row to detect "has more". With a namespace, fetch every filter-matching
-    // row and page after the Rust prefix filter.
-    if namespace.is_none()
-        && let Some(k) = cursor
-    {
-        qb.push(" AND id > ");
-        qb.push_bind(k);
-    }
-    qb.push(" ORDER BY id");
-    if namespace.is_none() {
-        let fetch = limit.saturating_add(1).min(i64::MAX as usize) as i64;
-        qb.push(" LIMIT ");
-        qb.push_bind(fetch);
-    }
-
+    let mut qb = search_query("", label, namespace, filter, indexes, cursor, max_results);
     let rows = qb.build().fetch_all(conn).await?;
     let mut objects = rows
         .into_iter()
@@ -1162,8 +1261,16 @@ impl<L: Label> ObjectStoreReader<L> for PgStore<L> {
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut conn = self.pool.acquire().await?;
-        let out =
-            op_search_objects(&mut conn, label, namespace, filter, max_results, page_token).await;
+        let out = op_search_objects(
+            &mut conn,
+            label,
+            namespace,
+            filter,
+            &self.indexes,
+            max_results,
+            page_token,
+        )
+        .await;
         record_err(&out);
         out
     }
@@ -1392,6 +1499,7 @@ impl<L: Label> AssociationStore<L> for PgStore<L> {
 pub struct PgTx<L: Label> {
     tx: tokio::sync::Mutex<sqlx::Transaction<'static, Postgres>>,
     inverse: InverseResolver,
+    indexes: std::sync::Arc<[PropertyIndex]>,
     _label: std::marker::PhantomData<L>,
 }
 
@@ -1465,8 +1573,16 @@ impl<L: Label> ObjectStoreReader<L> for PgTx<L> {
         page_token: Option<String>,
     ) -> Result<(Vec<Object<L>>, Option<String>)> {
         let mut tx = self.tx.lock().await;
-        let out =
-            op_search_objects(&mut tx, label, namespace, filter, max_results, page_token).await;
+        let out = op_search_objects(
+            &mut tx,
+            label,
+            namespace,
+            filter,
+            &self.indexes,
+            max_results,
+            page_token,
+        )
+        .await;
         record_err(&out);
         out
     }
@@ -1707,6 +1823,7 @@ impl<L: Label> Transactional<L> for PgStore<L> {
         let handle = PgTx::<L> {
             tx: tokio::sync::Mutex::new(tx),
             inverse: self.inverse.clone(),
+            indexes: self.indexes.clone(),
             _label: std::marker::PhantomData,
         };
         match f(&handle).await {
@@ -1735,6 +1852,7 @@ impl<L: Label> Transactional<L> for PgStore<L> {
         Ok(Box::new(PgTx::<L> {
             tx: tokio::sync::Mutex::new(tx),
             inverse: self.inverse.clone(),
+            indexes: self.indexes.clone(),
             _label: std::marker::PhantomData,
         }))
     }
@@ -1795,6 +1913,7 @@ mod tests {
         conformance::transaction_commit(&fresh(&pool).await).await;
         conformance::sensitive_blob_roundtrip(&fresh(&pool).await).await;
         conformance::search_object_predicates(&fresh(&pool).await).await;
+        conformance::search_indexed_path_shapes(&fresh(&pool).await).await;
         conformance::search_object_pagination_filters_completely(&fresh(&pool).await).await;
         conformance::search_namespace_and_filter(&fresh(&pool).await).await;
         conformance::edge_filter_predicates(&fresh(&pool).await).await;
@@ -1812,5 +1931,137 @@ mod tests {
         let inv = PgStore::<ConformanceLabel>::connect(pool.clone())
             .with_inverse(conformance::parent_child_inverse);
         conformance::inverse_edges(&inv).await;
+
+        // Declared property indexes change the SQL but never the results. These share the
+        // database with the checks above, so they run in this test rather than in parallel.
+        conformance::search_object_predicates(&fresh_indexed(&pool).await).await;
+        conformance::search_indexed_path_shapes(&fresh_indexed(&pool).await).await;
+        conformance::search_object_pagination_filters_completely(&fresh_indexed(&pool).await).await;
+        conformance::search_namespace_and_filter(&fresh_indexed(&pool).await).await;
+        conformance::search_fallback_predicates_agree(&fresh_indexed(&pool).await).await;
+        transaction_search_uses_hints(&fresh_indexed(&pool).await).await;
+        declared_paths_use_their_index(&fresh_indexed(&pool).await).await;
+    }
+
+    /// The paths the search conformance checks compare strings on, declared for `Node`.
+    fn conformance_indexes() -> Vec<PropertyIndex> {
+        ["location_key", "owner", "state"]
+            .into_iter()
+            .map(|p| PropertyIndex::new(ConformanceLabel::Node, p).unwrap())
+            .collect()
+    }
+
+    async fn fresh_indexed(pool: &PgPool) -> PgStore<ConformanceLabel> {
+        let store = fresh(pool)
+            .await
+            .with_property_indexes(conformance_indexes());
+        // Twice: the second run must be a no-op.
+        store.ensure_property_indexes().await.unwrap();
+        store.ensure_property_indexes().await.unwrap();
+        store
+    }
+
+    async fn transaction_search_uses_hints(store: &PgStore<ConformanceLabel>) {
+        for (name, key) in [("a", "s3://b/a/"), ("b", "s3://c/")] {
+            store
+                .create(
+                    ConformanceLabel::Node,
+                    &name.parse().unwrap(),
+                    Some(serde_json::json!({ "location_key": key })),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let tx = store.begin().await.unwrap();
+        let (hits, _) = tx
+            .search(
+                ConformanceLabel::Node,
+                None,
+                &Filter::any([
+                    Filter::eq("location_key", "s3://c/"),
+                    Filter::eq("location_key", "s3://x/"),
+                ]),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name.to_string(), "b");
+        tx.rollback().await.unwrap();
+    }
+
+    /// The three shapes mangrove issues on `location_key` (exact, IN-list, prefix range) are
+    /// served by the declared index, under both custom and generic plans (the label is a bound
+    /// parameter, which is why the index is `(label, expr)` rather than partial). An undeclared
+    /// label gets no hint.
+    async fn declared_paths_use_their_index(store: &PgStore<ConformanceLabel>) {
+        use sqlx::Row;
+        let expr = r#"((properties #>> '{location_key}') COLLATE "C")"#;
+        let mut conn = store.pool.acquire().await.unwrap();
+        // The table is tiny; without this the planner rightly prefers a sequential scan.
+        sqlx::query("SET enable_seqscan = off")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        for mode in ["force_custom_plan", "force_generic_plan"] {
+            sqlx::query(&format!("SET plan_cache_mode = {mode}"))
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            for filter in [
+                Filter::eq("location_key", "s3://b/a/"),
+                Filter::any([
+                    Filter::eq("location_key", "s3://b/"),
+                    Filter::eq("location_key", "s3://b/a/"),
+                ]),
+                Filter::all([
+                    Filter::ge("location_key", "s3://b/a/"),
+                    Filter::lt("location_key", "s3://b/a0"),
+                ]),
+            ] {
+                let mut qb = search_query(
+                    "EXPLAIN ",
+                    ConformanceLabel::Node,
+                    None,
+                    &filter,
+                    &store.indexes,
+                    None,
+                    None,
+                );
+                assert!(qb.sql().contains(expr), "{}", qb.sql());
+                let plan = qb
+                    .build()
+                    .fetch_all(&mut *conn)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.get::<String, _>(0))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                // The index must be probed on the expression, not just on its `label` prefix.
+                assert!(
+                    plan.contains("objects_prop_location_key")
+                        && plan
+                            .lines()
+                            .any(|l| l.contains("Index Cond") && l.contains("location_key")),
+                    "{mode} {filter:?} plan: {plan}"
+                );
+            }
+        }
+
+        let filter = Filter::eq("location_key", "s3://b/a/");
+        let qb = search_query(
+            "",
+            ConformanceLabel::Other,
+            None,
+            &filter,
+            &store.indexes,
+            None,
+            None,
+        );
+        assert!(!qb.sql().contains(expr), "undeclared label got a hint");
     }
 }
