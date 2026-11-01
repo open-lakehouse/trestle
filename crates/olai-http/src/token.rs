@@ -17,6 +17,10 @@
 
 use std::future::Future;
 use std::time::{Duration, Instant};
+
+use base64::Engine;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tokio::sync::Mutex;
 
 /// A temporary authentication token with an associated expiry
@@ -27,6 +31,29 @@ pub struct TemporaryToken<T> {
     /// The instant at which this credential is no longer valid
     /// None means the credential does not expire
     pub expiry: Option<Instant>,
+}
+
+/// The instant `expires` falls at, or now if it has already passed.
+pub(crate) fn expiry_from(expires: DateTime<Utc>) -> Instant {
+    Instant::now() + (expires - Utc::now()).to_std().unwrap_or_default()
+}
+
+/// The `exp` claim of `token` in seconds since the Unix epoch, if `token` is a JWT
+/// with one.
+///
+/// The signature is not verified: the expiry only decides when to refresh.
+pub(crate) fn jwt_exp_secs(token: &str) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct Claims {
+        exp: u64,
+    }
+    let payload = token.split('.').nth(1)?;
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice::<Claims>(&claims)
+        .ok()
+        .map(|claims| claims.exp)
 }
 
 /// Thread-safe cache for a [`TemporaryToken`] that proactively refreshes before
@@ -85,10 +112,11 @@ impl<T: Clone + Send> TokenCache<T> {
         if let Some((cached, fetched_at)) = locked.as_ref() {
             match cached.expiry {
                 Some(ttl) => {
-                    if ttl.checked_duration_since(now).unwrap_or_default() > self.min_ttl ||
+                    let remaining = ttl.checked_duration_since(now);
+                    if remaining.unwrap_or_default() > self.min_ttl ||
                         // if we've recently attempted to fetch this token and it's not actually
                         // expired, we'll wait to re-fetch it and return the cached one
-                        (fetched_at.elapsed() < self.fetch_backoff && ttl.checked_duration_since(now).is_some())
+                        (fetched_at.elapsed() < self.fetch_backoff && remaining.is_some())
                     {
                         return Ok(cached.token.clone());
                     }

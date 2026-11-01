@@ -17,7 +17,6 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Buf;
@@ -31,7 +30,7 @@ use url::Url;
 
 use crate::retry::RetryExt;
 use crate::service::HttpService;
-use crate::token::{TemporaryToken, TokenCache};
+use crate::token::{TemporaryToken, TokenCache, expiry_from};
 use crate::util::{hex_digest, hex_encode, hmac_sha256};
 use crate::{CredentialProvider, Result, RetryConfig, TokenProvider};
 
@@ -526,11 +525,10 @@ async fn instance_creds(
         .json()
         .await?;
 
-    let now = Utc::now();
-    let ttl = (creds.expiration - now).to_std().unwrap_or_default();
+    let expiry = expiry_from(creds.expiration);
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Some(Instant::now() + ttl),
+        expiry: Some(expiry),
     })
 }
 
@@ -635,10 +633,10 @@ async fn assume_role(
         &params,
     )
     .await?;
-    let ttl = (expiration - Utc::now()).to_std().unwrap_or_default();
+    let expiry = expiry_from(expiration);
     Ok(TemporaryToken {
         token: Arc::new(credential),
-        expiry: Some(Instant::now() + ttl),
+        expiry: Some(expiry),
     })
 }
 
@@ -781,12 +779,11 @@ async fn web_identity(
         .map_err(|e| format!("Invalid AssumeRoleWithWebIdentity response: {e}"))?;
 
     let creds = resp.assume_role_with_web_identity_result.credentials;
-    let now = Utc::now();
-    let ttl = (creds.expiration - now).to_std().unwrap_or_default();
+    let expiry = expiry_from(creds.expiration);
 
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Some(Instant::now() + ttl),
+        expiry: Some(expiry),
     })
 }
 
@@ -859,11 +856,10 @@ async fn task_credential(
 
     let creds: InstanceCredentials = req.send_retry(retry, service.clone()).await?.json().await?;
 
-    let now = Utc::now();
-    let ttl = (creds.expiration - now).to_std().unwrap_or_default();
+    let expiry = expiry_from(creds.expiration);
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
-        expiry: Some(Instant::now() + ttl),
+        expiry: Some(expiry),
     })
 }
 

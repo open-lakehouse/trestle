@@ -27,7 +27,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use base64::Engine;
 use reqwest::header::{ACCEPT, HeaderValue};
 use reqwest::{Client, Method};
 use serde::Deserialize;
@@ -37,11 +36,13 @@ use crate::azure::credential::{
     AzureCliCredential, AzureCredential, ClientSecretOAuthProvider, ImdsManagedIdentityProvider,
     WorkloadIdentityOAuthProvider,
 };
+use crate::error::generic;
 use crate::gcp::credential::{ServiceAccountCredentials, ServiceAccountKey};
 use crate::retry::RetryExt;
 use crate::service::{HttpService, make_service};
+use crate::token::jwt_exp_secs;
 use crate::{
-    ClientOptions, CredentialProvider, Error, Result, RetryConfig, StaticCredentialProvider,
+    ClientOptions, CredentialProvider, Result, RetryConfig, StaticCredentialProvider,
     TemporaryToken, TokenCredentialProvider, TokenProvider,
 };
 
@@ -741,30 +742,15 @@ impl CredentialProvider for LocalTokenProvider {
 }
 
 /// The `exp` of a JWT as an [`Instant`], if `token` is a JWT with one.
-///
-/// The signature is not verified: the expiry only decides when to refresh.
 fn jwt_expiry(token: &str) -> Option<Instant> {
-    #[derive(Deserialize)]
-    struct Claims {
-        exp: u64,
-    }
-    let payload = token.split('.').nth(1)?;
-    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload.trim_end_matches('='))
-        .ok()?;
-    let exp = serde_json::from_slice::<Claims>(&claims).ok()?.exp;
+    let exp = jwt_exp_secs(token)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     Some(Instant::now() + Duration::from_secs(exp.saturating_sub(now)))
 }
 
-fn generic(message: impl Into<String>) -> Error {
-    Error::Generic {
-        source: message.into().into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
     use mockito::Matcher;
 
     use super::*;

@@ -868,11 +868,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_response_recording() {
-        // Create a temporary directory for recordings
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_path_buf();
 
-        // Set up a mock server
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/test")
@@ -882,20 +880,16 @@ mod tests {
             .create_async()
             .await;
 
-        // Create a cloud client with recording enabled
         let mut client = CloudClient::new_unauthenticated();
         client.set_recording_dir(temp_path.clone()).unwrap();
 
-        // Make a request
         let url = format!("{}/test", server.url());
         let response = client.get(&url).send().await.unwrap();
 
-        // Verify the response is correct
         assert_eq!(response.status(), 200);
         let body = response.text().await.unwrap();
         assert_eq!(body, r#"{"message": "Hello, World!"}"#);
 
-        // Verify that a recording file was created
         let recordings: Vec<_> = fs::read_dir(&temp_path)
             .unwrap()
             .filter_map(|entry| {
@@ -911,16 +905,13 @@ mod tests {
 
         assert_eq!(recordings.len(), 1, "Expected exactly one recording file");
 
-        // Read and verify the recording content
         let recording_content = fs::read_to_string(&recordings[0]).unwrap();
         let recording: RequestResponseInfo = serde_json::from_str(&recording_content).unwrap();
 
-        // Verify request information
         assert_eq!(recording.request.method, "GET");
         assert_eq!(recording.request.url_path, "/test");
         assert_eq!(recording.request.body, None);
 
-        // Verify response information
         assert_eq!(recording.response.status, 200);
         assert_eq!(
             recording.response.headers.get("content-type").unwrap(),
@@ -936,11 +927,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_recording_with_request_body() {
-        // Create a temporary directory for recordings
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_path_buf();
 
-        // Set up a mock server
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/create")
@@ -950,11 +939,9 @@ mod tests {
             .create_async()
             .await;
 
-        // Create a cloud client with recording enabled
         let mut client = CloudClient::new_unauthenticated();
         client.set_recording_dir(temp_path.clone()).unwrap();
 
-        // Make a POST request with body
         let url = format!("{}/create", server.url());
         let response = client
             .post(&url)
@@ -963,10 +950,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify the response
         assert_eq!(response.status(), 201);
 
-        // Verify that a recording file was created
         let recordings: Vec<_> = fs::read_dir(&temp_path)
             .unwrap()
             .filter_map(|entry| {
@@ -982,17 +967,14 @@ mod tests {
 
         assert_eq!(recordings.len(), 1);
 
-        // Read and verify the recording content
         let recording_content = fs::read_to_string(&recordings[0]).unwrap();
         let recording: RequestResponseInfo = serde_json::from_str(&recording_content).unwrap();
 
-        // Verify request information
         assert_eq!(recording.request.method, "POST");
         assert_eq!(recording.request.url_path, "/create");
         assert!(recording.request.body.is_some());
         assert!(recording.request.body.unwrap().contains("test resource"));
 
-        // Verify response information
         assert_eq!(recording.response.status, 201);
         assert_eq!(
             recording.response.headers.get("location").unwrap(),
@@ -1005,11 +987,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_counter_based_file_naming() {
-        // Create a temporary directory for recordings
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_path_buf();
 
-        // Set up a mock server
         let mut server = mockito::Server::new_async().await;
         let mock1 = server
             .mock("GET", "/first")
@@ -1024,18 +1004,15 @@ mod tests {
             .create_async()
             .await;
 
-        // Create a cloud client with recording enabled
         let mut client = CloudClient::new_unauthenticated();
         client.set_recording_dir(temp_path.clone()).unwrap();
 
-        // Make multiple requests
         let url1 = format!("{}/first", server.url());
         let url2 = format!("{}/second", server.url());
 
         let _response1 = client.get(&url1).send().await.unwrap();
         let _response2 = client.get(&url2).send().await.unwrap();
 
-        // Verify that files are named with incrementing counter
         let mut recordings: Vec<_> = fs::read_dir(&temp_path)
             .unwrap()
             .filter_map(|entry| {
@@ -1052,11 +1029,9 @@ mod tests {
         recordings.sort();
         assert_eq!(recordings.len(), 2);
 
-        // Check that files are named 000000.json and 000001.json
         assert!(recordings[0].file_name().unwrap().to_str().unwrap() == "0000.json");
         assert!(recordings[1].file_name().unwrap().to_str().unwrap() == "0001.json");
 
-        // Verify content matches the order of requests
         let first_content = fs::read_to_string(&recordings[0]).unwrap();
         let first_recording: RequestResponseInfo = serde_json::from_str(&first_content).unwrap();
         assert_eq!(first_recording.request.url_path, "/first");
@@ -1079,14 +1054,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_parameter_recording() {
-        // Create a temporary directory for recordings
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path().to_path_buf();
 
-        // Start a mock server
         let mut server = mockito::Server::new_async().await;
 
-        // Create a mock that expects query parameters
         let mock = server
             .mock("GET", "/catalogs?max_results=10&page_token=abc123")
             .with_status(200)
@@ -1095,17 +1067,14 @@ mod tests {
             .create_async()
             .await;
 
-        // Create a client with recording enabled
         let mut client = CloudClient::new_unauthenticated();
         client.set_recording_dir(temp_path.clone()).unwrap();
 
-        // Make a request with query parameters
         let url = format!("{}/catalogs?max_results=10&page_token=abc123", server.url());
         let response = client.get(&url).send().await.unwrap();
 
         assert!(response.status().is_success());
 
-        // Verify that the recording file was created
         let recordings: Vec<_> = fs::read_dir(&temp_path)
             .unwrap()
             .filter_map(|entry| {
@@ -1274,9 +1243,8 @@ mod retry_integration_tests {
         }
     }
 
-    // A 5xx is retried by CloudClient::send: a single 503 followed by a 200
-    // should surface the 200, proving the user-request path now honors
-    // retry_config (previously it did a bare service.call with no retry).
+    // A 5xx is retried by `CloudClient::send`: a single 503 followed by a 200
+    // surfaces the 200.
     #[tokio::test]
     async fn send_retries_server_error_then_succeeds() {
         let mut server = mockito::Server::new_async().await;
