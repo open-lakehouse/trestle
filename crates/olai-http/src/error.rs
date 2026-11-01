@@ -73,3 +73,10 @@ pub enum Error {
     #[error("System clock error: time is before Unix epoch")]
     ClockError,
 }
+
+/// An [`Error::Generic`] carrying `message`.
+pub(crate) fn generic(message: impl Into<String>) -> Error {
+    Error::Generic {
+        source: message.into().into(),
+    }
+}

@@ -27,8 +27,7 @@ use std::time::Duration;
 /// `base * previous` where `previous` is the duration of the previous backoff
 ///
 /// See <https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/>
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct BackoffConfig {
     /// The initial backoff duration
     pub init_backoff: Duration,
@@ -79,7 +78,7 @@ impl Backoff {
 
     /// Creates a new `Backoff` with the optional `rng`
     ///
-    /// Used [`rand::thread_rng()`] if no rng provided
+    /// Uses [`rand::rng()`] if no rng is provided
     pub(crate) fn new_with_rng(
         config: &BackoffConfig,
         rng: Option<Box<dyn RngCore + Sync + Send>>,

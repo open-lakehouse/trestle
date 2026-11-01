@@ -2,14 +2,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use base64::Engine as _;
 use reqwest::{Client, Method};
 use serde::Deserialize;
 
 use crate::gcp::GcpCredentialProvider;
 use crate::retry::RetryExt;
 use crate::service::HttpService;
-use crate::token::TemporaryToken;
+use crate::token::{TemporaryToken, jwt_exp_secs};
 use crate::{RetryConfig, TokenProvider};
 
 /// Bearer token credential used by all Databricks auth paths.
@@ -161,12 +160,7 @@ impl TokenProvider for DatabricksGcpTokenExchangeProvider {
 ///
 /// Does not verify the signature — we are the intended recipient.
 pub(crate) fn jwt_exp(token: &str) -> Option<Instant> {
-    let payload = token.split('.').nth(1)?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-    let exp = v["exp"].as_u64()?;
+    let exp = jwt_exp_secs(token)?;
     let now_secs = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     let secs_remaining = exp.checked_sub(now_secs)?;
     Some(Instant::now() + Duration::from_secs(secs_remaining))
@@ -254,6 +248,8 @@ impl TokenProvider for OidcFileTokenProvider {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+
     use super::*;
     use crate::service::ReqwestService;
 

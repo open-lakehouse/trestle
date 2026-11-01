@@ -5,7 +5,7 @@ Databricks.
 
 > [!NOTE]
 > The credential providers are extracted from the [`object_store`] crate's
-> internal client and hoisted into a standalone crate for reuse.
+> internal client.
 
 When a service talks to multiple clouds (or to platforms like Databricks),
 pulling in every vendor SDK means dependency bloat and config fragmentation.
