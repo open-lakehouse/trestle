@@ -122,4 +122,9 @@ impl Error {
             source,
         }
     }
+
+    /// A failed interactive prompt (a terminal read or write error from `cliclack`).
+    pub fn prompt(source: std::io::Error) -> Self {
+        Self::other(format!("prompt failed: {source}"))
+    }
 }

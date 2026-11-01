@@ -97,8 +97,7 @@ pub fn run(args: GenerateArgs) -> Result<()> {
     Ok(())
 }
 
-/// Read a pre-built descriptor (escape-hatch path). Reads before canonicalizing so
-/// a missing file reports the path the user actually passed.
+/// Read a pre-built descriptor from the path the user passed to `--descriptors`.
 fn read_descriptor(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| {
         Error::io_at(path, e).with_hint(format!(
@@ -320,13 +319,8 @@ fn print_summary(config: &CodeGenConfig) {
     }
 }
 
-/// Print a copy-pasteable `clippy --fix` command as a hint.
-///
-/// We deliberately don't run `clippy --fix` in-pipeline (it's semantic and slow),
-/// but a lint-fix pass over the generated code is still worth doing. Surfacing the
-/// exact command — always, even under `--no-format` — lets consuming agents/users
-/// run it without guessing. Scoped to `project_dir` so it targets the generated
-/// crates rather than an unrelated workspace.
+/// Print a copy-pasteable `clippy --fix` command for the generated code. Not run
+/// in-pipeline: it is slow and semantic. Printed even under `--no-format`.
 fn print_clippy_hint(project_dir: &Path) {
     let clippy = "cargo clippy --fix --allow-dirty --all-targets -- -D warnings";
     println!("\nTip: lint the generated code with:");

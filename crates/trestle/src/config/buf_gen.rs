@@ -297,7 +297,7 @@ plugins:
         let merged = merge_buf_gen(&mk(ProtoLib::Buffa, false), &existing).unwrap();
         let refs = plugin_refs(&merged);
         assert!(refs.contains(&"buf.build/anthropics/buffa".to_string()));
-        // The old prost/serde managed entries are gone after the switch.
+        // Trestle's managed prost/serde entries are dropped.
         assert!(!refs.contains(&"buf.build/community/neoeinstein-prost".to_string()));
         assert!(!refs.contains(&"buf.build/community/neoeinstein-prost-serde".to_string()));
     }
