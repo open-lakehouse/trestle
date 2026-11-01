@@ -2506,7 +2506,7 @@ dependencies = [
 
 [[package]]
 name = "olai-credential-vending"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "olai-storage-credentials"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "chrono",
  "futures",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "olai-store"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "olai-vended-store"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "bytes",
