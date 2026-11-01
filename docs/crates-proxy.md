@@ -6,16 +6,23 @@ version published less than 7 days ago. Only the **index** is filtered: tarballs
 still come straight from the `static.crates.io` CDN, and CI resolves from
 crates.io directly.
 
-The open-lakehouse repos depend on each other through crates.io:
+This applies to **every crate any of our repos publishes**, in whichever direction
+it's consumed, not just to trestle's. The tooling below is generic: the
+*upstream* is whichever sibling repo published the crate, and the *consumer* is
+the repo you're building. As of this writing:
 
-| Upstream | Crates | Consumers |
+| Upstream | Publishes | Consumed by (how) |
 |---|---|---|
-| trestle | `olai-http`, `olai-http-wasm`, `olai-store`, `olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending` | mangrove, distributary, hydrofoil, headwaters |
-| mangrove | `olai-uc-*` | distributary, hydrofoil |
+| trestle | `olai-http`, `olai-store`, `olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending`, … | mangrove, distributary, hydrofoil, headwaters, datafusion-openlineage (crates.io) |
+| mangrove | `olai-uc-*` | distributary, hydrofoil (git pins) |
+| breakwater | `olai-cedar-oci`, `olai-datafusion-policy*` | hydrofoil (git pin) |
+| datafusion-openlineage | `datafusion-openlineage`, `openlineage-client` | hydrofoil (git pin) |
+| distributary, hydrofoil | `opensharing-*`, `hydrofoil-*` | not consumed by a sibling yet |
 
-So for a week after an upstream release, a consumer that bumps to it fails
-locally with `failed to select a version for the requirement` or `no matching
-package named`, even though CI would build it.
+A git pin isn't affected by the proxy, but the delay comes back the moment it's
+switched to a crates.io version. So for a week after any upstream release, a
+consumer that bumps to it fails locally with `failed to select a version for the
+requirement` or `no matching package named`, even though CI would build it.
 
 ## Pick a strategy
 
@@ -26,17 +33,25 @@ package named`, even though CI would build it.
    to crates.io entries before committing:
 
    ```bash
-   dev/scripts/crates-proxy.sh patch trestle    # gitignored .cargo/config.toml
+   dev/scripts/crates-proxy.sh patch <upstream>  # e.g. trestle, mangrove; gitignored .cargo/config.toml
    cargo build / cargo test ...
-   dev/scripts/crates-proxy.sh lock-registry    # before every commit touching Cargo.lock
-   dev/scripts/crates-proxy.sh check-lock       # the pre-commit hook runs this too
+   dev/scripts/crates-proxy.sh lock-registry     # before every commit touching Cargo.lock
+   dev/scripts/crates-proxy.sh check-lock        # the pre-commit hook runs this too
    ```
 
-   For a faithful lock, check out the release tag (`olai-http-v0.0.9`) in the
-   upstream checkout. `lock-registry` warns when the local crate differs from it,
-   because the lock's dependency list is taken from the local source. Drop the
-   patch with `dev/scripts/crates-proxy.sh patch --remove trestle` once the proxy
-   catches up.
+   For a faithful lock, check out the release tag (`<crate>-v<version>`, e.g.
+   `olai-uc-client-v0.0.7`) in the upstream checkout. `lock-registry` warns when
+   the local crate differs from it, because the lock's dependency list is taken
+   from the local source. It restores every crate of a patched upstream, including
+   siblings that the patched crates pull in by path.
+   Drop the patch with `dev/scripts/crates-proxy.sh patch --remove <upstream>`
+   once the proxy catches up.
+
+   **Releases that chain.** If the fresh upstream release itself depends on
+   another fresh release (e.g. a mangrove release that needs this week's trestle
+   release), patch both: `patch mangrove` and `patch trestle`. Each upstream gets
+   its own block in `.cargo/config.toml`, and `lock-registry` restores the
+   crates from all of them.
 3. **The change isn't released yet, or the consumer needs an unreleased fix.**
    Commit a git pin, keeping `version` so that switching back is a one-word edit:
 
@@ -59,7 +74,7 @@ on the git checkout they're run from (the *consumer*):
 | Script | Does |
 |---|---|
 | `upstream-root.sh <repo>` | Prints the upstream checkout: `$<REPO>_ROOT` (e.g. `MANGROVE_ROOT`), else `<repo>` next to the consumer's **main** checkout, so it works from `~/code/<consumer>-worktrees/<branch>` too. |
-| `patch.sh [--remove] <repo> [crate…]` | Writes a marked `patch.crates-io.<crate> = { path = … }` block per upstream to `.cargo/config.toml`. By default it patches every published upstream crate the committed locks resolve from crates.io; git-pinned crates are skipped. |
+| `patch.sh [--remove] <repo> [crate…]` | Writes a marked `patch.crates-io.<crate> = { path = … }` block per upstream to `.cargo/config.toml`. By default it patches every published upstream crate the consumer uses from crates.io: declared as a registry dependency in a workspace manifest (so a git pin just switched to a version is found before the lock resolves) or resolved from crates.io in a committed lock. Git-pinned crates are skipped. |
 | `lock-registry.sh [lock…]` | For each locally patched crate, downloads `<name>-<version>.crate` from the CDN, writes `source` + `checksum` (the tarball's sha256, which is what crates.io records), and drops `[[patch.unused]]` entries. Fails when the version isn't published, which means use strategy 3. |
 | `check-lock.sh [lock…]` | Fails when a lock has a path package that isn't a member of any workspace in the repo, or has `[[patch.unused]]` entries. Set `CRATES_PROXY_ALLOW_PATH="name …"` for intentional out-of-workspace path deps. |
 
@@ -69,7 +84,11 @@ nested workspaces such as mangrove's `wasm/`.
 ## Consumer setup
 
 Each consumer carries one shim, `dev/scripts/crates-proxy.sh`, that finds the
-trestle checkout the same way `upstream-root.sh` does and runs the named script:
+trestle checkout the same way `upstream-root.sh` does and runs the named script.
+trestle is only where the tooling lives; the shim needs it even when the crates
+you patch come from mangrove or breakwater. Any repo that consumes a sibling's
+published crates should carry the shim. trestle itself, if it ever consumes one,
+calls `scripts/crates-proxy/` directly.
 
 ```bash
 #!/usr/bin/env bash
