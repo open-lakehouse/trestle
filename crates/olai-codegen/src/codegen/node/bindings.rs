@@ -4,13 +4,11 @@
 //! [`crate::codegen::bindings`]; this module supplies the NAPI-specific scaffold, marshaling, and
 //! method bodies through [`NapiBackend`]'s [`BindingBackend`] impl.
 
-use itertools::Itertools;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::super::format_tokens;
 use super::caps::{is_napi_supported, is_napi_supported_type, is_required_message_body};
-use crate::analysis::EmitShape;
 use crate::codegen::bindings::builder::{OptionalSetter, SetterRender, generate_builder_pattern};
 use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
 use crate::codegen::{BindingMode, MethodHandler, Runtime, ServiceHandler};
@@ -50,11 +48,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<Str
 
 impl BindingBackend for NapiBackend {
     fn generate_service(&self, service: &ServiceHandler<'_>) -> crate::error::Result<String> {
-        let bindings = service
-            .config
-            .bindings
-            .as_ref()
-            .expect("bindings config required for node output");
+        let bindings = service.config.bindings_config();
 
         let rust_client_ident = service.client_type();
         let napi_client_ident = format_ident!("Napi{}", rust_client_ident);
@@ -109,8 +103,9 @@ impl BindingBackend for NapiBackend {
 
         let bindings = services
             .first()
-            .and_then(|s| s.config.bindings.as_ref())
-            .expect("bindings config required for node output");
+            .expect("binding output has a service")
+            .config
+            .bindings_config();
 
         let aggregate_client_name = &bindings.aggregate_client_name;
         let client_crate = format_ident!("{}", bindings.client_crate_name);
@@ -118,23 +113,14 @@ impl BindingBackend for NapiBackend {
         let napi_aggregate_client_ident = format_ident!("Napi{}", aggregate_client_name);
         let napi_error_ext_ident = format_ident!("{}", bindings.napi_error_ext_trait);
 
-        let mut sorted_services = services.iter().collect_vec();
-        sorted_services.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
+        let sorted_services = driver::sorted_services(services);
 
         let mod_paths = sorted_services.iter().map(|s| {
             let mod_path = s.models_path();
             quote! { use #mod_path::*; }
         });
 
-        // Only services with a scoped binding expose a per-service scoped client to import.
-        let codegen_imports = sorted_services
-            .iter()
-            .filter(|s| s.emits_scoped_binding())
-            .map(|s| {
-                let mod_name = format_ident!("{}", s.plan.base_path);
-                let client_name = format_ident!("Napi{}", s.client_type().to_string());
-                quote! { use crate::codegen::#mod_name::#client_name; }
-            });
+        let codegen_imports = driver::scoped_client_imports(&sorted_services, "Napi");
 
         let methods = driver::root_client_methods(self, &sorted_services);
         let resource_accessor_methods = driver::resource_accessor_methods(self, &sorted_services);
@@ -216,11 +202,7 @@ impl BindingBackend for NapiBackend {
     }
 
     fn client_call(&self, method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
-        let (method_name, drop_path) = match mode {
-            BindingMode::Scoped => (method.plan.resource_client_method(), true),
-            BindingMode::Flat => (method.plan.base_method_ident(), false),
-        };
-        let is_list = method.emit_shape() == EmitShape::List;
+        let (method_name, drop_path) = driver::client_method(method, mode);
         let args = method
             .required_parameters()
             .filter(|param| {
@@ -228,9 +210,7 @@ impl BindingBackend for NapiBackend {
                     && (is_napi_supported(param) || is_required_message_body(param))
             })
             .map(|param| {
-                // A required `page_token` isn't exposed on list methods (the stream drives
-                // pagination and overwrites it), so seed the builder with an empty token.
-                if is_list && param.name() == "page_token" {
+                if driver::is_seeded_page_token(method, param) {
                     return quote! { ::std::string::String::new() };
                 }
                 let param_name = param.field_ident();
@@ -339,11 +319,11 @@ impl BindingBackend for NapiBackend {
     }
 
     fn emit_get_update(&self, parts: &ShapeParts<'_>) -> TokenStream {
-        self.emit_unary(parts, self.unary_method_name(parts))
+        self.emit_unary(parts, parts.unary_method_name())
     }
 
     fn emit_delete(&self, parts: &ShapeParts<'_>) -> TokenStream {
-        let method_name = self.unary_method_name(parts);
+        let method_name = parts.unary_method_name();
         let param_defs = &parts.param_defs;
         let client_call = &parts.client_call;
         let builder_calls = generate_builder_pattern(parts.method, false, self);
@@ -363,59 +343,11 @@ impl BindingBackend for NapiBackend {
     }
 
     fn emit_resource_accessor(&self, service: &ServiceHandler<'_>) -> Option<TokenStream> {
-        let spec = service.accessor_spec()?;
-        let method_name = format_ident!("{}", spec.singular);
-        let client_name = format_ident!("Napi{}", service.client_type().to_string());
-
-        let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
-        let param_list = param_idents
-            .iter()
-            .map(|id| quote! { #id: String })
-            .collect::<Vec<_>>();
-
-        // A nested resource has a composite `full_name`; the underlying Rust client accessor takes a
-        // single `full_name` string, so join the decomposed params with `.` and call
-        // `{method}_from_full_name`.
-        let method_call = if spec.nested {
-            let from_full_name_method = format_ident!("{}_from_full_name", spec.singular);
-            let format_str = spec.join_format();
-            quote! {
-                #[napi]
-                pub fn #method_name(&self, #(#param_list),*) -> #client_name {
-                    let full_name = format!(#format_str, #(#param_idents),*);
-                    #client_name {
-                        client: self.client.#from_full_name_method(full_name),
-                    }
-                }
-            }
-        } else {
-            let param_refs = param_idents
-                .iter()
-                .map(|id| quote! { #id })
-                .collect::<Vec<_>>();
-            quote! {
-                #[napi]
-                pub fn #method_name(&self, #(#param_list),*) -> #client_name {
-                    #client_name {
-                        client: self.client.#method_name(#(#param_refs),*),
-                    }
-                }
-            }
-        };
-
-        Some(method_call)
+        driver::resource_accessor(service, quote! { #[napi] }, "Napi")
     }
 }
 
 impl NapiBackend {
-    /// Scoped methods use the resource-client method name; flat methods use the base name.
-    fn unary_method_name(&self, parts: &ShapeParts<'_>) -> Ident {
-        match parts.mode {
-            BindingMode::Scoped => parts.method.plan.resource_client_method(),
-            BindingMode::Flat => parts.method.binding_method_name(),
-        }
-    }
-
     /// Shared body for the unary (create / get-update) methods: a `Buffer` return when the method
     /// has a response type, or `()` otherwise. Delete is `()`-only and emitted directly.
     fn emit_unary(&self, parts: &ShapeParts<'_>, method_name: Ident) -> TokenStream {

@@ -3,6 +3,8 @@
 //! Generates a `client.ts` that wraps NAPI-RS native bindings with typed
 //! protobuf decoding via `@bufbuild/protobuf`.
 
+use std::collections::BTreeSet;
+
 use convert_case::{Case, Casing};
 use itertools::Itertools;
 
@@ -10,6 +12,7 @@ use super::caps::{is_napi_supported, is_required_message_body, message_type_name
 use crate::analysis::{EmitShape, RequestParam, RequestType};
 use crate::codegen::{BindingMode, BindingsConfig, MethodHandler, ServiceHandler};
 use crate::parsing::types::unified_to_typescript;
+use crate::utils::last_segment;
 
 /// JS globals that Biome's `noShadowRestrictedNames` rule forbids re-binding. A proto message
 /// named after one of these (e.g. `Function`, `Object`, `Date`) would shadow the global when
@@ -239,8 +242,9 @@ pub(crate) fn generate_models_barrel(services: &[ServiceHandler<'_>]) -> String 
 pub(crate) fn generate_client_ts(services: &[ServiceHandler<'_>]) -> String {
     let bindings = services
         .first()
-        .and_then(|s| s.config.bindings.as_ref())
-        .expect("bindings config required for node_ts output");
+        .expect("binding output has a service")
+        .config
+        .bindings_config();
 
     // Sort once up-front so all loops below produce stable output regardless of
     // the HashMap iteration order of `CodeGenMetadata::services`.
@@ -282,25 +286,17 @@ pub(crate) fn generate_client_ts(services: &[ServiceHandler<'_>]) -> String {
 fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
     let bindings = services
         .first()
-        .and_then(|s| s.config.bindings.as_ref())
-        .expect("bindings config required for node_ts output");
+        .expect("binding output has a service")
+        .config
+        .bindings_config();
 
     let napi_aggregate_name = format!("Napi{}", bindings.aggregate_client_name);
 
-    let mut type_names: Vec<String> = Vec::new();
-    let mut schema_names: Vec<String> = Vec::new();
+    let mut type_names: BTreeSet<String> = BTreeSet::new();
 
     for service in services {
         if let Some(resource) = service.resource() {
-            let type_name = resource
-                .type_name
-                .split('.')
-                .next_back()
-                .unwrap_or(&resource.type_name);
-            if !type_names.contains(&type_name.to_string()) {
-                type_names.push(type_name.to_string());
-                schema_names.push(format!("{type_name}Schema"));
-            }
+            type_names.insert(last_segment(&resource.type_name).to_string());
         }
 
         for method in service.methods() {
@@ -316,31 +312,20 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
             // `decoded_type_name`): item type for standard list unwrapping, otherwise the full
             // output message. This keeps imports in lockstep with emitted `fromBinary` calls,
             // including resource-less (Flat) services that decode `*Response` messages directly.
-            if let Some(name) = decoded_type_name(&method)
-                && !type_names.contains(&name)
-            {
-                type_names.push(name.clone());
-                schema_names.push(format!("{name}Schema"));
-            }
+            type_names.extend(decoded_type_name(&method));
 
             // Required message bodies are encoded with `toBinary(<Type>Schema, value)` before
             // crossing to the native binding, so import each body's type and schema too.
-            for param in method.required_parameters() {
-                if is_required_message_body(param)
-                    && let Some(name) = message_type_name(param)
-                    && !type_names.contains(&name)
-                {
-                    type_names.push(name.clone());
-                    schema_names.push(format!("{name}Schema"));
-                }
-            }
+            type_names.extend(
+                method
+                    .required_parameters()
+                    .filter(|param| is_required_message_body(param))
+                    .filter_map(message_type_name),
+            );
         }
     }
 
-    type_names.sort();
-    type_names.dedup();
-    schema_names.sort();
-    schema_names.dedup();
+    let schema_names: BTreeSet<String> = type_names.iter().map(|n| format!("{n}Schema")).collect();
 
     let mut native_classes: Vec<String> = vec![format!("{} as NativeClient", napi_aggregate_name)];
     for service in services {
@@ -608,7 +593,7 @@ fn instance_method_names(
     match mode {
         BindingMode::Scoped => (verb.to_string(), verb.to_string()),
         BindingMode::Flat => {
-            let name = method.binding_method_name_str().to_case(Case::Camel);
+            let name = method.js_method_name();
             (name.clone(), name)
         }
     }
@@ -862,7 +847,7 @@ impl MethodCallSpec {
 
 fn generate_collection_list_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let method_name = method.binding_method_name_str().to_case(Case::Camel);
+    let method_name = method.js_method_name();
     let items_field = match method.list_output_field() {
         Some(field) => field,
         None => return String::new(),
@@ -900,7 +885,7 @@ fn generate_collection_list_method(method: &MethodHandler<'_>, drop_path: bool) 
 /// Node.js 18+ (the minimum engine version) supports `for await...of` over `ReadableStream`.
 fn generate_collection_list_stream_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let base_method_name = method.binding_method_name_str().to_case(Case::Camel);
+    let base_method_name = method.js_method_name();
     let stream_method_name = format!("{base_method_name}Stream");
 
     let items_field = match method.list_output_field() {
@@ -942,7 +927,7 @@ fn generate_collection_create_method(method: &MethodHandler<'_>, drop_path: bool
     let output_type_ref = ts_type_ident(&output_type);
 
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let method_name = method.binding_method_name_str().to_case(Case::Camel);
+    let method_name = method.js_method_name();
 
     let (required_params, optional_params) = ts_collection_param_split(method, drop_path, false);
 
@@ -966,7 +951,7 @@ fn generate_collection_create_method(method: &MethodHandler<'_>, drop_path: bool
 
 fn generate_void_create_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let method_name = method.binding_method_name_str().to_case(Case::Camel);
+    let method_name = method.js_method_name();
 
     let (required_params, optional_params) = ts_collection_param_split(method, drop_path, false);
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);

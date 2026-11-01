@@ -6,7 +6,6 @@
 
 use std::collections::BTreeMap;
 
-use itertools::Itertools;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
@@ -58,11 +57,7 @@ pub(crate) struct PyBackend<'a> {
 
 impl<'a> PyBackend<'a> {
     fn from_service(service: &ServiceHandler<'a>) -> Self {
-        let bindings = service
-            .config
-            .bindings
-            .as_ref()
-            .expect("bindings config required for python output");
+        let bindings = service.config.bindings_config();
         Self {
             py_error_type: format_ident!("{}", bindings.py_error_type),
             py_result_type: format_ident!("{}", bindings.py_result_type),
@@ -193,11 +188,7 @@ pub(crate) fn generate(service: &ServiceHandler<'_>) -> crate::error::Result<Str
 
 impl BindingBackend for PyBackend<'_> {
     fn generate_service(&self, service: &ServiceHandler<'_>) -> crate::error::Result<String> {
-        let bindings = service
-            .config
-            .bindings
-            .as_ref()
-            .expect("bindings config required for python output");
+        let bindings = service.config.bindings_config();
 
         let rust_client_ident = service.client_type();
         let client_ident = format_ident!("Py{}", rust_client_ident);
@@ -278,8 +269,9 @@ impl BindingBackend for PyBackend<'_> {
 
         let bindings = services
             .first()
-            .and_then(|s| s.config.bindings.as_ref())
-            .expect("bindings config required for python output");
+            .expect("binding output has a service")
+            .config
+            .bindings_config();
 
         let aggregate_client_name = &bindings.aggregate_client_name;
         let client_crate = format_ident!("{}", bindings.client_crate_name);
@@ -288,8 +280,7 @@ impl BindingBackend for PyBackend<'_> {
         let py_error_type = &self.py_error_type;
         let py_result_type = &self.py_result_type;
 
-        let mut sorted_services = services.iter().collect_vec();
-        sorted_services.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
+        let sorted_services = driver::sorted_services(services);
 
         // Services can share a package, so dedupe the model imports.
         let mod_paths = glob_imports(sorted_services.iter().map(|s| s.models_path()));
@@ -298,15 +289,7 @@ impl BindingBackend for PyBackend<'_> {
         let wrapper_imports =
             glob_imports(sorted_services.iter().filter_map(|s| s.models_root_path()));
 
-        // Only services with a scoped binding expose a per-service scoped client to import.
-        let codegen_imports = sorted_services
-            .iter()
-            .filter(|s| s.emits_scoped_binding())
-            .map(|s| {
-                let mod_name = format_ident!("{}", s.plan.base_path);
-                let client_name = format_ident!("Py{}", s.client_type().to_string());
-                quote! { use crate::codegen::#mod_name::#client_name; }
-            });
+        let codegen_imports = driver::scoped_client_imports(&sorted_services, "Py");
 
         let methods = driver::root_client_methods(self, &sorted_services);
         let resource_accessor_methods = driver::resource_accessor_methods(self, &sorted_services);
@@ -383,18 +366,13 @@ impl BindingBackend for PyBackend<'_> {
     }
 
     fn client_call(&self, method: &MethodHandler<'_>, mode: BindingMode) -> TokenStream {
-        let (method_name, drop_path) = match mode {
-            BindingMode::Scoped => (method.plan.resource_client_method(), true),
-            BindingMode::Flat => (method.plan.base_method_ident(), false),
-        };
-        let is_list = method.emit_shape() == crate::analysis::EmitShape::List;
+        let (method_name, drop_path) = driver::client_method(method, mode);
         let args = method
             .required_parameters()
             .filter(|param| !(drop_path && param.is_path_param()))
             .map(|param| {
-                // A list method does not take the required `page_token` (`param_plan` drops it;
-                // the stream drives the pagination), so seed the builder with an empty token.
-                if is_list && param.name() == "page_token" {
+                // `param_plan` drops it too.
+                if driver::is_seeded_page_token(method, param) {
                     return quote! { ::std::string::String::new() };
                 }
                 let param_name = param.field_ident();
@@ -445,67 +423,21 @@ impl BindingBackend for PyBackend<'_> {
 
     fn emit_get_update(&self, parts: &ShapeParts<'_>) -> TokenStream {
         let method = parts.method;
-        self.single(parts, scoped_method_name(parts), wrap_single_output(method))
+        self.single(parts, parts.unary_method_name(), wrap_single_output(method))
     }
 
     fn emit_delete(&self, parts: &ShapeParts<'_>) -> TokenStream {
-        self.single(parts, scoped_method_name(parts), None)
+        self.single(parts, parts.unary_method_name(), None)
     }
 
     fn emit_resource_accessor(&self, service: &ServiceHandler<'_>) -> Option<TokenStream> {
         let spec = service.accessor_spec()?;
-        let method_name = format_ident!("{}", spec.singular);
-        let client_name = format_ident!("Py{}", service.client_type().to_string());
         let resource = service
             .resource()
             .map(|r| r.type_name.clone())
             .unwrap_or_else(|| spec.singular.clone());
         let doc = format!(" The requests on one `{resource}`. It sends no request itself.");
-
-        let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
-        let param_list = param_idents
-            .iter()
-            .map(|id| quote! { #id: String })
-            .collect::<Vec<_>>();
-
-        // A nested resource has a composite `full_name`; the underlying Rust client accessor takes a
-        // single `full_name` string, so join the decomposed Python params back together with `.`.
-        let method_call = if spec.nested {
-            let from_full_name_method = format_ident!("{}_from_full_name", spec.singular);
-            let format_str = spec.join_format();
-            quote! {
-                #[doc = #doc]
-                pub fn #method_name(&self, #(#param_list),*) -> #client_name {
-                    let full_name = format!(#format_str, #(#param_idents),*);
-                    #client_name {
-                        client: self.client.#from_full_name_method(full_name),
-                    }
-                }
-            }
-        } else {
-            let param_refs = param_idents
-                .iter()
-                .map(|id| quote! { #id })
-                .collect::<Vec<_>>();
-            quote! {
-                #[doc = #doc]
-                pub fn #method_name(&self, #(#param_list),*) -> #client_name {
-                    #client_name {
-                        client: self.client.#method_name(#(#param_refs),*),
-                    }
-                }
-            }
-        };
-
-        Some(method_call)
-    }
-}
-
-/// The name of a get, update or delete binding method.
-fn scoped_method_name(parts: &ShapeParts<'_>) -> Ident {
-    match parts.mode {
-        BindingMode::Scoped => parts.method.plan.resource_client_method(),
-        BindingMode::Flat => parts.method.binding_method_name(),
+        driver::resource_accessor(service, quote! { #[doc = #doc] }, "Py")
     }
 }
 
@@ -641,7 +573,7 @@ impl SetterRender for PyBackend<'_> {
         with_method: &Ident,
     ) -> TokenStream {
         let ty = setter.field_type;
-        let collection = ty.is_repeated || matches!(ty.base_type, BaseType::Map(..));
+        let collection = is_collection(ty);
         if let Some(json) = json_param(ty) {
             let value = if collection {
                 let items =
@@ -653,7 +585,7 @@ impl SetterRender for PyBackend<'_> {
                     }
                 }
             } else {
-                let from_py = format_ident!("json_{}_from_py", json.fn_suffix());
+                let from_py = super::model_conversions::json_from_py_fn(json);
                 quote! { #param_ident.as_ref().map(#from_py).transpose()? }
             };
             return quote! { .#with_method(#value) };
@@ -829,10 +761,10 @@ fn strip_option(ty: TokenStream) -> TokenStream {
 /// Scalars pass through.
 fn convert_param_value(ty: &UnifiedType, expr: TokenStream) -> TokenStream {
     if let Some(json) = json_param(ty) {
-        if ty.is_repeated || matches!(ty.base_type, BaseType::Map(..)) {
+        if is_collection(ty) {
             return super::model_conversions::json_from_py(json, ty, expr, true);
         }
-        let from_py = format_ident!("json_{}_from_py", json.fn_suffix());
+        let from_py = super::model_conversions::json_from_py_fn(json);
         return quote! { #from_py(&#expr)? };
     }
     if message_map_value(ty).is_some() {

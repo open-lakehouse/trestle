@@ -576,6 +576,14 @@ impl CodeGenConfig {
             .expect("validated: the python output has `BindingsConfig::python`")
     }
 
+    /// The bindings config. Only for the language-binding outputs, which [`validate`](Self::validate)
+    /// checks have it.
+    pub(crate) fn bindings_config(&self) -> &BindingsConfig {
+        self.bindings
+            .as_ref()
+            .expect("validated: language-binding output has a bindings config")
+    }
+
     fn bindings_python(&self) -> Option<&PythonOptions> {
         self.bindings.as_ref()?.python.as_ref()
     }

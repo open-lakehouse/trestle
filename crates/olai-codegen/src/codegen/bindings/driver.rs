@@ -4,10 +4,11 @@
 //! `node/bindings.rs`. They are now the single source of truth; each backend calls them to obtain
 //! the scoped-client and root-client method token vecs, then wraps those in its own module scaffold.
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
+use quote::{format_ident, quote};
 
 use super::{BindingBackend, ShapeParts};
-use crate::analysis::EmitShape;
+use crate::analysis::{EmitShape, RequestParam};
 use crate::codegen::{BindingMode, MethodHandler, ServiceHandler};
 
 /// Build the [`ShapeParts`] for `method` in `mode`, pulling the language-specific param defs and
@@ -103,6 +104,89 @@ pub(crate) fn root_client_methods(
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// The Rust client method a binding of `method` calls in `mode`, and whether the binding drops the
+/// path params (a scoped client supplies them).
+pub(crate) fn client_method(method: &MethodHandler<'_>, mode: BindingMode) -> (Ident, bool) {
+    match mode {
+        BindingMode::Scoped => (method.plan.resource_client_method(), true),
+        BindingMode::Flat => (method.plan.base_method_ident(), false),
+    }
+}
+
+/// Whether `param` is a list method's required `page_token`. Bindings don't expose it (the stream
+/// drives the pagination and overwrites it), so they seed the builder with an empty token.
+pub(crate) fn is_seeded_page_token(method: &MethodHandler<'_>, param: &RequestParam) -> bool {
+    method.emit_shape() == EmitShape::List && param.name() == "page_token"
+}
+
+/// `services` sorted by service name.
+pub(crate) fn sorted_services<'s, 'a>(
+    services: &'s [ServiceHandler<'a>],
+) -> Vec<&'s ServiceHandler<'a>> {
+    let mut sorted: Vec<_> = services.iter().collect();
+    sorted.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
+    sorted
+}
+
+/// `use crate::codegen::<base>::<prefix><Client>;` for each service with a scoped binding (only
+/// those expose a per-service scoped client to import).
+pub(crate) fn scoped_client_imports<'s>(
+    services: &'s [&ServiceHandler<'_>],
+    prefix: &'s str,
+) -> impl Iterator<Item = TokenStream> + 's {
+    services
+        .iter()
+        .filter(|s| s.emits_scoped_binding())
+        .map(move |s| {
+            let mod_name = format_ident!("{}", s.plan.base_path);
+            let client_name = format_ident!("{prefix}{}", s.client_type());
+            quote! { use crate::codegen::#mod_name::#client_name; }
+        })
+}
+
+/// The root-client accessor `<singular>(<params>: String…) -> <prefix><Client>` wrapping the Rust
+/// client's resource accessor, with `attr` on it.
+///
+/// A nested resource has a composite `full_name`; the underlying Rust client accessor takes a
+/// single `full_name` string, so the decomposed params are joined with `.` for
+/// `<singular>_from_full_name`.
+pub(crate) fn resource_accessor(
+    service: &ServiceHandler<'_>,
+    attr: TokenStream,
+    client_prefix: &str,
+) -> Option<TokenStream> {
+    let spec = service.accessor_spec()?;
+    let method_name = format_ident!("{}", spec.singular);
+    let client_name = format_ident!("{client_prefix}{}", service.client_type());
+
+    let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
+    let param_list = param_idents.iter().map(|id| quote! { #id: String });
+
+    let client = if spec.nested {
+        let from_full_name_method = format_ident!("{}_from_full_name", spec.singular);
+        let format_str = spec.join_format();
+        quote! {
+            let full_name = format!(#format_str, #(#param_idents),*);
+            #client_name {
+                client: self.client.#from_full_name_method(full_name),
+            }
+        }
+    } else {
+        quote! {
+            #client_name {
+                client: self.client.#method_name(#(#param_idents),*),
+            }
+        }
+    };
+
+    Some(quote! {
+        #attr
+        pub fn #method_name(&self, #(#param_list),*) -> #client_name {
+            #client
+        }
+    })
 }
 
 /// The resource-accessor methods for the root client, one per service that exposes a resource.

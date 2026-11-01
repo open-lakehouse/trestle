@@ -1630,6 +1630,12 @@ impl MethodHandler<'_> {
         }
     }
 
+    /// The camelCase binding method name JS sees (the name NAPI and `js_name` derive from
+    /// [`Self::binding_method_name_str`]).
+    pub(crate) fn js_method_name(&self) -> String {
+        self.binding_method_name_str().to_case(Case::Camel)
+    }
+
     /// Get type representation for rust depending on context
     ///
     /// Depending on context we may want concrete types (e.g. 'String') or more flexible types (e.g. 'Into<String d>')

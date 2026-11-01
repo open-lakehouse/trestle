@@ -120,6 +120,11 @@ pub(crate) fn generate_pyo3_impls(
     format_tokens(tokens)
 }
 
+/// The generated function converting a Python object into the free-form JSON type `json`.
+pub(crate) fn json_from_py_fn(json: JsonType) -> proc_macro2::Ident {
+    format_ident!("json_{}_from_py", json.fn_suffix())
+}
+
 /// Convert the Python object `value` (a `Bound<PyAny>`) into the free-form JSON field type `ty`.
 /// For a method argument (`arg`), a list or map is collected into a `Vec`, as the client takes
 /// an `impl IntoIterator` that leaves nothing to infer the collection from.
@@ -129,24 +134,19 @@ pub(crate) fn json_from_py(
     value: TokenStream,
     arg: bool,
 ) -> TokenStream {
-    let from_py = format_ident!("json_{}_from_py", json.fn_suffix());
+    let from_py = json_from_py_fn(json);
+    let collection = if arg {
+        quote! { ::std::vec::Vec<_> }
+    } else {
+        quote! { _ }
+    };
     if ty.is_repeated {
-        let collection = if arg {
-            quote! { ::std::vec::Vec<_> }
-        } else {
-            quote! { _ }
-        };
         quote! {{
             let items: ::std::vec::Vec<::pyo3::Bound<'_, ::pyo3::PyAny>> =
                 ::pyo3::types::PyAnyMethods::extract(&#value)?;
             items.iter().map(#from_py).collect::<::pyo3::PyResult<#collection>>()?
         }}
     } else if matches!(ty.base_type, BaseType::Map(..)) {
-        let collection = if arg {
-            quote! { ::std::vec::Vec<_> }
-        } else {
-            quote! { _ }
-        };
         quote! {{
             let items: ::std::collections::HashMap<::std::string::String, ::pyo3::Bound<'_, ::pyo3::PyAny>> =
                 ::pyo3::types::PyAnyMethods::extract(&#value)?;
@@ -1161,8 +1161,6 @@ impl FieldAccessor {
         }
 
         match &self.ty.base_type {
-            BaseType::String => quote! { #access.clone() },
-            BaseType::Bytes => quote! { #access.clone() },
             BaseType::Int32
             | BaseType::Int64
             | BaseType::Bool
@@ -1170,7 +1168,9 @@ impl FieldAccessor {
             | BaseType::Float64 => quote! { #access },
             BaseType::Enum(_) => self.read_enum(&access),
             BaseType::Message(_) | BaseType::OneOf(_) => self.read_message(&access),
-            BaseType::Unit | BaseType::Map(_, _) => quote! { #access.clone() },
+            BaseType::String | BaseType::Bytes | BaseType::Unit | BaseType::Map(_, _) => {
+                quote! { #access.clone() }
+            }
         }
     }
 
@@ -1198,7 +1198,6 @@ impl FieldAccessor {
             BaseType::Message(_) => quote! {
                 #access.iter().cloned().map(#base::from).collect()
             },
-            BaseType::String | BaseType::Bytes => quote! { #access.clone() },
             _ => quote! { #access.clone() },
         }
     }
@@ -1310,37 +1309,23 @@ impl FieldAccessor {
 
     /// Store an explicit-presence scalar/enum: `value` is `Option<base>`.
     fn write_optional_scalar(&self) -> TokenStream {
-        let inner = self.inner_rust_path.as_ref();
         match &self.ty.base_type {
             // buffa: Option<EnumValue<E>>; prost: Option<i32>.
-            BaseType::Enum(_) => match self.runtime {
-                Runtime::Buffa => quote! {
-                    value.map(|e| ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(e)))
-                },
-                Runtime::Prost => quote! {
-                    value.map(|e| <#inner as ::core::convert::From<_>>::from(e) as i32)
-                },
-            },
+            BaseType::Enum(_) => {
+                let store = self.enum_store(quote! { e });
+                quote! { value.map(|e| #store) }
+            }
             // Option<String> etc. store directly.
             _ => quote! { value },
         }
     }
 
     fn write_repeated(&self) -> TokenStream {
-        let inner = self.inner_rust_path.as_ref();
         match &self.ty.base_type {
-            BaseType::Enum(_) => match self.runtime {
-                Runtime::Buffa => quote! {
-                    value.into_iter()
-                        .map(|e| ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(e)))
-                        .collect()
-                },
-                Runtime::Prost => quote! {
-                    value.into_iter()
-                        .map(|e| <#inner as ::core::convert::From<_>>::from(e) as i32)
-                        .collect()
-                },
-            },
+            BaseType::Enum(_) => {
+                let store = self.enum_store(quote! { e });
+                quote! { value.into_iter().map(|e| #store).collect() }
+            }
             BaseType::Message(_) => quote! {
                 value.into_iter().map(::core::convert::Into::into).collect()
             },
@@ -1349,27 +1334,115 @@ impl FieldAccessor {
     }
 
     fn write_enum(&self) -> TokenStream {
-        let inner = self.inner_rust_path.as_ref();
         // A hidden-zero field takes `Option<base>`; `None` stores the zero value.
         if self.is_hidden_zero_enum() {
-            return match self.runtime {
-                Runtime::Buffa => quote! {
-                    value
-                        .map(|e| ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(e)))
-                        .unwrap_or_default()
-                },
-                Runtime::Prost => quote! {
-                    value.map(|e| <#inner as ::core::convert::From<_>>::from(e) as i32).unwrap_or(0)
-                },
+            let store = self.enum_store(quote! { e });
+            let zero = match self.runtime {
+                Runtime::Buffa => quote! { unwrap_or_default() },
+                Runtime::Prost => quote! { unwrap_or(0) },
             };
+            return quote! { value.map(|e| #store).#zero };
         }
+        self.enum_store(quote! { value })
+    }
+
+    /// The stored form of the bare enum `value`: buffa's `EnumValue<E>`, prost's `i32`.
+    fn enum_store(&self, value: TokenStream) -> TokenStream {
+        let inner = self.inner_rust_path.as_ref();
         match self.runtime {
             Runtime::Buffa => quote! {
-                ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(value))
+                ::buffa::EnumValue::Known(<#inner as ::core::convert::From<_>>::from(#value))
             },
             Runtime::Prost => quote! {
-                <#inner as ::core::convert::From<_>>::from(value) as i32
+                <#inner as ::core::convert::From<_>>::from(#value) as i32
             },
+        }
+    }
+
+    /// The constructor parameter of a required field: the bare type, without the `Option` of a
+    /// singular message or explicit-presence scalar.
+    fn required_ctor_param(&self) -> TokenStream {
+        let ident = &self.ident;
+        if self.json.is_some() {
+            return quote! { #ident: ::pyo3::Bound<'_, ::pyo3::PyAny> };
+        }
+        let ty = if self.py_type_is_optional() {
+            self.input_base_type()
+        } else {
+            self.input_type()
+        };
+        quote! { #ident: #ty }
+    }
+
+    /// The constructor parameter of an optional field. A field whose Python type is already
+    /// `Option<..>` is not wrapped again: pyo3 cannot coerce an `Option<Option<T>>` argument.
+    fn optional_ctor_param(&self) -> TokenStream {
+        let ident = &self.ident;
+        if self.json.is_some() {
+            return quote! { #ident: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>> };
+        }
+        let ty = self.input_type();
+        if self.py_type_is_optional() {
+            quote! { #ident: #ty }
+        } else {
+            quote! { #ident: ::core::option::Option<#ty> }
+        }
+    }
+
+    /// The constructor statement storing a required argument.
+    fn required_ctor_assign(&self) -> TokenStream {
+        let ident = &self.ident;
+        let store = match self.json {
+            Some(json) => self.json_store(json),
+            None => self.write_expr(),
+        };
+        // The store expression of an `Option` field reads an `Option`.
+        if self.json.is_none() && self.py_type_is_optional() {
+            quote! {
+                {
+                    let value = ::core::option::Option::Some(#ident);
+                    inner.#ident = #store;
+                }
+            }
+        } else {
+            let bind = bind_value(ident);
+            quote! {
+                {
+                    #bind
+                    inner.#ident = #store;
+                }
+            }
+        }
+    }
+
+    /// The constructor statement storing an optional argument.
+    fn optional_ctor_assign(&self) -> TokenStream {
+        let ident = &self.ident;
+        if let Some(json) = self.json {
+            let store = self.json_store(json);
+            return quote! {
+                if let ::core::option::Option::Some(value) = #ident {
+                    inner.#ident = #store;
+                }
+            };
+        }
+        // Bind `value` for the store expression.
+        let store = self.write_expr();
+        if self.py_type_is_optional() {
+            // The whole `Option` argument is stored; an omitted one is `None`.
+            let bind = bind_value(ident);
+            quote! {
+                {
+                    #bind
+                    inner.#ident = #store;
+                }
+            }
+        } else {
+            quote! {
+                if let ::core::option::Option::Some(value) = #ident {
+                    inner.#ident = #store;
+                }
+            }
         }
     }
 
@@ -1652,17 +1725,12 @@ fn py_type_for(ty: &UnifiedType, in_project: bool) -> TokenStream {
         BaseType::Float32 => quote! { f32 },
         BaseType::Float64 => quote! { f64 },
         BaseType::Unit => quote! { () },
-        BaseType::Message(n) | BaseType::Enum(n) => {
-            if in_project {
-                let w = wrapper_ident(n);
-                quote! { #w }
-            } else {
-                // Foreign type (no wrapper): fall back to the bare simple name.
-                let id = format_ident!("{}", extract_simple_type_name(n));
-                quote! { #id }
-            }
+        BaseType::Message(n) | BaseType::Enum(n) if in_project => {
+            let w = wrapper_ident(n);
+            quote! { #w }
         }
-        BaseType::OneOf(n) => {
+        // A foreign type (no wrapper) or a oneof enum: the bare simple name.
+        BaseType::Message(n) | BaseType::Enum(n) | BaseType::OneOf(n) => {
             let id = format_ident!("{}", extract_simple_type_name(n));
             quote! { #id }
         }
@@ -1714,34 +1782,8 @@ fn constructor(
     let (required, optional): (Vec<&FieldAccessor>, Vec<&FieldAccessor>) =
         accessors.iter().partition(is_required);
 
-    // A required argument takes the bare type, without the `Option` of a singular message or
-    // explicit-presence scalar.
-    let required_params = required.iter().map(|a| {
-        let ident = &a.ident;
-        if a.json.is_some() {
-            return quote! { #ident: ::pyo3::Bound<'_, ::pyo3::PyAny> };
-        }
-        let ty = if a.py_type_is_optional() {
-            a.input_base_type()
-        } else {
-            a.input_type()
-        };
-        quote! { #ident: #ty }
-    });
-    // A field whose Python type is already `Option<..>` is not wrapped again: pyo3 cannot coerce
-    // an `Option<Option<T>>` argument.
-    let optional_params = optional.iter().map(|a| {
-        let ident = &a.ident;
-        if a.json.is_some() {
-            return quote! { #ident: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>> };
-        }
-        let ty = a.input_type();
-        if a.py_type_is_optional() {
-            quote! { #ident: #ty }
-        } else {
-            quote! { #ident: ::core::option::Option<#ty> }
-        }
-    });
+    let required_params = required.iter().map(|a| a.required_ctor_param());
+    let optional_params = optional.iter().map(|a| a.optional_ctor_param());
     let oneof_params = oneofs.iter().flat_map(OneofAccessor::ctor_params);
     let params = required_params.chain(optional_params).chain(oneof_params);
 
@@ -1765,59 +1807,8 @@ fn constructor(
     sig_parts.extend(optional_idents.iter().map(|ident| quote! { #ident = None }));
     let sig = quote! { #(#sig_parts),* };
 
-    let required_assigns = required.iter().map(|a| {
-        let ident = &a.ident;
-        let store = match a.json {
-            Some(json) => a.json_store(json),
-            None => a.write_expr(),
-        };
-        // The store expression of an `Option` field reads an `Option`.
-        if a.json.is_none() && a.py_type_is_optional() {
-            quote! {
-                {
-                    let value = ::core::option::Option::Some(#ident);
-                    inner.#ident = #store;
-                }
-            }
-        } else {
-            let bind = bind_value(ident);
-            quote! {
-                {
-                    #bind
-                    inner.#ident = #store;
-                }
-            }
-        }
-    });
-    let optional_assigns = optional.iter().map(|a| {
-        let ident = &a.ident;
-        if let Some(json) = a.json {
-            let store = a.json_store(json);
-            return quote! {
-                if let ::core::option::Option::Some(value) = #ident {
-                    inner.#ident = #store;
-                }
-            };
-        }
-        // Bind `value` for the store expression.
-        let store = a.write_expr();
-        if a.py_type_is_optional() {
-            // The whole `Option` argument is stored; an omitted one is `None`.
-            let bind = bind_value(ident);
-            quote! {
-                {
-                    #bind
-                    inner.#ident = #store;
-                }
-            }
-        } else {
-            quote! {
-                if let ::core::option::Option::Some(value) = #ident {
-                    inner.#ident = #store;
-                }
-            }
-        }
-    });
+    let required_assigns = required.iter().map(|a| a.required_ctor_assign());
+    let optional_assigns = optional.iter().map(|a| a.optional_ctor_assign());
     let oneof_assigns = oneofs.iter().flat_map(OneofAccessor::ctor_assigns);
     // A free-form JSON argument can fail to convert.
     let (ret, result) = if accessors.iter().any(|a| a.json.is_some()) {

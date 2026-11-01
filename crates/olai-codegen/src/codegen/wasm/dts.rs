@@ -16,8 +16,9 @@ use crate::codegen::ServiceHandler;
 pub(crate) fn generate_dts(services: &[ServiceHandler<'_>]) -> String {
     let bindings = services
         .first()
-        .and_then(|s| s.config.bindings.as_ref())
-        .expect("bindings config required for wasm output");
+        .expect("binding output has a service")
+        .config
+        .bindings_config();
     let aggregate = &bindings.aggregate_client_name;
 
     // Collect every request/response model type referenced, so we can import them from `./models`.
@@ -107,7 +108,7 @@ pub(crate) fn generate_dts(services: &[ServiceHandler<'_>]) -> String {
 
 /// One method signature line: `methodName(request: ReqType): Promise<RespType>;`.
 fn method_signature(method: &crate::codegen::MethodHandler<'_>) -> String {
-    let name = method.binding_method_name_str().to_case(Case::Camel);
+    let name = method.js_method_name();
     let param = match method.input_type() {
         Some(ty) => format!("request: {ty}"),
         None => String::new(),
