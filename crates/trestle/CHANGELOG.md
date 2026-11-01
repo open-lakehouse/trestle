@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.18](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.17...olai-trestle-v0.0.18) - 2026-11-01
+
+### Fixed
+
+- [**breaking**] review fixes for the codegen refactor (#196, #237) (#238)
+
 ## [0.0.17](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.16...olai-trestle-v0.0.17) - 2026-10-31
 
 ### Added
