@@ -14,10 +14,11 @@
 //! - [`downscope_token`]: an access token exchanged at STS for one restricted by a
 //!   Credential Access Boundary.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use reqwest::Method;
+use reqwest::{Client, Method};
 use serde::Serialize;
 
 use super::GcpCredentialProvider;
@@ -30,7 +31,7 @@ use crate::bearer::{
     TOKEN_EXCHANGE_GRANT,
 };
 use crate::retry::RetryExt;
-use crate::service::make_service;
+use crate::service::{HttpService, make_service};
 use crate::{ClientOptions, Error, Result, RetryConfig};
 
 /// The OAuth scope of all Google Cloud APIs.
@@ -93,22 +94,46 @@ pub async fn impersonate_access_token(
         .trim_end_matches('/');
     let url = format!("{endpoint}/v1/projects/-/serviceAccounts/{email}:generateAccessToken");
     let base = base.get_credential().await?;
+    let client = options.client_options.client()?;
+    let service = make_service(client.clone(), None);
+    generate_access_token(
+        &client,
+        &service,
+        &options.retry,
+        &url,
+        &base.bearer,
+        lifetime,
+        scopes,
+    )
+    .await
+}
 
+/// One `generateAccessToken` call to `url` (the full resource URL of the service
+/// account), authenticated with `bearer`. Shared by [`impersonate_access_token`] and
+/// the impersonation step of the WIF provider, so both fail the same way on a bad
+/// `expireTime`.
+pub(crate) async fn generate_access_token(
+    client: &Client,
+    service: &Arc<dyn HttpService>,
+    retry: &RetryConfig,
+    url: &str,
+    bearer: &str,
+    lifetime: Duration,
+    scopes: &[&str],
+) -> Result<GcpToken> {
     #[derive(Serialize)]
     struct Request<'a> {
         scope: &'a [&'a str],
         lifetime: String,
     }
-    let client = options.client_options.client()?;
-    let service = make_service(client.clone(), None);
     let response: ImpersonateTokenResponse = client
         .request(Method::POST, url)
-        .bearer_auth(&base.bearer)
+        .bearer_auth(bearer)
         .json(&Request {
             scope: scopes,
             lifetime: format!("{}s", lifetime.as_secs()),
         })
-        .retryable(&options.retry, service)
+        .retryable(retry, service.clone())
         .idempotent(true)
         .send()
         .await
