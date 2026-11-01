@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.11...olai-codegen-v0.0.12) - 2026-11-01
+
+### Documentation
+
+- fix stale claims and AI phrasing in repo docs (#256)
+
 ## [0.0.11](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.10...olai-codegen-v0.0.11) - 2026-11-01
 
 ### Changed

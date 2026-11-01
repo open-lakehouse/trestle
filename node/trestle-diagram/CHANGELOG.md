@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.3...trestle-diagram-v0.5.4) - 2026-11-01
+
+### Fixed
+
+- surface catalog and layout errors, remove type escapes (#255)
+
 ## [0.5.3](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.2...trestle-diagram-v0.5.3) - 2026-10-26
 
 ### Added

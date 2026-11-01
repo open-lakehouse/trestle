@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-store-v0.0.6...olai-store-v0.0.7) - 2026-11-01
+
+### Added
+
+- index declared property paths for search pushdown (#260)
+
+### Changed
+
+- drop narration and alias the txn closure type (#252)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-store-v0.0.5...olai-store-v0.0.6) - 2026-07-12
 
 ### Added
