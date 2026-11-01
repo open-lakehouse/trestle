@@ -8,6 +8,8 @@ pub mod list;
 pub mod new;
 pub mod workspace;
 
+mod util;
+
 use std::sync::LazyLock;
 
 use clap::{Parser, Subcommand};
@@ -113,7 +115,7 @@ mod tests {
 
     #[test]
     fn generate_descriptors_is_a_path_flag() {
-        // The escape hatch: `--descriptors <path>` (no longer env-backed).
+        // `--descriptors <path>` takes a pre-built descriptor file.
         let cli = parse(&["trestle", "generate", "--descriptors", "api.bin"]);
         let Commands::Generate(args) = cli.command else {
             panic!("expected generate");

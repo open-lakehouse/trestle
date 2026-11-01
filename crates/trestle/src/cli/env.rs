@@ -39,6 +39,8 @@ use olai_stack_topology::{
 
 use crate::error::{Error, Result};
 
+use super::util::{ensure_writable_dir, parse_selection, validate_name};
+
 /// The `trestle env` subcommand group.
 #[derive(Subcommand)]
 pub enum EnvCommand {
@@ -192,21 +194,6 @@ fn parse_knob_override(s: &str) -> std::result::Result<((String, String), String
     Ok(((module.to_string(), knob.to_string()), value.to_string()))
 }
 
-/// Parse a `key=value[,value...]` selection (shared shape with `trestle new`'s
-/// `--select`). Used here for `--prefer role=provider[,provider]`.
-fn parse_selection(s: &str) -> std::result::Result<(String, Vec<String>), String> {
-    let (key, vals) = s
-        .split_once('=')
-        .ok_or_else(|| format!("expected key=value[,value], got `{s}`"))?;
-    let values: Vec<String> = vals
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(String::from)
-        .collect();
-    Ok((key.to_string(), values))
-}
-
 pub fn run(cmd: EnvCommand) -> Result<()> {
     match cmd {
         EnvCommand::New(args) => run_new(*args),
@@ -215,10 +202,6 @@ pub fn run(cmd: EnvCommand) -> Result<()> {
         EnvCommand::Diagram(args) => run_diagram(args),
     }
 }
-
-// ---------------------------------------------------------------------------
-// env new
-// ---------------------------------------------------------------------------
 
 fn run_new(args: EnvNewArgs) -> Result<()> {
     let out_dir = args
@@ -247,7 +230,7 @@ pub(super) fn new_env(
     args: EnvNewArgs,
     member: Option<(&WorkspaceManifest, &WorkspaceEnv)>,
 ) -> Result<bool> {
-    validate_env_name(&args.name)?;
+    validate_name("env name", &args.name)?;
     let out_dir = args
         .out_dir
         .clone()
@@ -349,7 +332,11 @@ pub(super) fn new_env(
         // setting them and running `env render` picks up where this left off.
         Err(PlanError::UnresolvedSecrets { vars }) => {
             let preview = catalog.plan(&selection, &ctx).map_err(map_plan_err)?;
-            write_manifest(&preview, &selection, &ctx, &out_dir)?;
+            persist_manifest(
+                &preview,
+                &EnvManifest::new(selection.clone(), ctx.clone()),
+                &out_dir,
+            )?;
             write_deploy_guide(&preview, &out_dir)?;
             return Err(unset_secrets(
                 &vars,
@@ -365,14 +352,14 @@ pub(super) fn new_env(
         println!("{summary}\n");
         println!("{}", layout_report(&plan));
     } else {
-        cliclack::note("Configuration", summary).map_err(io_err)?;
-        cliclack::note("Gateway layout", layout_report(&plan)).map_err(io_err)?;
+        cliclack::note("Configuration", summary).map_err(Error::prompt)?;
+        cliclack::note("Gateway layout", layout_report(&plan)).map_err(Error::prompt)?;
         let proceed = cliclack::confirm("Render this environment?")
             .initial_value(true)
             .interact()
-            .map_err(io_err)?;
+            .map_err(Error::prompt)?;
         if !proceed {
-            cliclack::outro_cancel("Cancelled.").map_err(io_err)?;
+            cliclack::outro_cancel("Cancelled.").map_err(Error::prompt)?;
             return Ok(false);
         }
     }
@@ -389,11 +376,11 @@ fn write_env(
     plan: &olai_stack_topology::Plan,
     selection: &Selection,
     ctx: &PlanCtx,
-    dir: &std::path::Path,
+    dir: &Path,
 ) -> Result<()> {
     let manifest = EnvManifest::new(selection.clone(), ctx.clone());
     write_rendered(plan, &manifest, &baseline_catalog(), dir)?;
-    write_manifest(plan, selection, ctx, dir)
+    persist_manifest(plan, &manifest, dir)
 }
 
 /// The file every render writes beside `compose.yaml`: the settled plan as JSON.
@@ -431,7 +418,7 @@ fn export_meta() -> ExportMeta {
 /// The catalog `manifest` plans against: the baseline, with the module manifests its
 /// `[catalog] manifests` lists (relative to `dir`) merged over it in order, so a manifest
 /// module with a baseline id replaces that module.
-fn load_catalog(manifest: &EnvManifest, dir: &Path) -> Result<Catalog> {
+pub(super) fn load_catalog(manifest: &EnvManifest, dir: &Path) -> Result<Catalog> {
     let mut catalog = baseline_catalog_with(&load_local_credentials(dir)?);
     for rel in &manifest.catalog.manifests {
         let path = dir.join(rel);
@@ -443,23 +430,12 @@ fn load_catalog(manifest: &EnvManifest, dir: &Path) -> Result<Catalog> {
     Ok(catalog)
 }
 
-/// Persist the `env.toml` manifest for `selection` in `dir`, followed by a commented reference
-/// of what `plan` leaves at its defaults (knobs, hosted connections).
-fn write_manifest(
-    plan: &olai_stack_topology::Plan,
-    selection: &Selection,
-    ctx: &PlanCtx,
-    dir: &std::path::Path,
-) -> Result<()> {
-    persist_manifest(plan, &EnvManifest::new(selection.clone(), ctx.clone()), dir)
-}
-
 /// Persist `manifest` as the `env.toml` in `dir`, followed by a commented reference of what
 /// `plan` (planned from it) leaves at its defaults.
 fn persist_manifest(
     plan: &olai_stack_topology::Plan,
     manifest: &EnvManifest,
-    dir: &std::path::Path,
+    dir: &Path,
 ) -> Result<()> {
     let selection = &manifest.selection;
     std::fs::create_dir_all(dir).map_err(|e| Error::io_at(dir, e))?;
@@ -496,11 +472,7 @@ fn non_default_knobs(selection: &Selection) -> Vec<String> {
 
 /// A short, human summary of what is about to be rendered: the planned modules
 /// and only the knobs that differ from their defaults.
-fn config_summary(
-    plan: &olai_stack_topology::Plan,
-    selection: &Selection,
-    dir: &std::path::Path,
-) -> String {
+fn config_summary(plan: &olai_stack_topology::Plan, selection: &Selection, dir: &Path) -> String {
     let modules: Vec<String> = plan
         .graph
         .nodes
@@ -542,11 +514,11 @@ fn knob_reference(plan: &olai_stack_topology::Plan, selection: &Selection) -> St
     for module in &plan.graph.nodes {
         let id = module.id();
         let overridden = selection.knob_overrides.get(id);
-        let remaining: Vec<&Knob> = module
+        let remaining: Vec<(&Knob, &str)> = module
             .knobs()
             .iter()
             .filter(|k| overridden.is_none_or(|o| !o.contains_key(&k.key)))
-            .filter(|k| k.default.is_some())
+            .filter_map(|k| Some((k, k.default.as_deref()?)))
             .collect();
         if remaining.is_empty() {
             continue;
@@ -557,8 +529,7 @@ fn knob_reference(plan: &olai_stack_topology::Plan, selection: &Selection) -> St
         } else {
             let _ = writeln!(out, "# [selection.knob_overrides.{id}]");
         }
-        for knob in remaining {
-            let default = knob.default.as_deref().unwrap_or_default();
+        for (knob, default) in remaining {
             let _ = writeln!(out, "# {} = {}", knob.key, toml_string(default));
         }
     }
@@ -615,7 +586,7 @@ fn toml_string(value: &str) -> String {
     toml::Value::String(value.to_string()).to_string()
 }
 
-fn report_written(plan: &olai_stack_topology::Plan, dir: &std::path::Path) {
+fn report_written(plan: &olai_stack_topology::Plan, dir: &Path) {
     print!("{}", next_steps(plan, dir));
 }
 
@@ -655,7 +626,7 @@ fn unset_secrets(vars: &[String], dir: &Path, saved: &str) -> Error {
 
 /// What to do after rendering: start the stack, where it is reachable, and the generated
 /// files a user is expected to read or edit.
-fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String {
+fn next_steps(plan: &olai_stack_topology::Plan, dir: &Path) -> String {
     use std::fmt::Write as _;
 
     let dir = dir.display();
@@ -744,10 +715,6 @@ fn next_steps(plan: &olai_stack_topology::Plan, dir: &std::path::Path) -> String
     );
     out
 }
-
-// ---------------------------------------------------------------------------
-// env render
-// ---------------------------------------------------------------------------
 
 /// The `env.toml` in `dir`, with a hint to create one when it is missing.
 fn read_env_manifest(dir: &Path) -> Result<EnvManifest> {
@@ -853,10 +820,6 @@ pub(super) fn render_env(
     Ok(plan)
 }
 
-// ---------------------------------------------------------------------------
-// env diagram
-// ---------------------------------------------------------------------------
-
 fn run_diagram(args: EnvDiagramArgs) -> Result<()> {
     let manifest = read_env_manifest(&args.dir)?;
     let catalog = load_catalog(&manifest, &args.dir)?;
@@ -870,10 +833,6 @@ fn run_diagram(args: EnvDiagramArgs) -> Result<()> {
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// env list-modules
-// ---------------------------------------------------------------------------
 
 fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
     let (catalog, manifests) = match &args.dir {
@@ -954,52 +913,12 @@ fn fmt_knob(knob: &Knob) -> String {
     line
 }
 
-// ---------------------------------------------------------------------------
-// shared helpers
-// ---------------------------------------------------------------------------
-
-/// Validate the environment name before it derives an output directory. Matches
-/// `^[a-z][a-z0-9-]*$` (as `trestle new` does for project names) so a name can't
-/// escape into a path-traversal target.
-fn validate_env_name(name: &str) -> Result<()> {
-    let mut chars = name.chars();
-    let valid = matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::InvalidVariable {
-            name: "env name".to_string(),
-            reason: format!(
-                "`{name}` must match `^[a-z][a-z0-9-]*$` (lowercase letters, digits, and dashes; \
-                 must start with a letter)"
-            ),
-        })
-    }
-}
-
-/// Create `dir` (and parents), erroring if it already exists non-empty and
-/// `force` is not set — mirroring `trestle new`.
-fn ensure_writable_dir(dir: &std::path::Path, force: bool) -> Result<()> {
-    if dir.exists() {
-        let non_empty = dir
-            .read_dir()
-            .map(|mut it| it.next().is_some())
-            .unwrap_or(false);
-        if non_empty && !force {
-            return Err(Error::OutputExists(dir.to_path_buf()));
-        }
-    }
-    std::fs::create_dir_all(dir).map_err(|e| Error::io_at(dir, e))?;
-    Ok(())
-}
-
 /// The file beside `env.toml` that may supply secrets for hosted resources (git-ignored).
 const SECRETS_FILE: &str = SECRETS_ENV_PATH;
 
 /// The secrets `${VAR}` references in hosted resources resolve against: `KEY=VALUE` lines
 /// from [`SECRETS_FILE`] in `dir` (if present), overridden by the process environment.
-fn load_secrets(dir: &std::path::Path) -> Result<Secrets> {
+fn load_secrets(dir: &Path) -> Result<Secrets> {
     let mut secrets = Secrets::new();
     let path = dir.join(SECRETS_FILE);
     if path.is_file() {
@@ -1017,7 +936,7 @@ fn load_secrets(dir: &std::path::Path) -> Result<Secrets> {
 /// The in-stack services' credentials an environment in `dir` keeps in [`SECRETS_FILE`] (or the
 /// process environment) under their `LOCAL_*` names; the ones not set keep their development
 /// defaults.
-fn load_local_credentials(dir: &std::path::Path) -> Result<LocalCredentials> {
+fn load_local_credentials(dir: &Path) -> Result<LocalCredentials> {
     LocalCredentials::from_secrets(&load_secrets(dir)?)
         .map_err(|e| Error::other(format!("{}: {e}", dir.join(SECRETS_FILE).display())))
 }
@@ -1063,17 +982,9 @@ fn map_manifest_err(e: ManifestError) -> Error {
     Error::other(format!("environment manifest error: {e}"))
 }
 
-fn io_err(e: std::io::Error) -> Error {
-    Error::PlainIo(e)
-}
-
-// ---------------------------------------------------------------------------
-// interactive wizard
-// ---------------------------------------------------------------------------
-
 mod wizard {
     use super::{
-        Catalog, GatewaySettings, Knob, KnobKind, ModuleId, PlanCtx, Result, Selection, io_err,
+        Catalog, Error, GatewaySettings, Knob, KnobKind, ModuleId, PlanCtx, Result, Selection,
         map_plan_err,
     };
     use olai_stack_topology::{Module, Role};
@@ -1103,7 +1014,7 @@ mod wizard {
         mode: Option<Mode>,
         ask_client: bool,
     ) -> Result<()> {
-        cliclack::intro("trestle env new").map_err(io_err)?;
+        cliclack::intro("trestle env new").map_err(Error::prompt)?;
 
         selection.modules = ask_modules(catalog, &selection.modules)?;
         if !access_preset {
@@ -1138,7 +1049,7 @@ mod wizard {
             cliclack::confirm("Generate a Python client workspace (uv + marimo)?")
                 .initial_value(false)
                 .interact()
-                .map_err(io_err)?;
+                .map_err(Error::prompt)?;
         if !selection.client.python {
             return Ok(());
         }
@@ -1158,7 +1069,7 @@ mod wizard {
             ))
             .initial_value(true)
             .interact()
-            .map_err(io_err)?;
+            .map_err(Error::prompt)?;
         }
         Ok(())
     }
@@ -1193,7 +1104,7 @@ mod wizard {
                 .initial_values(initial)
                 .required(true)
                 .interact()
-                .map_err(io_err)?;
+                .map_err(Error::prompt)?;
         let managed = preselected
             .iter()
             .filter(|id| catalog.get(id).is_some_and(|m| gateway_managed(m.as_ref())));
@@ -1225,7 +1136,7 @@ mod wizard {
             )
             .initial_value(current)
             .interact()
-            .map_err(io_err)
+            .map_err(Error::prompt)
     }
 
     /// Offer the recommended defaults first; customizing is opt-in.
@@ -1244,7 +1155,7 @@ mod wizard {
             )
             .initial_value(Mode::Defaults)
             .interact()
-            .map_err(io_err)
+            .map_err(Error::prompt)
     }
 
     /// For each selected module, prompt the knobs `mode` covers — skipping any the
@@ -1274,7 +1185,7 @@ mod wizard {
             if key.is_empty() && !offer_advanced {
                 continue;
             }
-            cliclack::log::step(format!("Configure {id}")).map_err(io_err)?;
+            cliclack::log::step(format!("Configure {id}")).map_err(Error::prompt)?;
             let mut asked = key;
             if offer_advanced {
                 let keys: Vec<&str> = advanced.iter().map(|k| k.key.as_str()).collect();
@@ -1284,14 +1195,14 @@ mod wizard {
                 ))
                 .initial_value(false)
                 .interact()
-                .map_err(io_err)?;
+                .map_err(Error::prompt)?;
                 if tune {
                     asked.extend(advanced);
                 }
             }
             for knob in asked {
                 if let Some(help) = &knob.help {
-                    cliclack::log::info(format!("  {help}")).map_err(io_err)?;
+                    cliclack::log::info(format!("  {help}")).map_err(Error::prompt)?;
                 }
                 if let Some(value) = prompt_knob(id, knob)?
                     && !is_default(knob, &value)
@@ -1335,7 +1246,7 @@ mod wizard {
                 let value = cliclack::confirm(prompt)
                     .initial_value(initial)
                     .interact()
-                    .map_err(io_err)?;
+                    .map_err(Error::prompt)?;
                 Ok(Some(value.to_string()))
             }
             KnobKind::Enum { options } => {
@@ -1347,7 +1258,7 @@ mod wizard {
                 if let Some(default) = &knob.default {
                     select = select.initial_value(default.clone());
                 }
-                Ok(Some(select.interact().map_err(io_err)?))
+                Ok(Some(select.interact().map_err(Error::prompt)?))
             }
             KnobKind::Integer { min, max } => prompt_int(prompt, knob, *min, *max),
             KnobKind::Port => prompt_int(prompt, knob, Some(1), Some(65535)),
@@ -1359,7 +1270,7 @@ mod wizard {
                 if !knob.required {
                     input = input.required(false);
                 }
-                let value: String = input.interact().map_err(io_err)?;
+                let value: String = input.interact().map_err(Error::prompt)?;
                 Ok(non_empty(value))
             }
         }
@@ -1380,7 +1291,7 @@ mod wizard {
         if !knob.required {
             input = input.required(false);
         }
-        let value: String = input.interact().map_err(io_err)?;
+        let value: String = input.interact().map_err(Error::prompt)?;
         Ok(non_empty(value))
     }
 

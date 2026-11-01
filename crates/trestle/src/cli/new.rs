@@ -1,26 +1,15 @@
-//! `trestle new` — scaffold a new project from a base template (the lakehouse env)
-//! plus zero or more apps layered on top.
+//! `trestle new`: scaffold a project from a base template (default `lakehouse`) plus
+//! any apps layered on top.
 //!
-//! High-level steps:
-//! 1. Load the **base** (default: `lakehouse` from the embedded library, or a
-//!    custom path/git URL via `--template`/`--base`).
-//! 2. Load each **app** named in `--app` (repeatable; default: none).
-//! 3. Collect variable values from `--values`, `--set` overrides, prompts, and
-//!    manifest defaults. Variable definitions from the base and every app are
-//!    merged into a single map.
-//! 4. Derive legacy template flags (`with_frontend`, `with_ci`, …) from the
-//!    user's category selections so existing `.tmpl` files keep rendering
-//!    unchanged during the transition.
-//! 5. Resolve the active component set:
-//!    - the base's `always:` baseline,
-//!    - explicit `--select` picks (and the wizard's category picks once Phase 3
-//!      lands),
-//!    - each app's `lakehouse_requires:` (hard + soft),
-//!    - back-compat: `--profile` + `--with` + `when:` against vars.
-//! 6. Aggregate `provides:` across components into a single `stack` context.
-//! 7. Render the base's `template/` tree → each app's `template/` tree → each
-//!    component's `template/` tree, in topological order.
-//! 8. Run every root's `post_init:` hooks.
+//! 1. Load the base and each app (embedded name, git URL, or local path).
+//! 2. Collect variables from `--set`, `--values`, the wizard, and manifest defaults.
+//! 3. Map category selections onto the `with_*` flags the templates read.
+//! 4. Resolve the component set from the base's `always:` baseline, the selections,
+//!    each app's `lakehouse_requires:`, and the `--profile` / `--with` shims.
+//! 5. Merge the `provides:` blocks of all components into one `stack` context.
+//! 6. Render the base, then each app, then each component. Write `trestle.yaml` and
+//!    `buf.gen.yaml`.
+//! 7. Run each root's `post_init:` hooks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -39,6 +28,8 @@ use crate::template::wizard::{WizardInput, run_wizard};
 use crate::template::{
     ComponentCatalog, Renderer, TemplateSource, collect_variables, load_template, render_tree,
 };
+
+use super::util::{ensure_writable_dir, parse_selection, validate_name};
 
 #[derive(Args, Clone)]
 pub struct NewArgs {
@@ -108,77 +99,22 @@ fn parse_key_val(s: &str) -> std::result::Result<(String, String), String> {
         .ok_or_else(|| format!("expected key=value, got `{s}`"))
 }
 
-fn parse_selection(s: &str) -> std::result::Result<(String, Vec<String>), String> {
-    let (key, vals) = s
-        .split_once('=')
-        .ok_or_else(|| format!("expected category=value[,value], got `{s}`"))?;
-    let values: Vec<String> = vals
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .map(String::from)
-        .collect();
-    Ok((key.to_string(), values))
-}
-
-/// Validate the project name before it is used to derive the output directory
-/// or the default `project_name` variable.
-///
-/// The name must match `^[a-z][a-z0-9-]*$` — the same pattern templates declare
-/// for the `project_name` variable. Enforcing it here (rather than only later,
-/// during variable collection) prevents path-traversal names like `../foo` or
-/// absolute paths from being turned into an output directory before the
-/// per-variable validation ever runs (notably in `--non-interactive` mode).
-fn validate_project_name(name: &str) -> Result<()> {
-    let valid = {
-        let mut chars = name.chars();
-        match chars.next() {
-            Some(c) if c.is_ascii_lowercase() => {
-                chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-            }
-            _ => false,
-        }
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::InvalidVariable {
-            name: "project_name".to_string(),
-            reason: format!(
-                "`{name}` must match `^[a-z][a-z0-9-]*$` (lowercase letters, digits, and dashes; \
-                 must start with a letter)"
-            ),
-        })
-    }
-}
-
 pub fn run(args: NewArgs) -> Result<()> {
     // Reject invalid / path-traversal names before touching the filesystem.
-    validate_project_name(&args.name)?;
+    validate_name("project_name", &args.name)?;
 
     let out_dir = args
         .out_dir
         .clone()
         .unwrap_or_else(|| PathBuf::from(&args.name));
-    if out_dir.exists() {
-        let is_empty = out_dir
-            .read_dir()
-            .map(|mut it| it.next().is_none())
-            .unwrap_or(false);
-        if !is_empty && !args.force {
-            return Err(Error::OutputExists(out_dir));
-        }
-    }
-    fs::create_dir_all(&out_dir).map_err(|e| Error::io_at(&out_dir, e))?;
+    ensure_writable_dir(&out_dir, args.force)?;
 
-    // ----- Load base (and optionally each app) -------------------------------
     let base = load_base(&args.template)?;
     let mut apps: Vec<LoadedTemplate> = Vec::new();
     for app in &args.apps {
         apps.push(load_app(app)?);
     }
 
-    // ----- Build initial state from CLI + values file ------------------------
     let mut overrides: BTreeMap<String, String> = args.overrides.iter().cloned().collect();
     if !overrides.contains_key("project_name") {
         overrides.insert("project_name".to_string(), args.name.clone());
@@ -199,7 +135,6 @@ pub fn run(args: NewArgs) -> Result<()> {
         merge_structured_values(path, &mut overrides, &mut selections, &mut chosen_app_names)?;
     }
 
-    // ----- Run the wizard (interactive runs only) ----------------------------
     if !args.non_interactive {
         let available_app_templates = load_available_apps()?;
         let available_refs: Vec<&LoadedTemplate> = available_app_templates.iter().collect();
@@ -230,16 +165,15 @@ pub fn run(args: NewArgs) -> Result<()> {
                 chosen_app_names.push(name);
             }
         }
+    }
 
-        // Apps the user picked in the wizard need their LoadedTemplate too.
-        for name in &chosen_app_names {
-            if !apps.iter().any(|a| a.manifest.name == *name) {
-                apps.push(load_app(name)?);
-            }
+    // Apps from `--app`, the `--values` file, and the wizard all need their template loaded.
+    for name in &chosen_app_names {
+        if !apps.iter().any(|a| a.manifest.name == *name) {
+            apps.push(load_app(name)?);
         }
     }
 
-    // ----- Merge variables, then collect values ------------------------------
     let merged_manifest = merge_variables(&base, &apps)?;
     let renderer = Renderer::new();
     let mut vars = collect_variables(
@@ -249,16 +183,14 @@ pub fn run(args: NewArgs) -> Result<()> {
         args.non_interactive,
     )?;
 
-    // ----- Translate category selections + apps into legacy var flags --------
     apply_app_category_compat(&apps, &selections, &mut vars);
 
-    // ----- Resolve components ------------------------------------------------
-    let initial_ctx = build_intermediate_ctx(&vars, &merged_manifest.template_context);
+    let initial_ctx = build_intermediate_ctx(&vars, &merged_manifest.template_context)?;
 
     // The explicit selection list = component-typed picks for lakehouse categories
     // (option strings for app-private categories are *not* components, so they're
     // filtered out by the catalog check).
-    let explicit_selections: Vec<String> = collect_component_selections(&base, &apps, &selections);
+    let explicit_selections: Vec<String> = collect_component_selections(&base, &selections);
 
     let roots: Vec<ScaffoldRoot<'_>> = std::iter::once(ScaffoldRoot {
         root: base.root.as_path(),
@@ -281,9 +213,8 @@ pub fn run(args: NewArgs) -> Result<()> {
     validate_resolved(&components)?;
 
     let merged_static_ctx = merge_static_context(&base, &apps);
-    let final_ctx = build_final_ctx(&vars, &merged_static_ctx);
+    let final_ctx = build_final_ctx(&vars, &merged_static_ctx, &renderer)?;
 
-    // ----- Render base, then apps, then components ---------------------------
     let parent_written = render_tree(&base.root, &out_dir, &final_ctx, &renderer)?;
     tracing::info!(
         "rendered {parent_written} files from base `{}`",
@@ -303,13 +234,9 @@ pub fn run(args: NewArgs) -> Result<()> {
         );
     }
 
-    // ----- Emit the structured config + derived buf.gen.yaml -----------------
-    // `trestle.yaml` / `buf.gen.yaml` are no longer templated; they are produced
-    // programmatically from the same selections so they stay in lockstep with the
-    // codegen the CLI understands.
+    // Written from the resolved variables, so they match what `trestle generate` reads.
     emit_project_config(&args.name, &vars, &out_dir)?;
 
-    // ----- Post-init hooks ---------------------------------------------------
     run_post_init(
         &base.manifest.post_init,
         &out_dir,
@@ -358,8 +285,7 @@ pub fn run(args: NewArgs) -> Result<()> {
 }
 
 /// Load the base template, defaulting to the embedded `lakehouse` base. Accepts
-/// embedded names, git URLs, and local paths via the existing [`TemplateSource`]
-/// detection.
+/// embedded names, git URLs, and local paths via [`TemplateSource`] detection.
 fn load_base(spec: &str) -> Result<LoadedTemplate> {
     match TemplateSource::detect(spec) {
         TemplateSource::Embedded(name) => load_embedded_base(&name),
@@ -492,11 +418,9 @@ fn merge_static_context(
     out
 }
 
-/// Build the structured [`TrestleConfig`](crate::config::TrestleConfig) from the
-/// scaffold's resolved variables and write `trestle.yaml` + the derived
-/// `buf.gen.yaml` into the project root. Replaces the old `trestle.yaml.tmpl` /
-/// `buf.gen.yaml.tmpl` templating so the scaffolded config always matches what
-/// the CLI's `config` / `generate` commands understand.
+/// Build the [`TrestleConfig`](crate::config::TrestleConfig) from the resolved
+/// variables and write `trestle.yaml` and the derived `buf.gen.yaml` into the
+/// project root, so the scaffolded config matches what `config` and `generate` read.
 fn emit_project_config(
     project_name: &str,
     vars: &BTreeMap<String, crate::template::VariableValue>,
@@ -664,7 +588,6 @@ fn apply_app_category_compat(
 /// drive the compat var-fill above and aren't components.
 fn collect_component_selections(
     base: &LoadedTemplate,
-    apps: &[LoadedTemplate],
     selections: &BTreeMap<String, Vec<String>>,
 ) -> Vec<String> {
     let lakehouse_category_ids: BTreeSet<&str> = base
@@ -714,53 +637,53 @@ fn collect_component_selections(
     // belt-and-braces in case someone passes them at the top level.)
     chosen.retain(|n| n != "none");
 
-    let _ = apps;
     chosen
+}
+
+/// The JSON value a resolved variable takes in the MiniJinja context.
+fn variable_json(v: &crate::template::VariableValue) -> serde_json::Value {
+    match v {
+        crate::template::VariableValue::String(s) => serde_json::Value::String(s.clone()),
+        crate::template::VariableValue::Bool(b) => serde_json::Value::Bool(*b),
+    }
 }
 
 fn build_intermediate_ctx(
     vars: &BTreeMap<String, crate::template::VariableValue>,
     static_ctx: &BTreeMap<String, serde_yaml::Value>,
-) -> Value {
+) -> Result<Value> {
     let mut map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     for (k, v) in vars {
-        let json = match v {
-            crate::template::VariableValue::String(s) => serde_json::Value::String(s.clone()),
-            crate::template::VariableValue::Bool(b) => serde_json::Value::Bool(*b),
-        };
-        map.insert(k.clone(), json);
+        map.insert(k.clone(), variable_json(v));
     }
     for (k, v) in static_ctx {
-        if let Ok(j) = serde_json::to_value(v) {
-            map.insert(k.clone(), j);
-        }
+        let json = serde_json::to_value(v)
+            .map_err(|e| Error::Manifest(format!("template_context `{k}`: {e}")))?;
+        map.insert(k.clone(), json);
     }
-    Value::from_serialize(&map)
+    Ok(Value::from_serialize(&map))
 }
 
 fn build_final_ctx(
     vars: &BTreeMap<String, crate::template::VariableValue>,
     static_ctx: &BTreeMap<String, serde_yaml::Value>,
-) -> Value {
+    renderer: &Renderer,
+) -> Result<Value> {
     let mut map = serde_json::Map::new();
     for (k, v) in vars {
-        let json = match v {
-            crate::template::VariableValue::String(s) => serde_json::Value::String(s.clone()),
-            crate::template::VariableValue::Bool(b) => serde_json::Value::Bool(*b),
-        };
-        map.insert(k.clone(), json);
+        map.insert(k.clone(), variable_json(v));
     }
     // Static context: rendered through MiniJinja first so authors can use vars there too.
-    let renderer = Renderer::new();
-    let base = Value::from_serialize(map.clone());
+    let base = Value::from_serialize(&map);
     for (k, v) in static_ctx {
         let rendered = match v {
-            serde_yaml::Value::String(s) => renderer
-                .render_str(s, &base, &format!("template_context:{k}"))
-                .ok()
-                .map(serde_json::Value::String)
-                .unwrap_or_else(|| serde_json::Value::String(s.clone())),
-            other => serde_json::to_value(other).unwrap_or(serde_json::Value::Null),
+            serde_yaml::Value::String(s) => serde_json::Value::String(renderer.render_str(
+                s,
+                &base,
+                &format!("template_context:{k}"),
+            )?),
+            other => serde_json::to_value(other)
+                .map_err(|e| Error::Manifest(format!("template_context `{k}`: {e}")))?,
         };
         map.insert(k.clone(), rendered);
     }
@@ -768,7 +691,7 @@ fn build_final_ctx(
         "trestle".to_string(),
         serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }),
     );
-    Value::from_serialize(serde_json::Value::Object(map))
+    Ok(Value::from_serialize(serde_json::Value::Object(map)))
 }
 
 #[cfg(test)]
@@ -791,47 +714,5 @@ mod tests {
     #[test]
     fn parse_key_val_rejects_missing_equals() {
         assert!(parse_key_val("noequals").is_err());
-    }
-
-    #[test]
-    fn parse_selection_splits_and_trims_values() {
-        assert_eq!(
-            parse_selection("storage=a, b ,c").unwrap(),
-            (
-                "storage".to_string(),
-                vec!["a".to_string(), "b".to_string(), "c".to_string()]
-            )
-        );
-    }
-
-    #[test]
-    fn parse_selection_drops_empty_values() {
-        // Trailing comma / empty segments are filtered, yielding an empty pick.
-        assert_eq!(
-            parse_selection("storage=").unwrap(),
-            ("storage".to_string(), Vec::<String>::new())
-        );
-        assert_eq!(
-            parse_selection("storage=a,,").unwrap(),
-            ("storage".to_string(), vec!["a".to_string()])
-        );
-    }
-
-    #[test]
-    fn parse_selection_rejects_missing_equals() {
-        assert!(parse_selection("storage").is_err());
-    }
-
-    #[test]
-    fn validate_project_name_accepts_kebab() {
-        assert!(validate_project_name("my-app-2").is_ok());
-        assert!(validate_project_name("a").is_ok());
-    }
-
-    #[test]
-    fn validate_project_name_rejects_traversal_and_bad_chars() {
-        for bad in ["../foo", "/abs", "Foo", "1app", "my_app", "app!", ""] {
-            assert!(validate_project_name(bad).is_err(), "should reject {bad:?}");
-        }
     }
 }

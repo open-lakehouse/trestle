@@ -181,7 +181,7 @@ fn prompt_for(var: &Variable) -> Result<VariableValue> {
             {
                 c = c.initial_value(b);
             }
-            let b = c.interact().map_err(|e| io_err("confirm", e))?;
+            let b = c.interact().map_err(Error::prompt)?;
             Ok(VariableValue::Bool(b))
         }
         VarKind::Enum => {
@@ -202,7 +202,7 @@ fn prompt_for(var: &Variable) -> Result<VariableValue> {
             {
                 s = s.initial_value(v.to_string());
             }
-            let picked = s.interact().map_err(|e| io_err("select", e))?;
+            let picked = s.interact().map_err(Error::prompt)?;
             Ok(VariableValue::String(picked))
         }
         VarKind::String => {
@@ -229,12 +229,8 @@ fn prompt_for(var: &Variable) -> Result<VariableValue> {
                     }
                 });
             }
-            let s: String = t.interact().map_err(|e| io_err("input", e))?;
+            let s: String = t.interact().map_err(Error::prompt)?;
             Ok(VariableValue::String(s))
         }
     }
-}
-
-fn io_err(kind: &str, e: std::io::Error) -> Error {
-    Error::other(format!("{kind} prompt failed: {e}"))
 }

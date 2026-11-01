@@ -107,10 +107,8 @@ mod tests {
 
     #[test]
     fn embedded_catalog_loads_without_local_stack_components() {
-        // The composed-environment components (`local-stack-*`) moved out of
-        // `trestle new` into the `trestle env` engine, so the shared component
-        // catalog no longer indexes them. It must still load cleanly, and
-        // the compose categories it used to serve must be gone.
+        // The shared catalog indexes no `local-stack-*` components and none of the
+        // compose categories; those belong to `trestle env`.
         let cat = ComponentCatalog::from_embedded().expect("embedded catalog loads");
         for category in [
             "gateway",

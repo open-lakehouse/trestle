@@ -3,13 +3,16 @@
 The unified CLI for the [Trestle](https://github.com/open-lakehouse/trestle)
 framework. Published as `olai-trestle`; installs a `trestle` binary.
 
-1. **Project scaffolding** — `trestle new <name> --template <name|git-url|path>`
-2. **Config bootstrap** — `trestle init` runs a guided interview and writes
+1. **Project scaffolding**: `trestle new <name>` renders a base template plus
+   optional apps (`--app`).
+2. **Config bootstrap**: `trestle init` runs a guided interview and writes
    `trestle.yaml` (+ derived `buf.gen.yaml`); `trestle config` reconfigures an
-   existing project (both accept the same flags for non-interactive use)
-3. **Code generation** — `trestle generate -c trestle.yaml` and
+   existing project (both accept the same flags for non-interactive use).
+3. **Code generation**: `trestle generate -c trestle.yaml` and
    `trestle enrich-openapi -c trestle.yaml` (see
-   [`olai-codegen`](https://crates.io/crates/olai-codegen))
+   [`olai-codegen`](https://crates.io/crates/olai-codegen)).
+4. **Dev environments**: `trestle env new <name>` renders a Docker Compose stack
+   from selected modules; `trestle workspace` runs several of them side by side.
 
 ## Install
 
@@ -21,8 +24,8 @@ cargo binstall olai-trestle
 ```
 
 This downloads the release archive for your platform and installs the `trestle`
-command. Prebuilt targets: Linux x86_64 + aarch64, and macOS on Apple Silicon
-(aarch64); other platforms fall back to a source build. Each archive ships with
+command. Prebuilt targets: Linux (x86_64 and aarch64) and macOS (Apple Silicon
+and Intel). Other platforms fall back to a source build. Each archive ships with
 a `.sha256` checksum and a GitHub build-provenance attestation you can verify:
 
 ```bash
@@ -37,33 +40,42 @@ cargo install olai-trestle   # or: cargo install --git https://github.com/open-l
 
 ## Scaffolding
 
-| Template | Description |
-|----------|-------------|
-| `databricks-app-rust` | Axum service + optional React/Vite frontend + Databricks Apps deploy + proto codegen |
-| `open-lakehouse-lab` | Envoy + Postgres + RustFS + MLflow + Unity Catalog + Marimo, emulating Databricks URLs |
+| Template | Kind | Description |
+|----------|------|-------------|
+| `lakehouse` | base (default) | Project skeleton for an open-lakehouse app; the composed dev environment is created separately with `trestle env`. |
+| `databricks-app-rust` | app (`--app`) | Service + optional frontend + proto codegen; deployable to Databricks Apps. |
 
 ```bash
 trestle list-templates
-trestle new my-app --template databricks-app-rust --profile dbx-emulator
-trestle new my-lab --template open-lakehouse-lab  --profile lakehouse
+trestle new my-app --app databricks-app-rust
+cd my-app
+trestle env new my-app --out-dir env   # the composed dev environment
 ```
 
-`--template` auto-detects an embedded name, a git URL, or a local path. Run
-`trestle new --help` for all options.
+`--template` picks the base and accepts an embedded name, a git URL, or a local
+path. `--app` layers an app on top and can be repeated; it takes the same forms.
+Run `trestle new --help` for all options.
 
-## Profiles and components
+## Categories and components
 
-A template manifest declares **components** (reusable subtrees) and **profiles**
-(named bundles of components). Each component declares typed contributions under
-`provides:` — compose includes, Postgres databases, S3 buckets, Envoy
-routes/clusters, env vars. trestle merges the `provides:` blocks of every active
-component into a single `stack.*` context that the parent template renders into
-unified files (`docker/envoy/envoy.yaml`, `.env.example`, …).
+Each app declares **categories**: named choices with explicit `options:`. Pick
+them with `--select app.<app>.<category>=<value>`, or answer the wizard. A
+category you don't pick takes its default. `databricks-app-rust` declares:
 
-```bash
-# profile = a named component bundle; --with adds individual components
-trestle new my-app --template databricks-app-rust --profile none --with local-stack-postgres
-```
+| Category | Options | Default |
+|----------|---------|---------|
+| `frontend` | `react`, `none` | `react` |
+| `ci` | `github`, `none` | `github` |
+| `connect` | `on`, `none` | `none` (`on` forces the buffa runtime) |
+
+Templates also declare **components** (`components:`), reusable subtrees that
+are enabled by a `when:` expression. Each component declares typed contributions
+under `provides:`: compose includes, Postgres databases, Envoy routes, env vars
+and free-form `extras`. trestle merges the `provides:` blocks of every active
+component into one `stack.*` context that the parent templates render.
+
+`--profile` and `--with` are legacy shims over a base's `profiles:` block and
+component names. `--select` is the way to choose.
 
 ## Advanced usage
 
@@ -76,10 +88,10 @@ are skipped in this mode (they can't be confirmed without a prompt).
 
 ```bash
 trestle new my-app \
-  --template databricks-app-rust \
+  --app databricks-app-rust \
   --non-interactive \
-  --select frontend=react \
-  --set project_name=my-app
+  --select app.databricks-app-rust.frontend=react \
+  --set gh_owner=acme
 ```
 
 ### Selecting components and options
@@ -87,13 +99,7 @@ trestle new my-app \
 `--select <category>=<value>[,<value>...]` makes explicit category picks instead
 of answering the wizard. Repeat the flag for multiple categories; comma-separate
 values for a multi-select category. App-private categories are namespaced as
-`app.<app-name>.<category>`:
-
-```bash
-trestle new my-app -a databricks-app-rust \
-  --select storage=object-store \
-  --select app.databricks-app-rust.frontend=react,ci
-```
+`app.<app-name>.<category>`. Values must be among the category's options.
 
 Individual variables are set with `--set <name>=<value>` (short form `-D`).
 
@@ -106,19 +112,20 @@ For repeatable runs, supply a YAML file with up to three top-level keys:
 apps:               # apps to layer on the base (same as repeating --app)
   - databricks-app-rust
 selections:         # same shape as --select; value may be a string or a list
-  storage: object-store
-  app.databricks-app-rust.frontend: [react, ci]
-variables:          # variable overrides (same as --set)
-  project_name: my-app
-  with_ci: true
+  app.databricks-app-rust.frontend: react
+  app.databricks-app-rust.ci: github
+variables:          # variable overrides (same as --set); only declared variables apply
+  gh_owner: acme
+  runtime: buffa
 ```
 
 ```bash
 trestle new my-app --values values.yaml --non-interactive
 ```
 
-CLI flags take precedence over the file: a `--set` override beats a `variables:`
-entry, and `--select`/`--app` are merged with `selections:`/`apps:`.
+CLI flags win over the file. A `--set` overrides the same `variables:` key, a
+`--select` replaces the same category in `selections:`, and `--app` adds to
+`apps:`.
 
 ## Troubleshooting
 
@@ -138,7 +145,7 @@ entry, and `--select`/`--app` are merged with `selections:`/`apps:`.
 my-template/
 ├── template.yaml     # manifest: variables, components, profiles, post_init
 ├── template/         # files copied + MiniJinja-rendered (.tmpl suffix stripped)
-├── components/       # optional local components
+├── components/       # local components (one directory each, with a template.yaml)
 └── hooks/            # optional post-init scripts
 ```
 
@@ -154,19 +161,20 @@ variables:
   - { name: project_name, prompt: "Name", validate: "^[a-z][a-z0-9-]*$" }
   - { name: with_x, type: bool, default: true }
 components:
-  - { name: local-stack-postgres, kind: shared, when: "with_x" }
+  - { name: x, kind: local, path: components/x, when: "with_x" }
 profiles:
-  small: [local-stack-postgres]
+  small: [x]
 post_init:
   - { run: "git init && git add -A", confirm: true, description: "Initialise git" }
 
-# component template.yaml
+# component template.yaml (components/x/template.yaml)
+name: x
 provides:
-  compose_includes:   [./docker/compose/x.yaml]
+  compose_includes: [./docker/compose/x.yaml]
   postgres_databases: []
-  envoy_routes:       []
-  env_vars:           {}
-  extras:             {}   # free-form, surfaced at stack.extras.<key>
+  envoy_routes: []
+  env_vars: {}
+  extras: {}   # surfaced as stack.extras["x__<key>"]
 ```
 
 ## Tests

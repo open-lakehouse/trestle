@@ -1,18 +1,9 @@
-//! `trestle workspace` — several environments side by side on one Docker host.
+//! `trestle workspace`: several environments side by side on one Docker host.
 //!
 //! A workspace directory holds a [`WORKSPACE_FILE`] and one environment directory per
 //! member. Each member is an ordinary `trestle env` environment; the workspace gives it a slot
 //! (its own host ports), a compose project name of its own and, with `--mesh`, a gateway on
 //! the network the members share (see [`WorkspaceManifest`]).
-//!
-//! - [`WorkspaceCommand::Init`] — create the workspace file.
-//! - [`WorkspaceCommand::Add`] — create a member, with every `trestle env new` flag.
-//! - [`WorkspaceCommand::Remove`] — drop a member from the workspace (its directory stays).
-//! - [`WorkspaceCommand::List`] — each member's slot, project, gateway and whether it runs.
-//! - [`WorkspaceCommand::Render`] — re-render every member, then check that no two bind the
-//!   same host port.
-//! - [`WorkspaceCommand::Up`] / [`WorkspaceCommand::Down`] — start or stop members with
-//!   Docker Compose.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,11 +11,11 @@ use std::process::Command;
 
 use clap::{Args, Subcommand};
 use olai_stack_topology::{
-    EnvManifest, WORKSPACE_FILE, WorkspaceEnv, WorkspaceManifest, baseline_catalog, port_conflicts,
+    EnvManifest, WORKSPACE_FILE, WorkspaceEnv, WorkspaceManifest, port_conflicts,
 };
 use serde::Serialize;
 
-use super::env::{EnvNewArgs, member_at, new_env, render_env};
+use super::env::{EnvNewArgs, load_catalog, member_at, new_env, render_env};
 use crate::error::{Error, Result};
 
 /// The `trestle workspace` subcommand group.
@@ -167,10 +158,6 @@ fn pick<'a>(workspace: &'a WorkspaceManifest, names: &[String]) -> Result<Vec<&'
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// init / add / remove
-// ---------------------------------------------------------------------------
-
 fn run_init(args: InitArgs) -> Result<()> {
     let path = manifest_path(&args.dir);
     if path.exists() {
@@ -245,10 +232,6 @@ fn run_remove(args: RemoveArgs) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// list
-// ---------------------------------------------------------------------------
-
 /// One row of `trestle workspace list`.
 #[derive(Serialize)]
 struct Row {
@@ -317,16 +300,18 @@ fn run_list(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-/// The gateway URL of `env` (in `env_dir`), planned without secrets as the workspace places it;
-/// `None` when it has no gateway or doesn't plan.
+/// The gateway URL of `env` (in `env_dir`), planned without secrets as the workspace places it
+/// and against the module manifests the environment lists, as `render` does; `None` when it has
+/// no gateway or doesn't plan.
 fn gateway_url(
     workspace: &WorkspaceManifest,
     env: &WorkspaceEnv,
     env_dir: &Path,
 ) -> Option<String> {
     let mut manifest = EnvManifest::read_from(&env_dir.join("env.toml")).ok()?;
+    let catalog = load_catalog(&manifest, env_dir).ok()?;
     workspace.apply(env, &mut manifest.context);
-    manifest.plan(&baseline_catalog()).ok()?.gateway_url()
+    manifest.plan(&catalog).ok()?.gateway_url()
 }
 
 /// Every Compose project Docker knows of, by name, with its status. Empty when Docker isn't
@@ -351,10 +336,6 @@ fn compose_projects() -> BTreeMap<String, String> {
         .map(|p| (p.name, p.status))
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// render
-// ---------------------------------------------------------------------------
 
 fn run_render(args: DirArgs) -> Result<()> {
     let dir = &args.workspace;
@@ -391,10 +372,6 @@ fn run_render(args: DirArgs) -> Result<()> {
     );
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// up / down
-// ---------------------------------------------------------------------------
 
 fn run_up(args: LifecycleArgs) -> Result<()> {
     compose_each(&args, &["up", "-d", "--wait"])
@@ -455,4 +432,31 @@ fn compose_each(args: &LifecycleArgs, compose: &[&str]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use olai_stack_topology::{PlanCtx, Selection};
+
+    /// A module manifest that adds `probe`, which the environment below selects.
+    const PROBE: &str = "id: probe\nmodel: probe\nprovider_of: probe_role\nrenders:\n  compose:\n    fragment: \"\"\n";
+
+    #[test]
+    fn gateway_url_plans_with_the_members_module_manifests() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env_manifest = EnvManifest::new(Selection::modules(["probe"]), PlanCtx::default());
+        std::fs::write(dir.path().join("probe.module.yaml"), PROBE).unwrap();
+        env_manifest.catalog.manifests = vec!["probe.module.yaml".to_string()];
+        env_manifest.write_to(&dir.path().join("env.toml")).unwrap();
+
+        let mut workspace = WorkspaceManifest::new("ws", false).unwrap();
+        let env = workspace.add_env("probe-env").unwrap().clone();
+        assert!(gateway_url(&workspace, &env, dir.path()).is_some());
+
+        // Without the manifest the baseline catalog doesn't know `probe`, so there is no plan.
+        env_manifest.catalog.manifests.clear();
+        env_manifest.write_to(&dir.path().join("env.toml")).unwrap();
+        assert_eq!(gateway_url(&workspace, &env, dir.path()), None);
+    }
 }
