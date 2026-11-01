@@ -417,66 +417,33 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     let artifacts = render_all(plan)?;
     let deploy = render_steps(plan, &Compose)?;
     let mut files = vec![
+        OutputFile::plain("compose.yaml", artifacts.compose),
         OutputFile {
-            path: "compose.yaml".into(),
-            contents: artifacts.compose,
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        },
-        OutputFile {
-            path: ".env".into(),
-            contents: artifacts.env,
             sensitive: true,
-            preserve: false,
-            moved_from: None,
+            ..OutputFile::plain(".env", artifacts.env)
         },
-        OutputFile {
-            path: ".gitignore".into(),
-            contents: artifacts.gitignore,
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        },
+        OutputFile::plain(".gitignore", artifacts.gitignore),
         // What a client loads to reach the stack, per vantage. Credential-free, so not
         // sensitive: it is meant to be shared (e.g. sourced by an app's dev environment).
-        OutputFile {
-            path: CLIENT_HOST_ENV_PATH.into(),
-            contents: render_client_env(
+        OutputFile::plain(
+            CLIENT_HOST_ENV_PATH,
+            render_client_env(
                 plan.client_env(Vantage::Host),
                 "on the host (localhost addresses)",
             ),
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        },
-        OutputFile {
-            path: CLIENT_CONTAINER_ENV_PATH.into(),
-            contents: render_client_env(
+        ),
+        OutputFile::plain(
+            CLIENT_CONTAINER_ENV_PATH,
+            render_client_env(
                 plan.client_env(Vantage::Container),
                 "inside the compose network",
             ),
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        },
+        ),
         // A human-readable, at-a-glance summary of the gateway layout (routes → services).
         // Pure to build (see `report::layout_report`), so it keeps `materialize` pure.
-        OutputFile {
-            path: "LAYOUT.md".into(),
-            contents: crate::report::layout_report(plan),
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        },
+        OutputFile::plain("LAYOUT.md", crate::report::layout_report(plan)),
         // How to bring the environment up: every module's deployment steps, in order.
-        OutputFile {
-            path: DEPLOY_README_PATH.into(),
-            contents: render_readme(plan, &deploy),
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        },
+        OutputFile::plain(DEPLOY_README_PATH, render_readme(plan, &deploy)),
     ];
 
     // The Envoy bootstrap is written only when the plan has a gateway — the same condition
@@ -484,13 +451,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     // otherwise get an orphan `modules/envoy/envoy.yaml` that the top-level compose never
     // mounts. Detect the gateway by role (not module-id), matching `render_all`.
     if runs_gateway(plan) {
-        files.push(OutputFile {
-            path: ENVOY_CONFIG_PATH.into(),
-            contents: artifacts.envoy,
-            sensitive: false,
-            preserve: false,
-            moved_from: None,
-        });
+        files.push(OutputFile::plain(ENVOY_CONFIG_PATH, artifacts.envoy));
     }
 
     // Each module owns a `modules/<id>/` directory: its compose fragment (skipped when empty)
@@ -499,11 +460,11 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
     for (module, out) in &artifacts.modules {
         if !out.fragment.trim().is_empty() {
             files.push(OutputFile {
-                path: format!("modules/{module}/compose.yaml"),
-                contents: out.fragment.clone(),
                 sensitive: plan.secret_values.appear_in(&out.fragment),
-                preserve: false,
-                moved_from: None,
+                ..OutputFile::plain(
+                    format!("modules/{module}/compose.yaml"),
+                    out.fragment.clone(),
+                )
             });
         }
         for file in &out.files {
@@ -525,13 +486,7 @@ pub fn materialize(plan: &Plan) -> Result<MaterializedOutput, RenderError> {
         deploy
             .iter()
             .filter_map(|step| step.script.as_ref())
-            .map(|script| OutputFile {
-                path: script.path.clone(),
-                contents: script.contents.clone(),
-                sensitive: false,
-                preserve: false,
-                moved_from: None,
-            }),
+            .map(|script| OutputFile::plain(&script.path, &script.contents)),
     );
 
     if plan.local_secrets == LocalSecrets::Inline {

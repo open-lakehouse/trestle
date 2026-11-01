@@ -12,8 +12,8 @@
 //! queue, GCS, MySQL) is a typed addition *here*, not free-form catalog data. In return,
 //! a provider cannot declare an incomplete connection (the variant's fields are
 //! mandatory), and a consumer binds to typed [`ConnectionField`]s rather than re-spelling
-//! coordinate names by hand — so the runtime "does this provider render every required
-//! coordinate?" check the old open model needed is gone.
+//! coordinate names by hand, so nothing checks at runtime that a provider renders every
+//! required coordinate.
 //!
 //! # Templates and resolution
 //!
@@ -316,7 +316,7 @@ impl ObjectStoreCredential {
 }
 
 /// One typed part of a resolved [`Connection`] a demand can bind to an environment
-/// variable. The typed replacement for the old stringly coordinate name.
+/// variable.
 ///
 /// Not every field is present on every variant — [`Connection::field`] returns `None` for a
 /// field the variant lacks (e.g. [`Url`](ConnectionField::Url) on an object store), which

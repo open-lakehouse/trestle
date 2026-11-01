@@ -18,11 +18,10 @@
 //!   or more [`RenderFile`]s to be written and mounted (e.g. a config file whose
 //!   contents reference the injected variables).
 //!
-//! Why env-var substitution as the contract: we mount config files anyway, so a
-//! single substitution mechanism covers every application style — `command:
+//! Env-var substitution covers every application style with one mechanism: `command:
 //! mlflow --static-prefix ${BASE_PATH}`, `environment: APP_BASE_PATH=${BASE_PATH}`,
-//! or a mounted `config.yaml` containing `base_path: ${BASE_PATH}`. The planner
-//! stays oblivious to which; the template decides.
+//! or a mounted `config.yaml` containing `base_path: ${BASE_PATH}`. The planner does not
+//! pick between them; the template does.
 
 use std::collections::BTreeMap;
 
@@ -210,28 +209,5 @@ mod tests {
         // Deterministic key order (BTreeMap): BASE_PATH before HOST_PORT.
         let pairs: Vec<_> = env.iter().collect();
         assert_eq!(pairs, vec![("BASE_PATH", "/mlflow"), ("HOST_PORT", "9080")]);
-    }
-
-    #[test]
-    fn render_output_carries_fragment_and_mountable_files() {
-        let out = RenderOutput {
-            fragment: "services:\n  mlflow: {}\n".into(),
-            files: vec![RenderFile {
-                path: "mlflow.yaml".into(),
-                // A mounted config file referencing an injected variable —
-                // compose substitutes ${BASE_PATH} at run time.
-                contents: "base_path: ${BASE_PATH}\n".into(),
-                alias: Some("mlflow_config".into()),
-                sensitive: false,
-                secret_alias: None,
-                at_root: false,
-                preserve: false,
-                moved_from: None,
-            }],
-        };
-        assert_eq!(out.files.len(), 1);
-        assert_eq!(out.files[0].path, "mlflow.yaml");
-        assert!(out.files[0].contents.contains("${BASE_PATH}"));
-        assert_eq!(out.files[0].alias.as_deref(), Some("mlflow_config"));
     }
 }

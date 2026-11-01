@@ -494,8 +494,8 @@ pub(super) fn ensure_named_cluster(
 /// The gateway rewrite for an API route, for the structured [`GatewayConfig`], from the
 /// endpoint's typed [`Rewrite`] and its service's `base_path`.
 ///
-/// Tri-state result: `None` means forward the path unchanged (no rewrite emitted);
-/// `Some(path)` means rewrite the matched prefix to `path`.
+/// `None` means forward the path unchanged (no rewrite emitted); `Some(path)` means rewrite the
+/// matched prefix to `path`.
 ///
 /// - [`Rewrite::Passthrough`] forwards unchanged (`None`).
 /// - [`Rewrite::To`] rewrites to the literal path.

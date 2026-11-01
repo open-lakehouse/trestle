@@ -98,7 +98,6 @@ pub enum RouteIntent {
 /// How the gateway rewrites the matched prefix before forwarding to an
 /// [`Api`](RouteIntent::Api) endpoint's upstream.
 ///
-/// This is the typed form of what was once a stringly-typed `rewrite:<prefix>` extra.
 /// The planner turns it into the structured gateway config's optional rewrite (and the
 /// [`AssignedRoute`](crate::AssignedRoute)'s `rewrite`): [`Passthrough`](Rewrite::Passthrough)
 /// and [`Inherit`](Rewrite::Inherit)-at-root emit no rewrite block; the others rewrite the
@@ -111,12 +110,11 @@ pub enum Rewrite {
     /// one rewrites the prefix to `base_path` joined with the client prefix. The default.
     #[default]
     Inherit,
-    /// Forward the matched prefix to the upstream unchanged — no rewrite block emitted.
-    /// (The old empty `rewrite:` override, e.g. an OTel ingest path the upstream serves at
-    /// the same path the client mounts.)
+    /// Forward the matched prefix to the upstream unchanged — no rewrite block emitted. For
+    /// an upstream that serves at the same path the client mounts (e.g. an OTel ingest path).
     Passthrough,
-    /// Rewrite the matched prefix to this literal upstream path. (The old non-empty
-    /// `rewrite:` override, e.g. stripping a client mount down to the service root.)
+    /// Rewrite the matched prefix to this literal upstream path (e.g. stripping a client mount
+    /// down to the service root).
     To(String),
 }
 
@@ -184,8 +182,8 @@ pub struct Endpoint {
     /// Empty for a bare `host:port` endpoint or a UI served at its base path.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
-    /// The client-facing mount prefix for an [`Api`](RouteIntent::Api) endpoint — the
-    /// typed replacement for the old `api_prefix:<id>` extra. The planner uses this as the
+    /// The client-facing mount prefix for an [`Api`](RouteIntent::Api) endpoint. The planner
+    /// uses this as the
     /// gateway route prefix and as the [`AssignedRoute`](crate::AssignedRoute) prefix; the
     /// endpoint's [`path`](Endpoint::path) stays empty so the resolver's `join(prefix, path)`
     /// round-trips to exactly the prefix. `None` for a non-`Api` endpoint (a UI's prefix is
@@ -193,8 +191,7 @@ pub struct Endpoint {
     /// no route).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mount_prefix: Option<String>,
-    /// How the gateway rewrites the matched prefix before forwarding — the typed
-    /// replacement for the old `rewrite:<prefix>` extra. Only meaningful for an
+    /// How the gateway rewrites the matched prefix before forwarding. Only meaningful for an
     /// [`Api`](RouteIntent::Api) endpoint; defaults to [`Inherit`](Rewrite::Inherit).
     #[serde(default)]
     pub rewrite: Rewrite,

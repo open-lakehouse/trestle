@@ -42,7 +42,7 @@ pub fn layout_report(plan: &Plan) -> String {
         .collect();
     let shared_port = plan.gateway_host_port();
 
-    // --- Gateway routes --- (without a gateway, the directly published endpoints instead)
+    // Without a gateway, the directly published endpoints are listed instead.
     if !plan.has_gateway() {
         direct_endpoints(plan, &mut out);
     } else {
@@ -69,7 +69,6 @@ pub fn layout_report(plan: &Plan) -> String {
         }
     }
 
-    // --- Services ---
     out.push_str("\n## Services\n\n");
     out.push_str("| Module | Service | Role | Placement | Endpoints |\n");
     out.push_str("| --- | --- | --- | --- | --- |\n");
@@ -103,7 +102,6 @@ pub fn layout_report(plan: &Plan) -> String {
         }
     }
 
-    // --- Hosted resources ---
     if !plan.hosted.is_empty() {
         out.push_str("\n## Hosted resources\n\n");
         out.push_str(

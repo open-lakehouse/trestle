@@ -329,14 +329,12 @@ pub struct PlanCtx {
     /// [`Gatewayed`](crate::RouteIntent::Gatewayed)). Consumed first; once exhausted the planner
     /// auto-allocates from [`dedicated_listener_port_base`](Self::dedicated_listener_port_base),
     /// so "every object store is exposed" works with no explicit list.
-    #[allow(clippy::struct_field_names)]
     #[serde(default)]
     pub dedicated_listener_ports: Vec<u16>,
     /// The base host port the planner auto-allocates dedicated listeners from when
     /// [`dedicated_listener_ports`](Self::dedicated_listener_ports) is exhausted: the first
     /// auto listener binds this port, the next `+1`, and so on. Defaults to `9100` (clear of
     /// the gateway's `9080`).
-    #[allow(clippy::struct_field_names)]
     #[serde(default = "PlanCtx::default_dedicated_listener_port_base")]
     pub dedicated_listener_port_base: u16,
     /// Added to every host port a *module* declares (an endpoint's `host_port`, and without a
@@ -1124,9 +1122,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
 mod tests {
     use super::*;
     use crate::catalog::baseline_catalog;
-    use crate::model::endpoint::RouteIntent;
     use crate::model::endpoint::{Endpoint, Rewrite};
-    use crate::model::placement::Placement;
     use knobs::resolve_knob;
 
     fn default_selection() -> Selection {
@@ -1142,6 +1138,17 @@ mod tests {
             .iter()
             .find(|r| r.prefix == prefix)
             .unwrap_or_else(|| panic!("no route for {prefix}"))
+    }
+
+    /// The rendered `mlflow` module of `plan`.
+    fn mlflow_output(plan: &Plan) -> crate::render::RenderOutput {
+        crate::render_all(plan)
+            .unwrap()
+            .modules
+            .into_iter()
+            .find(|(id, _)| id == &ModuleId::from("mlflow"))
+            .unwrap()
+            .1
     }
 
     /// A one-service module with `endpoints`, for exercising planner guards. Returns a
@@ -1301,8 +1308,8 @@ mod tests {
 
     #[test]
     fn knob_on_but_no_auth_provider_leaves_the_gateway_open() {
-        // Divergent-guard fix: the knob defaults on but the catalog has no `auth`-role provider.
-        // Auth must stay off entirely rather than gate the gateway behind a phantom upstream.
+        // The knob defaults on, but the catalog has no `auth`-role provider. Auth must stay off
+        // entirely rather than gate the gateway behind a phantom upstream.
         let p = plan_env(
             &Selection::modules(["edge"]),
             &Catalog::from_modules([arc(gateway_module(true))]),
@@ -1607,12 +1614,7 @@ mod tests {
             &PlanCtx::default(),
         )
         .unwrap();
-        let (_, mlflow) = crate::render_all(&s3)
-            .unwrap()
-            .modules
-            .into_iter()
-            .find(|(id, _)| id == &ModuleId::from("mlflow"))
-            .unwrap();
+        let mlflow = mlflow_output(&s3);
         assert!(
             mlflow
                 .fragment
@@ -1640,12 +1642,7 @@ mod tests {
             },
         )
         .unwrap();
-        let (_, mlflow_az) = crate::render_all(&az)
-            .unwrap()
-            .modules
-            .into_iter()
-            .find(|(id, _)| id == &ModuleId::from("mlflow"))
-            .unwrap();
+        let mlflow_az = mlflow_output(&az);
         assert!(
             mlflow_az
                 .fragment

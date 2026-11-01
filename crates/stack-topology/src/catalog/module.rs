@@ -1398,9 +1398,8 @@ services:
     #[cfg(feature = "catalog")]
     #[test]
     fn render_spec_serializes_without_a_kind_discriminator() {
-        // `RenderSpec` is a plain struct, not a tagged enum — its serialized form carries the
-        // bare `fragment`/`files` fields with no `kind: template` discriminator, and round-trips
-        // losslessly from that flat shape.
+        // `RenderSpec` serializes as a plain struct with `fragment` and `files` fields, and no
+        // `kind:` discriminator. It round-trips losslessly from that flat shape.
         let spec = RenderSpec {
             fragment: "services:\n  demo: {}\n".into(),
             files: vec![],

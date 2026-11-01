@@ -87,19 +87,17 @@ pub const DATA_ROOT_VAR: &str = "DATA_ROOT";
 /// The render-only variable carrying the gateway's public origin as a host-side browser
 /// reaches it (`http://localhost:<gateway_host_port>`, or `https://<env>.localhost:<port>` with
 /// forward-auth on), so a module that must know its own public URL (e.g. an auth portal's
-/// redirect target) follows the configured gateway port instead of hard-coding one. Baked at
-/// plan time, like [`DATA_ROOT_VAR`].
+/// redirect target) follows the configured gateway port instead of hard-coding one.
 pub const GATEWAY_URL_VAR: &str = "GATEWAY_URL";
 
 /// The render-only variable carrying the bare hostname of [`GATEWAY_URL_VAR`] (`localhost`, or
-/// `<env>.localhost` with forward-auth on), e.g. for a cookie domain. Baked at plan time.
+/// `<env>.localhost` with forward-auth on), e.g. for a cookie domain.
 pub const GATEWAY_HOST_VAR: &str = "GATEWAY_HOST";
 
 /// The render-only variable carrying the gateway's origin as an in-network caller reaches it
 /// (`http://<gateway_service>:<gateway_internal_port>`, or `http://<env>.internal:<port>` with
 /// forward-auth on): the container-vantage counterpart of [`GATEWAY_URL_VAR`], e.g. for a
-/// service that must accept the `Host` its in-network callers send. Baked at plan time, like
-/// [`DATA_ROOT_VAR`].
+/// service that must accept the `Host` its in-network callers send.
 pub const GATEWAY_INTERNAL_URL_VAR: &str = "GATEWAY_INTERNAL_URL";
 
 /// The render-only variable carrying the bare hostname of [`GATEWAY_INTERNAL_URL_VAR`].
@@ -128,8 +126,7 @@ pub const CLIENT_ENV_KEYS_VAR: &str = "CLIENT_ENV_KEYS";
 pub const HOST_PORT_VAR_PREFIX: &str = "HOST_PORT_";
 
 /// The default value injected for [`DATA_ROOT_VAR`]: `./.data`, relative to the compose
-/// file's directory — matching where the fragments persisted data before the root was
-/// centralized.
+/// file's directory.
 pub const DATA_ROOT_DEFAULT: &str = "./.data";
 
 /// The inlined baseline catalog: all common local-Lakehouse modules.
@@ -340,14 +337,14 @@ pub fn baseline_selection() -> crate::plan::Selection {
     crate::plan::Selection::modules(["postgres", "rustfs", "unity-catalog"])
 }
 
-/// Helper: a container-placed service.
+/// A container-placed service.
 fn container(service: &str) -> Placement {
     Placement::Container {
         service: service.to_string(),
     }
 }
 
-/// Helper: a [`RenderSpec`] (MiniJinja) carrying just a compose fragment (no extra
+/// A [`RenderSpec`] (MiniJinja) carrying just a compose fragment (no extra
 /// files). Every module's fragment is rendered against the typed [`RenderCtx`](crate::RenderCtx),
 /// so it reads plan-resolved values (`{{ env.X }}`, `{{ connections.* }}`) directly.
 fn template(text: &str) -> RenderSpec {
@@ -357,7 +354,7 @@ fn template(text: &str) -> RenderSpec {
     }
 }
 
-/// Helper: a [`RenderSpec`] carrying a fragment plus mounted config files. Each
+/// A [`RenderSpec`] carrying a fragment plus mounted config files. Each
 /// file's `path` is module-relative (the planner roots it under `modules/<id>/`), and each
 /// file template is rendered against the same [`RenderCtx`](crate::RenderCtx) as the fragment.
 fn template_with_files(text: &str, files: Vec<RenderFile>) -> RenderSpec {
@@ -409,10 +406,6 @@ fn config_file(path: &str, alias: &str, contents: &str) -> RenderFile {
     }
 }
 
-/// Helper: a string knob for a container image reference, defaulting to `default`.
-///
-/// `key` is the public snake_case identifier (typically `"image"` or `"init_image"`);
-/// `legacy` is the old SCREAMING_SNAKE env-var-style name accepted as an override alias.
 /// An operator-owned config file: written beside `compose.yaml` on first render and never
 /// overwritten (`preserve`), so local edits survive re-renders.
 fn operator_file(path: &str, alias: &str, contents: &str) -> RenderFile {
@@ -424,28 +417,36 @@ fn operator_file(path: &str, alias: &str, contents: &str) -> RenderFile {
     }
 }
 
-fn image_knob(key: &str, title: &str, default: &str, legacy: &str) -> Knob {
+/// The help of every container image knob.
+const IMAGE_HELP: &str = "Container image reference (repository:tag or digest). Override to pin or \
+     test a different release.";
+
+/// An advanced string knob: `default` is `None` when it has none, and `legacy` is an accepted
+/// SCREAMING_SNAKE override alias (the old env-var name).
+fn string_knob(
+    key: &str,
+    title: &str,
+    default: Option<&str>,
+    help: &str,
+    legacy: Option<&str>,
+) -> Knob {
     Knob {
         key: key.into(),
         title: Some(title.into()),
         kind: KnobKind::String,
-        default: Some(default.into()),
+        default: default.map(Into::into),
         required: false,
-        help: Some(
-            "Container image reference (repository:tag or digest). Override to pin or \
-             test a different release."
-                .into(),
-        ),
-        aliases: vec![legacy.into()],
+        help: Some(help.into()),
+        aliases: legacy.into_iter().map(Into::into).collect(),
         advanced: true,
     }
 }
 
-/// `envoy` — the single-port gateway. It has no surface endpoints of its
-/// own (it *is* the surface); its listening port is supplied to the planner via
-/// [`PlanCtx`](crate::PlanCtx), not as a routed endpoint. Its rendered Envoy bootstrap config
-/// is a planner-emitted artifact, not part of this fragment (which only declares the
-/// container that mounts it).
+/// `envoy` — the single-port gateway. Its one endpoint is
+/// [`Internal`](crate::RouteIntent::Internal): the gateway is the surface, and its listening
+/// port comes from [`PlanCtx`](crate::PlanCtx), not from a routed endpoint. Its rendered Envoy
+/// bootstrap config is a planner-emitted artifact, not part of this fragment (which only
+/// declares the container that mounts it).
 ///
 /// When a module declares [`impersonated_hosts`](crate::Provides::impersonated_hosts), the
 /// fragment also adds those hosts as network aliases and a one-shot that mints the local CA
@@ -482,12 +483,19 @@ fn envoy() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob("image", "Envoy image", images::ENVOY, "ENVOY_IMAGE"),
-            image_knob(
+            string_knob(
+                "image",
+                "Envoy image",
+                Some(images::ENVOY),
+                IMAGE_HELP,
+                Some("ENVOY_IMAGE"),
+            ),
+            string_knob(
                 "certs_image",
                 "Certificate minting image",
-                images::CERTS,
-                "GATEWAY_CERTS_IMAGE",
+                Some(images::CERTS),
+                IMAGE_HELP,
+                Some("GATEWAY_CERTS_IMAGE"),
             ),
             Knob {
                 key: "publish_admin".into(),
@@ -577,41 +585,32 @@ fn authelia(credentials: &LocalCredentials) -> Arc<dyn Module> {
             base_path: String::new(),
         }],
         provides,
-        knobs: vec![image_knob(
+        knobs: vec![string_knob(
             "image",
             "Authelia image",
-            images::AUTHELIA,
-            "AUTHELIA_IMAGE",
+            Some(images::AUTHELIA),
+            IMAGE_HELP,
+            Some("AUTHELIA_IMAGE"),
         )],
         renders: template_with_files(
             include_str!("../../templates/gateway/authelia.compose.yaml.jinja"),
             vec![
-                RenderFile {
-                    path: "configuration.yml".into(),
-                    contents: include_str!(
-                        "../../templates/gateway/authelia.configuration.yml.jinja"
-                    )
-                    .into(),
-                    alias: Some("authelia_config".into()),
-                    sensitive: false,
-                    secret_alias: None,
-                    at_root: false,
-                    preserve: false,
-                    moved_from: None,
-                },
+                config_file(
+                    "configuration.yml",
+                    "authelia_config",
+                    include_str!("../../templates/gateway/authelia.configuration.yml.jinja"),
+                ),
                 // Operator-owned local accounts, explained by the module's deployment step. Seeded
                 // once (`preserve`) so later renders leave edits alone. Older renders wrote it
                 // at the environment root; the writer moves that copy here.
                 RenderFile {
-                    path: "users.yml".into(),
-                    contents: include_str!("../../templates/gateway/authelia.users.yml.jinja")
-                        .into(),
-                    alias: Some("authelia_users".into()),
-                    sensitive: false,
-                    secret_alias: None,
-                    at_root: false,
                     preserve: true,
                     moved_from: Some("users.yml".into()),
+                    ..config_file(
+                        "users.yml",
+                        "authelia_users",
+                        include_str!("../../templates/gateway/authelia.users.yml.jinja"),
+                    )
                 },
                 sensitive_file(
                     ".env/authelia.env",
@@ -700,11 +699,12 @@ fn postgres(credentials: &LocalCredentials) -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob(
+            string_knob(
                 "image",
                 "Postgres image",
-                images::POSTGRES,
-                "POSTGRES_IMAGE",
+                Some(images::POSTGRES),
+                IMAGE_HELP,
+                Some("POSTGRES_IMAGE"),
             ),
             Knob {
                 key: "data".into(),
@@ -728,22 +728,14 @@ fn postgres(credentials: &LocalCredentials) -> Arc<dyn Module> {
         renders: template_with_files(
             include_str!("../../templates/modules/postgres/compose.yaml.jinja"),
             vec![
-                RenderFile {
-                    // Rendered from the databases the planner hands the provider via
-                    // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
-                    // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
-                    path: "init-databases.sh".into(),
-                    contents: include_str!(
-                        "../../templates/modules/postgres/init-databases.sh.jinja"
-                    )
-                    .into(),
-                    alias: Some("postgres_init".into()),
-                    sensitive: false,
-                    secret_alias: None,
-                    at_root: false,
-                    preserve: false,
-                    moved_from: None,
-                },
+                // Rendered from the databases the planner hands the provider via
+                // `RenderCtx.objects`; co-located under `modules/postgres/` and mounted into
+                // `/docker-entrypoint-initdb.d/` via the `postgres_init` config alias.
+                config_file(
+                    "init-databases.sh",
+                    "postgres_init",
+                    include_str!("../../templates/modules/postgres/init-databases.sh.jinja"),
+                ),
                 sensitive_file(
                     ".env/db.env",
                     include_str!("../../templates/modules/postgres/db.env.jinja"),
@@ -869,18 +861,26 @@ fn rustfs(credentials: &LocalCredentials) -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob("image", "RustFS image", images::RUSTFS, "RUSTFS_IMAGE"),
-            image_knob(
+            string_knob(
+                "image",
+                "RustFS image",
+                Some(images::RUSTFS),
+                IMAGE_HELP,
+                Some("RUSTFS_IMAGE"),
+            ),
+            string_knob(
                 "init_image",
                 "RustFS init image",
-                images::RUSTFS_INIT,
-                "RUSTFS_INIT_IMAGE",
+                Some(images::RUSTFS_INIT),
+                IMAGE_HELP,
+                Some("RUSTFS_INIT_IMAGE"),
             ),
-            image_knob(
+            string_knob(
                 "sts_shim_image",
                 "STS shim image",
-                images::STS_SHIM,
-                "STS_SHIM_IMAGE",
+                Some(images::STS_SHIM),
+                IMAGE_HELP,
+                Some("STS_SHIM_IMAGE"),
             ),
             Knob {
                 key: "generic_endpoint_env".into(),
@@ -1052,12 +1052,19 @@ fn azurite() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob("image", "Azurite image", images::AZURITE, "AZURITE_IMAGE"),
-            image_knob(
+            string_knob(
+                "image",
+                "Azurite image",
+                Some(images::AZURITE),
+                IMAGE_HELP,
+                Some("AZURITE_IMAGE"),
+            ),
+            string_knob(
                 "init_image",
                 "Azurite init image",
-                images::AZURITE_INIT,
-                "AZURITE_INIT_IMAGE",
+                Some(images::AZURITE_INIT),
+                IMAGE_HELP,
+                Some("AZURITE_INIT_IMAGE"),
             ),
         ],
         renders: template_with_files(
@@ -1192,7 +1199,13 @@ fn mlflow() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob("image", "MLflow image", images::MLFLOW, "MLFLOW_IMAGE"),
+            string_knob(
+                "image",
+                "MLflow image",
+                Some(images::MLFLOW),
+                IMAGE_HELP,
+                Some("MLFLOW_IMAGE"),
+            ),
             Knob {
                 key: "ai_gateway_models".into(),
                 title: Some("AI Gateway models".into()),
@@ -1458,17 +1471,19 @@ fn unity_catalog() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob(
+            string_knob(
                 "image",
                 "Unity Catalog image",
-                images::UNITY_CATALOG,
-                "UC_IMAGE",
+                Some(images::UNITY_CATALOG),
+                IMAGE_HELP,
+                Some("UC_IMAGE"),
             ),
-            image_knob(
+            string_knob(
                 "storage_image",
                 "Unity Catalog helper image (storage registration, writable mounts)",
-                images::UNITY_CATALOG_STORAGE,
-                "UC_STORAGE_IMAGE",
+                Some(images::UNITY_CATALOG_STORAGE),
+                IMAGE_HELP,
+                Some("UC_STORAGE_IMAGE"),
             ),
             Knob {
                 key: "storage_bootstrap".into(),
@@ -1501,17 +1516,21 @@ fn unity_catalog() -> Arc<dyn Module> {
                 aliases: vec![],
                 advanced: true,
             },
-            optional_string_knob(
+            string_knob(
                 "master_role_arn",
                 "Master role ARN",
+                None,
                 "The IAM role UC reports as its own identity (`aws.masterRoleArn`), which a \
                  storage role's trust policy names. Defaults to the object store's role.",
+                None,
             ),
-            optional_string_knob(
+            string_knob(
                 "default_catalog",
                 "Default catalog",
+                None,
                 "Also create this catalog, with managed storage under the first registered \
                  bucket. Needs `storage_bootstrap = api`.",
+                None,
             ),
             Knob {
                 key: "embedded_metadata".into(),
@@ -1528,29 +1547,37 @@ fn unity_catalog() -> Arc<dyn Module> {
                 aliases: vec![],
                 advanced: false,
             },
-            optional_string_knob(
+            string_knob(
                 "container_name",
                 "Container name",
+                None,
                 "A fixed Docker container name, for `docker exec <name> ...` instructions.",
+                None,
             ),
-            optional_string_knob(
+            string_knob(
                 "extra_mounts",
                 "Extra mounts",
+                None,
                 "More volumes for the server, `;`-separated, each in Compose short syntax \
                  (`source:target[:mode]`). Variable interpolation is passed through.",
+                None,
             ),
-            optional_string_knob(
+            string_knob(
                 "writable_mounts",
                 "Writable mounts",
+                None,
                 "`;`-separated `extra_mounts` targets to make writable by any user before the \
                  server starts: Docker creates a missing bind source owned by root, and \
                  host-side clients write to the same directory as the server.",
+                None,
             ),
-            optional_string_knob(
+            string_knob(
                 "build",
                 "Build context",
+                None,
                 "Build the server image from this directory (relative to the rendered \
                  compose.yaml) and tag it with the `image` knob.",
+                None,
             ),
         ],
         renders: template_with_files(
@@ -1587,20 +1614,6 @@ fn unity_catalog() -> Arc<dyn Module> {
         )
         .for_compose(),
     }))
-}
-
-/// An optional, advanced string knob with no default.
-fn optional_string_knob(key: &str, title: &str, help: &str) -> Knob {
-    Knob {
-        key: key.into(),
-        title: Some(title.into()),
-        kind: KnobKind::String,
-        default: None,
-        required: false,
-        help: Some(help.into()),
-        aliases: vec![],
-        advanced: true,
-    }
 }
 
 /// Unity Catalog, with knobs that change what it needs: `embedded_metadata` keeps metadata in
@@ -1823,11 +1836,12 @@ fn jaeger() -> Arc<dyn Module> {
             depends_on: vec![],
         }],
         provides,
-        knobs: vec![image_knob(
+        knobs: vec![string_knob(
             "image",
             "Jaeger image",
-            images::JAEGER,
-            "JAEGER_IMAGE",
+            Some(images::JAEGER),
+            IMAGE_HELP,
+            Some("JAEGER_IMAGE"),
         )],
         renders: template(include_str!(
             "../../templates/modules/jaeger/compose.yaml.jinja"
@@ -1889,10 +1903,9 @@ impl Headwaters {
                 provider: None,
                 bind: ConnectionBinding::default(),
             }],
-            // The one user-tunable surface Headwaters exposes: whether to serve the bundled
-            // lineage UI. The value lands in the module's `InjectedEnv` under
-            // `HEADWATERS_SERVE_UI` (the generated `config.toml` reads it as `ui.serve`), and
-            // it also drives `services()`'s route choice below.
+            // Whether to serve the bundled lineage UI. The value lands in the module's
+            // `InjectedEnv` under `HEADWATERS_SERVE_UI` (the generated `config.toml` reads it as
+            // `ui.serve`), and it also drives `services()`'s route choice below.
             knobs: vec![
                 Knob {
                     key: HEADWATERS_SERVE_UI.into(),
@@ -1908,11 +1921,12 @@ impl Headwaters {
                     aliases: vec![HEADWATERS_SERVE_UI_LEGACY.into()],
                     advanced: false,
                 },
-                image_knob(
+                string_knob(
                     "image",
                     "Headwaters image",
-                    images::HEADWATERS,
-                    "HEADWATERS_IMAGE",
+                    Some(images::HEADWATERS),
+                    IMAGE_HELP,
+                    Some("HEADWATERS_IMAGE"),
                 ),
             ],
             // The OpenLineage client contract (`OPENLINEAGE_URL` + `OPENLINEAGE_ENDPOINT`), as
@@ -1941,19 +1955,11 @@ impl Headwaters {
             render: template_with_files(
                 include_str!("../../templates/modules/headwaters/compose.yaml.jinja"),
                 vec![
-                    RenderFile {
-                        path: "config.toml".into(),
-                        contents: include_str!(
-                            "../../templates/modules/headwaters/config.toml.jinja"
-                        )
-                        .into(),
-                        alias: Some("headwaters_config".into()),
-                        sensitive: false,
-                        secret_alias: None,
-                        at_root: false,
-                        preserve: false,
-                        moved_from: None,
-                    },
+                    config_file(
+                        "config.toml",
+                        "headwaters_config",
+                        include_str!("../../templates/modules/headwaters/config.toml.jinja"),
+                    ),
                     sensitive_file(
                         ".env/headwaters-migrate.env",
                         include_str!("../../templates/modules/headwaters/database.env.jinja"),
@@ -2003,18 +2009,9 @@ impl Module for Headwaters {
         (target.as_str() == TargetId::COMPOSE).then_some(&self.render)
     }
     fn services(&self, knobs: &ResolvedKnobs) -> Vec<ServiceSpec> {
-        // The server always relocates its whole surface (UI, REST read API, ConnectRPC,
-        // ingest) under `/lineage` (told via `config.toml`'s `[ui].base_path`), so the gateway
-        // fronts that prefix either way:
-        //
-        // - UI on: as a `UiPrefixable` UI.
-        // - UI off: as an `Api` passthrough — a custom UI built on the shipped components
-        //   still needs the read API and ConnectRPC service behind it.
-        //
-        // The OpenLineage ingest path is also matched at its static, Databricks-style
-        // `/api/v1/lineage` (like Unity Catalog's `/api/2.1/unity-catalog`) and rewritten to
-        // carry the base path (`Rewrite::Inherit` → `/lineage/api/v1/lineage`), so clients
-        // post to a stable path regardless of the knob.
+        // The gateway fronts the base path either as a `UiPrefixable` UI (UI on) or as an `Api`
+        // passthrough (UI off: a custom UI built on the shipped components still needs the read
+        // API and ConnectRPC behind it). The ingest path is matched at its static prefix either way.
         let serve_ui = knobs.bool(HEADWATERS_SERVE_UI, true);
         let surface = if serve_ui {
             Endpoint::ui_prefixable("ui", 8091, None)
@@ -2072,16 +2069,6 @@ struct Omnigent {
 
 impl Omnigent {
     fn new() -> Self {
-        let string_knob = |key: &str, title: &str, default: &str, help: &str| Knob {
-            key: key.into(),
-            title: Some(title.into()),
-            kind: KnobKind::String,
-            default: Some(default.into()),
-            required: false,
-            help: Some(help.into()),
-            aliases: vec![],
-            advanced: false,
-        };
         Omnigent {
             id: ModuleId::from("omnigent"),
             // The gateway fronts the server; MLflow's AI Gateway serves the agents' models (and
@@ -2112,31 +2099,41 @@ impl Omnigent {
                     aliases: vec![],
                     advanced: false,
                 },
-                string_knob(
-                    "model",
-                    "Agent model",
-                    "claude-opus-5-5",
-                    "The model agents use by default: an AI Gateway endpoint name (see \
+                Knob {
+                    advanced: false,
+                    ..string_knob(
+                        "model",
+                        "Agent model",
+                        Some("claude-opus-5-5"),
+                        "The model agents use by default: an AI Gateway endpoint name (see \
                      mlflow.ai_gateway_models).",
-                ),
-                string_knob(
-                    "fast_model",
-                    "Background model",
-                    "claude-haiku-5-5",
-                    "The model harnesses use for quick background calls: an AI Gateway \
+                        None,
+                    )
+                },
+                Knob {
+                    advanced: false,
+                    ..string_knob(
+                        "fast_model",
+                        "Background model",
+                        Some("claude-haiku-5-5"),
+                        "The model harnesses use for quick background calls: an AI Gateway \
                      endpoint name.",
-                ),
-                image_knob(
+                        None,
+                    )
+                },
+                string_knob(
                     "image",
                     "Omnigent server image",
-                    images::OMNIGENT_SERVER,
-                    "OMNIGENT_IMAGE",
+                    Some(images::OMNIGENT_SERVER),
+                    IMAGE_HELP,
+                    Some("OMNIGENT_IMAGE"),
                 ),
-                image_knob(
+                string_knob(
                     "host_image",
                     "Omnigent host image",
-                    images::OMNIGENT_HOST,
-                    "OMNIGENT_HOST_IMAGE",
+                    Some(images::OMNIGENT_HOST),
+                    IMAGE_HELP,
+                    Some("OMNIGENT_HOST_IMAGE"),
                 ),
             ],
             // Where a client (`omnigent run --server`, `omnigent host`) reaches the server: its
@@ -2274,11 +2271,12 @@ fn marimo() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            image_knob(
+            string_knob(
                 "image",
                 "marimo runtime image",
-                images::MARIMO,
-                "MARIMO_IMAGE",
+                Some(images::MARIMO),
+                IMAGE_HELP,
+                Some("MARIMO_IMAGE"),
             ),
             Knob {
                 key: "index_url".into(),
@@ -2355,16 +2353,6 @@ fn puppygraph() -> Arc<dyn Module> {
         }],
         ..PythonClient::default()
     };
-    let string_knob = |key: &str, title: &str, default: &str, help: &str, advanced: bool| Knob {
-        key: key.into(),
-        title: Some(title.into()),
-        kind: KnobKind::String,
-        default: Some(default.into()),
-        required: false,
-        help: Some(help.into()),
-        aliases: vec![],
-        advanced,
-    };
     let uc_url = format!("http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}");
     Arc::new(DataModule {
         id: ModuleId::from("puppygraph"),
@@ -2408,34 +2396,38 @@ fn puppygraph() -> Arc<dyn Module> {
         }],
         provides,
         knobs: vec![
-            string_knob(
-                "catalog",
-                "Unity Catalog catalog",
-                "unity",
-                "The UC catalog whose schemas and tables the graph schema maps.",
-                false,
-            ),
+            Knob {
+                advanced: false,
+                ..string_knob(
+                    "catalog",
+                    "Unity Catalog catalog",
+                    Some("unity"),
+                    "The UC catalog whose schemas and tables the graph schema maps.",
+                    None,
+                )
+            },
             string_knob(
                 "uc_url",
                 "Unity Catalog URL",
-                &uc_url,
+                Some(&uc_url),
                 "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose \
                  network (not through the gateway).",
-                true,
+                None,
             ),
             string_knob(
                 "password",
                 "PuppyGraph password",
-                "puppygraph123",
+                Some("puppygraph123"),
                 "Password of the `puppygraph` user for the web UI, Bolt and Gremlin. A local \
                  default; set your own if the ports are reachable by others.",
-                true,
+                None,
             ),
-            image_knob(
+            string_knob(
                 "image",
                 "PuppyGraph image",
-                images::PUPPYGRAPH,
-                "PUPPYGRAPH_IMAGE",
+                Some(images::PUPPYGRAPH),
+                IMAGE_HELP,
+                Some("PUPPYGRAPH_IMAGE"),
             ),
         ],
         renders: template_with_files(
@@ -2540,11 +2532,12 @@ fn rivers() -> Arc<dyn Module> {
                 aliases: vec![],
                 advanced: true,
             },
-            image_knob(
+            string_knob(
                 "image",
                 "Rivers runtime image",
-                images::RIVERS,
-                "RIVERS_IMAGE",
+                Some(images::RIVERS),
+                IMAGE_HELP,
+                Some("RIVERS_IMAGE"),
             ),
         ],
         renders: template_with_files(
@@ -2595,7 +2588,13 @@ fn opa() -> Arc<dyn Module> {
         }],
         provides: Provides::default(),
         knobs: vec![
-            image_knob("image", "OPA image", images::OPA, "OPA_IMAGE"),
+            string_knob(
+                "image",
+                "OPA image",
+                Some(images::OPA),
+                IMAGE_HELP,
+                Some("OPA_IMAGE"),
+            ),
             Knob {
                 key: "dry_run".into(),
                 title: Some("Dry run".into()),
