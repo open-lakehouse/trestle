@@ -20,17 +20,27 @@ cargo fmt                # Format
   contain proto-syntax examples that aren't valid Rust).
 - Run `cargo fmt` and `cargo clippy` before opening a PR; CI enforces both.
 
+- Dev builds carry no debug info for dependencies, and only line tables for
+  workspace crates, which keeps `target/` small. For a debugger, build with
+  `--profile debugging`.
+- Building against a trestle crate that was just released, from a sibling repo
+  behind the crates.io proxy? See [`docs/crates-proxy.md`](docs/crates-proxy.md).
+
 ### Commit signing
 
-Commits must be GPG-signed. The PIN needs an interactive terminal, so the agent
-commits **unsigned** (`git commit --no-gpg-sign`) and the branch is signed once
-before the PR — see `~/.claude/CLAUDE.md` and the `/commit` skill for the flow.
+Commits must be GPG-signed. The PIN needs an interactive terminal, so agents
+commit **unsigned** (`git commit --no-gpg-sign`) and the branch is signed once
+at the end with a rebase + `--force-with-lease` push. The `/commit` skill
+(`.claude/skills/commit/SKILL.md`) has the exact commands, including the variant
+for stacks.
 
 ## Conventional commits (this is the release contract)
 
-Every commit to `main` must follow the
-[Conventional Commits](https://www.conventionalcommits.org/) format, because
-release-plz computes each crate's next version from the commit history:
+PRs are **squash-merged**, so each PR becomes one commit on `main` and **the PR
+title is that commit's message**. It must follow the
+[Conventional Commits](https://www.conventionalcommits.org/) format (CI lints it
+in `pr-title.yml`), because release-plz computes each crate's next version from
+the commit history:
 
 ```
 <type>(<scope>): <subject>
@@ -48,9 +58,11 @@ release-plz computes each crate's next version from the commit history:
   | `build` | Build | patch bump |
   | `test`, `chore`, `ci` | _(hidden)_ | no release on its own |
 
-- **`<scope>`** should be the affected crate, so the bump and changelog land on
-  the right crate: `olai-store`, `olai-http`, `olai-codegen`, `olai-http-wasm`,
-  `olai-trestle`.
+- **`<scope>`** should be the affected crate's package name, so the bump and
+  changelog land on the right crate: `olai-store`, `olai-http`, `olai-codegen`,
+  `olai-http-wasm`, `olai-trestle`, `olai-stack-topology`,
+  `olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending`,
+  `trestle-diagram`.
 - **Breaking changes** → append `!` after the type/scope (`feat(olai-store)!:`)
   or add a `BREAKING CHANGE:` footer. This triggers a **major** bump (or a minor
   bump while a crate is still `0.x`).
@@ -64,8 +76,11 @@ feat(olai-store)!: rename Label::variant to Label::kind
 ```
 
 > release-plz attributes a commit to a crate by the files it touches (and the
-> scope). Keep a commit focused on one crate where practical so versions and
-> changelogs stay clean.
+> scope). Keep a PR focused on one crate where practical so versions and
+> changelogs stay clean. When a change spans several crates or change types that
+> each deserve their own changelog entry, split it into a stack
+> ([`gh stack`](https://github.com/github/gh-stack)), one PR per `type(scope)`.
+> Commits inside a PR are squashed and don't reach the changelog.
 
 ## How releases work
 
