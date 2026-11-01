@@ -440,7 +440,8 @@ fn generate_oneof_variant_methods(
             // Derive the Rust parameter type from the UnifiedType abstraction. Hard-fail with
             // context when the derived type string is unparsable rather than silently
             // substituting `String`, which would generate a wrong-typed builder method.
-            let rust_type_str = unified_to_rust(&variant.field_type, RenderContext::Parameter);
+            let rust_type_str =
+                unified_to_rust(&variant.field_type, RenderContext::Parameter, method.config.runtime);
             let param_type: syn::Type = syn::parse_str(&rust_type_str).map_err(|source| {
                 crate::error::Error::InvalidRustPath {
                     path: rust_type_str.clone(),
