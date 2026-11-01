@@ -9,6 +9,7 @@ use serde_yaml::Value as YamlValue;
 
 use crate::Result;
 use crate::parsing::{CodeGenMetadata, parse_file_descriptor_set};
+use crate::utils::last_segment;
 
 /// Run Pass 0 (gnostic ref fix), Pass 1 (validation enrichment), optionally Pass 2
 /// (path/body dedup), and Pass 3 (schema-key aliasing).
@@ -400,11 +401,7 @@ fn dedup_path_params(spec: &mut YamlValue, metadata: &CodeGenMetadata) {
                 continue;
             }
 
-            let input_type = method
-                .input_type
-                .rfind('.')
-                .map(|i| &method.input_type[i + 1..])
-                .unwrap_or(&method.input_type);
+            let input_type = last_segment(&method.input_type);
 
             let schema = spec
                 .get_mut("components")

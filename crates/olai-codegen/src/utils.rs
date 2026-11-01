@@ -9,7 +9,12 @@ use convert_case::{Case, Casing};
 /// For example, `".unitycatalog.catalog.v1.Catalog"` returns `"Catalog"`.
 /// If the name contains no dots, the original string is returned unchanged.
 pub fn extract_simple_type_name(name: &str) -> String {
-    name.split('.').next_back().unwrap_or(name).to_string()
+    last_segment(name).to_string()
+}
+
+/// The last dot-separated segment of `name` (all of `name` when it has no dot).
+pub(crate) fn last_segment(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
 
 /// Derive the **emitted** type name for a (possibly nested) protobuf type from its fully-qualified

@@ -36,6 +36,8 @@ use crate::analysis::{
 use crate::output;
 use crate::parsing::types::{self, RenderContext, UnifiedType};
 use crate::parsing::{CodeGenMetadata, MessageField, MessageInfo};
+use crate::utils::last_segment;
+use crate::utils::strings::operation_to_method_name;
 
 mod aggregate;
 mod bindings;
@@ -555,7 +557,6 @@ fn generate_client_code(
         // files are flat under `<service>/`; with both they go under `<service>/<protocol>/` to
         // avoid the two `client.rs`/`builders.rs` colliding. The shared builder layer binds to the
         // protocol's low-level client and only calls `client.<method>(&request)`.
-        let mut emitted_resource_client = false;
         for &protocol in &protocols {
             let prefix = if multi {
                 format!("{}/{}", service.base_path, protocol.subdir())
@@ -608,7 +609,6 @@ fn generate_client_code(
                 format!("{prefix}/mod.rs"),
                 generate_client_module(has_resource_client, handler_impl),
             );
-            emitted_resource_client |= has_resource_client;
         }
 
         // When both protocols are emitted under subdirs, the `<service>/mod.rs` mounts and re-exports
@@ -619,7 +619,6 @@ fn generate_client_code(
                 generate_protocol_split_module(&protocols),
             );
         }
-        let _ = emitted_resource_client;
     }
 
     // Top-level aggregate root client (e.g. `UnityCatalogClient`), emitted only when a bindings
@@ -983,11 +982,7 @@ pub fn generate_models_mod(
             if msg_info.resource_descriptor.is_some()
                 && (fq_name.starts_with(&fq_prefix) || fq_name.starts_with(&fq_pkg))
             {
-                let simple = fq_name
-                    .rfind('.')
-                    .map(|i| &fq_name[i + 1..])
-                    .unwrap_or(fq_name.as_str());
-                type_names.insert(simple.to_string());
+                type_names.insert(last_segment(fq_name).to_string());
             }
         }
     }
@@ -1141,27 +1136,6 @@ pub fn generate_models_mod(
 pub struct GeneratedCode {
     /// Generated files keyed by path relative to the phase's output directory.
     pub files: HashMap<String, String>,
-}
-
-impl CodeGenMetadata {
-    fn get_message_meta(&self, message_name: &str) -> Option<MessageMeta<'_>> {
-        self.messages.get(message_name).map(|info| MessageMeta {
-            info,
-            metadata: self,
-        })
-    }
-}
-
-/// A protobuf message paired with the metadata needed to resolve its references.
-///
-/// Wraps a single [`MessageInfo`](crate::parsing::MessageInfo) together with a borrow of the whole
-/// [`CodeGenMetadata`] it came from, so the generators can look up a message's fields while still
-/// being able to resolve types that point at other messages in the same descriptor set. Obtained
-/// via `CodeGenMetadata::get_message_meta`.
-pub(crate) struct MessageMeta<'a> {
-    info: &'a MessageInfo,
-    #[allow(dead_code)]
-    metadata: &'a CodeGenMetadata,
 }
 
 /// The per-service generation context shared by every code generator.
@@ -1585,17 +1559,26 @@ impl MethodHandler<'_> {
         (required, optional)
     }
 
-    pub(crate) fn output_message(&self) -> Option<MessageMeta<'_>> {
+    pub(crate) fn output_message(&self) -> Option<&MessageInfo> {
         if self.plan.metadata.output_type.ends_with("Empty") {
             return None;
         }
-        self.metadata
-            .get_message_meta(&self.plan.metadata.output_type)
+        self.metadata.messages.get(&self.plan.metadata.output_type)
     }
 
     pub(crate) fn output_type(&self) -> Option<Ident> {
-        self.output_message()
-            .map(|t| extract_type_ident(&t.info.name))
+        self.output_message().map(|t| extract_type_ident(&t.name))
+    }
+
+    /// The success type of the handler-trait method: the output message, or `()` without a
+    /// response.
+    pub(crate) fn handler_output_type(&self) -> TokenStream {
+        if self.plan.has_response {
+            let output = self.output_type();
+            quote! { #output }
+        } else {
+            quote! { () }
+        }
     }
 
     /// The type a client call resolves to: the output message, `bool` for an existence check,
@@ -1615,23 +1598,20 @@ impl MethodHandler<'_> {
 
     pub(crate) fn list_output_field(&self) -> Option<&MessageField> {
         self.output_message()?
-            .info
             .fields
             .iter()
             .find(|f| !f.name.contains("page_token"))
     }
 
-    pub(crate) fn input_message(&self) -> Option<MessageMeta<'_>> {
+    pub(crate) fn input_message(&self) -> Option<&MessageInfo> {
         if self.plan.metadata.input_type == "Empty" {
             return None;
         }
-        self.metadata
-            .get_message_meta(&self.plan.metadata.input_type)
+        self.metadata.messages.get(&self.plan.metadata.input_type)
     }
 
     pub(crate) fn input_type(&self) -> Option<Ident> {
-        self.input_message()
-            .map(|t| extract_type_ident(&t.info.name))
+        self.input_message().map(|t| extract_type_ident(&t.name))
     }
 
     pub(crate) fn builder_type(&self) -> Ident {
@@ -1656,7 +1636,7 @@ impl MethodHandler<'_> {
     /// stay consistent with the snake→camel name NAPI derives for the native method.
     pub(crate) fn binding_method_name_str(&self) -> String {
         match self.plan.metadata.operation.as_ref() {
-            Some(op) if !op.operation_id.is_empty() => op.operation_id.to_case(Case::Snake),
+            Some(op) if !op.operation_id.is_empty() => operation_to_method_name(&op.operation_id),
             _ => self.plan.handler_function_name.clone(),
         }
     }

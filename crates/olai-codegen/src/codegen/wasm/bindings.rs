@@ -174,7 +174,6 @@ fn service_wrapper(service: &ServiceHandler<'_>) -> TokenStream {
         // Rust fn keeps the snake_case binding name; JS sees the camelCase name via `js_name`.
         let rust_name = method.binding_method_name();
         let js_name = method.binding_method_name_str().to_case(Case::Camel);
-        let has_body = method.plan.has_request_body || method.input_type().is_some();
 
         // Request: deserialize a JS object into the typed request, or default for no-input RPCs.
         let (req_param, req_build) = if let Some(input_ty) = method.input_type() {
@@ -186,7 +185,6 @@ fn service_wrapper(service: &ServiceHandler<'_>) -> TokenStream {
                 },
             )
         } else {
-            let _ = has_body;
             (quote! {}, quote! { let request = Default::default(); })
         };
 

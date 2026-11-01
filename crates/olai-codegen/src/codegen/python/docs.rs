@@ -160,7 +160,7 @@ fn get_return_type_documentation(method: &MethodHandler<'_>) -> String {
             .unwrap_or_else(|| "The items.".to_string()),
         _ => {
             if let Some(output_message) = method.output_message() {
-                if let Some(doc) = output_message.info.documentation.as_ref() {
+                if let Some(doc) = output_message.documentation.as_ref() {
                     let cleaned_doc = clean_and_format_description(doc);
                     if cleaned_doc.is_empty() {
                         "The requested resource".to_string()

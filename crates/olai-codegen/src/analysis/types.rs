@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
-use convert_case::{Case, Casing};
 use syn::Ident;
 
 use crate::error::{Error, Result};
 use crate::google::api::{ResourceDescriptor, http_rule::Pattern};
 use crate::parsing::types::UnifiedType;
 use crate::parsing::{CodeGenMetadata, HttpPattern, MethodMetadata, OneofVariant};
+use crate::utils::last_segment;
+use crate::utils::strings::operation_to_method_name;
 
 /// The Operation a method is performing
 ///
@@ -518,7 +519,7 @@ impl<'a> MethodPlanner<'a> {
     /// - [AIP-134](https://google.aip.dev/134) Update
     /// - [AIP-135](https://google.aip.dev/135) Delete
     pub(crate) fn request_type(&self) -> RequestType {
-        let snake_name = self.method.method_name.to_case(Case::Snake);
+        let snake_name = operation_to_method_name(&self.method.method_name);
         let verb_resource = snake_name.split_once('_');
 
         if let Some((verb, resource)) = verb_resource {
@@ -603,12 +604,7 @@ impl<'a> MethodPlanner<'a> {
     /// Strips the package prefix (e.g., `.example.catalog.v1.Catalog` → `Catalog`).
     pub(crate) fn output_resource_type(&self) -> Option<String> {
         if self.has_response() {
-            let output_type = &self.method.output_type;
-            let simple = output_type
-                .rfind('.')
-                .map(|i| &output_type[i + 1..])
-                .unwrap_or(output_type);
-            Some(simple.to_string())
+            Some(last_segment(&self.method.output_type).to_string())
         } else {
             None
         }

@@ -55,7 +55,7 @@ pub(crate) fn generate(
     let components: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
     let join_format = spec.join_format();
 
-    let struct_def = scoped_struct(&scoped_ident, &components, &low_level_ident);
+    let struct_def = scoped_struct(&components);
     let constructor = scoped_constructor(&components, &low_level_ident);
     // For nested resources, also offer a `from_full_name` constructor that splits a dot-joined
     // full name into the component fields once (no round-trip). Flat resources skip it — it would
@@ -375,11 +375,7 @@ fn render_child_builder_args(
 }
 
 /// The struct's captured-component fields (each a `String`).
-fn scoped_struct(
-    _scoped_ident: &proc_macro2::Ident,
-    components: &[proc_macro2::Ident],
-    _low_level_ident: &proc_macro2::Ident,
-) -> TokenStream {
+fn scoped_struct(components: &[proc_macro2::Ident]) -> TokenStream {
     // Fields are `pub(crate)` so hand-written extension impls in the consuming crate can read the
     // captured name components (and the low-level `client`) when adding bespoke methods.
     let fields = components.iter().map(|c| quote! { pub(crate) #c: String, });

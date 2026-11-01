@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::codegen::Runtime;
-use crate::utils::extract_simple_type_name;
+use crate::utils::{extract_simple_type_name, last_segment};
 
 /// Context for rendering types in different situations
 #[derive(Debug, Clone, Copy)]
@@ -537,9 +537,7 @@ impl UnifiedType {
     /// Extract a syn::Ident for the inner type name (last segment of a qualified name).
     pub fn type_ident(&self) -> syn::Ident {
         let name = match &self.base_type {
-            BaseType::Message(n) | BaseType::Enum(n) | BaseType::OneOf(n) => {
-                n.split('.').next_back().unwrap_or(n)
-            }
+            BaseType::Message(n) | BaseType::Enum(n) | BaseType::OneOf(n) => last_segment(n),
             BaseType::String => "String",
             BaseType::Int32 => "i32",
             BaseType::Int64 => "i64",

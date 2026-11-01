@@ -21,25 +21,17 @@ use crate::codegen::{MethodHandler, ServiceHandler};
 
 /// Generate handler trait for a service
 pub(super) fn generate(service: &ServiceHandler<'_>) -> Result<String> {
-    let context_ident = last_segment(&service.config.context_type_path);
-    let mut trait_methods = Vec::new();
     // The handler trait backs the Axum (REST) server, so it covers only routed methods. Routeless
     // (ConnectRPC-only) methods get no REST handler; a ConnectRPC server facade is a follow-up.
-    for method in service.rest_methods() {
-        let method_code = handler_trait_method(&method, &context_ident);
-        trait_methods.push(method_code);
-    }
+    let trait_methods: Vec<_> = service
+        .rest_methods()
+        .map(|method| handler_trait_method(&method))
+        .collect();
 
     let trait_code = handler_trait(service, &service.plan.handler_name, &trait_methods)?;
     let module_header = generate_module_header(service);
 
     Ok(format!("{module_header}{trait_code}"))
-}
-
-/// Extract the final path segment as an `Ident`.
-fn last_segment(path_str: &str) -> syn::Ident {
-    let s = path_str.rsplit("::").next().unwrap_or(path_str);
-    format_ident!("{}", s.trim())
 }
 
 /// Generate module-level `//!` documentation for the handler module
@@ -103,33 +95,18 @@ pub fn handler_trait(
 }
 
 /// Generate a single handler trait method
-pub fn handler_trait_method(
-    method: &MethodHandler<'_>,
-    _context_ident: &syn::Ident,
-) -> TokenStream {
+pub fn handler_trait_method(method: &MethodHandler<'_>) -> TokenStream {
     let doc_attrs = doc_tokens(method.plan.metadata.documentation.as_deref());
     let input_type = method.input_type();
     let method_name = method.plan.base_method_ident();
-    let cx_ident = format_ident!("Cx");
+    let output_type = method.handler_output_type();
 
-    if method.plan.has_response {
-        let output_type = method.output_type();
-        quote! {
-            #doc_attrs
-            async fn #method_name(
-                &self,
-                request: #input_type,
-                context: #cx_ident,
-            ) -> Result<#output_type>;
-        }
-    } else {
-        quote! {
-            #doc_attrs
-            async fn #method_name(
-                &self,
-                request: #input_type,
-                context: #cx_ident,
-            ) -> Result<()>;
-        }
+    quote! {
+        #doc_attrs
+        async fn #method_name(
+            &self,
+            request: #input_type,
+            context: Cx,
+        ) -> Result<#output_type>;
     }
 }

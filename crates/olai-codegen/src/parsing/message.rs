@@ -9,23 +9,20 @@ use protobuf::descriptor::{DescriptorProto, FieldDescriptorProto, MessageOptions
 use super::{CodeGenMetadata, MessageField, MessageInfo, OneofVariant, extract_documentation};
 use crate::google::api::{FieldBehavior, ResourceDescriptor, ResourceReference};
 use crate::parsing::types::{BaseType, UnifiedType};
+use crate::utils::last_segment;
 use crate::{Error, Result};
 
 /// Process a protobuf message definition
 pub(super) fn process_message(
     message: &DescriptorProto,
-    _file_name: &str,
     codegen_metadata: &mut CodeGenMetadata,
     type_prefix: &str,
     source_code_info: Option<&SourceCodeInfo>,
     path_prefix: &[i32],
 ) -> Result<()> {
     let message_name = message.name();
-    let full_type_name = if type_prefix.is_empty() {
-        format!(".{message_name}")
-    } else {
-        format!("{type_prefix}.{message_name}")
-    };
+    // An empty prefix (no package) yields `.<message>`.
+    let full_type_name = format!("{type_prefix}.{message_name}");
 
     // Pre-collect which nested messages are map entries so we can detect map fields
     // without relying on naming heuristics. Protobuf marks map entry messages with
@@ -128,7 +125,7 @@ pub(super) fn process_message(
     for (oneof_name, variants) in oneof_fields {
         // Create a single field representing the oneof enum.
         // The enum type name follows the pattern: message_name::OneofName
-        let oneof_field_name = oneof_name.split('.').next_back().unwrap().to_string();
+        let oneof_field_name = last_segment(&oneof_name).to_string();
         let enum_type_name = format!(
             "{}::{}",
             message_name.to_case(Case::Snake),
@@ -185,7 +182,6 @@ pub(super) fn process_message(
         let nested_path = [path_prefix, &[3, nested_index as i32]].concat();
         process_message(
             nested_message,
-            _file_name,
             codegen_metadata,
             &full_type_name,
             source_code_info,

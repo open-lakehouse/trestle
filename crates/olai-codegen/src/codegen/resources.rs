@@ -24,8 +24,8 @@ use super::{CodeGenConfig, format_tokens};
 /// Generate the `labels.rs` file containing `Resource` and `ObjectLabel` enums
 /// derived from `google.api.resource` annotations on message types.
 ///
-/// The package prefix is inferred from the service packages in `plan`: the longest
-/// common dot-delimited prefix across all services, formatted as `".<prefix>."`.
+/// The package prefix is inferred from the service packages in `plan`: the top-level
+/// dot-segment of the first service package, formatted as `".<prefix>."`.
 /// The `super::` depth is always `1` since `labels.rs` is placed one level inside
 /// the models subdirectory alongside the service `pub mod` blocks.
 ///
@@ -650,7 +650,7 @@ fn derive_path_names(
     // Find this resource's type string from metadata
     let resource_type = metadata
         .resource_from_singular(singular)
-        .map(|rd| rd.r#type.clone())
+        .map(|rd| rd.r#type.as_str())
         .unwrap_or_default();
 
     // --- Annotation-driven path ---
@@ -703,13 +703,10 @@ fn derive_path_names(
         || (get_path_param.as_deref() == Some("name") && !parent_params.is_empty());
 
     if should_decompose {
+        // The leaf is the resource's name field (usually `name`, or its `name_field` when it
+        // diverges, e.g. `tag_key`).
         let mut params = parent_params;
-        params.push(format!("{singular}_name"));
-        // Replace the final `{singular}_name` with the leaf field name (usually `name`, or the
-        // resource's `name_field` when it diverges, e.g. `tag_key`).
-        // last_mut() is infallible: we just pushed an element above.
-        let last = params.last_mut().unwrap();
-        *last = leaf_name.to_string();
+        params.push(leaf_name.to_string());
         params
     } else {
         vec![leaf_name.to_string()]
@@ -758,30 +755,18 @@ fn build_qualified_name_expr(path_names: &[String], is_string: &[bool]) -> Token
 
 /// Infer the package prefix from a list of proto package names.
 ///
-/// Finds the longest common leading dot-segment and returns it as `".<prefix>."`.
+/// Returns the first dot-segment of the first package as `".<segment>."`. Only the top-level
+/// namespace is used (not the full common prefix), so shared version segments like `v1` are
+/// never included.
 ///
 /// Examples:
-/// - `["unitycatalog.catalogs.v1", "unitycatalog.tables.v1"]` → `".unitycatalog."`
+/// - `["example.catalogs.v1", "example.tables.v1"]` → `".example."`
 /// - `["example.catalog.v1"]` → `".example."`
 fn infer_package_prefix(packages: &[&str]) -> String {
-    if packages.is_empty() {
-        return String::new();
+    match packages.first() {
+        Some(first) => format!(".{}.", first.split('.').next().unwrap_or_default()),
+        None => String::new(),
     }
-    let first_parts: Vec<&str> = packages[0].split('.').collect();
-    let _common_len = first_parts
-        .iter()
-        .enumerate()
-        .take_while(|(i, seg)| {
-            packages
-                .iter()
-                .skip(1)
-                .all(|p| p.split('.').nth(*i) == Some(seg))
-        })
-        .count();
-    // Take only the top-level shared segment (one dot-level), not the full common prefix,
-    // so version segments like "v1" don't get included when all packages share them.
-    // Use the first segment as the meaningful namespace prefix.
-    format!(".{}.", first_parts[0])
 }
 
 /// Convert a fully-qualified protobuf message name to a Rust type path relative to

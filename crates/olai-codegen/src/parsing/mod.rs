@@ -124,19 +124,18 @@ pub fn process_file_descriptor(
     file_desc: &FileDescriptorProto,
     codegen_metadata: &mut CodeGenMetadata,
 ) -> Result<()> {
-    let file_name = file_desc.name();
-
     // Extract source code info for documentation
     let source_code_info = file_desc.source_code_info.as_ref();
 
+    let package_name = file_desc.package();
+    let type_prefix = if package_name.is_empty() {
+        String::new()
+    } else {
+        format!(".{package_name}")
+    };
+
     // Process enums in the file
     for (enum_index, enum_desc) in file_desc.enum_type.iter().enumerate() {
-        let package_name = file_desc.package();
-        let type_prefix = if package_name.is_empty() {
-            String::new()
-        } else {
-            format!(".{package_name}")
-        };
         enum_parser::process_enum(
             enum_desc,
             codegen_metadata,
@@ -148,16 +147,8 @@ pub fn process_file_descriptor(
 
     // Process messages in the file
     for (message_index, message) in file_desc.message_type.iter().enumerate() {
-        let package_name = file_desc.package();
-        let type_prefix = if package_name.is_empty() {
-            String::new()
-        } else {
-            format!(".{package_name}")
-        };
-
         message::process_message(
             message,
-            file_name,
             codegen_metadata,
             &type_prefix,
             source_code_info,
@@ -166,11 +157,10 @@ pub fn process_file_descriptor(
     }
 
     // Process services in the file
-    let package_name = file_desc.package().to_string();
     for (service_index, service) in file_desc.service.iter().enumerate() {
         service::process_service(
             service,
-            &package_name,
+            package_name,
             codegen_metadata,
             source_code_info,
             service_index,

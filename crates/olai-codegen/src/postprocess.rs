@@ -17,6 +17,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::error::{Error, Result};
+use crate::utils::last_segment;
 use crate::utils::strings::lower_camel;
 
 /// The entries of the models directory that trestle writes itself.
@@ -74,7 +75,7 @@ pub fn field_options(
             .take_while(|s| s.starts_with(|c: char| c.is_ascii_lowercase()))
             .collect::<Vec<_>>()
             .join(".");
-        let simple = name.rsplit('.').next().unwrap_or(name);
+        let simple = last_segment(name);
         for field in &message.fields {
             let key = format!("{simple}.{}", field.name);
             if let Some(json) = &field.json_name {

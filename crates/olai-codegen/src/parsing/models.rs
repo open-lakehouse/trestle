@@ -4,6 +4,7 @@ use crate::gnostic::openapi::v3::Operation;
 use crate::google::api::{FieldBehavior, HttpRule, ResourceDescriptor, ResourceReference};
 use crate::parsing::http::HttpPattern;
 use crate::parsing::types::{BaseType, UnifiedType};
+use crate::utils::last_segment;
 
 /// Collected metadata for code generation
 #[derive(Debug, Default)]
@@ -53,8 +54,7 @@ impl CodeGenMetadata {
 
         // Fall back to simple-name suffix match
         self.messages.iter().find_map(|(key, info)| {
-            let simple = key.rfind('.').map(|i| &key[i + 1..]).unwrap_or(key);
-            if simple == type_name {
+            if last_segment(key) == type_name {
                 info.resource_descriptor.as_ref()
             } else {
                 None

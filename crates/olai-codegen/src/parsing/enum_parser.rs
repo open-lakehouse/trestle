@@ -12,11 +12,8 @@ pub(super) fn process_enum(
     path_prefix: &[i32],
 ) -> Result<()> {
     let enum_name = enum_desc.name();
-    let full_type_name = if type_prefix.is_empty() {
-        format!(".{enum_name}")
-    } else {
-        format!("{type_prefix}.{enum_name}")
-    };
+    // An empty prefix (no package) yields `.<enum>`.
+    let full_type_name = format!("{type_prefix}.{enum_name}");
 
     // Extract enum-level documentation
     let enum_documentation = extract_documentation(source_code_info, path_prefix);

@@ -316,7 +316,7 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
             // `decoded_type_name`): item type for standard list unwrapping, otherwise the full
             // output message. This keeps imports in lockstep with emitted `fromBinary` calls,
             // including resource-less (Flat) services that decode `*Response` messages directly.
-            if let Some(name) = decoded_type_name(service, &method)
+            if let Some(name) = decoded_type_name(&method)
                 && !type_names.contains(&name)
             {
                 type_names.push(name.clone());
@@ -392,7 +392,7 @@ import {{
 /// - every other returning method decodes its full output message (e.g. `TagAssignment`,
 ///   `ListTagAssignmentsResponse`);
 /// - `Empty`-returning (void) methods decode nothing → `None`.
-fn decoded_type_name(_service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> Option<String> {
+fn decoded_type_name(method: &MethodHandler<'_>) -> Option<String> {
     match &method.plan.request_type {
         RequestType::List => Some(
             method
@@ -690,18 +690,16 @@ fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode
 /// signature includes all params (including path params) and forwards them to the native client
 /// method of the same (camelCased) name. The emit shape is chosen by request type:
 /// list/stream, create-with-return (or void), get/update-style returning, or delete (void).
-fn generate_flat_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> String {
+fn generate_flat_method(method: &MethodHandler<'_>) -> String {
     let mode = BindingMode::Flat;
     // Flat methods never drop path params (the root client passes everything).
     match method.emit_shape() {
         EmitShape::List => {
-            let mut out = generate_collection_list_method(service, method, false);
-            out.push_str(&generate_collection_list_stream_method(
-                service, method, false,
-            ));
+            let mut out = generate_collection_list_method(method, false);
+            out.push_str(&generate_collection_list_stream_method(method, false));
             out
         }
-        EmitShape::Create => generate_collection_create_method(service, method, false),
+        EmitShape::Create => generate_collection_create_method(method, false),
         EmitShape::Delete => generate_resource_delete_method(method, mode),
         // Get / Update / resource-targeted custom: forward all params and decode the typed response.
         // An `Empty`-returning RPC produces a `Promise<void>`.
@@ -734,16 +732,12 @@ fn generate_aggregate_client_sorted(
                     }
                     match &method.plan.request_type {
                         RequestType::List => {
+                            methods.push_str(&generate_collection_list_method(&method, true));
                             methods
-                                .push_str(&generate_collection_list_method(service, &method, true));
-                            methods.push_str(&generate_collection_list_stream_method(
-                                service, &method, true,
-                            ));
+                                .push_str(&generate_collection_list_stream_method(&method, true));
                         }
                         RequestType::Create => {
-                            methods.push_str(&generate_collection_create_method(
-                                service, &method, true,
-                            ));
+                            methods.push_str(&generate_collection_create_method(&method, true));
                         }
                         _ => {}
                     }
@@ -762,7 +756,7 @@ fn generate_aggregate_client_sorted(
             // each passes all params (including path params) straight to the native client.
             BindingMode::Flat => {
                 for method in service.methods() {
-                    methods.push_str(&generate_flat_method(service, &method));
+                    methods.push_str(&generate_flat_method(&method));
                 }
             }
         }
@@ -866,11 +860,7 @@ impl MethodCallSpec {
     }
 }
 
-fn generate_collection_list_method(
-    _service: &ServiceHandler<'_>,
-    method: &MethodHandler<'_>,
-    drop_path: bool,
-) -> String {
+fn generate_collection_list_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let method_name = method.binding_method_name_str().to_case(Case::Camel);
     let items_field = match method.list_output_field() {
@@ -908,11 +898,7 @@ fn generate_collection_list_method(
 /// The native Rust side returns a `ReadableStream<Buffer>` (napi-rs v3). On the TypeScript
 /// side we wrap it in an async generator so callers can use `for await...of` directly.
 /// Node.js 18+ (the minimum engine version) supports `for await...of` over `ReadableStream`.
-fn generate_collection_list_stream_method(
-    _service: &ServiceHandler<'_>,
-    method: &MethodHandler<'_>,
-    drop_path: bool,
-) -> String {
+fn generate_collection_list_stream_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
     let base_method_name = method.binding_method_name_str().to_case(Case::Camel);
     let stream_method_name = format!("{base_method_name}Stream");
@@ -947,11 +933,7 @@ fn generate_collection_list_stream_method(
     )
 }
 
-fn generate_collection_create_method(
-    _service: &ServiceHandler<'_>,
-    method: &MethodHandler<'_>,
-    drop_path: bool,
-) -> String {
+fn generate_collection_create_method(method: &MethodHandler<'_>, drop_path: bool) -> String {
     let output_type = match method.output_type() {
         Some(t) => t.to_string(),
         None => return generate_void_create_method(method, drop_path),
