@@ -18,12 +18,9 @@ impl PyCatalogClient {
     ///     The requested resource
     pub fn get(&self, py: Python) -> PyExampleResult<PyCatalog> {
         let request = self.client.get();
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyCatalog::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyCatalog::from(result))
     }
 
     /// Returns:
@@ -38,22 +35,16 @@ impl PyCatalogClient {
             .client
             .update()
             .with_catalog(catalog.map(::core::convert::Into::into));
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyCatalog::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyCatalog::from(result))
     }
 
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {
         let request = self.client.delete();
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(result)
     }
 
     /// Resource-targeted custom GET (path param, not a collection method) — exercises surfacing a custom
@@ -64,12 +55,9 @@ impl PyCatalogClient {
     ///     The requested resource
     pub fn get_catalog_status(&self, py: Python) -> PyExampleResult<PyCatalogStatus> {
         let request = self.client.get_catalog_status();
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyCatalogStatus::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyCatalogStatus::from(result))
     }
 }
 
