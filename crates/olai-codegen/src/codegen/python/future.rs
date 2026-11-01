@@ -33,9 +33,10 @@ pub(crate) fn generate() -> String {
                 py: Python<'py>,
                 future: impl Future<Output = PyResult<T>> + Send + 'static,
             ) -> PyResult<Self> {
-                // `future_into_py` skips the runtime's own checks (such as the one for a
-                // forked child), so run them first.
-                crate::codegen::runtime::rt();
+                // Installed here rather than at import, so importing (and forking before the
+                // first call) starts no runtime. This also runs the runtime's own checks (such as
+                // the one for a forked child), which `future_into_py` skips.
+                crate::codegen::runtime::init_async_runtime();
                 Ok(Self {
                     future: ::pyo3_async_runtimes::tokio::future_into_py(py, future)?,
                     result: PhantomData,

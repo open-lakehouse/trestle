@@ -952,3 +952,86 @@ fn server_output_needs_the_common_output() {
     let err = generate_code(&metadata(), &config).expect_err("a server needs `common`");
     assert!(err.to_string().contains("CodeGenOutput::common"), "{err}");
 }
+
+// ── JSON-named query keys ────────────────────────────────────────────────────
+
+/// Methods whose input is in a `json_query_packages` package send (client) and read (server)
+/// lowerCamelCase query keys; a package matches only at a `.` boundary, so `example.schema`
+/// leaves `example.schemas.v1` on the proto names.
+#[test]
+fn json_query_packages_select_lower_camel_query_keys() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.rest_client.json_query_packages =
+        vec!["example.catalog.v1".into(), "example.schema".into()];
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let catalog = read_all(&tmp.path().join("client/catalog"));
+    let schemas = read_all(&tmp.path().join("client/schema"));
+    assert!(
+        catalog.contains("append_pair(\"maxResults\""),
+        "the catalog client must send the JSON name:\n{catalog}"
+    );
+    assert!(
+        schemas.contains("append_pair(\"max_results\"") && !schemas.contains("\"maxResults\""),
+        "`example.schema` must not match `example.schemas.v1`:\n{schemas}"
+    );
+
+    // The server's query extractors are emitted with the models, per service.
+    let extractor = |service: &str| {
+        walk(&tmp.path().join("common"))
+            .into_iter()
+            .find(|p| p.ends_with(format!("extractors/{service}/server.rs")))
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .unwrap_or_else(|| panic!("no query extractor for {service}"))
+    };
+    let catalog_server = extractor("catalog");
+    assert!(
+        catalog_server.contains("#[serde(rename = \"maxResults\")]"),
+        "the server extractor must read the key the client sends:\n{catalog_server}"
+    );
+    let schemas_server = extractor("schema");
+    assert!(
+        schemas_server.contains("max_results") && !schemas_server.contains("\"maxResults\""),
+        "{schemas_server}"
+    );
+}
+
+/// Without the generated client error module, the Python bindings still build on the client's
+/// `error::Error`, but the client crate implements `ApiErrorAnswer` for it by hand: `error.rs`
+/// declares the trait and leaves the impl out.
+#[test]
+fn python_bindings_without_error_module_leave_api_error_answer_to_the_crate() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    let python = tmp.path().join("python");
+    config.output.python = Some(python.clone());
+    config.rest_client.error_module = None;
+    config.bindings.as_mut().unwrap().python = Some(olai_codegen::PythonOptions {
+        package: olai_codegen::PyPackageConfig {
+            dir: tmp.path().join("pkg"),
+            name: "example".into(),
+        },
+        error_base_class: "ExampleError".into(),
+        module: "example._core".into(),
+        async_methods: false,
+        keyword_only: false,
+        public_modules: false,
+        user_agent: None,
+        exports: vec![],
+    });
+    generate_code(&metadata(), &config).expect("generation succeeds");
+
+    let errors = walk(&python)
+        .into_iter()
+        .find(|p| p.ends_with("error.rs"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .expect("python error.rs generated");
+    syn::parse_file(&errors).expect("error.rs is valid Rust");
+    assert!(
+        errors.contains("pub trait ApiErrorAnswer")
+            && !errors.contains("impl ApiErrorAnswer for ClientError")
+            && !errors.contains("ClientError::Api"),
+        "the ApiErrorAnswer impl is the client crate's without the error module:\n{errors}"
+    );
+}

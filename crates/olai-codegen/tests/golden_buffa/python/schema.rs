@@ -27,12 +27,9 @@ impl PySchemaClient {
         view: PyGetSchemaRequestView,
     ) -> PyExampleResult<PySchema> {
         let request = self.client.get(view.into());
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PySchema::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PySchema::from(result))
     }
 
     /// Returns:
@@ -51,22 +48,16 @@ impl PySchemaClient {
             .client
             .update()
             .with_schema(schema.map(::core::convert::Into::into));
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PySchema::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PySchema::from(result))
     }
 
     pub fn delete(&self, py: Python) -> PyExampleResult<()> {
         let request = self.client.delete();
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(result)
     }
 }
 

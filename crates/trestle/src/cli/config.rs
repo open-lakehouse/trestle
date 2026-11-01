@@ -195,21 +195,7 @@ fn apply_flags(cfg: &mut TrestleConfig, args: &ConfigArgs) {
                 Some(TransportArg::Wasm) => Transport::Wasm,
                 _ => Transport::Cloud,
             };
-            g.clients.rust = Some(RustClient {
-                output: "crates/client/src".to_string(),
-                transport,
-                transport_type_path: None,
-                dual_transport: false,
-                resource_features: false,
-                handler_impls: None,
-                protocols: vec![crate::config::ClientProtocol::Rest],
-                connect_client_path: None,
-                ignore_unknown_enum_values: false,
-                error_module: None,
-                form_encoded_methods: Vec::new(),
-                path_fields_in_body_methods: Vec::new(),
-                user_agent: None,
-            });
+            g.clients.rust = Some(rust_client("crates/client/src", transport));
         }
         if args.clients.contains(&ClientArg::Python) {
             g.clients.python = Some(python_client(&project_name));
@@ -267,13 +253,38 @@ fn python_client(project_name: &str) -> PythonClient {
     }
 }
 
-/// The Python exception classes raise the errors of the client error module, so a Python client
-/// turns it on.
+/// The REST Rust client of a new config, writing to `output`.
+fn rust_client(output: &str, transport: Transport) -> RustClient {
+    RustClient {
+        output: output.to_string(),
+        transport,
+        transport_type_path: None,
+        dual_transport: false,
+        resource_features: false,
+        handler_impls: None,
+        protocols: vec![crate::config::ClientProtocol::Rest],
+        connect_client_path: None,
+        ignore_unknown_enum_values: false,
+        error_module: None,
+        form_encoded_methods: Vec::new(),
+        path_fields_in_body_methods: Vec::new(),
+        user_agent: None,
+    }
+}
+
+/// The Python bindings wrap the Rust client, and their exception classes raise the errors of its
+/// error module, so a Python client adds a Rust client if there is none and turns the error
+/// module on.
 fn require_client_error_module(cfg: &mut TrestleConfig) {
-    if cfg.generate.clients.python.is_some()
-        && let Some(rust) = &mut cfg.generate.clients.rust
-        && rust.error_module.is_none()
-    {
+    if cfg.generate.clients.python.is_none() {
+        return;
+    }
+    let rust = cfg
+        .generate
+        .clients
+        .rust
+        .get_or_insert_with(|| rust_client("crates/client/src", Transport::Cloud));
+    if rust.error_module.is_none() {
         rust.error_module = Some(ErrorModule::default());
     }
 }
@@ -318,21 +329,7 @@ fn prompt_missing(cfg: &mut TrestleConfig) -> Result<()> {
         .map_err(|e| Error::other(format!("prompt failed: {e}")))?;
 
     if clients.contains(&ClientSel::Rust) && cfg.generate.clients.rust.is_none() {
-        cfg.generate.clients.rust = Some(RustClient {
-            output: "crates/client/src/gen".to_string(),
-            transport: Transport::Cloud,
-            transport_type_path: None,
-            dual_transport: false,
-            resource_features: false,
-            handler_impls: None,
-            protocols: vec![crate::config::ClientProtocol::Rest],
-            connect_client_path: None,
-            ignore_unknown_enum_values: false,
-            error_module: None,
-            form_encoded_methods: Vec::new(),
-            path_fields_in_body_methods: Vec::new(),
-            user_agent: None,
-        });
+        cfg.generate.clients.rust = Some(rust_client("crates/client/src/gen", Transport::Cloud));
     }
     if clients.contains(&ClientSel::Python) && cfg.generate.clients.python.is_none() {
         cfg.generate.clients.python = Some(python_client(&cfg.project.name));
@@ -463,6 +460,27 @@ mod tests {
         apply_flags(&mut cfg, &a);
         let rust = cfg.generate.clients.rust.expect("rust client set");
         assert!(matches!(rust.transport, Transport::Wasm));
+    }
+
+    #[test]
+    fn apply_flags_python_only_adds_the_rust_client() {
+        // The Python bindings wrap the Rust client and raise its error module's errors.
+        let mut cfg = default_config();
+        let a = ConfigArgs {
+            name: Some("demo".into()),
+            clients: vec![ClientArg::Python],
+            ..args()
+        };
+        apply_flags(&mut cfg, &a);
+        let rust = cfg
+            .generate
+            .clients
+            .rust
+            .as_ref()
+            .expect("rust client added");
+        assert!(rust.error_module.is_some());
+        cfg.derive_defaults();
+        cfg.validate(false).expect("python-only config validates");
     }
 
     #[test]

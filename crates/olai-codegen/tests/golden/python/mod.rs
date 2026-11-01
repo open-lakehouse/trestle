@@ -52,12 +52,9 @@ impl PyExampleClient {
             .client
             .create_catalog()
             .with_catalog(catalog.map(::core::convert::Into::into));
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyCatalog::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyCatalog::from(result))
     }
 
     /// Returns:
@@ -71,18 +68,14 @@ impl PyExampleClient {
         let request = self
             .client
             .list_catalogs(max_results, ::std::string::String::new());
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime
-                .block_on(async move {
-                    request.into_stream().try_collect::<::std::vec::Vec<_>>().await
-                })?;
-            Ok::<
-                _,
-                PyExampleError,
-            >(result.into_iter().map(PyCatalog::from).collect::<::std::vec::Vec<_>>())
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(
+            py,
+            async move {
+                request.into_stream().try_collect::<::std::vec::Vec<_>>().await
+            },
+        )??;
+        Ok(result.into_iter().map(PyCatalog::from).collect::<::std::vec::Vec<_>>())
     }
 
     /// Custom POST RPC without path params — covers `RequestType::Custom(Post)` dispatched as a collection
@@ -97,12 +90,9 @@ impl PyExampleClient {
         catalog_id: String,
     ) -> PyExampleResult<PyCatalogToken> {
         let request = self.client.generate_catalog_token(catalog_id);
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyCatalogToken::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyCatalogToken::from(result))
     }
 
     /// Repeated string query param
@@ -120,12 +110,9 @@ impl PyExampleClient {
         max_results: i32,
     ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_tags(tags, max_results);
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyListByTagsResponse::from(result))
     }
 
     /// Enum query param
@@ -142,12 +129,9 @@ impl PyExampleClient {
         catalog_type: PyCatalogType,
     ) -> PyExampleResult<PyListByTagsResponse> {
         let request = self.client.list_by_catalog_type(catalog_type.into());
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyListByTagsResponse::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyListByTagsResponse::from(result))
     }
 
     /// Args:
@@ -171,12 +155,9 @@ impl PyExampleClient {
         schema_type: PySchemaType,
     ) -> PyExampleResult<PySchema> {
         let request = self.client.create_schema(name, catalog_name, schema_type.into());
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PySchema::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PySchema::from(result))
     }
 
     /// Args:
@@ -195,18 +176,14 @@ impl PyExampleClient {
         let request = self
             .client
             .list_schemas(catalog_name, max_results, ::std::string::String::new());
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime
-                .block_on(async move {
-                    request.into_stream().try_collect::<::std::vec::Vec<_>>().await
-                })?;
-            Ok::<
-                _,
-                PyExampleError,
-            >(result.into_iter().map(PySchema::from).collect::<::std::vec::Vec<_>>())
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(
+            py,
+            async move {
+                request.into_stream().try_collect::<::std::vec::Vec<_>>().await
+            },
+        )??;
+        Ok(result.into_iter().map(PySchema::from).collect::<::std::vec::Vec<_>>())
     }
 
     /// List assignments for an entity. Path params: entity_type, entity_name.
@@ -225,12 +202,9 @@ impl PyExampleClient {
         let request = self
             .client
             .list_tag_assignments(entity_type, entity_name, max_results, page_token);
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyListTagAssignmentsResponse::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyListTagAssignmentsResponse::from(result))
     }
 
     /// Create/assign a tag. Path params: entity_type, entity_name; body: tag.
@@ -249,12 +223,9 @@ impl PyExampleClient {
             .client
             .create_tag_assignment(entity_type, entity_name)
             .with_tag(tag.map(::core::convert::Into::into));
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyTagAssignment::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyTagAssignment::from(result))
     }
 
     /// Get a single assignment. Composite key: entity_type, entity_name, tag_key. Carries a gnostic
@@ -272,12 +243,9 @@ impl PyExampleClient {
         tag_key: String,
     ) -> PyExampleResult<PyTagAssignment> {
         let request = self.client.get_tag_assignment(entity_type, entity_name, tag_key);
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyTagAssignment::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyTagAssignment::from(result))
     }
 
     /// Delete a single assignment. Composite key path params.
@@ -295,12 +263,9 @@ impl PyExampleClient {
         let request = self
             .client
             .delete_tag_assignment(entity_type, entity_name, tag_key);
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(PyDeleteTagAssignmentResponse::from(result))
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(PyDeleteTagAssignmentResponse::from(result))
     }
 
     /// Custom POST RPC targeting a composite key that returns `Empty` — exercises the `<()>` / void-return
@@ -316,12 +281,9 @@ impl PyExampleClient {
         let request = self
             .client
             .touch_tag_assignment(entity_type, entity_name, tag_key);
-        let runtime = crate::codegen::runtime::rt();
-        py.detach(|| {
-            #[allow(clippy::let_unit_value)]
-            let result = runtime.block_on(request.into_future())?;
-            Ok::<_, PyExampleError>(result)
-        })
+        #[allow(clippy::let_unit_value)]
+        let result = crate::codegen::runtime::block_on(py, request.into_future())??;
+        Ok(result)
     }
 
     /// The requests on one `Catalog`. It sends no request itself.

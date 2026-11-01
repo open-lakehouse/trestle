@@ -636,6 +636,19 @@ mod tests {
         assert_eq!(impls.feature, "handlers");
         assert_eq!(impls.skip, ["credentials"]);
 
+        let mut lowered: TrestleConfig = serde_yaml::from_str(&yaml).unwrap();
+        lowered.derive_defaults();
+        let rest = lowered.to_codegen_config().unwrap().rest_client;
+        assert!(rest.resource_features);
+        assert_eq!(
+            rest.handler_impls,
+            Some(olai_codegen::ClientHandlerImpls {
+                crate_path: "demo_handlers".into(),
+                feature: "handlers".into(),
+                skip: vec!["credentials".into()],
+            })
+        );
+
         // Both default off.
         let cfg: TrestleConfig = serde_yaml::from_str(&format!(
             "{}  clients:\n    rust:\n      output: crates/client/src\n",
@@ -698,7 +711,8 @@ mod tests {
              \x20       name: demo\n\
              \x20     module: demo._core\n\
              \x20     options:\n\
-             \x20       public_modules: true\n";
+             \x20       public_modules: true\n\
+             \x20       exports: [crate::extras::helper]\n";
         let mut cfg: TrestleConfig = serde_yaml::from_str(yaml).unwrap();
         let g = &cfg.generate;
         assert_eq!(g.json_int64, JsonInt64::Number);
@@ -722,6 +736,32 @@ mod tests {
         assert_eq!(python.module, "demo._core");
         assert!(python.options.public_modules);
         assert!(cfg.validate(false).is_ok());
+
+        // The `clients.rust` knobs and the JSON settings reach the codegen config.
+        cfg.derive_defaults();
+        let lowered = cfg.to_codegen_config().unwrap();
+        let rest = &lowered.rest_client;
+        assert!(rest.json_int64_as_number && rest.ignore_unknown_enum_values);
+        assert_eq!(
+            rest.error_module.as_ref().unwrap().code_enum.as_deref(),
+            Some("demo.v1.ErrorCode")
+        );
+        assert_eq!(
+            rest.form_encoded_methods,
+            ["demo.v1.TokenService.ExchangeToken"]
+        );
+        assert_eq!(
+            rest.path_fields_in_body_methods,
+            ["demo.v1.UserService.ReplaceUser"]
+        );
+        // Only the lowerCamelCase package sends lowerCamelCase query keys.
+        assert_eq!(rest.json_query_packages, ["demo.scim.v2"]);
+        assert_eq!(
+            lowered.transport_type_path,
+            olai_codegen::REQWEST_TRANSPORT_TYPE_PATH
+        );
+        let python = lowered.bindings.as_ref().unwrap().python.as_ref().unwrap();
+        assert_eq!(python.exports, ["crate::extras::helper"]);
 
         // Without the client error module, the binding crate maps its client's errors.
         cfg.generate.clients.rust.as_mut().unwrap().error_module = None;

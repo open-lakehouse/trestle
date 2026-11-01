@@ -44,11 +44,11 @@ pub trait TypeRenderer {
 }
 
 /// Rust type renderer — handles optional `impl Into<>` / `Option<>` wrapping.
-pub struct RustRenderer(pub RenderContext);
+pub struct RustRenderer(pub RenderContext, pub Runtime);
 
 impl TypeRenderer for RustRenderer {
     fn render(&self, ty: &UnifiedType) -> String {
-        unified_to_rust(ty, self.0)
+        unified_to_rust(ty, self.0, self.1)
     }
 }
 
@@ -72,13 +72,16 @@ impl TypeRenderer for TypeScriptRenderer {
 
 /// Convert a unified type to a Rust type string.
 ///
-/// Note: the *type* a field renders as is currently runtime-independent. Under both prost
-/// and buffa, generated builder/constructor params and the query-deserialization struct use
-/// the bare enum type `E` (serde deserializes the variant-name string into it), and the
-/// runtime-specific wrapping (`as i32` / `EnumValue::Known`) is applied by
-/// [`field_assignment`]. If a future runtime needs a different field *type* (e.g. buffa
-/// zero-copy view types), thread a `Runtime` argument back in here.
-pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> String {
+/// The `runtime` only selects the crate of the free-form JSON types ([`JsonType::rust_path`]).
+/// Otherwise the type is runtime-independent: under both prost and buffa, generated
+/// builder/constructor params and the query-deserialization struct use the bare enum type `E`
+/// (serde deserializes the variant-name string into it), and the runtime-specific wrapping
+/// (`as i32` / `EnumValue::Known`) is applied by [`field_assignment`].
+pub fn unified_to_rust(
+    unified_type: &UnifiedType,
+    context: RenderContext,
+    runtime: Runtime,
+) -> String {
     let base_type_str = match &unified_type.base_type {
         BaseType::String => {
             // A repeated string stays a plain `Vec<String>`.
@@ -99,7 +102,7 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
         BaseType::Bytes => "Vec<u8>".to_string(),
         BaseType::Unit => "()".to_string(),
         BaseType::Message(name) => match JsonType::of(name) {
-            Some(json) => json.rust_path().to_string(),
+            Some(json) => json.rust_path(runtime).to_string(),
             None => extract_simple_type_name(name),
         },
         BaseType::Enum(name) => {
@@ -117,12 +120,12 @@ pub fn unified_to_rust(unified_type: &UnifiedType, context: RenderContext) -> St
             if matches!(context, RenderContext::Constructor) && !unified_type.is_optional {
                 let value = match value_type.base_type {
                     BaseType::String => "impl Into<String>".to_string(),
-                    _ => unified_to_rust(value_type, RenderContext::Parameter),
+                    _ => unified_to_rust(value_type, RenderContext::Parameter, runtime),
                 };
                 format!("impl IntoIterator<Item = (impl Into<String>, {value})>")
             } else {
-                let key_str = unified_to_rust(key_type, context);
-                let value_str = unified_to_rust(value_type, context);
+                let key_str = unified_to_rust(key_type, context, runtime);
+                let value_str = unified_to_rust(value_type, context, runtime);
                 format!("HashMap<{key_str}, {value_str}>")
             }
         }
@@ -443,8 +446,8 @@ pub struct UnifiedType {
     pub is_repeated: bool,
 }
 
-/// A free-form JSON type of `google/protobuf/struct.proto`: buffa's type in Rust, a plain
-/// object in Python.
+/// A free-form JSON type of `google/protobuf/struct.proto`: the runtime's well-known type in
+/// Rust, a plain object in Python.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonType {
     /// `google.protobuf.Value`: any JSON value.
@@ -475,12 +478,15 @@ impl JsonType {
         }
     }
 
-    /// The path of the buffa type.
-    pub fn rust_path(self) -> &'static str {
-        match self {
-            Self::Value => "::buffa_types::google::protobuf::Value",
-            Self::Struct => "::buffa_types::google::protobuf::Struct",
-            Self::ListValue => "::buffa_types::google::protobuf::ListValue",
+    /// The path of the type in the `runtime`'s well-known-types crate.
+    pub fn rust_path(self, runtime: Runtime) -> &'static str {
+        match (runtime, self) {
+            (Runtime::Buffa, Self::Value) => "::buffa_types::google::protobuf::Value",
+            (Runtime::Buffa, Self::Struct) => "::buffa_types::google::protobuf::Struct",
+            (Runtime::Buffa, Self::ListValue) => "::buffa_types::google::protobuf::ListValue",
+            (Runtime::Prost, Self::Value) => "::prost_types::Value",
+            (Runtime::Prost, Self::Struct) => "::prost_types::Struct",
+            (Runtime::Prost, Self::ListValue) => "::prost_types::ListValue",
         }
     }
 
@@ -580,5 +586,30 @@ impl UnifiedType {
             is_optional: false,
             is_repeated: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_types_render_as_the_runtime_well_known_type() {
+        let structs = UnifiedType::map(
+            UnifiedType::string(),
+            UnifiedType {
+                base_type: BaseType::Message(".google.protobuf.Struct".to_string()),
+                is_optional: false,
+                is_repeated: false,
+            },
+        );
+        assert_eq!(
+            unified_to_rust(&structs, RenderContext::Parameter, Runtime::Prost),
+            "HashMap<String, ::prost_types::Struct>"
+        );
+        assert_eq!(
+            unified_to_rust(&structs, RenderContext::Parameter, Runtime::Buffa),
+            "HashMap<String, ::buffa_types::google::protobuf::Struct>"
+        );
     }
 }

@@ -1665,7 +1665,7 @@ impl MethodHandler<'_> {
     ///
     /// Depending on context we may want concrete types (e.g. 'String') or more flexible types (e.g. 'Into<String d>')
     pub(crate) fn field_type(&self, field_type: &UnifiedType, ctx: RenderContext) -> syn::Type {
-        let rust_type = types::unified_to_rust(field_type, ctx);
+        let rust_type = types::unified_to_rust(field_type, ctx, self.config.runtime);
         // `rust_type` comes from this crate's own proto→Rust mapping, not user input, so an
         // unparsable result is a bug in `unified_to_rust`. Panic with the offending string so
         // the broken mapping is obvious (the generated-code parse test in

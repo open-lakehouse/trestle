@@ -125,10 +125,6 @@ impl<'a> PyBackend<'a> {
                 use #path;
             }
         });
-        let init_async = self
-            .python
-            .async_methods
-            .then(|| quote! { crate::codegen::runtime::init_async_runtime(); });
         quote! {
             /// The extension module, as Python imports it.
             pub const CORE_MODULE: &str = #full_name;
@@ -162,7 +158,6 @@ impl<'a> PyBackend<'a> {
                 /// module in full.
                 #[pymodule_init]
                 fn init(py: Python<'_>) -> PyResult<()> {
-                    #init_async
                     let modules = py.import("sys")?.getattr("modules")?;
                     match modules.get_item(super::CORE_MODULE) {
                         Ok(module) => super::add_submodules_to_sys_modules(module.cast()?),
@@ -580,12 +575,9 @@ impl PyBackend<'_> {
                 #(#param_defs,)*
             ) -> #py_result_type<#py_type> {
                 let request = #client_call #(#builder_calls)*;
-                let runtime = crate::codegen::runtime::rt();
-                py.detach(|| {
-                    #[allow(clippy::let_unit_value)]
-                    let result = runtime.block_on(#future)?;
-                    Ok::<_, #py_error_type>(#convert)
-                })
+                #[allow(clippy::let_unit_value)]
+                let result = crate::codegen::runtime::block_on(py, #future)??;
+                Ok(#convert)
             }
         };
         if !python.async_methods {
