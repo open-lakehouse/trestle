@@ -481,6 +481,111 @@ pub async fn search_object_predicates<S: StoreExec<ConformanceLabel>>(store: &S)
     check(Filter::all([])).await;
 }
 
+/// String searches on an indexable path agree with [`Filter::matches`] across the query shapes a
+/// property index serves: exact match, IN-list (`Or` of `Eq`), and a bytewise prefix range
+/// (`Ge` + `Lt`), plus their negations and paging.
+///
+/// The `location_key` values mix in a number, `null`, an array, an absent key, a case variant and
+/// a second label sharing the key, so a backend that turns these predicates into index-usable SQL
+/// must still apply the type guard and the label. Backends with
+/// [`PropertyIndex`](crate::PropertyIndex) support should also run this on a store that declares
+/// and creates `location_key` for [`ConformanceLabel::Node`].
+pub async fn search_indexed_path_shapes<S: StoreExec<ConformanceLabel>>(store: &S) {
+    let payloads = [
+        serde_json::json!({ "location_key": "s3://b/a/" }),
+        serde_json::json!({ "location_key": "s3://b/a/x/" }),
+        serde_json::json!({ "location_key": "s3://b/ab/" }),
+        serde_json::json!({ "location_key": "s3://b/a0" }),
+        serde_json::json!({ "location_key": "s3://c/" }),
+        serde_json::json!({ "location_key": "S3://b/a/" }),
+        serde_json::json!({ "location_key": 42 }),
+        serde_json::json!({ "location_key": null }),
+        serde_json::json!({ "location_key": ["s3://b/a/"] }),
+        serde_json::json!({ "other": "s3://b/a/" }),
+    ];
+    for (i, p) in payloads.iter().enumerate() {
+        store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("k{i}")),
+                Some(p.clone()),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    // Same key on another label: must never leak into a `Node` search.
+    store
+        .create(
+            ConformanceLabel::Other,
+            &rn("k-other"),
+            Some(serde_json::json!({ "location_key": "s3://b/a/" })),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Page through the search two at a time, so hints are exercised alongside the keyset cursor.
+    let check = async |filter: Filter| {
+        let mut got = Vec::new();
+        let mut token = None;
+        loop {
+            let (hits, next) = store
+                .search(ConformanceLabel::Node, None, &filter, Some(2), token)
+                .await
+                .unwrap();
+            got.extend(hits.into_iter().map(|o| o.properties.unwrap()));
+            match next {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+        let mut want: Vec<_> = payloads
+            .iter()
+            .filter(|p| filter.matches(p))
+            .cloned()
+            .collect();
+        got.sort_by_key(|v| v.to_string());
+        want.sort_by_key(|v| v.to_string());
+        assert_eq!(
+            got, want,
+            "search disagreed with Filter::matches for {filter:?}"
+        );
+    };
+
+    check(Filter::eq("location_key", "s3://b/a/")).await;
+    check(Filter::eq("location_key", "s3://nowhere/")).await;
+    check(Filter::any([
+        Filter::eq("location_key", "s3://b/a/"),
+        Filter::eq("location_key", "s3://c/"),
+        Filter::eq("location_key", "s3://missing/"),
+    ]))
+    .await;
+    // The bytewise prefix range for `s3://b/a/`: `/` + 1 is `0`.
+    check(Filter::all([
+        Filter::ge("location_key", "s3://b/a/"),
+        Filter::lt("location_key", "s3://b/a0"),
+    ]))
+    .await;
+    check(Filter::gt("location_key", "s3://b/a/")).await;
+    check(Filter::le("location_key", "s3://b/a0")).await;
+    check(Filter::eq("location_key", "s3://b/a/").negate()).await;
+    check(Filter::all([
+        Filter::eq("location_key", "s3://b/a/"),
+        Filter::exists("location_key"),
+    ]))
+    .await;
+    // Not index-shaped (numeric comparand, mixed-path `Or`), but still correct.
+    check(Filter::eq("location_key", 42)).await;
+    check(Filter::any([
+        Filter::eq("location_key", "s3://c/"),
+        Filter::eq("other", "s3://b/a/"),
+    ]))
+    .await;
+}
+
 /// Paging a filtered object search returns every match exactly once even when matching and
 /// non-matching payloads are interleaved — the filter must never run behind a `LIMIT` that
 /// could truncate matches (the search analogue of
@@ -1310,6 +1415,7 @@ where
     sensitive_blob_roundtrip(&fresh()).await;
     inverse_edges(&with_inverse(parent_child_inverse)).await;
     search_object_predicates(&fresh()).await;
+    search_indexed_path_shapes(&fresh()).await;
     search_object_pagination_filters_completely(&fresh()).await;
     search_namespace_and_filter(&fresh()).await;
     edge_filter_predicates(&fresh()).await;
