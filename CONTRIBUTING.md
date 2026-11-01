@@ -171,8 +171,8 @@ one. The tap's `main` is protected and admits no direct pushes.
 Versions live in each crate's own `[package].version` (not in
 `[workspace.package]`), so crates bump independently.
 
-A dependency on another crate of this repository names both its `path` and its
-`version`, normal, optional and dev-dependencies alike:
+A normal or optional dependency on another crate of this repository names both
+its `path` and its `version`:
 
 ```toml
 olai-http = { path = "../olai-http", version = "0.0.8" }
@@ -181,14 +181,19 @@ olai-http = { path = "../olai-http", version = "0.0.8" }
 The `path` builds against the code in the repository; the `version` is what
 `cargo publish` writes into the published manifest, which has no paths. When
 release-plz bumps a crate, it rewrites the `version` of every dependency on it,
-bumps the dependents accordingly, and publishes in dependency order. Add the
-`version` once, at the dependency's current version, and leave its updates to
-release-plz.
+bumps the dependents accordingly, and publishes in the order of the normal
+dependencies. Add the `version` once, at the dependency's current version, and
+leave its updates to release-plz.
 
-The exception is crates that are never published (`publish = false`, such as
-`olai-test-emulators`): reference those by `path` only, and only as
-dev-dependencies. `cargo publish` drops path-only dev-dependencies, but would
-look a versioned one up on crates.io and fail.
+A crate of this repository used only as a dev-dependency is referenced by `path`
+only, with no `version`. That covers crates that are never published
+(`publish = false`, such as `olai-test-emulators`) and published ones alike.
+`cargo publish` drops path-only dev-dependencies but looks a versioned one up on
+crates.io, and release-plz does not order publishing by dev-dependencies. A
+versioned dev-dependency on a crate bumped in the same release therefore fails
+to publish, because the new version is not on crates.io yet. (A crate that is
+also a normal dependency keeps its `version` in the dev-dependency entry too,
+since the normal dependency already orders it first.)
 
 ### Published crates and the `trestle` / `olai-trestle` naming
 
