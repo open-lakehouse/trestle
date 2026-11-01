@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use chrono::Utc;
 use futures::TryFutureExt;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
@@ -35,6 +36,11 @@ use crate::retry::RetryExt;
 use crate::service::HttpService;
 use crate::token::TemporaryToken;
 use crate::{RetryConfig, TokenProvider};
+
+use super::token::generate_access_token;
+
+/// The lifetime requested for the impersonated token of a WIF provider.
+const IMPERSONATION_LIFETIME: Duration = Duration::from_secs(3600);
 
 pub(crate) const DEFAULT_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -561,7 +567,7 @@ impl ApplicationDefaultCredentials {
     };
 
     // Create a new application default credential in the following situations:
-    //  1. a file is passed in and the type matches.
+    //  1. a file is passed in; its `type` field selects the variant.
     //  2. without argument if the well-known configuration file is present.
     pub(crate) fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
@@ -716,12 +722,13 @@ impl TokenProvider for GcpWorkloadIdentityProvider {
     /// # Errors
     ///
     /// Returns [`Error::Generic`](crate::Error::Generic) if no credential source
-    /// is configured or the subject token cannot be read from its file or
-    /// environment variable. Returns [`Error::TokenRequest`] if the STS exchange
-    /// or the optional impersonation request fails after the configured retries
-    /// are exhausted, or [`Error::TokenResponseBody`] if either response cannot
-    /// be deserialized. The requests are retried internally per `retry`, so a
-    /// returned error is terminal.
+    /// is configured, the subject token cannot be read from its file or
+    /// environment variable, or the impersonation response's `expireTime` is not
+    /// RFC 3339. Returns [`Error::TokenRequest`] if the STS exchange fails after the
+    /// configured retries are exhausted, or [`Error::TokenResponseBody`] if the STS
+    /// response cannot be deserialized. The impersonation request is made by
+    /// [`generate_access_token`] and reports its failures as that call does. The
+    /// requests are retried internally per `retry`, so a returned error is terminal.
     async fn fetch_token(
         &self,
         client: &Client,
@@ -773,50 +780,33 @@ impl TokenProvider for GcpWorkloadIdentityProvider {
 
         // Step 2: Optional SA impersonation
         if let Some(imp_url) = &self.credentials.service_account_impersonation_url {
-            let imp_resp: ImpersonateTokenResponse = client
-                .request(Method::POST, imp_url)
-                .bearer_auth(&sts_resp.access_token)
-                .json(&serde_json::json!({
-                    "scope": [scope],
-                    "lifetime": "3600s"
-                }))
-                .retryable(retry, service.clone())
-                .idempotent(true)
-                .send()
-                .await
-                .map_err(|source| Error::TokenRequest { source })?
-                .json()
-                .await
-                .map_err(|source| Error::TokenResponseBody { source })?;
-
-            // Parse RFC 3339 expiry; fall back to 1 hour
-            let expiry = chrono::DateTime::parse_from_rfc3339(&imp_resp.expire_time)
-                .ok()
-                .map(|dt| {
-                    let secs = dt.timestamp().saturating_sub(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64,
-                    );
-                    std::time::Instant::now() + Duration::from_secs(secs.max(0) as u64)
-                })
-                .unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(3600));
-
-            Ok(TemporaryToken {
-                token: Arc::new(GcpCredential {
-                    bearer: imp_resp.access_token,
-                }),
-                expiry: Some(expiry),
-            })
-        } else {
-            Ok(TemporaryToken {
-                token: Arc::new(GcpCredential {
-                    bearer: sts_resp.access_token,
-                }),
-                expiry: Some(std::time::Instant::now() + Duration::from_secs(sts_resp.expires_in)),
-            })
+            let token = generate_access_token(
+                client,
+                service,
+                retry,
+                imp_url,
+                &sts_resp.access_token,
+                IMPERSONATION_LIFETIME,
+                &[scope],
+            )
+            .await?;
+            let remaining = token
+                .expiration
+                .signed_duration_since(Utc::now())
+                .to_std()
+                .unwrap_or_default();
+            return Ok(TemporaryToken {
+                token: Arc::new(token.credential),
+                expiry: Some(Instant::now() + remaining),
+            });
         }
+
+        Ok(TemporaryToken {
+            token: Arc::new(GcpCredential {
+                bearer: sts_resp.access_token,
+            }),
+            expiry: Some(Instant::now() + Duration::from_secs(sts_resp.expires_in)),
+        })
     }
 }
 
@@ -1008,5 +998,62 @@ mod tests {
 
         _sts_mock.assert_async().await;
         _imp_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_workload_identity_rejects_unparsable_impersonation_expiry() {
+        let mut server = mockito::Server::new_async().await;
+
+        let mut token_file = tempfile::NamedTempFile::new().unwrap();
+        write!(token_file, "external-subject-jwt").unwrap();
+
+        let sts_url = format!("{}/v1/token", server.url());
+        let imp_url = format!("{}/v1/impersonate", server.url());
+
+        let _sts_mock = server
+            .mock("POST", "/v1/token")
+            .with_status(200)
+            .with_body(
+                r#"{"access_token":"FEDERATED_TOKEN","expires_in":3600,"token_type":"Bearer"}"#,
+            )
+            .create_async()
+            .await;
+
+        // The impersonated token must not be cached under a guessed lifetime.
+        let _imp_mock = server
+            .mock("POST", "/v1/impersonate")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({ "scope": [DEFAULT_SCOPE], "lifetime": "3600s" }),
+            ))
+            .with_status(200)
+            .with_body(r#"{"accessToken":"SA_TOKEN","expireTime":"soon"}"#)
+            .create_async()
+            .await;
+
+        let client = Client::new();
+        let service: Arc<dyn HttpService> = Arc::new(ReqwestService::new(client.clone()));
+        let retry = RetryConfig::default();
+
+        let provider = GcpWorkloadIdentityProvider {
+            credentials: ExternalAccountCredentials {
+                token_url: sts_url.clone(),
+                audience: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/my-pool/providers/my-provider".into(),
+                requested_token_type: "urn:ietf:params:oauth:token-type:access_token".into(),
+                credential_source: CredentialSource {
+                    file: Some(token_file.path().to_str().unwrap().to_owned()),
+                    environment_id: None,
+                },
+                service_account_impersonation_url: Some(imp_url),
+                scopes: None,
+            },
+            sts_endpoint: sts_url,
+        };
+
+        let err = provider
+            .fetch_token(&client, &service, &retry)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("expireTime"), "{err}");
+        assert!(!err.to_string().contains("SA_TOKEN"), "{err}");
     }
 }
