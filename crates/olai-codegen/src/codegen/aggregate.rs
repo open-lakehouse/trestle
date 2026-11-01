@@ -1,4 +1,4 @@
-//! Generation of the Rust *aggregate root client* (e.g. `UnityCatalogClient`).
+//! Generation of the Rust *aggregate root client* (e.g. `ExampleClient`).
 //!
 //! The aggregate client is the hand-written-no-more root the language bindings call into.
 //! Generated Python/Node aggregate bindings invoke `self.client.<method>(...)` where `self.client`
@@ -47,28 +47,13 @@ pub(crate) fn generate(
 
     let aggregate_ident = format_ident!("{}", bindings.aggregate_client_name);
 
-    let mut services = plan
-        .services
-        .iter()
-        .map(|service| ServiceHandler {
-            plan: service,
-            metadata,
-            config,
-        })
-        .collect_vec();
+    let mut services = ServiceHandler::for_plan(plan, metadata, config);
     services.sort_by(|a, b| a.plan.service_name.cmp(&b.plan.service_name));
 
-    // --- Methods: collection constructors, flat constructors, resource accessors. ---
-    let methods = services
-        .iter()
-        .flat_map(|s| service_methods(s))
-        .collect_vec();
-
-    // --- Low-level passthrough accessors: `<base>_client(&self) -> <LowLevelClient>`. ---
-    let passthrough_accessors = services.iter().map(passthrough_accessor).collect_vec();
-
-    // With per-resource features, each service's accessors move into their own `impl` block behind
-    // the service's feature gate; the main block then keeps only the constructors.
+    // Per service: the low-level passthrough accessor `<base>_client(&self) -> <LowLevelClient>` and
+    // the methods (collection constructors, flat constructors, resource accessors). With
+    // per-resource features, each service's accessors move into their own `impl` block behind the
+    // service's feature gate; the main block then keeps only the constructors.
     let (passthrough_accessors, methods, gated_blocks) = if config.rest_client.resource_features {
         let blocks = services
             .iter()
@@ -87,11 +72,58 @@ pub(crate) fn generate(
             .collect_vec();
         (Vec::new(), Vec::new(), blocks)
     } else {
+        let passthrough_accessors = services.iter().map(passthrough_accessor).collect_vec();
+        let methods = services.iter().flat_map(service_methods).collect_vec();
         (passthrough_accessors, methods, Vec::new())
     };
 
     let (transport_import, transport_ident) = super::client::transport_tokens(config);
+    let convenience_ctors = convenience_ctors(config, &transport_ident);
 
+    let imports = generate_imports(&services, &transport_import);
+
+    let tokens = quote! {
+        // The per-service (`crate::codegen::<svc>::*`) and model globs below are
+        // convenience-wide; the aggregate root only references a subset directly,
+        // so a model whose types it never names (common under buffa) would trip
+        // `unused_imports` under `-D warnings`.
+        #![allow(unused_imports)]
+        #imports
+
+        #[derive(Clone)]
+        pub struct #aggregate_ident {
+            // `pub(crate)` so the client crate can add hand-written requests.
+            pub(crate) client: #transport_ident,
+            pub(crate) base_url: Url,
+        }
+
+        impl #aggregate_ident {
+            /// Create a new aggregate client from a cloud client and base URL.
+            ///
+            /// Per-service clients are constructed on demand (they only hold a cheaply-cloneable
+            /// `CloudClient` + `Url`), so nothing is allocated per service here.
+            pub fn new(client: #transport_ident, mut base_url: Url) -> Self {
+                if !base_url.path().ends_with('/') {
+                    base_url.set_path(&format!("{}/", base_url.path()));
+                }
+                Self { client, base_url }
+            }
+
+            #convenience_ctors
+
+            #(#passthrough_accessors)*
+
+            #(#methods)*
+        }
+
+        #(#gated_blocks)*
+    };
+
+    Ok(Some(format_tokens(tokens)?))
+}
+
+/// The transport-specific convenience constructors of the aggregate client.
+fn convenience_ctors(config: &CodeGenConfig, transport_ident: &syn::Ident) -> TokenStream {
     // Convenience constructors are transport-specific:
     // - `CloudClient` (native): unauthenticated + bearer-token variants.
     // - `WasmClient` (browser): the browser attaches the session, so only a
@@ -155,52 +187,11 @@ pub(crate) fn generate(
             }
         }
     });
-    let convenience_ctors = quote! {
+    quote! {
         #token_ctors
         #wasm_ctor
         #user_agent
-    };
-
-    let imports = generate_imports(&services, &transport_import);
-
-    let tokens = quote! {
-        // The per-service (`crate::codegen::<svc>::*`) and model globs below are
-        // convenience-wide; the aggregate root only references a subset directly,
-        // so a model whose types it never names (common under buffa) would trip
-        // `unused_imports` under `-D warnings`.
-        #![allow(unused_imports)]
-        #imports
-
-        #[derive(Clone)]
-        pub struct #aggregate_ident {
-            // `pub(crate)` so the client crate can add hand-written requests.
-            pub(crate) client: #transport_ident,
-            pub(crate) base_url: Url,
-        }
-
-        impl #aggregate_ident {
-            /// Create a new aggregate client from a cloud client and base URL.
-            ///
-            /// Per-service clients are constructed on demand (they only hold a cheaply-cloneable
-            /// `CloudClient` + `Url`), so nothing is allocated per service here.
-            pub fn new(client: #transport_ident, mut base_url: Url) -> Self {
-                if !base_url.path().ends_with('/') {
-                    base_url.set_path(&format!("{}/", base_url.path()));
-                }
-                Self { client, base_url }
-            }
-
-            #convenience_ctors
-
-            #(#passthrough_accessors)*
-
-            #(#methods)*
-        }
-
-        #(#gated_blocks)*
-    };
-
-    Ok(Some(format_tokens(tokens)?))
+    }
 }
 
 /// The low-level passthrough accessor `<base>_client(&self) -> <LowLevelClient>`.
@@ -279,30 +270,16 @@ fn generate_imports(
 fn service_methods(service: &ServiceHandler<'_>) -> Vec<TokenStream> {
     let mode = service.binding_mode();
 
-    let mut methods = Vec::new();
-    // The aggregate is REST-only, so it surfaces only routed methods.
-    for method in service.rest_methods() {
-        match mode {
-            // Scoped services contribute only collection-style methods (list/create/factory);
-            // their instance methods live on the generated scoped client.
-            BindingMode::Scoped => {
-                if method.is_collection_method() {
-                    methods.push(collection_method(service, &method));
-                }
-            }
-            // Resource-less services contribute every method, lowered flat (all params passed,
-            // including path params).
-            BindingMode::Flat => {
-                methods.push(flat_method(service, &method));
-            }
-        }
-    }
-
-    if let Some(accessor) = resource_accessor_method(service) {
-        methods.push(accessor);
-    }
-
-    methods
+    // The aggregate is REST-only, so it surfaces only routed methods. Scoped services contribute
+    // only collection-style methods (list/create/factory); their instance methods live on the
+    // generated scoped client. Resource-less services contribute every method, lowered flat (all
+    // params passed, including path params).
+    service
+        .rest_methods()
+        .filter(|method| mode == BindingMode::Flat || method.is_collection_method())
+        .map(|method| builder_constructor_method(service, &method))
+        .chain(resource_accessor_method(service))
+        .collect()
 }
 
 /// Build a doc-comment token stream for an aggregate method: the proto method documentation,
@@ -368,22 +345,10 @@ fn builder_params(
     (param_defs, args)
 }
 
-/// Emit a collection-style method (list / create / factory) on a resource-scoped service.
-///
-/// Forwards all required params (in `required_parameters()` order) to the builder's `::new`, which
-/// takes exactly those params. The binding method name mirrors what the Python aggregate calls.
-fn collection_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> TokenStream {
-    builder_constructor_method(service, method)
-}
-
-/// Emit a method for a resource-less ("flat") service: pass ALL required params (incl. path) to the
-/// builder constructor. Covers list/create/get/update/delete/custom uniformly.
-fn flat_method(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> TokenStream {
-    builder_constructor_method(service, method)
-}
-
-/// Shared body for aggregate builder-constructor methods: forward all required params to the
-/// builder's `::new`, constructing the per-service low-level client on demand.
+/// An aggregate builder-constructor method: forward all required params (in
+/// `required_parameters()` order, incl. path params) to the builder's `::new`, which takes exactly
+/// those params, constructing the per-service low-level client on demand. The binding method name
+/// mirrors what the Python aggregate calls.
 fn builder_constructor_method(
     service: &ServiceHandler<'_>,
     method: &MethodHandler<'_>,

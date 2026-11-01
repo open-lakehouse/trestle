@@ -129,11 +129,7 @@ fn child_model_import_paths(
         else {
             continue;
         };
-        let child = ServiceHandler {
-            plan: child_plan,
-            metadata: service.metadata,
-            config: service.config,
-        };
+        let child = service.with_plan(child_plan);
         let path = child.models_path();
         let key = quote! { #path }.to_string();
         if key == own_str || !seen.insert(key) {
@@ -164,11 +160,7 @@ fn child_methods(
         else {
             continue;
         };
-        let child = ServiceHandler {
-            plan: child_plan,
-            metadata: service.metadata,
-            config: service.config,
-        };
+        let child = service.with_plan(child_plan);
 
         // Child methods name the child's client and builders, so they share its feature gate.
         let cfg = child.client_feature_cfg();
@@ -884,11 +876,7 @@ mod tests {
         };
         let metadata = CodeGenMetadata::default();
         let config = test_config();
-        let parent = ServiceHandler {
-            plan: &plan.services[0],
-            metadata: &metadata,
-            config: &config,
-        };
+        let parent = ServiceHandler::new(&plan.services[0], &metadata, &config);
 
         let imports: Vec<String> = child_model_import_paths(&parent, &plan)
             .iter()

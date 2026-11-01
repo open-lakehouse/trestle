@@ -57,15 +57,7 @@ pub(crate) fn package_files(
         ));
     }
     if python.public_modules {
-        let handlers: Vec<_> = plan
-            .services
-            .iter()
-            .map(|plan| crate::codegen::ServiceHandler {
-                plan,
-                metadata,
-                config,
-            })
-            .collect();
+        let handlers = crate::codegen::ServiceHandler::for_plan(plan, metadata, config);
         let clients = handlers
             .iter()
             .filter(|s| s.emits_scoped_binding())

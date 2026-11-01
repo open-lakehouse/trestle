@@ -299,16 +299,20 @@ pub(crate) fn encode_path_value_fn() -> TokenStream {
 
 /// Generate query parameter handling code
 fn generate_query_parameters(method: &MethodHandler<'_>) -> proc_macro2::TokenStream {
-    let mut param_assignments = Vec::new();
-    for param in method.plan.query_parameters() {
+    let param_assignments = method.plan.query_parameters().map(|param| {
         let field_ident = crate::utils::field_ident(&param.name);
         let param_name = method.query_key(param);
         let field_type = &param.field_type;
+        // A known buffa enum variant `known`, sent by its proto name.
+        let append_known = quote! {
+            use buffa::Enumeration as _;
+            url.query_pairs_mut().append_pair(#param_name, known.proto_name());
+        };
 
         if field_type.is_repeated {
             if let BaseType::Enum(enum_name) = &field_type.base_type {
                 let enum_type_ident = extract_type_ident(enum_name);
-                param_assignments.push(match method.config.runtime {
+                match method.config.runtime {
                     // prost: the field is `Vec<i32>`; recover the typed variant via `from_i32`.
                     Runtime::Prost => quote! {
                         for &raw in &request.#field_ident {
@@ -321,62 +325,52 @@ fn generate_query_parameters(method: &MethodHandler<'_>) -> proc_macro2::TokenSt
                     Runtime::Buffa => quote! {
                         for v in &request.#field_ident {
                             if let Some(known) = v.as_known() {
-                                use buffa::Enumeration as _;
-                                url.query_pairs_mut().append_pair(#param_name, known.proto_name());
+                                #append_known
                             }
                         }
                     },
-                });
+                }
             } else {
-                param_assignments.push(quote! {
+                quote! {
                     for value in &request.#field_ident {
                         url.query_pairs_mut().append_pair(#param_name, &value.to_string());
                     }
-                });
+                }
             }
         } else if matches!(method.config.runtime, Runtime::Buffa)
             && matches!(field_type.base_type, BaseType::Enum(_))
         {
             // buffa singular enum: the field is `EnumValue<E>` (or `Option<EnumValue<E>>`), which
             // has no `Display`. Emit the known variant by its proto name; skip unknown/absent.
-            if param.is_optional() {
-                param_assignments.push(quote! {
-                    if let Some(known) = request.#field_ident.and_then(|v| v.as_known()) {
-                        use buffa::Enumeration as _;
-                        url.query_pairs_mut().append_pair(#param_name, known.proto_name());
-                    }
-                });
+            let known = if param.is_optional() {
+                quote! { request.#field_ident.and_then(|v| v.as_known()) }
             } else {
-                param_assignments.push(quote! {
-                    if let Some(known) = request.#field_ident.as_known() {
-                        use buffa::Enumeration as _;
-                        url.query_pairs_mut().append_pair(#param_name, known.proto_name());
-                    }
-                });
+                quote! { request.#field_ident.as_known() }
+            };
+            quote! {
+                if let Some(known) = #known {
+                    #append_known
+                }
             }
         } else if param.is_optional() {
-            param_assignments.push(quote! {
+            quote! {
                 if let Some(ref value) = request.#field_ident {
                     url.query_pairs_mut().append_pair(#param_name, &value.to_string());
                 }
-            });
+            }
         } else if matches!(field_type.base_type, BaseType::String) {
             // Required string param: always sent. Append the value directly (it is already a
             // `String`, so `.to_string()` would be redundant).
-            param_assignments.push(quote! {
+            quote! {
                 url.query_pairs_mut().append_pair(#param_name, &request.#field_ident);
-            });
+            }
         } else {
             // Required non-string scalar: always sent.
-            param_assignments.push(quote! {
+            quote! {
                 url.query_pairs_mut().append_pair(#param_name, &request.#field_ident.to_string());
-            });
+            }
         }
-    }
-
-    if param_assignments.is_empty() {
-        return quote! {};
-    }
+    });
 
     quote! {
         #(#param_assignments)*
