@@ -613,7 +613,7 @@ impl<'a> MethodPlanner<'a> {
 
 /// Whether a request of this type carries a JSON body (create / update / custom POST·PATCH).
 ///
-/// Single source of truth for the body-attach decision the client emitter previously re-derived.
+/// Single source of truth for the body-attach decision.
 pub(crate) fn request_has_body(request_type: &RequestType) -> bool {
     matches!(
         request_type,
@@ -627,14 +627,14 @@ pub(crate) fn request_has_body(request_type: &RequestType) -> bool {
 /// Whether the Axum server extractor reads request *parts* (path/query) rather than the body.
 ///
 /// Single source of truth for the `FromRequestParts`-vs-`FromRequest` decision (and the
-/// `RequestPartsExt` import) the server emitter previously re-derived.
+/// `RequestPartsExt` import).
 pub(crate) fn request_needs_request_parts(request_type: &RequestType) -> bool {
     matches!(
         request_type,
-        RequestType::List | RequestType::Get | RequestType::Delete
-    ) || matches!(
-        request_type,
-        RequestType::Custom(Pattern::Get(_) | Pattern::Delete(_))
+        RequestType::List
+            | RequestType::Get
+            | RequestType::Delete
+            | RequestType::Custom(Pattern::Get(_) | Pattern::Delete(_))
     )
 }
 
@@ -689,16 +689,7 @@ pub(crate) fn scoped_verb(request_type: &RequestType) -> Option<String> {
 /// Delegates to [`BodyField::is_optional`] for the classification. Optional fields
 /// become `with_*` setter methods; required fields become constructor parameters.
 pub fn split_body_fields(plan: &MethodPlan) -> (Vec<&BodyField>, Vec<&BodyField>) {
-    let mut required = Vec::new();
-    let mut optional = Vec::new();
-    for field in plan.body_fields() {
-        if field.is_optional() {
-            optional.push(field);
-        } else {
-            required.push(field);
-        }
-    }
-    (required, optional)
+    plan.body_fields().partition(|field| !field.is_optional())
 }
 
 /// Extract managed resources from service methods, deduplicating by type name.

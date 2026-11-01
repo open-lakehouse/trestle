@@ -112,7 +112,7 @@ pub fn unified_to_rust(
             ) {
                 "i32".to_string()
             } else {
-                convert_protobuf_enum_to_rust_type(&format!("TYPE_ENUM:{name}"))
+                convert_protobuf_enum_to_rust_type(name)
             }
         }
         BaseType::OneOf(name) => extract_simple_type_name(name),
@@ -246,7 +246,7 @@ pub fn unified_to_napi(unified_type: &UnifiedType) -> String {
         BaseType::Bytes => "Vec<u8>".to_string(),
         BaseType::Unit => "()".to_string(),
         BaseType::Message(name) => extract_simple_type_name(name),
-        BaseType::Enum(name) => convert_protobuf_enum_to_rust_type(&format!("TYPE_ENUM:{name}")),
+        BaseType::Enum(name) => convert_protobuf_enum_to_rust_type(name),
         BaseType::OneOf(name) => extract_simple_type_name(name),
         BaseType::Map(key_type, value_type) => {
             let key_str = unified_to_napi(key_type);
@@ -330,17 +330,15 @@ fn flexible_optional_field_assignment(
         }
     } else {
         match (&unified_type.base_type, runtime) {
-            (BaseType::String, _) => quote! { #field_ident.into() },
             (
-                BaseType::Int32
+                BaseType::String
+                | BaseType::Int32
                 | BaseType::Int64
                 | BaseType::Bool
                 | BaseType::Float64
                 | BaseType::Float32,
                 _,
-            ) => {
-                quote! { #field_ident.into() }
-            }
+            ) => quote! { #field_ident.into() },
             (BaseType::Enum(_), Runtime::Prost) => quote! { #field_ident as i32 },
             (BaseType::Enum(_), Runtime::Buffa) => quote! { buffa::EnumValue::Known(#field_ident) },
             // Message, OneOf, and Map types are always handled by their own
@@ -364,58 +362,24 @@ fn flexible_optional_field_assignment(
 /// The correct fix (Phase 3): accept a `package_prefix: &str` parameter so
 /// callers can strip the known package prefix and always identify the boundary
 /// between package segments and message/enum names deterministically.
-pub(crate) fn convert_protobuf_enum_to_rust_type(proto_type: &str) -> String {
-    if let Some(enum_name) = proto_type.strip_prefix("TYPE_ENUM:") {
-        // Remove leading dot if present
-        let enum_name = enum_name.trim_start_matches('.');
+pub(crate) fn convert_protobuf_enum_to_rust_type(enum_name: &str) -> String {
+    let enum_name = enum_name.trim_start_matches('.');
+    let Some((parent_part, enum_simple_name)) = enum_name.rsplit_once('.') else {
+        return convert_enum_name_to_rust(enum_name);
+    };
+    let enum_rust_name = convert_enum_name_to_rust(enum_simple_name);
 
-        // Check if this is a nested enum (has a parent message)
-        // Nested enums have PascalCase message names before the enum name
-        if let Some(last_dot) = enum_name.rfind('.') {
-            let parent_part = &enum_name[..last_dot];
-            let enum_simple_name = &enum_name[last_dot + 1..];
-
-            // Check if the parent part ends with a PascalCase message name (nested enum)
-            // vs. a package name like "v1" (package-level enum)
-            let parent_parts: Vec<&str> = parent_part.split('.').collect();
-            if let Some(last_part) = parent_parts.last() {
-                // If the last part starts with uppercase, it's likely a message name (nested enum)
-                // If it's "v1" or similar version, it's a package-level enum
-                if last_part.chars().next().is_some_and(|c| c.is_uppercase())
-                    && *last_part != "V1"
-                    && !last_part
-                        .chars()
-                        .all(|c| c.is_lowercase() || c.is_numeric())
-                {
-                    // This is a nested enum - convert parent message to snake_case module
-                    let snake_case_module = last_part.to_case(Case::Snake);
-
-                    // Convert enum name from UPPER_SNAKE_CASE to PascalCase if needed
-                    let enum_rust_name = if enum_simple_name.contains('_')
-                        && enum_simple_name
-                            .chars()
-                            .all(|c| c.is_uppercase() || c == '_')
-                    {
-                        enum_simple_name.to_case(Case::Pascal)
-                    } else {
-                        enum_simple_name.to_string()
-                    };
-
-                    format!("{snake_case_module}::{enum_rust_name}")
-                } else {
-                    // This is a package-level enum - just use the simple name
-                    convert_enum_name_to_rust(enum_simple_name)
-                }
-            } else {
-                // Fallback to simple enum name
-                convert_enum_name_to_rust(enum_simple_name)
-            }
-        } else {
-            // Simple enum name without dots
-            convert_enum_name_to_rust(enum_name)
-        }
+    // A nested enum's parent is a PascalCase message name; a package-level enum's is a package
+    // segment like `v1`.
+    let parent = last_segment(parent_part);
+    let is_nested = parent.starts_with(char::is_uppercase)
+        && parent != "V1"
+        && !parent.chars().all(|c| c.is_lowercase() || c.is_numeric());
+    if is_nested {
+        // The parent message becomes its snake_case module.
+        format!("{}::{enum_rust_name}", parent.to_case(Case::Snake))
     } else {
-        "i32".to_string() // Fallback for unknown enum types
+        enum_rust_name
     }
 }
 

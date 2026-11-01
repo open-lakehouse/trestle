@@ -527,48 +527,49 @@ fn analyze_routeless_method(
 /// `google.api.field_behavior` REQUIRED — mirroring the `body: "*"` branch of
 /// [`extract_request_fields`], minus the path/query split that ConnectRPC has no notion of.
 fn routeless_body_fields(input_fields: &[MessageField]) -> Vec<BodyField> {
-    let mut body_fields = Vec::new();
-    for field in input_fields {
-        if field.field_behavior.contains(&FieldBehavior::OutputOnly) {
-            continue;
-        }
+    input_fields
+        .iter()
+        .filter(|field| !field.field_behavior.contains(&FieldBehavior::OutputOnly))
+        .map(body_field)
+        .collect()
+}
 
-        if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
-            body_fields.push(BodyField {
-                name: field.name.clone(),
-                field_type: field.unified_type.clone().optional(),
-                repeated: false,
-                required: false,
-                oneof_variants: field.oneof_variants.clone(),
-                documentation: field.documentation.clone(),
-            });
-            continue;
-        }
-
-        let required = field.field_behavior.contains(&FieldBehavior::Required);
-        // Match the REST body branch: mark non-required singular message bodies optional on the
-        // type so they become `with_*(impl Into<Option<T>>)` setters rather than required args.
-        let needs_optional_marker = !required
-            && !field.unified_type.is_repeated
-            && matches!(
-                field.unified_type.base_type,
-                BaseType::Message(_) | BaseType::OneOf(_)
-            );
-        let field_type = if needs_optional_marker {
-            field.unified_type.clone().optional()
-        } else {
-            field.unified_type.clone()
-        };
-        body_fields.push(BodyField {
+/// The body field for a request field.
+///
+/// A oneof is always optional and keeps its variants. Otherwise `required` comes from
+/// `google.api.field_behavior` REQUIRED, and a non-required singular message is marked optional on
+/// the type so it becomes a `with_*(impl Into<Option<T>>)` setter (and an `Option<T>` with a
+/// `= None` default in FFI bindings) rather than a required argument. Scalars and collections are
+/// unaffected (their optionality is already correct).
+fn body_field(field: &MessageField) -> BodyField {
+    if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
+        return BodyField {
             name: field.name.clone(),
-            field_type,
-            repeated: field.unified_type.is_repeated,
-            required,
-            oneof_variants: None,
+            field_type: field.unified_type.clone().optional(),
+            repeated: false,
+            required: false,
+            oneof_variants: field.oneof_variants.clone(),
             documentation: field.documentation.clone(),
-        });
+        };
     }
-    body_fields
+
+    let required = field.field_behavior.contains(&FieldBehavior::Required);
+    let needs_optional_marker = !required
+        && !field.unified_type.is_repeated
+        && matches!(field.unified_type.base_type, BaseType::Message(_));
+    let field_type = if needs_optional_marker {
+        field.unified_type.clone().optional()
+    } else {
+        field.unified_type.clone()
+    };
+    BodyField {
+        name: field.name.clone(),
+        field_type,
+        repeated: field.unified_type.is_repeated,
+        required,
+        oneof_variants: None,
+        documentation: field.documentation.clone(),
+    }
 }
 
 /// Extract and classify request fields from an input message into path, query, and body buckets.
@@ -636,14 +637,7 @@ fn extract_request_fields(
 
         // Oneof fields are always body fields and always optional.
         if matches!(field.unified_type.base_type, BaseType::OneOf(_)) {
-            body_fields.push(BodyField {
-                name: field.name.clone(),
-                field_type: field.unified_type.clone().optional(),
-                repeated: false,
-                required: false,
-                oneof_variants: field.oneof_variants.clone(),
-                documentation: field.documentation.clone(),
-            });
+            body_fields.push(body_field(field));
             processed_fields.insert(field_name);
             continue;
         }
@@ -655,30 +649,7 @@ fn extract_request_fields(
         };
 
         if is_body {
-            let required = field.field_behavior.contains(&FieldBehavior::Required);
-            // Mark non-required singular message/oneof bodies as optional on the type so FFI
-            // bindings render them as `Option<T>` (matching their `= None` default). Required
-            // bodies keep the bare type and become required constructor params. Scalars and
-            // collections are unaffected (their optionality is already correct).
-            let needs_optional_marker = !required
-                && !field.unified_type.is_repeated
-                && matches!(
-                    field.unified_type.base_type,
-                    BaseType::Message(_) | BaseType::OneOf(_)
-                );
-            let field_type = if needs_optional_marker {
-                field.unified_type.clone().optional()
-            } else {
-                field.unified_type.clone()
-            };
-            body_fields.push(BodyField {
-                name: field.name.clone(),
-                field_type,
-                repeated: field.unified_type.is_repeated,
-                required,
-                oneof_variants: None,
-                documentation: field.documentation.clone(),
-            });
+            body_fields.push(body_field(field));
         } else {
             query_params.push(QueryParam {
                 name: field.name.clone(),

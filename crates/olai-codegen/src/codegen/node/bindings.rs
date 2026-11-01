@@ -504,9 +504,7 @@ impl SetterRender for NapiBackend {
 /// leaf name, which the model glob import does not bring into scope. Top-level enums
 /// resolve to their simple name unchanged.
 fn enum_rust_type_path(enum_name: &str) -> TokenStream {
-    let path = crate::parsing::types::convert_protobuf_enum_to_rust_type(&format!(
-        "TYPE_ENUM:{enum_name}"
-    ));
+    let path = crate::parsing::types::convert_protobuf_enum_to_rust_type(enum_name);
     path.parse()
         .expect("enum rust path is a valid token stream")
 }

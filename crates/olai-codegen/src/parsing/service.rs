@@ -5,8 +5,8 @@ use tracing::{debug, warn};
 
 use super::{CodeGenMetadata, MethodMetadata, ServiceInfo, extract_documentation};
 use crate::gnostic::openapi::v3::Operation;
-use crate::google::api::{HttpRule, http_rule::Pattern};
-use crate::parsing::http::HttpPattern;
+use crate::google::api::HttpRule;
+use crate::parsing::http::{HttpPattern, extract_http_rule_pattern};
 use crate::{Error, Result};
 
 /// Process a protobuf service definition
@@ -71,18 +71,8 @@ fn process_method(
     let (operation, http_rule) = extract_method_annotations(method, service_name)?;
 
     // Pre-parse the HTTP URL pattern so analysis can use it directly.
-    let http_pattern = {
-        let raw_path = match &http_rule.pattern {
-            Some(Pattern::Get(p))
-            | Some(Pattern::Post(p))
-            | Some(Pattern::Put(p))
-            | Some(Pattern::Delete(p))
-            | Some(Pattern::Patch(p)) => p.as_str(),
-            Some(Pattern::Custom(c)) => c.path.as_str(),
-            None => "",
-        };
-        HttpPattern::parse(raw_path)
-    };
+    let http_pattern =
+        extract_http_rule_pattern(&http_rule).unwrap_or_else(|| HttpPattern::parse(""));
 
     let method_metadata = MethodMetadata {
         service_name: service_name.to_string(),
@@ -112,11 +102,12 @@ fn extract_method_annotations(
     method: &MethodDescriptorProto,
     service_name: &str,
 ) -> Result<(Option<Operation>, HttpRule)> {
+    let missing_http_rule = || Error::MissingAnnotation {
+        object: method.name().to_string(),
+        message: "missing required google.api.http annotation".to_string(),
+    };
     let Some(options) = method.options.as_ref() else {
-        return Err(Error::MissingAnnotation {
-            object: method.name().to_string(),
-            message: "missing required google.api.http annotation".to_string(),
-        });
+        return Err(missing_http_rule());
     };
     let unknown_fields = options.unknown_fields();
 
@@ -135,35 +126,19 @@ fn extract_method_annotations(
 
         match field_number {
             super::GOOGLE_API_HTTP_EXTENSION => {
-                // Parse HTTP rule from extension data
-                match HttpRule::decode(data) {
-                    Ok(rule) => {
-                        http_rule = Some(rule);
-                    }
-                    Err(e) => {
-                        return Err(Error::InvalidAnnotation {
-                            object: method.name().to_string(),
-                            message: format!(
-                                "Failed to parse HTTP rule for {}.{}: {}",
-                                service_name,
-                                method.name(),
-                                e
-                            ),
-                        });
-                    }
-                }
+                let rule = HttpRule::decode(data).map_err(|e| Error::InvalidAnnotation {
+                    object: method.name().to_string(),
+                    message: format!(
+                        "Failed to parse HTTP rule for {service_name}.{}: {e}",
+                        method.name()
+                    ),
+                })?;
+                http_rule = Some(rule);
             }
-            super::GNOSTIC_OPERATION_EXTENSION => {
-                // Parse operation from extension data
-                match Operation::decode(data) {
-                    Ok(op) => {
-                        operation = Some(op);
-                    }
-                    Err(e) => {
-                        warn!("Failed to parse gnostic operation: {}", e);
-                    }
-                }
-            }
+            super::GNOSTIC_OPERATION_EXTENSION => match Operation::decode(data) {
+                Ok(op) => operation = Some(op),
+                Err(e) => warn!("Failed to parse gnostic operation: {}", e),
+            },
             _ => {
                 debug!(
                     "Unknown extension field {} in {}.{}",
@@ -175,11 +150,7 @@ fn extract_method_annotations(
         }
     }
 
-    // Ensure HTTP rule was found
-    let http_rule = http_rule.ok_or_else(|| Error::MissingAnnotation {
-        object: method.name().to_string(),
-        message: "missing required google.api.http annotation".to_string(),
-    })?;
+    let http_rule = http_rule.ok_or_else(missing_http_rule)?;
 
     Ok((operation, http_rule))
 }

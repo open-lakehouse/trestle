@@ -87,25 +87,20 @@ impl HttpPattern {
     /// Generate a format string for URL construction
     /// Returns ("/catalogs/{}", ["name"]) for "/catalogs/{name}"
     pub fn to_format_string(&self) -> (String, Vec<String>) {
-        let mut format_parts = Vec::new();
+        let mut format = String::new();
         let mut format_args = Vec::new();
 
         for segment in &self.segments {
             match segment {
-                UrlSegment::Static(literal) => {
-                    format_parts.push(literal.clone());
-                }
+                UrlSegment::Static(literal) => format.push_str(literal),
                 UrlSegment::Parameter(name) => {
-                    format_parts.push("{}".to_string());
+                    format.push_str("{}");
                     format_args.push(name.clone());
                 }
             }
         }
 
-        (
-            format_parts.join("").trim_start_matches('/').to_string(),
-            format_args,
-        )
+        (format.trim_start_matches('/').to_string(), format_args)
     }
 }
 
@@ -144,8 +139,7 @@ fn parse_url_segments(template: &str) -> (Vec<UrlSegment>, Vec<String>) {
         if ch == '{' {
             // Save any accumulated static content
             if !current_static.is_empty() {
-                segments.push(UrlSegment::Static(current_static.clone()));
-                current_static.clear();
+                segments.push(UrlSegment::Static(std::mem::take(&mut current_static)));
             }
 
             // Parse the raw placeholder contents (everything up to the closing `}`).
@@ -210,24 +204,16 @@ fn extract_static_prefix(segments: &[UrlSegment]) -> String {
 
 /// Extract static suffix (everything after last parameter)
 fn extract_static_suffix(segments: &[UrlSegment]) -> Option<String> {
-    let mut suffix = String::new();
-    let mut found_last_param_index = None;
-
-    // Find the last parameter index
-    for (i, segment) in segments.iter().enumerate() {
-        if matches!(segment, UrlSegment::Parameter(_)) {
-            found_last_param_index = Some(i);
-        }
-    }
-
-    // If we found a parameter, collect everything after it
-    if let Some(last_param_index) = found_last_param_index {
-        for segment in segments.iter().skip(last_param_index + 1) {
-            if let UrlSegment::Static(literal) = segment {
-                suffix.push_str(literal);
-            }
-        }
-    }
+    let last_param_index = segments
+        .iter()
+        .rposition(|segment| matches!(segment, UrlSegment::Parameter(_)))?;
+    let suffix: String = segments[last_param_index + 1..]
+        .iter()
+        .filter_map(|segment| match segment {
+            UrlSegment::Static(literal) => Some(literal.as_str()),
+            UrlSegment::Parameter(_) => None,
+        })
+        .collect();
 
     (!suffix.is_empty()).then_some(suffix)
 }
@@ -242,14 +228,13 @@ pub fn extract_path_parameters(path_template: &str) -> Vec<String> {
 pub fn extract_http_rule_pattern(http_rule: &crate::google::api::HttpRule) -> Option<HttpPattern> {
     use crate::google::api::http_rule::Pattern;
 
-    let template = match &http_rule.pattern {
-        Some(Pattern::Get(path)) => path,
-        Some(Pattern::Post(path)) => path,
-        Some(Pattern::Put(path)) => path,
-        Some(Pattern::Delete(path)) => path,
-        Some(Pattern::Patch(path)) => path,
-        Some(Pattern::Custom(custom)) => &custom.path,
-        None => return None,
+    let template = match http_rule.pattern.as_ref()? {
+        Pattern::Get(path)
+        | Pattern::Post(path)
+        | Pattern::Put(path)
+        | Pattern::Delete(path)
+        | Pattern::Patch(path) => path,
+        Pattern::Custom(custom) => &custom.path,
     };
 
     Some(HttpPattern::parse(template))

@@ -21,23 +21,16 @@ pub fn run(
     schema_renames: &BTreeMap<String, String>,
     schema_overrides: &HashSet<String>,
 ) -> Result<()> {
-    let spec_str = fs::read_to_string(spec)
-        .map_err(|e| crate::Error::Build(format!("Failed to read {}: {}", spec.display(), e)))?;
-    let mut doc: YamlValue = serde_yaml::from_str(&spec_str).map_err(|e| {
-        crate::Error::Build(format!("Failed to parse YAML {}: {}", spec.display(), e))
-    })?;
+    let spec_str = fs::read_to_string(spec).map_err(|e| file_error("read", spec, e))?;
+    let mut doc: YamlValue =
+        serde_yaml::from_str(&spec_str).map_err(|e| file_error("parse YAML", spec, e))?;
 
     fix_gnostic_refs(&mut doc);
     enrich_from_jsonschema(&mut doc, jsonschema_dir, camel_case, schema_overrides)?;
 
     if let Some(desc_path) = descriptors {
-        let bytes = fs::read(desc_path).map_err(|e| {
-            crate::Error::Build(format!(
-                "Failed to read descriptors {}: {}",
-                desc_path.display(),
-                e
-            ))
-        })?;
+        let bytes =
+            fs::read(desc_path).map_err(|e| file_error("read descriptors", desc_path, e))?;
         let fds = protobuf::descriptor::FileDescriptorSet::parse_from_bytes(&bytes)
             .map_err(|e| crate::Error::Build(format!("Failed to parse descriptors: {e}")))?;
         let metadata = parse_file_descriptor_set(&fds)?;
@@ -48,10 +41,14 @@ pub fn run(
 
     let out = serde_yaml::to_string(&doc)
         .map_err(|e| crate::Error::Build(format!("Failed to serialize YAML: {e}")))?;
-    fs::write(spec, out)
-        .map_err(|e| crate::Error::Build(format!("Failed to write {}: {}", spec.display(), e)))?;
+    fs::write(spec, out).map_err(|e| file_error("write", spec, e))?;
 
     Ok(())
+}
+
+/// `Failed to <action> <path>: <error>`.
+fn file_error(action: &str, path: &Path, error: impl std::fmt::Display) -> crate::Error {
+    crate::Error::Build(format!("Failed to {action} {}: {error}", path.display()))
 }
 
 // ── Pass 0 ────────────────────────────────────────────────────────────────────
@@ -119,55 +116,13 @@ fn enrich_from_jsonschema(
     let mut added = 0usize;
 
     for path in &files {
-        let filename = path
-            .file_name()
-            .and_then(|f: &std::ffi::OsStr| f.to_str())
-            .unwrap_or_default();
-        let type_name = match type_name_from_filename(filename) {
-            Some(n) => n,
-            None => {
-                eprintln!("enrich-openapi: skipping {filename} (cannot extract type name)");
-                continue;
-            }
-        };
-
-        let content = fs::read_to_string(path).map_err(|e| {
-            crate::Error::Build(format!("Failed to read {}: {}", path.display(), e))
-        })?;
-        let bundle: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-            crate::Error::Build(format!("Failed to parse JSON {}: {}", path.display(), e))
-        })?;
-
-        let defs: JsonMap<String, serde_json::Value> = bundle
-            .get("$defs")
-            .and_then(|v: &serde_json::Value| v.as_object())
-            .cloned()
-            .unwrap_or_default();
-
-        let root_ref = bundle
-            .get("$ref")
-            .and_then(|v: &serde_json::Value| v.as_str())
-            .unwrap_or("");
-        // Surface an unexpected `$ref` shape instead of silently coercing it to an empty key,
-        // which would mask malformed bundles behind a generic "could not resolve" message.
-        let root_key = match root_ref.strip_prefix("#/$defs/") {
-            Some(key) => key,
-            None => {
-                eprintln!(
-                    "enrich-openapi: unexpected root $ref format '{root_ref}' for {type_name} \
-                     (expected '#/$defs/<name>'), skipping"
-                );
-                continue;
-            }
-        };
-        let root_schema: serde_json::Value = match defs.get(root_key) {
-            Some(s) => s.clone(),
-            None => {
-                eprintln!(
-                    "enrich-openapi: could not resolve root $ref '{root_ref}' for {type_name}, skipping"
-                );
-                continue;
-            }
+        let Some(SchemaBundle {
+            type_name,
+            defs,
+            root_schema,
+        }) = load_bundle(path)?
+        else {
+            continue;
         };
 
         // Navigate to components.schemas.<TypeName>
@@ -182,27 +137,7 @@ fn enrich_from_jsonschema(
             }
         };
 
-        let exists = schemas
-            .as_mapping()
-            .map(|m| m.contains_key(type_name.as_str()))
-            .unwrap_or(false);
-
-        if !exists {
-            let ty = root_schema
-                .get("type")
-                .and_then(|v: &serde_json::Value| v.as_str())
-                .unwrap_or("object");
-            if let Some(map) = schemas.as_mapping_mut() {
-                let mut entry = serde_yaml::Mapping::new();
-                entry.insert(
-                    YamlValue::String("type".into()),
-                    YamlValue::String(ty.to_string()),
-                );
-                map.insert(
-                    YamlValue::String(type_name.clone()),
-                    YamlValue::Mapping(entry),
-                );
-            }
+        if insert_missing_schema(schemas, &type_name, &root_schema) {
             added += 1;
         } else {
             updated += 1;
@@ -213,8 +148,8 @@ fn enrich_from_jsonschema(
             .and_then(|m| m.get_mut(type_name.as_str()));
         if let Some(oa) = oa_schema {
             // Authoritative override: gnostic can clobber a proto message whose name
-            // collides with one of its own OpenAPI meta-model types (e.g. our
-            // `unitycatalog.schemas.v1.Schema` is overwritten by gnostic's `Schema`),
+            // collides with one of its own OpenAPI meta-model types (e.g. a
+            // `example.schemas.v1.Schema` is overwritten by gnostic's `Schema`),
             // leaving the emitted component with meta-object fields instead of the
             // real entity's. For such keys, rebuild the component body from the
             // authoritative JSON Schema root before the usual validation merge.
@@ -238,6 +173,97 @@ fn enrich_from_jsonschema(
     Ok(())
 }
 
+/// A parsed `*.schema.strict.bundle.json` file.
+struct SchemaBundle {
+    /// The OpenAPI schema key (the proto message name).
+    type_name: String,
+    /// The bundle's `$defs`.
+    defs: JsonMap<String, serde_json::Value>,
+    /// The `$defs` entry the bundle's root `$ref` points at.
+    root_schema: serde_json::Value,
+}
+
+/// Read and parse a JSON Schema bundle, or `None` (logged) when it cannot be used.
+fn load_bundle(path: &Path) -> Result<Option<SchemaBundle>> {
+    let filename = path
+        .file_name()
+        .and_then(|f: &std::ffi::OsStr| f.to_str())
+        .unwrap_or_default();
+    let Some(type_name) = type_name_from_filename(filename) else {
+        eprintln!("enrich-openapi: skipping {filename} (cannot extract type name)");
+        return Ok(None);
+    };
+
+    let content = fs::read_to_string(path).map_err(|e| file_error("read", path, e))?;
+    let bundle: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| file_error("parse JSON", path, e))?;
+
+    let defs: JsonMap<String, serde_json::Value> = bundle
+        .get("$defs")
+        .and_then(|v: &serde_json::Value| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    let root_ref = bundle
+        .get("$ref")
+        .and_then(|v: &serde_json::Value| v.as_str())
+        .unwrap_or("");
+    // Surface an unexpected `$ref` shape instead of silently coercing it to an empty key,
+    // which would mask malformed bundles behind a generic "could not resolve" message.
+    let Some(root_key) = root_ref.strip_prefix("#/$defs/") else {
+        eprintln!(
+            "enrich-openapi: unexpected root $ref format '{root_ref}' for {type_name} \
+             (expected '#/$defs/<name>'), skipping"
+        );
+        return Ok(None);
+    };
+    let Some(root_schema) = defs.get(root_key).cloned() else {
+        eprintln!(
+            "enrich-openapi: could not resolve root $ref '{root_ref}' for {type_name}, skipping"
+        );
+        return Ok(None);
+    };
+
+    Ok(Some(SchemaBundle {
+        type_name,
+        defs,
+        root_schema,
+    }))
+}
+
+/// Add a `{type: <root type>}` stub for `type_name` when `schemas` lacks it; returns whether it
+/// was added.
+fn insert_missing_schema(
+    schemas: &mut YamlValue,
+    type_name: &str,
+    root_schema: &serde_json::Value,
+) -> bool {
+    let exists = schemas
+        .as_mapping()
+        .map(|m| m.contains_key(type_name))
+        .unwrap_or(false);
+    if exists {
+        return false;
+    }
+
+    let ty = root_schema
+        .get("type")
+        .and_then(|v: &serde_json::Value| v.as_str())
+        .unwrap_or("object");
+    if let Some(map) = schemas.as_mapping_mut() {
+        let mut entry = serde_yaml::Mapping::new();
+        entry.insert(
+            YamlValue::String("type".into()),
+            YamlValue::String(ty.to_string()),
+        );
+        map.insert(
+            YamlValue::String(type_name.to_string()),
+            YamlValue::Mapping(entry),
+        );
+    }
+    true
+}
+
 /// Extract type name from a JSON Schema bundle filename.
 /// e.g. "dda.coordinator.v1.CreateWaveRequest.schema.strict.bundle.json" → "CreateWaveRequest"
 fn type_name_from_filename(filename: &str) -> Option<String> {
@@ -253,6 +279,18 @@ fn resolve_ref<'a>(
 ) -> Option<&'a serde_json::Value> {
     let key = ref_str.strip_prefix("#/$defs/")?;
     defs.get(key)
+}
+
+/// The `$defs` entry `node`'s `$ref` points at, or `node` itself when it has no resolvable
+/// `$ref`.
+fn resolve_or_self<'a>(
+    node: &'a serde_json::Value,
+    defs: &'a JsonMap<String, serde_json::Value>,
+) -> &'a serde_json::Value {
+    node.get("$ref")
+        .and_then(|v| v.as_str())
+        .and_then(|ref_str| resolve_ref(ref_str, defs))
+        .unwrap_or(node)
 }
 
 const VALIDATION_FIELDS: &[&str] = &[
@@ -280,28 +318,20 @@ fn merge_validation(source: &serde_json::Value, target: &mut YamlValue) {
             None => continue,
         };
 
-        if key == "exclusiveMinimum" {
+        // JSON Schema 2020-12 numeric form → OpenAPI 3.0 boolean form.
+        let bound = match key {
+            "exclusiveMinimum" => Some("minimum"),
+            "exclusiveMaximum" => Some("maximum"),
+            _ => None,
+        };
+        if let Some(bound) = bound {
             if let Some(n) = val.as_f64() {
-                // JSON Schema 2020-12 numeric form → OpenAPI 3.0 boolean form
                 yaml_set(
                     target,
-                    "minimum",
+                    bound,
                     YamlValue::Number(serde_yaml::Number::from(n)),
                 );
-                yaml_set(target, "exclusiveMinimum", YamlValue::Bool(true));
-            }
-            continue;
-        }
-
-        if key == "exclusiveMaximum" {
-            if let Some(n) = val.as_f64() {
-                // JSON Schema 2020-12 numeric form → OpenAPI 3.0 boolean form
-                yaml_set(
-                    target,
-                    "maximum",
-                    YamlValue::Number(serde_yaml::Number::from(n)),
-                );
-                yaml_set(target, "exclusiveMaximum", YamlValue::Bool(true));
+                yaml_set(target, key, YamlValue::Bool(true));
             }
             continue;
         }
@@ -328,40 +358,20 @@ fn enrich_schema(
                 snake_key.clone()
             };
 
-            let resolved: std::borrow::Cow<serde_json::Value> =
-                if let Some(ref_str) = js_prop.get("$ref").and_then(|v| v.as_str()) {
-                    match resolve_ref(ref_str, defs) {
-                        Some(r) => std::borrow::Cow::Borrowed(r),
-                        None => std::borrow::Cow::Borrowed(js_prop),
-                    }
-                } else {
-                    std::borrow::Cow::Borrowed(js_prop)
-                };
-
             if let Some(oa_prop) = openapi
                 .get_mut("properties")
                 .and_then(|p| p.get_mut(lookup_key.as_str()))
             {
-                enrich_schema(oa_prop, &resolved, defs, camel_case);
+                enrich_schema(oa_prop, resolve_or_self(js_prop, defs), defs, camel_case);
             }
         }
     }
 
     // Recurse into items
-    if let Some(js_items) = json_schema.get("items") {
-        let resolved: std::borrow::Cow<serde_json::Value> =
-            if let Some(ref_str) = js_items.get("$ref").and_then(|v| v.as_str()) {
-                match resolve_ref(ref_str, defs) {
-                    Some(r) => std::borrow::Cow::Borrowed(r),
-                    None => std::borrow::Cow::Borrowed(js_items),
-                }
-            } else {
-                std::borrow::Cow::Borrowed(js_items)
-            };
-
-        if let Some(oa_items) = openapi.get_mut("items") {
-            enrich_schema(oa_items, &resolved, defs, camel_case);
-        }
+    if let Some(js_items) = json_schema.get("items")
+        && let Some(oa_items) = openapi.get_mut("items")
+    {
+        enrich_schema(oa_items, resolve_or_self(js_items, defs), defs, camel_case);
     }
 
     // Recurse into combiners
@@ -369,20 +379,8 @@ fn enrich_schema(
         if let Some(js_list) = json_schema.get(combiner).and_then(|v| v.as_array())
             && let Some(oa_list) = openapi.get_mut(combiner).and_then(|v| v.as_sequence_mut())
         {
-            for (i, js_entry) in js_list.iter().enumerate() {
-                if i >= oa_list.len() {
-                    break;
-                }
-                let resolved: std::borrow::Cow<serde_json::Value> =
-                    if let Some(ref_str) = js_entry.get("$ref").and_then(|v| v.as_str()) {
-                        match resolve_ref(ref_str, defs) {
-                            Some(r) => std::borrow::Cow::Borrowed(r),
-                            None => std::borrow::Cow::Borrowed(js_entry),
-                        }
-                    } else {
-                        std::borrow::Cow::Borrowed(js_entry)
-                    };
-                enrich_schema(&mut oa_list[i], &resolved, defs, camel_case);
+            for (oa_entry, js_entry) in oa_list.iter_mut().zip(js_list) {
+                enrich_schema(oa_entry, resolve_or_self(js_entry, defs), defs, camel_case);
             }
         }
     }
@@ -395,8 +393,12 @@ fn dedup_path_params(spec: &mut YamlValue, metadata: &CodeGenMetadata) {
 
     for service in metadata.services.values() {
         for method in &service.methods {
-            let path_params: HashSet<String> =
-                method.http_pattern.parameters.iter().cloned().collect();
+            let path_params: HashSet<&str> = method
+                .http_pattern
+                .parameters
+                .iter()
+                .map(String::as_str)
+                .collect();
             if path_params.is_empty() {
                 continue;
             }
@@ -451,10 +453,9 @@ fn dedup_path_params(spec: &mut YamlValue, metadata: &CodeGenMetadata) {
 /// The OpenAPI schema key is derived by gnostic from the proto message name, and
 /// gnostic offers no per-message key override. This pass decouples the two: the
 /// proto message (and thus every Rust/Python/Node model type) keeps its clean
-/// name, while the emitted spec presents a different key — used here to align the
-/// spec with the official Unity Catalog `*Info` naming (`Catalog` -> `CatalogInfo`)
-/// so downstream OpenAPI consumers match the reference spec without churning the
-/// internal model API.
+/// name, while the emitted spec presents a different key — e.g. to align the spec
+/// with a reference spec's naming (`Catalog` -> `CatalogInfo`) so downstream OpenAPI
+/// consumers match it without churning the internal model API.
 ///
 /// `renames` maps current schema key -> desired schema key. Entries whose source
 /// key is absent from the spec are ignored (logged), so a rename table can name
