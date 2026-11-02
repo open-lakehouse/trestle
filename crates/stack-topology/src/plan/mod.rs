@@ -411,8 +411,8 @@ impl PlanCtx {
     /// This context without its runtime placement: the project name, host label, mesh network
     /// and port offset cleared, and the slot-shifted ports (gateway, admin, dedicated listeners)
     /// moved back by the offset. What an [`EnvManifest`](crate::EnvManifest) persists, so the
-    /// same environment can be placed anywhere; [`RuntimePlacement::apply`]
-    /// (crate::RuntimePlacement::apply) is the inverse.
+    /// same environment can be placed anywhere;
+    /// [`RuntimePlacement::apply`](crate::RuntimePlacement::apply) is the inverse.
     pub fn without_placement(&self) -> PlanCtx {
         let offset = self.port_offset;
         PlanCtx {

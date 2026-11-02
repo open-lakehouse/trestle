@@ -1,8 +1,8 @@
 //! Several environments on one host: the [`WorkspaceManifest`].
 //!
 //! A workspace is a directory holding a `trestle-workspace.toml` and one environment directory
-//! per member. Each member stays a self-contained environment (its own [`EnvManifest`]
-//! (crate::EnvManifest), its own compose project); the workspace only decides the values that
+//! per member. Each member stays a self-contained environment (its own
+//! [`EnvManifest`](crate::EnvManifest), its own compose project); the workspace only decides the values that
 //! must differ between environments sharing a Docker host, and checks them:
 //!
 //! - a **slot** per environment, which shifts every host port the environment binds by
