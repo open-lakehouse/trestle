@@ -127,6 +127,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-auth/Cargo.toml -- cargo check --locked --all-features
       - name: Verify MSRV (olai-stack-runtime)
         run: cargo msrv verify --manifest-path crates/stack-runtime/Cargo.toml -- cargo check --locked --all-features
+      - name: Verify MSRV (olai-stack-state)
+        run: cargo msrv verify --manifest-path crates/stack-state/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}

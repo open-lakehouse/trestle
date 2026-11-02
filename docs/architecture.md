@@ -47,6 +47,7 @@ links against.
 | [`olai-http-wasm`](../crates/olai-http-wasm) | runtime (browser) | The `wasm32` transport for generated clients: same client bodies, browser Fetch backend, browser-managed session. |
 | [`olai-stack-topology`](../crates/stack-topology) | tooling | Plans and renders environments: module catalog, planner, Compose/Envoy renderers, the `env.toml` and `trestle-workspace.toml` manifests. Pure and wasm-clean. |
 | [`olai-stack-runtime`](../crates/stack-runtime) | tooling | Runs environments on Docker Compose: the `ComposeEngine` trait, `DockerCli`, typed status/health/events, a `FakeEngine` for tests (see [runtime.md](runtime.md)). |
+| [`olai-stack-state`](../crates/stack-state) | tooling | The state the CLI and the desktop app share: workspaces, environments with immutable revisions, instances and host-wide slot leases, in SQLite under `TRESTLE_HOME`. |
 | [`olai-trestle`](../crates/trestle) | tooling | The `trestle` CLI: project scaffolding (`trestle new`) and the codegen entry point (`trestle generate`). |
 
 The credential vending crates, which build on `olai-http`, are described in

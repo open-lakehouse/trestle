@@ -32,6 +32,9 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
 - `crates/stack-runtime/` (`olai-stack-runtime`): runs environments on Docker
   Compose (`ComposeEngine`, `DockerCli`, `FakeEngine`), behind `trestle
   workspace up/down/list`; see [`docs/runtime.md`](docs/runtime.md)
+- `crates/stack-state/` (`olai-stack-state`): the shared SQLite state store
+  (workspaces, environments, immutable revisions, instances, host-wide slot
+  leases) under `TRESTLE_HOME`
 - `crates/olai-test-emulators/`: testcontainers storage emulators (test-only,
   unpublished)
 - `node/`: Bun workspace: env editor, diagram package

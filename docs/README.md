@@ -10,7 +10,7 @@ Design records and deeper explanations for Trestle.
   SPIFFE/SPIRE workload identity.
 - [Running environments](runtime.md): `olai-stack-runtime`'s Compose engine, what
   the Docker engines print (captured as fixtures), and how credentials reach
-  Compose.
+  Compose; and the state store the CLI and the desktop app share.
 - [Credential vending](credential-vending.md): protocol-neutral crates for vended
   storage credentials (model, client-side `object_store` integration, server-side
   minting), shared by Unity Catalog, Iceberg REST and Open Sharing. Accepted, with
@@ -31,5 +31,6 @@ Each crate also has its own README with usage detail:
 - [`olai-http-wasm`](../crates/olai-http-wasm/README.md): the browser/WASM transport.
 - [`olai-stack-runtime`](../crates/stack-runtime/README.md): running environments
   on Docker Compose.
+- [`olai-stack-state`](../crates/stack-state/README.md): the shared state store.
 - [`olai-trestle`](../crates/trestle/README.md): the CLI, covering scaffolding and
   template authoring.

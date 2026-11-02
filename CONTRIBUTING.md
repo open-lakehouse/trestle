@@ -197,8 +197,9 @@ since the normal dependency already orders it first.)
 
 ### Published crates and the `trestle` / `olai-trestle` naming
 
-Eleven crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
+Twelve crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
 `olai-http-wasm`, `olai-trestle`, `olai-stack-topology`, `olai-stack-runtime`,
+`olai-stack-state`,
 `olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending`, and
 `olai-auth`.
 They are the packages listed in `release-plz.toml`. `olai-test-emulators` and

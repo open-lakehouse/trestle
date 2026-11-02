@@ -9,6 +9,39 @@ up/down/list` runs on it. Instances, the layered environment and secret provider
 the desktop app. The CLI used to shell out to `docker` from
 `cli/workspace.rs`; that code now lives here, behind a trait.
 
+## The state store
+
+`olai-stack-state` is the state the CLI and the desktop app share: one SQLite
+database, `state.db` under `$TRESTLE_HOME` (default: `trestle` in the platform
+data directory, such as `~/Library/Application Support/trestle`). It uses WAL,
+and writers take the lock up front.
+
+```text
+Workspace ─┬─ vars, mesh
+           └─ Environment ─┬─ draft (placement-free env.toml + module.yaml texts + vars), vars, head
+                           └─ Revision n (immutable: manifest, modules, vars, digest)
+Instance  = a revision to run: desired state, overrides, sources ─── SlotLease (host-wide, 0..=54)
+```
+
+- **Revisions are immutable.** `commit_draft` numbers the next one and moves the
+  head. The `Revision` type has no setters, and a trigger refuses an `UPDATE`
+  even from outside the API.
+- **Slots are host-wide.** A `WorkspaceManifest` hands out slots starting at 0 in
+  each workspace, so two workspaces clash. The store leases each instance the
+  lowest free slot on the host, inside a write transaction, so concurrent
+  processes never share one.
+- **Secrets are references** (`SecretRef { provider, key }`). Values stay with
+  their provider.
+- **Schema**: `PRAGMA user_version` with embedded migrations. A newer schema is
+  refused (`UnsupportedVersion`), as a newer manifest is.
+- **Change feed**: a `Watcher` compares `PRAGMA data_version`, which moves when
+  another connection commits, so the app notices a CLI write. It reports that
+  something changed and leaves what to the reader.
+- **Import/export**: `trestle-workspace.toml` and env directories are the
+  exchange format. Import drops slots, because the store leases its own. Export
+  writes the chosen instances' slots, so `docker compose up` works in the
+  exported directory.
+
 ## The engine
 
 `ComposeEngine` is what the runtime asks of Docker Compose:

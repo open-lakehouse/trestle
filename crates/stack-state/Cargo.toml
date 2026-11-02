@@ -1,0 +1,45 @@
+[package]
+name = "olai-stack-state"
+description = "The shared trestle state store: workspaces, environments, immutable revisions, instances and slot leases in SQLite"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+
+[dependencies]
+# local crates (release-plz keeps versions in sync) (in alphabetical order)
+olai-stack-topology = { path = "../stack-topology", version = "0.0.12", features = [
+    "std-io",
+    "catalog",
+] }
+
+# workspace dependencies (in alphabetical order)
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+uuid = { workspace = true, features = ["v4"] }
+
+# crates.io dependencies (in alphabetical order)
+dirs = "5"
+hex = "0.4"
+# 0.32 is the release on libsqlite3-sys 0.30, which sqlx (olai-store) links too: two
+# libsqlite3-sys versions can't share a build (`links = "sqlite3"`).
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
