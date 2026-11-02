@@ -29,6 +29,9 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
 - `crates/stack-topology/` (`olai-stack-topology`): environment planner and
   renderer behind `trestle env` · `crates/stack-topology-wasm/`: its wasm build
   for the web UI
+- `crates/stack-runtime/` (`olai-stack-runtime`): runs environments on Docker
+  Compose (`ComposeEngine`, `DockerCli`, `FakeEngine`), behind `trestle
+  workspace up/down/list`; see [`docs/runtime.md`](docs/runtime.md)
 - `crates/olai-test-emulators/`: testcontainers storage emulators (test-only,
   unpublished)
 - `node/`: Bun workspace: env editor, diagram package

@@ -2646,6 +2646,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "olai-stack-runtime"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "futures",
+ "olai-stack-topology",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "olai-stack-topology"
 version = "0.0.12"
 dependencies = [
@@ -2722,6 +2736,7 @@ dependencies = [
  "ignore",
  "minijinja",
  "olai-codegen",
+ "olai-stack-runtime",
  "olai-stack-topology",
  "protobuf",
  "regex",
@@ -2733,6 +2748,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",

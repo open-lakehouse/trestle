@@ -37,6 +37,7 @@ pkg-fmt = "tgz"
 [dependencies]
 # local crates (release-plz keeps versions in sync) (in alphabetical order)
 olai-codegen = { path = "../olai-codegen", version = "0.0.12" }
+olai-stack-runtime = { path = "../stack-runtime", version = "0.0.1" }
 olai-stack-topology = { path = "../stack-topology", version = "0.0.12", features = [
     "std-io",
     "catalog",
@@ -46,6 +47,8 @@ olai-stack-topology = { path = "../stack-topology", version = "0.0.12", features
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# The single-threaded runtime the Docker-facing `workspace` commands run on.
+tokio = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -68,6 +71,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5"
 
 [dev-dependencies]
+olai-stack-runtime = { path = "../stack-runtime", features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 rstest = "0.23"
 tempfile = "3"
 walkdir = "2.5"

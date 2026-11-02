@@ -53,6 +53,7 @@ jobs:
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
       - run: cargo clippy --locked --all-targets -p olai-vended-store --no-default-features -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-vended-store --all-features -- -D warnings
@@ -124,6 +125,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-credential-vending/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-auth)
         run: cargo msrv verify --manifest-path crates/olai-auth/Cargo.toml -- cargo check --locked --all-features
+      - name: Verify MSRV (olai-stack-runtime)
+        run: cargo msrv verify --manifest-path crates/stack-runtime/Cargo.toml -- cargo check --locked --all-features
 
   test:
     name: Test / ${{ matrix.os }}
@@ -150,6 +153,8 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-auth HTTP key source)
         run: cargo test --locked --lib --tests -p olai-auth --features http
+      - name: Run tests (olai-stack-runtime fake engine)
+        run: cargo test --locked --lib --tests -p olai-stack-runtime --features testing
       - name: Run tests (olai-vended-store protocol modules)
         run: cargo test --locked --lib --tests -p olai-vended-store --features delta-api,databricks
 

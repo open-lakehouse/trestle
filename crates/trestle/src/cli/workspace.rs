@@ -5,11 +5,13 @@
 //! (its own host ports), a compose project name of its own and, with `--mesh`, a gateway on
 //! the network the members share (see [`WorkspaceManifest`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use clap::{Args, Subcommand};
+use olai_stack_runtime::{
+    ComposeEngine, DockerCli, DownOptions, Error as RuntimeError, UpOptions, remove_mesh_if_idle,
+};
 use olai_stack_topology::{
     EnvManifest, WORKSPACE_FILE, WorkspaceEnv, WorkspaceManifest, port_conflicts,
 };
@@ -110,15 +112,25 @@ pub struct DownArgs {
 }
 
 pub fn run(cmd: WorkspaceCommand) -> Result<()> {
+    let docker = DockerCli::new();
     match cmd {
         WorkspaceCommand::Init(args) => run_init(args),
         WorkspaceCommand::Add(args) => run_add(*args),
         WorkspaceCommand::Remove(args) => run_remove(args),
-        WorkspaceCommand::List(args) => run_list(args),
+        WorkspaceCommand::List(args) => block_on(run_list(&docker, args)),
         WorkspaceCommand::Render(args) => run_render(args),
-        WorkspaceCommand::Up(args) => run_up(args),
-        WorkspaceCommand::Down(args) => run_down(args),
+        WorkspaceCommand::Up(args) => block_on(run_up(&docker, args)),
+        WorkspaceCommand::Down(args) => block_on(run_down(&docker, args)),
     }
+}
+
+/// Drive one of the Docker-facing commands to completion on a single-threaded runtime.
+fn block_on(fut: impl std::future::Future<Output = Result<()>>) -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::other(format!("starting the async runtime: {e}")))?
+        .block_on(fut)
 }
 
 fn manifest_path(dir: &Path) -> PathBuf {
@@ -246,10 +258,10 @@ struct Row {
     status: Option<String>,
 }
 
-fn run_list(args: ListArgs) -> Result<()> {
+async fn run_list(engine: &dyn ComposeEngine, args: ListArgs) -> Result<()> {
     let dir = &args.dir.workspace;
     let workspace = read_workspace(dir)?;
-    let running = compose_projects();
+    let running = compose_projects(engine).await;
     let rows: Vec<Row> = workspace
         .envs
         .iter()
@@ -315,26 +327,15 @@ fn gateway_url(
 }
 
 /// Every Compose project Docker knows of, by name, with its status. Empty when Docker isn't
-/// available.
-fn compose_projects() -> BTreeMap<String, String> {
-    #[derive(serde::Deserialize)]
-    struct Project {
-        #[serde(rename = "Name")]
-        name: String,
-        #[serde(rename = "Status")]
-        status: String,
+/// available (or can't be asked), so a listing still shows every member as stopped.
+async fn compose_projects(engine: &dyn ComposeEngine) -> BTreeMap<String, String> {
+    match engine.ls().await {
+        Ok(projects) => projects.into_iter().map(|p| (p.name, p.status)).collect(),
+        Err(e) => {
+            tracing::debug!("listing compose projects: {e}");
+            BTreeMap::new()
+        }
     }
-    let Ok(out) = Command::new("docker")
-        .args(["compose", "ls", "--all", "--format", "json"])
-        .output()
-    else {
-        return BTreeMap::new();
-    };
-    serde_json::from_slice::<Vec<Project>>(&out.stdout)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| (p.name, p.status))
-        .collect()
 }
 
 fn run_render(args: DirArgs) -> Result<()> {
@@ -373,63 +374,92 @@ fn run_render(args: DirArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_up(args: LifecycleArgs) -> Result<()> {
-    compose_each(&args, &["up", "-d", "--wait"])
+/// What `up` or `down` does to each picked member.
+enum Lifecycle {
+    Up,
+    Down { volumes: bool },
 }
 
-fn run_down(args: DownArgs) -> Result<()> {
-    let mut compose = vec!["down"];
-    if args.volumes {
-        compose.push("--volumes");
+impl Lifecycle {
+    /// The compose command, as the progress line and an error show it.
+    fn command(&self) -> &'static str {
+        match self {
+            Lifecycle::Up => "up -d --wait",
+            Lifecycle::Down { volumes: false } => "down",
+            Lifecycle::Down { volumes: true } => "down --volumes",
+        }
     }
-    compose_each(&args.lifecycle, &compose)?;
+}
+
+async fn run_up(engine: &dyn ComposeEngine, args: LifecycleArgs) -> Result<()> {
+    compose_each(engine, &args, Lifecycle::Up).await
+}
+
+async fn run_down(engine: &dyn ComposeEngine, args: DownArgs) -> Result<()> {
+    let lifecycle = Lifecycle::Down {
+        volumes: args.volumes,
+    };
+    compose_each(engine, &args.lifecycle, lifecycle).await?;
     // Compose labels the mesh with the project that created it, so no member's `down` removes
     // it once another member has joined: drop it here when the last member stopped.
     let dir = &args.lifecycle.dir.workspace;
     let workspace = read_workspace(dir)?;
     if let Some(network) = workspace.mesh_network() {
-        let running = compose_projects();
-        if workspace
+        let members: BTreeSet<String> = workspace
             .envs
             .iter()
-            .all(|e| !running.contains_key(&workspace.project_name(e)))
+            .map(|e| workspace.project_name(e))
+            .collect();
+        if remove_mesh_if_idle(engine, &network, &members)
+            .await
+            .unwrap_or(false)
         {
-            let removed = Command::new("docker")
-                .args(["network", "rm", &network])
-                .output()
-                .is_ok_and(|o| o.status.success());
-            if removed {
-                println!("Removed the mesh network {network}");
-            }
+            println!("Removed the mesh network {network}");
         }
     }
     Ok(())
 }
 
-/// Run `docker compose <compose…>` in each picked member's directory, in order, stopping at
+/// Run `docker compose <lifecycle>` in each picked member's directory, in order, stopping at
 /// the first failure.
-fn compose_each(args: &LifecycleArgs, compose: &[&str]) -> Result<()> {
+async fn compose_each(
+    engine: &dyn ComposeEngine,
+    args: &LifecycleArgs,
+    lifecycle: Lifecycle,
+) -> Result<()> {
     let dir = &args.dir.workspace;
     let workspace = read_workspace(dir)?;
     for env in pick(&workspace, &args.envs)? {
         let env_dir = dir.join(&env.path);
-        println!("== {}: docker compose {}", env.name, compose.join(" "));
-        let status = Command::new("docker")
-            .arg("compose")
-            .args(compose)
-            .current_dir(&env_dir)
-            .status()
-            .map_err(|e| {
-                Error::other(format!("running docker compose: {e}"))
+        println!("== {}: docker compose {}", env.name, lifecycle.command());
+        let result = match lifecycle {
+            Lifecycle::Up => {
+                let opts = UpOptions {
+                    wait: true,
+                    ..UpOptions::default()
+                };
+                engine.up(&env_dir, &opts).await
+            }
+            Lifecycle::Down { volumes } => {
+                let opts = DownOptions {
+                    volumes,
+                    ..DownOptions::default()
+                };
+                engine.down(&env_dir, &opts).await
+            }
+        };
+        result.map_err(|e| match e {
+            RuntimeError::Unavailable { reason } => {
+                Error::other(format!("running docker compose: {reason}"))
                     .with_hint("install Docker with the Compose plugin")
-            })?;
-        if !status.success() {
-            return Err(Error::other(format!(
+            }
+            RuntimeError::Failed { .. } => Error::other(format!(
                 "`docker compose {}` failed for `{}`",
-                compose.join(" "),
+                lifecycle.command(),
                 env.name
-            )));
-        }
+            )),
+            e => Error::other(format!("running docker compose: {e}")),
+        })?;
     }
     Ok(())
 }
@@ -458,5 +488,91 @@ mod tests {
         env_manifest.catalog.manifests.clear();
         env_manifest.write_to(&dir.path().join("env.toml")).unwrap();
         assert_eq!(gateway_url(&workspace, &env, dir.path()), None);
+    }
+
+    /// A mesh workspace `demo` with members `dev` and `prod`, each with a head compose file
+    /// naming its project.
+    fn fake_workspace() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceManifest::new("demo", true).unwrap();
+        for name in ["dev", "prod"] {
+            let env = workspace.add_env(name).unwrap().clone();
+            let env_dir = dir.path().join(&env.path);
+            std::fs::create_dir_all(&env_dir).unwrap();
+            let project = workspace.project_name(&env);
+            std::fs::write(env_dir.join("compose.yaml"), format!("name: {project}\n")).unwrap();
+        }
+        write_workspace(dir.path(), &workspace).unwrap();
+        dir
+    }
+
+    fn lifecycle(dir: &Path, envs: &[&str]) -> LifecycleArgs {
+        LifecycleArgs {
+            dir: DirArgs {
+                workspace: dir.to_owned(),
+            },
+            envs: envs.iter().map(|e| e.to_string()).collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn up_and_down_drive_every_member_and_drop_the_idle_mesh() {
+        use olai_stack_runtime::{FakeCall, FakeEngine};
+        let dir = fake_workspace();
+        let engine = FakeEngine::new();
+        engine.add_network("trestle-demo-mesh");
+
+        run_up(&engine, lifecycle(dir.path(), &[])).await.unwrap();
+        assert_eq!(
+            engine.projects(),
+            ["demo-dev".to_owned(), "demo-prod".to_owned()].into()
+        );
+        let running = compose_projects(&engine).await;
+        assert_eq!(running["demo-prod"], "running(1)");
+
+        // Stopping one member keeps the mesh the other still uses.
+        let down = |envs: &[&str]| DownArgs {
+            lifecycle: lifecycle(dir.path(), envs),
+            volumes: true,
+        };
+        run_down(&engine, down(&["dev"])).await.unwrap();
+        assert!(engine.networks().contains("trestle-demo-mesh"));
+        run_down(&engine, down(&["prod"])).await.unwrap();
+        assert!(engine.networks().is_empty());
+        assert!(engine.calls().contains(&FakeCall::Down {
+            project: "demo-prod".into(),
+            volumes: true,
+        }));
+    }
+
+    #[tokio::test]
+    async fn a_failed_up_names_the_member_and_stops() {
+        use olai_stack_runtime::FakeEngine;
+        let dir = fake_workspace();
+        let engine = FakeEngine::new();
+        engine.fail_up("demo-dev");
+        let err = run_up(&engine, lifecycle(dir.path(), &[]))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("`docker compose up -d --wait` failed for `dev`"),
+            "{err}"
+        );
+        // `prod` comes after `dev`, so it never started.
+        assert_eq!(engine.projects(), ["demo-dev".to_owned()].into());
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_docker_lists_as_stopped_and_fails_up_with_a_hint() {
+        use olai_stack_runtime::FakeEngine;
+        let dir = fake_workspace();
+        let engine = FakeEngine::new();
+        engine.set_unavailable(true);
+        assert!(compose_projects(&engine).await.is_empty());
+        let err = run_up(&engine, lifecycle(dir.path(), &["prod"]))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("running docker compose"), "{err}");
     }
 }

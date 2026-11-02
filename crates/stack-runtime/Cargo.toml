@@ -1,0 +1,38 @@
+[package]
+name = "olai-stack-runtime"
+description = "Run trestle environments on Docker Compose: a ComposeEngine over the Docker CLI, status, health and events"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+
+[dependencies]
+# local crates (release-plz keeps versions in sync) (in alphabetical order)
+olai-stack-topology = { path = "../stack-topology", version = "0.0.12" }
+
+# workspace dependencies (in alphabetical order)
+async-trait = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[features]
+# `FakeEngine`: an in-memory `ComposeEngine` for tests of code that drives one.
+testing = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

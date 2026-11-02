@@ -8,6 +8,9 @@ Design records and deeper explanations for Trestle.
 - [Multiple environments](multi-env.md): running several environments side by
   side as a workspace (ports, project names, the gateway mesh), and the path to
   SPIFFE/SPIRE workload identity.
+- [Running environments](runtime.md): `olai-stack-runtime`'s Compose engine, what
+  the Docker engines print (captured as fixtures), and how credentials reach
+  Compose.
 - [Credential vending](credential-vending.md): protocol-neutral crates for vended
   storage credentials (model, client-side `object_store` integration, server-side
   minting), shared by Unity Catalog, Iceberg REST and Open Sharing. Accepted, with
@@ -26,5 +29,7 @@ Each crate also has its own README with usage detail:
   field-role enforcement.
 - [`olai-http`](../crates/olai-http/README.md): cloud credentials and the HTTP client.
 - [`olai-http-wasm`](../crates/olai-http-wasm/README.md): the browser/WASM transport.
+- [`olai-stack-runtime`](../crates/stack-runtime/README.md): running environments
+  on Docker Compose.
 - [`olai-trestle`](../crates/trestle/README.md): the CLI, covering scaffolding and
   template authoring.
