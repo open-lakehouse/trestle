@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.4...trestle-diagram-v0.6.0) - 2026-11-02
+
+### Added
+
+- [**breaking**] split runtime placement from the environment manifest (#284)
+
 ## [0.5.4](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.3...trestle-diagram-v0.5.4) - 2026-11-01
 
 ### Fixed

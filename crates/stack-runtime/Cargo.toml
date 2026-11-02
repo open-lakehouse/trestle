@@ -13,7 +13,7 @@ keywords.workspace = true
 [dependencies]
 # local crates (release-plz keeps versions in sync) (in alphabetical order)
 olai-stack-state = { path = "../stack-state", version = "0.0.1" }
-olai-stack-topology = { path = "../stack-topology", version = "0.0.12", features = [
+olai-stack-topology = { path = "../stack-topology", version = "0.0.13", features = [
     "std-io",
     "catalog",
 ] }

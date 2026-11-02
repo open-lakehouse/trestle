@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.20](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.19...olai-trestle-v0.0.20) - 2026-11-02
+
+### Added
+
+- extract compose orchestration into a library crate (#285)
+- [**breaking**] split runtime placement from the environment manifest (#284)
+
 ## [0.0.19](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.18...olai-trestle-v0.0.19) - 2026-11-01
 
 ### Fixed

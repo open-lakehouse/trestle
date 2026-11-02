@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.12...olai-stack-topology-v0.0.13) - 2026-11-02
+
+### Added
+
+- render without credentials on disk (#288)
+- [**breaking**] split runtime placement from the environment manifest (#284)
+
 ## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.11...olai-stack-topology-v0.0.12) - 2026-11-01
 
 ### Changed
