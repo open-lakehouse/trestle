@@ -1,0 +1,52 @@
+{
+  "branches": [
+    {
+      "id": "br-autumn-mouse-baubmqk8",
+      "project_id": "orange-truth-58809040",
+      "parent_id": "br-muddy-hill-baw66qsf",
+      "parent_lsn": "0/19C1730",
+      "parent_timestamp": "2026-11-02T22:36:33Z",
+      "name": "spike-a",
+      "slug": "br-autumn-mouse-baubmqk8",
+      "project_slug": "orange-truth-58809040",
+      "current_state": "ready",
+      "state_changed_at": "2026-11-02T22:36:59Z",
+      "creation_source": "console",
+      "primary": false,
+      "default": false,
+      "protected": false,
+      "cpu_used_sec": 0,
+      "compute_time_seconds": 0,
+      "active_time_seconds": 0,
+      "written_data_bytes": 0,
+      "data_transfer_bytes": 0,
+      "created_at": "2026-11-02T22:36:59Z",
+      "updated_at": "2026-11-02T22:37:00Z",
+      "ttl_interval_seconds": 10798,
+      "expires_at": "2026-11-03T01:36:57Z",
+      "created_by": {
+        "name": "<personal-5>",
+        "image": "<personal-1>"
+      },
+      "init_source": "parent-data"
+    }
+  ],
+  "annotations": {
+    "br-autumn-mouse-baubmqk8": {
+      "object": {
+        "type": "console/branch",
+        "id": "br-autumn-mouse-baubmqk8"
+      },
+      "value": {
+        "trestle.owner": "trestle",
+        "trestle.instance": "spike"
+      },
+      "created_at": "2026-11-02T22:36:59Z",
+      "updated_at": "2026-11-02T22:36:59Z"
+    }
+  },
+  "pagination": {
+    "sort_by": "updated_at",
+    "sort_order": "DESC"
+  }
+}

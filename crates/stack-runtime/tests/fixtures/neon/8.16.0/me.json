@@ -1,0 +1,29 @@
+{
+  "active_seconds_limit": 0,
+  "auth_accounts": [
+    {
+      "email": "<personal-3>",
+      "image": "<personal-1>",
+      "login": "<personal-4>",
+      "name": "<personal-5>",
+      "provider": "keycloak"
+    },
+    {
+      "email": "<personal-3>",
+      "image": "<personal-1>",
+      "login": "<personal-4>",
+      "name": "<personal-5>",
+      "provider": "google"
+    }
+  ],
+  "email": "<personal-3>",
+  "id": "<personal-2>",
+  "image": "<personal-1>",
+  "login": "<personal-4>",
+  "name": "<personal-5>",
+  "last_name": "<personal-6>",
+  "projects_limit": 0,
+  "branches_limit": 0,
+  "max_autoscaling_limit": 0,
+  "plan": "free"
+}

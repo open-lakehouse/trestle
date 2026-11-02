@@ -1,0 +1,12 @@
+[
+  {
+    "id": "org-aged-pond-53188553",
+    "name": "open-lakehouse",
+    "handle": "open-lakehouse-org-aged-pond-53188553",
+    "plan": "scale",
+    "created_at": "2026-07-22T20:41:42Z",
+    "managed_by": "console",
+    "updated_at": "2026-07-31T11:57:52Z",
+    "require_mfa": false
+  }
+]

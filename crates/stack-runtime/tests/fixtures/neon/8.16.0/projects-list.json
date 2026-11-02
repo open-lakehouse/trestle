@@ -1,0 +1,48 @@
+[
+  {
+    "id": "orange-truth-58809040",
+    "platform_id": "aws",
+    "region_id": "aws-eu-central-1",
+    "name": "trestle-spike",
+    "provisioner": "k8s-neonvm",
+    "default_endpoint_settings": {
+      "autoscaling_limit_min_cu": 1,
+      "autoscaling_limit_max_cu": 1,
+      "suspend_timeout_seconds": 0
+    },
+    "settings": {
+      "allowed_ips": {
+        "ips": [],
+        "protected_branches_only": false
+      },
+      "enable_logical_replication": false,
+      "maintenance_window": {
+        "weekdays": [
+          6
+        ],
+        "start_time": "02:00",
+        "end_time": "03:00"
+      },
+      "block_public_connections": false,
+      "block_vpc_connections": false,
+      "hipaa": false
+    },
+    "pg_version": 18,
+    "proxy_host": "c-8.eu-central-1.aws.neon.tech",
+    "branch_logical_size_limit": 16777216,
+    "branch_logical_size_limit_bytes": 17592186044416,
+    "store_passwords": true,
+    "active_time": 368,
+    "cpu_used_sec": 0,
+    "creation_source": "neonctl",
+    "created_at": "2026-11-02T22:36:30Z",
+    "updated_at": "2026-11-02T22:43:31Z",
+    "synthetic_storage_size": 0,
+    "quota_reset_at": "2026-12-01T00:00:00Z",
+    "owner_id": "org-aged-pond-53188553",
+    "compute_last_active_at": "2026-11-02T22:43:22Z",
+    "org_id": "org-aged-pond-53188553",
+    "history_retention_seconds": 86400,
+    "effective_project_permission": "ADMIN"
+  }
+]

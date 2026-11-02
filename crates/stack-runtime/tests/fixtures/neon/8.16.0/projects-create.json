@@ -1,0 +1,52 @@
+{
+  "project": {
+    "data_storage_bytes_hour": 0,
+    "data_transfer_bytes": 0,
+    "written_data_bytes": 0,
+    "compute_time_seconds": 0,
+    "active_time_seconds": 0,
+    "cpu_used_sec": 0,
+    "id": "orange-truth-58809040",
+    "platform_id": "aws",
+    "region_id": "aws-eu-central-1",
+    "name": "trestle-spike",
+    "slug": "orange-truth-58809040",
+    "provisioner": "k8s-neonvm",
+    "default_endpoint_settings": {
+      "autoscaling_limit_min_cu": 1,
+      "autoscaling_limit_max_cu": 1,
+      "suspend_timeout_seconds": 0
+    },
+    "settings": {
+      "allowed_ips": {
+        "ips": [],
+        "protected_branches_only": false
+      },
+      "enable_logical_replication": false,
+      "maintenance_window": {
+        "weekdays": [
+          6
+        ],
+        "start_time": "02:00",
+        "end_time": "03:00"
+      },
+      "block_public_connections": false,
+      "block_vpc_connections": false,
+      "hipaa": false
+    },
+    "pg_version": 18,
+    "proxy_host": "c-8.eu-central-1.aws.neon.tech",
+    "branch_logical_size_limit": 16777216,
+    "branch_logical_size_limit_bytes": 17592186044416,
+    "store_passwords": true,
+    "creation_source": "neonctl",
+    "history_retention_seconds": 86400,
+    "created_at": "2026-11-02T22:36:30Z",
+    "updated_at": "2026-11-02T22:36:30Z",
+    "synthetic_storage_size": 0,
+    "consumption_period_start": "0001-01-01T00:00:00Z",
+    "consumption_period_end": "0001-01-01T00:00:00Z",
+    "owner_id": "org-aged-pond-53188553",
+    "org_id": "org-aged-pond-53188553"
+  }
+}

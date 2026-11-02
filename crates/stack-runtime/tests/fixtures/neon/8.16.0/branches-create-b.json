@@ -1,0 +1,83 @@
+{
+  "branch": {
+    "id": "br-frosty-surf-banrys2q",
+    "project_id": "orange-truth-58809040",
+    "parent_id": "br-muddy-hill-baw66qsf",
+    "parent_lsn": "0/1B54488",
+    "name": "spike-b",
+    "slug": "br-frosty-surf-banrys2q",
+    "project_slug": "orange-truth-58809040",
+    "current_state": "init",
+    "pending_state": "ready",
+    "state_changed_at": "2026-11-02T22:43:17Z",
+    "creation_source": "console",
+    "primary": false,
+    "default": false,
+    "protected": false,
+    "cpu_used_sec": 0,
+    "compute_time_seconds": 0,
+    "active_time_seconds": 0,
+    "written_data_bytes": 0,
+    "data_transfer_bytes": 0,
+    "created_at": "2026-11-02T22:43:17Z",
+    "updated_at": "2026-11-02T22:43:17Z",
+    "ttl_interval_seconds": 10798,
+    "expires_at": "2026-11-03T01:43:15Z",
+    "created_by": {
+      "name": "<personal-5>",
+      "image": "<personal-1>"
+    },
+    "init_source": "parent-data"
+  },
+  "endpoints": [
+    {
+      "host": "ep-holy-hill-ba85c4dl.c-8.eu-central-1.aws.neon.tech",
+      "hosts": {
+        "read_write_host": "ep-holy-hill-ba85c4dl.c-8.eu-central-1.aws.neon.tech",
+        "read_write_pooled_host": "ep-holy-hill-ba85c4dl-pooler.c-8.eu-central-1.aws.neon.tech"
+      },
+      "id": "ep-holy-hill-ba85c4dl",
+      "slug": "ep-holy-hill-ba85c4dl",
+      "branch_slug": "br-frosty-surf-banrys2q",
+      "project_slug": "orange-truth-58809040",
+      "project_id": "orange-truth-58809040",
+      "branch_id": "br-frosty-surf-banrys2q",
+      "autoscaling_limit_min_cu": 1,
+      "autoscaling_limit_max_cu": 1,
+      "region_id": "aws-eu-central-1",
+      "type": "read_write",
+      "current_state": "init",
+      "pending_state": "active",
+      "group": {
+        "size": {
+          "min": 1,
+          "max": 1
+        },
+        "allow_readable_secondaries": false,
+        "computes": [
+          {
+            "binding_id": "j14",
+            "current_state": "init",
+            "pending_state": "active",
+            "role": "read_write",
+            "compute_host": "ep-holy-hill-ba85c4dl-j14.c-8.eu-central-1.aws.neon.tech",
+            "compute_pooled_host": "ep-holy-hill-ba85c4dl-j14-pooler.c-8.eu-central-1.aws.neon.tech",
+            "created_at": "2026-11-02T22:43:17Z",
+            "updated_at": "2026-11-02T22:43:17Z"
+          }
+        ]
+      },
+      "settings": {},
+      "pooler_enabled": false,
+      "pooler_mode": "transaction",
+      "disabled": false,
+      "passwordless_access": true,
+      "creation_source": "console",
+      "created_at": "2026-11-02T22:43:17Z",
+      "updated_at": "2026-11-02T22:43:17Z",
+      "proxy_host": "c-8.eu-central-1.aws.neon.tech",
+      "suspend_timeout_seconds": 0,
+      "provisioner": "k8s-neonvm"
+    }
+  ]
+}

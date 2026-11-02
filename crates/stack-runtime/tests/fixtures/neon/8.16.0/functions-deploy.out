@@ -1,0 +1,10 @@
+Function deployment triggered for function spikefn.
+{
+  "id": 1,
+  "status": "completed",
+  "memory_mib": 2048,
+  "runtime": "nodejs24",
+  "created_at": "2026-11-02T22:42:49.710362Z",
+  "invocation_url": "https://br-muddy-hill-baw66qsf-spikefn.compute.c-8.eu-central-1.aws.neon.tech/"
+}
+Function deployment spikefn/1 completed.

@@ -1,0 +1,62 @@
+[
+  {
+    "id": "basic",
+    "title": "Basic function",
+    "provider": "Neon",
+    "description": "A minimal Neon Function with a JSON response."
+  },
+  {
+    "id": "context-dev",
+    "title": "Context.dev web data",
+    "provider": "Context.dev",
+    "description": "Search the web and news, read pages, answer questions, and retrieve brand data with Context.dev."
+  },
+  {
+    "id": "image-analysis",
+    "title": "Image analysis with AI Gateway",
+    "provider": "Neon",
+    "description": "Describe an uploaded image with structured details using a vision model on Neon AI Gateway."
+  },
+  {
+    "id": "mcp-postgres",
+    "title": "MCP server backed by Postgres",
+    "provider": "Neon",
+    "description": "A Hono MCP server exposing create, list, update, and delete tools backed by a Postgres database."
+  },
+  {
+    "id": "telegram-bot",
+    "title": "Telegram AI chat bot",
+    "provider": "Telegram",
+    "description": "Telegram bot with Neon Functions, AI Gateway, and Postgres for message storage."
+  },
+  {
+    "id": "rest-api-postgres",
+    "title": "REST API with Hono and Postgres",
+    "provider": "Neon",
+    "description": "A CRUD REST API on Neon Functions with Hono, backed by Lakebase Postgres."
+  },
+  {
+    "id": "image-generation",
+    "title": "AI image generation API",
+    "provider": "Neon",
+    "description": "Generate an image with AI Gateway, store it in Object Storage, and return a presigned URL."
+  },
+  {
+    "id": "authenticated-api",
+    "title": "Authenticated API with Hono and Managed Better Auth",
+    "provider": "Neon",
+    "description": "A protected Hono API that validates the caller's identity and gates access."
+  },
+  {
+    "id": "tanstack-ai",
+    "title": "TanStack AI on AI Gateway",
+    "provider": "TanStack",
+    "description": "Streaming chat with tool calling, structured extraction, and summaries with TanStack AI on Neon AI Gateway."
+  },
+  {
+    "id": "mastra",
+    "title": "Mastra agent with Postgres memory",
+    "provider": "Mastra",
+    "description": "A Mastra agent that remembers users in Neon Postgres, streams chat for useChat on AI Gateway, and runs a resumable human-in-the-loop review workflow."
+  }
+]

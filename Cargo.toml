@@ -121,7 +121,11 @@ default.extend-ignore-re = [
   "(?s)(#|//|<\\!--)\\s*spellchecker:off.*?\\n\\s*(#|//|<\\!--)\\s*spellchecker:on",
   "(?Rm)^.*(#|//)\\s*spellchecker:disable-line$",
 ]
-files.extend-exclude = ["crates/olai-codegen/src/gen/**/*"]
+files.extend-exclude = [
+  "crates/olai-codegen/src/gen/**/*",
+  # Captured CLI output: random resource ids (Neon's `br-…`, `ep-…`) aren't words.
+  "crates/stack-runtime/tests/fixtures/neon/**/*",
+]
 
 [workspace.metadata.typos.default.extend-words]
 typ = "typ"

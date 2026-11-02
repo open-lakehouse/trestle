@@ -15,6 +15,9 @@ Design records and deeper explanations for Trestle.
   storage credentials (model, client-side `object_store` integration, server-side
   minting), shared by Unity Catalog, Iceberg REST and Open Sharing. Accepted, with
   most phases landed.
+- [Neon from trestle](neon.md): what the `neon` CLI prints and does for branches,
+  Postgres, object storage and functions (the WP2 spike), behind the Neon branch
+  source.
 - [crates.io proxy delay](crates-proxy.md): building the sibling repos against a
   fresh trestle or mangrove release while the proxy still hides it, with the
   `scripts/crates-proxy/` tooling.

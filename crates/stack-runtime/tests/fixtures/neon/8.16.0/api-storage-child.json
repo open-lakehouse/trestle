@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "s3_endpoint": "https://br-frosty-surf-banrys2q.storage.c-8.eu-central-1.aws.neon.tech",
+  "region": "eu-central-1",
+  "force_path_style": true
+}
