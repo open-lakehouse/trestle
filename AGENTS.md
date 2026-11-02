@@ -24,6 +24,8 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
   `crates/olai-credential-vending/`: storage credential vending (model,
   client-side `object_store` integration, server-side minting; see
   [`docs/credential-vending.md`](docs/credential-vending.md))
+- `crates/olai-auth/`: bearer-token authentication for axum services (EdDSA JWT
+  verification, JWKS key sources, `Principal` extractor, `auth_layer`)
 - `crates/stack-topology/` (`olai-stack-topology`): environment planner and
   renderer behind `trestle env` · `crates/stack-topology-wasm/`: its wasm build
   for the web UI

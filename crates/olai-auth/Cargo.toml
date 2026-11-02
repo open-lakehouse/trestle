@@ -1,0 +1,51 @@
+[package]
+name = "olai-auth"
+description = "Bearer-token authentication for axum services: EdDSA JWT verification and a Principal extractor"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+
+[dependencies]
+# workspace dependencies (in alphabetical order)
+async-trait = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Only the async mutex that keeps key refreshes single-flight.
+tokio = { workspace = true, features = ["sync"] }
+
+# crates.io dependencies (in alphabetical order)
+# No default features: the json, form, query and serve features are not needed, so the
+# hosts decide what else of axum they link.
+axum = { version = "0.8", default-features = false }
+# Verification only. The default `fast` and `zeroize` features are kept; `rand_core` is not
+# needed because this crate never generates keys.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast", "zeroize"] }
+# Only the `http` feature's JWKS fetch. rustls without the workspace's http2/json/stream
+# extras, to keep the client small.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
+# Without the workspace's `log` bridge.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+mockito = "1.4"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[features]
+# `HttpKeySource`: fetch a JWKS document over HTTPS. Hosts that receive the keys some other
+# way (see `PushKeySource`) leave it off and link no HTTP client.
+http = ["dep:reqwest"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
