@@ -1,8 +1,8 @@
 # Running environments: `olai-stack-runtime`
 
-Status: the engine (this page's first half) has landed and `trestle workspace
-up/down/list` runs on it. Instances, the layered environment and secret providers
-(open-lakehouse/trestle#271) build on the secret-handling decision below.
+Status: the engine, the state store, and instances with the layered environment
+and secret providers have landed. `trestle workspace up/down/list` runs on the
+engine. The CLI moves onto the store and instances in WP2 (#272).
 
 `olai-stack-topology` plans and renders an environment and never touches Docker.
 `olai-stack-runtime` is the part that runs it, shared by the `trestle` CLI and
@@ -146,11 +146,14 @@ three kinds:
    `server.properties` / `hibernate.properties`;
 3. the root **`.env`**, which Compose reads for `${VAR}` interpolation.
 
-Planning with `PlanCtx::secrets = None`, which keeps the hosted `${VAR}`
-references verbatim, works for kinds 1 and 3. Tested on Colima, Compose
-interpolates `${VAR}` inside `env_file` contents from its process environment.
-It fails for kind 2: the references land literally in `server.properties`,
-which Unity Catalog reads as is.
+Planning with `PlanCtx::secrets = None` keeps the hosted `${VAR}` references
+verbatim, and that only goes so far:
+
+- Compose interpolates `${VAR}` inside `env_file` contents from its process
+  environment (tested on Colima). trestle's fragments read their env files with
+  `format: raw`, though, which turns interpolation off.
+- Kind 2 doesn't work at all: the references land literally in
+  `server.properties`, which Unity Catalog reads as is.
 
 ## Decision: credentials reach Compose as process environment only
 
@@ -159,8 +162,10 @@ Some`), as today. Materialization then has a mode in which no sensitive value is
 written:
 
 - **`env_file`s**: each `KEY=value` line of a sensitive env file is written as
-  `KEY=${VAR}`, and `VAR=value` goes into the launch environment. Verified:
-  Compose interpolates env-file contents.
+  `KEY=${VAR}`, and `VAR=value` goes into the launch environment. The fragments
+  referencing the file drop its `format: raw`. Every value is now a reference,
+  so the raw format has nothing left to protect, and Compose has to interpolate
+  the file. Verified: Compose interpolates env-file contents.
 - **Compose secrets**: `file: ./modules/<m>/secrets/<name>` becomes
   `environment: VAR`, the file isn't written, and its whole contents go into the
   launch environment. Verified: Compose's `secrets: <name>: environment: VAR`
@@ -168,9 +173,84 @@ written:
 - **The root `.env`** is not written. Its values go into the launch environment
   directly, where Compose's interpolation finds them first anyway.
 
-The rule is generic over the three kinds above and needs no change per module.
-The rendered tree (a cache under `<state>/instances/<id>/`) holds only `${VAR}`
-references. The runtime passes the values in `UpOptions::env`, and a sentinel test
-in #271 checks that no value appears anywhere in the tree. `trestle env render`
-keeps writing ordinary env directories (sensitive files git-ignored) for users who
-run `docker compose up` themselves.
+This is `MaterializedOutput::into_launch_env` in `olai-stack-topology`. The rule
+is generic over the three kinds above and needs no change per module. Any other
+sensitive file is an error, not something left behind. The rendered tree (a cache
+under `<state>/instances/<id>/`) holds only `${VAR}` references, and the runtime
+passes the values in `UpOptions::env`. Two sentinel tests check that no value
+appears anywhere in the tree: every baseline module with sentinel credentials,
+and a hosted plan. Instances are tested the same way, under `FakeEngine` and
+against real Docker. `trestle env render` keeps writing ordinary env directories
+(sensitive files git-ignored) for users who run `docker compose up` themselves.
+
+## Instances
+
+`Instances` runs the store's instances on an engine. Each instance runs one
+revision, so two revisions of one environment run side by side:
+
+| | Value | Why |
+|---|---|---|
+| Compose project | `<workspace>_<env>_r<n>` | Trestle names can't contain `_`, so the name parses back to its parts, and reconcile tells instance projects from any other. |
+| Host label | `<workspace>-<env>-r<n>` | Its own `*.localhost` sign-in cookie. |
+| Slot | leased from the store, host-wide | Its own host ports. |
+| Mesh | `trestle-<workspace>-mesh` when the workspace has one | |
+
+`start` does the following:
+1. Leases the instance a slot.
+2. Refuses a second running instance of the same revision, since the two would
+   share a project.
+3. Renders the revision afresh into `<state>/instances/<id>/` (mode 0700) and
+   checks the plan's host ports.
+4. Records the instance as wanted running and runs `up --wait` with the launch
+   environment.
+
+`stop` runs `down` and keeps the slot. `remove` also drops the tree and
+releases the slot. `health` and `events` follow the engine. `reconcile`, run on
+startup, adopts running instance projects, marks instances whose project is
+gone as stopped, and reports, or takes down, instance-shaped projects that the
+store doesn't know.
+
+### The layered environment
+
+`EffectiveEnv` resolves an instance's variables from these layers, lowest
+precedence first:
+
+1. catalog defaults: the in-stack development credentials (`LOCAL_*`)
+2. the revision manifest: the plan's injected variables
+3. placement: `COMPOSE_PROJECT_NAME`, `TRESTLE_INSTANCE`, `TRESTLE_SLOT` and
+   `TRESTLE_HOST_LABEL`, which no layer can override
+4. the plan's client environment
+5. workspace vars
+6. environment vars
+7. revision vars
+8. source overlays, in the order the instance names them
+9. instance overrides
+
+Secret references resolve last, once every layer has had its say. Each variable
+keeps its provenance and the layers it overrode, and `masked()` is the view for
+a UI. A key that any layer holds as a secret stays masked, even where a higher
+layer sets it as a plain literal. The same is true of a plan variable that carries
+a resolved credential under a key of its own. The resolution also feeds the
+launch: the instance plans with these values as `PlanCtx::secrets` and
+`LOCAL_*` credentials, and Compose gets them as process environment.
+
+Planning needs the credentials, and the plan contributes layers 2 and 4. So the
+runtime resolves twice: first without the plan's layers, to plan, and then with
+them.
+
+### Secret providers and sources
+
+A `SecretRef { provider, key }` resolves through a `SecretProvider`:
+
+- `EnvProvider` (`env`) reads the process environment.
+- `KeychainProvider` (`keychain`, feature `keychain`) reads the OS credential
+  store: macOS Keychain, Windows Credential Manager, or the Linux kernel keyring.
+
+A reference to a provider that isn't configured is an error. Nothing falls back
+to another provider.
+
+A `Source` overlays an instance with variables, endpoints and credentials from
+outside the store, such as a Neon branch (#274). Its credentials may expire
+(`Overlay::expires_at`), and an expired overlay is refreshed before use.
+`UserVars` (`user`) is built in. An instance that names a source nobody
+configured fails to start.

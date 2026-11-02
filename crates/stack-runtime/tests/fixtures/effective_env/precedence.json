@@ -1,0 +1,133 @@
+{
+  "COMPOSE_PROJECT_NAME": {
+    "value": "demo_dev_r1",
+    "secret": false,
+    "provenance": {
+      "layer": "placement"
+    },
+    "shadowed": [
+      {
+        "layer": "workspace_vars"
+      },
+      {
+        "layer": "instance_overrides"
+      }
+    ]
+  },
+  "DATA_ROOT": {
+    "value": "./.data",
+    "secret": false,
+    "provenance": {
+      "layer": "revision_manifest"
+    }
+  },
+  "FEATURE": {
+    "value": "on",
+    "secret": false,
+    "provenance": {
+      "layer": "revision_vars"
+    }
+  },
+  "GATEWAY_URL": {
+    "value": "http://localhost:10080",
+    "secret": false,
+    "provenance": {
+      "layer": "client_env"
+    }
+  },
+  "LEVEL": {
+    "value": "instance",
+    "secret": false,
+    "provenance": {
+      "layer": "instance_overrides"
+    },
+    "shadowed": [
+      {
+        "layer": "catalog_defaults"
+      },
+      {
+        "layer": "revision_manifest"
+      },
+      {
+        "layer": "client_env"
+      },
+      {
+        "layer": "workspace_vars"
+      },
+      {
+        "layer": "environment_vars"
+      },
+      {
+        "layer": "revision_vars"
+      },
+      {
+        "layer": "source",
+        "name": "neon"
+      },
+      {
+        "layer": "source",
+        "name": "user"
+      }
+    ]
+  },
+  "LOCAL_POSTGRES_PASSWORD": {
+    "value": "••••••",
+    "secret": true,
+    "provenance": {
+      "layer": "workspace_vars"
+    },
+    "shadowed": [
+      {
+        "layer": "catalog_defaults"
+      }
+    ]
+  },
+  "LOCAL_RUSTFS_SECRET_KEY": {
+    "value": "••••••",
+    "secret": true,
+    "provenance": {
+      "layer": "instance_overrides"
+    },
+    "shadowed": [
+      {
+        "layer": "catalog_defaults"
+      }
+    ]
+  },
+  "PGPASSWORD": {
+    "value": "••••••",
+    "secret": true,
+    "provenance": {
+      "layer": "source",
+      "name": "neon"
+    }
+  },
+  "REGION": {
+    "value": "eu-west-1",
+    "secret": false,
+    "provenance": {
+      "layer": "environment_vars"
+    }
+  },
+  "TRESTLE_SLOT": {
+    "value": "1",
+    "secret": false,
+    "provenance": {
+      "layer": "placement"
+    }
+  },
+  "UC_URL": {
+    "value": "http://localhost:8080",
+    "secret": false,
+    "provenance": {
+      "layer": "source",
+      "name": "user"
+    },
+    "shadowed": [
+      {
+        "layer": "source",
+        "name": "neon"
+      }
+    ]
+  }
+}

@@ -12,7 +12,11 @@ keywords.workspace = true
 
 [dependencies]
 # local crates (release-plz keeps versions in sync) (in alphabetical order)
-olai-stack-topology = { path = "../stack-topology", version = "0.0.12" }
+olai-stack-state = { path = "../stack-state", version = "0.0.1" }
+olai-stack-topology = { path = "../stack-topology", version = "0.0.12", features = [
+    "std-io",
+    "catalog",
+] }
 
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
@@ -22,11 +26,22 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync"] }
 
+# crates.io dependencies (in alphabetical order)
+# The OS credential store (macOS Keychain, Windows Credential Manager, the Linux kernel
+# keyring), behind `keychain`. Native backends only: no D-Bus secret service.
+keyring = { version = "3.6", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "linux-native",
+], optional = true }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
+# `KeychainProvider`: secrets in the OS credential store.
+keychain = ["dep:keyring"]
 # `FakeEngine`: an in-memory `ComposeEngine` for tests of code that drives one.
 testing = []
 

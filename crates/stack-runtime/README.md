@@ -16,6 +16,21 @@ stops and watches it. The `trestle` CLI and the desktop app share it.
 - **`managed_projects`, `remove_mesh_if_idle`**: match what Docker runs against
   what the caller manages.
 
+- **`Instances`**: runs the revisions in an `olai-stack-state` store, each in its own
+  compose project, slot and host label, so two revisions of one environment run side by
+  side.
+  - It starts, stops and removes instances, reports their health and events, and
+    reconciles with Docker after a restart.
+  - The rendered tree is a cache under the state directory and holds no credential.
+- **`EffectiveEnv`**: an instance's variables from every layer (catalog defaults,
+  revision, placement, client env, workspace/environment/revision vars, source
+  overlays, instance overrides), with provenance and a masked view.
+- **`SecretProvider`**: `EnvProvider`, plus `KeychainProvider` behind feature
+  `keychain`. A reference to a provider that isn't configured is an error, never a
+  fallback.
+- **`Source`**: overlays of variables, endpoints and expiring credentials from outside
+  the store. `UserVars` is built in.
+
 Credentials go to Compose as process environment (`UpOptions::env`), never through a
 file.
 

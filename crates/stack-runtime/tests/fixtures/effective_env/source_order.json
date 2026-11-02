@@ -1,0 +1,16 @@
+{
+  "WHO": {
+    "value": "alpha",
+    "secret": false,
+    "provenance": {
+      "layer": "source",
+      "name": "alpha"
+    },
+    "shadowed": [
+      {
+        "layer": "source",
+        "name": "zeta"
+      }
+    ]
+  }
+}

@@ -40,6 +40,8 @@ pub enum FakeCall {
 #[derive(Default)]
 struct Inner {
     projects: BTreeMap<String, Vec<ServiceStatus>>,
+    /// The directory each project was started from, as Compose reports its config files.
+    dirs: BTreeMap<String, PathBuf>,
     /// The services (and their health once up) a project gets, set by the test.
     scripts: BTreeMap<String, Vec<(String, Health)>>,
     fail_up: BTreeSet<String>,
@@ -252,6 +254,7 @@ impl ComposeEngine for FakeEngine {
         self.lock()
             .projects
             .insert(project.clone(), services.clone());
+        self.lock().dirs.insert(project.clone(), dir.to_owned());
         self.emit(
             &project,
             &services,
@@ -275,6 +278,7 @@ impl ComposeEngine for FakeEngine {
             volumes: opts.volumes,
         });
         let removed = self.lock().projects.remove(&project);
+        self.lock().dirs.remove(&project);
         if let Some(services) = removed {
             self.emit(
                 &project,
@@ -291,8 +295,8 @@ impl ComposeEngine for FakeEngine {
 
     async fn ls(&self) -> Result<Vec<ProjectStatus>> {
         self.check_available()?;
-        Ok(self
-            .lock()
+        let inner = self.lock();
+        Ok(inner
             .projects
             .iter()
             .map(|(name, services)| {
@@ -314,7 +318,11 @@ impl ComposeEngine for FakeEngine {
                     name: name.clone(),
                     status,
                     states,
-                    config_files: String::new(),
+                    config_files: inner
+                        .dirs
+                        .get(name)
+                        .map(|d| d.join("compose.yaml").display().to_string())
+                        .unwrap_or_default(),
                 }
             })
             .collect())

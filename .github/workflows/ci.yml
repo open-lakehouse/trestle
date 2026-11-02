@@ -53,7 +53,7 @@ jobs:
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
-      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
       - run: cargo clippy --locked --all-targets -p olai-vended-store --no-default-features -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-vended-store --all-features -- -D warnings

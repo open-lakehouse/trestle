@@ -12,6 +12,10 @@
 //! - [`probe_host_ports`]: whether a plan's host ports are free before starting it.
 //! - [`managed_projects`] and [`remove_mesh_if_idle`]: matching what Docker runs against what
 //!   the caller manages.
+//! - [`Instances`]: runs the revisions of an [`olai_stack_state::Store`] as compose projects,
+//!   side by side, with the layered [`EffectiveEnv`] injected and credentials resolved by
+//!   [`SecretProvider`]s ([`EnvProvider`], and `KeychainProvider` behind feature `keychain`) and
+//!   [`Source`] overlays.
 //!
 //! Values that must not reach a file (credentials) go to Compose as process environment only:
 //! every lifecycle call takes the variables to add ([`UpOptions::env`]).
@@ -33,17 +37,24 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod docker;
+mod effective;
 mod engine;
 mod error;
 mod events;
 #[cfg(feature = "testing")]
 mod fake;
+mod instances;
 mod logs;
 mod ports;
 mod reconcile;
+mod secrets;
+mod source;
 mod status;
 
 pub use docker::DockerCli;
+pub use effective::{
+    EffectiveEnv, EnvLayers, EnvValue, Layer, LayerValue, MASK, MaskedVar, Resolved,
+};
 pub use engine::{ComposeEngine, DownOptions, EngineStream, LogOptions, Progress, UpOptions};
 pub use error::{Error, Result};
 pub use events::{
@@ -52,7 +63,16 @@ pub use events::{
 #[cfg(feature = "testing")]
 #[cfg_attr(docsrs, doc(cfg(feature = "testing")))]
 pub use fake::{FakeCall, FakeEngine};
+pub use instances::{
+    INSTANCES_DIR, InstanceError, InstanceEvent, Instances, Materialized, PLACEMENT_KEYS,
+    ReconcileOptions, Reconciled, instance_project, parse_instance_project,
+};
 pub use logs::{LogLine, parse_log_line};
 pub use ports::{BusyPort, is_free, probe_host_ports};
 pub use reconcile::{ProjectMatch, managed_projects, remove_mesh_if_idle};
+#[cfg(feature = "keychain")]
+#[cfg_attr(docsrs, doc(cfg(feature = "keychain")))]
+pub use secrets::KeychainProvider;
+pub use secrets::{EnvProvider, SecretError, SecretProvider, SecretProviders, SecretValue};
+pub use source::{Overlay, Source, SourceCtx, SourceError, UserVars};
 pub use status::{Health, ProjectStatus, Published, ServiceStatus, State, parse_ls, parse_ps};
