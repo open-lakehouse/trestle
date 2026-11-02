@@ -1,0 +1,32 @@
+# A tiny project for capturing what the Docker CLI prints (see capture.sh): one healthy
+# service, one that never turns healthy (behind the `bad` profile), and one without a
+# healthcheck that logs a line a second.
+name: ${CAPTURE_PROJECT:-trestle-capture}
+
+services:
+  web:
+    image: python:3.13-alpine
+    command: ["python", "-m", "http.server", "8000"]
+    ports:
+      - "127.0.0.1:${CAPTURE_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000')"]
+      interval: 1s
+      timeout: 2s
+      retries: 10
+      start_period: 1s
+
+  ticker:
+    image: python:3.13-alpine
+    command: ["sh", "-c", "i=0; while true; do i=$$((i+1)); echo tick $$i; sleep 1; done"]
+
+  broken:
+    image: python:3.13-alpine
+    profiles: ["bad"]
+    command: ["sleep", "3600"]
+    healthcheck:
+      test: ["CMD", "false"]
+      interval: 1s
+      timeout: 1s
+      retries: 2
+      start_period: 0s

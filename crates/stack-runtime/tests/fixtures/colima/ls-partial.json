@@ -1,0 +1,7 @@
+[
+  {
+    "Name": "trestle-capture",
+    "Status": "exited(1), running(2)",
+    "ConfigFiles": "/capture/compose.yaml"
+  }
+]
