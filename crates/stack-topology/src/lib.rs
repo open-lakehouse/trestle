@@ -122,6 +122,7 @@ pub use render::deploy::{
     SECRETS_ENV_PATH, render_readme, render_steps,
 };
 pub use render::envoy::render_envoy;
+pub use render::launch_env::{LaunchEnv, LaunchEnvError};
 pub use render::output::{
     CLIENT_CONTAINER_ENV_PATH, CLIENT_HOST_ENV_PATH, MaterializedOutput, OutputFile,
 };

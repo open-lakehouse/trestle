@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 pub mod compose;
 pub mod deploy;
 pub mod envoy;
+pub mod launch_env;
 pub mod output;
 pub mod python_client;
 
