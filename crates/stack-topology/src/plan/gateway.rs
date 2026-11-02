@@ -293,10 +293,10 @@ pub struct GatewayConfig {
 /// [`internal_host`](Self::internal_host) network alias.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SecureOrigin {
-    /// The host-side hostname, `<env>.localhost`: browsers and most clients resolve every
+    /// The host-side hostname, `<label>.localhost`: browsers and most clients resolve every
     /// `*.localhost` name to the loopback address, so it needs no `/etc/hosts` entry.
     pub public_host: String,
-    /// The in-network alias, `<env>.internal`. Not a `*.localhost` name, because some clients
+    /// The in-network alias, `<label>.internal`. Not a `*.localhost` name, because some clients
     /// (curl among them) resolve those to loopback without asking DNS.
     pub internal_host: String,
     /// Where the CA and the listener's certificate live.
@@ -306,9 +306,10 @@ pub struct SecureOrigin {
 }
 
 impl SecureOrigin {
-    /// The secure origin for an environment named `env_name`.
-    pub(super) fn for_env(env_name: &str) -> Self {
-        let label = dns_label(env_name);
+    /// The secure origin for an environment whose hostnames carry `host_label` (see
+    /// [`PlanCtx::host_label`](crate::PlanCtx::host_label)).
+    pub(super) fn for_label(host_label: &str) -> Self {
+        let label = dns_label(host_label);
         SecureOrigin {
             public_host: format!("{label}.localhost"),
             internal_host: format!("{label}.internal"),
@@ -709,8 +710,8 @@ mod tests {
     }
 
     #[test]
-    fn secure_origin_hosts_follow_the_env_name() {
-        let origin = SecureOrigin::for_env("demo");
+    fn secure_origin_hosts_follow_the_host_label() {
+        let origin = SecureOrigin::for_label("demo");
         assert_eq!(origin.public_host, "demo.localhost");
         assert_eq!(origin.internal_host, "demo.internal");
         assert_eq!(origin.mint_service, GATEWAY_CERTS_SERVICE);

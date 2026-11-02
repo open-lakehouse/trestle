@@ -297,15 +297,24 @@ pub struct AppUpstream {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanCtx {
     /// The environment name: the compose project name (the head file's `name:`) unless
-    /// [`project_name`](Self::project_name) overrides it, and the label of the env's
-    /// hostnames (`<env>.localhost`, `<env>.internal`).
+    /// [`project_name`](Self::project_name) overrides it, the label of the env's hostnames
+    /// unless [`host_label`](Self::host_label) overrides it, and the name hosted resources
+    /// are created under.
     #[serde(default = "PlanCtx::default_env_name")]
     pub env_name: String,
-    /// The compose project name, when it differs from [`env_name`](Self::env_name). A
-    /// workspace sets it to `<workspace>-<env>` so equally named envs in two workspaces
-    /// never share a project; the hostnames keep following `env_name`.
+    /// The compose project name, when it differs from [`env_name`](Self::env_name). Part of the
+    /// runtime placement (see [`RuntimePlacement`](crate::RuntimePlacement)): a workspace sets
+    /// it to `<workspace>-<env>` so equally named envs in two workspaces never share a project.
+    /// Never persisted in an [`EnvManifest`](crate::EnvManifest).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
+    /// The label of the env's hostnames (`<label>.localhost`, `<label>.internal`, the
+    /// `<label>.mesh` alias) and so of its sign-in cookie domain, when it differs from
+    /// [`env_name`](Self::env_name). Part of the runtime placement: two placements of one
+    /// environment get distinct labels, so their sign-in cookies don't collide. Never
+    /// persisted in an [`EnvManifest`](crate::EnvManifest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_label: Option<String>,
     /// The deploy target the environment runs on (see [`target`](crate::target)). Defaults to
     /// Docker Compose. Every selected module must have a rendering for it.
     #[serde(default)]
@@ -344,7 +353,7 @@ pub struct PlanCtx {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub port_offset: u16,
     /// A compose network shared across environments, which the gateway (and nothing else)
-    /// joins under the alias `<env>.mesh`: cross-env traffic enters and leaves an env only
+    /// joins under the alias `<label>.mesh` (see [`host_label`](Self::host_label)): cross-env traffic enters and leaves an env only
     /// through its gateway. Declared by name rather than `external`, so whichever env starts
     /// first creates it. `None` (the default) keeps the env on its private network alone, as
     /// does a gateway-less env (nothing fronts it for the others to reach).
@@ -393,6 +402,36 @@ impl PlanCtx {
         self.project_name.as_deref().unwrap_or(&self.env_name)
     }
 
+    /// The label of the env's hostnames: [`host_label`](Self::host_label), else
+    /// [`env_name`](Self::env_name).
+    pub fn host_label(&self) -> &str {
+        self.host_label.as_deref().unwrap_or(&self.env_name)
+    }
+
+    /// This context without its runtime placement: the project name, host label, mesh network
+    /// and port offset cleared, and the slot-shifted ports (gateway, admin, dedicated listeners)
+    /// moved back by the offset. What an [`EnvManifest`](crate::EnvManifest) persists, so the
+    /// same environment can be placed anywhere; [`RuntimePlacement::apply`]
+    /// (crate::RuntimePlacement::apply) is the inverse.
+    pub fn without_placement(&self) -> PlanCtx {
+        let offset = self.port_offset;
+        PlanCtx {
+            project_name: None,
+            host_label: None,
+            mesh_network: None,
+            port_offset: 0,
+            gateway_host_port: self.gateway_host_port.saturating_sub(offset),
+            gateway_admin_port: self.gateway_admin_port.saturating_sub(offset),
+            dedicated_listener_port_base: self.dedicated_listener_port_base.saturating_sub(offset),
+            dedicated_listener_ports: self
+                .dedicated_listener_ports
+                .iter()
+                .map(|p| p.saturating_sub(offset))
+                .collect(),
+            ..self.clone()
+        }
+    }
+
     fn default_env_name() -> String {
         "lakehouse".into()
     }
@@ -421,6 +460,7 @@ impl Default for PlanCtx {
         PlanCtx {
             env_name: PlanCtx::default_env_name(),
             project_name: None,
+            host_label: None,
             target: TargetId::default(),
             gateway_service: PlanCtx::default_gateway_service(),
             gateway_internal_port: PlanCtx::default_gateway_internal_port(),
@@ -970,7 +1010,7 @@ impl Plan {
     }
 
     /// The shared listener's origin as a host-side caller reaches it: `http://localhost:<port>`,
-    /// or `https://<env>.localhost:<port>` when forward-auth is on (see
+    /// or `https://<label>.localhost:<port>` when forward-auth is on (see
     /// [`GatewayConfig::secure`]). `None` without a gateway.
     pub fn gateway_url(&self) -> Option<String> {
         self.has_gateway()

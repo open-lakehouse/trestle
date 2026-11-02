@@ -42,6 +42,7 @@ describe("workspace model", () => {
     expect(contextFor(demo, env("prod", 1))).toEqual({
       env_name: "prod",
       project_name: "demo-prod",
+      host_label: "demo-prod",
       mesh_network: "trestle-demo-mesh",
       port_offset: 1000,
       gateway_host_port: 10080,

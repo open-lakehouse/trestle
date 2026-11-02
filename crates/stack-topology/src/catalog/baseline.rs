@@ -85,17 +85,17 @@ use crate::target::TargetId;
 pub const DATA_ROOT_VAR: &str = "DATA_ROOT";
 
 /// The render-only variable carrying the gateway's public origin as a host-side browser
-/// reaches it (`http://localhost:<gateway_host_port>`, or `https://<env>.localhost:<port>` with
+/// reaches it (`http://localhost:<gateway_host_port>`, or `https://<label>.localhost:<port>` with
 /// forward-auth on), so a module that must know its own public URL (e.g. an auth portal's
 /// redirect target) follows the configured gateway port instead of hard-coding one.
 pub const GATEWAY_URL_VAR: &str = "GATEWAY_URL";
 
 /// The render-only variable carrying the bare hostname of [`GATEWAY_URL_VAR`] (`localhost`, or
-/// `<env>.localhost` with forward-auth on), e.g. for a cookie domain.
+/// `<label>.localhost` with forward-auth on), e.g. for a cookie domain.
 pub const GATEWAY_HOST_VAR: &str = "GATEWAY_HOST";
 
 /// The render-only variable carrying the gateway's origin as an in-network caller reaches it
-/// (`http://<gateway_service>:<gateway_internal_port>`, or `http://<env>.internal:<port>` with
+/// (`http://<gateway_service>:<gateway_internal_port>`, or `http://<label>.internal:<port>` with
 /// forward-auth on): the container-vantage counterpart of [`GATEWAY_URL_VAR`], e.g. for a
 /// service that must accept the `Host` its in-network callers send.
 pub const GATEWAY_INTERNAL_URL_VAR: &str = "GATEWAY_INTERNAL_URL";

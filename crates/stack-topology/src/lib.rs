@@ -135,8 +135,8 @@ pub use address::{AddressError, ServiceRef};
 pub use manifest::{CatalogSource, EnvManifest, ManifestError, pin_dedicated_ports};
 
 pub use workspace::{
-    MAX_SLOT, PortConflict, SLOT_PORT_STRIDE, WORKSPACE_FILE, WorkspaceEnv, WorkspaceError,
-    WorkspaceManifest, port_conflicts,
+    MAX_SLOT, PortConflict, RuntimePlacement, SLOT_PORT_STRIDE, WORKSPACE_FILE, WorkspaceEnv,
+    WorkspaceError, WorkspaceManifest, port_conflicts,
 };
 
 pub use report::layout_report;

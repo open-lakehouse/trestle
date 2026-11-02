@@ -59,7 +59,12 @@ fn members_get_their_own_ports_and_projects() {
     for gateway in [&dev_gateway, &prod_gateway] {
         assert!(gateway.contains("name: trestle-demo-mesh"), "{gateway}");
     }
-    assert!(prod_gateway.contains("- prod.mesh"), "{prod_gateway}");
+    assert!(prod_gateway.contains("- demo-prod.mesh"), "{prod_gateway}");
+    // The member's env.toml holds the environment, not where the workspace runs it.
+    let prod_toml = read(ws.join("prod/env.toml"));
+    for key in ["project_name", "mesh_network", "port_offset", "10080"] {
+        assert!(!prod_toml.contains(key), "{key} in env.toml:\n{prod_toml}");
+    }
 
     let listing = trestle(&ws, &["workspace", "list", "--json"]);
     let rows: serde_json::Value = serde_json::from_slice(&listing.stdout).unwrap();
@@ -73,23 +78,22 @@ fn members_get_their_own_ports_and_projects() {
 }
 
 #[test]
-fn render_restores_the_slot_and_rejects_shared_slots() {
+fn render_follows_the_slot_and_rejects_shared_slots() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = demo(tmp.path());
 
-    // A member hand-edited back to the single-env ports is put back on its slot.
+    // Moving a member to another slot moves its ports on the next render; env.toml stays put.
+    let manifest = ws.join("trestle-workspace.toml");
     let prod_toml = ws.join("prod/env.toml");
-    fs::write(
-        &prod_toml,
-        read(&prod_toml).replace("gateway_host_port = 10080", "gateway_host_port = 9080"),
-    )
-    .unwrap();
+    let before = read(&prod_toml);
+    fs::write(&manifest, read(&manifest).replace("slot = 1", "slot = 2")).unwrap();
     trestle(&ws.join("prod"), &["env", "render"]);
-    assert!(read(&prod_toml).contains("gateway_host_port = 10080"));
+    let gateway = read(ws.join("prod/modules/envoy/compose.yaml"));
+    assert!(gateway.contains("\"11080:10000\""), "{gateway}");
+    assert_eq!(read(&prod_toml), before);
 
     // Two members on one slot can't run side by side.
-    let manifest = ws.join("trestle-workspace.toml");
-    fs::write(&manifest, read(&manifest).replace("slot = 1", "slot = 0")).unwrap();
+    fs::write(&manifest, read(&manifest).replace("slot = 2", "slot = 0")).unwrap();
     let clash = run(&ws, &["workspace", "render"]);
     assert!(!clash.status.success());
     let stderr = String::from_utf8_lossy(&clash.stderr);

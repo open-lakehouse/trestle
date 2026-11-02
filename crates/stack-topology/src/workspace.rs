@@ -9,10 +9,15 @@
 //!   `slot × `[`SLOT_PORT_STRIDE`] (slot 0 keeps the single-environment defaults);
 //! - the compose **project name**, `<workspace>-<env>`, so equally named environments in two
 //!   workspaces never share containers or volumes;
+//! - the **host label**, `<workspace>-<env>`, so the members' hostnames and sign-in cookies
+//!   (`<label>.localhost`) don't collide across workspaces;
 //! - optionally a **mesh** network every member's gateway joins (see
 //!   [`PlanCtx::mesh_network`]).
 //!
-//! [`apply`](WorkspaceManifest::apply) writes a member's values into its [`PlanCtx`];
+//! Together these are a member's [`RuntimePlacement`]: where it runs, as opposed to what it is.
+//! The environment's [`EnvManifest`](crate::EnvManifest) never records them, so one environment
+//! can be placed twice side by side. [`placement`](WorkspaceManifest::placement) builds a
+//! member's placement and [`RuntimePlacement::apply`] writes it into a [`PlanCtx`] at plan time;
 //! [`port_conflicts`] checks the planned members against each other.
 //!
 //! Pure and WASM-clean, like [`manifest`](crate::manifest): (de)serialization works on strings,
@@ -93,6 +98,79 @@ pub fn is_valid_name(name: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && name.len() <= 63
+}
+
+/// Where one environment runs on a Docker host: its slot (and so its host ports), its compose
+/// project, the mesh network its gateway joins and the label of its hostnames. Never part of the
+/// environment's manifest; a consumer builds it at plan time ([`WorkspaceManifest::placement`],
+/// or [`standalone`](Self::standalone) for an environment on its own) and
+/// [`apply`](Self::apply)s it to the manifest's [`PlanCtx`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimePlacement {
+    /// The slot: every host port sits `slot × `[`SLOT_PORT_STRIDE`] above the manifest's own.
+    pub slot: u16,
+    /// The compose project name.
+    pub project_name: String,
+    /// The network shared with other environments that the gateway joins, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_network: Option<String>,
+    /// The label of the environment's hostnames (`<label>.localhost`, `<label>.internal`, the
+    /// `<label>.mesh` alias), which also scopes its sign-in cookie.
+    pub host_label: String,
+}
+
+impl RuntimePlacement {
+    /// An environment on its own: slot 0, no mesh, and the project and host label both its
+    /// name, which is how an environment outside a workspace has always been placed.
+    pub fn standalone(env_name: impl Into<String>) -> Self {
+        let env_name = env_name.into();
+        RuntimePlacement {
+            slot: 0,
+            project_name: env_name.clone(),
+            mesh_network: None,
+            host_label: env_name,
+        }
+    }
+
+    /// The amount this placement shifts the environment's host ports by.
+    pub fn port_offset(&self) -> u16 {
+        self.slot.saturating_mul(SLOT_PORT_STRIDE)
+    }
+
+    /// Write this placement into `ctx`: the project name, host label, mesh network and
+    /// [`port_offset`](PlanCtx::port_offset), and the gateway, admin and dedicated-listener ports
+    /// shifted by the offset. `ctx` holds the environment's own, slot-0 values (as an
+    /// [`EnvManifest`](crate::EnvManifest) persists them); a placement already in it is replaced,
+    /// not added to. An explicit [`dedicated_listener_ports`](PlanCtx::dedicated_listener_ports)
+    /// list is kept only if it lies between the dedicated-listener base and the admin port.
+    pub fn apply(&self, ctx: &mut PlanCtx) {
+        let base = ctx.without_placement();
+        let offset = self.port_offset();
+        let shift = |port: u16| port.saturating_add(offset);
+        *ctx = PlanCtx {
+            project_name: Some(self.project_name.clone()),
+            host_label: Some(self.host_label.clone()),
+            mesh_network: self.mesh_network.clone(),
+            port_offset: offset,
+            gateway_host_port: shift(base.gateway_host_port),
+            gateway_admin_port: shift(base.gateway_admin_port),
+            dedicated_listener_port_base: shift(base.dedicated_listener_port_base),
+            dedicated_listener_ports: base
+                .dedicated_listener_ports
+                .iter()
+                .map(|p| shift(*p))
+                .collect(),
+            ..base
+        };
+        let slot_range = ctx.dedicated_listener_port_base..ctx.gateway_admin_port;
+        if !ctx
+            .dedicated_listener_ports
+            .iter()
+            .all(|p| slot_range.contains(p))
+        {
+            ctx.dedicated_listener_ports.clear();
+        }
+    }
 }
 
 /// The persisted record of a workspace: its name, whether its gateways share a mesh network,
@@ -249,31 +327,22 @@ impl WorkspaceManifest {
         self.mesh.then(|| format!("trestle-{}-mesh", self.name))
     }
 
-    /// Write what the workspace decides for `env` into its `ctx`: the env and project names,
-    /// the mesh network, the [`port_offset`](PlanCtx::port_offset) and the gateway, admin and
-    /// dedicated-listener ports, each the single-environment default shifted by the slot. An
-    /// explicit [`dedicated_listener_ports`](PlanCtx::dedicated_listener_ports) list is kept
-    /// only if it lies between the slot's dedicated-listener base and its admin port, so a
-    /// member moved to another slot doesn't keep pins into its old one.
-    pub fn apply(&self, env: &WorkspaceEnv, ctx: &mut PlanCtx) {
-        let defaults = PlanCtx::default();
-        let offset = env.port_offset();
-        ctx.env_name = env.name.clone();
-        ctx.project_name = Some(self.project_name(env));
-        ctx.mesh_network = self.mesh_network();
-        ctx.port_offset = offset;
-        ctx.gateway_host_port = defaults.gateway_host_port.saturating_add(offset);
-        ctx.gateway_admin_port = defaults.gateway_admin_port.saturating_add(offset);
-        ctx.dedicated_listener_port_base =
-            defaults.dedicated_listener_port_base.saturating_add(offset);
-        let slot_range = ctx.dedicated_listener_port_base..ctx.gateway_admin_port;
-        if !ctx
-            .dedicated_listener_ports
-            .iter()
-            .all(|p| slot_range.contains(p))
-        {
-            ctx.dedicated_listener_ports.clear();
+    /// The [`RuntimePlacement`] the workspace gives `env`: its slot, the project name and host
+    /// label `<workspace>-<env>`, and the [mesh network](Self::mesh_network).
+    pub fn placement(&self, env: &WorkspaceEnv) -> RuntimePlacement {
+        RuntimePlacement {
+            slot: env.slot,
+            project_name: self.project_name(env),
+            mesh_network: self.mesh_network(),
+            host_label: self.project_name(env),
         }
+    }
+
+    /// Write what the workspace decides for `env` into its `ctx`: the env name, then its
+    /// [`placement`](Self::placement) (see [`RuntimePlacement::apply`]).
+    pub fn apply(&self, env: &WorkspaceEnv, ctx: &mut PlanCtx) {
+        ctx.env_name = env.name.clone();
+        self.placement(env).apply(ctx);
     }
 }
 
@@ -404,6 +473,7 @@ mod tests {
         ws.apply(ws.env("prod").unwrap(), &mut ctx);
         assert_eq!(ctx.env_name, "prod");
         assert_eq!(ctx.compose_project(), "demo-prod");
+        assert_eq!(ctx.host_label(), "demo-prod");
         assert_eq!(ctx.mesh_network.as_deref(), Some("trestle-demo-mesh"));
         assert_eq!(ctx.port_offset, 1000);
         assert_eq!(ctx.gateway_host_port, 10080);
@@ -418,21 +488,107 @@ mod tests {
     }
 
     #[test]
-    fn apply_drops_dedicated_pins_from_another_slot() {
+    fn apply_shifts_dedicated_pins_and_drops_ones_outside_the_slot() {
         let ws = demo();
+        // Pins are the env's own, slot-0 ports: they move with the slot.
         let mut ctx = PlanCtx {
             dedicated_listener_ports: vec![9100, 9101],
             ..PlanCtx::default()
         };
         ws.apply(ws.env("prod").unwrap(), &mut ctx);
-        assert!(ctx.dedicated_listener_ports.is_empty());
+        assert_eq!(ctx.dedicated_listener_ports, vec![10100, 10101]);
 
+        // A pin past the admin port would land in the next slot's range, so it is dropped.
         let mut ctx = PlanCtx {
-            dedicated_listener_ports: vec![10100],
+            dedicated_listener_ports: vec![9100, 9950],
             ..PlanCtx::default()
         };
         ws.apply(ws.env("prod").unwrap(), &mut ctx);
-        assert_eq!(ctx.dedicated_listener_ports, vec![10100]);
+        assert!(ctx.dedicated_listener_ports.is_empty());
+    }
+
+    #[test]
+    fn applying_a_placement_twice_replaces_it() {
+        let ws = demo();
+        let mut ctx = PlanCtx {
+            gateway_host_port: 9090,
+            ..PlanCtx::default()
+        };
+        ws.apply(ws.env("prod").unwrap(), &mut ctx);
+        assert_eq!(ctx.gateway_host_port, 10090);
+        // Moving the env to slot 0 lands back on its own port, not 10090.
+        ws.apply(ws.env("dev").unwrap(), &mut ctx);
+        assert_eq!(ctx.gateway_host_port, 9090);
+        assert_eq!(ctx.host_label(), "demo-dev");
+        assert_eq!(ctx.without_placement().gateway_host_port, 9090);
+    }
+
+    #[test]
+    fn standalone_placement_is_the_single_environment_layout() {
+        let mut ctx = PlanCtx {
+            env_name: "solo".into(),
+            ..PlanCtx::default()
+        };
+        RuntimePlacement::standalone("solo").apply(&mut ctx);
+        assert_eq!(ctx.compose_project(), "solo");
+        assert_eq!(ctx.host_label(), "solo");
+        assert_eq!(ctx.mesh_network, None);
+        assert_eq!(ctx.gateway_host_port, PlanCtx::default().gateway_host_port);
+    }
+
+    #[test]
+    fn two_host_labels_get_their_own_cookie_domains() {
+        // One environment, placed twice (as two workspaces holding a `dev` would).
+        let selection = Selection {
+            gateway: crate::GatewaySettings {
+                auth: true,
+                ..crate::GatewaySettings::OPEN
+            },
+            ..Selection::modules(["envoy", "authelia", "rustfs", "mlflow"])
+        };
+        let place = |workspace: &str, slot: u16| {
+            let mut ctx = PlanCtx {
+                env_name: "dev".into(),
+                ..PlanCtx::default()
+            };
+            RuntimePlacement {
+                slot,
+                project_name: format!("{workspace}-dev"),
+                mesh_network: None,
+                host_label: format!("{workspace}-dev"),
+            }
+            .apply(&mut ctx);
+            baseline_catalog().plan(&selection, &ctx).unwrap()
+        };
+        let (a, b) = (place("alpha", 0), place("beta", 1));
+        assert!(port_conflicts([("a", &a), ("b", &b)]).is_empty());
+
+        let cookie_domains = |plan: &Plan| -> Vec<String> {
+            let out = plan.materialize().unwrap();
+            let config = out
+                .files
+                .iter()
+                .find(|f| f.path == "modules/authelia/configuration.yml")
+                .expect("authelia configuration")
+                .contents
+                .clone();
+            config
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("- domain:"))
+                .map(|d| d.trim().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            cookie_domains(&a),
+            ["alpha-dev.localhost", "alpha-dev.internal"]
+        );
+        assert_eq!(
+            cookie_domains(&b),
+            ["beta-dev.localhost", "beta-dev.internal"]
+        );
+        // Hosted resources keep following the env name, not the placement.
+        assert_eq!(a.env_name, "dev");
+        assert_eq!(b.env_name, "dev");
     }
 
     #[test]
@@ -493,7 +649,7 @@ mod tests {
         assert!(file("compose.yaml").contains("name: demo-prod"));
         let gateway = file("modules/envoy/compose.yaml");
         assert!(gateway.contains("name: trestle-demo-mesh"), "{gateway}");
-        assert!(gateway.contains("- prod.mesh"), "{gateway}");
+        assert!(gateway.contains("- demo-prod.mesh"), "{gateway}");
         assert!(gateway.contains("\"10080:10000\""), "{gateway}");
     }
 }

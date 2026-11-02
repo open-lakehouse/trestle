@@ -84,7 +84,7 @@ pub(super) fn route(
     emulate_public_hosts(graph, provisioned, chosen, &mut gateway)?;
     // Forward-auth needs a secure, dotted origin (see `SecureOrigin`).
     if stack_facts.gateway_auth {
-        gateway.secure = Some(SecureOrigin::for_env(&ctx.env_name));
+        gateway.secure = Some(SecureOrigin::for_label(ctx.host_label()));
     }
 
     let facts = GatewayFacts {

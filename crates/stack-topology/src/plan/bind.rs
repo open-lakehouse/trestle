@@ -295,7 +295,7 @@ pub(super) fn bind(
                 .filter(|_| routed.direct.is_none());
             let mesh = mesh.map(|name| MeshNetwork {
                 name: name.clone(),
-                alias: format!("{}.mesh", super::gateway::dns_label(&ctx.env_name)),
+                alias: format!("{}.mesh", super::gateway::dns_label(ctx.host_label())),
             });
             (
                 published_ports(gateway, ctx, admin),

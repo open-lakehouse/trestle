@@ -87,12 +87,15 @@ export function meshNetwork(workspace: WorkspaceDoc): string | undefined {
   return workspace.mesh ? `trestle-${workspace.name}-mesh` : undefined;
 }
 
-/** The context `env` plans under (`WorkspaceManifest::apply`). */
+/** The context `env` plans under: its defaults placed on its slot
+ *  (`WorkspaceManifest::apply`). Project and host label are both
+ *  `<workspace>-<env>`, so members of two workspaces get distinct hostnames. */
 export function contextFor(workspace: WorkspaceDoc, env: EnvDoc): PlanContext {
   const offset = env.slot * SLOT_PORT_STRIDE;
   return {
     env_name: env.name,
     project_name: projectName(workspace, env),
+    host_label: projectName(workspace, env),
     mesh_network: meshNetwork(workspace),
     port_offset: offset,
     gateway_host_port: DEFAULT_PORTS.gateway + offset,

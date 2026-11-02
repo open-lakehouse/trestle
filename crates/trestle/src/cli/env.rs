@@ -223,8 +223,8 @@ fn run_new(args: EnvNewArgs) -> Result<()> {
 }
 
 /// Create the environment `args` describes, as `trestle env new` does. As a workspace
-/// `member`, the workspace's ports and names override the defaults (see
-/// [`WorkspaceManifest::apply`]). Returns whether the environment was written (the wizard can
+/// `member`, it is planned in the workspace's placement (see [`WorkspaceManifest::apply`]),
+/// which `env.toml` doesn't record. Returns whether the environment was written (the wizard can
 /// be cancelled).
 pub(super) fn new_env(
     args: EnvNewArgs,
@@ -766,8 +766,8 @@ pub(super) fn member_at<'a>(
 }
 
 /// Re-render the environment in `dir` from its `env.toml` into `out_dir` (default `dir`), as
-/// `trestle env render` does, and return its plan. As a workspace `member`, the workspace's
-/// ports and names are applied first, and saved to `env.toml` when they changed.
+/// `trestle env render` does, and return its plan. As a workspace `member`, it is planned in the
+/// placement the workspace gives it (ports, names, mesh); `env.toml` never records that.
 pub(super) fn render_env(
     dir: &Path,
     out_dir: Option<&Path>,
@@ -783,11 +783,8 @@ pub(super) fn render_env(
     if out_dir != dir {
         ensure_writable_dir(out_dir, force)?;
     }
-    let mut drifted = false;
     if let Some((workspace, env)) = member {
-        let before = manifest.context.clone();
         workspace.apply(env, &mut manifest.context);
-        drifted = manifest.context != before;
     }
 
     manifest.context.secrets = Some(load_secrets(dir)?);
@@ -797,23 +794,11 @@ pub(super) fn render_env(
         Err(PlanError::UnresolvedSecrets { vars }) => {
             manifest.context.secrets = None;
             let preview = manifest.plan(&catalog).map_err(map_plan_err)?;
-            if drifted {
-                persist_manifest(&preview, &manifest, dir)?;
-            }
             write_deploy_guide(&preview, out_dir)?;
             return Err(unset_secrets(&vars, out_dir, "updated README.md"));
         }
         plan => plan.map_err(map_plan_err)?,
     };
-    if drifted {
-        manifest.context.secrets = None;
-        persist_manifest(&plan, &manifest, dir)?;
-        println!(
-            "Updated {} to the workspace's ports and names",
-            dir.join("env.toml").display()
-        );
-    }
-
     println!("{}", layout_report(&plan));
     write_rendered(&plan, &manifest, &catalog, out_dir)?;
     report_written(&plan, out_dir);

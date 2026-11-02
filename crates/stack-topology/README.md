@@ -411,17 +411,19 @@ the gateway, so planning rejects them with `PlanError::GatewayRequired`.
 Each environment is its own compose project, so networks, named volumes and the gateway's CA
 are already separate. What two environments share is the host's ports. A
 [`WorkspaceManifest`](src/workspace.rs) (`trestle-workspace.toml`) lists member environments
-and gives each a slot. `WorkspaceManifest::apply` writes the slot's values into a member's
-`PlanCtx`:
+and gives each a slot. A member's `RuntimePlacement` (`WorkspaceManifest::placement`) is where
+it runs, and `RuntimePlacement::apply` writes it into the member's `PlanCtx` at plan time. The
+`EnvManifest` never persists it, so one environment can be placed twice:
 
-- `gateway_host_port`, `gateway_admin_port` and `dedicated_listener_port_base`: the defaults
-  shifted by `slot × 1000` (slot 1 serves the gateway on `10080`).
+- `gateway_host_port`, `gateway_admin_port` and `dedicated_listener_port_base`: the
+  manifest's own values shifted by `slot × 1000` (slot 1 serves the gateway on `10080`).
 - `port_offset`: the same shift for host ports a module declares itself (PuppyGraph's Bolt and
   Gremlin, and the direct publishes of an env without a gateway).
-- `project_name`: `<workspace>-<env>`, the compose `name:`. Hostnames keep following
-  `env_name`.
+- `project_name`: `<workspace>-<env>`, the compose `name:`.
+- `host_label`: `<workspace>-<env>` too, the label of the hostnames (`demo-prod.localhost`)
+  and so of the sign-in cookie domain. Hosted resource names keep following `env_name`.
 - `mesh_network`: with `mesh = true`, `trestle-<workspace>-mesh`. The gateway, and only the
-  gateway, joins it under the alias `<env>.mesh`, so cross-environment traffic always passes
+  gateway, joins it under the alias `<label>.mesh`, so cross-environment traffic always passes
   through an Envoy.
 
 The CLI drives it:
@@ -430,15 +432,15 @@ The CLI drives it:
 trestle workspace init demo --mesh   # writes demo/trestle-workspace.toml
 cd demo
 trestle workspace add dev -y         # every `trestle env new` flag works here
-trestle workspace add prod --auth -y # slot 1: gateway on https://prod.localhost:10080
+trestle workspace add prod --auth -y # slot 1: gateway on https://demo-prod.localhost:10080
 trestle workspace list               # slot, project, gateway, and whether it runs
 trestle workspace render             # re-render all, then check no port is bound twice
 trestle workspace up [ENV…]          # docker compose up -d --wait, per member
 trestle workspace down [ENV…]        # --volumes to drop their data too
 ```
 
-`trestle env render` inside a member applies the workspace's values too, and saves them to
-`env.toml` when a hand edit moved them.
+`trestle env render` inside a member applies the workspace's placement too; `env.toml` stays
+as it is.
 
 `Plan::host_ports` lists every host port a plan binds. Planning rejects one that is bound twice
 (`PlanError::HostPortCollision`), and `port_conflicts` finds the ports two planned members

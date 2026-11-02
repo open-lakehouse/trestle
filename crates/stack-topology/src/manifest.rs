@@ -93,7 +93,11 @@ pub struct EnvManifest {
     /// The environment-level plan context — gateway ports, `data_root`, provider preferences,
     /// app upstream. A persisted non-default `gateway_host_port` is authoritative on reload, so
     /// the host-facing port stays put across re-plans.
-    #[serde(default)]
+    ///
+    /// Persisted without its runtime placement ([`PlanCtx::without_placement`]): a context a
+    /// [`RuntimePlacement`](crate::RuntimePlacement) was applied to serializes as the
+    /// environment's own slot-0 values, so the file doesn't change with where it runs.
+    #[serde(default, serialize_with = "serialize_placement_free")]
     pub context: PlanCtx,
     /// Module manifests to plan with beyond the built-in catalog (`[catalog] manifests`).
     #[serde(default, skip_serializing_if = "CatalogSource::is_empty")]
@@ -127,9 +131,11 @@ impl EnvManifest {
     /// provider modules ([`Selection::hosted`](crate::Selection::hosted)); an older file's
     /// entries are migrated on read (see [`from_toml`](Self::from_toml)). Version 4 added
     /// gateway-less environments ([`GatewaySettings::enabled`](crate::GatewaySettings::enabled));
-    /// an older file always has a gateway, so it reads unchanged.
+    /// an older file always has a gateway, so it reads unchanged. Version 5 moved the runtime
+    /// placement (project name, mesh network, port offset) out of `[context]`; an older file's
+    /// placement is dropped on read and its slot-shifted ports moved back to slot 0.
     pub fn current_version() -> u32 {
-        4
+        5
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -158,15 +164,25 @@ impl EnvManifest {
     /// which replaces the in-stack module in the selection (its knob overrides are dropped), and
     /// the manifest is stamped with the current version. An Azure entry whose storage account
     /// can't be read off its endpoint is a [`ManifestError::LegacyExternal`].
+    ///
+    /// A pre-version-5 file's runtime placement in `[context]` (a workspace member's
+    /// `project_name`, `mesh_network` and `port_offset`) is dropped, and the ports the offset
+    /// shifted are moved back by it (see [`PlanCtx::without_placement`]); the workspace supplies
+    /// the placement at plan time.
     pub fn from_toml(s: &str) -> Result<Self, ManifestError> {
         let mut table: toml::Table = toml::from_str(s)?;
-        let migrated = migrate_external(&mut table)?;
+        let mut migrated = migrate_external(&mut table)?;
         let mut manifest: Self = toml::Value::Table(table).try_into()?;
         if manifest.version > Self::current_version() {
             return Err(ManifestError::UnsupportedVersion {
                 found: manifest.version,
                 supported: Self::current_version(),
             });
+        }
+        let placement_free = manifest.context.without_placement();
+        if placement_free != manifest.context {
+            manifest.context = placement_free;
+            migrated = true;
         }
         if migrated {
             manifest.version = Self::current_version();
@@ -326,6 +342,14 @@ enum LegacyConnection {
 
 fn legacy_postgres_port() -> u16 {
     5432
+}
+
+/// Serialize a manifest's context [`without_placement`](PlanCtx::without_placement).
+fn serialize_placement_free<S: serde::Serializer>(
+    ctx: &PlanCtx,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    ctx.without_placement().serialize(serializer)
 }
 
 fn legacy_name_placeholder() -> String {
@@ -627,6 +651,80 @@ mod tests {
         let v1 =
             EnvManifest::from_toml("version = 1\n[selection]\nmodules = [\"envoy\"]\n").unwrap();
         assert_eq!(v1.selection.gateway, crate::GatewaySettings::OPEN);
+    }
+
+    #[test]
+    fn a_v4_workspace_member_drops_its_placement_on_read() {
+        // As `trestle workspace` wrote a slot-1 member before version 5.
+        let v4 = r#"
+            version = 4
+            [selection]
+            modules = ["envoy", "rustfs"]
+            [context]
+            env_name = "prod"
+            project_name = "demo-prod"
+            mesh_network = "trestle-demo-mesh"
+            port_offset = 1000
+            gateway_host_port = 10080
+            gateway_admin_port = 10901
+            dedicated_listener_port_base = 10100
+            dedicated_listener_ports = [10100]
+        "#;
+        let manifest = EnvManifest::from_toml(v4).unwrap();
+        assert_eq!(manifest.version, 5);
+        let ctx = &manifest.context;
+        assert_eq!(ctx.env_name, "prod");
+        assert_eq!(ctx.project_name, None);
+        assert_eq!(ctx.mesh_network, None);
+        assert_eq!(ctx.port_offset, 0);
+        assert_eq!(ctx.gateway_host_port, 9080);
+        assert_eq!(ctx.gateway_admin_port, 9901);
+        assert_eq!(ctx.dedicated_listener_port_base, 9100);
+        assert_eq!(ctx.dedicated_listener_ports, vec![9100]);
+
+        // The v5 file round-trips and carries no placement.
+        let text = manifest.to_toml().unwrap();
+        for key in ["project_name", "mesh_network", "port_offset", "host_label"] {
+            assert!(!text.contains(key), "{key} persisted:\n{text}");
+        }
+        assert_eq!(EnvManifest::from_toml(&text).unwrap(), manifest);
+
+        // Placing it back in its slot plans what the v4 file planned.
+        let ws = {
+            let mut ws = crate::WorkspaceManifest::new("demo", true).unwrap();
+            ws.add_env("dev").unwrap();
+            ws.add_env("prod").unwrap();
+            ws
+        };
+        let mut placed = manifest.clone();
+        ws.apply(ws.env("prod").unwrap(), &mut placed.context);
+        assert_eq!(placed.context.gateway_host_port, 10080);
+        assert_eq!(placed.context.dedicated_listener_ports, vec![10100]);
+        assert_eq!(placed.context.compose_project(), "demo-prod");
+    }
+
+    #[test]
+    fn a_placed_context_persists_without_its_placement() {
+        let manifest = sample_manifest();
+        let mut placed = manifest.clone();
+        crate::RuntimePlacement {
+            slot: 3,
+            project_name: "ws-lakehouse".into(),
+            mesh_network: Some("trestle-ws-mesh".into()),
+            host_label: "ws-lakehouse".into(),
+        }
+        .apply(&mut placed.context);
+        assert_ne!(placed, manifest);
+        assert_eq!(placed.to_toml().unwrap(), manifest.to_toml().unwrap());
+    }
+
+    #[test]
+    fn a_standalone_v4_manifest_reads_unchanged() {
+        let v4 = "version = 4\n[context]\nenv_name = \"solo\"\ngateway_host_port = 9090\n";
+        let manifest = EnvManifest::from_toml(v4).unwrap();
+        // Nothing to migrate, so the version stays (and a plan.json digest with it).
+        assert_eq!(manifest.version, 4);
+        assert_eq!(manifest.context.gateway_host_port, 9090);
     }
 
     #[test]

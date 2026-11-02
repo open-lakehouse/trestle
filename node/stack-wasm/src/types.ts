@@ -449,10 +449,16 @@ export interface HostPortDto {
  *  every field is optional and falls back to its default). A workspace member
  *  plans under its slot's values (see `contextFor` in the editor). */
 export interface PlanContext {
-  /** The environment name: its hostnames, and its compose project by default. */
+  /** The environment name: its hostnames and compose project by default, and
+   *  the name hosted resources are created under. */
   env_name?: string;
-  /** The compose project name, when it differs from `env_name`. */
+  /** The compose project name, when it differs from `env_name`. Placement:
+   *  never persisted in `env.toml`. */
   project_name?: string;
+  /** The label of the env's hostnames (`<label>.localhost`, `<label>.internal`)
+   *  and sign-in cookie, when it differs from `env_name`. Placement: never
+   *  persisted in `env.toml`. */
+  host_label?: string;
   /** The deploy target (Docker Compose when omitted). */
   target?: string;
   gateway_host_port?: number;
