@@ -236,8 +236,19 @@ Maintainer setup (one-time, per crate):
   from the protected `release` environment. Then:
   1. On crates.io, register the Trusted Publisher for the new crate (repo
      `open-lakehouse/trestle`, workflow `release-plz.yml`, environment `release`).
+     Do it right after the bootstrap: until then, every release-plz run fails
+     with `403 … access token is not valid for crate` when it reaches the crate,
+     and nothing after it in publish order gets published.
   2. From then on the crate releases through `release-plz.yml` like the others.
      Do not run the bootstrap workflow for it again.
+
+  The bootstrap's `cargo publish` builds the package against crates.io, not the
+  workspace. A new crate that uses unreleased changes in a sibling (for example
+  a new `olai-stack-topology` API) can't be bootstrapped until the sibling's
+  release is out. Order it like this: merge, let release-plz publish the
+  siblings, bootstrap the new crate from `main` (after its Release PR bumped the
+  sibling requirements), register its Trusted Publisher, then re-run release-plz
+  for whatever depends on the new crate.
 
 ### The `@open-lakehouse/trestle-diagram` npm package
 
