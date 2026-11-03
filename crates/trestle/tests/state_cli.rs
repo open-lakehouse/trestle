@@ -51,7 +51,7 @@ case "$*" in
   "functions list"*) echo '{functions}' ;;
   "buckets list"*) echo '[]' ;;
   "buckets create"*) echo 'Bucket created' ;;
-  "databases list"*) echo '[{{"name":"neondb"}}]' ;;
+  "databases list"*) cat "{fx}/databases-list.json" ;;
   "databases create"*) echo '{{}}' ;;
   "credentials create"*) cat "{fx}/credentials-create.json" ;;
   "credentials revoke"*) echo '{{}}' ;;
@@ -547,8 +547,8 @@ fn a_hybrid_environment_runs_on_a_bound_neon_branch() {
     // to the keychain.
     let calls = home.neon_calls();
     for call in [
-        "databases create --name mlflow",
-        "databases create --name omnigent",
+        "databases create --name mlflow --owner-name neondb_owner",
+        "databases create --name omnigent --owner-name neondb_owner",
         "buckets create mlflow",
         "credentials create",
     ] {
