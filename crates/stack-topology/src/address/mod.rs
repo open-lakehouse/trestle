@@ -413,7 +413,7 @@ mod tests {
             restore_refs(url.host_str().unwrap()),
             "${UNITYCATALOG_FUNCTION_URL}"
         );
-        // Anything else is left alone, including look-alikes.
+        // Anything else is left alone, including near misses.
         for s in [
             "https://trestle-ref-zz.invalid",
             "https://trestle-ref-414.invalid",

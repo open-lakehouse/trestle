@@ -707,6 +707,23 @@ impl HostedConnection {
         }
     }
 
+    /// The values of its credential fields: the password, the access keys, the connection
+    /// string.
+    fn credentials(&self) -> Vec<&str> {
+        match self {
+            HostedConnection::Postgres { password, .. } => vec![password],
+            HostedConnection::S3 {
+                access_key_id,
+                secret_access_key,
+                ..
+            } => vec![access_key_id, secret_access_key],
+            HostedConnection::AzureBlob {
+                connection_string, ..
+            } => vec![connection_string],
+            HostedConnection::Function { .. } => vec![],
+        }
+    }
+
     /// Every `${VAR}` secret reference in this connection, sorted.
     pub fn secret_refs(&self) -> BTreeSet<String> {
         let mut refs = BTreeSet::new();
@@ -917,17 +934,24 @@ pub(super) fn resolve_hosted(
         {
             *url = Some(format!("${{{}}}", function_url_var(slug)));
         }
-        // A function's URL is an address, not a credential: it may appear in any file.
-        let mut not_secret = BTreeSet::new();
-        let values = if *kind == HostedKind::Function {
-            &mut not_secret
-        } else {
-            &mut out.secret_values.0
-        };
         let connection = match secrets {
-            Some(secrets) => resource
-                .connection
-                .resolve(&secrets.0, values, &mut missing),
+            Some(secrets) => {
+                let mut resolved_values = BTreeSet::new();
+                let connection =
+                    resource
+                        .connection
+                        .resolve(&secrets.0, &mut resolved_values, &mut missing);
+                // Only credentials make a file sensitive: a host, a region or a function URL may
+                // appear anywhere (and a short one, such as a region, inside other values).
+                out.secret_values.0.extend(
+                    connection
+                        .credentials()
+                        .into_iter()
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_owned),
+                );
+                connection
+            }
             None => resource.connection.clone(),
         };
         out.modules.insert(
