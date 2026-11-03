@@ -132,6 +132,15 @@ fn function_hosted_modules_run_nothing_and_demand_nothing() {
         "{}",
         mlflow.contents
     );
+    // A function's URL is an address, not a credential: the fragment holding it can still move
+    // its credentials into the launch env.
+    let (_, launch) = plan.materialize().unwrap().into_launch_env().unwrap();
+    assert!(
+        !launch
+            .into_vars()
+            .values()
+            .any(|v| v.contains("compute.example"))
+    );
 }
 
 #[test]

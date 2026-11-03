@@ -917,12 +917,17 @@ pub(super) fn resolve_hosted(
         {
             *url = Some(format!("${{{}}}", function_url_var(slug)));
         }
+        // A function's URL is an address, not a credential: it may appear in any file.
+        let mut not_secret = BTreeSet::new();
+        let values = if *kind == HostedKind::Function {
+            &mut not_secret
+        } else {
+            &mut out.secret_values.0
+        };
         let connection = match secrets {
-            Some(secrets) => {
-                resource
-                    .connection
-                    .resolve(&secrets.0, &mut out.secret_values.0, &mut missing)
-            }
+            Some(secrets) => resource
+                .connection
+                .resolve(&secrets.0, values, &mut missing),
             None => resource.connection.clone(),
         };
         out.modules.insert(
