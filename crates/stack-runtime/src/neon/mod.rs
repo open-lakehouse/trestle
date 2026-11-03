@@ -242,8 +242,8 @@ pub trait NeonControl: Send + Sync {
     /// Reset the branch `id` to its parent's current state.
     async fn reset_branch(&self, project: &str, id: &str) -> Result<(), NeonError>;
 
-    /// The branch's Postgres connection to `database` (the default one when `None`), through
-    /// the connection pooler when `pooled`.
+    /// The branch's Postgres connection to `database` (the main one when `None`: `neondb`, or
+    /// the first when it has none), through the connection pooler when `pooled`.
     async fn connection(
         &self,
         project: &str,
@@ -255,7 +255,7 @@ pub trait NeonControl: Send + Sync {
     /// The branch's databases.
     async fn databases(&self, project: &str, branch: &str) -> Result<Vec<String>, NeonError>;
 
-    /// Create the database `name` on the branch.
+    /// Create the database `name` on the branch, owned by the main database's owner.
     async fn create_database(
         &self,
         project: &str,

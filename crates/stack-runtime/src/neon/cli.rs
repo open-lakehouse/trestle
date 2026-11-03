@@ -227,6 +227,48 @@ struct Named {
     name: String,
 }
 
+/// A database of `databases list`.
+#[derive(Deserialize)]
+struct Database {
+    name: String,
+    owner_name: String,
+}
+
+/// The database Neon creates with a project. `connection-string` and `databases create` only
+/// pick a default while the branch has one database and one role; a branch that hosts more
+/// (another service's database, a read-only role) needs both named.
+const DEFAULT_DATABASE: &str = "neondb";
+
+impl NeonCli {
+    async fn database_list(&self, project: &str, branch: &str) -> Result<Vec<Database>, NeonError> {
+        self.json(&[
+            "databases",
+            "list",
+            "--project-id",
+            project,
+            "--branch",
+            branch,
+        ])
+        .await
+    }
+
+    /// The branch's main database: `neondb` when it has one, else the first.
+    async fn main_database(&self, project: &str, branch: &str) -> Result<Database, NeonError> {
+        let mut dbs = self.database_list(project, branch).await?;
+        if dbs.is_empty() {
+            return Err(NeonError::Failed {
+                command: "databases list".into(),
+                stderr: format!("branch {branch} has no database"),
+            });
+        }
+        let at = dbs
+            .iter()
+            .position(|d| d.name == DEFAULT_DATABASE)
+            .unwrap_or(0);
+        Ok(dbs.swap_remove(at))
+    }
+}
+
 #[async_trait]
 impl NeonControl for NeonCli {
     async fn auth_status(&self) -> Result<String, NeonError> {
@@ -306,24 +348,21 @@ impl NeonControl for NeonCli {
         if pooled {
             args.push("--pooled");
         }
-        if let Some(db) = database {
-            args.extend(["--database-name", db]);
-        }
+        let main;
+        let db = match database {
+            Some(db) => db,
+            None => {
+                main = self.main_database(project, branch).await?;
+                main.name.as_str()
+            }
+        };
+        args.extend(["--database-name", db]);
         let extended: Extended = self.json(&args).await?;
         Ok(extended.into())
     }
 
     async fn databases(&self, project: &str, branch: &str) -> Result<Vec<String>, NeonError> {
-        let dbs: Vec<Named> = self
-            .json(&[
-                "databases",
-                "list",
-                "--project-id",
-                project,
-                "--branch",
-                branch,
-            ])
-            .await?;
+        let dbs = self.database_list(project, branch).await?;
         Ok(dbs.into_iter().map(|d| d.name).collect())
     }
 
@@ -333,11 +372,15 @@ impl NeonControl for NeonCli {
         branch: &str,
         name: &str,
     ) -> Result<(), NeonError> {
+        // Owned like the main database, by the role `connection-string` connects as.
+        let owner = self.main_database(project, branch).await?.owner_name;
         self.run(&[
             "databases",
             "create",
             "--name",
             name,
+            "--owner-name",
+            &owner,
             "--project-id",
             project,
             "--branch",

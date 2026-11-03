@@ -1,6 +1,9 @@
 //! Neon branches as a source: the CLI's output parsed (a stub `neon` replays the spike's
 //! fixtures), binding against `FakeNeon`, the overlay, ownership, and an instance of the
 //! `neon-hybrid` scenario run on a bound branch.
+//!
+//! The stub's branch hosts a second database and a second role, as a branch that already runs
+//! other services does; the CLI then picks no default and needs both named.
 #![cfg(all(feature = "neon", feature = "testing"))]
 
 use std::collections::BTreeMap;
@@ -39,14 +42,16 @@ fn stub_neon(dir: &Path, fail_auth: bool) -> (NeonCli, PathBuf) {
   "branches create"*) cat "{fx}/branches-create.json" ;;
   "branches delete"*) cat "{fx}/branches-delete.json" ;;
   "branches reset"*) cat "{fx}/branches-reset.json" ;;
-  connection-string*) cat "{fx}/cs-extended.json" ;;
+  connection-string*--database-name*) cat "{fx}/cs-extended.json" ;;
+  connection-string*) echo 'ERROR: Multiple databases found for the branch, please provide one with the --database-name option: neondb, unitycatalog' >&2; exit 1 ;;
   "functions list"*) cat "{fx}/functions-list.json" ;;
   "buckets list"*) cat "{fx}/buckets-list.json" ;;
   "buckets create"*) cat "{fx}/buckets-create.json" ;;
   "credentials create"*) cat "{fx}/credentials-create.json" ;;
   "credentials revoke"*) ;;
-  "databases list"*) echo '[{{"name": "neondb"}}]' ;;
-  "databases create"*) echo '{{}}' ;;
+  "databases list"*) cat "{fx}/databases-list.json" ;;
+  "databases create"*--owner-name*) echo '{{}}' ;;
+  "databases create"*) echo 'ERROR: More than one role found in branch br-autumn-mouse-baubmqk8. Please specify the owner name. Roles: neondb_owner, authz_reader' >&2; exit 1 ;;
   *) echo "unexpected: $*" >&2; exit 2 ;;
 esac"#,
             fx = fx.display()
@@ -118,7 +123,12 @@ async fn the_cli_output_parses_for_every_verb() {
     neon.revoke_credential(p, "main", &credential.token_id)
         .await
         .unwrap();
-    assert_eq!(neon.databases(p, "main").await.unwrap(), ["neondb"]);
+    assert_eq!(
+        neon.databases(p, "main").await.unwrap(),
+        ["neondb", "unitycatalog"]
+    );
+    // Owned by the main database's owner, which has to be named next to a second role.
+    neon.create_database(p, "main", "mlflow").await.unwrap();
     neon.reset_branch(p, &created.id).await.unwrap();
     neon.delete_branch(p, &created.id).await.unwrap();
 
@@ -127,6 +137,12 @@ async fn the_cli_output_parses_for_every_verb() {
         .lines()
         .find(|l| l.starts_with("branches create"))
         .unwrap();
+    let named = |verb: &str, arg: &str| {
+        let line = calls.lines().find(|l| l.starts_with(verb)).unwrap();
+        assert!(line.contains(arg), "{arg} in {line}");
+    };
+    named("connection-string", "--database-name neondb");
+    named("databases create", "--owner-name neondb_owner");
     for arg in [
         "--no-secrets",
         "--parent main",
