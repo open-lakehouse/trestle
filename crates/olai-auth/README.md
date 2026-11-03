@@ -10,6 +10,11 @@ the `Authorization: Bearer` header of each request and hands handlers a `Princip
   - `PushKeySource` takes a JWKS document the host fetched itself, so no HTTP client
     is linked.
   - `HttpKeySource` (feature `http`) fetches a JWKS URL.
+- **API keys**: `olk_<id>_<secret>` keys authenticate service accounts. An
+  `ApiKeyStore` looks the key up by id, and the SHA-256 of the whole key is compared
+  in constant time. Live keys are cached for a short time (10 s by default), so a
+  revoked key stops working within that time. `PgApiKeyStore` (feature `postgres`)
+  reads them from Postgres.
 - **User status**: a required, cached lookup of whether a user is banned or an admin,
   implemented by the host against its identity provider's user records. Token claims
   are never used for either.
@@ -28,6 +33,7 @@ let verifier = JwtVerifier::new("https://auth.example.com", keys)
     .with_audience("https://api.example.com");
 let authenticator = Authenticator::builder(MyUserStatusStore)
     .issuer(verifier)
+    .api_keys(PgApiKeyStore::new(pool))
     .resource_metadata_url("https://api.example.com/.well-known/oauth-protected-resource")
     .build()?;
 
@@ -40,15 +46,16 @@ let app = Router::new()
 | Response | When |
 |---|---|
 | 401, `WWW-Authenticate: Bearer resource_metadata="…"` | no bearer token |
-| 401, `WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="…"` | the token was rejected, or its user is unknown |
+| 401, `WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="…"` | the token or API key was rejected, or its user is unknown |
 | 403 | the user is banned |
-| 503 | the key source or the user status store failed |
+| 503 | the key source, the user status store or the API key store failed |
 
 ## Features
 
 | Feature | Adds |
 |---|---|
 | `http` | `HttpKeySource`, using `reqwest` with rustls |
+| `postgres` | `PgApiKeyStore`, using `sqlx` with only its `postgres` feature (the host's sqlx brings the runtime and TLS) |
 
 ## License
 

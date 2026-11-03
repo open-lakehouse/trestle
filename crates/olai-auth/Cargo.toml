@@ -1,6 +1,6 @@
 [package]
 name = "olai-auth"
-description = "Bearer-token authentication for axum services: EdDSA JWT verification and a Principal extractor"
+description = "Bearer-token authentication for axum services: EdDSA JWT verification, API keys and a Principal extractor"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -30,11 +30,18 @@ ed25519-dalek = { version = "2.1", default-features = false, features = ["std", 
 # Only the `http` feature's JWKS fetch. rustls without the workspace's http2/json/stream
 # extras, to keep the client small.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
+# API key digests and their constant-time comparison.
+sha2 = { version = "0.10", default-features = false }
+# Only the `postgres` feature's `PgApiKeyStore`. Runtime queries (no macros, no offline
+# cache), and no runtime or TLS features: the host's own sqlx brings those.
+sqlx = { version = "0.8", default-features = false, features = ["postgres"], optional = true }
+subtle = { version = "2.6", default-features = false }
 # Without the workspace's `log` bridge.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 mockito = "1.4"
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
@@ -42,6 +49,12 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 # `HttpKeySource`: fetch a JWKS document over HTTPS. Hosts that receive the keys some other
 # way (see `PushKeySource`) leave it off and link no HTTP client.
 http = ["dep:reqwest"]
+# `PgApiKeyStore`: API keys from Postgres tables, through the host's `sqlx::PgPool`.
+postgres = ["dep:sqlx"]
+
+[[test]]
+name = "postgres"
+required-features = ["postgres"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }

@@ -53,6 +53,7 @@ jobs:
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-auth --features postgres -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-trestle --features test-engine -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
@@ -239,6 +240,15 @@ jobs:
           # combined with other target selectors, so it is a separate invocation.
           cargo test --locked --lib -p olai-store --features postgres
           cargo test --locked --doc -p olai-store --features postgres
+      # `PgApiKeyStore` against its tables, in a schema the test creates and drops.
+      - name: Run Postgres API key test (olai-auth)
+        env:
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: olai_store
+        run: |
+          export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
+          cargo test --locked -p olai-auth --features postgres --test postgres
 
   coverage:
     name: Coverage

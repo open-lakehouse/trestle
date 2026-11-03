@@ -64,6 +64,25 @@ test-pg PG_PORT="5433":
   export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
   SQLX_OFFLINE=true cargo test --locked --lib -p olai-store --features postgres
 
+# Run the olai-auth Postgres API key test against a throwaway Postgres container.
+test-auth-pg PG_PORT="5434":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  name=olai-auth-pg-test
+  user=postgres pass=postgres db=olai_auth
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" \
+    -e POSTGRES_USER="$user" -e POSTGRES_PASSWORD="$pass" -e POSTGRES_DB="$db" \
+    -p {{ PG_PORT }}:5432 postgres:16 >/dev/null
+  trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+  echo ">> waiting for postgres..."
+  for _ in $(seq 1 30); do
+    docker exec "$name" pg_isready -U "$user" -d "$db" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
+  cargo test --locked -p olai-auth --features postgres --test postgres -- --nocapture
+
 # Regenerate the Homebrew formula for an existing `olai-trestle-v*` release and
 # print it (does not push). Downloads the `.sha256` sidecars from that release
 # and renders `Formula/trestle.rb` via scripts/gen-homebrew-formula.sh — the same

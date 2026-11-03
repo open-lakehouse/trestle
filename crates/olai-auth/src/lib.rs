@@ -10,6 +10,9 @@
 //!   host fetched itself; [`HttpKeySource`] (feature `http`) fetches a JWKS URL.
 //! - A [`UserStatusStore`] supplies whether a user is banned or an admin. The lookup is
 //!   required and cached for a short TTL. Token claims are never used for either.
+//! - API keys (`olk_<id>_<secret>`) authenticate service accounts. An [`ApiKeyStore`]
+//!   looks a key up by id, and the SHA-256 of the key is compared in constant time.
+//!   `PgApiKeyStore` (feature `postgres`) reads them from Postgres.
 //! - [`auth_layer`] runs an [`Authenticator`] in front of a router. Rejected requests get
 //!   a 401 with an RFC 6750 `WWW-Authenticate` challenge whose `resource_metadata`
 //!   parameter (RFC 9728) points clients at the authorization server.
@@ -66,6 +69,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+mod api_key;
 mod authenticator;
 mod error;
 mod jwk;
@@ -76,10 +80,15 @@ mod metadata;
 mod principal;
 mod user_status;
 
+#[cfg(feature = "postgres")]
+mod postgres;
 #[cfg(test)]
 mod test_support;
 
-/// Re-exported for implementing [`KeySource`] and [`UserStatusStore`].
+pub use api_key::{
+    API_KEY_ISSUER, API_KEY_PREFIX, ApiKeyRecord, ApiKeyStore, api_key_digest, parse_api_key,
+};
+/// Re-exported for implementing [`KeySource`], [`UserStatusStore`] and [`ApiKeyStore`].
 pub use async_trait::async_trait;
 pub use authenticator::{Authenticator, AuthenticatorBuilder, ConfigError};
 pub use error::{AuthError, BoxError, InvalidToken};
@@ -91,5 +100,8 @@ pub use key_source::HttpKeySource;
 pub use key_source::{KeySource, PushKeySource};
 pub use layer::auth_layer;
 pub use metadata::{ProtectedResourceMetadata, WELL_KNOWN_PATH};
+#[cfg(feature = "postgres")]
+#[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
+pub use postgres::PgApiKeyStore;
 pub use principal::{AuthMethod, MissingPrincipal, Principal, PrincipalKind};
 pub use user_status::{UserStatus, UserStatusStore};

@@ -12,8 +12,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use olai_auth::{
-    Authenticator, BoxError, JwtVerifier, Principal, ProtectedResourceMetadata, PushKeySource,
-    UserStatus, UserStatusStore, WELL_KNOWN_PATH, auth_layer,
+    ApiKeyRecord, ApiKeyStore, Authenticator, BoxError, JwtVerifier, Principal,
+    ProtectedResourceMetadata, PushKeySource, UserStatus, UserStatusStore, WELL_KNOWN_PATH,
+    api_key_digest, auth_layer,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -34,6 +35,24 @@ impl UserStatusStore for Users {
             "admin" => Some(UserStatus::from_role(Some("admin"), false)),
             _ => Some(UserStatus::default()),
         })
+    }
+}
+
+const API_KEY: &str =
+    "olk_0123456789abcdef_fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+/// Knows one key, `API_KEY`, for the `ci-bot` service account.
+struct Keys;
+
+#[olai_auth::async_trait]
+impl ApiKeyStore for Keys {
+    async fn lookup(&self, id: &str) -> Result<Option<ApiKeyRecord>, BoxError> {
+        Ok((id == "0123456789abcdef").then(|| ApiKeyRecord {
+            sha256: api_key_digest(API_KEY),
+            account_id: "ci-bot-id".into(),
+            account_name: "ci-bot".into(),
+            scopes: vec![],
+        }))
     }
 }
 
@@ -72,6 +91,7 @@ fn app() -> Router {
         .with_min_refresh_interval(Duration::ZERO);
     let authenticator = Authenticator::builder(Users)
         .issuer(verifier)
+        .api_keys(Keys)
         .resource_metadata_url(METADATA_URL)
         .build()
         .unwrap();
@@ -118,6 +138,23 @@ async fn valid_token_reaches_the_handler() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await, "admin admin=true");
+}
+
+#[tokio::test]
+async fn api_key_reaches_the_handler_as_a_service_account() {
+    let response = call("/whoami", Some(&format!("Bearer {API_KEY}"))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await, "ci-bot-id admin=false");
+
+    let wrong = API_KEY.replace("fedcba98", "00000000");
+    let response = call("/whoami", Some(&format!("Bearer {wrong}"))).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let header = challenge(&response).to_owned();
+    assert!(
+        header.contains(r#"error_description="invalid API key""#),
+        "{header}"
+    );
+    assert!(!header.contains(&wrong));
 }
 
 #[tokio::test]

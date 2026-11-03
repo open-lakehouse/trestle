@@ -19,6 +19,8 @@ const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
 /// A token is accepted when all of these hold:
 ///
 /// - the header's `alg` is `EdDSA` (no other algorithm is accepted) and it has a `kid`;
+/// - if a type is required with [`with_type`](Self::with_type), the header's `typ` is
+///   that type;
 /// - the Ed25519 signature verifies against that `kid`'s key from the [`KeySource`];
 /// - `iss` equals the configured issuer exactly;
 /// - `aud` (a string or an array) contains one of the configured audiences;
@@ -30,6 +32,7 @@ const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
 pub struct JwtVerifier {
     issuer: String,
     audiences: Vec<String>,
+    token_type: Option<String>,
     leeway: Duration,
     keys: KeyCache,
     clock: fn() -> i64,
@@ -105,6 +108,7 @@ struct Registered {
 #[derive(Deserialize)]
 struct Header {
     alg: String,
+    typ: Option<String>,
     kid: Option<String>,
 }
 
@@ -127,6 +131,7 @@ impl JwtVerifier {
         Self {
             issuer: issuer.into(),
             audiences: Vec::new(),
+            token_type: None,
             leeway: DEFAULT_LEEWAY,
             keys: KeyCache::new(keys),
             clock: system_now,
@@ -136,6 +141,17 @@ impl JwtVerifier {
     /// Also accepts tokens whose `aud` contains `audience`.
     pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
         self.audiences.push(audience.into());
+        self
+    }
+
+    /// Only accepts tokens whose header `typ` is `token_type`, such as `at+jwt` for
+    /// OAuth access tokens (RFC 9068). Tokens without a `typ` are rejected.
+    ///
+    /// By default the `typ` is not checked. Requiring it keeps other JWTs of the same
+    /// issuer, such as ID tokens, from being used as access tokens. As RFC 7515
+    /// specifies, the comparison ignores case and an `application/` prefix.
+    pub fn with_type(mut self, token_type: impl Into<String>) -> Self {
+        self.token_type = Some(token_type.into());
         self
     }
 
@@ -177,6 +193,14 @@ impl JwtVerifier {
         if header.alg != "EdDSA" {
             return Err(InvalidToken::Algorithm.into());
         }
+        if let Some(required) = &self.token_type
+            && !header
+                .typ
+                .as_deref()
+                .is_some_and(|typ| media_type_eq(typ, required))
+        {
+            return Err(InvalidToken::Type.into());
+        }
         let kid = header.kid.ok_or(InvalidToken::MissingKeyId)?;
         let signature = URL_SAFE_NO_PAD
             .decode(parts.signature)
@@ -215,6 +239,18 @@ impl JwtVerifier {
         }
         Ok(parse::<RawClaims>(&payload)?.into())
     }
+}
+
+/// Whether two `typ` values name the same media type: case-insensitive, with an
+/// optional `application/` prefix (RFC 7515, section 4.1.9).
+fn media_type_eq(a: &str, b: &str) -> bool {
+    fn short(t: &str) -> &str {
+        match t.get(..12) {
+            Some(prefix) if prefix.eq_ignore_ascii_case("application/") => &t[12..],
+            _ => t,
+        }
+    }
+    short(a).eq_ignore_ascii_case(short(b))
 }
 
 /// The token's `iss`, read without verifying anything, to pick the verifier.
@@ -371,6 +407,45 @@ mod tests {
     async fn rejects_the_wrong_issuer() {
         let t = token(&with(json!({ "iss": "https://auth.example.com/" })));
         assert_eq!(reason(&t).await, InvalidToken::Issuer);
+    }
+
+    #[tokio::test]
+    async fn checks_the_type_only_when_required() {
+        let typed = |typ: Option<&str>| {
+            let mut header = json!({ "alg": "EdDSA", "kid": "k1" });
+            if let Some(typ) = typ {
+                header["typ"] = json!(typ);
+            }
+            sign(&header, &claims(), &signing_key(1))
+        };
+        // Not required: any `typ`, or none, passes.
+        assert!(verifier().verify(&typed(None)).await.is_ok());
+        assert!(verifier().verify(&typed(Some("JWT"))).await.is_ok());
+
+        let access = verifier().with_type("at+jwt");
+        for ok in [
+            "at+jwt",
+            "AT+JWT",
+            "application/at+jwt",
+            "Application/AT+JWT",
+        ] {
+            assert!(access.verify(&typed(Some(ok))).await.is_ok(), "{ok}");
+        }
+        for bad in [
+            None,
+            Some("JWT"),
+            Some("jwt"),
+            Some("application/"),
+            Some(""),
+        ] {
+            assert!(
+                matches!(
+                    access.verify(&typed(bad)).await,
+                    Err(AuthError::InvalidToken(InvalidToken::Type))
+                ),
+                "{bad:?}"
+            );
+        }
     }
 
     #[tokio::test]

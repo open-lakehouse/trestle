@@ -19,7 +19,8 @@ use axum::response::{IntoResponse, Response};
 pub struct Principal {
     /// Who the caller is.
     pub kind: PrincipalKind,
-    /// The issuer that vouched for the caller.
+    /// The issuer that vouched for the caller: the token's `iss`, or
+    /// [`API_KEY_ISSUER`](crate::API_KEY_ISSUER) for an API key.
     pub issuer: String,
     /// The scopes the credential grants. Empty when it carries none.
     pub scopes: Vec<String>,
@@ -28,7 +29,8 @@ pub struct Principal {
     /// How the caller authenticated.
     pub auth_method: AuthMethod,
     /// Whether the caller is an administrator, according to the
-    /// [`UserStatusStore`](crate::UserStatusStore).
+    /// [`UserStatusStore`](crate::UserStatusStore). Always `false` for a service
+    /// account.
     pub admin: bool,
 }
 
@@ -59,6 +61,9 @@ pub enum PrincipalKind {
 pub enum AuthMethod {
     /// A JWT verified by a [`JwtVerifier`](crate::JwtVerifier).
     Jwt,
+    /// An API key found in the [`ApiKeyStore`](crate::ApiKeyStore). The principal is
+    /// a [`PrincipalKind::ServiceAccount`].
+    ApiKey,
 }
 
 impl Principal {
