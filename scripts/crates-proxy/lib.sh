@@ -73,16 +73,22 @@ config_patches() {
     local config
     config="$(consumer_root)/.cargo/config.toml"
     [[ -f "$config" ]] || return 0
-    sed -nE 's|^patch\.crates-io\.([A-Za-z0-9_-]+) = \{ path = "([^"]+)" \}$|\1 \2|p' "$config"
+    # `name = { path = "…" }` as patch.sh writes it, and the renamed form for a second
+    # release of the same crate: `name-old = { path = "…", package = "name" }`.
+    sed -nE \
+        -e 's|^patch\.crates-io\.([A-Za-z0-9_-]+) = \{ path = "([^"]+)" \}$|\1 \2|p' \
+        -e 's|^patch\.crates-io\.[A-Za-z0-9_-]+ = \{ path = "([^"]+)", package = "([A-Za-z0-9_-]+)" \}$|\2 \1|p' \
+        "$config"
 }
 
-# `name dir` of every publishable crate of a cargo workspace.
+# `name dir version` of every publishable crate of a cargo workspace.
 published_crates() {
     cargo metadata --no-deps --offline --format-version 1 --manifest-path "$1/Cargo.toml" 2>/dev/null |
-        jq -r '.packages[] | select(.publish != []) | "\(.name) \(.manifest_path | sub("/Cargo.toml$"; ""))"'
+        jq -r '.packages[] | select(.publish != []) | "\(.name) \(.manifest_path | sub("/Cargo.toml$"; "")) \(.version)"'
 }
 
-# `name dir` of every publishable crate of every upstream patched in .cargo/config.toml.
+# `name dir version` of every publishable crate of every upstream patched in
+# .cargo/config.toml (a crate is listed once per checkout it's patched from).
 # Wider than config_patches: a patched crate pulls its upstream siblings in through
 # their path dependencies, so they resolve from the checkout too without being named.
 patched_upstream_crates() {
@@ -91,4 +97,62 @@ patched_upstream_crates() {
     done | sort -u | while IFS= read -r root; do
         published_crates "$root"
     done
+}
+
+# Print `lock` with its restored packages turned back into crates.io entries:
+#   sums  ` name@version=sha256 …`: the packages to restore, with their checksums
+#   drop  `name …`: the crates whose [[patch.unused]] entries go
+#
+# Only a package without a `source` is restored: the same name and version can also
+# be in the lock from git (a crate published from a repo that's also git-pinned),
+# and that entry stays as it is. While such a twin exists, Cargo writes every
+# reference to either with its source, so bare `"name version"` references, which
+# meant the patched path package, get the crates.io source.
+restore_registry_entries() {
+    awk -v sums="$2" -v drop="$3" -v source="$CRATES_IO_SOURCE" '
+        BEGIN {
+            n = split(sums, kv, " ")
+            for (i = 1; i <= n; i++) { split(kv[i], a, "="); sum[a[1]] = a[2] }
+            n = split(drop, d, " ")
+            for (i = 1; i <= n; i++) fixed[d[i]] = 1
+        }
+        # First pass: which restored name@version also has an entry with a source.
+        FNR == NR {
+            if (/^\[\[/) { pkg = ($0 == "[[package]]"); name = ver = "" }
+            else if (pkg && /^name = /) { name = $3; gsub(/"/, "", name) }
+            else if (pkg && /^version = /) { ver = $3; gsub(/"/, "", ver) }
+            else if (pkg && /^source = / && (name "@" ver) in sum) twin[name "@" ver] = 1
+            next
+        }
+        # Blocks are buffered so a dropped [[patch.unused]] entry goes as a whole, and
+        # so a package is only restored once it is known to have no source.
+        function flush() {
+            if (kind == "package" && !has_source && (name "@" ver) in sum)
+                sub(/\nversion = [^\n]*\n/, "&source = \"" source "\"\nchecksum = \"" sum[name "@" ver] "\"\n", block)
+            if (!(kind == "unused" && fixed[name])) out = out block
+            block = ""
+        }
+        /^\[\[/ {
+            flush()
+            kind = ($0 == "[[package]]") ? "package" : ($0 == "[[patch.unused]]") ? "unused" : "other"
+            name = ver = ""; has_source = 0
+            block = $0 "\n"
+            next
+        }
+        /^name = / { name = $3; gsub(/"/, "", name) }
+        /^version = / { ver = $3; gsub(/"/, "", ver) }
+        /^source = / { has_source = 1 }
+        # A dependency reference: ` "name version",`.
+        /^ "[^" ]+ [^" ]+",$/ {
+            ref = $1 "@" $2; gsub(/[",]/, "", ref)
+            if (ref in twin) { sub(/",$/, " (" source ")\",") }
+        }
+        { block = block $0 "\n" }
+        END {
+            flush()
+            # Dropping the last [[patch.unused]] entries leaves trailing blank lines.
+            sub(/\n+$/, "\n", out)
+            printf "%s", out
+        }
+    ' "$1" "$1"
 }

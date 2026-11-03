@@ -52,6 +52,25 @@ requirement` or `no matching package named`, even though CI would build it.
    release), patch both: `patch mangrove` and `patch trestle`. Each upstream gets
    its own block in `.cargo/config.toml`, and `lock-registry` restores the
    crates from all of them.
+
+   **Two releases of one crate.** Two dependencies can pull different releases of
+   the same upstream crate (a git pin on this week's mangrove next to a crate built
+   on last month's trestle). Patch the older set too, from a second checkout at its
+   release commit (`git worktree add --detach … <commit>`), under renamed keys
+   after the `patch.sh` block:
+
+   ```toml
+   patch.crates-io.olai-store-old = { path = "/…/trestle-old/crates/olai-store", package = "olai-store" }
+   ```
+
+   `lock-registry` checks each version against the checkout it was patched from.
+
+   **The same crate from git and crates.io.** When a crate is git-pinned *and*
+   reaches the graph from crates.io at the same version (mangrove's `olai-uc-*`
+   from a git pin and through distributary's crates.io deps), the lock has two
+   entries that Cargo tells apart only by `source`. `lock-registry` restores the
+   patched entry, leaves the git one alone, and qualifies the references to the
+   crates.io one with its source, as Cargo writes them.
 3. **The change isn't released yet, or the consumer needs an unreleased fix.**
    Commit a git pin, keeping `version` so that switching back is a one-word edit:
 
@@ -75,11 +94,14 @@ on the git checkout they're run from (the *consumer*):
 |---|---|
 | `upstream-root.sh <repo>` | Prints the upstream checkout: `$<REPO>_ROOT` (e.g. `MANGROVE_ROOT`), else `<repo>` next to the consumer's **main** checkout, so it works from `~/code/<consumer>-worktrees/<branch>` too. |
 | `patch.sh [--remove] <repo> [crate…]` | Writes a marked `patch.crates-io.<crate> = { path = … }` block per upstream to `.cargo/config.toml`. By default it patches every published upstream crate the consumer uses from crates.io: declared as a registry dependency in a workspace manifest (so a git pin just switched to a version is found before the lock resolves) or resolved from crates.io in a committed lock. Git-pinned crates are skipped. |
-| `lock-registry.sh [lock…]` | For each locally patched crate, downloads `<name>-<version>.crate` from the CDN, writes `source` + `checksum` (the tarball's sha256, which is what crates.io records), and drops `[[patch.unused]]` entries. Fails when the version isn't published, which means use strategy 3. |
+| `lock-registry.sh [lock…]` | For each locally patched crate, downloads `<name>-<version>.crate` from the CDN, writes `source` + `checksum` (the tarball's sha256, which is what crates.io records), and drops `[[patch.unused]]` entries. A git entry of the same name and version is left as it is, and references to the restored entry get its source. Fails when the version isn't published, which means use strategy 3. |
 | `check-lock.sh [lock…]` | Fails when a lock has a path package that isn't a member of any workspace in the repo, or has `[[patch.unused]]` entries. Set `CRATES_PROXY_ALLOW_PATH="name …"` for intentional out-of-workspace path deps. |
 
 Without arguments, the lock scripts cover every committed `Cargo.lock`, including
 nested workspaces such as mangrove's `wasm/`.
+
+`scripts/crates-proxy/test.sh` checks the lock rewrite and the config parsing
+offline, against `testdata/`.
 
 ## Consumer setup
 

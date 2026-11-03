@@ -15,6 +15,7 @@
 #   - warns if the local crate differs from its release tag, since the lock's
 #     dependency list comes from the local source and must match the published one
 #   - writes `source` + `checksum` and drops the matching [[patch.unused]] entries
+#     (restore_registry_entries in lib.sh)
 #
 # Usage: lock-registry.sh [Cargo.lock...]    # default: every committed Cargo.lock
 set -euo pipefail
@@ -56,7 +57,9 @@ for lock in "${locks[@]}"; do
         sums="$sums $name@$ver=$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
         rm -f "$tarball"
 
-        dir="$(awk -v n="$name" '$1 == n {print $2}' <<<"$patches")"
+        # The checkout this version came from: two releases of a crate can be patched
+        # from two checkouts.
+        dir="$(awk -v n="$name" -v v="$ver" '$1 == n && $3 == v {print $2; exit}' <<<"$patches")"
         if [[ -n "$dir" ]]; then
             upstream="$(git -C "$dir" rev-parse --show-toplevel)"
             # release-plz's per-crate tag. A bare `v<ver>` is ambiguous in a
@@ -71,35 +74,7 @@ for lock in "${locks[@]}"; do
         fi
     done < <(awk 'NF' <<<"$todo")
 
-    awk -v sums="$sums" -v drop="$drop" -v source="$CRATES_IO_SOURCE" '
-        BEGIN {
-            n = split(sums, kv, " ")
-            for (i = 1; i <= n; i++) { split(kv[i], a, "="); sum[a[1]] = a[2] }
-            n = split(drop, d, " ")
-            for (i = 1; i <= n; i++) fixed[d[i]] = 1
-        }
-        # Blocks are buffered so a dropped [[patch.unused]] entry goes as a whole.
-        function flush() {
-            if (!(kind == "unused" && fixed[name])) out = out block
-            block = ""
-        }
-        /^\[\[/ { flush(); kind = ($0 == "[[package]]") ? "package" : ($0 == "[[patch.unused]]") ? "unused" : "other"; name = "" }
-        /^name = / { name = $3; gsub(/"/, "", name) }
-        /^version = / && kind == "package" {
-            ver = $3; gsub(/"/, "", ver)
-            block = block $0 "\n"
-            if ((name "@" ver) in sum)
-                block = block "source = \"" source "\"\nchecksum = \"" sum[name "@" ver] "\"\n"
-            next
-        }
-        { block = block $0 "\n" }
-        END {
-            flush()
-            # Dropping the last [[patch.unused]] entries leaves trailing blank lines.
-            sub(/\n+$/, "\n", out)
-            printf "%s", out
-        }
-    ' "$lock" >"$lock.tmp"
+    restore_registry_entries "$lock" "$sums" "$drop" >"$lock.tmp"
     mv "$lock.tmp" "$lock"
 
     echo "$lock: restored crates.io entries for:"
