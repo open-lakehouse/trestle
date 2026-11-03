@@ -1,7 +1,7 @@
 [package]
 name = "olai-stack-runtime"
 description = "Run trestle environments on Docker Compose: a ComposeEngine over the Docker CLI, status, health and events"
-version = "0.0.2"
+version = "0.0.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

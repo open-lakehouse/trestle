@@ -2926,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "olai-auth"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3139,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.21"
+version = "0.0.22"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -5522,7 +5522,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.7.0"
+version = "0.7.1"
 
 [[package]]
 name = "try-lock"

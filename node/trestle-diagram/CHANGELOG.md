@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.7.0...trestle-diagram-v0.7.1) - 2026-11-03
+
+### Added
+
+- revision-aware WorkspaceStore and publish the editor (#303)
+- add @open-lakehouse/host, the shared UI host contract (#302)
+- publish the canonical @open-lakehouse/ui-kit (#301)
+
 ## [0.7.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.6.0...trestle-diagram-v0.7.0) - 2026-11-03
 
 ### Added

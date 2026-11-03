@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.22](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.21...olai-trestle-v0.0.22) - 2026-11-03
+
+### Fixed
+
+- name the database and owner on shared Neon branches (#310)
+
 ## [0.0.21](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.20...olai-trestle-v0.0.21) - 2026-11-03
 
 ### Added
