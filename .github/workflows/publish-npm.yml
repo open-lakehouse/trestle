@@ -1,42 +1,43 @@
-name: Publish trestle-diagram
+name: Publish npm package
 
-# Publish `@open-lakehouse/trestle-diagram` (node/trestle-diagram) to npmjs.com
-# and GitHub Packages, and attach it to its GitHub Release. One job builds and
-# packs the tarball; three jobs ship that same tarball, each with only the
-# permissions it needs. The GitHub Release gets the tarball, its SHA-256, and a
-# build-provenance attestation.
+# Publish one of the npm packages under node/ (`@open-lakehouse/<package>`,
+# from node/<package>) to npmjs.com and GitHub Packages, and attach it to its
+# GitHub Release. One job builds and packs the tarball; three jobs ship that
+# same tarball, each with only the permissions it needs. The GitHub Release
+# gets the tarball, its SHA-256, and a build-provenance attestation.
 #
-# Releases come from release-plz: the placeholder crate at node/Cargo.toml
-# carries the package version, release-plz bumps it and tags
-# `trestle-diagram-v<version>`, and release-plz.yml calls this workflow with
-# that tag. The version is stamped into package.json at pack time. Publishing
-# is idempotent: a version a registry already has is skipped, so re-runs are
-# safe.
+# Releases come from release-plz: each package has a placeholder crate
+# (node/Cargo.toml for trestle-diagram, node/<package>/Cargo.toml for the
+# others) that carries its version. release-plz bumps it and tags
+# `<package>-v<version>`, and release-plz.yml calls this workflow once per
+# released package with that tag. The version is stamped into package.json at
+# pack time. Publishing is idempotent: a version a registry already has is
+# skipped, so re-runs are safe.
 #
 # No stored credentials:
 # - npmjs.com: trusted publishing (OIDC, `id-token: write`) with a provenance
 #   attestation. The trusted publisher only allows *staged* publishing: CI runs
 #   `npm stage publish`, and the version goes live once a maintainer approves
 #   it on npmjs.com (or with `npm stage approve`) with 2FA. npm checks the
-#   *calling* workflow, so the trusted publisher is registered for
+#   *calling* workflow, so each package's trusted publisher is registered for
 #   `release-plz.yml` with the `release` environment.
 # - GitHub Packages: has no OIDC exchange, so it uses the job's own short-lived
 #   GITHUB_TOKEN (`packages: write`).
 # Packages are only ever published from CI, never from a developer machine.
 #
-# Manual runs are for a dry run, or for the one-time npm bootstrap: npm cannot
-# attach a trusted publisher to a package that does not exist yet, and OIDC
-# cannot create one. The bootstrap *stages* the first version with a token
-# instead (`npm stage publish`, which can create a package), and a maintainer
-# promotes it on npmjs.com with 2FA. So the token can't publish anything on
-# its own:
+# Manual runs are for a dry run, or for the one-time npm bootstrap of a new
+# package: npm cannot attach a trusted publisher to a package that does not
+# exist yet, and OIDC cannot create one. The bootstrap *stages* the first
+# version with a token instead (`npm stage publish`, which can create a
+# package), and a maintainer promotes it on npmjs.com with 2FA. So the token
+# can't publish anything on its own:
 #   1. Store an npm token that can stage to the @open-lakehouse scope as
 #      NPM_TOKEN in the `release` environment.
-#   2. From `main`: `gh workflow run publish-trestle-diagram.yml -f
-#      tag=trestle-diagram-v0.1.0 -f npm_bootstrap=true -f dry_run=false`
+#   2. From `main`: `gh workflow run publish-npm.yml -f package=ui-kit
+#      -f tag=ui-kit-v0.0.1 -f npm_bootstrap=true -f dry_run=false`
 #      (the default `dry_run=true` checks it first).
 #   3. Approve the staged version on npmjs.com and delete the token. Shortly
-#      before the next trestle-diagram release, register the trusted publisher
+#      before the package's next release, register the trusted publisher
 #      (workflow `release-plz.yml`, environment `release`, stage publish only).
 #      npm expires one that hasn't published within 2 days.
 # release-plz releases a package's first version as soon as it reaches `main`,
@@ -45,14 +46,25 @@ name: Publish trestle-diagram
 on:
   workflow_call:
     inputs:
+      package:
+        description: "The package's directory under node/ (= its npm name without the scope)"
+        required: true
+        type: string
       tag:
-        description: "The release-plz tag to publish (trestle-diagram-v<version>)"
+        description: "The release-plz tag to publish (<package>-v<version>)"
         required: true
         type: string
   workflow_dispatch:
     inputs:
+      package:
+        description: "The package to publish"
+        required: true
+        type: choice
+        options:
+          - trestle-diagram
+          - ui-kit
       tag:
-        description: "Release tag to build (trestle-diagram-v<version>); default: the selected ref"
+        description: "Release tag to build (<package>-v<version>); default: the selected ref"
         required: false
         type: string
       dry_run:
@@ -70,11 +82,14 @@ on:
 permissions: {}
 
 concurrency:
-  group: publish-trestle-diagram
+  group: publish-npm-${{ inputs.package }}
   cancel-in-progress: false
 
 env:
-  PACKAGE: "@open-lakehouse/trestle-diagram"
+  PACKAGE: "@open-lakehouse/${{ inputs.package }}"
+  # The package's directory under node/, and its tarball's name everywhere.
+  PACKAGE_DIR: ${{ inputs.package }}
+  TGZ: ${{ inputs.package }}.tgz
   # workflow_call has no `dry_run` input; treat it as a real publish.
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 
@@ -100,39 +115,56 @@ jobs:
           bun-version: "1.3.14"
           no-cache: true
       # The placeholder crate's `version` (release-plz owns it) is the package
-      # version.
+      # version. trestle-diagram's crate sits at node/ (it covers the sources
+      # it bundles), every other package's in its own directory.
       - name: Read the release version
         id: version
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
-          if [ -z "$version" ]; then
-            echo "::error::no version in node/Cargo.toml"
+          if ! [[ "$PACKAGE_DIR" =~ ^[a-z][a-z0-9-]*$ ]]; then
+            echo "::error::not a package name: $PACKAGE_DIR"
             exit 1
           fi
-          if [ -n "$TAG" ] && [ "$TAG" != "trestle-diagram-v$version" ]; then
-            echo "::error::tag $TAG does not match trestle-diagram version $version"
+          if [ "$PACKAGE_DIR" = trestle-diagram ]; then
+            manifest=Cargo.toml
+          else
+            manifest="$PACKAGE_DIR/Cargo.toml"
+          fi
+          if [ ! -f "$manifest" ] || [ ! -f "$PACKAGE_DIR/package.json" ]; then
+            echo "::error::no npm package with a placeholder crate at node/$PACKAGE_DIR"
+            exit 1
+          fi
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n1)"
+          if [ -z "$version" ]; then
+            echo "::error::no version in node/$manifest"
+            exit 1
+          fi
+          if [ -n "$TAG" ] && [ "$TAG" != "$PACKAGE_DIR-v$version" ]; then
+            echo "::error::tag $TAG does not match $PACKAGE_DIR version $version"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
+      # Every publishable package, in dependency order (a package's build reads
+      # its workspace dependencies' dist/ types), then the diagram bundle.
+      - run: bun run build:packages
       - run: bun run build:diagram
-      # `bun pm pack` rewrites the `workspace:` protocol in package.json, which
-      # `npm publish` of the directory would leave in place.
+      # `bun pm pack` rewrites the `workspace:` protocol in package.json (which
+      # `npm publish` of the directory would leave in place) to the
+      # dependency's package.json version, so every package is stamped from its
+      # placeholder crate first, not only this one.
       - name: Pack
-        working-directory: node/trestle-diagram
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          npm pkg set version="$VERSION"
-          bun pm pack --filename "$RUNNER_TEMP/trestle-diagram.tgz"
+          bun scripts/stamp-versions.ts
+          cd "$PACKAGE_DIR"
+          bun pm pack --filename "$RUNNER_TEMP/$TGZ"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: trestle-diagram-tgz
-          path: ${{ runner.temp }}/trestle-diagram.tgz
+          name: npm-tgz
+          path: ${{ runner.temp }}/${{ env.TGZ }}
           if-no-files-found: error
           retention-days: 7
 
@@ -150,7 +182,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: trestle-diagram-tgz
+          name: npm-tgz
           path: ${{ runner.temp }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -183,7 +215,7 @@ jobs:
           fi
       - name: Stage (dry-run)
         if: ${{ env.DRY_RUN == 'true' }}
-        run: npm stage publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public --dry-run
+        run: npm stage publish "$RUNNER_TEMP/$TGZ" --access public --dry-run
       # npm prefers the OIDC exchange and only falls back to NODE_AUTH_TOKEN
       # when it fails, which is the case before the trusted publisher exists.
       # Outside the bootstrap the token is empty, so only OIDC can stage.
@@ -196,7 +228,7 @@ jobs:
           # promotes the version on npmjs.com with 2FA.
           NODE_AUTH_TOKEN: ${{ inputs.npm_bootstrap && secrets.NPM_TOKEN || '' }}
         run: |
-          npm stage publish "$RUNNER_TEMP/trestle-diagram.tgz" --access public --provenance
+          npm stage publish "$RUNNER_TEMP/$TGZ" --access public --provenance
           if [ "$BOOTSTRAP" = true ]; then
             echo "::notice::Staged $PACKAGE@$VERSION. Approve it on npmjs.com, then register the trusted publisher."
           else
@@ -216,7 +248,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: trestle-diagram-tgz
+          name: npm-tgz
           path: ${{ runner.temp }}
       # Writes an .npmrc for the GitHub Packages registry that reads the token
       # from NODE_AUTH_TOKEN.
@@ -235,13 +267,13 @@ jobs:
           fi
       - name: Publish (dry-run)
         if: ${{ env.DRY_RUN == 'true' }}
-        run: npm publish "$RUNNER_TEMP/trestle-diagram.tgz" --dry-run
+        run: npm publish "$RUNNER_TEMP/$TGZ" --dry-run
       - name: Publish
         if: ${{ env.DRY_RUN != 'true' && !steps.published.outputs.skip }}
         # zizmor: ignore[use-trusted-publishing] — npm trusted publishing (OIDC)
         # exists only for registry.npmjs.org; GitHub Packages authenticates the
         # job's own ephemeral GITHUB_TOKEN, so no long-lived credential exists.
-        run: npm publish "$RUNNER_TEMP/trestle-diagram.tgz"
+        run: npm publish "$RUNNER_TEMP/$TGZ"
 
   github-release:
     name: Attest and attach to the GitHub Release
@@ -262,15 +294,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: trestle-diagram-tgz
+          name: npm-tgz
           path: ${{ runner.temp }}
       # npm's own tarball name, plus a checksum next to it.
       - name: Name and checksum the tarball
         id: files
         working-directory: ${{ runner.temp }}
         run: |
-          tgz="open-lakehouse-trestle-diagram-$VERSION.tgz"
-          mv trestle-diagram.tgz "$tgz"
+          tgz="open-lakehouse-$PACKAGE_DIR-$VERSION.tgz"
+          mv "$TGZ" "$tgz"
           sha256sum "$tgz" > "$tgz.sha256"
           echo "tgz=$RUNNER_TEMP/$tgz" >> "$GITHUB_OUTPUT"
           echo "sha256=$RUNNER_TEMP/$tgz.sha256" >> "$GITHUB_OUTPUT"
@@ -292,5 +324,5 @@ jobs:
           TGZ: ${{ steps.files.outputs.tgz }}
           SHA256: ${{ steps.files.outputs.sha256 }}
         run: |
-          gh release upload "trestle-diagram-v$VERSION" "$TGZ" "$SHA256" \
+          gh release upload "$PACKAGE_DIR-v$VERSION" "$TGZ" "$SHA256" \
             --clobber --repo "$GITHUB_REPOSITORY"

@@ -1,5 +1,5 @@
 import { FIXTURE_PLAN } from "@open-lakehouse/stack-wasm/fixtures";
-import type { Meta, StoryObj } from "@storybook/react";
+import type { Meta, StoryObj } from "@storybook/react-vite";
 import { type ReactNode, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDiagramPortal } from "../graph/nodeSlots";

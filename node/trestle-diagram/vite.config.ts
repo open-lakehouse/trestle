@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { transform } from "lightningcss";
 import postcss, { type Rule } from "postcss";
 import selectorParser from "postcss-selector-parser";
-import { defineConfig, type Plugin } from "vite";
+import { defaultClientConditions, defineConfig, type Plugin } from "vite";
 
 /** The class every diagram style is scoped under (the embed's root element). */
 const SCOPE = "trestle-diagram";
@@ -100,6 +100,9 @@ function isExternal(id: string): boolean {
 // A library build of the read-only diagram.
 export default defineConfig({
   plugins: [tailwindcss(), scopedStyles()],
+  // Bundle the workspace packages from source (their `source` export
+  // condition), not from a `dist/` that may not be built.
+  resolve: { conditions: ["source", ...defaultClientConditions] },
   build: {
     outDir: "dist",
     emptyOutDir: true,

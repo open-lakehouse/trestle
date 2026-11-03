@@ -2,7 +2,7 @@ import {
   FIXTURE_CATALOG,
   FIXTURE_PLAN,
 } from "@open-lakehouse/stack-wasm/fixtures";
-import type { Meta, StoryObj } from "@storybook/react";
+import type { Meta, StoryObj } from "@storybook/react-vite";
 import { EnvironmentEditor } from "./EnvironmentEditor";
 import type { Planner } from "./types";
 

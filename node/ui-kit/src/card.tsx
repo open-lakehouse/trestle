@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { cn } from "./utils";
+import { cn } from "./utils.js";
 
 // A raised surface for grouping content (the module/capability picker tiles, panels).
 // Headless with respect to theme: it emits `bg-card`/`text-card-foreground`/`border`

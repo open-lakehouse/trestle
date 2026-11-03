@@ -1,0 +1,38 @@
+# Release placeholder for the npm package `@open-lakehouse/ui-kit` (this
+# directory). release-plz only understands Cargo packages, so this manifest
+# `include`s exactly the files that end up in the npm tarball; a change to any
+# of them releases the package. Its `version` is the npm version: release-plz
+# bumps it from conventional commits, writes CHANGELOG.md and tags
+# `ui-kit-v<version>`, and release-plz.yml then publishes the npm package (see
+# .github/workflows/publish-npm.yml). Never published to crates.io.
+
+[package]
+name = "ui-kit"
+version = "0.0.1"
+description = "Release placeholder for the @open-lakehouse/ui-kit npm package"
+publish = false
+readme = "README.md"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+# Anchored (leading `/`): unanchored names would also match inside node_modules.
+include = [
+  "/Cargo.toml",
+  "/release.rs",
+  "/package.json",
+  "/README.md",
+  "/DESIGN.md",
+  "/tsconfig*.json",
+  "/src/**",
+  "!**/*.stories.tsx",
+  "!**/*.test.ts",
+  "!**/*.test.tsx",
+]
+
+[lib]
+path = "release.rs"

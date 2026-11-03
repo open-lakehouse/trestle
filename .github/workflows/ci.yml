@@ -327,9 +327,10 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  # The environment-editor web workspace (node/): lint, typecheck, build the
-  # app against the fixture planner (no wasm), and build the publishable
-  # diagram package, which also checks its bundle's dependency manifest.
+  # The environment-editor web workspace (node/): lint, typecheck, test, build
+  # the app against the fixture planner (no wasm), the publishable diagram
+  # bundle and Storybook, then build the published packages and check that
+  # their tarballs install and build in a clean project.
   web:
     name: Web
     runs-on: ubuntu-latest
@@ -363,6 +364,11 @@ jobs:
       - run: bun run test
       - run: bun run build
       - run: bun run build:diagram
+      - run: bun run build-storybook
+      # The published packages: build their dist/, then install the packed
+      # tarballs into a clean project outside the workspace and build that.
+      - run: bun run build:packages
+      - run: bun scripts/smoke-install.ts
 
   build-release:
     name: Build / release / ${{ matrix.os }}

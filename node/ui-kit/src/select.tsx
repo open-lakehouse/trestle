@@ -1,8 +1,8 @@
-import * as SelectPrimitive from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Select as SelectPrimitive } from "radix-ui";
 import * as React from "react";
 
-import { cn } from "./utils";
+import { cn } from "./utils.js";
 
 const Select = SelectPrimitive.Root;
 const SelectGroup = SelectPrimitive.Group;

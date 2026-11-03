@@ -2,9 +2,10 @@
 resolver = "2"
 members = [
   "crates/*",
-  # Release placeholder for the @open-lakehouse/trestle-diagram npm package
-  # (see node/Cargo.toml); it has no code and is never published.
+  # Release placeholders for the npm packages under node/ (see node/Cargo.toml
+  # and node/*/Cargo.toml); they have no code and are never published.
   "node",
+  "node/ui-kit",
 ]
 exclude = [
   # Templates are scaffolds containing project skeletons (frequently

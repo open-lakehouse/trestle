@@ -1,19 +1,18 @@
-# Design token contract — `@open-lakehouse/ui-kit`
+# Design token contract: `@open-lakehouse/ui-kit`
 
-This is the shared design contract for trestle's web UI (the environment editor
-and its demo app). It follows the
-[`design.md`](https://github.com/google-labs-code/design.md) convention: a single
-place that fixes the *contract*, not the concrete look. It is intentionally the
-same contract the sibling Open Lakehouse apps (mangrove's Unity Catalog UI,
-headwaters' lineage UI) align on, so a component themed here drops into any of
-them unchanged.
+This is the shared design contract for every Open Lakehouse web UI: trestle's
+environment editor, mangrove's Unity Catalog UI, headwaters' lineage UI and the
+desktop shell. It follows the
+[`design.md`](https://github.com/google-labs-code/design.md) convention. It is
+the one place that fixes the *contract*, but not the concrete look, so a
+component themed here drops into any of those apps unchanged.
 
 The primitives in this package are **headless with respect to theme**. They emit
 semantic Tailwind utilities (`bg-background`, `text-foreground`, `border-border`,
 …) and own **no color values, no light/dark palette, and no Tailwind config**.
-Each host application supplies the actual values as CSS variables. Aligning on the
-variable *names and meanings* below is what keeps separate apps visually coherent
-while staying independently themeable.
+Each host application supplies the actual values as CSS variables. Separate apps
+stay visually coherent because they agree on the variable *names and meanings*
+below, and each one can still pick its own values.
 
 ## How theming is injected
 
@@ -21,18 +20,29 @@ while staying independently themeable.
    its own global stylesheet.
 2. The host maps them to Tailwind color tokens via `@theme inline`
    (`--color-background: hsl(var(--background));` …).
-3. The host adds a `@source` glob so Tailwind scans this package's source and
-   generates the utilities the primitives reference
-   (`@source "../../ui-kit/src";`).
+3. The host adds a `@source` glob so Tailwind scans this package and generates
+   the utilities the primitives reference. When the package is installed from the
+   registry, point the glob at the build. Inside a workspace that links it, point
+   it at the source:
 
-The reference implementation of steps 1–3 is `node/env-app/src/globals.css`. A
-host may pick entirely different values — only the variable names are the contract.
+   ```css
+   @source "../node_modules/@open-lakehouse/ui-kit/dist"; /* installed */
+   @source "../../ui-kit/src";                            /* workspace */
+   ```
+
+   Do the same for every other `@open-lakehouse/*` UI package the host renders,
+   including ones it only renders indirectly.
+
+The reference implementation of steps 1–3 is trestle's
+`node/env-app/src/globals.css`. A host may pick entirely different values. Only
+the variable names are the contract.
 
 ## The variables (HSL components: `H S% L%`)
 
-Every consumer MUST define all of these on both `:root` and `.dark`.
+Every consumer MUST define the required groups on both `:root` and `.dark`. An
+optional group is needed only by the views that use it.
 
-### Surfaces & text
+### Surfaces & text (required)
 | Variable | Meaning |
 | --- | --- |
 | `--background` / `--foreground` | App canvas + primary text on it |
@@ -40,7 +50,7 @@ Every consumer MUST define all of these on both `:root` and `.dark`.
 | `--popover` / `--popover-foreground` | Floating surface (menus, tooltips) + its text |
 | `--muted` / `--muted-foreground` | Subdued fill + secondary/label text |
 
-### Interaction
+### Interaction (required)
 | Variable | Meaning |
 | --- | --- |
 | `--primary` / `--primary-foreground` | Primary action fill + text on it (also the graph's selected/incident accent) |
@@ -51,9 +61,9 @@ Every consumer MUST define all of these on both `:root` and `.dark`.
 | `--border` | Hairline borders (also the default `border-color`) |
 | `--input` | Form control border |
 | `--ring` | Focus ring |
-| `--radius` | Base corner radius (length, e.g. `0.5rem` — not an HSL triple) |
+| `--radius` | Base corner radius (a length such as `0.5rem`, not an HSL triple) |
 
-### Status accents
+### Status accents (required)
 | Variable | Meaning |
 | --- | --- |
 | `--status-planned` | Neutral / not started |
@@ -62,7 +72,7 @@ Every consumer MUST define all of these on both `:root` and `.dark`.
 | `--status-in-progress` | Active (usually tracks `--primary`) |
 | `--status-blocked` | Error / blocked |
 
-### IDE chrome (the workspace shell)
+### IDE chrome (optional; IDE-style shells such as env-editor's `WorkspaceShell`)
 | Variable | Meaning |
 | --- | --- |
 | `--sidebar` / `--sidebar-foreground` | Sidebar and tab-strip surface + text |
@@ -70,11 +80,19 @@ Every consumer MUST define all of these on both `:root` and `.dark`.
 | `--activitybar` | The icon rail left of the sidebar |
 | `--statusbar` / `--statusbar-foreground` | The status bar along the bottom + text on it |
 
-### Typography (font stacks, not HSL)
+### Delta-log action slots (optional; mangrove's `log-query` views)
+| Variable | Meaning |
+| --- | --- |
+| `--action-add` / `--action-remove` | add / remove actions (reuse the good / critical hues) |
+| `--action-metadata` / `--action-protocol` / `--action-txn` / `--action-domain` | the neutral action kinds, as distinct categorical hues |
+
+These views always pair a hue with an icon and label.
+
+### Typography (font stacks, not HSL; required)
 | Variable | Meaning |
 | --- | --- |
 | `--font-sans` | UI sans-serif stack |
-| `--font-mono` | Monospace stack (rendered artifacts, identifiers, ports) |
+| `--font-mono` | Monospace stack (code, identifiers, ports, data cells) |
 
 ## Rules
 
@@ -82,5 +100,6 @@ Every consumer MUST define all of these on both `:root` and `.dark`.
   reference a `--var` that isn't in this contract, or hosts will render it unset.
 - **Values live in hosts, not here.** Do not add a `:root {}` block or a
   Tailwind config to this package.
-- **Changing a token's meaning is a contract change** — coordinate across the
-  consuming apps (this repo's env-app, mangrove, headwaters) so palettes stay aligned.
+- **Changing a token's meaning is a contract change.** Coordinate it across the
+  consuming apps (trestle's env-app, mangrove, headwaters, the desktop shell) so
+  palettes stay aligned.

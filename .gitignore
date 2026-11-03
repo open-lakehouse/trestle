@@ -20,6 +20,7 @@ scratch/
 node_modules/
 node/**/dist/
 node/**/.vite/
+node/**/storybook-static/
 # wasm-bindgen output for the stack-wasm package (built via `just build-stack-wasm`)
 node/stack-wasm/pkg/
 *.tsbuildinfo

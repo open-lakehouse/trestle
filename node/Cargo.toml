@@ -5,8 +5,14 @@
 # at `node/` and `include`s exactly the sources that end up in the npm bundle.
 # It has to sit at a directory that contains all of them: Cargo silently drops
 # `include` patterns that reach outside the package (`../env-editor/**` matches
-# nothing), so moving it into `trestle-diagram/` would stop every env-editor or
-# ui-kit change from releasing the package.
+# nothing), so moving it into `trestle-diagram/` would stop every env-editor
+# change from releasing the package.
+#
+# The bundled workspace packages that are published on their own (ui-kit) have
+# their own placeholder crate, and Cargo leaves a nested package's files out of
+# this one. A path dependency on that crate stands in for them: when it is
+# released, release-plz bumps the requirement here and releases the diagram
+# too, which re-bundles the new version.
 #
 # It deliberately has no dependency on `stack-topology-wasm`. The diagram only
 # reads the `GraphDto` shape, whose TypeScript mirror (`stack-wasm/src/types.ts`)
@@ -47,8 +53,6 @@ include = [
   "env-editor/src/graph/**",
   "env-editor/src/state/origin.ts",
   "env-editor/src/types.ts",
-  "ui-kit/package.json",
-  "ui-kit/src/**",
   "stack-wasm/src/types.ts",
   "!**/*.stories.tsx",
   "!**/*.test.ts",
@@ -57,3 +61,6 @@ include = [
 
 [lib]
 path = "trestle-diagram/release.rs"
+
+[dependencies]
+ui-kit = { path = "ui-kit", version = "0.0.1" }

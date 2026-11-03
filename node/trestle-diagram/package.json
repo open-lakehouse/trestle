@@ -29,12 +29,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@radix-ui/react-tooltip": "^1.2.8",
+    "radix-ui": "^1.7.0",
     "@xyflow/react": "^12.4.0",
     "clsx": "^2.1.1",
     "elkjs": "^0.11.0",
     "html-to-image": "^1.11.13",
-    "lucide-react": "^0.475.0",
+    "lucide-react": "^1.55.0",
     "shiki": "^3.23.0",
     "tailwind-merge": "^3.6.0"
   },

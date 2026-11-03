@@ -5,7 +5,7 @@
 @import "@xyflow/react/dist/style.css";
 
 /* The workspace UI packages are consumed directly from their `src/` (via each
-   package's `exports` map), so Tailwind's automatic source detection does not
+   package's `source` export condition), so Tailwind's automatic source detection does not
    scan them from this app. Register their source so the utilities they use are
    generated. Paths are relative to this stylesheet (node/env-app/src/). */
 @source "../../ui-kit/src";

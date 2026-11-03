@@ -1,7 +1,7 @@
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defaultClientConditions, defineConfig } from "vite";
 
 // The in-browser wasm planner is OPT-IN per build: `@open-lakehouse/stack-wasm`
 // imports the gitignored wasm-bindgen artifact under node/stack-wasm/pkg/
@@ -16,8 +16,11 @@ export default defineConfig({
   // Relative asset URLs so the bundle works under any server base path.
   base: "./",
   resolve: {
-    // The shared workspace packages are consumed from source; force a single
-    // copy of React so hooks/context work at runtime (duplicates break them).
+    // The shared workspace packages are consumed from source: their `source`
+    // export condition points at `src/`, so no package build is needed first.
+    conditions: ["source", ...defaultClientConditions],
+    // Force a single copy of React so hooks/context work at runtime
+    // (duplicates break them).
     dedupe: ["react", "react-dom"],
     alias: WASM_ENABLED
       ? {
@@ -28,11 +31,15 @@ export default defineConfig({
             "../stack-wasm/pkg/stack_topology_wasm.js",
           ),
         }
-      : {
+      : [
           // Default builds ship no wasm: alias the package to its fixture stub so
           // it never resolves the gitignored artifact under node/stack-wasm/pkg/.
-          "@open-lakehouse/stack-wasm": "@open-lakehouse/stack-wasm/stub",
-        },
+          // Only the bare specifier: `/fixtures` and `/types` resolve as usual.
+          {
+            find: /^@open-lakehouse\/stack-wasm$/,
+            replacement: "@open-lakehouse/stack-wasm/stub",
+          },
+        ],
   },
   server: {
     port: 3020,

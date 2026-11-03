@@ -239,63 +239,78 @@ Maintainer setup (one-time, per crate):
   2. From then on the crate releases through `release-plz.yml` like the others.
      Do not run the bootstrap workflow for it again.
 
-### The `@open-lakehouse/trestle-diagram` npm package
+### The npm packages (`node/`)
 
-release-plz only versions Cargo packages, so the npm package `node/trestle-diagram`
-is released through a placeholder crate, `trestle-diagram` (`node/Cargo.toml`).
-It has no code and is never published to crates.io (`git_only` and
-`publish = false` in `release-plz.toml`). Its `include` list names the sources
-that end up in the npm bundle, so a commit touching them bumps the package in
-the Release PR and lands in `node/trestle-diagram/CHANGELOG.md`, like a crate.
-Use the `trestle-diagram` scope for these commits (`feat(trestle-diagram): …`).
+release-plz only versions Cargo packages, so each published npm package under
+`node/` is released through a placeholder crate whose name is the package's
+directory and its npm name without the `@open-lakehouse/` scope:
 
-When the Release PR merges, release-plz tags `trestle-diagram-v<version>` and
-the `publish-trestle-diagram` job (a `workflow_call` into
-`.github/workflows/publish-trestle-diagram.yml`) stamps that version into
-`package.json` (whose own `version` stays `0.0.0`), then publishes the same
+| npm package | Placeholder crate | Commit scope |
+|---|---|---|
+| `@open-lakehouse/trestle-diagram` | `node/Cargo.toml` | `trestle-diagram` |
+| `@open-lakehouse/ui-kit` | `node/ui-kit/Cargo.toml` | `ui-kit` |
+
+A placeholder has no code and is never published to crates.io (`git_only` and
+`publish = false` in `release-plz.toml`). Its `include` list names the files that
+end up in the npm tarball, so a commit touching them bumps the package in the
+Release PR and lands in its `CHANGELOG.md`, like a crate. Use the package's scope
+for these commits (`feat(ui-kit): …`). Cargo leaves a nested package's files out
+of its parent, so trestle-diagram (which sits at `node/` and bundles its workspace
+sources) depends on the placeholders of the packages it bundles that are published
+on their own. A release of one of them bumps that requirement and releases the
+diagram too. `cargo package --list -p <crate>` shows a placeholder's file set; add
+new source files or directories to its `include`.
+
+The placeholder crate's `version` is the package version. `package.json` files
+keep `0.0.0`: `node/scripts/stamp-versions.ts` stamps every package from its
+crate before packing, so `bun pm pack` pins `workspace:*` dependencies to the
+versions being released. A new package needs a row in that script, in
+`NPM_PACKAGES` in `release-plz.yml`, in the `package` choices of
+`publish-npm.yml`, and in `build:packages` in `node/package.json`.
+
+When the Release PR merges, release-plz tags `<package>-v<version>` and the
+`publish-npm` job (a matrix of `workflow_call`s into
+`.github/workflows/publish-npm.yml`, one per released package) publishes the same
 tarball to:
 
 - npmjs.com, with trusted publishing (OIDC) and a provenance attestation. The
   trusted publisher only allows staged publishing, so the job runs
   `npm stage publish`. The version stays pending until a maintainer approves it
   with 2FA, on the package's npmjs.com page or with `npm stage approve <stage-id>`
-  (`npm stage list` shows the id). Every trestle-diagram release needs that
-  approval.
+  (`npm stage list` shows the id). Every release needs that approval.
 - GitHub Packages, with the job's ephemeral `GITHUB_TOKEN`, since it has no OIDC
   exchange.
-- The `trestle-diagram-v<version>` GitHub Release, as
-  `open-lakehouse-trestle-diagram-<version>.tgz` plus a `.sha256`, with a
+- The `<package>-v<version>` GitHub Release, as
+  `open-lakehouse-<package>-<version>.tgz` plus a `.sha256`, with a
   build-provenance attestation. The attestation also covers the GitHub Packages
   copy, which cannot carry npm provenance:
-  `gh attestation verify open-lakehouse-trestle-diagram-<version>.tgz --repo open-lakehouse/trestle`.
+  `gh attestation verify open-lakehouse-<package>-<version>.tgz --repo open-lakehouse/trestle`.
 
 Either registry skips a version it already has, so re-running is safe. A version
 that is staged but not yet approved is not visible yet, and a re-run tries to stage
-it again and fails. Approve the pending version instead. If you add a new source
-file or directory to the bundle, add it to `include` in `node/Cargo.toml`
-(`cargo package --list -p trestle-diagram` shows the set).
+it again and fails. Approve the pending version instead.
 
-Maintainer setup (one-time). As with crates, npm cannot attach a trusted publisher
-to a package that does not exist yet, and the website cannot create an empty one.
-The first version is therefore staged with a token (`npm stage publish` can create
-a package) and promoted by a maintainer, so the token cannot publish on its own. A
-`git_only` package has no tag until its first release, so release-plz releases it
-on the first push to `main` that contains it, without a Release PR. That run's npm
-job fails with a 404 until this is done:
+Maintainer setup (one-time per package). As with crates, npm cannot attach a
+trusted publisher to a package that does not exist yet, and the website cannot
+create an empty one. The first version is therefore staged with a token
+(`npm stage publish` can create a package) and promoted by a maintainer, so the
+token cannot publish on its own. A `git_only` package has no tag until its first
+release, so release-plz releases it on the first push to `main` that contains it,
+without a Release PR. That run's npm job fails with a 404 until this is done:
 
-1. Create the `open-lakehouse` org on npmjs.com. Add a granular npm token that
-   can stage packages in it as `NPM_TOKEN` in the `release` environment.
-2. From `main`, run the Publish trestle-diagram workflow for the release tag. It runs
+1. The `open-lakehouse` org on npmjs.com needs a granular npm token that can
+   stage packages in it, stored as `NPM_TOKEN` in the `release` environment.
+2. From `main`, run the Publish npm package workflow for the release tag. It runs
    with `dry_run` on by default, which checks the staging command:
    ```bash
-   gh workflow run publish-trestle-diagram.yml -f tag=trestle-diagram-v0.1.0 -f npm_bootstrap=true
-   gh workflow run publish-trestle-diagram.yml -f tag=trestle-diagram-v0.1.0 -f npm_bootstrap=true -f dry_run=false
+   gh workflow run publish-npm.yml -f package=ui-kit -f tag=ui-kit-v0.0.1 -f npm_bootstrap=true
+   gh workflow run publish-npm.yml -f package=ui-kit -f tag=ui-kit-v0.0.1 -f npm_bootstrap=true -f dry_run=false
    ```
    GitHub Packages already has the version, and the run skips it.
 3. On npmjs.com, approve the staged version (2FA). Staging a new package also
    creates a `0.0.0-stage` placeholder version.
 4. Delete `NPM_TOKEN`. Then, shortly before merging the next Release PR that
-   bumps `trestle-diagram`, add the trusted publisher under the package's
+   bumps the package, add the trusted publisher under the package's
    Settings → Trusted Publisher: GitHub repo `open-lakehouse/trestle`,
    workflow `release-plz.yml` (npm checks the calling workflow), and
    environment `release`. Allow only stage publish; leave direct

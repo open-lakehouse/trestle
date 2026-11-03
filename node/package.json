@@ -15,11 +15,13 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "typecheck": "bun run --filter '*' typecheck",
-    "test": "bun test",
+    "test": "bun test --conditions=source",
     "dev": "bun run --filter @open-lakehouse/env-editor-app dev",
     "build": "bun run --filter @open-lakehouse/env-editor-app build",
     "storybook": "bun run --filter @open-lakehouse/env-editor-app storybook",
-    "build:diagram": "bun run --filter @open-lakehouse/trestle-diagram build"
+    "build:diagram": "bun run --filter @open-lakehouse/trestle-diagram build",
+    "build:packages": "cd ui-kit && bun run build",
+    "build-storybook": "bun run --filter @open-lakehouse/env-editor-app build-storybook"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",

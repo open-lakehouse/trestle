@@ -106,6 +106,15 @@ publish = false # required alongside git_only
 semver_check = false
 changelog_path = "node/trestle-diagram/CHANGELOG.md"
 
+# The npm package @open-lakehouse/ui-kit, through its placeholder crate at
+# node/ui-kit/Cargo.toml; same setup as trestle-diagram.
+[[package]]
+name = "ui-kit"
+git_only = true
+publish = false
+semver_check = false
+changelog_path = "node/ui-kit/CHANGELOG.md"
+
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
 # Because commits use crate scopes (feat(olai-codegen): ...), each crate's
@@ -130,5 +139,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|olai-auth|olai-stack-runtime|olai-stack-state|trestle-diagram|web)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|olai-auth|olai-stack-runtime|olai-stack-state|trestle-diagram|ui-kit|web)\)', replace = "" },
 ]

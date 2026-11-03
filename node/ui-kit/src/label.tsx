@@ -1,7 +1,7 @@
-import * as LabelPrimitive from "@radix-ui/react-label";
+import { Label as LabelPrimitive } from "radix-ui";
 import * as React from "react";
 
-import { cn } from "./utils";
+import { cn } from "./utils.js";
 
 const Label = React.forwardRef<
   React.ComponentRef<typeof LabelPrimitive.Root>,

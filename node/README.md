@@ -9,7 +9,7 @@ the node-based "markitecture" and rendered artifacts.
 
 | Package | Role |
 | --- | --- |
-| [`@open-lakehouse/ui-kit`](./ui-kit) | Shared headless Radix + CVA primitives + the design-token contract (`DESIGN.md`). |
+| [`@open-lakehouse/ui-kit`](./ui-kit) | The canonical Open Lakehouse Radix + CVA primitives + the design-token contract (`DESIGN.md`), shared with mangrove and headwaters; released to npmjs.com and GitHub Packages. |
 | [`@open-lakehouse/stack-wasm`](./stack-wasm) | The in-browser planner: a TS wrapper over the `stack-topology-wasm` crate, plus a fixture stub. |
 | [`@open-lakehouse/env-editor`](./env-editor) | The headless editor component (selection → knobs → diagram → artifacts) and its planner seam (`DESIGN.md`). |
 | [`@open-lakehouse/trestle-diagram`](./trestle-diagram) | The published, read-only diagram embed (a bundle of env-editor's canvas) for blogs and docs; released to npmjs.com and GitHub Packages. |
@@ -34,6 +34,12 @@ just ui-dev-wasm     # → http://localhost:3020
 # Lint + typecheck:
 just ui-check
 
+# Storybook (ui-kit + env-editor stories, on fixtures):
+cd node && bun run storybook
+
+# Build the published packages' dist/ and check they install in a clean project:
+cd node && bun run build:packages && bun scripts/smoke-install.ts
+
 # Build the publishable diagram embed (node/trestle-diagram/dist):
 cd node && bun run build:diagram
 ```
@@ -48,3 +54,13 @@ artifact **only when `VITE_ENABLE_WASM=true`**. Default builds alias the package
 to its fixture-backed `./stub`, so a fresh clone runs with no wasm build — and
 Storybook/tests never need it. This is the same opt-in-wasm pattern mangrove's
 `query-wasm` uses.
+
+## Workspace packages from source
+
+Each package's `exports` carries a `source` condition pointing at `src/` next to
+the `dist/` entries consumers outside the workspace get. Inside the workspace
+everything resolves `source` (`customConditions` in `tsconfig.base.json`,
+`resolve.conditions` in the Vite configs, `bun test --conditions=source`), so
+nothing needs building first. `bun run build:packages` builds the published
+packages' `dist/` (`scripts/build-package.ts`); releases go through release-plz
+placeholder crates, see the npm section of [`CONTRIBUTING.md`](../CONTRIBUTING.md).

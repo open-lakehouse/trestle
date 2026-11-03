@@ -1,11 +1,11 @@
 // Public surface of the shared UI kit: the shadcn/Radix primitives, the `cn`
-// class-merge helper, and the theme context. Feature packages
-// (@open-lakehouse/env-editor) and the app depend on this package rather than
-// each carrying its own copy of the primitives. Distribute visuals from one
-// place; the token contract lives in ./DESIGN.md.
+// class-merge helper, and the theme context. Every Open Lakehouse web UI
+// (trestle's env-editor, mangrove's Unity Catalog UI, headwaters' lineage UI)
+// depends on this package rather than carrying its own copy of the primitives.
+// The token contract lives in ./DESIGN.md.
 
-export { Badge, type BadgeProps, badgeVariants } from "./badge";
-export { Button, type ButtonProps, buttonVariants } from "./button";
+export { Badge, type BadgeProps, badgeVariants } from "./badge.js";
+export { Button, type ButtonProps, buttonVariants } from "./button.js";
 export {
   Card,
   CardContent,
@@ -13,7 +13,7 @@ export {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "./card";
+} from "./card.js";
 export {
   Dialog,
   DialogClose,
@@ -25,24 +25,25 @@ export {
   DialogPortal,
   DialogTitle,
   DialogTrigger,
-} from "./dialog";
+} from "./dialog.js";
 export {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuPortal,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
-} from "./dropdown-menu";
-export { Input } from "./input";
-export { Label } from "./label";
+} from "./dropdown-menu.js";
+export { Input } from "./input.js";
+export { Label } from "./label.js";
 export {
   ResizeHandle,
   type ResizeHandleProps,
   usePaneSize,
-} from "./resizable";
+} from "./resizable.js";
 export {
   Select,
   SelectContent,
@@ -50,8 +51,8 @@ export {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "./select";
-export { Separator } from "./separator";
+} from "./select.js";
+export { Separator } from "./separator.js";
 export {
   Sheet,
   SheetClose,
@@ -62,15 +63,16 @@ export {
   SheetPortal,
   SheetTitle,
   SheetTrigger,
-} from "./sheet";
-export { Toaster } from "./sonner";
-export { Switch, type SwitchProps } from "./switch";
-export { ThemeProvider, useTheme } from "./ThemeProvider";
-export { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
+} from "./sheet.js";
+export { Toaster } from "./sonner.js";
+export { Switch, type SwitchProps } from "./switch.js";
+export { ThemeProvider, useTheme } from "./ThemeProvider.js";
+export { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs.js";
+export { Textarea } from "./textarea.js";
 export {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "./tooltip";
-export { cn } from "./utils";
+} from "./tooltip.js";
+export { cn } from "./utils.js";
