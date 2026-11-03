@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use olai_stack_runtime::neon::{NeonBranchSource, NeonCli, NeonError};
 use olai_stack_runtime::{
     ComposeEngine, DockerCli, DownOptions, EngineEvent, EngineStream, EnvProvider, EventFilter,
     Instances, LogLine, LogOptions, ProjectStatus, SecretError, SecretProvider, SecretProviders,
@@ -70,13 +71,24 @@ impl Ctx {
         let providers = SecretProviders::new()
             .with(EnvProvider)
             .with(self.secrets.clone());
-        let instances = Instances::new(Arc::clone(&self.store), self.engine.clone(), &self.home)
-            .with_providers(providers);
+        let mut instances =
+            Instances::new(Arc::clone(&self.store), self.engine.clone(), &self.home)
+                .with_providers(providers.clone());
+        // Instances bound to a Neon branch take its overlay. Without the Neon CLI nothing can
+        // be bound, and a pure compose environment never needs it.
+        if let Ok(neon) = NeonCli::new() {
+            instances = instances.with_source(NeonBranchSource::new(Arc::new(neon), providers));
+        }
         if self.engine.is_fake() {
             instances.without_port_probe()
         } else {
             instances
         }
+    }
+
+    /// The Neon CLI, or an error saying how to get it.
+    pub fn neon(&self) -> Result<NeonCli> {
+        NeonCli::new().map_err(neon_err)
     }
 
     /// Where secret values go.
@@ -90,6 +102,25 @@ impl Ctx {
         let out = block_on(fut);
         self.engine.save()?;
         out
+    }
+}
+
+/// `e` with a hint at what to do about it.
+pub(super) fn neon_err(e: NeonError) -> Error {
+    let hint = match &e {
+        NeonError::NotInstalled => Some(
+            "install the Neon CLI (`brew install neonctl` or `npm i -g neonctl`), or point \
+             NEON_CLI at it",
+        ),
+        NeonError::NotAuthenticated(_) => Some("`neon auth`, or set NEON_API_KEY"),
+        NeonError::MissingFunctions { .. } => {
+            Some("`neon functions deploy <slug> --branch <branch>`, or bind a branch made since")
+        }
+        _ => None,
+    };
+    match hint {
+        Some(h) => Error::from(e).with_hint(h),
+        None => e.into(),
     }
 }
 

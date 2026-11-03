@@ -35,6 +35,27 @@ pub enum WsCommand {
     Import(ImportArgs),
     /// Export a workspace's head revisions as a workspace directory.
     Export(ExportArgs),
+    /// Name the Neon project the workspace's instances bind branches of.
+    SetNeon(SetNeonArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct SetNeonArgs {
+    /// The workspace.
+    pub name: String,
+
+    /// The Neon project id.
+    #[clap(long, required_unless_present = "clear")]
+    pub project: Option<String>,
+
+    /// The branch `--neon-branch new` creates branches from (the project's default when
+    /// unset).
+    #[clap(long, conflicts_with = "clear")]
+    pub parent: Option<String>,
+
+    /// Forget the workspace's Neon project.
+    #[clap(long)]
+    pub clear: bool,
 }
 
 #[derive(Args, Clone)]
@@ -103,7 +124,29 @@ pub fn run(cmd: WsCommand) -> Result<()> {
         WsCommand::Rm(args) => ctx.block_on(run_rm(&ctx, args)),
         WsCommand::Import(args) => run_import(&ctx, args),
         WsCommand::Export(args) => run_export(&ctx, args),
+        WsCommand::SetNeon(args) => run_set_neon(&ctx, args),
     }
+}
+
+fn run_set_neon(ctx: &Ctx, args: SetNeonArgs) -> Result<()> {
+    let ws = find_workspace(&ctx.store, &args.name)?;
+    let source = olai_stack_runtime::neon::NEON_SOURCE;
+    match &args.project {
+        Some(project) if !args.clear => {
+            let config = super::neon::project_config(project, args.parent.as_deref());
+            ctx.store
+                .set_workspace_source(&ws.id, source, Some(config))?;
+            println!(
+                "workspace `{}` binds branches of Neon project {project}",
+                ws.name
+            );
+        }
+        _ => {
+            ctx.store.set_workspace_source(&ws.id, source, None)?;
+            println!("workspace `{}` has no Neon project", ws.name);
+        }
+    }
+    Ok(())
 }
 
 fn run_create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
@@ -322,6 +365,17 @@ pub(super) async fn remove_instances(
         let runtime = ctx.instances();
         for instance in instances {
             runtime.remove(&instance.id, true).await?;
+        }
+    }
+    // The instances go with what they are deleted with: their Neon storage credentials too.
+    let bindings: Vec<_> = instances
+        .iter()
+        .filter_map(super::neon::binding_of)
+        .collect();
+    if !bindings.is_empty() {
+        let neon = ctx.neon()?;
+        for binding in &bindings {
+            super::neon::release(ctx, &neon, binding).await?;
         }
     }
     Ok(())

@@ -6,6 +6,7 @@ pub mod env;
 pub mod env_store;
 pub mod generate;
 pub mod list;
+pub mod neon;
 pub mod new;
 mod output;
 pub mod run;
@@ -80,6 +81,10 @@ pub enum Commands {
     Logs(run::LogsArgs),
     /// Show the health of an instance's services.
     Health(run::HealthArgs),
+    /// Branches of a workspace's Neon project, which instances bind to with
+    /// `up --neon-branch`.
+    #[command(subcommand)]
+    Neon(neon::NeonCommand),
     /// Deprecated: directory-based workspaces. Use `trestle ws import <dir>` and the store.
     #[command(subcommand)]
     Workspace(workspace::WorkspaceCommand),
@@ -110,6 +115,7 @@ pub fn run() -> Result<()> {
         Commands::Ps(args) => run::run_ps(args),
         Commands::Logs(args) => run::run_logs(args),
         Commands::Health(args) => run::run_health(args),
+        Commands::Neon(cmd) => neon::run(cmd),
         Commands::Workspace(cmd) => workspace::run(cmd),
         Commands::ListTemplates => list::run_templates(),
         Commands::ListApps => list::run_apps(),

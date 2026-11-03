@@ -14,9 +14,70 @@ struct Home {
 
 impl Home {
     fn new() -> Self {
-        Home {
+        let home = Home {
             dir: tempfile::tempdir().unwrap(),
+        };
+        home.write_neon_stub();
+        home
+    }
+
+    /// A `neon` that answers for project `proj` (branches `main`, the project's default, and
+    /// `demo-dev-r1`, made by trestle) and logs every call to `neon.log`. Every test runs with
+    /// it, so the real Neon CLI is never called.
+    fn write_neon_stub(&self) {
+        let fx = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../stack-runtime/tests/fixtures/neon/8.16.0");
+        let branch = |id: &str, name: &str, default: bool| {
+            format!(
+                r#"{{"id":"{id}","name":"{name}","parent_id":null,"default":{default},"expires_at":null}}"#
+            )
+        };
+        let branches = format!(
+            r#"{{"branches":[{},{}],"annotations":{{"br-new-1":{{"value":{{"trestle.owner":"trestle"}}}}}}}}"#,
+            branch("br-main", "main", true),
+            branch("br-new-1", "demo-dev-r1", false)
+        );
+        let functions = r#"[{"slug":"unitycatalog","invocation_url":"https://br-main-unitycatalog.compute.example.neon.tech/"},{"slug":"headwaters","invocation_url":"https://br-main-headwaters.compute.example.neon.tech/"}]"#;
+        let script = format!(
+            r#"#!/bin/sh
+echo "$*" >> "{log}"
+case "$*" in
+  "me "*) cat "{fx}/me.json" ;;
+  api\ */storage*) cat "{fx}/api-storage.json" ;;
+  "api "*) echo '{branches}' ;;
+  "branches create"*) echo '{{"branch":{created}}}' ;;
+  "branches delete"*|"branches reset"*) echo '{{}}' ;;
+  connection-string*) cat "{fx}/cs-extended.json" ;;
+  "functions list"*) echo '{functions}' ;;
+  "buckets list"*) echo '[]' ;;
+  "buckets create"*) echo 'Bucket created' ;;
+  "databases list"*) echo '[{{"name":"neondb"}}]' ;;
+  "databases create"*) echo '{{}}' ;;
+  "credentials create"*) cat "{fx}/credentials-create.json" ;;
+  "credentials revoke"*) echo '{{}}' ;;
+  *) echo "unexpected: $*" >&2; exit 2 ;;
+esac
+"#,
+            log = self.path("neon.log").display(),
+            fx = fx.display(),
+            created = branch("br-new-1", "demo-dev-r1", false),
+        );
+        let path = self.path("neon");
+        std::fs::write(&path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+    }
+
+    /// Every call the stub `neon` got.
+    fn neon_calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.path("neon.log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn path(&self, rel: &str) -> PathBuf {
@@ -30,6 +91,7 @@ impl Home {
             .env("TRESTLE_HOME", self.path("home"))
             .env("TRESTLE_FAKE_ENGINE", self.path("engine.json"))
             .env("TRESTLE_FAKE_KEYCHAIN", self.path("keychain.json"))
+            .env("NEON_CLI", self.path("neon"))
             .env_remove("TRESTLE_LOG");
         cmd
     }
@@ -438,4 +500,158 @@ fn targets_are_checked() {
         let err = home.fails(args);
         assert!(err.contains(needle), "{args:?}: {err}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hybrid_environment_runs_on_a_bound_neon_branch() {
+    let home = Home::new();
+    let scenario = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/scenarios/neon-hybrid");
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&[
+        "env",
+        "create",
+        "demo/dev",
+        "--from",
+        scenario.to_str().unwrap(),
+    ]);
+    home.ok(&["env", "commit", "demo/dev"]);
+
+    // It runs on Neon, so it needs a branch, and the workspace a project.
+    let err = home.fails(&["up", "demo/dev"]);
+    assert!(
+        err.contains("bound to no branch") && err.contains("--neon-branch"),
+        "{err}"
+    );
+    let err = home.fails(&["up", "demo/dev", "--neon-branch", "main"]);
+    assert!(
+        err.contains("no Neon project") && err.contains("ws set-neon"),
+        "{err}"
+    );
+    home.ok(&["ws", "set-neon", "demo", "--project", "proj"]);
+
+    let branches = home.json(
+        &["neon", "branch", "list", "demo", "--json"],
+        "neon_branches",
+    );
+    assert_eq!(branches[0]["name"], "main");
+    assert_eq!(branches[0]["owned"], false);
+    assert_eq!(branches[1]["owned"], true);
+    // Branches trestle didn't make are left alone.
+    let err = home.fails(&["neon", "branch", "delete", "demo", "main"]);
+    assert!(err.contains("not created by trestle"), "{err}");
+
+    let up = home.ok(&["up", "demo/dev", "--neon-branch", "main"]);
+    assert!(up.contains("bound to Neon branch `main`"), "{up}");
+    // Binding created what the branch lacked and minted a credential on it, whose secret went
+    // to the keychain.
+    let calls = home.neon_calls();
+    for call in [
+        "databases create --name mlflow",
+        "databases create --name omnigent",
+        "buckets create mlflow",
+        "credentials create",
+    ] {
+        assert!(
+            calls.iter().any(|c| c.starts_with(call)),
+            "{call} in {calls:?}"
+        );
+    }
+    let keychain = home.keychain();
+    let (key, secret) = keychain.iter().next().unwrap();
+    assert!(key.starts_with("neon/demo/dev/r1/nak_live_"), "{key}");
+    assert_eq!(secret, "<s3-secret-access-key-1>");
+
+    let ps = home.json(&["ps", "--json"], "instances");
+    assert_eq!(ps[0]["neon_branch"], "main");
+    let effective = home.json(
+        &["env", "show", "demo/dev", "--effective", "--json"],
+        "effective_env",
+    );
+    let vars = &effective["vars"];
+    assert_eq!(
+        vars["UNITY_CATALOG_URL"]["value"],
+        "https://br-main-unitycatalog.compute.example.neon.tech/api/2.1/unity-catalog"
+    );
+    assert_eq!(vars["PGHOST"]["provenance"]["name"], "neon");
+    assert_eq!(vars["NEON_S3_SECRET_ACCESS_KEY"]["secret"], true);
+    assert!(!effective.to_string().contains("<s3-secret-access-key-1>"));
+    assert!(!effective.to_string().contains("<password-1>"));
+
+    // `up` again keeps the binding: nothing is minted twice.
+    home.ok(&["up", "demo/dev"]);
+    let minted = home
+        .neon_calls()
+        .iter()
+        .filter(|c| c.starts_with("credentials create"))
+        .count();
+    assert_eq!(minted, 1);
+
+    // Removing the instance revokes its credential and forgets the secret.
+    home.ok(&["down", "demo", "--rm"]);
+    assert!(
+        home.neon_calls()
+            .iter()
+            .any(|c| c.starts_with("credentials revoke nak_live_"))
+    );
+    assert!(home.keychain().is_empty());
+
+    // So does deleting the environment of a bound instance.
+    home.ok(&["up", "demo/dev", "--neon-branch", "main"]);
+    home.ok(&["down", "demo"]);
+    assert_eq!(home.keychain().len(), 1);
+    home.ok(&["env", "rm", "demo/dev"]);
+    let revoked = home
+        .neon_calls()
+        .iter()
+        .filter(|c| c.starts_with("credentials revoke"))
+        .count();
+    assert_eq!(revoked, 2);
+    assert!(home.keychain().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn trestle_made_branches_carry_ownership_and_an_expiry() {
+    let home = Home::new();
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&[
+        "ws",
+        "set-neon",
+        "demo",
+        "--project",
+        "proj",
+        "--parent",
+        "main",
+    ]);
+    let out = home.ok(&[
+        "neon", "branch", "create", "demo", "scratch", "--ttl", "12h",
+    ]);
+    assert!(out.contains("br-new-1"), "{out}");
+    let create = home
+        .neon_calls()
+        .into_iter()
+        .find(|c| c.starts_with("branches create"))
+        .unwrap();
+    for arg in [
+        "--name scratch",
+        "--parent main",
+        "--expires-at 20",
+        "\"trestle.owner\":\"trestle\"",
+        "--no-secrets",
+    ] {
+        assert!(create.contains(arg), "{arg} in {create}");
+    }
+    home.ok(&["neon", "branch", "reset", "demo", "demo-dev-r1"]);
+    home.ok(&["neon", "branch", "delete", "demo", "br-new-1"]);
+    assert!(
+        home.neon_calls()
+            .iter()
+            .any(|c| c.starts_with("branches delete br-new-1"))
+    );
+    home.ok(&["ws", "set-neon", "demo", "--clear"]);
+    assert!(
+        home.fails(&["neon", "branch", "list", "demo"])
+            .contains("no Neon project")
+    );
 }

@@ -237,8 +237,27 @@ function URLs are public, so each function checks the caller's Neon Auth token
 itself either way (in the desktop, the Rust proxy holds that token). Gateway
 fronting can follow if one origin turns out to matter.
 
+Running one binds an instance to a branch:
+
+```bash
+trestle ws set-neon demo --project <project-id> [--parent main]
+trestle up demo/dev --neon-branch main          # or `new`: a branch made for the instance
+trestle neon branch list demo
+trestle neon branch create demo scratch --ttl 12h
+trestle neon branch delete demo scratch         # only branches trestle created
+```
+
+`up --neon-branch` checks that the branch runs every function the revision needs
+(a missing one is an error then, not at start). It creates the databases and
+buckets the branch lacks and mints a storage credential on the branch for the
+instance, whose secret goes to the keychain. The instance stays bound, and
+`down --rm` (or removing its environment or workspace) revokes the credential.
+A revision that runs on Neon refuses to start unbound. `ps` shows each
+instance's branch, and `env show --effective` shows what the branch supplies as
+`source:neon`.
+
 A fully local environment, with no Neon at all, plans and renders exactly as
-before. PuppyGraph calls Unity Catalog on the compose network, so it needs a
+before, and needs no Neon CLI. PuppyGraph calls Unity Catalog on the compose network, so it needs a
 local Unity Catalog.
 
 ## Networks
@@ -297,6 +316,8 @@ trestle env show demo/dev@1 --effective
 trestle env diff demo/dev               # head → draft
 trestle down demo/dev [--volumes] [--rm]
 trestle ws export demo ./demo
+trestle ws set-neon demo --project <id>  # then `up --neon-branch <branch|new>`
+trestle neon branch list|create|delete|reset demo …
 ```
 
 Every read command takes `--json` and prints `{"version": 1, "kind": …, "data":

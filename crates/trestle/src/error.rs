@@ -80,6 +80,9 @@ pub enum Error {
     #[error(transparent)]
     Engine(#[from] olai_stack_runtime::Error),
 
+    #[error(transparent)]
+    Neon(#[from] olai_stack_runtime::neon::NeonError),
+
     /// An error carrying an actionable suggestion, rendered as a `try:` line.
     /// The wrapped error is the real cause; [`hint`](Error::hint) exposes the
     /// suggestion so the CLI can print it after the error chain. Display

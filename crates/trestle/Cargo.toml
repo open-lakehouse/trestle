@@ -39,6 +39,7 @@ pkg-fmt = "tgz"
 olai-codegen = { path = "../olai-codegen", version = "0.0.12" }
 olai-stack-runtime = { path = "../stack-runtime", version = "0.0.1", features = [
     "keychain",
+    "neon",
 ] }
 olai-stack-state = { path = "../stack-state", version = "0.0.2" }
 olai-stack-topology = { path = "../stack-topology", version = "0.0.13", features = [

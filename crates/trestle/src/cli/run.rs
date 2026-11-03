@@ -23,6 +23,16 @@ use crate::error::{Error, Result};
 pub struct UpArgs {
     /// `<ws>/<env>[@<rev>]` (the head revision by default).
     pub target: Target,
+
+    /// Bind the instance to this branch of the workspace's Neon project (`new`: a branch
+    /// created for it), which supplies the Postgres, object storage and functions the revision
+    /// runs on Neon. A bound instance stays bound.
+    #[clap(long, value_name = "BRANCH")]
+    pub neon_branch: Option<String>,
+
+    /// How long a branch `--neon-branch new` creates lives, e.g. `12h`, `7d`.
+    #[clap(long, default_value = super::neon::DEFAULT_TTL, value_parser = super::neon::parse_ttl, requires = "neon_branch")]
+    pub ttl: std::time::Duration,
 }
 
 #[derive(Args, Clone)]
@@ -141,6 +151,30 @@ pub fn run_up(args: UpArgs) -> Result<()> {
         Some(i) => i.id,
         None => ctx.store.create_instance(&env.id, rev.number())?.id,
     };
+    let instance = ctx.store.instance(&id)?;
+    let req = super::neon::requirements(&rev)?;
+    match &args.neon_branch {
+        Some(branch) => {
+            let binding = ctx.block_on(super::neon::bind_instance(
+                &ctx, &ws, &env, &rev, &instance, branch, args.ttl, &req,
+            ))?;
+            println!(
+                "bound to Neon branch `{}` ({})",
+                binding.branch_name, binding.branch
+            );
+        }
+        None if !req.is_empty() && super::neon::binding_of(&instance).is_none() => {
+            return Err(Error::other(format!(
+                "{}/{} r{} runs on Neon ({}), but the instance is bound to no branch",
+                ws.name,
+                env.name,
+                rev.number(),
+                describe(&req)
+            ))
+            .with_hint("`--neon-branch <branch>`, or `--neon-branch new`"));
+        }
+        None => {}
+    }
     let runtime = ctx.instances();
     let materialized = ctx.block_on(async { Ok(runtime.start(&id).await?) })?;
     let placement = runtime.placement(&id)?;
@@ -158,6 +192,25 @@ pub fn run_up(args: UpArgs) -> Result<()> {
     Ok(())
 }
 
+/// What a plan needs of a Neon branch, in a few words.
+fn describe(req: &olai_stack_topology::NeonRequirements) -> String {
+    let mut parts = Vec::new();
+    if !req.functions.is_empty() {
+        let slugs: Vec<&str> = req.functions.iter().map(|f| f.slug.as_str()).collect();
+        parts.push(format!("functions {}", slugs.join(", ")));
+    }
+    if !req.databases.is_empty() {
+        parts.push(format!("databases {}", req.databases.join(", ")));
+    }
+    if !req.buckets.is_empty() {
+        parts.push(format!("buckets {}", req.buckets.join(", ")));
+    }
+    if parts.is_empty() {
+        parts.push(req.vars.join(", "));
+    }
+    parts.join("; ")
+}
+
 pub fn run_down(args: DownArgs) -> Result<()> {
     let ctx = Ctx::open()?;
     let instances = instances_of(&ctx, &args.target)?;
@@ -173,6 +226,10 @@ pub fn run_down(args: DownArgs) -> Result<()> {
             let known = projects.iter().any(|p| p.name == project);
             if args.rm {
                 runtime.remove(&instance.id, args.volumes).await?;
+                // A removed instance's storage credential goes too.
+                if let Some(binding) = super::neon::binding_of(instance) {
+                    super::neon::release(&ctx, &ctx.neon()?, &binding).await?;
+                }
                 println!("removed {project}");
             } else if known || instance.desired == Desired::Running {
                 runtime.stop(&instance.id, args.volumes).await?;
@@ -209,6 +266,9 @@ struct PsRow {
     desired: Desired,
     /// Containers per state, as Docker reports them (empty when it doesn't know the project).
     containers: BTreeMap<String, u32>,
+    /// The Neon branch it is bound to, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    neon_branch: Option<String>,
 }
 
 pub fn run_ps(args: PsArgs) -> Result<()> {
@@ -228,7 +288,9 @@ pub fn run_ps(args: PsArgs) -> Result<()> {
             .find(|p| p.name == project)
             .map(|p| p.states.clone())
             .unwrap_or_default();
+        let neon_branch = super::neon::binding_of(&i).map(|b| b.branch_name);
         rows.push(PsRow {
+            neon_branch,
             workspace: ws.name,
             environment: env.name,
             revision: i.revision,
@@ -270,8 +332,12 @@ pub fn run_ps(args: PsArgs) -> Result<()> {
                 Desired::Running => "running",
                 Desired::Stopped => "stopped",
             };
+            let neon = r
+                .neon_branch
+                .as_ref()
+                .map_or(String::new(), |b| format!("  neon:{b}"));
             println!(
-                "{:<28} {:>4} {desired:<8} {containers}",
+                "{:<28} {:>4} {desired:<8} {containers}{neon}",
                 format!("{}/{}@{}", r.workspace, r.environment, r.revision),
                 r.slot.map_or("-".to_owned(), |s| s.to_string()),
             );

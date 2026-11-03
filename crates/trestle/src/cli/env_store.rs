@@ -126,7 +126,7 @@ pub struct RmArgs {
 
 /// The catalog a draft or revision plans against: the baseline with its module manifests
 /// merged over it.
-fn catalog_for(modules: &BTreeMap<String, String>) -> Result<Catalog> {
+pub(super) fn catalog_for(modules: &BTreeMap<String, String>) -> Result<Catalog> {
     let mut catalog = baseline_catalog();
     for (path, text) in modules {
         let custom = Catalog::from_manifests([text.as_str()])
