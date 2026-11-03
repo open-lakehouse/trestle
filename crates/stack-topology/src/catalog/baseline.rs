@@ -174,14 +174,13 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
 /// PostgreSQL, Neon, …) in place of the in-stack `postgres`. Consumers connect to it directly;
 /// its deployment steps create the databases they demand.
 fn hosted_postgres() -> Arc<dyn Module> {
-    hosted_module(
+    Arc::new(hosted_module(
         "hosted-postgres",
         "postgresql",
         "Hosted Postgres",
         "A managed PostgreSQL server (Neon, RDS, Azure, …); README.md sets it up.",
         "metadata_db",
         HostedKind::Postgres,
-        None,
         ServiceSpec {
             name: "db".into(),
             role: Role::relational_db(),
@@ -190,20 +189,19 @@ fn hosted_postgres() -> Arc<dyn Module> {
             depends_on: vec![],
             base_path: String::new(),
         },
-    )
+    ))
 }
 
 /// `aws-s3` — Amazon S3 (or an S3-compatible store at an explicit endpoint) in place of an
 /// in-stack object store. Its deployment steps create the buckets consumers demand.
 fn aws_s3() -> Arc<dyn Module> {
-    hosted_module(
+    Arc::new(hosted_module(
         "aws-s3",
         "amazonS3",
         "Amazon S3",
         "Amazon S3 or an S3-compatible store; README.md sets up the buckets.",
         "storage",
         HostedKind::S3,
-        None,
         ServiceSpec {
             name: "s3".into(),
             role: Role::object_store(),
@@ -212,20 +210,19 @@ fn aws_s3() -> Arc<dyn Module> {
             depends_on: vec![],
             base_path: String::new(),
         },
-    )
+    ))
 }
 
 /// `azure-storage` — an Azure storage account (Blob / ADLS Gen2) in place of an in-stack
 /// object store. Its deployment steps create the containers consumers demand.
 fn azure_storage() -> Arc<dyn Module> {
-    hosted_module(
+    Arc::new(hosted_module(
         "azure-storage",
         "azureBlobStorage",
         "Azure Storage",
         "An Azure storage account (Blob / ADLS Gen2); README.md sets it up.",
         "storage",
         HostedKind::AzureBlob,
-        None,
         ServiceSpec {
             name: "blob".into(),
             role: Role::object_store(),
@@ -234,7 +231,7 @@ fn azure_storage() -> Arc<dyn Module> {
             depends_on: vec![],
             base_path: String::new(),
         },
-    )
+    ))
 }
 
 /// `neon-storage` — the object storage of a Neon branch (S3-compatible, path-style) in place
@@ -242,25 +239,13 @@ fn azure_storage() -> Arc<dyn Module> {
 /// bound to: `NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_ACCESS_KEY_ID` and
 /// `NEON_S3_SECRET_ACCESS_KEY`.
 fn neon_storage() -> Arc<dyn Module> {
-    hosted_module(
+    let mut module = hosted_module(
         "neon-storage",
         "neonObjectStorage",
         "Neon Object Storage",
         "The S3-compatible object storage of a Neon branch; the branch supplies its keys.",
         "storage",
         HostedKind::S3,
-        Some(HostedResource {
-            cloud: Some("neon".into()),
-            vendor: Some(HostedVendor::Neon),
-            connection: HostedConnection::S3 {
-                region: "${NEON_S3_REGION}".into(),
-                endpoint: Some("${NEON_S3_ENDPOINT}".into()),
-                bucket: "{name}".into(),
-                access_key_id: "${NEON_S3_ACCESS_KEY_ID}".into(),
-                secret_access_key: "${NEON_S3_SECRET_ACCESS_KEY}".into(),
-                role_arn: None,
-            },
-        }),
         ServiceSpec {
             name: "s3".into(),
             role: Role::object_store(),
@@ -269,7 +254,20 @@ fn neon_storage() -> Arc<dyn Module> {
             depends_on: vec![],
             base_path: String::new(),
         },
-    )
+    );
+    module.provides.hosted_default = Some(HostedResource {
+        cloud: Some("neon".into()),
+        vendor: Some(HostedVendor::Neon),
+        connection: HostedConnection::S3 {
+            region: "${NEON_S3_REGION}".into(),
+            endpoint: Some("${NEON_S3_ENDPOINT}".into()),
+            bucket: "{name}".into(),
+            access_key_id: "${NEON_S3_ACCESS_KEY_ID}".into(),
+            secret_access_key: "${NEON_S3_SECRET_ACCESS_KEY}".into(),
+            role_arn: None,
+        },
+    });
+    Arc::new(module)
 }
 
 /// The deployment steps of a hosted provider of `kind`: create what consumers demand, in the
@@ -335,12 +333,10 @@ fn hosted_module(
     summary: &str,
     category: &str,
     kind: HostedKind,
-    default: Option<HostedResource>,
     service: ServiceSpec,
-) -> Arc<dyn Module> {
+) -> DataModule {
     let mut provides = Provides {
         hosted: Some(kind),
-        hosted_default: default,
         deploy: hosted_steps(kind),
         ..Provides::default()
     };
@@ -351,7 +347,7 @@ fn hosted_module(
             .template()
             .expect("a hosted resource kind binds a connection"),
     );
-    Arc::new(DataModule {
+    DataModule {
         id: ModuleId::from(id),
         model: Some(model.into()),
         display_name: Some(display_name.into()),
@@ -365,7 +361,7 @@ fn hosted_module(
         provides,
         knobs: vec![],
         renders: BTreeMap::new(),
-    })
+    }
 }
 
 /// A hosted service's placement before planning, which replaces the origin with the

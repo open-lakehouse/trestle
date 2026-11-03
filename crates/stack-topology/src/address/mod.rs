@@ -234,7 +234,7 @@ pub(crate) fn restore_refs(s: &str) -> String {
             .unwrap_or(rest.len() - hex_start);
         let hex = &rest[hex_start..hex_start + hex_len];
         let after = &rest[hex_start + hex_len..];
-        let decoded = (hex.len() % 2 == 0 && after.starts_with(PLACEHOLDER_HOST_SUFFIX))
+        let decoded = (hex.len().is_multiple_of(2) && after.starts_with(PLACEHOLDER_HOST_SUFFIX))
             .then(|| {
                 (0..hex.len())
                     .step_by(2)
