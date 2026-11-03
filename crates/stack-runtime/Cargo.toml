@@ -20,6 +20,8 @@ olai-stack-topology = { path = "../stack-topology", version = "0.0.13", features
 
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
+# Branch expiry timestamps, behind `neon`.
+chrono = { workspace = true, optional = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -42,6 +44,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 [features]
 # `KeychainProvider`: secrets in the OS credential store.
 keychain = ["dep:keyring"]
+# `NeonControl`, `NeonCli` and `NeonBranchSource`: Neon branches as an environment source,
+# through the Neon CLI (with `testing`, also `FakeNeon`).
+neon = ["dep:chrono"]
 # `FakeEngine`: an in-memory `ComposeEngine` for tests of code that drives one.
 testing = []
 

@@ -16,6 +16,8 @@
 //!   side by side, with the layered [`EffectiveEnv`] injected and credentials resolved by
 //!   [`SecretProvider`]s ([`EnvProvider`], and `KeychainProvider` behind feature `keychain`) and
 //!   [`Source`] overlays.
+//! - `neon` (feature `neon`): Neon branches as a source, through the Neon CLI
+//!   (`NeonControl`, `NeonCli`, `NeonBranchSource`, and `FakeNeon` with `testing`).
 //!
 //! Values that must not reach a file (credentials) go to Compose as process environment only:
 //! every lifecycle call takes the variables to add ([`UpOptions::env`]).
@@ -45,6 +47,9 @@ mod events;
 mod fake;
 mod instances;
 mod logs;
+#[cfg(feature = "neon")]
+#[cfg_attr(docsrs, doc(cfg(feature = "neon")))]
+pub mod neon;
 mod ports;
 mod reconcile;
 mod secrets;

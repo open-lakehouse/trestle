@@ -259,3 +259,32 @@ can set a config per source for all its instances (e.g. which project). The
 source gets the binding's keys merged over the workspace's
 (`SourceCtx::config`). Neither holds secrets. An instance that binds a source
 nobody configured fails to start.
+
+### Neon branches
+
+Feature `neon` adds a Neon branch as a source, all through the Neon CLI (see
+[`neon.md`](neon.md) for what it prints):
+
+- `NeonControl` is what trestle asks of Neon: branches with their annotations,
+  create, delete and reset, connection details, databases, functions, storage,
+  buckets, and storage credentials. `NeonCli` runs `neon` (or `neonctl`) with
+  `--output json`. It is found at `$NEON_CLI`, on `PATH`, in the Homebrew prefixes
+  and `~/.npm-global/bin`, or through a login shell, and it parses the first JSON
+  value of the output. `FakeNeon` (with `testing`) is an in-memory project that
+  behaves as the spike found the real one does, and can be seeded from the
+  fixtures.
+- `bind` checks a branch against `Plan::neon_requirements()`. A missing function
+  is an error at bind time, not at start. It creates the databases and buckets
+  the branch lacks and mints a storage credential on it for the instance; the
+  caller keeps the secret. The result, a `NeonBinding`, is the instance's
+  `neon` source config. `unbind` revokes the credential. A child branch inherits
+  its parent's credentials, so every binding mints its own rather than reuse one.
+- `NeonBranchSource` overlays the instance with `PGHOST`, `PGUSER`,
+  `PGDATABASE`, `PGPASSWORD`, `DATABASE_URL` (pooled), `DATABASE_URL_UNPOOLED`,
+  the `NEON_S3_*` storage coordinates and each function's
+  `<SLUG>_FUNCTION_URL`. The credentials are masked wherever the environment is
+  shown.
+- Branches trestle creates carry the `trestle.owner` annotation and an expiry,
+  and only those are reset or deleted.
+- `stop` falls back to the tree rendered at the last start when a source fails,
+  so a Neon outage never keeps an instance from stopping.

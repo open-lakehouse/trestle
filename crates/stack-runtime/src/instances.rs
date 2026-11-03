@@ -462,15 +462,25 @@ impl<E: ComposeEngine> Instances<E> {
     }
 
     /// Stop the instance (`down`, with its volumes when `volumes`), keeping its slot.
+    ///
+    /// When a source fails (a Neon outage, say), the tree rendered at the last start is taken
+    /// down without its launch env: Compose then interpolates the missing variables as empty,
+    /// which `down` doesn't mind, so a source never keeps an instance from stopping.
     pub async fn stop(&self, id: &InstanceId, volumes: bool) -> Result<()> {
         // Compose interpolates the files on `down` too, so it needs the launch env again.
-        let materialized = self.materialize(id).await?;
+        let (dir, env) = match self.materialize(id).await {
+            Ok(m) => (m.dir, m.launch),
+            Err(InstanceError::Source(_)) if self.dir(id).join("compose.yaml").is_file() => {
+                (self.dir(id), BTreeMap::new())
+            }
+            Err(e) => return Err(e),
+        };
         let opts = DownOptions {
             volumes,
-            env: materialized.launch,
+            env,
             progress: Progress::Quiet,
         };
-        self.engine.down(&materialized.dir, &opts).await?;
+        self.engine.down(&dir, &opts).await?;
         self.store.set_desired(id, Desired::Stopped)?;
         Ok(())
     }

@@ -53,7 +53,7 @@ jobs:
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
-      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-trestle --features test-engine -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
       - run: cargo clippy --locked --all-targets -p olai-vended-store --no-default-features -- -D warnings
@@ -156,8 +156,8 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-auth HTTP key source)
         run: cargo test --locked --lib --tests -p olai-auth --features http
-      - name: Run tests (olai-stack-runtime fake engine)
-        run: cargo test --locked --lib --tests -p olai-stack-runtime --features testing
+      - name: Run tests (olai-stack-runtime fake engine and Neon)
+        run: cargo test --locked --lib --tests -p olai-stack-runtime --features testing,neon
       - name: Run tests (trestle CLI on the fake engine)
         run: cargo test --locked --lib --tests -p olai-trestle --features test-engine
       - name: Run tests (olai-vended-store protocol modules)
