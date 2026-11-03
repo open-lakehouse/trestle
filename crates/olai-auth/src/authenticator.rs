@@ -135,6 +135,7 @@ impl Authenticator {
             client_id: claims.client_id,
             auth_method: AuthMethod::Jwt,
             admin: status.admin,
+            issued_at: claims.issued_at,
         })
     }
 
@@ -260,6 +261,7 @@ async fn authenticate_api_key(api_keys: &CachedApiKeys, key: &str) -> Result<Pri
         client_id: None,
         auth_method: AuthMethod::ApiKey,
         admin: false,
+        issued_at: None,
     })
 }
 
@@ -316,6 +318,7 @@ mod tests {
         assert_eq!(principal.issuer, ISSUER);
         assert_eq!(principal.subject(), "8c1d0f5e-3b7a-4c55-9f40-2d6f1e9b7a10");
         assert_eq!(principal.auth_method, AuthMethod::Jwt);
+        assert_eq!(principal.issued_at, Some(NOW - 60));
         assert!(principal.is_admin());
         assert!(matches!(
             principal.kind,

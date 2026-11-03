@@ -1,4 +1,4 @@
-//! Bearer-token authentication for axum services.
+//! Bearer-token authentication and an authorization port for axum services.
 //!
 //! The crate verifies the `Authorization: Bearer` header of each request and hands
 //! handlers a [`Principal`]:
@@ -13,6 +13,11 @@
 //! - API keys (`olk_<id>_<secret>`) authenticate service accounts. An [`ApiKeyStore`]
 //!   looks a key up by id, and the SHA-256 of the key is compared in constant time.
 //!   `PgApiKeyStore` (feature `postgres`) reads them from Postgres.
+//! - An [`Authorizer`] decides whether a principal may perform an action on a resource,
+//!   wherever the Cedar policies are evaluated: `HttpAuthorizer` (feature `pdp-client`)
+//!   asks a remote policy decision point, `CedarAuthorizer` (feature `cedar`) evaluates
+//!   them in-process. Both fail closed. [`CachedAuthorizer`] reuses decisions for a few
+//!   seconds, and [`AuthContext`] builds the standard request context.
 //! - [`auth_layer`] runs an [`Authenticator`] in front of a router. Rejected requests get
 //!   a 401 with an RFC 6750 `WWW-Authenticate` challenge whose `resource_metadata`
 //!   parameter (RFC 9728) points clients at the authorization server.
@@ -71,6 +76,7 @@
 
 mod api_key;
 mod authenticator;
+mod authz;
 mod error;
 mod jwk;
 mod jwt;
@@ -91,6 +97,15 @@ pub use api_key::{
 /// Re-exported for implementing [`KeySource`], [`UserStatusStore`] and [`ApiKeyStore`].
 pub use async_trait::async_trait;
 pub use authenticator::{Authenticator, AuthenticatorBuilder, ConfigError};
+#[cfg(feature = "cedar")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cedar")))]
+pub use authz::cedar::{CedarAuthorizer, CedarConfigError, EntityLoader};
+#[cfg(feature = "pdp-client")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pdp-client")))]
+pub use authz::http::HttpAuthorizer;
+pub use authz::wire;
+pub use authz::wire::{AuthorizeRequest, AuthorizeResponse, Decision, EntityRef};
+pub use authz::{AuthContext, Authorizer, CachedAuthorizer, EntityTypes};
 pub use error::{AuthError, BoxError, InvalidToken};
 pub use jwk::{JwkError, JwkSet};
 pub use jwt::{JwtClaims, JwtVerifier};

@@ -1,0 +1,38 @@
+// A small document service: the schema both Authorizer implementations are tested
+// against (tests/authz.rs).
+namespace Docs {
+  entity Role;
+  entity Group in [Group];
+  entity User in [Group, Role] {
+    banned: Bool,
+    email_verified: Bool,
+  };
+  entity ServiceAccount in [Group];
+  entity Folder;
+  entity Doc in [Folder] {
+    owner: User,
+    public: Bool,
+  };
+
+  // The standard context `AuthContext` builds.
+  type RequestContext = {
+    auth_method: String,
+    scopes: Set<String>,
+    client_id?: String,
+    token_issued_at?: Long,
+    source_ip?: ipaddr,
+    request_time?: datetime,
+    branch?: String,
+  };
+
+  action read, write appliesTo {
+    principal: [User, ServiceAccount],
+    resource: [Doc],
+    context: RequestContext,
+  };
+  action ingest appliesTo {
+    principal: [ServiceAccount],
+    resource: [Folder],
+    context: RequestContext,
+  };
+}

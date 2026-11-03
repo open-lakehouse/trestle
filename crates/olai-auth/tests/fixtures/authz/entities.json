@@ -1,0 +1,41 @@
+[
+  { "uid": { "type": "Docs::Role", "id": "admin" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "Docs::Group", "id": "staff" }, "attrs": {}, "parents": [] },
+  {
+    "uid": { "type": "Docs::Group", "id": "editors" }, "attrs": {},
+    "parents": [{ "type": "Docs::Group", "id": "staff" }]
+  },
+  {
+    "uid": { "type": "Docs::User", "id": "alice" },
+    "attrs": { "banned": false, "email_verified": true },
+    "parents": [{ "type": "Docs::Role", "id": "admin" }]
+  },
+  {
+    "uid": { "type": "Docs::User", "id": "bob" },
+    "attrs": { "banned": false, "email_verified": true },
+    "parents": [{ "type": "Docs::Group", "id": "editors" }]
+  },
+  {
+    "uid": { "type": "Docs::User", "id": "carol" },
+    "attrs": { "banned": true, "email_verified": true },
+    "parents": [{ "type": "Docs::Role", "id": "admin" }]
+  },
+  {
+    "uid": { "type": "Docs::User", "id": "dave" },
+    "attrs": { "banned": false, "email_verified": false },
+    "parents": []
+  },
+  { "uid": { "type": "Docs::ServiceAccount", "id": "ingest-bot" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "Docs::Folder", "id": "shared" }, "attrs": {}, "parents": [] },
+  { "uid": { "type": "Docs::Folder", "id": "inbox" }, "attrs": {}, "parents": [] },
+  {
+    "uid": { "type": "Docs::Doc", "id": "plan" },
+    "attrs": { "owner": { "__entity": { "type": "Docs::User", "id": "dave" } }, "public": false },
+    "parents": [{ "type": "Docs::Folder", "id": "shared" }]
+  },
+  {
+    "uid": { "type": "Docs::Doc", "id": "faq" },
+    "attrs": { "owner": { "__entity": { "type": "Docs::User", "id": "alice" } }, "public": true },
+    "parents": [{ "type": "Docs::Folder", "id": "inbox" }]
+  }
+]

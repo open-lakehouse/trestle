@@ -59,6 +59,8 @@ pub struct JwtClaims {
     pub scopes: Vec<String>,
     /// `client_id`, or `azp` when there is none.
     pub client_id: Option<String>,
+    /// `iat`.
+    pub issued_at: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +77,8 @@ struct RawClaims {
     scp: Option<Vec<String>>,
     client_id: Option<String>,
     azp: Option<String>,
+    #[serde(default, deserialize_with = "numeric_date")]
+    iat: Option<i64>,
 }
 
 impl From<RawClaims> for JwtClaims {
@@ -89,6 +93,7 @@ impl From<RawClaims> for JwtClaims {
                 .unwrap_or(false),
             scopes: raw.scope.or(raw.scp).unwrap_or_default(),
             client_id: raw.client_id.or(raw.azp),
+            issued_at: raw.iat,
         }
     }
 }

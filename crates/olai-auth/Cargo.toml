@@ -1,6 +1,6 @@
 [package]
 name = "olai-auth"
-description = "Bearer-token authentication for axum services: EdDSA JWT verification, API keys and a Principal extractor"
+description = "Authentication and authorization for axum services: EdDSA JWT verification, API keys, a Principal extractor and a Cedar Authorizer port"
 version = "0.0.1"
 edition.workspace = true
 rust-version.workspace = true
@@ -24,10 +24,14 @@ tokio = { workspace = true, features = ["sync"] }
 # No default features: the json, form, query and serve features are not needed, so the
 # hosts decide what else of axum they link.
 axum = { version = "0.8", default-features = false }
+# Only the `cedar` feature's embedded `CedarAuthorizer`. The extensions policies use for
+# request context: `ipaddr` (`source_ip`), `datetime` (`request_time`) and `decimal`.
+# Needs Rust 1.89, newer than the rest of the crate.
+cedar-policy = { version = "4.14", default-features = false, features = ["datetime", "decimal", "ipaddr"], optional = true }
 # Verification only. The default `fast` and `zeroize` features are kept; `rand_core` is not
 # needed because this crate never generates keys.
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "fast", "zeroize"] }
-# Only the `http` feature's JWKS fetch. rustls without the workspace's http2/json/stream
+# Only the `http` feature's JWKS fetch and the `pdp-client` feature's `HttpAuthorizer`. rustls without the workspace's http2/json/stream
 # extras, to keep the client small.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 # API key digests and their constant-time comparison.
@@ -40,9 +44,11 @@ subtle = { version = "2.6", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+# An in-test policy decision point for `HttpAuthorizer`.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 mockito = "1.4"
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "time"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [features]
@@ -51,10 +57,18 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 http = ["dep:reqwest"]
 # `PgApiKeyStore`: API keys from Postgres tables, through the host's `sqlx::PgPool`.
 postgres = ["dep:sqlx"]
+# `HttpAuthorizer`: ask a remote policy decision point over HTTPS.
+pdp-client = ["dep:reqwest"]
+# `CedarAuthorizer`: evaluate Cedar policies in-process. Needs Rust 1.89.
+cedar = ["dep:cedar-policy"]
 
 [[test]]
 name = "postgres"
 required-features = ["postgres"]
+
+[[test]]
+name = "authz"
+required-features = ["cedar", "pdp-client"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }

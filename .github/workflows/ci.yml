@@ -53,7 +53,8 @@ jobs:
       - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
-      - run: cargo clippy --locked --all-targets -p olai-auth --features postgres -- -D warnings
+      # Every olai-auth feature, `cedar` (Rust 1.89) included: this job runs on stable.
+      - run: cargo clippy --locked --all-targets -p olai-auth --all-features -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-trestle --features test-engine -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
@@ -125,8 +126,10 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-vended-store/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-credential-vending)
         run: cargo msrv verify --manifest-path crates/olai-credential-vending/Cargo.toml -- cargo check --locked
+      # Every feature but `cedar`: cedar-policy needs Rust 1.89, newer than the crate's
+      # MSRV, and is tested in the `auth-cedar` job.
       - name: Verify MSRV (olai-auth)
-        run: cargo msrv verify --manifest-path crates/olai-auth/Cargo.toml -- cargo check --locked --all-features
+        run: cargo msrv verify --manifest-path crates/olai-auth/Cargo.toml -- cargo check --locked --features http,postgres,pdp-client
       - name: Verify MSRV (olai-stack-runtime)
         run: cargo msrv verify --manifest-path crates/stack-runtime/Cargo.toml -- cargo check --locked --all-features
       - name: Verify MSRV (olai-stack-state)
@@ -155,14 +158,31 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-http --features recording
       - name: Run tests (olai-storage-credentials wire adapters)
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
-      - name: Run tests (olai-auth HTTP key source)
-        run: cargo test --locked --lib --tests -p olai-auth --features http
+      - name: Run tests (olai-auth HTTP key source and PDP client)
+        run: cargo test --locked --lib --tests -p olai-auth --features http,pdp-client
       - name: Run tests (olai-stack-runtime fake engine and Neon)
         run: cargo test --locked --lib --tests -p olai-stack-runtime --features testing,neon
       - name: Run tests (trestle CLI on the fake engine)
         run: cargo test --locked --lib --tests -p olai-trestle --features test-engine
       - name: Run tests (olai-vended-store protocol modules)
         run: cargo test --locked --lib --tests -p olai-vended-store --features delta-api,databricks
+
+  auth-cedar:
+    name: olai-auth with Cedar
+    # cedar-policy needs Rust 1.89, newer than the 1.88 the test job runs, so the
+    # `cedar` feature (and the shared authorizer fixtures in tests/authz.rs, which run
+    # both Authorizer implementations) is tested on stable here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: stable
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Run tests (olai-auth, all features)
+        run: cargo test --locked -p olai-auth --all-features
 
   emulator-tests:
     name: Emulator tests

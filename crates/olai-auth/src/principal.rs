@@ -32,6 +32,8 @@ pub struct Principal {
     /// [`UserStatusStore`](crate::UserStatusStore). Always `false` for a service
     /// account.
     pub admin: bool,
+    /// When the token was issued (`iat`, seconds since the epoch), if it says.
+    pub issued_at: Option<i64>,
 }
 
 /// The kind of caller behind a [`Principal`].
@@ -64,6 +66,16 @@ pub enum AuthMethod {
     /// An API key found in the [`ApiKeyStore`](crate::ApiKeyStore). The principal is
     /// a [`PrincipalKind::ServiceAccount`].
     ApiKey,
+}
+
+impl AuthMethod {
+    /// The method's name in an authorization context: `jwt` or `api_key`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Jwt => "jwt",
+            Self::ApiKey => "api_key",
+        }
+    }
 }
 
 impl Principal {

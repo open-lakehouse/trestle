@@ -1,0 +1,105 @@
+[
+  {
+    "name": "an admin may do anything",
+    "principal": ["User", "alice"], "action": "write", "resource": ["Doc", "plan"],
+    "decision": "allow", "policies": ["admin-permit"]
+  },
+  {
+    "name": "a banned admin may do nothing",
+    "principal": ["User", "carol"], "action": "read", "resource": ["Doc", "faq"],
+    "decision": "deny", "policies": ["banned-forbid"]
+  },
+  {
+    "name": "anyone may read a public doc",
+    "principal": ["User", "dave"], "action": "read", "resource": ["Doc", "faq"],
+    "decision": "allow", "policies": ["public-read"]
+  },
+  {
+    "name": "nobody else may read a private doc",
+    "principal": ["User", "bob"], "action": "read", "resource": ["Doc", "plan"],
+    "decision": "deny", "policies": []
+  },
+  {
+    "name": "the owner may write their doc",
+    "principal": ["User", "dave"], "action": "write", "resource": ["Doc", "plan"],
+    "decision": "allow", "policies": ["owner-edit"]
+  },
+  {
+    "name": "an editor may write in the shared folder",
+    "principal": ["User", "bob"], "action": "write", "resource": ["Doc", "plan"],
+    "decision": "allow", "policies": ["editors-write"]
+  },
+  {
+    "name": "an editor may not write outside it",
+    "principal": ["User", "bob"], "action": "write", "resource": ["Doc", "faq"],
+    "decision": "deny", "policies": []
+  },
+  {
+    "name": "writes from inside the office network pass",
+    "principal": ["User", "bob"], "action": "write", "resource": ["Doc", "plan"],
+    "context": { "source_ip": { "__extn": { "fn": "ip", "arg": "10.1.2.3" } } },
+    "decision": "allow", "policies": ["editors-write"]
+  },
+  {
+    "name": "writes from outside it are forbidden",
+    "principal": ["User", "bob"], "action": "write", "resource": ["Doc", "plan"],
+    "context": { "source_ip": { "__extn": { "fn": "ip", "arg": "192.0.2.1" } } },
+    "decision": "deny", "policies": ["writes-from-office"]
+  },
+  {
+    "name": "a request time before the cutoff passes",
+    "principal": ["User", "dave"], "action": "write", "resource": ["Doc", "plan"],
+    "context": { "request_time": { "__extn": { "fn": "datetime", "arg": "2027-01-15T08:00:00Z" } } },
+    "decision": "allow", "policies": ["owner-edit"]
+  },
+  {
+    "name": "a request time after it is forbidden",
+    "principal": ["User", "dave"], "action": "write", "resource": ["Doc", "plan"],
+    "context": { "request_time": { "__extn": { "fn": "datetime", "arg": "2031-06-01T00:00:00Z" } } },
+    "decision": "deny", "policies": ["no-writes-after-2030"]
+  },
+  {
+    "name": "a service account with the ingest scope may ingest",
+    "principal": ["ServiceAccount", "ingest-bot"], "action": "ingest", "resource": ["Folder", "inbox"],
+    "context": { "auth_method": "api_key", "scopes": ["ingest"] },
+    "decision": "allow", "policies": ["ingest-scope"]
+  },
+  {
+    "name": "without the scope it may not",
+    "principal": ["ServiceAccount", "ingest-bot"], "action": "ingest", "resource": ["Folder", "inbox"],
+    "context": { "auth_method": "api_key", "scopes": ["read"] },
+    "decision": "deny", "policies": []
+  },
+  {
+    "name": "a service account may read a public doc",
+    "principal": ["ServiceAccount", "ingest-bot"], "action": "read", "resource": ["Doc", "faq"],
+    "context": { "auth_method": "api_key" },
+    "decision": "allow", "policies": ["public-read"]
+  },
+  {
+    "name": "a service account may not write",
+    "principal": ["ServiceAccount", "ingest-bot"], "action": "write", "resource": ["Doc", "plan"],
+    "context": { "auth_method": "api_key", "scopes": ["ingest"] },
+    "decision": "deny", "policies": []
+  },
+  {
+    "name": "a caller-supplied resource entity is evaluated",
+    "principal": ["User", "dave"], "action": "write", "resource": ["Doc", "draft"],
+    "resource_entity": {
+      "uid": { "type": "Docs::Doc", "id": "draft" },
+      "attrs": { "owner": { "__entity": { "type": "Docs::User", "id": "dave" } }, "public": false },
+      "parents": [{ "type": "Docs::Folder", "id": "inbox" }]
+    },
+    "decision": "allow", "policies": ["owner-edit"]
+  },
+  {
+    "name": "a caller-supplied resource entity replaces the loaded one",
+    "principal": ["User", "bob"], "action": "read", "resource": ["Doc", "plan"],
+    "resource_entity": {
+      "uid": { "type": "Docs::Doc", "id": "plan" },
+      "attrs": { "owner": { "__entity": { "type": "Docs::User", "id": "dave" } }, "public": true },
+      "parents": [{ "type": "Docs::Folder", "id": "shared" }]
+    },
+    "decision": "allow", "policies": ["public-read"]
+  }
+]
