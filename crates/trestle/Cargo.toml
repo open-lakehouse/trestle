@@ -37,13 +37,18 @@ pkg-fmt = "tgz"
 [dependencies]
 # local crates (release-plz keeps versions in sync) (in alphabetical order)
 olai-codegen = { path = "../olai-codegen", version = "0.0.12" }
-olai-stack-runtime = { path = "../stack-runtime", version = "0.0.1" }
+olai-stack-runtime = { path = "../stack-runtime", version = "0.0.1", features = [
+    "keychain",
+] }
+olai-stack-state = { path = "../stack-state", version = "0.0.2" }
 olai-stack-topology = { path = "../stack-topology", version = "0.0.13", features = [
     "std-io",
     "catalog",
 ] }
 
 # workspace dependencies (in alphabetical order)
+async-trait = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -66,15 +71,29 @@ regex = "1"
 rust-embed = { version = "8.11", features = ["debug-embed", "include-exclude"] }
 serde_yaml = "0.9"
 sha2 = "0.10"
+similar = "2.7"
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2.5"
 
+[features]
+# A test seam: `TRESTLE_FAKE_ENGINE=<file>` runs the store-backed commands on an in-memory
+# Docker (its projects persisted in the file), `TRESTLE_FAKE_KEYCHAIN=<file>` keeps secrets in a
+# file. Never enabled in a release build.
+test-engine = ["olai-stack-runtime/testing"]
+
 [dev-dependencies]
 olai-stack-runtime = { path = "../stack-runtime", features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
+assert_cmd = "2"
+insta = { version = "1", features = ["json", "redactions"] }
+predicates = "3"
 rstest = "0.23"
 tempfile = "3"
 walkdir = "2.5"
 serde_yaml = "0.9"
 regex = "1"
+
+[[test]]
+name = "state_cli"
+required-features = ["test-engine"]

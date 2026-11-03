@@ -1,8 +1,9 @@
 # Running environments: `olai-stack-runtime`
 
 Status: the engine, the state store, and instances with the layered environment
-and secret providers have landed. `trestle workspace up/down/list` runs on the
-engine. The CLI moves onto the store and instances in WP2 (#272).
+and secret providers have landed. The CLI runs on them: `trestle ws`, `env
+create`/`commit`, `var`, and `up`/`down`/`ps`/`logs`/`health` (see
+[`multi-env.md`](multi-env.md)).
 
 `olai-stack-topology` plans and renders an environment and never touches Docker.
 `olai-stack-runtime` is the part that runs it, shared by the `trestle` CLI and

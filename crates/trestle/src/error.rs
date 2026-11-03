@@ -71,6 +71,15 @@ pub enum Error {
     #[error("codegen error: {0}")]
     Codegen(#[from] olai_codegen::Error),
 
+    #[error(transparent)]
+    State(#[from] olai_stack_state::Error),
+
+    #[error(transparent)]
+    Instance(#[from] olai_stack_runtime::InstanceError),
+
+    #[error(transparent)]
+    Engine(#[from] olai_stack_runtime::Error),
+
     /// An error carrying an actionable suggestion, rendered as a `try:` line.
     /// The wrapped error is the real cause; [`hint`](Error::hint) exposes the
     /// suggestion so the CLI can print it after the error chain. Display

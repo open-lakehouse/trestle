@@ -1,0 +1,30 @@
+---
+source: crates/trestle/tests/state_cli.rs
+expression: "home.json(&[\"ps\", \"--json\"], \"instances\")"
+---
+[
+  {
+    "containers": {
+      "running": 1
+    },
+    "desired": "running",
+    "environment": "dev",
+    "instance": "[id]",
+    "project": "demo_dev_r1",
+    "revision": 1,
+    "slot": 0,
+    "workspace": "demo"
+  },
+  {
+    "containers": {
+      "running": 1
+    },
+    "desired": "running",
+    "environment": "dev",
+    "instance": "[id]",
+    "project": "demo_dev_r2",
+    "revision": 2,
+    "slot": 1,
+    "workspace": "demo"
+  }
+]

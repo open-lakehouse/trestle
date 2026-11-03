@@ -1,0 +1,19 @@
+---
+source: crates/trestle/tests/state_cli.rs
+expression: "home.json(&[\"ws\", \"show\", \"demo\", \"--json\"], \"workspace\")"
+---
+{
+  "environments": [
+    {
+      "draft_changed": false,
+      "head": 1,
+      "instances": [],
+      "name": "dev",
+      "revisions": 1
+    }
+  ],
+  "mesh": true,
+  "name": "demo",
+  "sources": {},
+  "vars": []
+}

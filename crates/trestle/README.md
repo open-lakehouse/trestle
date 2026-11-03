@@ -12,7 +12,10 @@ framework. Published as `olai-trestle`; installs a `trestle` binary.
    `trestle enrich-openapi -c trestle.yaml` (see
    [`olai-codegen`](https://crates.io/crates/olai-codegen)).
 4. **Dev environments**: `trestle env new <name>` renders a Docker Compose stack
-   from selected modules; `trestle workspace` runs several of them side by side.
+   from selected modules. `trestle ws`, `trestle env create`/`commit` and
+   `trestle up`/`down`/`ps` keep workspaces of environments, with numbered
+   revisions, in the trestle state store and run them side by side (see
+   [multi-env.md](https://github.com/open-lakehouse/trestle/blob/main/docs/multi-env.md)).
 
 ## Install
 

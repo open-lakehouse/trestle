@@ -1,0 +1,20 @@
+---
+source: crates/trestle/tests/state_cli.rs
+expression: "home.json(&[\"ws\", \"list\", \"--json\"], \"workspaces\")"
+---
+[
+  {
+    "environments": 1,
+    "instances": 0,
+    "mesh": true,
+    "name": "demo",
+    "running": 0
+  },
+  {
+    "environments": 0,
+    "instances": 0,
+    "mesh": false,
+    "name": "other",
+    "running": 0
+  }
+]

@@ -1,5 +1,8 @@
 //! `trestle workspace`: several environments side by side on one Docker host.
 //!
+//! Deprecated in favour of the store-backed `trestle ws` (`ws import` takes a workspace
+//! directory in) and `trestle up`/`down`/`ps`.
+//!
 //! A workspace directory holds a [`WORKSPACE_FILE`] and one environment directory per
 //! member. Each member is an ordinary `trestle env` environment; the workspace gives it a slot
 //! (its own host ports), a compose project name of its own and, with `--mesh`, a gateway on
@@ -112,6 +115,10 @@ pub struct DownArgs {
 }
 
 pub fn run(cmd: WorkspaceCommand) -> Result<()> {
+    eprintln!(
+        "warning: `trestle workspace` is deprecated: `trestle ws import <dir>` moves a workspace \
+         directory into the trestle state, then `trestle up <ws>/<env>` runs it"
+    );
     let docker = DockerCli::new();
     match cmd {
         WorkspaceCommand::Init(args) => run_init(args),

@@ -3,10 +3,17 @@
 pub mod config;
 pub mod enrich_openapi;
 pub mod env;
+pub mod env_store;
 pub mod generate;
 pub mod list;
 pub mod new;
+mod output;
+pub mod run;
+mod state;
+pub mod target;
+pub mod var;
 pub mod workspace;
+pub mod ws;
 
 mod util;
 
@@ -56,7 +63,24 @@ pub enum Commands {
     /// Create and render composed Docker-Compose lakehouse environments.
     #[command(subcommand)]
     Env(env::EnvCommand),
-    /// Run several environments side by side on one host, each on its own ports.
+    /// Workspaces in the trestle state: sets of environments sharing a host.
+    #[command(subcommand)]
+    Ws(ws::WsCommand),
+    /// Variables of a workspace, an environment or a draft; `--secret` ones live in the OS
+    /// keychain.
+    #[command(subcommand)]
+    Var(var::VarCommand),
+    /// Start a revision of an environment (the head by default): `<ws>/<env>[@<rev>]`.
+    Up(run::UpArgs),
+    /// Stop the instances of a workspace, an environment or a revision.
+    Down(run::DownArgs),
+    /// List instances and what Docker runs of them.
+    Ps(run::PsArgs),
+    /// Print an instance's logs.
+    Logs(run::LogsArgs),
+    /// Show the health of an instance's services.
+    Health(run::HealthArgs),
+    /// Deprecated: directory-based workspaces. Use `trestle ws import <dir>` and the store.
     #[command(subcommand)]
     Workspace(workspace::WorkspaceCommand),
     /// List embedded bases + apps.
@@ -79,6 +103,13 @@ pub fn run() -> Result<()> {
         Commands::Generate(args) => generate::run(*args),
         Commands::EnrichOpenapi(args) => enrich_openapi::run(args),
         Commands::Env(cmd) => env::run(cmd),
+        Commands::Ws(cmd) => ws::run(cmd),
+        Commands::Var(cmd) => var::run(cmd),
+        Commands::Up(args) => run::run_up(args),
+        Commands::Down(args) => run::run_down(args),
+        Commands::Ps(args) => run::run_ps(args),
+        Commands::Logs(args) => run::run_logs(args),
+        Commands::Health(args) => run::run_health(args),
         Commands::Workspace(cmd) => workspace::run(cmd),
         Commands::ListTemplates => list::run_templates(),
         Commands::ListApps => list::run_apps(),

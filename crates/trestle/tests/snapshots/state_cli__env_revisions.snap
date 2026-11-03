@@ -1,0 +1,27 @@
+---
+source: crates/trestle/tests/state_cli.rs
+expression: "home.json(&[\"env\", \"revisions\", \"demo/dev\", \"--json\"], \"revisions\")"
+---
+[
+  {
+    "digest": "[digest]",
+    "head": false,
+    "instances": 0,
+    "modules": [
+      "unity-catalog"
+    ],
+    "number": 1,
+    "vars": 0
+  },
+  {
+    "digest": "[digest]",
+    "head": true,
+    "instances": 0,
+    "modules": [
+      "unity-catalog",
+      "mlflow"
+    ],
+    "number": 2,
+    "vars": 0
+  }
+]

@@ -1,0 +1,37 @@
+---
+source: crates/trestle/tests/state_cli.rs
+expression: "home.json(&[\"var\", \"list\", \"demo/dev\", \"--json\"], \"vars\")"
+---
+[
+  {
+    "name": "EMPTY",
+    "scope": "environment",
+    "value": ""
+  },
+  {
+    "name": "LOG",
+    "scope": "environment",
+    "value": "info"
+  },
+  {
+    "name": "TOKEN",
+    "scope": "environment",
+    "secret": {
+      "key": "demo/dev/TOKEN",
+      "provider": "keychain"
+    }
+  },
+  {
+    "name": "DRAFT_PW",
+    "scope": "draft",
+    "secret": {
+      "key": "demo/dev@r2/DRAFT_PW",
+      "provider": "keychain"
+    }
+  },
+  {
+    "name": "FEATURE",
+    "scope": "draft",
+    "value": "on"
+  }
+]

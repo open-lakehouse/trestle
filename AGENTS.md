@@ -10,7 +10,7 @@ contributor detail (release mechanics, publishing, auth) lives in
 Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
 
 - `crates/trestle/`: the CLI, published as `olai-trestle` (`trestle` binary):
-  `new` / `init` / `config` / `generate` / `env` / `workspace` / `enrich-openapi`,
+  `new` / `init` / `config` / `generate` / `env` / `ws` / `var` / `up` … / `enrich-openapi`,
   plus the embedded
   project templates in `crates/trestle/templates/` (excluded from the workspace)
 - `crates/olai-codegen/`: proto-driven code generation (REST handlers, clients,
@@ -31,10 +31,10 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
   for the web UI
 - `crates/stack-runtime/` (`olai-stack-runtime`): runs environments on Docker
   Compose (`ComposeEngine`, `DockerCli`, `FakeEngine`), behind `trestle
-  workspace up/down/list`; see [`docs/runtime.md`](docs/runtime.md)
+  up/down/ps`; see [`docs/runtime.md`](docs/runtime.md)
 - `crates/stack-state/` (`olai-stack-state`): the shared SQLite state store
   (workspaces, environments, immutable revisions, instances, host-wide slot
-  leases) under `TRESTLE_HOME`
+  leases) under `TRESTLE_HOME`, behind `trestle ws` / `env create` / `var`
 - `crates/olai-test-emulators/`: testcontainers storage emulators (test-only,
   unpublished)
 - `node/`: Bun workspace: env editor, diagram package

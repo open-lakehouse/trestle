@@ -52,6 +52,26 @@ pub enum EnvCommand {
     ListModules(EnvListModulesArgs),
     /// Print an environment's architecture diagram as Mermaid, for Markdown.
     Diagram(EnvDiagramArgs),
+    /// Create an environment of a workspace in the trestle state, as a draft: `<ws>/<env>`.
+    Create(super::env_store::CreateArgs),
+    /// Show an environment's draft or a revision (`--effective`: what an instance runs with).
+    Show(super::env_store::ShowArgs),
+    /// Select modules in the draft.
+    AddModule(super::env_store::ModulesArgs),
+    /// Deselect modules (and drop their knob overrides) in the draft.
+    RemoveModule(super::env_store::ModulesArgs),
+    /// Set knob overrides in the draft: `module.key=value`.
+    SetKnob(super::env_store::SetKnobArgs),
+    /// Commit the draft as the environment's next revision.
+    Commit(super::env_store::EnvTargetArgs),
+    /// List the environment's revisions.
+    Revisions(super::env_store::RevisionsArgs),
+    /// Diff two revisions, or a revision and the draft (head → draft by default).
+    Diff(super::env_store::DiffArgs),
+    /// Export a revision as an environment directory (`env.toml` and module manifests).
+    Export(super::env_store::ExportArgs),
+    /// Delete an environment from its workspace, with its revisions and instances.
+    Rm(super::env_store::RmArgs),
 }
 
 #[derive(Args, Clone)]
@@ -180,7 +200,9 @@ pub struct EnvListModulesArgs {
 /// Parse a `module.key=value` override. The value is split on the *first* `=`
 /// (so a value may itself contain `=`, e.g. a connection string), and the
 /// `module.key` left-hand side on its *first* `.`.
-fn parse_knob_override(s: &str) -> std::result::Result<((String, String), String), String> {
+pub(super) fn parse_knob_override(
+    s: &str,
+) -> std::result::Result<((String, String), String), String> {
     let (lhs, value) = s
         .split_once('=')
         .ok_or_else(|| format!("expected module.key=value, got `{s}`"))?;
@@ -200,6 +222,16 @@ pub fn run(cmd: EnvCommand) -> Result<()> {
         EnvCommand::Render(args) => run_render(args),
         EnvCommand::ListModules(args) => run_list_modules(args),
         EnvCommand::Diagram(args) => run_diagram(args),
+        EnvCommand::Create(args) => super::env_store::run_create(args),
+        EnvCommand::Show(args) => super::env_store::run_show(args),
+        EnvCommand::AddModule(args) => super::env_store::run_add_module(args),
+        EnvCommand::RemoveModule(args) => super::env_store::run_remove_module(args),
+        EnvCommand::SetKnob(args) => super::env_store::run_set_knob(args),
+        EnvCommand::Commit(args) => super::env_store::run_commit(args),
+        EnvCommand::Revisions(args) => super::env_store::run_revisions(args),
+        EnvCommand::Diff(args) => super::env_store::run_diff(args),
+        EnvCommand::Export(args) => super::env_store::run_export(args),
+        EnvCommand::Rm(args) => super::env_store::run_rm(args),
     }
 }
 
@@ -945,7 +977,7 @@ fn parse_env_lines(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn map_plan_err(e: PlanError) -> Error {
+pub(super) fn map_plan_err(e: PlanError) -> Error {
     let hint = match &e {
         PlanError::UnresolvedSecrets { .. } => format!(
             "export them, or set them in `{SECRETS_FILE}` beside env.toml (it is git-ignored)"

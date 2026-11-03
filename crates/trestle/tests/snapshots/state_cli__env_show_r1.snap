@@ -1,0 +1,17 @@
+---
+source: crates/trestle/tests/state_cli.rs
+expression: "home.json(&[\"env\", \"show\", \"demo/dev@1\", \"--json\"], \"environment\")"
+---
+{
+  "digest": "[digest]",
+  "head": 2,
+  "knobs": {},
+  "module_manifests": [],
+  "modules": [
+    "unity-catalog"
+  ],
+  "name": "dev",
+  "revision": "1",
+  "vars": [],
+  "workspace": "demo"
+}
