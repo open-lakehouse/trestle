@@ -93,6 +93,11 @@ env:
   # The package's directory under node/, and its tarball's name everywhere.
   PACKAGE_DIR: ${{ inputs.package }}
   TGZ: ${{ inputs.package }}.tgz
+  # The tarball's artifact name. It must be unique per package: release-plz.yml
+  # calls this workflow once per released package, and every one of those calls
+  # runs inside the same workflow run, where artifact names are shared. A fixed
+  # name made each job download whichever package's tarball came first.
+  ARTIFACT: npm-tgz-${{ inputs.package }}
   # workflow_call has no `dry_run` input; treat it as a real publish.
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
 
@@ -166,7 +171,7 @@ jobs:
           bun pm pack --filename "$RUNNER_TEMP/$TGZ"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: npm-tgz
+          name: ${{ env.ARTIFACT }}
           path: ${{ runner.temp }}/${{ env.TGZ }}
           if-no-files-found: error
           retention-days: 7
@@ -185,7 +190,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: npm-tgz
+          name: ${{ env.ARTIFACT }}
           path: ${{ runner.temp }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -251,7 +256,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: npm-tgz
+          name: ${{ env.ARTIFACT }}
           path: ${{ runner.temp }}
       # Writes an .npmrc for the GitHub Packages registry that reads the token
       # from NODE_AUTH_TOKEN.
@@ -297,7 +302,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: npm-tgz
+          name: ${{ env.ARTIFACT }}
           path: ${{ runner.temp }}
       # npm's own tarball name, plus a checksum next to it.
       - name: Name and checksum the tarball
