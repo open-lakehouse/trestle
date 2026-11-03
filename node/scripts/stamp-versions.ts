@@ -16,6 +16,7 @@ const root = join(import.meta.dir, "..");
 const PACKAGES: Record<string, string> = {
   "trestle-diagram": "Cargo.toml",
   "ui-kit": "ui-kit/Cargo.toml",
+  host: "host/Cargo.toml",
 };
 
 const check = process.argv.includes("--check");

@@ -63,6 +63,7 @@ on:
         options:
           - trestle-diagram
           - ui-kit
+          - host
       tag:
         description: "Release tag to build (<package>-v<version>); default: the selected ref"
         required: false

@@ -20,6 +20,12 @@ const root = join(import.meta.dir, "..");
 const PACKAGES: Record<string, string> = {
   "ui-kit": `import { Button, cn, Textarea } from "@open-lakehouse/ui-kit";
 export const kit = [Button, Textarea, cn("a", "b")];`,
+  host: `import { hostFetch, registerHost, type LakehouseHost } from "@open-lakehouse/host";
+import { HostProvider, useService } from "@open-lakehouse/host/react";
+import { createFakeHost } from "@open-lakehouse/host/testing";
+const fake: LakehouseHost = createFakeHost({ services: { svc: { "/x": 1 } } });
+registerHost(fake);
+export const host = [hostFetch("svc"), HostProvider, useService];`,
 };
 
 const project = mkdtempSync(join(tmpdir(), "olai-npm-smoke-"));

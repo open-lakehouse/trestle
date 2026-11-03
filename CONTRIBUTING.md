@@ -249,6 +249,7 @@ directory and its npm name without the `@open-lakehouse/` scope:
 |---|---|---|
 | `@open-lakehouse/trestle-diagram` | `node/Cargo.toml` | `trestle-diagram` |
 | `@open-lakehouse/ui-kit` | `node/ui-kit/Cargo.toml` | `ui-kit` |
+| `@open-lakehouse/host` | `node/host/Cargo.toml` | `host` |
 
 A placeholder has no code and is never published to crates.io (`git_only` and
 `publish = false` in `release-plz.toml`). Its `include` list names the files that

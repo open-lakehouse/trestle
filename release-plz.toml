@@ -118,6 +118,14 @@ publish = false
 semver_check = false
 changelog_path = "node/ui-kit/CHANGELOG.md"
 
+# The npm package @open-lakehouse/host (node/host/Cargo.toml).
+[[package]]
+name = "host"
+git_only = true
+publish = false
+semver_check = false
+changelog_path = "node/host/CHANGELOG.md"
+
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
 # Because commits use crate scopes (feat(olai-codegen): ...), each crate's
@@ -142,5 +150,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|olai-auth|olai-stack-runtime|olai-stack-state|trestle-diagram|ui-kit|web)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|olai-auth|olai-stack-runtime|olai-stack-state|trestle-diagram|ui-kit|host|web)\)', replace = "" },
 ]
