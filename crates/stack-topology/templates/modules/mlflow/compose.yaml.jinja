@@ -3,13 +3,14 @@ services:
   mlflow:
     image: {{ knobs.image }}
     restart: unless-stopped
-{%- if dependencies or "unity-catalog" in stack.modules %}
+{%- set uc_runs = "unity-catalog" in stack.modules and "unity-catalog" not in stack.functions %}
+{%- if dependencies or uc_runs %}
     depends_on:
 {%- for dep in dependencies %}
       {{ dep.service }}:
         condition: service_{{ dep.readiness }}
 {%- endfor %}
-{%- if "unity-catalog" in stack.modules %}
+{%- if uc_runs %}
       # The model registry is Unity Catalog's (see `--registry-store-uri` below).
       unitycatalog:
         condition: service_healthy
@@ -26,10 +27,17 @@ services:
       - "--static-prefix"
       - "{{ env.BASE_PATH }}"
 {%- if "unity-catalog" in stack.modules %}
+{%- if "unity-catalog" in stack.functions %}
+      # One model registry per environment: MLflow's registry API and UI read and write the
+      # models of Unity Catalog, which runs as a function and is called at its URL.
+      - "--registry-store-uri"
+      - "uc:{{ stack.functions["unity-catalog"].url }}"
+{%- else %}
       # One model registry per environment: with Unity Catalog in the stack, MLflow's registry
       # API and UI read and write UC models, called directly on the compose network.
       - "--registry-store-uri"
       - "uc:{{ knobs.uc_url }}"
+{%- endif %}
 {%- endif %}
     env_file:
       - path: ./modules/mlflow/.env/mlflow.env

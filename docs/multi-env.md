@@ -187,6 +187,60 @@ instances `<workspace>_<env>_r<n>`. Take the old ones down with
 the same ports. Values from `secrets.env` need setting again as vars, with
 `--secret` for the sensitive ones.
 
+## Where services run: hybrid environments
+
+A service runs in the instance's compose project, or, if it can, as a Neon
+Function on the Neon branch the instance is bound to. MLflow and Omnigent always
+run locally. Unity Catalog and Headwaters can run either way, and other services
+will be added as they ship as functions. Local services may use the branch's
+Postgres and object storage too:
+
+```toml
+[selection]
+modules = ["mlflow", "omnigent", "unity-catalog", "headwaters", "hosted-postgres", "neon-storage"]
+
+[selection.hosted.unity-catalog]          # run Unity Catalog as a function
+vendor = "neon-function"
+connection = { kind = "function" }
+
+[selection.hosted.headwaters]
+vendor = "neon-function"
+connection = { kind = "function" }
+
+[selection.hosted.hosted-postgres]        # the branch's Postgres
+vendor = "neon"
+connection = { kind = "postgres", host = "${PGHOST}", username = "${PGUSER}", password = "${PGPASSWORD}" }
+```
+
+- A **function-hosted module** keeps its id, services and client environment,
+  but nothing of it renders: no compose service, no helpers, and none of its
+  resource demands (the function has its own storage). Everything that refers to
+  it still works. MLflow's model registry, for example, becomes the function's
+  (`--registry-store-uri uc:<function URL>`), and MLflow no longer waits for a
+  local Unity Catalog.
+- **`neon-storage`** is the branch's S3-compatible object storage
+  (`NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_ACCESS_KEY_ID`,
+  `NEON_S3_SECRET_ACCESS_KEY`). `hosted-postgres` with vendor `neon` is its
+  Postgres.
+- Every coordinate is a `${VAR}` that binding the branch supplies. A function's
+  URL defaults to `${<SLUG>_FUNCTION_URL}` (`UNITYCATALOG_FUNCTION_URL`,
+  `HEADWATERS_FUNCTION_URL`). `Plan::neon_requirements()` lists what the branch
+  must supply: databases, buckets, functions by slug, and the variables. A
+  preview keeps the references, so `UNITY_CATALOG_URL` reads
+  `${UNITYCATALOG_FUNCTION_URL}/api/2.1/unity-catalog`.
+
+**Clients call a function at its URL, not through the local gateway.** The
+plan's client env points dependants straight at the function. Fronting remote
+functions with the local Envoy would give local clients one origin, but it needs
+an outbound-TLS cluster kind the gateway doesn't have, and it would hide nothing:
+function URLs are public, so each function checks the caller's Neon Auth token
+itself either way (in the desktop, the Rust proxy holds that token). Gateway
+fronting can follow if one origin turns out to matter.
+
+A fully local environment, with no Neon at all, plans and renders exactly as
+before. PuppyGraph calls Unity Catalog on the compose network, so it needs a
+local Unity Catalog.
+
 ## Networks
 
 The network plan comes in three phases. Each phase keeps the next one open.

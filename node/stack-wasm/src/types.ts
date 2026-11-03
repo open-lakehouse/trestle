@@ -49,6 +49,10 @@ export interface ModuleDto {
   /** Set for a hosted provider: a managed database or cloud object store the
    *  stack uses but does not run. */
   hosted?: HostedModuleDto | null;
+  /** Set for a service module that can run as a function (a Neon Function):
+   *  the slug it is deployed under. A `hosted` entry with a `function`
+   *  connection runs it as one. */
+  function?: string;
 }
 
 /** A container a module runs to support its services (mirrors
@@ -60,7 +64,7 @@ export interface HelperService {
 }
 
 /** What a hosted provider stands for (mirrors `HostedKind`). */
-export type HostedKind = "postgres" | "s3" | "azure_blob";
+export type HostedKind = "postgres" | "s3" | "azure_blob" | "function";
 
 /** A hosted provider's kind and default configuration (mirrors
  *  `HostedModuleDto`). */
@@ -118,7 +122,8 @@ export type HostedVendor =
   | "aws-rds"
   | "azure-postgres"
   | "aws-s3"
-  | "azure-storage";
+  | "azure-storage"
+  | "neon-function";
 
 /** How a hosted provider is configured (mirrors the Rust `HostedResource`). */
 export interface HostedResource {
@@ -159,6 +164,12 @@ export type HostedConnection =
       account: string;
       container?: string;
       connection_string: string;
+    }
+  | {
+      /** A service module run as a function. */
+      kind: "function";
+      /** The function's URL; defaults to `${<SLUG>_FUNCTION_URL}`. */
+      url?: string | null;
     };
 
 /** An extra resource to provision (mirrors the Rust `ExtraResource`). */

@@ -1,0 +1,8 @@
+{%- set f = stack.functions[module] -%}
+`{{ module }}` runs as the Neon Function `{{ f.slug }}` on the Neon branch the environment is
+bound to, reached at `{{ f.url }}`; nothing of it runs locally. Deploy it on the branch's parent
+(`neon functions deploy`): a branch created from a parent that has the function gets a copy of
+it, but a branch that existed before the deploy, or one reset since, needs it deployed again.
+`trestle up --neon-branch <branch>` reads the function's URL from the branch and fails when the
+function is missing. Function URLs are public: the function must check the caller's Neon Auth
+token itself.

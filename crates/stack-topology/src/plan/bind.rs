@@ -339,7 +339,7 @@ fn provider_templates<'a>(
         .provides()
         .resource_kinds
         .values()
-        .map(move |own| configured.map_or(own, |h| &h.template))
+        .map(move |own| configured.and_then(|h| h.template.as_ref()).unwrap_or(own))
 }
 
 /// The gateway's published `host:container` mappings: every routing listener, then, unless

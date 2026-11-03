@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::deploy::DeployStepSpec;
 use crate::model::connection::{ConnectionField, ConnectionTemplate};
 use crate::model::role::ServiceSpec;
-use crate::plan::hosted::HostedKind;
+use crate::plan::hosted::{HostedKind, HostedResource};
 use crate::render::{InjectedEnv, RenderFile, RenderOutput};
 use crate::target::TargetId;
 
@@ -149,6 +149,18 @@ pub struct Provides {
     /// [`HostedConnection`]: crate::HostedConnection
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted: Option<HostedKind>,
+    /// A hosted provider's own default configuration, used when the selection configures it
+    /// with none (else its kind's [default](HostedKind::default_resource)): `neon-storage`'s
+    /// Neon endpoint and keys, say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_default: Option<HostedResource>,
+    /// Set for a service module that can run as a function (a Neon Function): the slug it is
+    /// deployed under (`[a-z0-9]{1,20}`, e.g. `unitycatalog`). A selection hosts it with a
+    /// [`HostedConnection::Function`](crate::HostedConnection::Function) entry, and the
+    /// environment then reaches it at the function's URL instead of running it (see
+    /// [`plan::hosted`](crate::plan::hosted)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
     /// The helper containers this module's fragment may run beside its services (an init job,
     /// a sidecar). They get no routes and fold into the module's node, so only this list lets
     /// an export name every container the stack runs. Whether one runs can depend on knobs or
@@ -813,6 +825,18 @@ pub struct StackFacts {
     /// The resource roles a hosted provider serves (e.g. `"object_store"` for a cloud
     /// bucket): consumers reach those at a public origin, not on the stack's network.
     pub hosted_roles: BTreeSet<String>,
+    /// The modules hosted as functions, by id: none of them runs in the stack, and each is
+    /// reached at its function's URL (see [`plan::function`](crate::plan)).
+    pub functions: BTreeMap<String, HostedFunction>,
+}
+
+/// A module hosted as a function (see [`StackFacts::functions`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct HostedFunction {
+    /// The slug it is deployed under (see [`Provides::function`]).
+    pub slug: String,
+    /// Its origin: the function's URL, or the `${VAR}` reference it is read from.
+    pub url: String,
 }
 
 impl StackFacts {
@@ -824,6 +848,11 @@ impl StackFacts {
     /// Whether a hosted provider serves the resource `role`.
     pub fn is_hosted(&self, role: &str) -> bool {
         self.hosted_roles.contains(role)
+    }
+
+    /// Whether the module `id` is in the stack and runs there (not hosted as a function).
+    pub fn runs(&self, id: &str) -> bool {
+        self.has(id) && !self.functions.contains_key(id)
     }
 }
 

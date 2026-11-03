@@ -3,7 +3,7 @@
 //! [`client_env`](crate::Provides::client_env) and every hosted provider's coordinates.
 
 use super::{Plan, PlanError};
-use crate::address::{AddressError, gateway_origin};
+use crate::address::{AddressError, gateway_origin, restore_refs};
 use crate::catalog::module::{ClientValue, UrlPart};
 use crate::model::placement::Vantage;
 use crate::model::role::Role;
@@ -45,7 +45,8 @@ pub(super) fn resolve_client_env(plan: &Plan, from: Vantage) -> Result<InjectedE
                                 UrlPart::Path => url.path().to_string(),
                                 UrlPart::Authority => authority(&url),
                             };
-                            format!("{prefix}{part}")
+                            // A function's URL is a `${VAR}` until launch.
+                            restore_refs(&format!("{prefix}{part}"))
                         })
                 }
             }

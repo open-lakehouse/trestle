@@ -318,7 +318,8 @@ fn a_vendor_must_offer_its_modules_kind() {
     selection.hosted.insert(
         ModuleId::from("aws-s3"),
         HostedResource {
-            vendor: Some(HostedVendor::Neon),
+            // RDS runs databases, not buckets (Neon has both).
+            vendor: Some(HostedVendor::AwsRds),
             ..HostedKind::S3.default_resource()
         },
     );

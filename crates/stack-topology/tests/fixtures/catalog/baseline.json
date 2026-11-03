@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:ad4c35d2d1b7bd4e2b32d1cd86e83e4caac2dcc6f349629fc4347dfb683e40c6"
+    "digest": "sha256:c385a316fbc34691556b29f9c1751aaa28df731f11b3c3514db822984acb51df"
   },
   "modules": [
     {
@@ -406,6 +406,43 @@
       }
     },
     {
+      "id": "neon-storage",
+      "model": "neonObjectStorage",
+      "display_name": "Neon Object Storage",
+      "summary": "The S3-compatible object storage of a Neon branch; the branch supplies its keys.",
+      "category": "storage",
+      "provider_of": "object_store",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [
+        "object_store"
+      ],
+      "resource_nouns": [
+        {
+          "kind": "object_store",
+          "singular": "bucket",
+          "plural": "buckets"
+        }
+      ],
+      "knobs": [],
+      "helpers": [],
+      "hosted": {
+        "kind": "s3",
+        "default": {
+          "cloud": "neon",
+          "vendor": "neon",
+          "connection": {
+            "kind": "s3",
+            "region": "${NEON_S3_REGION}",
+            "endpoint": "${NEON_S3_ENDPOINT}",
+            "bucket": "{name}",
+            "access_key_id": "${NEON_S3_ACCESS_KEY_ID}",
+            "secret_access_key": "${NEON_S3_SECRET_ACCESS_KEY}"
+          }
+        }
+      }
+    },
+    {
       "id": "mlflow",
       "model": "mlflow",
       "display_name": "MLflow",
@@ -612,7 +649,8 @@
           "kind": "init"
         }
       ],
-      "hosted": null
+      "hosted": null,
+      "function": "unitycatalog"
     },
     {
       "id": "jaeger",
@@ -694,7 +732,8 @@
           "kind": "init"
         }
       ],
-      "hosted": null
+      "hosted": null,
+      "function": "headwaters"
     },
     {
       "id": "omnigent",

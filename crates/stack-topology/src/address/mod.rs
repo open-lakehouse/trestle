@@ -167,13 +167,96 @@ pub(crate) fn gateway_origin(from: Vantage, facts: &GatewayFacts) -> Result<Url,
 }
 
 /// The address of an [`External`](Placement::External) service's `endpoint`: its origin plus
-/// the endpoint's path, identical from every vantage.
+/// the endpoint's mount prefix and path, identical from every vantage.
+///
+/// An origin that is one `${VAR}` reference (a function's URL, read from the environment at
+/// launch) is addressed as a [placeholder origin](placeholder_origin), which
+/// [`restore_refs`] turns back into the reference once the URL is a string.
 fn external_url(origin: &str, endpoint: &Endpoint) -> Result<Url, AddressError> {
-    let mut url = Url::parse(origin).map_err(|_| AddressError::InvalidUrl(origin.to_string()))?;
-    if !endpoint.path.is_empty() {
-        url.set_path(&endpoint.path);
+    let invalid = || AddressError::InvalidUrl(origin.to_string());
+    let parsed = match whole_ref(origin) {
+        Some(var) => Url::parse(&placeholder_origin(var)),
+        // A reference inside an origin can't be addressed until it is resolved.
+        None if origin.contains("${") => return Err(invalid()),
+        None => Url::parse(origin),
+    };
+    let mut url = parsed.map_err(|_| invalid())?;
+    let path = format!(
+        "{}{}{}",
+        url.path().trim_end_matches('/'),
+        endpoint.mount_prefix.as_deref().unwrap_or_default(),
+        endpoint.path
+    );
+    if !path.is_empty() {
+        url.set_path(&path);
     }
     Ok(url)
+}
+
+/// The host a placeholder origin's URL carries, before the hex-encoded variable name.
+const PLACEHOLDER_HOST_PREFIX: &str = "trestle-ref-";
+/// The reserved TLD placeholder hosts sit under, so one is never a real host.
+const PLACEHOLDER_HOST_SUFFIX: &str = ".invalid";
+
+/// The variable `s` reads when it is exactly one `${VAR}` reference.
+fn whole_ref(s: &str) -> Option<&str> {
+    let name = s.strip_prefix("${")?.strip_suffix('}')?;
+    let valid = name
+        .bytes()
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    valid.then_some(name)
+}
+
+/// A URL origin standing for the `${var}` reference: `https://trestle-ref-<hex>.invalid`. Host
+/// names are case-insensitive, so the name is hex-encoded to survive URL parsing.
+fn placeholder_origin(var: &str) -> String {
+    format!(
+        "https://{PLACEHOLDER_HOST_PREFIX}{}{PLACEHOLDER_HOST_SUFFIX}",
+        hex_encode(var)
+    )
+}
+
+fn hex_encode(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `s` with every [placeholder origin](placeholder_origin), and every bare placeholder host,
+/// put back as the `${VAR}` reference it stands for.
+pub(crate) fn restore_refs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find(PLACEHOLDER_HOST_PREFIX) {
+        let hex_start = at + PLACEHOLDER_HOST_PREFIX.len();
+        let hex_len = rest[hex_start..]
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .unwrap_or(rest.len() - hex_start);
+        let hex = &rest[hex_start..hex_start + hex_len];
+        let after = &rest[hex_start + hex_len..];
+        let decoded = (hex.len() % 2 == 0 && after.starts_with(PLACEHOLDER_HOST_SUFFIX))
+            .then(|| {
+                (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+                    .collect::<Option<Vec<u8>>>()
+                    .and_then(|b| String::from_utf8(b).ok())
+            })
+            .flatten();
+        let Some(var) = decoded else {
+            out.push_str(&rest[..hex_start]);
+            rest = &rest[hex_start..];
+            continue;
+        };
+        // Drop the scheme the placeholder origin added: the reference holds its own.
+        let head = &rest[..at];
+        let head = head.strip_suffix("https://").unwrap_or(head);
+        out.push_str(head);
+        out.push_str(&format!("${{{var}}}"));
+        rest = &after[PLACEHOLDER_HOST_SUFFIX.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The (host, port, path) for a direct reach — straight to the callee. Never called for an
@@ -317,8 +400,58 @@ fn build_url(scheme: Scheme, host: &str, port: u16, path: &str) -> Option<Url> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_reference_origin_round_trips_through_a_url() {
+        let endpoint = Endpoint::api("rest", 8080, "/api/2.1/unity-catalog", Rewrite::Inherit);
+        let url = external_url("${UNITYCATALOG_FUNCTION_URL}", &endpoint).unwrap();
+        assert_eq!(
+            restore_refs(url.as_str()),
+            "${UNITYCATALOG_FUNCTION_URL}/api/2.1/unity-catalog"
+        );
+        assert_eq!(
+            restore_refs(url.host_str().unwrap()),
+            "${UNITYCATALOG_FUNCTION_URL}"
+        );
+        // Anything else is left alone, including look-alikes.
+        for s in [
+            "https://trestle-ref-zz.invalid",
+            "https://trestle-ref-414.invalid",
+            "trestle-ref-41",
+            "plain",
+        ] {
+            assert_eq!(restore_refs(s), s);
+        }
+        // A reference inside an origin isn't one origin.
+        assert!(external_url("https://${HOST}.example.com", &endpoint).is_err());
+    }
+
+    #[test]
+    fn an_external_address_keeps_the_mount_prefix_and_the_origins_path() {
+        let endpoint = Endpoint::api("rest", 8080, "/api/2.1/unity-catalog", Rewrite::Inherit);
+        for origin in ["https://fn.example.com", "https://fn.example.com/"] {
+            assert_eq!(
+                external_url(origin, &endpoint).unwrap().as_str(),
+                "https://fn.example.com/api/2.1/unity-catalog"
+            );
+        }
+        assert_eq!(
+            external_url("https://fn.example.com/base/", &endpoint)
+                .unwrap()
+                .as_str(),
+            "https://fn.example.com/base/api/2.1/unity-catalog"
+        );
+        let internal = Endpoint::internal("sql", Scheme::Tcp, 5432, None);
+        assert_eq!(
+            external_url("tcp://db.example.com:5432", &internal)
+                .unwrap()
+                .as_str(),
+            "tcp://db.example.com:5432"
+        );
+    }
+
     use super::*;
-    use crate::model::endpoint::{RouteIntent, Scheme};
+    use crate::model::endpoint::{Rewrite, RouteIntent, Scheme};
     use crate::model::placement::Placement;
     use crate::model::role::Role;
     use crate::plan::routing::{AssignedRoute, Listener, RoutePlan};

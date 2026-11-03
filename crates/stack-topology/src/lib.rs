@@ -92,10 +92,10 @@ pub use catalog::credentials::{
 pub use catalog::deploy::{DeployCtx, DeployPhase, DeployStepSpec, RenderedStep};
 pub use catalog::module::{
     ClientNotebook, ClientValue, ConnectionBinding, DataModule, ExtraResource, GatewayTls,
-    HelperKind, HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, MeshNetwork,
-    Module, ModuleId, PortDecl, PortMapping, Provides, PythonClient, Readiness, ReadyGate,
-    RenderCtx, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, TemplateError, UrlPart,
-    is_model_ref,
+    HelperKind, HelperService, HostedFunction, ImpersonatedHost, Knob, KnobKind, KnobRejection,
+    MeshNetwork, Module, ModuleId, PortDecl, PortMapping, Provides, PythonClient, Readiness,
+    ReadyGate, RenderCtx, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, TemplateError,
+    UrlPart, is_model_ref,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,
@@ -106,11 +106,12 @@ pub use plan::resolve::{Edge, ExtraEdges, ResolveError, ResolvedGraph, resolve, 
 pub use plan::routing::{AssignedRoute, Listener, RoutePlan};
 pub use plan::{
     AppUpstream, AuthConfig, ClientSelection, ClusterConfig, ENVOY_AUTH_KNOB,
-    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, GatewayConfig, GatewayRoute, GatewaySettings,
-    HostedConnection, HostedKind, HostedResource, HostedStepView, HostedVendor, ListenerConfig,
-    LocalSecrets, ModuleBinding, PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx, PlanError,
-    PolicyConfig, PythonWorkspace, Secrets, SecureOrigin, Selection, TlsListenerConfig,
-    TlsVirtualHost, is_valid_resource_name, resource_name_rule,
+    ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, FunctionRequirement, GatewayConfig, GatewayRoute,
+    GatewaySettings, HostedConnection, HostedKind, HostedResource, HostedStepView, HostedVendor,
+    ListenerConfig, LocalSecrets, ModuleBinding, NeonRequirements, PYTHON_CLIENT_BASE_DEPENDENCIES,
+    Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace, Secrets, SecureOrigin, Selection,
+    TlsListenerConfig, TlsVirtualHost, function_url_var, is_valid_resource_name,
+    resource_name_rule,
 };
 
 pub use render::compose::{

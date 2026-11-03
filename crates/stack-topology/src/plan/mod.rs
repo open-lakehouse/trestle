@@ -50,6 +50,7 @@ mod augment;
 mod bind;
 mod client_env;
 mod demands;
+mod function;
 mod gateway;
 pub mod hosted;
 mod impersonation;
@@ -83,7 +84,8 @@ pub use gateway::{
 };
 use hosted::SecretValues;
 pub use hosted::{
-    HostedConnection, HostedKind, HostedResource, HostedStepView, HostedVendor, Secrets,
+    FunctionRequirement, HostedConnection, HostedKind, HostedResource, HostedStepView,
+    HostedVendor, NeonRequirements, Secrets, function_url_var,
 };
 pub use names::{is_valid_resource_name, resource_name_rule};
 use python_client::resolve_python_client;
@@ -966,6 +968,23 @@ impl Plan {
         self.provisioned.get(module).map_or(&[], Vec::as_slice)
     }
 
+    /// What the Neon branch the environment is bound to must supply (empty when nothing in it
+    /// is Neon-hosted): the databases and buckets its Neon Postgres and object storage serve,
+    /// the functions its function-hosted modules run as, and the variables binding the branch
+    /// must set.
+    pub fn neon_requirements(&self) -> NeonRequirements {
+        hosted::neon_requirements(
+            &self.hosted,
+            |m| self.provisioned_by(m),
+            |m| {
+                self.stack_facts
+                    .functions
+                    .get(m.as_str())
+                    .map(|f| f.slug.clone())
+            },
+        )
+    }
+
     /// Every resource name provisioned for the resource role `role` (e.g.
     /// `"relational_db"`), across all of the plan's providers of that role, in plan
     /// (dependency) order. One provider fills a role, so this is that provider's list.
@@ -1074,6 +1093,9 @@ impl Catalog {
 ///
 /// The client environment is resolved last, through the finished plan's own addressing API.
 fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<Plan, PlanError> {
+    // A module the selection hosts as a function plans as its hosted wrapper.
+    let functions = function::host_functions(selection, catalog)?;
+    let catalog = functions.as_ref().unwrap_or(catalog);
     let mut augmented = augment::augment(selection, catalog, ctx, false)?;
     let mut settled = settle::settle(
         &augmented.selection,

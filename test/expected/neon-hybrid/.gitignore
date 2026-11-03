@@ -1,0 +1,7 @@
+.data/
+.env
+secrets.env
+modules/*/.env/
+modules/*/secrets/
+# Rendered with hosted-resource secrets:
+modules/mlflow/compose.yaml

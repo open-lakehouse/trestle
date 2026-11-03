@@ -67,7 +67,7 @@ use crate::model::connection::{
 use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
-use crate::plan::hosted::HostedKind;
+use crate::plan::hosted::{HostedConnection, HostedKind, HostedResource, HostedVendor};
 use crate::render::RenderFile;
 use crate::target::TargetId;
 
@@ -152,6 +152,7 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
         hosted_postgres(),
         aws_s3(),
         azure_storage(),
+        neon_storage(),
         mlflow(),
         unity_catalog(),
         jaeger(),
@@ -161,7 +162,7 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
         puppygraph(),
         rivers(),
         opa(),
-    ] as [Arc<dyn Module>; 17])
+    ] as [Arc<dyn Module>; 18])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     .with_default_provider(Role::RELATIONAL_DB, "postgres")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
@@ -180,6 +181,7 @@ fn hosted_postgres() -> Arc<dyn Module> {
         "A managed PostgreSQL server (Neon, RDS, Azure, …); README.md sets it up.",
         "metadata_db",
         HostedKind::Postgres,
+        None,
         ServiceSpec {
             name: "db".into(),
             role: Role::relational_db(),
@@ -201,6 +203,7 @@ fn aws_s3() -> Arc<dyn Module> {
         "Amazon S3 or an S3-compatible store; README.md sets up the buckets.",
         "storage",
         HostedKind::S3,
+        None,
         ServiceSpec {
             name: "s3".into(),
             role: Role::object_store(),
@@ -222,11 +225,47 @@ fn azure_storage() -> Arc<dyn Module> {
         "An Azure storage account (Blob / ADLS Gen2); README.md sets it up.",
         "storage",
         HostedKind::AzureBlob,
+        None,
         ServiceSpec {
             name: "blob".into(),
             role: Role::object_store(),
             placement: hosted_placement(),
             endpoints: vec![Endpoint::internal("blob", Scheme::Https, 443, None)],
+            depends_on: vec![],
+            base_path: String::new(),
+        },
+    )
+}
+
+/// `neon-storage` — the object storage of a Neon branch (S3-compatible, path-style) in place
+/// of an in-stack object store. Its endpoint and keys come from the branch the environment is
+/// bound to: `NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_ACCESS_KEY_ID` and
+/// `NEON_S3_SECRET_ACCESS_KEY`.
+fn neon_storage() -> Arc<dyn Module> {
+    hosted_module(
+        "neon-storage",
+        "neonObjectStorage",
+        "Neon Object Storage",
+        "The S3-compatible object storage of a Neon branch; the branch supplies its keys.",
+        "storage",
+        HostedKind::S3,
+        Some(HostedResource {
+            cloud: Some("neon".into()),
+            vendor: Some(HostedVendor::Neon),
+            connection: HostedConnection::S3 {
+                region: "${NEON_S3_REGION}".into(),
+                endpoint: Some("${NEON_S3_ENDPOINT}".into()),
+                bucket: "{name}".into(),
+                access_key_id: "${NEON_S3_ACCESS_KEY_ID}".into(),
+                secret_access_key: "${NEON_S3_SECRET_ACCESS_KEY}".into(),
+                role_arn: None,
+            },
+        }),
+        ServiceSpec {
+            name: "s3".into(),
+            role: Role::object_store(),
+            placement: hosted_placement(),
+            endpoints: vec![Endpoint::internal("s3", Scheme::Https, 443, None)],
             depends_on: vec![],
             base_path: String::new(),
         },
@@ -280,6 +319,8 @@ fn hosted_steps(kind: HostedKind) -> Vec<DeployStepSpec> {
                 "../../templates/hosted/azure.storage.sh.jinja"
             )),
         ],
+        // A function-hosted module brings its own steps (see `plan::function`).
+        HostedKind::Function => vec![],
     }
 }
 
@@ -294,23 +335,29 @@ fn hosted_module(
     summary: &str,
     category: &str,
     kind: HostedKind,
+    default: Option<HostedResource>,
     service: ServiceSpec,
 ) -> Arc<dyn Module> {
     let mut provides = Provides {
         hosted: Some(kind),
+        hosted_default: default,
         deploy: hosted_steps(kind),
         ..Provides::default()
     };
-    provides
-        .resource_kinds
-        .insert(kind.role().into(), kind.default_connection().template());
+    let role = kind.role().expect("a hosted resource kind has a role");
+    provides.resource_kinds.insert(
+        role.into(),
+        kind.default_connection()
+            .template()
+            .expect("a hosted resource kind binds a connection"),
+    );
     Arc::new(DataModule {
         id: ModuleId::from(id),
         model: Some(model.into()),
         display_name: Some(display_name.into()),
         summary: Some(summary.into()),
         category: Some(category.into()),
-        provider_of: Some(kind.role().into()),
+        provider_of: Some(role.into()),
         requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
@@ -1399,6 +1446,9 @@ fn unity_catalog() -> Arc<dyn Module> {
             HelperService::sidecar(UNITY_CATALOG_STORAGE),
             HelperService::init(UNITY_CATALOG_MOUNTS),
         ],
+        // It can also run as a Neon Function, whose slug can't hold a dash (see
+        // `plan::function`).
+        function: Some("unitycatalog".into()),
         ..Provides::default()
     };
     provides.client_env.insert(
@@ -1935,6 +1985,8 @@ impl Headwaters {
             // rewrite, so clients never see it.
             provides: Provides {
                 helpers: vec![HelperService::init("headwaters-migrate")],
+                // It can also run as a Neon Function (see `plan::function`).
+                function: Some("headwaters".into()),
                 client_env: [
                     (
                         "OPENLINEAGE_URL".to_string(),
@@ -2666,6 +2718,7 @@ mod tests {
             ("hosted-postgres", "postgresql"),
             ("aws-s3", "amazonS3"),
             ("azure-storage", "azureBlobStorage"),
+            ("neon-storage", "neonObjectStorage"),
             ("mlflow", "mlflow"),
             ("unity-catalog", "unityCatalogServer"),
             ("jaeger", "jaeger"),

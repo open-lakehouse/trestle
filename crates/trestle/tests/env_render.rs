@@ -253,7 +253,7 @@ fn scenario_renders_match_golden_fixtures() {
 
 #[test]
 fn sensitive_runtime_files_are_generated_but_not_committed() {
-    for name in ["lakehouse", "authenticated", "full-azure"] {
+    for name in ["lakehouse", "authenticated", "full-azure", "neon-hybrid"] {
         let dir = tempfile::tempdir().unwrap();
         render_scenario(name, dir.path());
 

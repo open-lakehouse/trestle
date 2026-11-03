@@ -91,6 +91,22 @@ around deploy) as text.
   themselves. A `functions:invoke` credential scope exists, but nothing enforces
   it on the default URL.
 
+## What a branch supplies to an environment
+
+The planner (#281) reads every Neon coordinate from a variable:
+
+| Variable | From |
+|---|---|
+| `PGHOST`, `PGUSER`, `PGPASSWORD` | `connection-string --extended` (for `hosted-postgres` with vendor `neon`) |
+| `NEON_S3_ENDPOINT`, `NEON_S3_REGION` | `neon api /projects/<p>/branches/<b>/storage` |
+| `NEON_S3_ACCESS_KEY_ID`, `NEON_S3_SECRET_ACCESS_KEY` | a credential minted on the branch (`token_id`, `s3_secret_access_key`) |
+| `<SLUG>_FUNCTION_URL` | `functions list` on the branch (`invocation_url` of the function with that slug) |
+
+`Plan::neon_requirements()` lists the databases, buckets and functions (by
+slug) one plan needs, plus these variables, so binding a branch can check it
+before anything starts. `unity-catalog` deploys as `unitycatalog`, `headwaters`
+as `headwaters`.
+
 ## Running `neon` from the desktop app
 
 - Homebrew links `neon` and `neonctl` into `/opt/homebrew/bin` (Apple silicon)

@@ -102,12 +102,16 @@ pub struct ModuleDto {
     /// does not run): what it stands for and the configuration it uses until the selection's
     /// `hosted` entry overrides it.
     pub hosted: Option<HostedModuleDto>,
+    /// Set for a service module that can run as a function: the slug it is deployed under. A
+    /// selection hosts it with a `hosted` entry whose connection is `{ kind = "function" }`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
 }
 
 /// A hosted provider module's kind and default configuration (see [`ModuleDto::hosted`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct HostedModuleDto {
-    /// What it stands for (`"postgres"`, `"s3"`, `"azure_blob"`).
+    /// What it stands for (`"postgres"`, `"s3"`, `"azure_blob"`, `"function"`).
     pub kind: HostedKind,
     /// The configuration used when the selection gives none.
     pub default: HostedResource,
@@ -323,8 +327,13 @@ pub fn catalog_dto_of(catalog: &Catalog) -> CatalogDto {
             helpers: m.provides().helpers.clone(),
             hosted: m.hosted().map(|kind| HostedModuleDto {
                 kind,
-                default: kind.default_resource(),
+                default: m
+                    .provides()
+                    .hosted_default
+                    .clone()
+                    .unwrap_or_else(|| kind.default_resource()),
             }),
+            function: m.provides().function.clone(),
         })
         .collect();
     CatalogDto {

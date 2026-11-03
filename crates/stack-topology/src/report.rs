@@ -175,8 +175,10 @@ fn direct_endpoints(plan: &Plan, out: &mut String) {
                 };
                 let _ = writeln!(
                     out,
-                    "| `{module}` | `{}` | `{}` | {url} |",
-                    svc.name, endpoint.id
+                    "| `{module}` | `{}` | `{}` | {} |",
+                    svc.name,
+                    endpoint.id,
+                    crate::address::restore_refs(url.as_str())
                 );
             }
         }

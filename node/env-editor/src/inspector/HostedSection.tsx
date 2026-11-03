@@ -28,9 +28,11 @@ const VENDORS: Record<HostedKind, { value: HostedVendor; label: string }[]> = {
   ],
   s3: [
     { value: "aws-s3", label: "Amazon S3" },
+    { value: "neon", label: "Neon" },
     { value: "generic", label: "S3-compatible (R2, MinIO, …)" },
   ],
   azure_blob: [{ value: "azure-storage", label: "Azure Storage" }],
+  function: [{ value: "neon-function", label: "Neon Function" }],
 };
 
 /** An env-var reference (`${NAME}`), resolved from the environment when the
@@ -125,6 +127,15 @@ function fieldsOf(c: HostedConnection): Field[] {
           value: c.connection_string,
           set: (connection_string) => ({ ...c, connection_string }),
           hint: SECRET_HINT,
+        },
+      ];
+    case "function":
+      return [
+        {
+          label: "URL (optional)",
+          value: c.url ?? "",
+          set: (url) => ({ ...c, url: url || null }),
+          hint: "Defaults to the function URL the bound Neon branch supplies.",
         },
       ];
   }

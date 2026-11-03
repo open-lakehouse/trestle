@@ -11,12 +11,14 @@ use super::demands::{
     ChosenProviders, check_role_exclusivity, provisioned_by_provider, resolve_demand_providers,
     resolve_with_demands,
 };
-use super::hosted::{HostedProviders, ResolveHostedError, resolve_hosted};
+use super::hosted::{
+    HostedConnection, HostedProvider, HostedProviders, ResolveHostedError, resolve_hosted,
+};
 use super::knobs::resolve_module_knobs;
 use super::resolve::ResolvedGraph;
 use super::{LocalSecrets, PlanCtx, PlanError, Selection, names};
 use crate::catalog::Catalog;
-use crate::catalog::module::{ModuleId, ResolvedKnobs, StackFacts};
+use crate::catalog::module::{HostedFunction, ModuleId, ResolvedKnobs, StackFacts};
 use crate::model::endpoint::RouteIntent;
 use crate::model::placement::Placement;
 use crate::model::role::{Role, ServiceSpec};
@@ -64,10 +66,19 @@ pub(super) fn settle(
                 .into(),
         });
     }
-    let hosted_modules: BTreeMap<ModuleId, _> = graph
+    let hosted_modules: BTreeMap<ModuleId, HostedProvider> = graph
         .nodes
         .iter()
-        .filter_map(|m| Some((m.id().clone(), m.hosted()?)))
+        .filter_map(|m| {
+            Some((
+                m.id().clone(),
+                HostedProvider {
+                    kind: m.hosted()?,
+                    default: m.provides().hosted_default.clone(),
+                    function_slug: m.provides().function.clone(),
+                },
+            ))
+        })
         .collect();
     if ctx.local_secrets == LocalSecrets::Inline && !hosted_modules.is_empty() {
         return Err(PlanError::InlineSecretsWithHosted {
@@ -124,7 +135,9 @@ pub(super) fn settle(
             continue;
         };
         let demand = &graph.needs(module)[*idx];
-        resolved.connection = provider.template.resolve(&demand.name);
+        if let Some(template) = &provider.template {
+            resolved.connection = template.resolve(&demand.name);
+        }
     }
 
     // At most one provider per resource role may end up in an environment.
@@ -152,6 +165,23 @@ pub(super) fn settle(
             .iter()
             .filter(|m| hosted.modules.contains_key(m.id()))
             .filter_map(|m| m.provider_of().map(str::to_string))
+            .collect(),
+        functions: hosted
+            .resources
+            .iter()
+            .filter(|(_, resource)| {
+                matches!(resource.connection, HostedConnection::Function { .. })
+            })
+            .map(|(id, _)| {
+                (
+                    id.to_string(),
+                    HostedFunction {
+                        slug: hosted_modules[id].function_slug.clone().unwrap_or_default(),
+                        // Resolved when the plan has secrets, a `${VAR}` in a preview.
+                        url: hosted.modules[id].origin.clone(),
+                    },
+                )
+            })
             .collect(),
     };
     let mut services = BTreeMap::new();

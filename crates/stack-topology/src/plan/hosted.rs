@@ -2,10 +2,10 @@
 //! Postgres server, an S3 bucket, an Azure storage account — in a stack whose other services run
 //! on the deploy target.
 //!
-//! A hosted provider is its own catalog module (`hosted-postgres`, `aws-s3`, `azure-storage`),
-//! an alternative to the in-stack provider of the same role (`postgres`, `rustfs`, `azurite`):
-//! an environment has exactly one provider per role, so it is either the in-stack one or the
-//! hosted one. The module declares its [`HostedKind`]; the planner then
+//! A hosted provider is its own catalog module (`hosted-postgres`, `aws-s3`, `azure-storage`,
+//! `neon-storage`), an alternative to the in-stack provider of the same role (`postgres`,
+//! `rustfs`, `azurite`): an environment has exactly one provider per role, so it is either the
+//! in-stack one or the hosted one. The module declares its [`HostedKind`]; the planner then
 //!
 //! - binds its consumers to a [`HostedConnection`] — the selection's
 //!   [`hosted`](super::Selection::hosted) entry for it, or the kind's
@@ -14,6 +14,13 @@
 //!   at the connection's origin from every vantage, never through the gateway;
 //! - renders nothing for it. The resources it would provision are created by its
 //!   [deploy steps](crate::catalog::deploy), which depend on the resource's [`HostedVendor`].
+//!
+//! A **service** module can be hosted too: one that can run as a function (it sets
+//! [`Provides::function`](crate::Provides::function), as `unity-catalog` and `headwaters` do)
+//! is, when the selection's `hosted` entry for it is a [`HostedConnection::Function`]. The
+//! module keeps its id, services and client environment, so whatever refers to it still does,
+//! but nothing of it is rendered: no compose service, no helpers and none of its resource
+//! demands. Its services are reached at the function's URL.
 //!
 //! Secrets are **env-var references**, so `env.toml` stays committable: a secret-bearing field
 //! holds `${VAR}`, and [`PlanCtx::secrets`](super::PlanCtx::secrets) — supplied at plan time by
@@ -40,23 +47,28 @@ pub enum HostedKind {
     S3,
     /// An Azure storage account (Blob / ADLS Gen2).
     AzureBlob,
+    /// A service module run as a function (a Neon Function), reached at its URL.
+    Function,
 }
 
 impl HostedKind {
-    /// The kind's serialized name (`postgres`, `s3`, `azure_blob`).
+    /// The kind's serialized name (`postgres`, `s3`, `azure_blob`, `function`).
     pub fn as_str(self) -> &'static str {
         match self {
             HostedKind::Postgres => "postgres",
             HostedKind::S3 => "s3",
             HostedKind::AzureBlob => "azure_blob",
+            HostedKind::Function => "function",
         }
     }
 
-    /// The resource role the kind provides.
-    pub fn role(self) -> &'static str {
+    /// The resource role the kind provides; `None` for a [`Function`](Self::Function), which
+    /// keeps the role of the module it hosts.
+    pub fn role(self) -> Option<&'static str> {
         match self {
-            HostedKind::Postgres => Role::RELATIONAL_DB,
-            HostedKind::S3 | HostedKind::AzureBlob => Role::OBJECT_STORE,
+            HostedKind::Postgres => Some(Role::RELATIONAL_DB),
+            HostedKind::S3 | HostedKind::AzureBlob => Some(Role::OBJECT_STORE),
+            HostedKind::Function => None,
         }
     }
 
@@ -67,6 +79,7 @@ impl HostedKind {
             HostedKind::Postgres => None,
             HostedKind::S3 => Some("aws"),
             HostedKind::AzureBlob => Some("azure"),
+            HostedKind::Function => Some("neon"),
         }
     }
 
@@ -97,6 +110,8 @@ impl HostedKind {
                 container: name_placeholder(),
                 connection_string: "${AZURE_STORAGE_CONNECTION_STRING}".into(),
             },
+            // The URL depends on the module: the planner fills in `${<SLUG>_FUNCTION_URL}`.
+            HostedKind::Function => HostedConnection::Function { url: None },
         }
     }
 
@@ -117,6 +132,7 @@ impl HostedKind {
             HostedKind::Postgres => HostedVendor::Generic,
             HostedKind::S3 => HostedVendor::AwsS3,
             HostedKind::AzureBlob => HostedVendor::AzureStorage,
+            HostedKind::Function => HostedVendor::NeonFunction,
         }
     }
 }
@@ -140,17 +156,20 @@ pub enum HostedVendor {
     AwsS3,
     /// An Azure storage account.
     AzureStorage,
+    /// A Neon Function deployed on a Neon branch.
+    NeonFunction,
 }
 
 impl HostedVendor {
     /// Every vendor, in display order.
-    pub const ALL: [HostedVendor; 6] = [
+    pub const ALL: [HostedVendor; 7] = [
         HostedVendor::Generic,
         HostedVendor::Neon,
         HostedVendor::AwsRds,
         HostedVendor::AzurePostgres,
         HostedVendor::AwsS3,
         HostedVendor::AzureStorage,
+        HostedVendor::NeonFunction,
     ];
 
     /// The vendor's serialized name (`generic`, `neon`, `aws-rds`, …).
@@ -162,6 +181,7 @@ impl HostedVendor {
             HostedVendor::AzurePostgres => "azure-postgres",
             HostedVendor::AwsS3 => "aws-s3",
             HostedVendor::AzureStorage => "azure-storage",
+            HostedVendor::NeonFunction => "neon-function",
         }
     }
 
@@ -174,19 +194,21 @@ impl HostedVendor {
             HostedVendor::AzurePostgres => "Azure Database for PostgreSQL",
             HostedVendor::AwsS3 => "Amazon S3",
             HostedVendor::AzureStorage => "Azure Storage",
+            HostedVendor::NeonFunction => "Neon Function",
         }
     }
 
     /// Whether this vendor offers resources of `kind`. [`Generic`](Self::Generic) fits every
-    /// kind.
+    /// resource kind; only [`NeonFunction`](Self::NeonFunction) runs functions.
     pub fn offers(self, kind: HostedKind) -> bool {
         match self {
-            HostedVendor::Generic => true,
-            HostedVendor::Neon | HostedVendor::AwsRds | HostedVendor::AzurePostgres => {
-                kind == HostedKind::Postgres
-            }
+            HostedVendor::Generic => kind != HostedKind::Function,
+            // A Neon branch has a Postgres database and an S3-compatible object store.
+            HostedVendor::Neon => matches!(kind, HostedKind::Postgres | HostedKind::S3),
+            HostedVendor::AwsRds | HostedVendor::AzurePostgres => kind == HostedKind::Postgres,
             HostedVendor::AwsS3 => kind == HostedKind::S3,
             HostedVendor::AzureStorage => kind == HostedKind::AzureBlob,
+            HostedVendor::NeonFunction => kind == HostedKind::Function,
         }
     }
 
@@ -195,7 +217,7 @@ impl HostedVendor {
     pub fn default_cloud(self) -> Option<&'static str> {
         match self {
             HostedVendor::Generic => None,
-            HostedVendor::Neon => Some("neon"),
+            HostedVendor::Neon | HostedVendor::NeonFunction => Some("neon"),
             HostedVendor::AwsRds | HostedVendor::AwsS3 => Some("aws"),
             HostedVendor::AzurePostgres | HostedVendor::AzureStorage => Some("azure"),
         }
@@ -257,6 +279,9 @@ impl HostedResource {
     /// demanded resource names `objects`.
     pub fn step_view(&self, objects: &[String]) -> HostedStepView {
         let (fields, name_field): (Vec<StepField>, &str) = match &self.connection {
+            HostedConnection::Function { url } => {
+                (vec![("url", url.clone().unwrap_or_default(), None)], "")
+            }
             HostedConnection::Postgres {
                 host,
                 port,
@@ -336,10 +361,14 @@ impl HostedResource {
             cloud: self.cloud.clone(),
             values,
             vars,
-            resources: objects
-                .iter()
-                .map(|o| name_field.replace("{name}", o))
-                .collect(),
+            resources: if name_field.is_empty() {
+                Vec::new()
+            } else {
+                objects
+                    .iter()
+                    .map(|o| name_field.replace("{name}", o))
+                    .collect()
+            },
             secrets: self.connection.secret_refs().into_iter().collect(),
         }
     }
@@ -447,6 +476,21 @@ pub enum HostedConnection {
         /// The account's connection string — typically a `${VAR}` reference.
         connection_string: String,
     },
+    /// A service module run as a function.
+    Function {
+        /// Where the function is reached: its origin (e.g.
+        /// `https://<branch>-<slug>.compute.<region>/`), typically a `${VAR}` reference. Defaults
+        /// to `${<SLUG>_FUNCTION_URL}`, with the slug the module runs as (see
+        /// [`function_url_var`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+}
+
+/// The variable a function-hosted module's URL is read from by default:
+/// `<SLUG>_FUNCTION_URL` (`UNITYCATALOG_FUNCTION_URL`).
+pub fn function_url_var(slug: &str) -> String {
+    format!("{}_FUNCTION_URL", slug.to_ascii_uppercase())
 }
 
 fn default_postgres_port() -> u16 {
@@ -503,6 +547,9 @@ impl std::fmt::Debug for HostedConnection {
                 .field("container", container)
                 .field("connection_string", &"<redacted>")
                 .finish(),
+            HostedConnection::Function { url } => {
+                f.debug_struct("Function").field("url", url).finish()
+            }
         }
     }
 }
@@ -514,6 +561,7 @@ impl HostedConnection {
             HostedConnection::Postgres { .. } => HostedKind::Postgres,
             HostedConnection::S3 { .. } => HostedKind::S3,
             HostedConnection::AzureBlob { .. } => HostedKind::AzureBlob,
+            HostedConnection::Function { .. } => HostedKind::Function,
         }
     }
 
@@ -526,12 +574,18 @@ impl HostedConnection {
                 region, endpoint, ..
             } => s3_endpoint(region, endpoint.as_deref()),
             HostedConnection::AzureBlob { account, .. } => azure_blob_endpoint(account),
+            HostedConnection::Function { url } => url
+                .as_deref()
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_string(),
         }
     }
 
-    /// The [`ConnectionTemplate`] consumers bind.
-    pub(crate) fn template(&self) -> ConnectionTemplate {
-        ConnectionTemplate(match self {
+    /// The [`ConnectionTemplate`] consumers bind; `None` for a function, which no resource
+    /// demand binds.
+    pub(crate) fn template(&self) -> Option<ConnectionTemplate> {
+        Some(ConnectionTemplate(match self {
             HostedConnection::Postgres {
                 host,
                 port,
@@ -579,7 +633,8 @@ impl HostedConnection {
                 },
                 tls_trust: None,
             },
-        })
+            HostedConnection::Function { .. } => return None,
+        }))
     }
 
     /// The coordinates a *client* of this resource (an app, a notebook) loads to reach it, as
@@ -595,6 +650,8 @@ impl HostedConnection {
             HostedConnection::AzureBlob { account, .. } => {
                 vec![("AZURE_STORAGE_ACCOUNT", account.clone())]
             }
+            // Clients reach a function through the hosted module's own client environment.
+            HostedConnection::Function { .. } => vec![],
         };
         coordinates
             .into_iter()
@@ -643,6 +700,9 @@ impl HostedConnection {
                 account: f(account),
                 container: f(container),
                 connection_string: f(connection_string),
+            },
+            HostedConnection::Function { url } => HostedConnection::Function {
+                url: url.as_deref().map(&mut f),
             },
         }
     }
@@ -788,8 +848,8 @@ impl std::fmt::Debug for SecretValues {
 /// and where consumers reach it.
 #[derive(Clone, Debug)]
 pub(super) struct ResolvedHosted {
-    /// The connection template consumers bind (secrets resolved).
-    pub template: ConnectionTemplate,
+    /// The connection template consumers bind (secrets resolved); `None` for a function.
+    pub template: Option<ConnectionTemplate>,
     /// The origin its services are reached at.
     pub origin: String,
 }
@@ -806,22 +866,24 @@ pub(super) struct HostedProviders {
     pub secret_values: SecretValues,
 }
 
-/// Resolve every hosted provider (module id → its kind) against the selection's `configured`
-/// entries and `secrets`.
+/// Resolve every hosted provider against the selection's `configured` entries and `secrets`.
 ///
-/// A provider with no entry uses its kind's [default](HostedKind::default_resource). An entry
+/// A provider with no entry uses its own default resource when it has one (see
+/// [`HostedProvider::default`]), else its kind's [default](HostedKind::default_resource). A
+/// function without a URL reads it from [`function_url_var`] of its slug. An entry
 /// whose connection is for another kind is `Err(Invalid)`. `secrets: None` (a preview) leaves
 /// `${VAR}` references verbatim; `Some` resolves them and collects every missing name into
 /// `Err(Unresolved)`.
 pub(super) fn resolve_hosted(
-    providers: &BTreeMap<ModuleId, HostedKind>,
+    providers: &BTreeMap<ModuleId, HostedProvider>,
     configured: &BTreeMap<ModuleId, HostedResource>,
     secrets: Option<&Secrets>,
 ) -> Result<HostedProviders, ResolveHostedError> {
     let mut out = HostedProviders::default();
     let mut missing = BTreeSet::new();
-    for (module, kind) in providers {
-        let resource = match configured.get(module) {
+    for (module, provider) in providers {
+        let kind = &provider.kind;
+        let mut resource = match configured.get(module) {
             Some(resource) if resource.connection.kind() != *kind => {
                 return Err(ResolveHostedError::Invalid {
                     module: module.clone(),
@@ -843,8 +905,18 @@ pub(super) fn resolve_hosted(
                 });
             }
             Some(resource) => resource.clone().settled(),
-            None => kind.default_resource().settled(),
+            None => provider
+                .default
+                .clone()
+                .unwrap_or_else(|| kind.default_resource())
+                .settled(),
         };
+        if let (HostedConnection::Function { url }, Some(slug)) =
+            (&mut resource.connection, &provider.function_slug)
+            && url.is_none()
+        {
+            *url = Some(format!("${{{}}}", function_url_var(slug)));
+        }
         let connection = match secrets {
             Some(secrets) => {
                 resource
@@ -869,6 +941,87 @@ pub(super) fn resolve_hosted(
             missing.into_iter().collect(),
         ))
     }
+}
+
+/// What the Neon branch an environment is bound to must supply: the databases and buckets its
+/// Neon-hosted Postgres and object storage serve, the functions its function-hosted modules run
+/// as, and the variables those connections read. See [`Plan::neon_requirements`].
+///
+/// [`Plan::neon_requirements`]: super::Plan::neon_requirements
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct NeonRequirements {
+    /// The databases the branch's Postgres must have.
+    pub databases: Vec<String>,
+    /// The buckets its object storage must have.
+    pub buckets: Vec<String>,
+    /// The functions deployed on it.
+    pub functions: Vec<FunctionRequirement>,
+    /// Every `${VAR}` the Neon-hosted connections read, sorted: what binding the branch must
+    /// set.
+    pub vars: Vec<String>,
+}
+
+impl NeonRequirements {
+    /// Whether the environment needs no Neon branch.
+    pub fn is_empty(&self) -> bool {
+        self.databases.is_empty()
+            && self.buckets.is_empty()
+            && self.functions.is_empty()
+            && self.vars.is_empty()
+    }
+}
+
+/// A function a Neon branch must run (see [`NeonRequirements::functions`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FunctionRequirement {
+    /// The module it runs.
+    pub module: ModuleId,
+    /// The slug it is deployed under.
+    pub slug: String,
+    /// The variable its URL is read from, when it is one `${VAR}`.
+    pub url_var: Option<String>,
+}
+
+/// The [`NeonRequirements`] of `hosted` resources, with each provider's provisioned names from
+/// `provisioned` and each function's slug from `slugs`.
+pub(super) fn neon_requirements<'a>(
+    hosted: &BTreeMap<ModuleId, HostedResource>,
+    provisioned: impl Fn(&ModuleId) -> &'a [String],
+    slugs: impl Fn(&ModuleId) -> Option<String>,
+) -> NeonRequirements {
+    let mut out = NeonRequirements::default();
+    let mut vars = BTreeSet::new();
+    for (module, resource) in hosted {
+        let view = resource.step_view(provisioned(module));
+        match (resource.vendor(), &resource.connection) {
+            (HostedVendor::Neon, HostedConnection::Postgres { .. }) => {
+                out.databases.extend(view.resources)
+            }
+            (HostedVendor::Neon, HostedConnection::S3 { .. }) => out.buckets.extend(view.resources),
+            (HostedVendor::NeonFunction, HostedConnection::Function { url }) => {
+                out.functions.push(FunctionRequirement {
+                    module: module.clone(),
+                    slug: slugs(module).unwrap_or_default(),
+                    url_var: url.as_deref().and_then(single_ref).map(str::to_string),
+                })
+            }
+            _ => continue,
+        }
+        vars.extend(resource.connection.secret_refs());
+    }
+    out.vars = vars.into_iter().collect();
+    out
+}
+
+/// A hosted module as [`resolve_hosted`] sees it.
+#[derive(Clone, Debug)]
+pub(super) struct HostedProvider {
+    /// What it stands for.
+    pub kind: HostedKind,
+    /// Its own default resource, when it has one (`neon-storage`'s Neon endpoint and keys).
+    pub default: Option<HostedResource>,
+    /// The slug it runs as, for a function.
+    pub function_slug: Option<String>,
 }
 
 /// Why [`resolve_hosted`] failed.
@@ -907,7 +1060,7 @@ mod tests {
         let resolved = c.resolve(&secrets, &mut values, &mut missing);
         assert!(missing.is_empty());
         assert!(values.contains(value));
-        let ConnectionTemplate(Connection::RelationalDb { url, password, .. }) =
+        let Some(ConnectionTemplate(Connection::RelationalDb { url, password, .. })) =
             resolved.template()
         else {
             panic!("relational template");
@@ -954,7 +1107,7 @@ mod tests {
             connection_string: "${AZURE_STORAGE_CONNECTION_STRING}".into(),
         };
         assert_eq!(azure.origin(), "https://acct.blob.core.windows.net");
-        let ConnectionTemplate(Connection::ObjectStore { uri, .. }) = azure.template() else {
+        let Some(ConnectionTemplate(Connection::ObjectStore { uri, .. })) = azure.template() else {
             panic!("object-store template");
         };
         assert_eq!(uri, "abfss://{name}@acct.dfs.core.windows.net");
@@ -1013,7 +1166,14 @@ mod tests {
 
     #[test]
     fn a_connection_for_another_kind_is_invalid() {
-        let providers = BTreeMap::from([(ModuleId::from("aws-s3"), HostedKind::S3)]);
+        let providers = BTreeMap::from([(
+            ModuleId::from("aws-s3"),
+            HostedProvider {
+                kind: HostedKind::S3,
+                default: None,
+                function_slug: None,
+            },
+        )]);
         let configured = BTreeMap::from([(
             ModuleId::from("aws-s3"),
             HostedResource {
