@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.21](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.20...olai-trestle-v0.0.21) - 2026-11-03
+
+### Added
+
+- bind instances to Neon branches (#299)
+- [**breaking**] Neon-hosted placement for services and backing resources (#297)
+- [**breaking**] move workspace and environment config into CLI state (#295)
+
 ## [0.0.20](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.19...olai-trestle-v0.0.20) - 2026-11-02
 
 ### Added

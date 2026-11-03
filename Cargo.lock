@@ -2758,7 +2758,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2775,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "dirs",
  "futures",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -2858,7 +2858,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -5139,7 +5139,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "try-lock"

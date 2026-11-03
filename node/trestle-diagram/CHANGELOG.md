@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.6.0...trestle-diagram-v0.7.0) - 2026-11-03
+
+### Added
+
+- [**breaking**] Neon-hosted placement for services and backing resources (#297)
+
 ## [0.6.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.5.4...trestle-diagram-v0.6.0) - 2026-11-02
 
 ### Added
