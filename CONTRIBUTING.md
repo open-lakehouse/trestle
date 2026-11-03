@@ -256,9 +256,9 @@ end up in the npm tarball, so a commit touching them bumps the package in the
 Release PR and lands in its `CHANGELOG.md`, like a crate. Use the package's scope
 for these commits (`feat(ui-kit): …`). Cargo leaves a nested package's files out
 of its parent, so trestle-diagram (which sits at `node/` and bundles its workspace
-sources) depends on the placeholders of the packages it bundles that are published
-on their own. A release of one of them bumps that requirement and releases the
-diagram too. `cargo package --list -p <crate>` shows a placeholder's file set; add
+sources) lists the packages it bundles that have their own placeholder in
+`changelog_include` (`release-plz.toml`): their commits release the diagram too,
+with at most a patch bump. `cargo package --list -p <crate>` shows a placeholder's file set; add
 new source files or directories to its `include`.
 
 The placeholder crate's `version` is the package version. `package.json` files

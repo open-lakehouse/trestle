@@ -105,6 +105,9 @@ git_only = true
 publish = false # required alongside git_only
 semver_check = false
 changelog_path = "node/trestle-diagram/CHANGELOG.md"
+# The diagram bundles these packages, whose files Cargo leaves out of its
+# placeholder crate (they have their own): their commits release it too.
+changelog_include = ["ui-kit"]
 
 # The npm package @open-lakehouse/ui-kit, through its placeholder crate at
 # node/ui-kit/Cargo.toml; same setup as trestle-diagram.

@@ -10,9 +10,10 @@
 #
 # The bundled workspace packages that are published on their own (ui-kit) have
 # their own placeholder crate, and Cargo leaves a nested package's files out of
-# this one. A path dependency on that crate stands in for them: when it is
-# released, release-plz bumps the requirement here and releases the diagram
-# too, which re-bundles the new version.
+# this one. `changelog_include` in release-plz.toml stands in for them: their
+# commits release the diagram too (at most a patch bump), which re-bundles them.
+# Not a Cargo dependency: release-plz runs `cargo package`, which would look
+# the unpublished placeholder up on crates.io.
 #
 # It deliberately has no dependency on `stack-topology-wasm`. The diagram only
 # reads the `GraphDto` shape, whose TypeScript mirror (`stack-wasm/src/types.ts`)
@@ -61,6 +62,3 @@ include = [
 
 [lib]
 path = "trestle-diagram/release.rs"
-
-[dependencies]
-ui-kit = { path = "ui-kit", version = "0.0.1" }
