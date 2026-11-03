@@ -1,6 +1,6 @@
 import type { NodeProps } from "@xyflow/react";
 import { Cloud } from "lucide-react";
-import { CLOUD_GROUP_HEADER } from "../useTopologyLayout";
+import { CLOUD_GROUP_HEADER } from "../useTopologyLayout.js";
 
 /** What a cloud group node carries: the cloud's label ("" when unnamed). */
 export interface CloudGroupNodeData {

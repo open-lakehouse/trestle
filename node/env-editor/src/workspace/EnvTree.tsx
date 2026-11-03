@@ -19,18 +19,21 @@ import {
   Workflow,
 } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
-import { buildFileTree, type FileTreeNode } from "../artifacts/buildFileTree";
-import { EnvStatus, IconButton, NameInput, SidebarHeader } from "./chrome";
-import type { EditorTab } from "./editors";
+import {
+  buildFileTree,
+  type FileTreeNode,
+} from "../artifacts/buildFileTree.js";
+import { EnvStatus, IconButton, NameInput, SidebarHeader } from "./chrome.js";
+import type { EditorTab } from "./editors.js";
 import {
   type EnvDoc,
   freeName,
   type PortConflict,
   SLOT_PORT_STRIDE,
   type WorkspaceDoc,
-} from "./model";
-import type { MemberPlan } from "./useMemberPlans";
-import { useWorkspace } from "./useWorkspace";
+} from "./model.js";
+import type { MemberPlan } from "./useMemberPlans.js";
+import { useWorkspace } from "./useWorkspace.js";
 
 /** What the explorer is asking a name for. */
 type NameEdit =

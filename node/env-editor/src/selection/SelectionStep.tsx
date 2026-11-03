@@ -4,9 +4,9 @@ import {
   TabsList,
   TabsTrigger,
 } from "@open-lakehouse/ui-kit";
-import type { CatalogDto } from "../types";
-import { CapabilityPicker } from "./CapabilityPicker";
-import { TechnologyPicker } from "./TechnologyPicker";
+import type { CatalogDto } from "../types.js";
+import { CapabilityPicker } from "./CapabilityPicker.js";
+import { TechnologyPicker } from "./TechnologyPicker.js";
 
 export interface SelectionStepProps {
   catalog: CatalogDto;

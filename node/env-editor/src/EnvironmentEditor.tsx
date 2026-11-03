@@ -21,30 +21,30 @@ import {
   buildBundleZip,
   downloadZip,
   generateCredentials,
-} from "./artifacts/bundleZip";
-import { FilesPanel } from "./artifacts/FilesPanel";
-import { fileSourceOf } from "./artifacts/fileSource";
-import { errorMessage } from "./errors";
-import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar";
-import { ComponentPalette } from "./graph/ComponentPalette";
-import type { CanvasActions } from "./graph/canvasActions";
-import { MarkitectureCanvas } from "./graph/MarkitectureCanvas";
-import type { NodeFilesTarget } from "./graph/nodeFiles";
-import { CLIENTS_NODE_ID } from "./graph/useTopologyLayout";
-import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection";
-import { InspectorPanel } from "./inspector/InspectorPanel";
-import { ConfigPanel } from "./layout/ConfigPanel";
-import { PlannerProvider, usePlanner } from "./planner";
-import { moduleName } from "./selection/catalogIndex";
-import { componentOrigin, describeOrigin } from "./state/origin";
-import { isEmptySelection, useEnvironment } from "./state/useEnvironment";
+} from "./artifacts/bundleZip.js";
+import { FilesPanel } from "./artifacts/FilesPanel.js";
+import { fileSourceOf } from "./artifacts/fileSource.js";
+import { errorMessage } from "./errors.js";
+import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar.js";
+import { ComponentPalette } from "./graph/ComponentPalette.js";
+import type { CanvasActions } from "./graph/canvasActions.js";
+import { MarkitectureCanvas } from "./graph/MarkitectureCanvas.js";
+import type { NodeFilesTarget } from "./graph/nodeFiles.js";
+import { CLIENTS_NODE_ID } from "./graph/useTopologyLayout.js";
+import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection.js";
+import { InspectorPanel } from "./inspector/InspectorPanel.js";
+import { ConfigPanel } from "./layout/ConfigPanel.js";
+import { PlannerProvider, usePlanner } from "./planner.js";
+import { moduleName } from "./selection/catalogIndex.js";
+import { componentOrigin, describeOrigin } from "./state/origin.js";
+import { isEmptySelection, useEnvironment } from "./state/useEnvironment.js";
 import type {
   CatalogDto,
   PlanContext,
   Planner,
   PlanResult,
   Selection,
-} from "./types";
+} from "./types.js";
 
 export interface EnvironmentEditorProps {
   /**

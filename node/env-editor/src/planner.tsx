@@ -6,7 +6,7 @@
 // transport seam pattern the sibling headwaters lineage UI uses.
 
 import { createContext, useContext } from "react";
-import type { Planner } from "./types";
+import type { Planner } from "./types.js";
 
 const PlannerContext = createContext<Planner | null>(null);
 

@@ -3,7 +3,7 @@
 // manifest) and reads contents on demand from the host, typically out of the
 // rendered environment shipped next to the snapshot.
 
-import type { OutputFile } from "../types";
+import type { OutputFile } from "../types.js";
 
 export interface FileSource {
   /** Every viewable path, relative to the rendered environment's root. */

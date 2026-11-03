@@ -3,7 +3,7 @@
 // workspace.rs): the same names, slots, port shifts and project names, so a
 // workspace made here renders with `trestle workspace render` unchanged.
 
-import type { HostPortDto, PlanContext, Selection } from "../types";
+import type { HostPortDto, PlanContext, Selection } from "../types.js";
 
 /** One environment of a workspace, as the editor keeps it. */
 export interface EnvDoc {
@@ -13,9 +13,12 @@ export interface EnvDoc {
   name: string;
   /** Its slot: host ports sit `slot × SLOT_PORT_STRIDE` above the defaults. */
   slot: number;
-  /** The modules and settings chosen for it; the catalog's default until the
-   *  first edit. */
+  /** The modules and settings chosen for it (its draft, where the store keeps
+   *  revisions); the catalog's default until the first edit. */
   selection?: Selection;
+  /** The number of its latest revision, where the store keeps revisions and
+   *  it has one (see `WorkspaceStore.commit`). */
+  head?: number;
 }
 
 /** A workspace as the editor keeps it (see {@link WorkspaceStore}). */

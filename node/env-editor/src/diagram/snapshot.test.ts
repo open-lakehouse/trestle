@@ -5,7 +5,7 @@ import {
   edgeKey,
   parseGraphSnapshot,
   stringifyGraphSnapshot,
-} from "./snapshot";
+} from "./snapshot.js";
 
 const roundTrip = (value: unknown) =>
   parseGraphSnapshot(JSON.parse(JSON.stringify(value)));

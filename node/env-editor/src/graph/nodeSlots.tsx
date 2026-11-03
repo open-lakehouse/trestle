@@ -5,7 +5,7 @@
 // rather than node `data`, so changing them never re-runs the ELK layout.
 
 import { createContext, type ReactNode, useContext } from "react";
-import type { GraphNodeDto } from "../types";
+import type { GraphNodeDto } from "../types.js";
 
 export interface NodeSlots {
   /**

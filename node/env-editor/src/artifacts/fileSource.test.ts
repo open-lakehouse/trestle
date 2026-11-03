@@ -4,7 +4,7 @@ import {
   filesByModule,
   moduleFiles,
   relativePath,
-} from "./fileSource";
+} from "./fileSource.js";
 
 const paths = [
   "compose.yaml",

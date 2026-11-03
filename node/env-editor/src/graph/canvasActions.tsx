@@ -5,8 +5,8 @@
 // the ELK layout.
 
 import { createContext, useContext } from "react";
-import type { Origin } from "../state/origin";
-import type { ModuleDto } from "../types";
+import type { Origin } from "../state/origin.js";
+import type { ModuleDto } from "../types.js";
 
 export interface CanvasActions {
   /** Why a component is in the environment; only explicit picks can be removed. */

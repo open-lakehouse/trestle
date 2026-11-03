@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { strFromU8, unzipSync } from "fflate";
-import type { Bundle } from "../types";
+import type { Bundle } from "../types.js";
 import {
   buildBundleZip,
   buildWorkspaceZip,
   fileMode,
   generateCredentials,
-} from "./bundleZip";
+} from "./bundleZip.js";
 
 const bundle: Bundle = {
   env_name: "lakehouse",

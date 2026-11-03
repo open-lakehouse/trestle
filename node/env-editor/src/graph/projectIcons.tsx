@@ -11,7 +11,7 @@
 // Each logo remains its owner's trademark.
 
 import type { ComponentType } from "react";
-import { roleStyle } from "./roleTheme";
+import { roleStyle } from "./roleTheme.js";
 
 export interface IconProps {
   className?: string;

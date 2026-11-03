@@ -3,10 +3,10 @@
 // host port — including the ones not open in a tab.
 
 import { useEffect, useState } from "react";
-import { errorMessage } from "../errors";
-import { usePlanner } from "../planner";
-import type { CatalogDto, PlanResult } from "../types";
-import { contextFor, type WorkspaceDoc } from "./model";
+import { errorMessage } from "../errors.js";
+import { usePlanner } from "../planner.js";
+import type { CatalogDto, PlanResult } from "../types.js";
+import { contextFor, type WorkspaceDoc } from "./model.js";
 
 /** One member's latest plan, or why it doesn't plan. */
 export interface MemberPlan {

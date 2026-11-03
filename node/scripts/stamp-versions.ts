@@ -17,6 +17,8 @@ const PACKAGES: Record<string, string> = {
   "trestle-diagram": "Cargo.toml",
   "ui-kit": "ui-kit/Cargo.toml",
   host: "host/Cargo.toml",
+  "stack-wasm": "stack-wasm/Cargo.toml",
+  "env-editor": "env-editor/Cargo.toml",
 };
 
 const check = process.argv.includes("--check");

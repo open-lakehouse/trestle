@@ -40,6 +40,7 @@
       "name": "@open-lakehouse/env-editor",
       "version": "0.0.0",
       "dependencies": {
+        "@open-lakehouse/stack-wasm": "workspace:*",
         "@open-lakehouse/ui-kit": "workspace:*",
         "@xyflow/react": "^12.4.0",
         "elkjs": "^0.11.0",
@@ -49,7 +50,7 @@
         "shiki": "^3.23.0",
       },
       "devDependencies": {
-        "@open-lakehouse/stack-wasm": "workspace:*",
+        "@open-lakehouse/host": "workspace:*",
         "@storybook/react-vite": "^10.6.0",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",

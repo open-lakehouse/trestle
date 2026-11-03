@@ -3,8 +3,8 @@ import {
   FIXTURE_PLAN,
 } from "@open-lakehouse/stack-wasm/fixtures";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { EnvironmentEditor } from "./EnvironmentEditor";
-import type { Planner } from "./types";
+import { EnvironmentEditor } from "./EnvironmentEditor.js";
+import type { Planner } from "./types.js";
 
 // A fixture planner: the real captured catalog, and a representative plan for
 // any non-empty selection. Lets the editor render end-to-end with no wasm; the

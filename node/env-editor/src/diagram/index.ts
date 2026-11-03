@@ -6,7 +6,7 @@
 export {
   type NodeSlots,
   useDiagramPortal,
-} from "../graph/nodeSlots";
+} from "../graph/nodeSlots.js";
 export type {
   ExposedDto,
   ExposedKind,
@@ -19,11 +19,11 @@ export type {
   SurfaceKind,
   TopologyEdgeDto,
   TopologyEdgeKind,
-} from "../types";
+} from "../types.js";
 export {
   EnvironmentDiagram,
   type EnvironmentDiagramProps,
-} from "./EnvironmentDiagram";
+} from "./EnvironmentDiagram.js";
 export {
   type DiagramImageFormat,
   type DiagramImageOptions,
@@ -31,7 +31,7 @@ export {
   downloadUrl,
   useDiagramImage,
   useDiagramReady,
-} from "./exportImage";
+} from "./exportImage.js";
 export {
   createGraphSnapshot,
   edgeKey,
@@ -42,4 +42,4 @@ export {
   parseGraphSnapshot,
   SUPPORTED_GRAPH_SNAPSHOT_VERSIONS,
   stringifyGraphSnapshot,
-} from "./snapshot";
+} from "./snapshot.js";

@@ -5,7 +5,7 @@
 // injected `Planner` (see ./planner and DESIGN.md); this package has no runtime
 // dependency on the wasm engine.
 
-export { FilesPanel } from "./artifacts/FilesPanel";
+export { FilesPanel } from "./artifacts/FilesPanel.js";
 export {
   createGraphSnapshot,
   type DiagramImageFormat,
@@ -20,54 +20,54 @@ export {
   stringifyGraphSnapshot,
   useDiagramImage,
   useDiagramReady,
-} from "./diagram";
+} from "./diagram/index.js";
 export {
   EnvironmentEditor,
   type EnvironmentEditorProps,
-} from "./EnvironmentEditor";
+} from "./EnvironmentEditor.js";
 export {
   CanvasNotice,
   type CanvasNoticeProps,
   CanvasToolbar,
   type CanvasToolbarProps,
-} from "./graph/CanvasToolbar";
+} from "./graph/CanvasToolbar.js";
 export {
   ComponentPalette,
   type ComponentPaletteProps,
-} from "./graph/ComponentPalette";
-export type { CanvasActions } from "./graph/canvasActions";
+} from "./graph/ComponentPalette.js";
+export type { CanvasActions } from "./graph/canvasActions.js";
 export {
   MarkitectureCanvas,
   type MarkitectureCanvasProps,
-} from "./graph/MarkitectureCanvas";
+} from "./graph/MarkitectureCanvas.js";
 export {
   type IconProps,
   ModuleIcon,
   type ModuleIconProps,
   projectIcon,
-} from "./graph/projectIcons";
-export { roleStyle } from "./graph/roleTheme";
+} from "./graph/projectIcons.js";
+export { roleStyle } from "./graph/roleTheme.js";
 export {
   InspectorPanel,
   type InspectorPanelProps,
-} from "./inspector/InspectorPanel";
-export { KnobsStep } from "./knobs/KnobsStep";
+} from "./inspector/InspectorPanel.js";
+export { KnobsStep } from "./knobs/KnobsStep.js";
 export {
   PlannerProvider,
   type PlannerProviderProps,
   usePlanner,
-} from "./planner";
-export { SelectionStep } from "./selection/SelectionStep";
+} from "./planner.js";
+export { SelectionStep } from "./selection/SelectionStep.js";
 export {
   componentOrigin,
   describeOrigin,
   type Origin,
-} from "./state/origin";
+} from "./state/origin.js";
 export {
   type EnvironmentOptions,
   type EnvironmentState,
   useEnvironment,
-} from "./state/useEnvironment";
+} from "./state/useEnvironment.js";
 export type {
   AuthDto,
   CatalogDto,
@@ -98,5 +98,5 @@ export type {
   TopologyEdgeDto,
   TopologyEdgeKind,
   VirtualHostDto,
-} from "./types";
-export * from "./workspace";
+} from "./types.js";
+export * from "./workspace/index.js";

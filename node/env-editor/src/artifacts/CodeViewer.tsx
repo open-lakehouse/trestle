@@ -7,14 +7,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import type { FileSource } from "./fileSource";
+import type { FileSource } from "./fileSource.js";
 import {
   type CodeLine,
   highlightLines,
   languageFor,
   languageLabel,
   plainLines,
-} from "./highlight";
+} from "./highlight.js";
 
 export interface CodeViewerProps {
   path: string;

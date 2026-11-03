@@ -1,4 +1,4 @@
-import type { OutputFile } from "../types";
+import type { OutputFile } from "../types.js";
 
 export interface FileTreeNode {
   name: string;

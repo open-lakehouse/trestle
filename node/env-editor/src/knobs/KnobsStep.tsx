@@ -1,6 +1,6 @@
 import { Card } from "@open-lakehouse/ui-kit";
-import type { CatalogDto } from "../types";
-import { KnobField } from "./KnobField";
+import type { CatalogDto } from "../types.js";
+import { KnobField } from "./KnobField.js";
 
 export interface KnobsStepProps {
   catalog: CatalogDto;

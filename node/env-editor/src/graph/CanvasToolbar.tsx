@@ -38,14 +38,14 @@ import {
   downloadText,
   downloadUrl,
   useDiagramImage,
-} from "../diagram/exportImage";
+} from "../diagram/exportImage.js";
 import {
   createGraphSnapshot,
   GRAPH_SNAPSHOT_EXTENSION,
   stringifyGraphSnapshot,
-} from "../diagram/snapshot";
-import { errorMessage } from "../errors";
-import type { DeployStepDto, GraphDto } from "../types";
+} from "../diagram/snapshot.js";
+import { errorMessage } from "../errors.js";
+import type { DeployStepDto, GraphDto } from "../types.js";
 
 export interface CanvasToolbarProps {
   onAdd: () => void;

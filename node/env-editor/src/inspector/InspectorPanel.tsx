@@ -25,11 +25,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { moduleFiles, relativePath } from "../artifacts/fileSource";
-import { ModuleIcon } from "../graph/projectIcons";
-import { roleStyle } from "../graph/roleTheme";
-import { KnobField } from "../knobs/KnobField";
-import { describeOrigin, type Origin } from "../state/origin";
+import { moduleFiles, relativePath } from "../artifacts/fileSource.js";
+import { ModuleIcon } from "../graph/projectIcons.js";
+import { roleStyle } from "../graph/roleTheme.js";
+import { KnobField } from "../knobs/KnobField.js";
+import { describeOrigin, type Origin } from "../state/origin.js";
 import type {
   CatalogDto,
   GatewaySettings,
@@ -39,9 +39,9 @@ import type {
   ProvisionedDto,
   ResourceNounDto,
   TopologyEdgeDto,
-} from "../types";
-import { AccessSection } from "./AccessSection";
-import { HostedSection } from "./HostedSection";
+} from "../types.js";
+import { AccessSection } from "./AccessSection.js";
+import { HostedSection } from "./HostedSection.js";
 
 export interface InspectorPanelProps {
   /** The inspected component's module id. */

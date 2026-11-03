@@ -15,7 +15,7 @@ import type {
   HostedResource,
   HostedVendor,
   ModuleDto,
-} from "../types";
+} from "../types.js";
 
 /** The vendors that offer each kind (mirrors `HostedVendor::offers`), the
  *  kind's default first. The vendor decides the setup steps in README.md. */

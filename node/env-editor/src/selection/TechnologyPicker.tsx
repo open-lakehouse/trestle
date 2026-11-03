@@ -1,13 +1,13 @@
 import { Badge, Card, cn, Switch } from "@open-lakehouse/ui-kit";
-import { ModuleIcon } from "../graph/projectIcons";
-import { roleStyle } from "../graph/roleTheme";
-import { KnobField } from "../knobs/KnobField";
-import type { CatalogDto } from "../types";
+import { ModuleIcon } from "../graph/projectIcons.js";
+import { roleStyle } from "../graph/roleTheme.js";
+import { KnobField } from "../knobs/KnobField.js";
+import type { CatalogDto } from "../types.js";
 import {
   conflictsWith,
   groupByCategory,
   pickableModules,
-} from "./catalogIndex";
+} from "./catalogIndex.js";
 
 export interface TechnologyPickerProps {
   catalog: CatalogDto;

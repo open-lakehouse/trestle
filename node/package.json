@@ -21,7 +21,7 @@
     "build": "bun run --filter @open-lakehouse/env-editor-app build",
     "storybook": "bun run --filter @open-lakehouse/env-editor-app storybook",
     "build:diagram": "bun run --filter @open-lakehouse/trestle-diagram build",
-    "build:packages": "cd ui-kit && bun run build && cd ../host && bun run build",
+    "build:packages": "for p in ui-kit host stack-wasm env-editor; do (cd $p && bun run build) || exit 1; done",
     "build-storybook": "bun run --filter @open-lakehouse/env-editor-app build-storybook"
   },
   "devDependencies": {

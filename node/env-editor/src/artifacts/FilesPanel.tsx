@@ -1,14 +1,14 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { ChevronRight, FileText, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { OutputFile, PlanResult } from "../types";
+import type { OutputFile, PlanResult } from "../types.js";
 import {
   buildFileTree,
   defaultFilePath,
   type FileTreeNode,
-} from "./buildFileTree";
-import { CodeViewer } from "./CodeViewer";
-import { fileSourceOf } from "./fileSource";
+} from "./buildFileTree.js";
+import { CodeViewer } from "./CodeViewer.js";
+import { fileSourceOf } from "./fileSource.js";
 
 export interface FilesPanelProps {
   plan: PlanResult | null;

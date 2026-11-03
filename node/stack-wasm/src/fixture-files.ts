@@ -1,4 +1,4 @@
-import type { OutputFile } from "./types";
+import type { OutputFile } from "./types.js";
 
 /** Captured non-sensitive materialized files for the lakehouse fixture plan. */
 export const FIXTURE_FILES: OutputFile[] = [

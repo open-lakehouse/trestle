@@ -22,32 +22,35 @@ import {
   useRef,
   useState,
 } from "react";
-import { type FileSource, filesByModule } from "../artifacts/fileSource";
-import { NodeFilesDialog } from "../artifacts/NodeFilesDialog";
+import { type FileSource, filesByModule } from "../artifacts/fileSource.js";
+import { NodeFilesDialog } from "../artifacts/NodeFilesDialog.js";
 import type {
   GraphDto,
   GraphNodeDto,
   TopologyEdgeDto,
   TopologyEdgeKind,
-} from "../types";
+} from "../types.js";
 import {
   type CanvasActions,
   CanvasContext,
   type CanvasContextValue,
-} from "./canvasActions";
-import { ElkEdge } from "./edges/ElkEdge";
+} from "./canvasActions.js";
+import { ElkEdge } from "./edges/ElkEdge.js";
 import {
   NodeFilesContext,
   type NodeFilesContextValue,
   type NodeFilesTarget,
-} from "./nodeFiles";
-import { type NodeSlots, NodeSlotsContext } from "./nodeSlots";
-import { ClientsNode } from "./nodes/ClientsNode";
-import { CloudGroupNode } from "./nodes/CloudGroupNode";
-import { ComponentNode } from "./nodes/ComponentNode";
-import { GatewayNode } from "./nodes/GatewayNode";
-import { roleStyle } from "./roleTheme";
-import { type TopologyEdgeData, useTopologyLayout } from "./useTopologyLayout";
+} from "./nodeFiles.js";
+import { type NodeSlots, NodeSlotsContext } from "./nodeSlots.js";
+import { ClientsNode } from "./nodes/ClientsNode.js";
+import { CloudGroupNode } from "./nodes/CloudGroupNode.js";
+import { ComponentNode } from "./nodes/ComponentNode.js";
+import { GatewayNode } from "./nodes/GatewayNode.js";
+import { roleStyle } from "./roleTheme.js";
+import {
+  type TopologyEdgeData,
+  useTopologyLayout,
+} from "./useTopologyLayout.js";
 
 const nodeTypes: NodeTypes = {
   clients: ClientsNode,

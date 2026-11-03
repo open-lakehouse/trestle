@@ -5,7 +5,9 @@ members = [
   # Release placeholders for the npm packages under node/ (see node/Cargo.toml
   # and node/*/Cargo.toml); they have no code and are never published.
   "node",
+  "node/env-editor",
   "node/host",
+  "node/stack-wasm",
   "node/ui-kit",
 ]
 exclude = [

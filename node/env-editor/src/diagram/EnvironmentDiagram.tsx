@@ -9,17 +9,17 @@ import {
   useRef,
   useState,
 } from "react";
-import type { FileSource } from "../artifacts/fileSource";
-import { DIALOG_STYLE } from "../dialogStyle";
-import { errorMessage } from "../errors";
+import type { FileSource } from "../artifacts/fileSource.js";
+import { DIALOG_STYLE } from "../dialogStyle.js";
+import { errorMessage } from "../errors.js";
 import {
   ConnectionLegend,
   MarkitectureCanvas,
-} from "../graph/MarkitectureCanvas";
-import { DiagramPortalContext, type NodeSlots } from "../graph/nodeSlots";
-import type { GraphDto } from "../types";
-import { useDiagramReady } from "./exportImage";
-import { parseGraphSnapshot } from "./snapshot";
+} from "../graph/MarkitectureCanvas.js";
+import { DiagramPortalContext, type NodeSlots } from "../graph/nodeSlots.js";
+import type { GraphDto } from "../types.js";
+import { useDiagramReady } from "./exportImage.js";
+import { parseGraphSnapshot } from "./snapshot.js";
 
 export interface EnvironmentDiagramProps {
   /**

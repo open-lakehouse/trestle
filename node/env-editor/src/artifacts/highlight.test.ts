@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { highlightLines, languageFor, plainLines } from "./highlight";
+import { highlightLines, languageFor, plainLines } from "./highlight.js";
 
 describe("languageFor", () => {
   test.each([

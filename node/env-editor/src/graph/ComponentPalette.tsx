@@ -22,11 +22,11 @@ import {
   groupByCategory,
   isGatewayManaged,
   slotHolders,
-} from "../selection/catalogIndex";
-import { describeOrigin, formatList, type Origin } from "../state/origin";
-import type { CatalogDto, ModuleDto, Selection } from "../types";
-import { ModuleIcon } from "./projectIcons";
-import { roleStyle } from "./roleTheme";
+} from "../selection/catalogIndex.js";
+import { describeOrigin, formatList, type Origin } from "../state/origin.js";
+import type { CatalogDto, ModuleDto, Selection } from "../types.js";
+import { ModuleIcon } from "./projectIcons.js";
+import { roleStyle } from "./roleTheme.js";
 
 export interface ComponentPaletteProps {
   open: boolean;

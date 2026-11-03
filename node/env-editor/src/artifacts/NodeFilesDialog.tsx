@@ -1,12 +1,12 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { ExternalLink, FileCode2, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef } from "react";
-import { DIALOG_STYLE } from "../dialogStyle";
-import { ModuleIcon } from "../graph/projectIcons";
-import { roleStyle } from "../graph/roleTheme";
-import type { GraphNodeDto } from "../types";
-import { CodeViewer } from "./CodeViewer";
-import { type FileSource, relativePath } from "./fileSource";
+import { DIALOG_STYLE } from "../dialogStyle.js";
+import { ModuleIcon } from "../graph/projectIcons.js";
+import { roleStyle } from "../graph/roleTheme.js";
+import type { GraphNodeDto } from "../types.js";
+import { CodeViewer } from "./CodeViewer.js";
+import { type FileSource, relativePath } from "./fileSource.js";
 
 export interface NodeFilesDialogProps {
   /** The node whose files are shown; the dialog is closed without one. */

@@ -2,8 +2,8 @@ import { cn } from "@open-lakehouse/ui-kit";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { Box, Database, Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
-import type { GraphNodeDto, ProvisionedDto } from "../../types";
-import { useCanvasContext } from "../canvasActions";
+import type { GraphNodeDto, ProvisionedDto } from "../../types.js";
+import { useCanvasContext } from "../canvasActions.js";
 import {
   COMPONENT_WIDTH,
   componentFacts,
@@ -16,10 +16,10 @@ import {
   type ResourceSection,
   resourceHandle,
   resourceSections,
-} from "../useTopologyLayout";
-import { BaseNode, HANDLE_CLASS } from "./BaseNode";
-import { NodeActions } from "./NodeActions";
-import { NodeHeader } from "./NodeHeader";
+} from "../useTopologyLayout.js";
+import { BaseNode, HANDLE_CLASS } from "./BaseNode.js";
+import { NodeActions } from "./NodeActions.js";
+import { NodeHeader } from "./NodeHeader.js";
 
 export interface ComponentNodeData {
   node: GraphNodeDto;

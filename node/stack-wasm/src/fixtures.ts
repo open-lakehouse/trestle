@@ -1,8 +1,8 @@
 // Auto-generated fixture from the real planner (crates/stack-topology).
 // Regenerate: see node/stack-wasm/README.md. Do not hand-edit.
 
-import { FIXTURE_FILES } from "./fixture-files";
-import type { CatalogDto, PlanResult } from "./types";
+import { FIXTURE_FILES } from "./fixture-files.js";
+import type { CatalogDto, PlanResult } from "./types.js";
 
 export const FIXTURE_CATALOG: CatalogDto = {
   modules: [

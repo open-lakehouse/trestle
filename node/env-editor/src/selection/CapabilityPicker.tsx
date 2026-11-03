@@ -1,7 +1,7 @@
 import { Badge, Card, cn } from "@open-lakehouse/ui-kit";
 import { Sparkles } from "lucide-react";
-import type { CatalogDto } from "../types";
-import { capabilityIndex, capabilityLabel } from "./catalogIndex";
+import type { CatalogDto } from "../types.js";
+import { capabilityIndex, capabilityLabel } from "./catalogIndex.js";
 
 export interface CapabilityPickerProps {
   catalog: CatalogDto;

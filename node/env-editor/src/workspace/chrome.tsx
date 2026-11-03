@@ -15,7 +15,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
-import type { MemberPlan } from "./useMemberPlans";
+import type { MemberPlan } from "./useMemberPlans.js";
 
 /** A sidebar view's title row, with its actions on the right. */
 export function SidebarHeader({

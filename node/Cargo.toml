@@ -8,7 +8,8 @@
 # nothing), so moving it into `trestle-diagram/` would stop every env-editor
 # change from releasing the package.
 #
-# The bundled workspace packages that are published on their own (ui-kit) have
+# The bundled workspace packages that are published on their own (ui-kit,
+# env-editor, stack-wasm) have
 # their own placeholder crate, and Cargo leaves a nested package's files out of
 # this one. `changelog_include` in release-plz.toml stands in for them: their
 # commits release the diagram too (at most a patch bump), which re-bundles them.
@@ -49,12 +50,6 @@ include = [
   "trestle-diagram/rollup.dts.config.mjs",
   "trestle-diagram/scripts/**",
   "trestle-diagram/src/**",
-  "env-editor/package.json",
-  "env-editor/src/diagram/**",
-  "env-editor/src/graph/**",
-  "env-editor/src/state/origin.ts",
-  "env-editor/src/types.ts",
-  "stack-wasm/src/types.ts",
   "!**/*.stories.tsx",
   "!**/*.test.ts",
   "!**/*.test.tsx",

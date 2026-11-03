@@ -1,5 +1,5 @@
 import { Label, Switch } from "@open-lakehouse/ui-kit";
-import type { GatewaySettings } from "../types";
+import type { GatewaySettings } from "../types.js";
 
 /** An open gateway: no sign-in, no policy. */
 export const OPEN: GatewaySettings = { auth: false, policy: false };

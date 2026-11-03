@@ -26,6 +26,25 @@ import { createFakeHost } from "@open-lakehouse/host/testing";
 const fake: LakehouseHost = createFakeHost({ services: { svc: { "/x": 1 } } });
 registerHost(fake);
 export const host = [hostFetch("svc"), HostProvider, useService];`,
+  "stack-wasm": `import type { Planner } from "@open-lakehouse/stack-wasm/types";
+import { FIXTURE_CATALOG } from "@open-lakehouse/stack-wasm/fixtures";
+import { createWasmPlanner } from "@open-lakehouse/stack-wasm/stub";
+export const planner: Planner = createWasmPlanner();
+export const catalog = FIXTURE_CATALOG.modules.length;`,
+  "env-editor": `import {
+  createMemoryWorkspaceStore,
+  diffSelections,
+  PlannerProvider,
+  supportsRevisions,
+  WorkspaceProvider,
+  WorkspaceShell,
+  type RevisionStore,
+} from "@open-lakehouse/env-editor";
+import { EnvironmentDiagram } from "@open-lakehouse/env-editor/diagram";
+const revisions = createMemoryWorkspaceStore(null, { revisions: true });
+export const editor = [PlannerProvider, WorkspaceProvider, WorkspaceShell, EnvironmentDiagram, diffSelections];
+export const keeps: boolean = supportsRevisions(revisions);
+export type Store = RevisionStore;`,
 };
 
 const project = mkdtempSync(join(tmpdir(), "olai-npm-smoke-"));

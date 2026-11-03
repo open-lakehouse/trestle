@@ -1,17 +1,28 @@
-// The shell's open editors: each tab is an environment's diagram or one of its
-// rendered files. Pure helpers, so the tab rules are testable on their own.
+// The shell's open editors: each tab is an environment's diagram, one of its
+// rendered files, one of its revisions or a comparison of two. Pure helpers, so the tab rules are testable on their own.
 
-/** An open editor: `env`'s diagram, or its rendered file at `path`. */
+/** An open editor: `env`'s diagram, its rendered file at `path`, one of its
+ *  revisions (read-only), or a comparison of two of them. At most one of
+ *  `path`, `revision` and `compare` is set. */
 export interface EditorTab {
   /** The environment's id. */
   env: string;
   /** The file's path in the environment; absent for its diagram. */
   path?: string;
+  /** A revision's number, to view it read-only. */
+  revision?: number;
+  /** Two revisions to compare; `"draft"` is the environment's draft. */
+  compare?: { from: number; to: number | "draft" };
 }
 
 /** A tab's identity. */
 export function tabKey(tab: EditorTab): string {
-  return `${tab.env}\n${tab.path ?? ""}`;
+  const what = tab.compare
+    ? `compare:${tab.compare.from}..${tab.compare.to}`
+    : tab.revision !== undefined
+      ? `revision:${tab.revision}`
+      : (tab.path ?? "");
+  return `${tab.env}\n${what}`;
 }
 
 /** `tabs` with `tab` open (appended unless it already is). */

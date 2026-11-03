@@ -5,8 +5,8 @@
 // them: credential files owner-only, deploy scripts executable.
 
 import { zipSync } from "fflate";
-import { downloadBlob } from "../diagram/exportImage";
-import type { Bundle, LocalCredentialDto } from "../types";
+import { downloadBlob } from "../diagram/exportImage.js";
+import type { Bundle, LocalCredentialDto } from "../types.js";
 
 /** The longest generated value, even when a service accepts more. */
 const MAX_GENERATED = 64;

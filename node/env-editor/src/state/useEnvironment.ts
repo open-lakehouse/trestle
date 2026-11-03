@@ -4,8 +4,8 @@
 // good one on screen next to the error, so the diagram never blanks mid-edit.
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { errorMessage } from "../errors";
-import { usePlanner } from "../planner";
+import { errorMessage } from "../errors.js";
+import { usePlanner } from "../planner.js";
 import type {
   CatalogDto,
   GatewaySettings,
@@ -13,7 +13,7 @@ import type {
   PlanContext,
   PlanResult,
   Selection,
-} from "../types";
+} from "../types.js";
 
 const EMPTY_SELECTION: Selection = {
   modules: [],

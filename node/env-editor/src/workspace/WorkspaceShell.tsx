@@ -25,6 +25,7 @@ import {
   CircleX,
   Files,
   FileText,
+  History,
   Layers,
   Loader2,
   PanelBottom,
@@ -47,21 +48,21 @@ import {
   buildWorkspaceZip,
   downloadZip,
   generateCredentials,
-} from "../artifacts/bundleZip";
-import { CodeViewer } from "../artifacts/CodeViewer";
-import { fileSourceOf } from "../artifacts/fileSource";
-import { EnvironmentEditor } from "../EnvironmentEditor";
-import { errorMessage } from "../errors";
-import { usePlanner } from "../planner";
-import type { Bundle, CatalogDto } from "../types";
+} from "../artifacts/bundleZip.js";
+import { CodeViewer } from "../artifacts/CodeViewer.js";
+import { fileSourceOf } from "../artifacts/fileSource.js";
+import { EnvironmentEditor } from "../EnvironmentEditor.js";
+import { errorMessage } from "../errors.js";
+import { usePlanner } from "../planner.js";
+import type { Bundle, CatalogDto } from "../types.js";
 import {
   Breadcrumb,
   EnvStatus,
   IconButton,
   NameInput,
   SidebarHeader,
-} from "./chrome";
-import { EnvTree } from "./EnvTree";
+} from "./chrome.js";
+import { EnvTree } from "./EnvTree.js";
 import {
   closeTab,
   type EditorTab,
@@ -69,7 +70,7 @@ import {
   openTab,
   pruneTabs,
   tabKey,
-} from "./editors";
+} from "./editors.js";
 import {
   contextFor,
   type EnvDoc,
@@ -81,9 +82,14 @@ import {
   SLOT_PORT_STRIDE,
   type WorkspaceDoc,
   workspaceToml,
-} from "./model";
-import { gatewayUrl, type MemberPlan, useMemberPlans } from "./useMemberPlans";
-import { useWorkspace } from "./useWorkspace";
+} from "./model.js";
+import { CompareEditor, RevisionEditor, RevisionsView } from "./revisions.js";
+import {
+  gatewayUrl,
+  type MemberPlan,
+  useMemberPlans,
+} from "./useMemberPlans.js";
+import { useWorkspace } from "./useWorkspace.js";
 
 export interface WorkspaceShellProps {
   /** Drives the diagram canvas colors; defaults to `"system"`. */
@@ -94,7 +100,7 @@ export interface WorkspaceShellProps {
   statusItems?: ReactNode;
 }
 
-type SideView = "explorer" | "modules" | "settings";
+type SideView = "explorer" | "history" | "modules" | "settings";
 type PanelView = "problems" | "output";
 
 /** The editor for a whole workspace (see the module comment). */
@@ -183,6 +189,11 @@ export function WorkspaceShell({
   );
   const activeTab = open.find((t) => tabKey(t) === activeKey);
   const activeEnv = envs.find((e) => e.id === activeTab?.env);
+  // A store without revisions has no history view; leave it if it was open.
+  const hasRevisions = !!ws.revisions;
+  useEffect(() => {
+    if (!hasRevisions && view === "history") setView("explorer");
+  }, [hasRevisions, view]);
 
   // ⌘B toggles the sidebar, ⌘J the panel, ⌘1…9 switch tabs.
   useEffect(() => {
@@ -278,6 +289,7 @@ export function WorkspaceShell({
               }
             }}
             problemCount={problemCount}
+            history={hasRevisions}
           />
           {sidebarOpen && (
             <>
@@ -294,6 +306,14 @@ export function WorkspaceShell({
                     onOpen={openEditor}
                     onDownload={planner.bundle ? downloadWorkspace : undefined}
                     downloading={downloading}
+                  />
+                )}
+                {view === "history" && (
+                  <RevisionsView
+                    workspace={workspace}
+                    env={activeEnv}
+                    catalog={catalog}
+                    onOpen={openEditor}
                   />
                 )}
                 {view === "modules" && <ModulesView catalog={catalog} />}
@@ -317,7 +337,22 @@ export function WorkspaceShell({
               onClose={closeEditor}
             />
             <div className="min-h-0 flex-1">
-              {activeEnv && activeTab?.path !== undefined ? (
+              {activeEnv && activeTab?.compare ? (
+                <CompareEditor
+                  workspace={workspace}
+                  env={activeEnv}
+                  from={activeTab.compare.from}
+                  to={activeTab.compare.to}
+                  catalog={catalog}
+                />
+              ) : activeEnv && activeTab?.revision !== undefined ? (
+                <RevisionEditor
+                  workspace={workspace}
+                  env={activeEnv}
+                  number={activeTab.revision}
+                  colorMode={colorMode}
+                />
+              ) : activeEnv && activeTab?.path !== undefined ? (
                 <FileEditor
                   workspace={workspace}
                   env={activeEnv}
@@ -402,13 +437,19 @@ function ActivityBar({
   view,
   onView,
   problemCount,
+  history,
 }: {
   view: SideView | undefined;
   onView: (view: SideView) => void;
   problemCount: number;
+  /** Whether to offer the revision history (the store keeps revisions). */
+  history: boolean;
 }) {
   const items: { id: SideView; label: string; icon: ReactNode }[] = [
     { id: "explorer", label: "Environments", icon: <Files /> },
+    ...(history
+      ? [{ id: "history" as const, label: "History", icon: <History /> }]
+      : []),
     { id: "modules", label: "Modules", icon: <Blocks /> },
     { id: "settings", label: "Workspace settings", icon: <Settings /> },
   ];
@@ -574,13 +615,26 @@ function TabStrip({
         const env = envs.find((e) => e.id === tab.env);
         if (!env) return null;
         const active = key === activeKey;
-        const label = tab.path
-          ? (tab.path.split("/").at(-1) ?? tab.path)
-          : env.name;
+        const label = tab.compare
+          ? `#${tab.compare.from} → ${tab.compare.to === "draft" ? "draft" : `#${tab.compare.to}`}`
+          : tab.revision !== undefined
+            ? `#${tab.revision}`
+            : tab.path
+              ? (tab.path.split("/").at(-1) ?? tab.path)
+              : env.name;
+        // Anything but the diagram also names its environment.
+        const secondary =
+          tab.path !== undefined || tab.revision !== undefined || !!tab.compare;
         return (
           <div
             key={key}
-            title={tab.path ? `${env.name}/${tab.path}` : `${env.name} diagram`}
+            title={
+              tab.path
+                ? `${env.name}/${tab.path}`
+                : secondary
+                  ? `${env.name} ${label}`
+                  : `${env.name} diagram`
+            }
             className={cn(
               "group flex items-center gap-1.5 border-r pl-3 pr-1 text-sm",
               active
@@ -598,13 +652,15 @@ function TabStrip({
               }}
               className="flex items-center gap-1.5 whitespace-nowrap"
             >
-              {tab.path ? (
+              {tab.revision !== undefined || tab.compare ? (
+                <History className="h-3.5 w-3.5 text-muted-foreground" />
+              ) : tab.path ? (
                 <FileText className="h-3.5 w-3.5 text-muted-foreground" />
               ) : (
                 <EnvStatus plan={plans[env.id]} />
               )}
               {label}
-              {tab.path && (
+              {secondary && (
                 <span className="text-xs text-muted-foreground">
                   {env.name}
                 </span>

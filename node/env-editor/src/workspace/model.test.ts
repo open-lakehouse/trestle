@@ -10,7 +10,7 @@ import {
   portConflicts,
   type WorkspaceDoc,
   workspaceToml,
-} from "./model";
+} from "./model.js";
 
 const env = (name: string, slot: number): EnvDoc => ({ id: name, name, slot });
 const demo: WorkspaceDoc = {

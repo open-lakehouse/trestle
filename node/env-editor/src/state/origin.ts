@@ -2,8 +2,11 @@
 // pulled it in for something else. Only an explicit pick can be removed — an
 // automatic one leaves when whatever needs it does.
 
-import { capabilityLabel, isGatewayManaged } from "../selection/catalogIndex";
-import type { CatalogDto, GraphDto, Selection } from "../types";
+import {
+  capabilityLabel,
+  isGatewayManaged,
+} from "../selection/catalogIndex.js";
+import type { CatalogDto, GraphDto, Selection } from "../types.js";
 
 export type Origin =
   | { kind: "explicit" }

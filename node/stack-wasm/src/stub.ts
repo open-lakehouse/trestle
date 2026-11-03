@@ -8,14 +8,14 @@
 // and `plan()` returns a representative pre-planned environment regardless of the
 // exact selection.
 
-import { FIXTURE_CATALOG, FIXTURE_PLAN } from "./fixtures";
+import { FIXTURE_CATALOG, FIXTURE_PLAN } from "./fixtures.js";
 import type {
   CatalogDto,
   PlanContext,
   Planner,
   PlanResult,
   Selection,
-} from "./types";
+} from "./types.js";
 
 export type {
   AuthDto,
@@ -56,7 +56,7 @@ export type {
   TopologyEdgeDto,
   TopologyEdgeKind,
   VirtualHostDto,
-} from "./types";
+} from "./types.js";
 
 /**
  * A fixture-backed {@link Planner}. `catalog()` returns the real captured

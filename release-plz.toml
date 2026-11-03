@@ -107,7 +107,7 @@ semver_check = false
 changelog_path = "node/trestle-diagram/CHANGELOG.md"
 # The diagram bundles these packages, whose files Cargo leaves out of its
 # placeholder crate (they have their own): their commits release it too.
-changelog_include = ["ui-kit"]
+changelog_include = ["ui-kit", "env-editor", "stack-wasm"]
 
 # The npm package @open-lakehouse/ui-kit, through its placeholder crate at
 # node/ui-kit/Cargo.toml; same setup as trestle-diagram.
@@ -125,6 +125,23 @@ git_only = true
 publish = false
 semver_check = false
 changelog_path = "node/host/CHANGELOG.md"
+
+# The npm package @open-lakehouse/stack-wasm (node/stack-wasm/Cargo.toml): the
+# planner's types, fixtures and fixture planner (the wasm build isn't published).
+[[package]]
+name = "stack-wasm"
+git_only = true
+publish = false
+semver_check = false
+changelog_path = "node/stack-wasm/CHANGELOG.md"
+
+# The npm package @open-lakehouse/env-editor (node/env-editor/Cargo.toml).
+[[package]]
+name = "env-editor"
+git_only = true
+publish = false
+semver_check = false
+changelog_path = "node/env-editor/CHANGELOG.md"
 
 # ---------------------------------------------------------------------------
 # Changelog rendering (git-cliff, embedded). Conventional-commit grouping.
@@ -150,5 +167,5 @@ commit_parsers = [
 # Strip the redundant "(scope)" from each rendered line — each crate's
 # changelog is already crate-scoped.
 commit_preprocessors = [
-  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|olai-auth|olai-stack-runtime|olai-stack-state|trestle-diagram|ui-kit|host|web)\)', replace = "" },
+  { pattern = '\((olai-store|olai-http|olai-codegen|olai-http-wasm|olai-trestle|stack-topology|olai-stack-topology|olai-storage-credentials|olai-vended-store|olai-credential-vending|olai-auth|olai-stack-runtime|olai-stack-state|trestle-diagram|ui-kit|host|stack-wasm|env-editor|web)\)', replace = "" },
 ]

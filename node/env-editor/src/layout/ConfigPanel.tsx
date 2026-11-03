@@ -1,7 +1,7 @@
 import { Card } from "@open-lakehouse/ui-kit";
-import { AccessSection } from "../inspector/AccessSection";
-import { SelectionStep } from "../selection/SelectionStep";
-import type { CatalogDto, GatewaySettings, Selection } from "../types";
+import { AccessSection } from "../inspector/AccessSection.js";
+import { SelectionStep } from "../selection/SelectionStep.js";
+import type { CatalogDto, GatewaySettings, Selection } from "../types.js";
 
 export interface ConfigPanelProps {
   catalog: CatalogDto | undefined;

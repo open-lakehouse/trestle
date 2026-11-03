@@ -9,7 +9,7 @@ import type {
   GraphDto,
   TopologyEdgeDto,
   TopologyEdgeKind,
-} from "../types";
+} from "../types.js";
 
 /** The `format` tag every snapshot carries. */
 export const GRAPH_SNAPSHOT_FORMAT = "trestle-graph";

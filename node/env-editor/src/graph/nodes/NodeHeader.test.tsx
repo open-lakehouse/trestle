@@ -1,13 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { GraphNodeDto } from "../../types";
-import { NodeFilesContext, type NodeFilesContextValue } from "../nodeFiles";
-import { type NodeSlots, NodeSlotsContext } from "../nodeSlots";
+import type { GraphNodeDto } from "../../types.js";
+import { NodeFilesContext, type NodeFilesContextValue } from "../nodeFiles.js";
+import { type NodeSlots, NodeSlotsContext } from "../nodeSlots.js";
 
 // The layout module builds an ELK instance on import, which needs a Web Worker
 // bun doesn't provide; the header only reads its geometry constants.
 mock.module("elkjs/lib/elk.bundled.js", () => ({ default: class {} }));
-const { NodeHeader } = await import("./NodeHeader");
+const { NodeHeader } = await import("./NodeHeader.js");
 
 const node: GraphNodeDto = {
   id: "unity-catalog",

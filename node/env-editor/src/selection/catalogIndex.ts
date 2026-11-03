@@ -1,6 +1,6 @@
 // Catalog lookups shared by the pickers, the component palette and the canvas.
 
-import type { CatalogDto, ModuleDto } from "../types";
+import type { CatalogDto, ModuleDto } from "../types.js";
 
 /** Group modules by their `category` (uncategorized last), preserving order. */
 export function groupByCategory(modules: ModuleDto[]): [string, ModuleDto[]][] {

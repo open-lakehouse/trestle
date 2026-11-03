@@ -20,7 +20,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import ELK, { type ElkNode } from "elkjs/lib/elk.bundled.js";
 import { useEffect, useRef, useState } from "react";
-import { errorMessage } from "../errors";
+import { errorMessage } from "../errors.js";
 import type {
   ExposedDto,
   GraphDto,
@@ -28,18 +28,18 @@ import type {
   ProvisionedDto,
   SurfaceDto,
   TopologyEdgeDto,
-} from "../types";
-import type { Point } from "./edges/ElkEdge";
+} from "../types.js";
+import type { Point } from "./edges/ElkEdge.js";
 import {
   arrangeColumns,
   type Box,
   isLateral,
   type LateralRoute,
   routeLateral,
-} from "./lateralEdges";
-import type { CloudGroupNodeData } from "./nodes/CloudGroupNode";
-import type { ComponentNodeData } from "./nodes/ComponentNode";
-import type { GatewayNodeData } from "./nodes/GatewayNode";
+} from "./lateralEdges.js";
+import type { CloudGroupNodeData } from "./nodes/CloudGroupNode.js";
+import type { ComponentNodeData } from "./nodes/ComponentNode.js";
+import type { GatewayNodeData } from "./nodes/GatewayNode.js";
 
 // Built on first layout, so importing the geometry doesn't start ELK's worker.
 let engine: InstanceType<typeof ELK> | undefined;

@@ -2,9 +2,9 @@ import { cn } from "@open-lakehouse/ui-kit";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
-import type { ExposedDto, GraphNodeDto, SurfaceDto } from "../../types";
-import { ModuleIcon } from "../projectIcons";
-import { roleStyle } from "../roleTheme";
+import type { ExposedDto, GraphNodeDto, SurfaceDto } from "../../types.js";
+import { ModuleIcon } from "../projectIcons.js";
+import { roleStyle } from "../roleTheme.js";
 import {
   type AccessCheck,
   type AccessCheckKind,
@@ -19,10 +19,10 @@ import {
   gatewayRowHeight,
   routeHandle,
   surfaceHandle,
-} from "../useTopologyLayout";
-import { cardClass, HANDLE_CLASS } from "./BaseNode";
-import { NodeActions } from "./NodeActions";
-import { NodeHeader } from "./NodeHeader";
+} from "../useTopologyLayout.js";
+import { cardClass, HANDLE_CLASS } from "./BaseNode.js";
+import { NodeActions } from "./NodeActions.js";
+import { NodeHeader } from "./NodeHeader.js";
 
 /** The `data` payload the gateway node carries (set in `useTopologyLayout`). */
 export interface GatewayNodeData {

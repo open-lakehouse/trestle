@@ -9,8 +9,12 @@ import {
   GUTTER_INSET,
   TOP_IN,
   TOP_OUT,
-} from "../lateralEdges";
-import { COMPONENT_IN, COMPONENT_OUT, NODE_HEADER } from "../useTopologyLayout";
+} from "../lateralEdges.js";
+import {
+  COMPONENT_IN,
+  COMPONENT_OUT,
+  NODE_HEADER,
+} from "../useTopologyLayout.js";
 
 /** A small, quiet connection dot: edges carry the meaning, not the handles. */
 export const HANDLE_CLASS =

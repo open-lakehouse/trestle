@@ -15,8 +15,8 @@
 // would cross a card, or the gutter is full) is rejected, and the layout hands
 // it back to ELK as an ordinary edge.
 
-import type { TopologyEdgeDto } from "../types";
-import type { Point } from "./edges/ElkEdge";
+import type { TopologyEdgeDto } from "../types.js";
+import type { Point } from "./edges/ElkEdge.js";
 
 /** A laid-out card (or frame) in flow coordinates. */
 export interface Box {

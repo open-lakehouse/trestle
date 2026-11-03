@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { TopologyEdgeDto } from "../types";
+import type { TopologyEdgeDto } from "../types.js";
 import {
   arrangeColumns,
   BOTTOM_IN,
@@ -12,7 +12,7 @@ import {
   routeLateral,
   TOP_IN,
   TOP_OUT,
-} from "./lateralEdges";
+} from "./lateralEdges.js";
 
 const card = (x: number, y: number, height = 52): Box => ({
   x,

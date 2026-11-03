@@ -2,9 +2,9 @@ import { FIXTURE_PLAN } from "@open-lakehouse/stack-wasm/fixtures";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { type ReactNode, useState } from "react";
 import { createPortal } from "react-dom";
-import { useDiagramPortal } from "../graph/nodeSlots";
-import { EnvironmentDiagram } from "./EnvironmentDiagram";
-import { createGraphSnapshot } from "./snapshot";
+import { useDiagramPortal } from "../graph/nodeSlots.js";
+import { EnvironmentDiagram } from "./EnvironmentDiagram.js";
+import { createGraphSnapshot } from "./snapshot.js";
 
 // The read-only embed, drawn from a snapshot of the fixture plan, set in a
 // prose-width column the way a blog post would host it.

@@ -1,8 +1,15 @@
 // The workspace editor: several environments sharing one host, edited in an
 // IDE-like shell and persisted through an injected `WorkspaceStore`.
 
-export { Breadcrumb } from "./chrome";
-export { EnvTree, type EnvTreeProps } from "./EnvTree";
+export { Breadcrumb } from "./chrome.js";
+export {
+  diffSelections,
+  isEmptyDiff,
+  type KnobChange,
+  type ListDiff,
+  type SelectionDiff,
+} from "./diff.js";
+export { EnvTree, type EnvTreeProps } from "./EnvTree.js";
 export {
   closeTab,
   type EditorTab,
@@ -10,7 +17,7 @@ export {
   openTab,
   pruneTabs,
   tabKey,
-} from "./editors";
+} from "./editors.js";
 export {
   contextFor,
   type EnvDoc,
@@ -26,25 +33,32 @@ export {
   SLOT_PORT_STRIDE,
   type WorkspaceDoc,
   workspaceToml,
-} from "./model";
+} from "./model.js";
 export {
   createLocalStorageWorkspaceStore,
   createMemoryWorkspaceStore,
   DEFAULT_WORKSPACE_KEY,
   type KeyValueStorage,
+  type MemoryStoreOptions,
+  type RevisionDoc,
+  type RevisionStore,
+  type RevisionSummary,
+  selectionDigest,
+  supportsRevisions,
   type WorkspaceStore,
-} from "./store";
+} from "./store.js";
 export {
   gatewayUrl,
   type MemberPlan,
   useMemberPlans,
-} from "./useMemberPlans";
+} from "./useMemberPlans.js";
 export {
   starterWorkspace,
   useWorkspace,
   useWorkspaceState,
   WorkspaceProvider,
   type WorkspaceProviderProps,
+  type WorkspaceRevisions,
   type WorkspaceState,
-} from "./useWorkspace";
-export { WorkspaceShell, type WorkspaceShellProps } from "./WorkspaceShell";
+} from "./useWorkspace.js";
+export { WorkspaceShell, type WorkspaceShellProps } from "./WorkspaceShell.js";

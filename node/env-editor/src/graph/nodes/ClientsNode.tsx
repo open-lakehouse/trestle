@@ -1,7 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { Monitor } from "lucide-react";
-import { CLIENTS_SIZE } from "../useTopologyLayout";
-import { HANDLE_CLASS } from "./BaseNode";
+import { CLIENTS_SIZE } from "../useTopologyLayout.js";
+import { HANDLE_CLASS } from "./BaseNode.js";
 
 /**
  * The environment's clients (browsers, SDKs, CLIs on the host): where access

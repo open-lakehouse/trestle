@@ -18,6 +18,14 @@ that the `@open-lakehouse/env-editor` component consumes through its planner sea
 - **`./types`** (`types.ts`) — the DTO + `Planner` TypeScript types (the single
   source of truth, hand-kept in sync with `crates/stack-topology/src/projection/mod.rs`).
 
+## Published package
+
+`@open-lakehouse/stack-wasm` on npmjs.com and GitHub Packages carries `./types`,
+`./stub` and `./fixtures`: the planner's TypeScript surface, for hosts that
+implement a `Planner` themselves (the desktop's native planner) and for tests and
+stories. The `.` entry (the wasm planner) resolves inside this workspace only,
+because the wasm build isn't published yet.
+
 ## Building the wasm artifact
 
 ```bash

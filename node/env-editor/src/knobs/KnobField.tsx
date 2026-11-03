@@ -8,7 +8,7 @@ import {
   SelectValue,
   Switch,
 } from "@open-lakehouse/ui-kit";
-import type { Knob } from "../types";
+import type { Knob } from "../types.js";
 
 export interface KnobFieldProps {
   /** Stable field id (e.g. `${moduleId}.${knob.key}`). */

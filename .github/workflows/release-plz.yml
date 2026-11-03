@@ -124,7 +124,7 @@ jobs:
         id: npm
         env:
           RELEASES: ${{ steps.release.outputs.releases }}
-          NPM_PACKAGES: '["trestle-diagram", "ui-kit", "host"]'
+          NPM_PACKAGES: '["trestle-diagram", "ui-kit", "host", "stack-wasm", "env-editor"]'
         run: |
           set -euo pipefail
           releases="$(jq -c --argjson npm "$NPM_PACKAGES" \

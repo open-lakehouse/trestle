@@ -18,10 +18,10 @@ import {
   useEffect,
   useState,
 } from "react";
-import { describeOrigin } from "../../state/origin";
-import { useCanvasContext } from "../canvasActions";
-import { useNodeFiles } from "../nodeFiles";
-import { ModuleIcon } from "../projectIcons";
+import { describeOrigin } from "../../state/origin.js";
+import { useCanvasContext } from "../canvasActions.js";
+import { useNodeFiles } from "../nodeFiles.js";
+import { ModuleIcon } from "../projectIcons.js";
 
 /**
  * The action bar floating above a node on hover or selection: configure, view

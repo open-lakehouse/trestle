@@ -1,14 +1,14 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { FileCode2 } from "lucide-react";
 import type { ReactNode } from "react";
-import { describeOrigin } from "../../state/origin";
-import type { GraphNodeDto } from "../../types";
-import { useCanvasContext } from "../canvasActions";
-import { useNodeFiles } from "../nodeFiles";
-import { useNodeSlots } from "../nodeSlots";
-import { ModuleIcon } from "../projectIcons";
-import { roleStyle } from "../roleTheme";
-import { NODE_HEADER } from "../useTopologyLayout";
+import { describeOrigin } from "../../state/origin.js";
+import type { GraphNodeDto } from "../../types.js";
+import { useCanvasContext } from "../canvasActions.js";
+import { useNodeFiles } from "../nodeFiles.js";
+import { useNodeSlots } from "../nodeSlots.js";
+import { ModuleIcon } from "../projectIcons.js";
+import { roleStyle } from "../roleTheme.js";
+import { NODE_HEADER } from "../useTopologyLayout.js";
 
 /**
  * The heading every card opens with: the project's logo on a tile tinted by

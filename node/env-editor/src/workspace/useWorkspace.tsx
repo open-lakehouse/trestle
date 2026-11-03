@@ -10,10 +10,20 @@ import {
   useMemo,
   useState,
 } from "react";
-import { errorMessage } from "../errors";
-import type { Selection } from "../types";
-import { type EnvDoc, nameProblem, nextSlot, type WorkspaceDoc } from "./model";
-import type { WorkspaceStore } from "./store";
+import { errorMessage } from "../errors.js";
+import type { Selection } from "../types.js";
+import {
+  type EnvDoc,
+  nameProblem,
+  nextSlot,
+  type WorkspaceDoc,
+} from "./model.js";
+import {
+  type RevisionDoc,
+  type RevisionSummary,
+  supportsRevisions,
+  type WorkspaceStore,
+} from "./store.js";
 
 /** The workspace a store starts with when it holds none: one `dev` env. */
 export function starterWorkspace(): WorkspaceDoc {
@@ -28,6 +38,18 @@ function newId(): string {
   return (
     globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
   );
+}
+
+/** An environment's revisions, where the store keeps them. */
+export interface WorkspaceRevisions {
+  /** Its revisions, newest first. */
+  list(envId: string): Promise<RevisionSummary[]>;
+  /** One revision, or `null` when there is no such number. */
+  load(envId: string, number: number): Promise<RevisionDoc | null>;
+  /** Commit its draft; its `head` moves to the new revision. */
+  commit(envId: string, message?: string): Promise<RevisionSummary>;
+  /** Bumped after every commit, so revision lists know to reload. */
+  version: number;
 }
 
 export interface WorkspaceState {
@@ -50,6 +72,9 @@ export interface WorkspaceState {
   setMesh: (mesh: boolean) => void;
   /** Rename the workspace; returns the reason when `name` can't be used. */
   renameWorkspace: (name: string) => string | undefined;
+  /** Revisions, or `undefined` when the store keeps drafts only (the shell
+   *  then shows nothing revision-related). */
+  revisions: WorkspaceRevisions | undefined;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -172,6 +197,30 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
     [workspace, update],
   );
 
+  const [revisionVersion, setRevisionVersion] = useState(0);
+  const revisions = useMemo((): WorkspaceRevisions | undefined => {
+    if (!supportsRevisions(store)) return undefined;
+    return {
+      list: (envId) => store.listRevisions(envId),
+      load: (envId, number) => store.loadRevision(envId, number),
+      async commit(envId, message) {
+        const revision = await store.commit(envId, message);
+        setWorkspace(
+          (current) =>
+            current && {
+              ...current,
+              envs: current.envs.map((e) =>
+                e.id === envId ? { ...e, head: revision.number } : e,
+              ),
+            },
+        );
+        setRevisionVersion((v) => v + 1);
+        return revision;
+      },
+      version: revisionVersion,
+    };
+  }, [store, revisionVersion]);
+
   return useMemo(
     () => ({
       workspace,
@@ -183,6 +232,7 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
       setSelection,
       setMesh,
       renameWorkspace,
+      revisions,
     }),
     [
       workspace,
@@ -194,6 +244,7 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
       setSelection,
       setMesh,
       renameWorkspace,
+      revisions,
     ],
   );
 }

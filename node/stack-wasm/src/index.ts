@@ -18,7 +18,7 @@ import type {
   Planner,
   PlanResult,
   Selection,
-} from "./types";
+} from "./types.js";
 
 export type {
   AuthDto,
@@ -66,7 +66,7 @@ export type {
   TopologyEdgeDto,
   TopologyEdgeKind,
   VirtualHostDto,
-} from "./types";
+} from "./types.js";
 
 let ready: Promise<void> | undefined;
 
