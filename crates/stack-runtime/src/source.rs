@@ -52,6 +52,9 @@ pub struct SourceCtx {
     pub environment: String,
     /// The revision it runs.
     pub revision: u32,
+    /// What the instance's binding tells the source (e.g. which branch), merged over the
+    /// workspace's config for it: `null` when neither sets any.
+    pub config: serde_json::Value,
 }
 
 /// Why a source failed.
@@ -66,7 +69,7 @@ pub struct SourceError {
 
 /// Something outside the store an instance takes variables, endpoints and credentials from,
 /// as an overlay on its environment (a Neon branch, say: its Postgres URL, its object-storage
-/// endpoint and vended keys, its function URLs). An instance names the sources it takes; they
+/// endpoint and vended keys, its function URLs). An instance binds the sources it takes; they
 /// apply in that order, above the store's vars and below the instance's own overrides.
 #[async_trait]
 pub trait Source: Send + Sync {

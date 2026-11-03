@@ -308,17 +308,19 @@ impl<E: ComposeEngine> Instances<E> {
             .with_vars(Layer::EnvironmentVars, &env.vars)
             .with_vars(Layer::RevisionVars, revision.vars())
             .with_vars(Layer::InstanceOverrides, &instance.overrides);
-        let ctx = SourceCtx {
-            instance: id.clone(),
-            workspace: workspace.name.clone(),
-            environment: env.name.clone(),
-            revision: instance.revision,
-        };
-        for name in &instance.sources {
+        for binding in &instance.sources {
+            let name = &binding.name;
             let source = self.sources.get(name).ok_or_else(|| SourceError {
                 source_name: name.clone(),
                 reason: "no such source is configured".into(),
             })?;
+            let ctx = SourceCtx {
+                instance: id.clone(),
+                workspace: workspace.name.clone(),
+                environment: env.name.clone(),
+                revision: instance.revision,
+                config: merge_config(workspace.sources.get(name), &binding.config),
+            };
             let mut overlay = source.overlay(&ctx).await?;
             if overlay.is_expired(std::time::SystemTime::now()) {
                 overlay = source.refresh(&ctx, &overlay).await?;
@@ -595,6 +597,25 @@ impl<E: ComposeEngine> Instances<E> {
         };
         self.engine.down(dir, &opts).await?;
         Ok(true)
+    }
+}
+
+/// A source's config for one instance: the binding's keys over the workspace's (objects merge
+/// one level deep; anything else replaces).
+fn merge_config(
+    workspace: Option<&serde_json::Value>,
+    binding: &serde_json::Value,
+) -> serde_json::Value {
+    use serde_json::Value;
+    match (workspace, binding) {
+        (None, b) => b.clone(),
+        (Some(w), Value::Null) => w.clone(),
+        (Some(Value::Object(w)), Value::Object(b)) => {
+            let mut merged = w.clone();
+            merged.extend(b.iter().map(|(k, v)| (k.clone(), v.clone())));
+            Value::Object(merged)
+        }
+        (Some(_), b) => b.clone(),
     }
 }
 

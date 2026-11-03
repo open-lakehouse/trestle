@@ -12,7 +12,7 @@ use olai_stack_runtime::{
     ReconcileOptions, SecretError, SecretProvider, SecretProviders, SecretValue, UserVars,
     instance_project,
 };
-use olai_stack_state::{Draft, InstanceId, SecretRef, Store, VarSet, VarValue};
+use olai_stack_state::{Draft, InstanceId, SecretRef, SourceBinding, Store, VarSet, VarValue};
 use olai_stack_topology::{EnvManifest, PlanCtx, Selection, port_conflicts};
 
 /// Secrets from a map, as a provider called `vault`.
@@ -246,7 +246,9 @@ async fn an_unknown_secret_provider_fails_without_fallback() {
 async fn sources_overlay_the_store_and_placement_keys_stay_put() {
     let f = fixture();
     let (r1, _) = two_revisions(&f);
-    f.store.set_sources(&r1, &["user".to_owned()]).unwrap();
+    f.store
+        .set_sources(&r1, &[SourceBinding::new("user")])
+        .unwrap();
     let mut overrides = VarSet::new();
     overrides.set("COMPOSE_PROJECT_NAME", VarValue::Literal("hijacked".into()));
     f.store.set_overrides(&r1, &overrides).unwrap();
@@ -259,7 +261,9 @@ async fn sources_overlay_the_store_and_placement_keys_stay_put() {
     assert_eq!(project.shadowed, [Layer::InstanceOverrides]);
 
     // A source the instance names but nobody configured is an error.
-    f.store.set_sources(&r1, &["neon".to_owned()]).unwrap();
+    f.store
+        .set_sources(&r1, &[SourceBinding::new("neon")])
+        .unwrap();
     assert!(matches!(
         f.instances.effective_env(&r1).await,
         Err(InstanceError::Source(_))
@@ -349,4 +353,60 @@ async fn a_killed_runtime_reconciles_on_restart() {
     );
     assert!(f.engine.projects().contains("someone-elses-project"));
     assert!(!f.engine.projects().contains("demo_ghost_r2"));
+}
+
+/// A source called `echo` that hands back the config it was given, as `CONFIG`.
+struct Echo;
+
+#[async_trait::async_trait]
+impl olai_stack_runtime::Source for Echo {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    async fn overlay(
+        &self,
+        ctx: &olai_stack_runtime::SourceCtx,
+    ) -> Result<olai_stack_runtime::Overlay, olai_stack_runtime::SourceError> {
+        Ok(olai_stack_runtime::Overlay {
+            vars: [("CONFIG".to_owned(), ctx.config.to_string())].into(),
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_source_sees_its_binding_config_over_the_workspaces() {
+    let f = fixture();
+    let instances = instances(&f.store, &f.engine, &f.state).with_source(Echo);
+    let (r1, _) = two_revisions(&f);
+    let ws = f.store.workspace("demo").unwrap().unwrap();
+    f.store
+        .set_workspace_source(
+            &ws.id,
+            "echo",
+            Some(serde_json::json!({"project": "p", "branch": "main"})),
+        )
+        .unwrap();
+    f.store
+        .set_sources(
+            &r1,
+            &[SourceBinding::new("echo").with_config(serde_json::json!({"branch": "dev"}))],
+        )
+        .unwrap();
+    let env = instances.effective_env(&r1).await.unwrap();
+    assert_eq!(
+        env.get("CONFIG").unwrap().expose(),
+        r#"{"branch":"dev","project":"p"}"#
+    );
+
+    // Without a binding config the workspace's applies as is.
+    f.store
+        .set_sources(&r1, &[SourceBinding::new("echo")])
+        .unwrap();
+    let env = instances.effective_env(&r1).await.unwrap();
+    assert_eq!(
+        env.get("CONFIG").unwrap().expose(),
+        r#"{"branch":"main","project":"p"}"#
+    );
 }

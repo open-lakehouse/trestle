@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 
-use olai_stack_topology::{EnvManifest, WORKSPACE_FILE, WorkspaceEnv, WorkspaceManifest};
+use olai_stack_topology::{EnvManifest, MAX_SLOT, WORKSPACE_FILE, WorkspaceEnv, WorkspaceManifest};
 
 use crate::error::{Error, Result};
-use crate::model::{Draft, InstanceId, Workspace};
+use crate::model::{Draft, EnvironmentId, InstanceId, Revision, Workspace, WorkspaceId};
 use crate::store::Store;
 
 /// The environment manifest's file name inside an environment directory.
@@ -46,52 +46,105 @@ impl Store {
     /// the exported directory `trestle env render` and `docker compose up` work as in any
     /// workspace.
     pub fn export_instances(&self, instances: &[InstanceId], dir: &Path) -> Result<()> {
-        let mut workspace: Option<WorkspaceManifest> = None;
+        let mut workspace: Option<Workspace> = None;
         let mut members = Vec::new();
         for id in instances {
             let instance = self.instance(id)?;
             let env = self.environment(&instance.environment)?;
             let ws = self.workspace_by_id(&env.workspace)?;
-            let manifest = workspace.get_or_insert_with(|| WorkspaceManifest {
-                version: WorkspaceManifest::current_version(),
-                name: ws.name.clone(),
-                mesh: ws.mesh,
-                envs: Vec::new(),
-            });
-            if manifest.name != ws.name {
+            let first = workspace.get_or_insert_with(|| ws.clone());
+            if first.id != ws.id {
                 return Err(Error::Export(format!(
                     "the instances belong to two workspaces, `{}` and `{}`",
-                    manifest.name, ws.name
+                    first.name, ws.name
                 )));
             }
             let slot = instance.slot.ok_or_else(|| {
                 Error::Export(format!("instance {id} holds no slot; lease one first"))
             })?;
-            manifest.envs.push(WorkspaceEnv {
-                name: env.name.clone(),
-                path: env.name.clone(),
-                slot,
-            });
-            members.push((
-                env.name,
-                self.revision(&instance.environment, instance.revision)?,
-            ));
+            let revision = self.revision(&instance.environment, instance.revision)?;
+            members.push((env.name, slot, revision));
         }
         let Some(workspace) = workspace else {
             return Err(Error::Export("no instances given".into()));
         };
-        // Two instances of one environment would be two members of one name.
-        workspace.validate()?;
-
-        for (name, revision) in &members {
-            let env_dir = dir.join(name);
-            for (rel, text) in revision.modules() {
-                write(&env_dir.join(safe_relative(rel)?), text)?;
-            }
-            write(&env_dir.join(ENV_FILE), revision.manifest_toml())?;
-        }
-        write(&dir.join(WORKSPACE_FILE), &workspace.to_toml()?)
+        write_workspace(&workspace, &members, dir)
     }
+
+    /// Export the head revision of every environment of the workspace as a workspace
+    /// directory in `dir`, as [`export_instances`](Self::export_instances) does. A member sits
+    /// on the slot of an instance of its head when one holds a slot, else on the lowest slot no
+    /// other member takes. Every environment needs a revision.
+    pub fn export_workspace(&self, workspace: &WorkspaceId, dir: &Path) -> Result<()> {
+        let ws = self.workspace_by_id(workspace)?;
+        let mut members = Vec::new();
+        let mut unslotted = Vec::new();
+        for env in self.environments(workspace)? {
+            let head = env.head.ok_or_else(|| {
+                Error::Export(format!(
+                    "environment `{}` has no revision; commit it first",
+                    env.name
+                ))
+            })?;
+            let revision = self.revision(&env.id, head)?;
+            let slot = self
+                .instances_of(&env.id)?
+                .into_iter()
+                .filter(|i| i.revision == head)
+                .find_map(|i| i.slot);
+            match slot {
+                Some(slot) => members.push((env.name, slot, revision)),
+                None => unslotted.push((env.name, revision)),
+            }
+        }
+        for (name, revision) in unslotted {
+            let slot = (0..=MAX_SLOT)
+                .find(|s| members.iter().all(|(_, taken, _)| taken != s))
+                .ok_or(Error::SlotsExhausted)?;
+            members.push((name, slot, revision));
+        }
+        members.sort_by(|a, b| a.0.cmp(&b.0));
+        write_workspace(&ws, &members, dir)
+    }
+
+    /// Export revision `number` of the environment as an environment directory in `dir`: its
+    /// `env.toml` and module manifests. No instance is needed. Like any `env.toml` it carries no
+    /// placement, so it renders as an environment on its own.
+    pub fn export_revision(&self, env: &EnvironmentId, number: u32, dir: &Path) -> Result<()> {
+        write_env_dir(&self.revision(env, number)?, dir)
+    }
+}
+
+/// Write the workspace manifest for `members` (name, slot, revision) and each member's
+/// environment directory under `dir`.
+fn write_workspace(ws: &Workspace, members: &[(String, u16, Revision)], dir: &Path) -> Result<()> {
+    let manifest = WorkspaceManifest {
+        version: WorkspaceManifest::current_version(),
+        name: ws.name.clone(),
+        mesh: ws.mesh,
+        envs: members
+            .iter()
+            .map(|(name, slot, _)| WorkspaceEnv {
+                name: name.clone(),
+                path: name.clone(),
+                slot: *slot,
+            })
+            .collect(),
+    };
+    // Two instances of one environment would be two members of one name.
+    manifest.validate()?;
+    for (name, _, revision) in members {
+        write_env_dir(revision, &dir.join(name))?;
+    }
+    write(&dir.join(WORKSPACE_FILE), &manifest.to_toml()?)
+}
+
+/// Write the revision's `env.toml` and module manifests into `dir`.
+fn write_env_dir(revision: &Revision, dir: &Path) -> Result<()> {
+    for (rel, text) in revision.modules() {
+        write(&dir.join(safe_relative(rel)?), text)?;
+    }
+    write(&dir.join(ENV_FILE), revision.manifest_toml())
 }
 
 /// An environment directory's `env.toml` and the module manifests it lists, as a draft.

@@ -3,7 +3,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use olai_stack_state::{Desired, Draft, Error, SCHEMA_VERSION, SecretRef, Store, VarSet, VarValue};
+use olai_stack_state::{
+    Desired, Draft, Error, SCHEMA_VERSION, SecretRef, SourceBinding, Store, VarScope, VarSet,
+    VarValue,
+};
 use olai_stack_topology::{EnvManifest, MAX_SLOT, PlanCtx, Selection};
 
 fn store() -> (tempfile::TempDir, Store) {
@@ -242,4 +245,166 @@ fn trestle_home_overrides_the_data_dir() {
     let store = Store::open_default().unwrap();
     assert_eq!(store.path(), dir.path().join("state.db"));
     unsafe { std::env::remove_var("TRESTLE_HOME") };
+}
+
+#[test]
+fn source_bindings_and_workspace_source_config_round_trip() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    assert!(ws.sources.is_empty());
+    let config = serde_json::json!({"project_id": "p-1"});
+    store
+        .set_workspace_source(&ws.id, "neon", Some(config.clone()))
+        .unwrap();
+    assert_eq!(
+        store.workspace("demo").unwrap().unwrap().sources["neon"],
+        config
+    );
+    store.set_workspace_source(&ws.id, "neon", None).unwrap();
+    assert!(store.workspace("demo").unwrap().unwrap().sources.is_empty());
+
+    let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    store.commit_draft(&env.id).unwrap();
+    let instance = store.create_instance(&env.id, 1).unwrap();
+    let bindings = [
+        SourceBinding::new("user"),
+        SourceBinding::new("neon").with_config(serde_json::json!({"branch": "br-1"})),
+    ];
+    store.set_sources(&instance.id, &bindings).unwrap();
+    assert_eq!(store.instance(&instance.id).unwrap().sources, bindings);
+
+    let missing = olai_stack_state::WorkspaceId("nope".into());
+    assert!(matches!(
+        store.set_workspace_source(&missing, "neon", None),
+        Err(Error::NotFound { .. })
+    ));
+}
+
+#[test]
+fn vars_change_in_place_per_scope() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    for (scope, key) in [
+        (VarScope::Workspace(ws.id.clone()), "WS"),
+        (VarScope::Environment(env.id.clone()), "ENV"),
+        (VarScope::Draft(env.id.clone()), "DRAFT"),
+    ] {
+        store
+            .modify_vars(&scope, |vars| {
+                vars.set(key, VarValue::Literal("1".into()));
+                vars.set("GONE", VarValue::Literal("x".into()));
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        let written = store
+            .modify_vars(&scope, |vars| {
+                assert!(vars.remove("GONE").is_some());
+                Ok::<_, Error>(())
+            })
+            .unwrap();
+        assert_eq!(written.0.keys().collect::<Vec<_>>(), [key]);
+    }
+    assert!(
+        store
+            .workspace("demo")
+            .unwrap()
+            .unwrap()
+            .vars
+            .get("WS")
+            .is_some()
+    );
+    let env = store.environment(&env.id).unwrap();
+    assert!(env.vars.get("ENV").is_some());
+    assert!(env.draft.vars.get("DRAFT").is_some());
+    // The draft's vars go into the next revision; the environment's don't.
+    let r1 = store.commit_draft(&env.id).unwrap();
+    assert!(r1.vars().get("DRAFT").is_some() && r1.vars().get("ENV").is_none());
+
+    // A failing change writes nothing.
+    let scope = VarScope::Workspace(ws.id.clone());
+    let failed = store.modify_vars(&scope, |vars| {
+        vars.0.clear();
+        Err(Error::Export("no".into()))
+    });
+    assert!(failed.is_err());
+    assert!(
+        store
+            .workspace("demo")
+            .unwrap()
+            .unwrap()
+            .vars
+            .get("WS")
+            .is_some()
+    );
+}
+
+#[test]
+fn modify_draft_keeps_the_name_and_concurrent_edits() {
+    let (dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    let written = store
+        .modify_draft(&env.id, |d| {
+            d.manifest.context.env_name = "renamed".into();
+            d.manifest.add_module("mlflow");
+            Ok::<_, Error>(())
+        })
+        .unwrap();
+    assert_eq!(written.manifest.context.env_name, "dev");
+    assert_eq!(store.environment(&env.id).unwrap().draft, written);
+
+    // Two writers each adding vars never lose the other's.
+    let path = dir.path().join("state.db");
+    let threads: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|who| {
+            let (path, id) = (path.clone(), env.id.clone());
+            std::thread::spawn(move || {
+                let store = Store::open(&path).unwrap();
+                for n in 0..25 {
+                    store
+                        .modify_draft(&id, |d| {
+                            d.vars
+                                .set(format!("{who}{n}"), VarValue::Literal(n.to_string()));
+                            Ok::<_, Error>(())
+                        })
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(store.environment(&env.id).unwrap().draft.vars.0.len(), 50);
+}
+
+#[test]
+fn deleting_an_environment_removes_its_revisions_instances_and_leases() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    let dev = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    let prod = store
+        .create_environment(&ws.id, "prod", draft(&[]))
+        .unwrap();
+    for env in [&dev, &prod] {
+        store.commit_draft(&env.id).unwrap();
+        let i = store.create_instance(&env.id, 1).unwrap();
+        store.lease_slot(&i.id).unwrap();
+    }
+    assert_eq!(store.instances_of(&dev.id).unwrap().len(), 1);
+
+    store.delete_environment(&dev.id).unwrap();
+    assert!(matches!(
+        store.environment(&dev.id),
+        Err(Error::NotFound { .. })
+    ));
+    assert!(store.instances_of(&dev.id).unwrap().is_empty());
+    assert_eq!(store.instances().unwrap().len(), 1);
+    assert_eq!(store.leases().unwrap().len(), 1);
+    assert!(matches!(
+        store.delete_environment(&dev.id),
+        Err(Error::NotFound { .. })
+    ));
 }

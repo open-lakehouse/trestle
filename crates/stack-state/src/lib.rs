@@ -8,7 +8,8 @@
 //!   `module.yaml` texts it lists, vars) and a head.
 //! - [`Revision`]s: numbered, immutable snapshots of a draft with a digest. Nothing in the
 //!   API changes one, and the database refuses an update.
-//! - [`Instance`]s: a revision to run, whether it should run, overrides and overlay sources.
+//! - [`Instance`]s: a revision to run, whether it should run, overrides and the overlay
+//!   [sources](SourceBinding) it takes.
 //! - [`SlotLease`]s: host-wide, so two instances never share a slot whatever their
 //!   workspace (slots per workspace clashed across workspaces).
 //!
@@ -20,8 +21,8 @@
 //!
 //! `trestle-workspace.toml` and environment directories stay as an exchange format:
 //! [`Store::import_workspace`] drops placement (the store leases slots itself), and
-//! [`Store::export_instances`] writes the instances' slots, so the exported directory runs
-//! with `docker compose up` like any workspace.
+//! [`Store::export_instances`] and [`Store::export_workspace`] write slots, so the exported
+//! directory runs with `docker compose up` like any workspace.
 //!
 //! ```no_run
 //! use olai_stack_state::{Draft, Store};
@@ -49,7 +50,7 @@ mod watch;
 pub use error::{Error, Result};
 pub use model::{
     Desired, Draft, Environment, EnvironmentId, Instance, InstanceId, Revision, SecretRef,
-    SlotLease, VarSet, VarValue, Workspace, WorkspaceId,
+    SlotLease, SourceBinding, VarScope, VarSet, VarValue, Workspace, WorkspaceId,
 };
 pub use store::{DB_FILE, SCHEMA_VERSION, Store, TRESTLE_HOME_VAR, trestle_home};
 pub use transfer::{ENV_FILE, read_env_dir};

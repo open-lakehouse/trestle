@@ -156,3 +156,88 @@ fn export_refuses_unleased_or_clashing_instances() {
             .is_err()
     );
 }
+
+#[test]
+fn export_workspace_writes_heads_on_held_or_free_slots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (src, out) = (tmp.path().join("src"), tmp.path().join("out"));
+    workspace_dir(&src);
+    let store = Store::open(&tmp.path().join("state.db")).unwrap();
+    let ws = store.import_workspace(&src).unwrap();
+    let envs = store.environments(&ws.id).unwrap();
+    let (dev, prod) = (&envs[0], &envs[1]);
+
+    // `prod`'s head runs on a leased slot; `dev` has no instance. Slot 0 is someone else's,
+    // which only matters for running, not for the export.
+    let instance = store.create_instance(&prod.id, 1).unwrap();
+    store.lease_slot(&instance.id).unwrap();
+    let slot = store.instance(&instance.id).unwrap().slot.unwrap();
+    // A newer `dev` head is what gets exported.
+    store
+        .modify_draft(&dev.id, |d| {
+            d.manifest.add_module("mlflow");
+            Ok::<_, olai_stack_state::Error>(())
+        })
+        .unwrap();
+    store.commit_draft(&dev.id).unwrap();
+
+    store.export_workspace(&ws.id, &out).unwrap();
+    let exported = WorkspaceManifest::read_from(&out.join("trestle-workspace.toml")).unwrap();
+    let slots: Vec<(String, u16)> = exported
+        .envs
+        .iter()
+        .map(|e| (e.name.clone(), e.slot))
+        .collect();
+    let dev_slot = if slot == 0 { 1 } else { 0 };
+    assert_eq!(slots, [("dev".into(), dev_slot), ("prod".into(), slot)]);
+    let dev_out = read_env_dir(&out.join("dev")).unwrap();
+    assert!(
+        dev_out
+            .manifest
+            .selection
+            .modules
+            .iter()
+            .any(|m| m.as_str() == "mlflow")
+    );
+    assert_eq!(
+        std::fs::read_to_string(out.join("dev/modules/probe.module.yaml")).unwrap(),
+        PROBE
+    );
+
+    // An environment with no revision can't be exported.
+    store
+        .create_environment(
+            &ws.id,
+            "scratch",
+            olai_stack_state::Draft::new(EnvManifest::new(
+                Selection::default(),
+                PlanCtx::default(),
+            )),
+        )
+        .unwrap();
+    let err = store
+        .export_workspace(&ws.id, &tmp.path().join("again"))
+        .unwrap_err();
+    assert!(err.to_string().contains("scratch"), "{err}");
+}
+
+#[test]
+fn export_revision_writes_one_environment_without_an_instance() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    workspace_dir(&src);
+    let store = Store::open(&tmp.path().join("state.db")).unwrap();
+    let ws = store.import_workspace(&src).unwrap();
+    let dev = &store.environments(&ws.id).unwrap()[0];
+    let out = tmp.path().join("dev");
+    store.export_revision(&dev.id, 1, &out).unwrap();
+    assert_eq!(
+        read_env_dir(&out).unwrap(),
+        read_env_dir(&src.join("dev")).unwrap()
+    );
+    assert!(
+        store
+            .export_revision(&dev.id, 9, &tmp.path().join("x"))
+            .is_err()
+    );
+}

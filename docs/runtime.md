@@ -223,7 +223,7 @@ precedence first:
 5. workspace vars
 6. environment vars
 7. revision vars
-8. source overlays, in the order the instance names them
+8. source overlays, in the order the instance binds them
 9. instance overrides
 
 Secret references resolve last, once every layer has had its say. Each variable
@@ -252,5 +252,9 @@ to another provider.
 A `Source` overlays an instance with variables, endpoints and credentials from
 outside the store, such as a Neon branch (#274). Its credentials may expire
 (`Overlay::expires_at`), and an expired overlay is refreshed before use.
-`UserVars` (`user`) is built in. An instance that names a source nobody
-configured fails to start.
+`UserVars` (`user`) is built in. An instance binds each source it takes with a
+config (`SourceBinding { name, config }`, e.g. which branch), and a workspace
+can set a config per source for all its instances (e.g. which project). The
+source gets the binding's keys merged over the workspace's
+(`SourceCtx::config`). Neither holds secrets. An instance that binds a source
+nobody configured fails to start.

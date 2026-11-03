@@ -93,9 +93,53 @@ impl VarSet {
         self.0.get(name)
     }
 
+    /// Remove `name`, returning its value if it was set.
+    pub fn remove(&mut self, name: &str) -> Option<VarValue> {
+        self.0.remove(name)
+    }
+
     /// Whether there are none.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+/// Which mutable [`VarSet`] a change applies to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VarScope {
+    /// The vars every environment of the workspace sees.
+    Workspace(WorkspaceId),
+    /// The vars every revision of the environment sees.
+    Environment(EnvironmentId),
+    /// The vars the environment's next revision carries.
+    Draft(EnvironmentId),
+}
+
+/// An overlay source an instance takes: its name, and what the source needs to know about the
+/// instance (which branch, say). The config is merged over the workspace's config for the same
+/// source. Neither holds secrets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceBinding {
+    /// The source's name (e.g. `user`).
+    pub name: String,
+    /// What the source is told about this instance; `null` for nothing.
+    #[serde(default)]
+    pub config: serde_json::Value,
+}
+
+impl SourceBinding {
+    /// A binding to `name` with no config.
+    pub fn new(name: impl Into<String>) -> Self {
+        SourceBinding {
+            name: name.into(),
+            config: serde_json::Value::Null,
+        }
+    }
+
+    /// The same binding with `config`.
+    pub fn with_config(mut self, config: serde_json::Value) -> Self {
+        self.config = config;
+        self
     }
 }
 
@@ -111,6 +155,9 @@ pub struct Workspace {
     pub mesh: bool,
     /// Vars every environment in the workspace sees.
     pub vars: VarSet,
+    /// Per overlay source, the config every instance of the workspace binds it with (e.g. which
+    /// project), below the instance's own [`SourceBinding::config`].
+    pub sources: BTreeMap<String, serde_json::Value>,
 }
 
 /// What an environment's next revision will be: its manifest, the module manifests it lists
@@ -269,8 +316,8 @@ pub struct Instance {
     pub desired: Desired,
     /// Vars that override every other layer.
     pub overrides: VarSet,
-    /// The overlay sources it takes, by name (e.g. `user`), in order.
-    pub sources: Vec<String>,
+    /// The overlay sources it takes, in order.
+    pub sources: Vec<SourceBinding>,
     /// Its slot, when leased.
     pub slot: Option<u16>,
 }

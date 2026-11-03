@@ -5,6 +5,8 @@ CREATE TABLE workspace (
     name        TEXT NOT NULL UNIQUE,
     mesh        INTEGER NOT NULL,
     vars        TEXT NOT NULL DEFAULT '{}',
+    -- Per overlay source, what every instance of the workspace tells it (e.g. which project).
+    sources     TEXT NOT NULL DEFAULT '{}',
     created_at  INTEGER NOT NULL
 );
 
@@ -47,6 +49,7 @@ CREATE TABLE instance (
     revision       INTEGER NOT NULL,
     desired        TEXT NOT NULL,
     overrides      TEXT NOT NULL DEFAULT '{}',
+    -- The overlay sources it takes, in order: `[{"name": …, "config": …}]`.
     sources        TEXT NOT NULL DEFAULT '[]',
     created_at     INTEGER NOT NULL,
     FOREIGN KEY (environment_id, revision)

@@ -11,8 +11,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Desired, Draft, Environment, EnvironmentId, Instance, InstanceId, Revision, SlotLease, VarSet,
-    Workspace, WorkspaceId, digest,
+    Desired, Draft, Environment, EnvironmentId, Instance, InstanceId, Revision, SlotLease,
+    SourceBinding, VarScope, VarSet, Workspace, WorkspaceId, digest,
 };
 
 /// The environment variable naming the trestle state directory.
@@ -156,11 +156,20 @@ impl Store {
             name: name.to_owned(),
             mesh,
             vars: VarSet::new(),
+            sources: BTreeMap::new(),
         };
         self.write(|tx| {
             tx.execute(
-                "INSERT INTO workspace (id, name, mesh, vars, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![ws.id.0, ws.name, ws.mesh, json(&ws.vars)?, now()],
+                "INSERT INTO workspace (id, name, mesh, vars, sources, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    ws.id.0,
+                    ws.name,
+                    ws.mesh,
+                    json(&ws.vars)?,
+                    json(&ws.sources)?,
+                    now()
+                ],
             )
             .map_err(|e| {
                 if is_unique_violation(&e) {
@@ -180,8 +189,7 @@ impl Store {
     /// Every workspace, by name.
     pub fn workspaces(&self) -> Result<Vec<Workspace>> {
         self.read(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT id, name, mesh, vars FROM workspace ORDER BY name")?;
+            let mut stmt = conn.prepare(&format!("{WS_COLUMNS} ORDER BY name"))?;
             let rows = stmt.query_map([], workspace_row)?;
             rows.map(|r| r?).collect()
         })
@@ -191,7 +199,7 @@ impl Store {
     pub fn workspace(&self, name: &str) -> Result<Option<Workspace>> {
         self.read(|conn| {
             conn.query_row(
-                "SELECT id, name, mesh, vars FROM workspace WHERE name = ?1",
+                &format!("{WS_COLUMNS} WHERE name = ?1"),
                 [name],
                 workspace_row,
             )
@@ -204,7 +212,7 @@ impl Store {
     pub fn workspace_by_id(&self, id: &WorkspaceId) -> Result<Workspace> {
         self.read(|conn| {
             conn.query_row(
-                "SELECT id, name, mesh, vars FROM workspace WHERE id = ?1",
+                &format!("{WS_COLUMNS} WHERE id = ?1"),
                 [&id.0],
                 workspace_row,
             )
@@ -226,6 +234,92 @@ impl Store {
             )?;
             found(n, "workspace", &id.0)
         })
+    }
+
+    /// Set the config every instance of the workspace binds the source `name` with, or clear it
+    /// (`None`).
+    pub fn set_workspace_source(
+        &self,
+        id: &WorkspaceId,
+        name: &str,
+        config: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.write(|tx| {
+            let text: String = tx
+                .query_row(
+                    "SELECT sources FROM workspace WHERE id = ?1",
+                    [&id.0],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| Error::NotFound {
+                    kind: "workspace",
+                    id: id.0.clone(),
+                })?;
+            let mut sources: BTreeMap<String, serde_json::Value> = from_json(&text)?;
+            match config {
+                Some(config) => sources.insert(name.to_owned(), config),
+                None => sources.remove(name),
+            };
+            tx.execute(
+                "UPDATE workspace SET sources = ?2 WHERE id = ?1",
+                params![id.0, json(&sources)?],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Change the vars `scope` names with `f`, in one write transaction, so a concurrent writer's
+    /// change to other vars of the same set is kept. Returns the vars as written.
+    pub fn modify_vars<E: From<Error>>(
+        &self,
+        scope: &VarScope,
+        f: impl FnOnce(&mut VarSet) -> std::result::Result<(), E>,
+    ) -> std::result::Result<VarSet, E> {
+        let (table, column, kind, id) = match scope {
+            VarScope::Workspace(id) => ("workspace", "vars", "workspace", &id.0),
+            VarScope::Environment(id) => ("environment", "vars", "environment", &id.0),
+            VarScope::Draft(id) => ("environment", "draft_vars", "environment", &id.0),
+        };
+        self.modify(
+            &format!("SELECT {column} FROM {table} WHERE id = ?1"),
+            &format!("UPDATE {table} SET {column} = ?2 WHERE id = ?1"),
+            kind,
+            id,
+            |text| {
+                let mut vars: VarSet = from_json(text)?;
+                f(&mut vars)?;
+                Ok((json(&vars)?, vars))
+            },
+        )
+    }
+
+    /// Read the text `select` returns for `id`, let `f` turn it into a new text and a result,
+    /// and write the text with `update`: all in one write transaction.
+    fn modify<T, E: From<Error>>(
+        &self,
+        select: &str,
+        update: &str,
+        kind: &'static str,
+        id: &str,
+        f: impl FnOnce(&str) -> std::result::Result<(String, T), E>,
+    ) -> std::result::Result<T, E> {
+        let mut conn = self.lock();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(Error::from)?;
+        let text: String = tx
+            .query_row(select, [id], |r| r.get(0))
+            .optional()
+            .map_err(Error::from)?
+            .ok_or_else(|| Error::NotFound {
+                kind,
+                id: id.to_owned(),
+            })?;
+        let (text, out) = f(&text)?;
+        tx.execute(update, params![id, text]).map_err(Error::from)?;
+        tx.commit().map_err(Error::from)?;
+        Ok(out)
     }
 
     /// Delete the workspace with all its environments, revisions, instances and leases.
@@ -324,21 +418,53 @@ impl Store {
     /// Replace the environment's draft. Its committed revisions are untouched. The draft's
     /// `env_name` is kept as the environment's name.
     pub fn update_draft(&self, id: &EnvironmentId, draft: &Draft) -> Result<()> {
-        let env = self.environment(id)?;
-        let mut manifest = draft.manifest.clone();
-        manifest.context.env_name = env.name;
-        self.write(|tx| {
-            let n = tx.execute(
-                "UPDATE environment SET draft = ?2, draft_modules = ?3, draft_vars = ?4 WHERE id = ?1",
-                params![
-                    id.0,
-                    manifest.to_toml()?,
-                    json(&draft.modules)?,
-                    json(&draft.vars)?
-                ],
-            )?;
-            found(n, "environment", &id.0)
-        })
+        self.modify_draft(id, |d| {
+            *d = draft.clone();
+            Ok::<_, Error>(())
+        })?;
+        Ok(())
+    }
+
+    /// Change the environment's draft with `f`, in one write transaction, so two writers (the
+    /// CLI and the app, say) never lose each other's edits. The draft's `env_name` is kept as
+    /// the environment's name. Returns the draft as written.
+    pub fn modify_draft<E: From<Error>>(
+        &self,
+        id: &EnvironmentId,
+        f: impl FnOnce(&mut Draft) -> std::result::Result<(), E>,
+    ) -> std::result::Result<Draft, E> {
+        let mut conn = self.lock();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(Error::from)?;
+        let env = tx
+            .query_row(
+                &format!("{ENV_COLUMNS} WHERE id = ?1"),
+                [&id.0],
+                environment_row,
+            )
+            .optional()
+            .map_err(Error::from)?
+            .transpose()?
+            .ok_or_else(|| Error::NotFound {
+                kind: "environment",
+                id: id.0.clone(),
+            })?;
+        let mut draft = env.draft;
+        f(&mut draft)?;
+        draft.manifest.context.env_name = env.name;
+        tx.execute(
+            "UPDATE environment SET draft = ?2, draft_modules = ?3, draft_vars = ?4 WHERE id = ?1",
+            params![
+                id.0,
+                draft.manifest.to_toml().map_err(Error::from)?,
+                json(&draft.modules)?,
+                json(&draft.vars)?
+            ],
+        )
+        .map_err(Error::from)?;
+        tx.commit().map_err(Error::from)?;
+        Ok(draft)
     }
 
     /// Replace the vars every revision of the environment sees.
@@ -348,6 +474,14 @@ impl Store {
                 "UPDATE environment SET vars = ?2 WHERE id = ?1",
                 params![id.0, json(vars)?],
             )?;
+            found(n, "environment", &id.0)
+        })
+    }
+
+    /// Delete the environment with its revisions, instances and their leases.
+    pub fn delete_environment(&self, id: &EnvironmentId) -> Result<()> {
+        self.write(|tx| {
+            let n = tx.execute("DELETE FROM environment WHERE id = ?1", [&id.0])?;
             found(n, "environment", &id.0)
         })
     }
@@ -498,6 +632,17 @@ impl Store {
         })
     }
 
+    /// The instances of the environment, oldest first.
+    pub fn instances_of(&self, env: &EnvironmentId) -> Result<Vec<Instance>> {
+        self.read(|conn| {
+            let mut stmt = conn.prepare(&format!(
+                "{INST_COLUMNS} WHERE i.environment_id = ?1 ORDER BY i.created_at, i.id"
+            ))?;
+            let rows = stmt.query_map([&env.0], instance_row)?;
+            rows.map(|r| r?).collect()
+        })
+    }
+
     /// Set whether the instance should be running.
     pub fn set_desired(&self, id: &InstanceId, desired: Desired) -> Result<()> {
         self.write(|tx| {
@@ -521,7 +666,7 @@ impl Store {
     }
 
     /// Replace the overlay sources the instance takes.
-    pub fn set_sources(&self, id: &InstanceId, sources: &[String]) -> Result<()> {
+    pub fn set_sources(&self, id: &InstanceId, sources: &[SourceBinding]) -> Result<()> {
         self.write(|tx| {
             let n = tx.execute(
                 "UPDATE instance SET sources = ?2 WHERE id = ?1",
@@ -644,15 +789,20 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+const WS_COLUMNS: &str = "SELECT id, name, mesh, vars, sources FROM workspace";
+
 fn workspace_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Workspace>> {
-    let vars: String = r.get(3)?;
+    let (vars, sources): (String, String) = (r.get(3)?, r.get(4)?);
     let (id, name, mesh) = (r.get(0)?, r.get(1)?, r.get(2)?);
-    Ok(from_json(&vars).map(|vars| Workspace {
-        id: WorkspaceId(id),
-        name,
-        mesh,
-        vars,
-    }))
+    Ok((|| {
+        Ok(Workspace {
+            id: WorkspaceId(id),
+            name,
+            mesh,
+            vars: from_json(&vars)?,
+            sources: from_json(&sources)?,
+        })
+    })())
 }
 
 const ENV_COLUMNS: &str =
