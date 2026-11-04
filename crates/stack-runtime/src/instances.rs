@@ -629,26 +629,74 @@ fn merge_config(
     }
 }
 
-/// Write `output` into `dir`, replacing whatever was there, with the directory owner-only.
+/// The file in an instance's tree that lists what the last render wrote there, one relative
+/// path per line, so the next render knows what it may remove.
+const RENDERED_FILE: &str = ".trestle-rendered";
+
+/// Write `output` into `dir` over the previous render, with the directory owner-only.
+///
+/// Only what a render wrote is replaced or removed: files the previous render listed in
+/// [`RENDERED_FILE`] and this one doesn't are deleted, and everything else in `dir` is left
+/// alone. The containers write there too (bind-mounted data, generated certificates), and on
+/// Linux those files belong to root: deleting the whole tree first would fail on them, and
+/// with it every re-render, `stop` included.
 fn write_tree(dir: &Path, output: &MaterializedOutput) -> Result<()> {
     let io = |path: &Path| {
         let path = path.to_owned();
         move |source| InstanceError::Io { path, source }
     };
-    if dir.exists() {
-        std::fs::remove_dir_all(dir).map_err(io(dir))?;
-    }
     std::fs::create_dir_all(dir).map_err(io(dir))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(io(dir))?;
     }
-    output.write_to(dir).map_err(io(dir))
+    let listing = dir.join(RENDERED_FILE);
+    let previous = match std::fs::read_to_string(&listing) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(io(&listing)(e)),
+    };
+    // Written first: a relocated file (`moved_from`) is carried over before its old path is
+    // cleared as stale.
+    output.write_to(dir).map_err(io(dir))?;
+    let current: BTreeSet<&str> = output.files.iter().map(|f| f.path.as_str()).collect();
+    for stale in previous.lines().filter(|l| !l.is_empty()) {
+        // Only paths inside the tree: the listing is ours, but a hand edit shouldn't reach out.
+        let relative = Path::new(stale);
+        let inside = relative
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if current.contains(stale) || !inside {
+            continue;
+        }
+        let path = dir.join(relative);
+        match std::fs::remove_file(&path) {
+            Ok(()) => remove_empty_parents(dir, &path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io(&path)(e)),
+        }
+    }
+    let mut text = current.into_iter().collect::<Vec<_>>().join("\n");
+    text.push('\n');
+    std::fs::write(&listing, text).map_err(io(&listing))
+}
+
+/// Remove the directories between `file` (just removed) and `root` that are now empty.
+fn remove_empty_parents(root: &Path, file: &Path) {
+    let mut dir = file.parent();
+    while let Some(d) = dir {
+        if d == root || !d.starts_with(root) || std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use olai_stack_topology::OutputFile;
+
     use super::*;
 
     #[test]
@@ -659,5 +707,80 @@ mod tests {
         for other in ["demo-dev", "a_b", "a_b_c", "a_b_r", "A_b_r1", "a_b_r1_x"] {
             assert_eq!(parse_instance_project(other), None, "{other}");
         }
+    }
+
+    fn output(files: &[(&str, &str)]) -> MaterializedOutput {
+        MaterializedOutput {
+            files: files
+                .iter()
+                .map(|(path, contents)| OutputFile {
+                    path: (*path).into(),
+                    contents: (*contents).into(),
+                    sensitive: false,
+                    preserve: false,
+                    moved_from: None,
+                })
+                .collect(),
+            deploy: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_render_replaces_its_own_files_and_leaves_the_containers_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("inst");
+        write_tree(
+            &dir,
+            &output(&[("compose.yaml", "v1"), ("modules/old/a.env", "A=1")]),
+        )
+        .unwrap();
+
+        // What a container leaves behind: on Linux, root-owned files the user can't delete.
+        // A read-only directory stands in for that here.
+        let data = dir.join("data/postgres");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("PG_VERSION"), "16").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+        }
+
+        write_tree(
+            &dir,
+            &output(&[("compose.yaml", "v2"), ("modules/new/b.env", "B=2")]),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("compose.yaml")).unwrap(),
+            "v2"
+        );
+        assert!(dir.join("modules/new/b.env").is_file());
+        assert!(
+            !dir.join("modules/old").exists(),
+            "the previous render's stale file and its empty directory are gone"
+        );
+        assert_eq!(
+            std::fs::read_to_string(data.join("PG_VERSION")).unwrap(),
+            "16",
+            "what the containers wrote stays"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_listing_never_reaches_outside_the_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("keep.txt");
+        std::fs::write(&outside, "keep").unwrap();
+        let dir = tmp.path().join("inst");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(RENDERED_FILE), "../keep.txt\n/etc/hosts\n").unwrap();
+        write_tree(&dir, &output(&[("compose.yaml", "v1")])).unwrap();
+        assert!(outside.is_file());
     }
 }
