@@ -129,6 +129,60 @@ export function NameInput({
   );
 }
 
+/** An inline confirmation for a destructive action: the action button takes
+ *  focus, Escape or Cancel backs out. It doesn't cancel on blur: WebKit
+ *  doesn't focus a clicked button, so pressing the action would blur the
+ *  strip and cancel it before the click lands.
+ *
+ *  The explorer asks in place, not with `window.confirm`: webviews that host
+ *  the editor (WKWebView in a Tauri app) don't implement the browser dialogs,
+ *  and there `confirm()` returns `false` without asking. */
+export function InlineConfirm({
+  message,
+  action,
+  onConfirm,
+  onCancel,
+}: {
+  message: ReactNode;
+  action: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      role="alertdialog"
+      aria-label={action}
+      className="rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1.5"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onCancel();
+      }}
+    >
+      <p className="text-xs">{message}</p>
+      <div className="mt-1.5 flex justify-end gap-1.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs"
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          autoFocus
+          className="h-6 px-2 text-xs"
+          onClick={onConfirm}
+        >
+          {action}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** Where an editor sits, `workspace › env › …`, for its toolbar. */
 export function Breadcrumb({ parts }: { parts: readonly string[] }) {
   return (

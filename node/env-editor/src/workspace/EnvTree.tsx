@@ -23,7 +23,13 @@ import {
   buildFileTree,
   type FileTreeNode,
 } from "../artifacts/buildFileTree.js";
-import { EnvStatus, IconButton, NameInput, SidebarHeader } from "./chrome.js";
+import {
+  EnvStatus,
+  IconButton,
+  InlineConfirm,
+  NameInput,
+  SidebarHeader,
+} from "./chrome.js";
 import type { EditorTab } from "./editors.js";
 import {
   type EnvDoc,
@@ -66,6 +72,8 @@ export function EnvTree({
 }: EnvTreeProps) {
   const ws = useWorkspace();
   const [edit, setEdit] = useState<NameEdit | null>(null);
+  // The environment whose removal is being confirmed.
+  const [removing, setRemoving] = useState<string | null>(null);
   // Expanded environments and folders, by env id / `<env id>:<path>`. The
   // active environment starts expanded.
   const [expanded, setExpanded] = useState<Set<string>>(
@@ -152,15 +160,27 @@ export function EnvTree({
               onOpen={onOpen}
               onRename={() => setEdit({ kind: "rename", id: env.id })}
               onDuplicate={() => setEdit({ kind: "duplicate", id: env.id })}
-              onRemove={() => {
-                if (
-                  window.confirm(
-                    `Remove \`${env.name}\` from the workspace? Its selection is lost.`,
-                  )
-                ) {
-                  ws.removeEnv(env.id);
-                }
-              }}
+              onRemove={() => setRemoving(env.id)}
+              confirm={
+                removing === env.id && (
+                  <div className="px-2 py-0.5">
+                    <InlineConfirm
+                      message={
+                        <>
+                          Remove <code>{env.name}</code> from the workspace? Its
+                          selection is lost.
+                        </>
+                      }
+                      action="Remove"
+                      onConfirm={() => {
+                        setRemoving(null);
+                        ws.removeEnv(env.id);
+                      }}
+                      onCancel={() => setRemoving(null)}
+                    />
+                  </div>
+                )
+              }
             />
           ),
         )}
@@ -254,6 +274,7 @@ function EnvNode({
   onRename,
   onDuplicate,
   onRemove,
+  confirm,
 }: {
   env: EnvDoc;
   plan: MemberPlan | undefined;
@@ -265,6 +286,8 @@ function EnvNode({
   onRename: () => void;
   onDuplicate: () => void;
   onRemove: () => void;
+  /** The removal confirmation, drawn under the row while it asks. */
+  confirm?: ReactNode;
 }) {
   const open = expanded.has(env.id);
   const files = plan?.plan?.files;
@@ -303,6 +326,7 @@ function EnvNode({
           {port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`}
         </span>
       </Row>
+      {confirm}
       {open && (
         <div>
           <Row
