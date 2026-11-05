@@ -2,7 +2,7 @@
 # Envoy consults it for every request on the shared listener after Authelia authenticates it.
 services:
   opa:
-    image: openpolicyagent/opa:1.21.1-envoy-static
+    image: openpolicyagent/opa:1.22.0-envoy-static
     restart: unless-stopped
     # The REST API stays on loopback; only the ext_authz gRPC port is reachable in-network.
     command:

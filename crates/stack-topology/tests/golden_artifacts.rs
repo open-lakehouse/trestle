@@ -451,7 +451,7 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
         Some("/home/unitycatalog/etc/conf/server.properties")
     );
     assert!(
-        s3.contains("image: unitycatalog/unitycatalog:v0.6.0"),
+        s3.contains("image: unitycatalog/unitycatalog:v0.7.0"),
         "official image pinned inline, not via ${{UC_IMAGE}}: {s3}"
     );
     assert!(
@@ -1285,7 +1285,7 @@ fn data_root_is_injected_and_relocatable() {
 
     // Persisting fragments mount under it by convention, with the default root baked in: a
     // Static fragment via `${DATA_ROOT}` substitution, a Template fragment via `{{ env.DATA_ROOT }}`.
-    assert!(frag(&p, "postgres").contains("./.data/postgres:/var/lib/postgresql/data"));
+    assert!(frag(&p, "postgres").contains("./.data/postgres:/var/lib/postgresql"));
     // RustFS is the exception: it runs as a non-root user, so it persists to a named volume
     // rather than a root-owned bind mount.
     assert!(frag(&p, "rustfs").contains("- rustfs-data:/data"));

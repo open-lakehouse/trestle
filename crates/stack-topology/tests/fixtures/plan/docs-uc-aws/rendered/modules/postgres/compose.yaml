@@ -1,7 +1,7 @@
 # Postgres — contributed by the `postgres` module.
 services:
   db:
-    image: postgres:16
+    image: postgres:18
     restart: unless-stopped
     env_file:
       - path: ./modules/postgres/.env/db.env
@@ -11,7 +11,7 @@ services:
     expose:
       - "5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     configs:
       - source: postgres_init
         target: /docker-entrypoint-initdb.d/init-databases.sh

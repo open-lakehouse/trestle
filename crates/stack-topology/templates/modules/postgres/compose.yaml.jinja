@@ -12,9 +12,9 @@ services:
       - "5432"
     volumes:
 {%- if knobs.data == "volume" %}
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
 {%- else %}
-      - {{ env.DATA_ROOT }}/postgres:/var/lib/postgresql/data
+      - {{ env.DATA_ROOT }}/postgres:/var/lib/postgresql
 {%- endif %}
     configs:
       - source: postgres_init

@@ -1,7 +1,7 @@
 # RustFS (S3 + STS) + one-shot bucket init + STS policy shim
 services:
   rustfs:
-    image: rustfs/rustfs:1.0.1
+    image: rustfs/rustfs:1.0.4
     restart: unless-stopped
     env_file:
       - path: ./modules/rustfs/.env/rustfs.env
@@ -30,7 +30,7 @@ services:
   # the wildcards, drops the KMS statements, and re-signs. The gateway routes the emulated STS
   # hostnames here.
   sts-shim:
-    image: python:3.13-alpine
+    image: python:3.15-alpine
     # Python ignores SIGTERM as PID 1; an init forwards it, so `down` doesn't wait for the kill.
     init: true
     restart: unless-stopped

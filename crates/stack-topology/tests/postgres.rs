@@ -79,7 +79,7 @@ fn postgres_data_volume_uses_named_volume() {
     assert!(!vol_list.is_empty(), "volumes list should not be empty");
     let vol_str = vol_list[0].as_str().unwrap();
     assert_eq!(
-        vol_str, "postgres-data:/var/lib/postgresql/data",
+        vol_str, "postgres-data:/var/lib/postgresql",
         "volume knob should use named volume, got: {}",
         vol_str
     );

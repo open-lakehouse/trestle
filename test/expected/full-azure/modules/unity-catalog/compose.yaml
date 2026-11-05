@@ -1,7 +1,7 @@
 # Unity Catalog
 services:
   unitycatalog:
-    image: unitycatalog/unitycatalog:v0.6.0
+    image: unitycatalog/unitycatalog:v0.7.0
     # The server ignores SIGTERM as PID 1.
     init: true
     restart: unless-stopped
@@ -30,7 +30,7 @@ services:
   # per bucket, plus `default_catalog`), so server.properties carries only the master identity.
   # It stays up and turns healthy once done, so `up --wait` waits for registration too.
   unitycatalog-storage:
-    image: python:3.13-alpine
+    image: python:3.15-alpine
     init: true
     restart: "no"
     command: ["python", "/bootstrap_storage.py"]

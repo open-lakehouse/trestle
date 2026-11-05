@@ -44,7 +44,7 @@ services:
   # One-shot: Docker creates a missing bind source owned by root, so open the paths up for
   # the server and for host-side clients that write to the same directories.
   unitycatalog-mounts:
-    image: python:3.13-alpine
+    image: python:3.15-alpine
     user: root
     restart: "no"
     entrypoint:

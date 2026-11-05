@@ -1,7 +1,7 @@
 # Omnigent agent platform: the coordinating server, and the host its agents run on
 services:
   omnigent:
-    image: ghcr.io/omnigent-ai/omnigent-server:v0.17.0
+    image: ghcr.io/omnigent-ai/omnigent-server:v0.21.0
     restart: unless-stopped
     env_file:
       - path: ./modules/omnigent/.env/omnigent.env
@@ -31,7 +31,7 @@ services:
   # module's address) and forwards it to each agent, and points the harnesses at MLflow's AI
   # Gateway, which holds the provider keys.
   omnigent-host:
-    image: ghcr.io/omnigent-ai/omnigent-host:v0.17.0
+    image: ghcr.io/omnigent-ai/omnigent-host:v0.21.0
     restart: unless-stopped
     depends_on:
       omnigent:

@@ -156,7 +156,7 @@ fn compose(plan: &Plan) -> serde_yaml::Value {
 fn storage_is_registered_through_the_api_by_default() {
     let plan = plan_with(&[("default_catalog", "main")]).unwrap();
     let init = &compose(&plan)["services"]["unitycatalog-storage"];
-    assert_eq!(init["image"], "python:3.13-alpine");
+    assert_eq!(init["image"], "python:3.15-alpine");
     let files = files(&plan);
     let storage = &files["modules/unity-catalog/storage.txt"];
     let entries: Vec<&str> = storage.lines().filter(|l| !l.starts_with('#')).collect();

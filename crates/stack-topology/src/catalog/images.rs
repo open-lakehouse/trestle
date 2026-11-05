@@ -5,48 +5,48 @@
 //! editing templates. Bump versions here when refreshing the baseline stack.
 
 /// Envoy gateway proxy.
-pub const ENVOY: &str = "envoyproxy/envoy:v1.38-latest";
+pub const ENVOY: &str = "envoyproxy/envoy:v1.40-latest";
 /// Authelia forward-auth provider.
 pub const AUTHELIA: &str = "ghcr.io/authelia/authelia:4.39";
 /// Postgres relational database.
-pub const POSTGRES: &str = "postgres:16";
+pub const POSTGRES: &str = "postgres:18";
 /// RustFS S3-compatible object store with STS. Pinned: the STS shim's action list was probed
 /// against this release's policy parser.
-pub const RUSTFS: &str = "rustfs/rustfs:1.0.1";
+pub const RUSTFS: &str = "rustfs/rustfs:1.0.4";
 /// One-shot S3 bucket initializer for RustFS.
 pub const RUSTFS_INIT: &str = "amazon/aws-cli:latest";
 /// The Python runtime for RustFS's STS policy shim.
-pub const STS_SHIM: &str = "python:3.13-alpine";
+pub const STS_SHIM: &str = "python:3.15-alpine";
 /// One-shot that mints the gateway's local CA (needs `openssl` and the JDK's `keytool`).
 /// Noble, not the floating tag: its Ubuntu 26.04 rebuild segfaults on 6.8 VM kernels.
-pub const CERTS: &str = "eclipse-temurin:17-jdk-noble";
+pub const CERTS: &str = "eclipse-temurin:25-jdk-noble";
 /// Azurite Azure Blob emulator.
-pub const AZURITE: &str = "mcr.microsoft.com/azure-storage/azurite:3.35.0";
+pub const AZURITE: &str = "mcr.microsoft.com/azure-storage/azurite:3.37.0";
 /// One-shot container initializer for Azurite.
-pub const AZURITE_INIT: &str = "mcr.microsoft.com/azure-cli:2.87.0";
+pub const AZURITE_INIT: &str = "mcr.microsoft.com/azure-cli:2.92.0";
 /// MLflow tracking server with its built-in AI Gateway (the `-full` image carries the gateway
 /// provider dependencies).
-pub const MLFLOW: &str = "ghcr.io/mlflow/mlflow:v3.17.0-full";
+pub const MLFLOW: &str = "ghcr.io/mlflow/mlflow:v3.18.0-full";
 /// Unity Catalog server.
-pub const UNITY_CATALOG: &str = "unitycatalog/unitycatalog:v0.6.0";
+pub const UNITY_CATALOG: &str = "unitycatalog/unitycatalog:v0.7.0";
 /// The Python runtime for Unity Catalog's storage registration helper (stdlib only).
-pub const UNITY_CATALOG_STORAGE: &str = "python:3.13-alpine";
+pub const UNITY_CATALOG_STORAGE: &str = "python:3.15-alpine";
 /// Jaeger all-in-one tracing backend.
-pub const JAEGER: &str = "cr.jaegertracing.io/jaegertracing/jaeger:2.14.1";
+pub const JAEGER: &str = "cr.jaegertracing.io/jaegertracing/jaeger:2.23.0";
 /// Open Policy Agent with the Envoy ext_authz plugin (the multi-arch `-static` build).
-pub const OPA: &str = "openpolicyagent/opa:1.21.1-envoy-static";
+pub const OPA: &str = "openpolicyagent/opa:1.22.0-envoy-static";
 /// Headwaters lineage service (migrate + serve).
-pub const HEADWATERS: &str = "ghcr.io/open-lakehouse/headwaters:0.0.7";
+pub const HEADWATERS: &str = "ghcr.io/open-lakehouse/headwaters:0.0.10";
 /// Omnigent agent-platform server (the coordinator: web UI, REST + WebSocket API).
-pub const OMNIGENT_SERVER: &str = "ghcr.io/omnigent-ai/omnigent-server:v0.17.0";
+pub const OMNIGENT_SERVER: &str = "ghcr.io/omnigent-ai/omnigent-server:v0.21.0";
 /// Omnigent agent host (runs agents; ships the claude / codex / pi harness CLIs).
-pub const OMNIGENT_HOST: &str = "ghcr.io/omnigent-ai/omnigent-host:v0.17.0";
+pub const OMNIGENT_HOST: &str = "ghcr.io/omnigent-ai/omnigent-host:v0.21.0";
 /// The uv + Python runtime the hosted marimo editor installs the client workspace into (the
 /// workspace's `pyproject.toml` owns the packages, marimo included).
-pub const MARIMO: &str = "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim";
+pub const MARIMO: &str = "ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim";
 /// PuppyGraph graph query engine (web UI + REST, Gremlin, openCypher over Bolt). Its bundled
 /// `python3` also runs the one-shot schema upload.
-pub const PUPPYGRAPH: &str = "puppygraph/puppygraph:1.14.0";
+pub const PUPPYGRAPH: &str = "puppygraph/puppygraph:1.18.1";
 /// The uv + Python runtime the Rivers dev server installs the client workspace into (the
 /// workspace's `pyproject.toml` carries `rivers`). Rivers publishes no standalone server image.
-pub const RIVERS: &str = "ghcr.io/astral-sh/uv:0.13.0-python3.12-trixie-slim";
+pub const RIVERS: &str = "ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim";

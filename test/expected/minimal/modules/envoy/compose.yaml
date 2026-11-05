@@ -1,7 +1,7 @@
 # Envoy gateway
 services:
   envoy:
-    image: envoyproxy/envoy:v1.38-latest
+    image: envoyproxy/envoy:v1.40-latest
     restart: unless-stopped
     configs:
       - source: envoy_config
@@ -30,7 +30,7 @@ services:
 
   # One-shot: mints the local CA and the gateway's certificate for its TLS hostnames.
   gateway-certs:
-    image: eclipse-temurin:17-jdk-noble
+    image: eclipse-temurin:25-jdk-noble
     entrypoint: ["bash", "/certs.sh"]
     environment:
       CERT_DIR: /certs

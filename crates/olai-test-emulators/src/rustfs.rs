@@ -11,7 +11,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, Healthcheck, ImageExt};
 
 /// RustFS image tag; the same tag stack-topology deploys.
-pub const RUSTFS_TAG: &str = "1.0.1";
+pub const RUSTFS_TAG: &str = "1.0.4";
 
 /// Root access key of the emulator.
 pub const ROOT_ACCESS_KEY: &str = "vendingroot";

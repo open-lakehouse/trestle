@@ -1549,7 +1549,7 @@ mod tests {
 
         // Untouched modules get a commented header; overridden ones only their remaining keys.
         assert!(
-            reference.contains("# [selection.knob_overrides.postgres]\n# image = \"postgres:16\""),
+            reference.contains("# [selection.knob_overrides.postgres]\n# image = \"postgres:18\""),
             "{reference}"
         );
         assert!(
@@ -1592,7 +1592,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             edited.selection.knob_overrides[&ModuleId::from("postgres")]["image"],
-            "postgres:16"
+            "postgres:18"
         );
     }
 

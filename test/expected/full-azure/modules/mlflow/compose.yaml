@@ -1,7 +1,7 @@
 # MLflow tracking server, with its built-in AI Gateway
 services:
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.17.0-full
+    image: ghcr.io/mlflow/mlflow:v3.18.0-full
     restart: unless-stopped
     depends_on:
       db:
@@ -60,7 +60,7 @@ services:
   # Seeds the AI Gateway with one endpoint per configured model, storing the provider keys
   # exported in your shell. Idempotent: re-runs on every `up` and leaves existing endpoints alone.
   mlflow-gateway-init:
-    image: ghcr.io/mlflow/mlflow:v3.17.0-full
+    image: ghcr.io/mlflow/mlflow:v3.18.0-full
     init: true
     restart: "no"
     command: ["python", "/seed_gateway.py"]
