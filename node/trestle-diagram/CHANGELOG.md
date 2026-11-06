@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.7.1...trestle-diagram-v0.8.0) - 2026-11-06
+
+### Added
+
+- [**breaking**] bump default images to Unity Catalog 0.7 and Postgres 18 (#318)
+
+### Fixed
+
+- confirm environment removal in-app, not with window.confirm (#319)
+
 ## [0.7.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.7.0...trestle-diagram-v0.7.1) - 2026-11-03
 
 ### Added

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.12...olai-codegen-v0.0.13) - 2026-11-06
+
+### Added
+
+- custom field options and NDJSON streams (#316)
+
 ## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.11...olai-codegen-v0.0.12) - 2026-11-01
 
 ### Documentation

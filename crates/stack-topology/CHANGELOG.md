@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.14...olai-stack-topology-v0.0.15) - 2026-11-06
+
+### Added
+
+- [**breaking**] bump default images to Unity Catalog 0.7 and Postgres 18 (#318)
+
 ## [0.0.14](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.13...olai-stack-topology-v0.0.14) - 2026-11-03
 
 ### Added

@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "env-editor"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "equivalent"
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "convert_case",
  "glob",
@@ -3039,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3056,7 +3056,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "dirs",
  "futures",
@@ -3074,7 +3074,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -3139,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.23"
+version = "0.0.24"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -4902,7 +4902,7 @@ dependencies = [
 
 [[package]]
 name = "stack-wasm"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "stacker"
@@ -5522,7 +5522,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "try-lock"

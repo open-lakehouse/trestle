@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.24](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.23...olai-trestle-v0.0.24) - 2026-11-06
+
+### Added
+
+- [**breaking**] bump default images to Unity Catalog 0.7 and Postgres 18 (#318)
+
 ## [0.0.22](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.21...olai-trestle-v0.0.22) - 2026-11-03
 
 ### Fixed
