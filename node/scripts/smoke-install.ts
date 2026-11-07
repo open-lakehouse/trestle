@@ -7,8 +7,9 @@
 //
 //   bun scripts/smoke-install.ts
 //
-// Packing stamps versions into package.json (scripts/stamp-versions.ts); the
-// script restores the originals afterwards.
+// Packing stamps versions and sibling pins into package.json
+// (scripts/stamp-versions.ts), and each tarball must keep those pins
+// (scripts/check-packed.ts); the script restores the originals afterwards.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +63,11 @@ try {
     await $`bun pm pack --filename ${tgz} --quiet`.cwd(join(root, dir));
     tarballs[`@open-lakehouse/${dir}`] = `file:${tgz}`;
   }
+  // Installs below override the pins to the tarballs, so check the pins
+  // themselves: a registry install has no such override.
+  await $`bun scripts/check-packed.ts ${Object.values(tarballs).map((t) => t.slice("file:".length))}`.cwd(
+    root,
+  );
 
   writeFileSync(
     join(project, "package.json"),
