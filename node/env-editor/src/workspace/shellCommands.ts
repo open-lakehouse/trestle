@@ -12,7 +12,7 @@ export interface ShellCommandState {
   /** The open editors, in tab order. */
   open: readonly EditorTab[];
   /** The side views, the editor's and a host's. */
-  sideViews: readonly { id: string; label: string }[];
+  sideViews: readonly { id: string; label: string; run?: () => void }[];
   activeEnv: EnvDoc | undefined;
   /** The store keeps revisions. */
   revisions: boolean;
@@ -61,13 +61,23 @@ export function shellCommands(
         keywords: ["tab", "editor", tab.path ?? ""],
         run: () => actions.activate(tabKey(tab)),
       })),
-    ...state.sideViews.map((view) => ({
-      id: `goto.view.${view.id}`,
-      title: `Show ${view.label}`,
-      section: "Go to",
-      keywords: ["view", "sidebar"],
-      run: () => actions.showView(view.id),
-    })),
+    ...state.sideViews.map((view) =>
+      view.run
+        ? {
+            id: `goto.action.${view.id}`,
+            title: view.label,
+            section: "Go to",
+            keywords: ["open"],
+            run: view.run,
+          }
+        : {
+            id: `goto.view.${view.id}`,
+            title: `Show ${view.label}`,
+            section: "Go to",
+            keywords: ["view", "sidebar"],
+            run: () => actions.showView(view.id),
+          },
+    ),
     // ⌘1…9: the open editors by position.
     ...open.slice(0, 9).map((tab, i) => ({
       id: `goto.tab-index.${i + 1}`,

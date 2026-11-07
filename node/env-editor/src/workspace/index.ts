@@ -9,6 +9,7 @@ export {
 } from "./ActivityBar.js";
 export { Breadcrumb } from "./chrome.js";
 export {
+  type ActivityActionContribution,
   ContributionsProvider,
   type ContributionsProviderProps,
   type EditorContributions,

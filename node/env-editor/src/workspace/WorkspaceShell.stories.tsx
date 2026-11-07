@@ -5,7 +5,14 @@ import {
   FIXTURE_PLAN,
 } from "@open-lakehouse/stack-wasm/fixtures";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { Activity, Play, Square, Stethoscope, Wrench } from "lucide-react";
+import {
+  Activity,
+  Play,
+  Settings2,
+  Square,
+  Stethoscope,
+  Wrench,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Command } from "../commands/registry.js";
 import { PlannerProvider } from "../planner.js";
@@ -174,6 +181,16 @@ function fakeRuntime(): EditorContributions & {
         icon: <Wrench />,
         align: "end",
         render: view("App settings", "Theme, telemetry, update channel."),
+      },
+    ],
+    activityActions: [
+      {
+        id: "host-settings",
+        label: "Settings",
+        icon: <Settings2 />,
+        align: "end",
+        run: () =>
+          window.alert("The host opens its settings, over the workspace."),
       },
     ],
     environment: {

@@ -28,13 +28,7 @@ describe("side views", () => {
       { id: "settings-app", label: "App settings", icon: null, align: "end" },
       { id: "doctor", label: "Doctor", icon: null, render: () => null },
     ] as never).map((i) => i.id);
-    expect(ids).toEqual([
-      "explorer",
-      "modules",
-      "settings",
-      "settings-app",
-      "doctor",
-    ]);
+    expect(ids).toEqual(["explorer", "settings", "settings-app", "doctor"]);
     const out = html(
       <ActivityBar
         view="doctor"
@@ -68,9 +62,56 @@ describe("side views", () => {
     expect(sideViewItems(true).map((i) => i.id)).toEqual([
       "explorer",
       "history",
-      "modules",
       "settings",
     ]);
+  });
+
+  test("a host's actions come last, and run instead of opening a view", () => {
+    let ran = 0;
+    const items = sideViewItems(
+      false,
+      [{ id: "doctor", label: "Doctor", icon: null, render: () => null }],
+      [
+        {
+          id: "gear",
+          label: "Settings",
+          icon: null,
+          align: "end",
+          run: () => ran++,
+        },
+      ],
+    );
+    expect(items.map((i) => i.id)).toEqual([
+      "explorer",
+      "settings",
+      "doctor",
+      "gear",
+    ]);
+    items.at(-1)?.run?.();
+    expect(ran).toBe(1);
+    const out = html(
+      <ActivityBar
+        view="explorer"
+        onView={() => {}}
+        problemCount={0}
+        history={false}
+        actions={[
+          {
+            id: "gear",
+            label: "Settings",
+            icon: null,
+            align: "end",
+            run: () => {},
+          },
+        ]}
+      />,
+    );
+    // An action isn't a view: it is never shown as the open one.
+    expect(out).toContain('aria-label="Settings"');
+    expect(out).not.toContain('aria-label="Settings" aria-pressed');
+    expect(out.indexOf("mt-auto")).toBeLessThan(
+      out.indexOf('aria-label="Settings"'),
+    );
   });
 });
 

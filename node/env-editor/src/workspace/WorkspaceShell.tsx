@@ -129,6 +129,7 @@ function ShellBody({
   const ws = useWorkspace();
   const { contributions, version } = useContributions();
   const hostViews = contributions?.sideViews;
+  const hostActions = contributions?.activityActions;
   const workspace = ws.workspace;
   const [catalog, setCatalog] = useState<CatalogDto | undefined>(seededCatalog);
   const [notice, setNotice] = useState<string | null>(null);
@@ -288,7 +289,7 @@ function ShellBody({
             {
               workspace,
               open,
-              sideViews: sideViewItems(hasRevisions, hostViews),
+              sideViews: sideViewItems(hasRevisions, hostViews, hostActions),
               activeEnv,
               revisions: hasRevisions,
               canExport: !!planner.bundle,
@@ -323,6 +324,7 @@ function ShellBody({
       open,
       hasRevisions,
       hostViews,
+      hostActions,
       activeEnv,
       planner.bundle,
       downloading,
@@ -366,6 +368,7 @@ function ShellBody({
             problemCount={problemCount}
             history={hasRevisions}
             extra={hostViews}
+            actions={hostActions}
           />
           {sidebarOpen && (
             <>
@@ -393,7 +396,6 @@ function ShellBody({
                     focusCommit={focusCommit}
                   />
                 )}
-                {view === "modules" && <ModulesView catalog={catalog} />}
                 {view === "settings" && <SettingsView workspace={workspace} />}
                 {hostView?.render()}
               </aside>
@@ -522,52 +524,6 @@ function ShellBody({
 // ---------------------------------------------------------------------------
 // Sidebar views
 // ---------------------------------------------------------------------------
-
-function ModulesView({ catalog }: { catalog: CatalogDto | undefined }) {
-  const groups = useMemo(() => {
-    const byCategory = new Map<string, CatalogDto["modules"]>();
-    for (const module of catalog?.modules ?? []) {
-      const category = module.category ?? "other";
-      byCategory.set(category, [...(byCategory.get(category) ?? []), module]);
-    }
-    return [...byCategory.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [catalog]);
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <SidebarHeader title="Modules" />
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 text-sm">
-        {!catalog && (
-          <span className="text-xs text-muted-foreground">
-            Loading catalog…
-          </span>
-        )}
-        {groups.map(([category, modules]) => (
-          <section key={category} className="mb-3">
-            <h3 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              {category}
-            </h3>
-            <ul>
-              {modules.map((m) => (
-                <li
-                  key={m.id}
-                  className="py-0.5"
-                  title={m.summary ?? undefined}
-                >
-                  <span className="text-foreground">
-                    {m.display_name ?? m.id}
-                  </span>{" "}
-                  <span className="font-mono text-[11px] text-muted-foreground">
-                    {m.id}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function SettingsView({ workspace }: { workspace: WorkspaceDoc }) {
   const ws = useWorkspace();

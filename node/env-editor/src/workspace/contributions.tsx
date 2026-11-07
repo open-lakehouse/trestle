@@ -76,6 +76,19 @@ export interface SideViewContribution {
   render: () => ReactNode;
 }
 
+/** A button in the activity bar that runs instead of opening a sidebar view: e.g.
+ *  a host's settings, opened in a dialog over the workspace, so the editor keeps
+ *  the window. */
+export interface ActivityActionContribution {
+  /** Unique among the activity bar's items. */
+  id: string;
+  label: string;
+  icon: ReactNode;
+  /** `"end"` puts it at the bottom of the activity bar. */
+  align?: "start" | "end";
+  run: () => void;
+}
+
 /** A host panel, in place of the bottom panel's static Run output. */
 export interface PanelContribution {
   label: string;
@@ -104,6 +117,8 @@ export interface EditorContributions {
    *  editor's (see `EDITOR_SHORTCUTS`). */
   commands?: Command[];
   sideViews?: SideViewContribution[];
+  /** Activity-bar buttons that run an action (also listed in the ⌘K palette). */
+  activityActions?: ActivityActionContribution[];
   environment?: EnvironmentContributions;
   panel?: PanelContribution;
 }

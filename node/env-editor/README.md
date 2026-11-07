@@ -64,6 +64,9 @@ optional, and with no contributions the shell is unchanged:
 
 - `sideViews`: extra activity-bar views (`align: "end"` puts one at the
   bottom).
+- `activityActions`: activity-bar buttons that run instead of opening a sidebar
+  view, e.g. a host's settings in a dialog over the workspace. They are listed
+  in the ⌘K palette as well.
 - `environment.status(envId)`: a run-state dot and placement (`local slot 0`, a
   remote branch) in the tree, and the header over the environment's tab, with
   its revision.

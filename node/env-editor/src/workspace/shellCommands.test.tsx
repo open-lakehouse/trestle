@@ -67,7 +67,8 @@ describe("the shell's commands", () => {
     );
     expect(html).toContain("Go to dev");
     expect(html).toContain("Go to compose.yaml (dev)");
-    expect(html).toContain("Show Modules");
+    expect(html).toContain("Show Workspace settings");
+    expect(html).not.toContain("Show Modules");
     expect(html).toContain("Toggle sidebar");
     expect(html).not.toContain("Go to editor 1");
   });

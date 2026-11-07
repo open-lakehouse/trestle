@@ -1,6 +1,7 @@
 // The shell's activity bar: one button per side view, the editor's own first,
-// then a host's (see `SideViewContribution`); those aligned to the end sit at
-// the bottom.
+// then a host's (see `SideViewContribution`), then a host's actions (see
+// `ActivityActionContribution`), which run instead of opening a sidebar; those
+// aligned to the end sit at the bottom.
 
 import {
   cn,
@@ -8,42 +9,50 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@open-lakehouse/ui-kit";
-import { Blocks, Files, History, Settings } from "lucide-react";
+import { Files, History, Settings } from "lucide-react";
 import type { ReactNode } from "react";
-import type { SideViewContribution } from "./contributions.js";
+import type {
+  ActivityActionContribution,
+  SideViewContribution,
+} from "./contributions.js";
 
 /** A side view's id: the editor's, or a host's `SideViewContribution.id`. */
 export type SideView = string;
 
 /** The editor's own side views. */
-export const BUILTIN_SIDE_VIEWS = [
-  "explorer",
-  "history",
-  "modules",
-  "settings",
-] as const;
+export const BUILTIN_SIDE_VIEWS = ["explorer", "history", "settings"] as const;
 
-interface Item {
+/** A button in the activity bar: a side view, or (with `run`) a host's action. */
+export interface ActivityItem {
   id: SideView;
   label: string;
   icon: ReactNode;
   align?: "start" | "end";
+  /** An action: runs on a click instead of opening a sidebar view. */
+  run?: () => void;
 }
 
-/** The side views to list: the editor's (history only with revisions), then
- *  the host's. */
+/** What the activity bar lists: the editor's side views (history only with
+ *  revisions), then the host's, then the host's actions. */
 export function sideViewItems(
   history: boolean,
   extra: readonly SideViewContribution[] = [],
-): Item[] {
+  actions: readonly ActivityActionContribution[] = [],
+): ActivityItem[] {
   return [
     { id: "explorer", label: "Environments", icon: <Files /> },
     ...(history
       ? [{ id: "history", label: "History", icon: <History /> }]
       : []),
-    { id: "modules", label: "Modules", icon: <Blocks /> },
     { id: "settings", label: "Workspace settings", icon: <Settings /> },
     ...extra.map(({ id, label, icon, align }) => ({ id, label, icon, align })),
+    ...actions.map(({ id, label, icon, align, run }) => ({
+      id,
+      label,
+      icon,
+      align,
+      run,
+    })),
   ];
 }
 
@@ -53,6 +62,7 @@ export function ActivityBar({
   problemCount,
   history,
   extra,
+  actions,
 }: {
   view: SideView | undefined;
   onView: (view: SideView) => void;
@@ -61,16 +71,18 @@ export function ActivityBar({
   history: boolean;
   /** A host's side views. */
   extra?: readonly SideViewContribution[];
+  /** A host's actions. */
+  actions?: readonly ActivityActionContribution[];
 }) {
-  const items = sideViewItems(history, extra);
-  const button = (item: Item) => (
+  const items = sideViewItems(history, extra, actions);
+  const button = (item: ActivityItem) => (
     <Tooltip key={item.id}>
       <TooltipTrigger asChild>
         <button
           type="button"
           aria-label={item.label}
-          aria-pressed={view === item.id}
-          onClick={() => onView(item.id)}
+          aria-pressed={item.run ? undefined : view === item.id}
+          onClick={() => (item.run ? item.run() : onView(item.id))}
           className={cn(
             "relative flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground [&_svg]:h-5 [&_svg]:w-5",
             view === item.id &&
