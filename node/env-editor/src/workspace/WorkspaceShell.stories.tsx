@@ -6,6 +6,8 @@ import {
 } from "@open-lakehouse/stack-wasm/fixtures";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Activity, Play, Square, Stethoscope, Wrench } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import type { Command } from "../commands/registry.js";
 import { PlannerProvider } from "../planner.js";
 import type { Planner, Selection } from "../types.js";
 import {
@@ -83,7 +85,10 @@ function Shell({
  * `staging` on a remote branch. Start and Stop step through starting/stopping
  * on a timer, and notify through `subscribe` like a query cache would.
  */
-function fakeRuntime(): EditorContributions {
+function fakeRuntime(): EditorContributions & {
+  /** The host's ⌘K commands for the runtime's current state. */
+  commandsNow: () => Command[];
+} {
   const state: Record<string, RunState> = {
     dev: "stopped",
     staging: "running",
@@ -111,7 +116,51 @@ function fakeRuntime(): EditorContributions {
       <p className="text-muted-foreground">{body}</p>
     </div>
   );
+  const commandsNow = (): Command[] => [
+    ...Object.keys(state).map((id) =>
+      running(id)
+        ? {
+            id: `env.stop.${id}`,
+            title: `Stop ${id}`,
+            section: "Environment",
+            hint: `trestle down ${id}`,
+            run: () => transition(id, "stopping", "stopped"),
+          }
+        : {
+            id: `env.start.${id}`,
+            title: `Start ${id}`,
+            section: "Environment",
+            hint: `trestle up ${id}`,
+            enabled: state[id] === "stopped",
+            reason: `${id} is ${state[id]}`,
+            run: () => transition(id, "starting", "running"),
+          },
+    ),
+    {
+      id: "env.open-mlflow",
+      title: "Open MLflow",
+      section: "Environment",
+      keywords: ["experiments", "browser"],
+      enabled: running("dev"),
+      reason: notRunning("dev"),
+      run: () => {},
+    },
+    {
+      id: "env.copy-up",
+      title: "Copy the `trestle up` command",
+      section: "Environment",
+      hint: "trestle up dev",
+      run: () => void navigator.clipboard?.writeText("trestle up dev"),
+    },
+    {
+      id: "app.check-updates",
+      title: "Check for updates",
+      section: "App",
+      run: () => {},
+    },
+  ];
   return {
+    commandsNow,
     sideViews: [
       {
         id: "doctor",
@@ -216,10 +265,23 @@ export const WithRevisions: Story = {
  *  Lineage / Logs sub-tabs (disabled until the environment runs), each
  *  service's state on the canvas, and an Output panel. */
 export const WithContributions: Story = {
-  render: () => (
-    <Shell
-      store={createMemoryWorkspaceStore(workspace)}
-      contributions={fakeRuntime()}
-    />
-  ),
+  render: () => <LiveShell />,
 };
+
+/** The fake runtime, its commands rebuilt whenever its state changes (a host
+ *  would derive them from its query cache the same way). */
+function LiveShell() {
+  const [runtime] = useState(fakeRuntime);
+  const [store] = useState(() => createMemoryWorkspaceStore(workspace));
+  const [version, setVersion] = useState(0);
+  useEffect(
+    () => runtime.environment?.subscribe?.(() => setVersion((v) => v + 1)),
+    [runtime],
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is the runtime's change signal.
+  const contributions = useMemo<EditorContributions>(
+    () => ({ ...runtime, commands: runtime.commandsNow() }),
+    [runtime, version],
+  );
+  return <Shell store={store} contributions={contributions} />;
+}

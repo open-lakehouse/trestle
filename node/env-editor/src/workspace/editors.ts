@@ -59,3 +59,15 @@ export function neighbourAfterClose(
   const next = tabs[i + 1] ?? tabs[i - 1];
   return next && tabKey(next);
 }
+
+/** A tab's label: the file's name, `#n` for a revision, `#a → b` for a
+ *  comparison, else the environment's name (its diagram). */
+export function tabLabel(tab: EditorTab, envName: string): string {
+  if (tab.compare) {
+    const to = tab.compare.to === "draft" ? "draft" : `#${tab.compare.to}`;
+    return `#${tab.compare.from} → ${to}`;
+  }
+  if (tab.revision !== undefined) return `#${tab.revision}`;
+  if (tab.path) return tab.path.split("/").at(-1) ?? tab.path;
+  return envName;
+}

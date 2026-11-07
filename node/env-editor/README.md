@@ -76,6 +76,10 @@ optional, and with no contributions the shell is unchanged:
 - `environment.subscribe(onChange)`: tells the shell to ask again, e.g. from a
   query cache. Re-rendering the provider with a new object works too.
 - `panel`: replaces the bottom panel's static Run output.
+- `commands`: ⌘K palette commands under their own sections (`Environment`,
+  `App`), each with an optional `shortcut`, `hint` (e.g. the `trestle` CLI
+  equivalent) and `enabled`/`reason`. Their bindings take precedence over the
+  editor's (`EDITOR_SHORTCUTS`); see `DESIGN.md` for the keymap rules.
 
 ```tsx
 <WorkspaceProvider store={store}>

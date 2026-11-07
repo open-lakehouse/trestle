@@ -24,6 +24,8 @@ import {
 } from "./artifacts/bundleZip.js";
 import { FilesPanel } from "./artifacts/FilesPanel.js";
 import { fileSourceOf } from "./artifacts/fileSource.js";
+import { CommandProvider, useCommands } from "./commands/CommandProvider.js";
+import type { Command } from "./commands/registry.js";
 import { errorMessage } from "./errors.js";
 import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar.js";
 import { ComponentPalette } from "./graph/ComponentPalette.js";
@@ -107,14 +109,17 @@ export function EnvironmentEditor({
   planner,
   ...props
 }: EnvironmentEditorProps) {
+  // Its commands join a host's registry (the workspace shell's), or a
+  // registry of its own when it stands alone.
+  const body = (
+    <CommandProvider>
+      <EditorBody {...props} />
+    </CommandProvider>
+  );
   if (planner) {
-    return (
-      <PlannerProvider planner={planner}>
-        <EditorBody {...props} />
-      </PlannerProvider>
-    );
+    return <PlannerProvider planner={planner}>{body}</PlannerProvider>;
   }
-  return <EditorBody {...props} />;
+  return body;
 }
 
 function EditorBody({
@@ -333,51 +338,93 @@ function EditorBody({
     }
   }, [selectedId, planned, selection]);
 
-  // Canvas shortcuts: ⌘K or / opens the component palette, ⌘Z / ⇧⌘Z undo and redo,
-  // Delete removes the selected component, Esc deselects.
-  useEffect(() => {
-    if (tab !== "canvas") return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      // The files dialog is modal: its own keys (Escape, the tab arrows) only.
-      if (openFiles) return;
-      const mod = e.metaKey || e.ctrlKey;
-      const key = e.key.toLowerCase();
-      if (mod && key === "k") {
-        e.preventDefault();
-        setPaletteOpen(true);
-        return;
-      }
-      if (paletteOpen || isEditableTarget(e.target)) return;
-      if (key === "/") {
-        e.preventDefault();
-        setPaletteOpen(true);
-      } else if (mod && (key === "z" || key === "y")) {
-        e.preventDefault();
-        if (key === "y" || e.shiftKey) redo();
-        else undo();
-      } else if (selectedId && key === "escape") {
-        setSelectedId(undefined);
-      } else if (
-        selectedId &&
-        (key === "delete" || key === "backspace") &&
-        originOf(selectedId).kind === "explicit"
-      ) {
-        e.preventDefault();
-        removeComponent(selectedId);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
-    tab,
-    paletteOpen,
-    openFiles,
-    selectedId,
-    originOf,
-    removeComponent,
-    undo,
-    redo,
-  ]);
+  // The canvas's commands: Add module… (`/`), undo and redo, download; and,
+  // as shortcuts only, Delete removes the selected component and Esc
+  // deselects. Only while the canvas shows, and not over its dialogs.
+  const onCanvas = tab === "canvas" && !openFiles && !paletteOpen;
+  const selectedRemovable =
+    !!selectedId && originOf(selectedId).kind === "explicit";
+  const commands = useMemo<Command[]>(
+    () =>
+      tab !== "canvas"
+        ? []
+        : [
+            {
+              id: "edit.add-module",
+              title: "Add module…",
+              section: "Edit",
+              keywords: ["component", "capability", "role", "provider"],
+              shortcut: "/",
+              enabled: onCanvas,
+              run: () => setPaletteOpen(true),
+            },
+            {
+              id: "edit.undo",
+              title: "Undo",
+              section: "Edit",
+              shortcut: "mod+z",
+              enabled: onCanvas && env.canUndo,
+              reason: "Nothing to undo",
+              run: undo,
+            },
+            {
+              id: "edit.redo",
+              title: "Redo",
+              section: "Edit",
+              shortcut: ["mod+shift+z", "mod+y"],
+              enabled: onCanvas && env.canRedo,
+              reason: "Nothing to redo",
+              run: redo,
+            },
+            ...(planner.bundle
+              ? [
+                  {
+                    id: "edit.download-environment",
+                    title: "Download environment (.zip)",
+                    section: "Edit",
+                    keywords: ["export", "bundle", "zip"],
+                    enabled: !bundling,
+                    run: downloadBundle,
+                  },
+                ]
+              : []),
+            {
+              id: "edit.remove-selected",
+              title: "Remove the selected component",
+              section: "Edit",
+              shortcut: ["delete", "backspace"],
+              hidden: true,
+              enabled: onCanvas && selectedRemovable,
+              run: () => {
+                if (selectedId) removeComponent(selectedId);
+              },
+            },
+            {
+              id: "edit.deselect",
+              title: "Deselect",
+              section: "Edit",
+              shortcut: "escape",
+              hidden: true,
+              enabled: onCanvas && !!selectedId,
+              run: () => setSelectedId(undefined),
+            },
+          ],
+    [
+      tab,
+      onCanvas,
+      env.canUndo,
+      env.canRedo,
+      undo,
+      redo,
+      planner.bundle,
+      bundling,
+      downloadBundle,
+      selectedId,
+      selectedRemovable,
+      removeComponent,
+    ],
+  );
+  useCommands(commands);
 
   const inspected =
     selectedId && selectedId !== CLIENTS_NODE_ID ? selectedId : null;
@@ -603,7 +650,7 @@ function EmptyCanvas({
             <div className="flex gap-2">
               <Button type="button" size="sm" onClick={onAdd}>
                 <Plus className="h-4 w-4" />
-                Add component
+                Add module
               </Button>
               {onBaseline && (
                 <Button
@@ -621,12 +668,4 @@ function EmptyCanvas({
       </div>
     </div>
   );
-}
-
-/** Keys typed into a form control or an open menu aren't canvas shortcuts. */
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return true;
-  return !!target.closest('[role="dialog"], [role="listbox"], [role="menu"]');
 }

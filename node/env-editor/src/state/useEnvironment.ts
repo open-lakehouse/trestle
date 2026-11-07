@@ -230,39 +230,17 @@ export function useEnvironment(
   }, [planner, selection, contextKey]);
 
   const add = useCallback((moduleId: string) => {
-    dispatch({
-      type: "edit",
-      next: (s) =>
-        s.modules.includes(moduleId)
-          ? s
-          : { ...s, modules: [...s.modules, moduleId] },
-    });
+    dispatch({ type: "edit", next: (s) => selectionEdits.add(s, moduleId) });
   }, []);
 
   const remove = useCallback((moduleId: string) => {
-    dispatch({
-      type: "edit",
-      next: (s) =>
-        s.modules.includes(moduleId)
-          ? {
-              ...s,
-              modules: s.modules.filter((m) => m !== moduleId),
-              knob_overrides: withoutKey(s.knob_overrides, moduleId),
-              hosted: withoutKey(s.hosted ?? {}, moduleId),
-            }
-          : s,
-    });
+    dispatch({ type: "edit", next: (s) => selectionEdits.remove(s, moduleId) });
   }, []);
 
   const swap = useCallback((fromId: string, toId: string) => {
     dispatch({
       type: "edit",
-      next: (s) => ({
-        ...s,
-        modules: [...s.modules.filter((m) => m !== fromId && m !== toId), toId],
-        knob_overrides: withoutKey(s.knob_overrides, fromId),
-        hosted: withoutKey(s.hosted ?? {}, fromId),
-      }),
+      next: (s) => selectionEdits.swap(s, fromId, toId),
     });
   }, []);
 
@@ -277,12 +255,7 @@ export function useEnvironment(
   const toggleCapability = useCallback((capability: string) => {
     dispatch({
       type: "edit",
-      next: (s) => ({
-        ...s,
-        capabilities: s.capabilities.includes(capability)
-          ? s.capabilities.filter((c) => c !== capability)
-          : [...s.capabilities, capability],
-      }),
+      next: (s) => selectionEdits.toggleCapability(s, capability),
     });
   }, []);
 
@@ -405,6 +378,36 @@ export function useEnvironment(
     canRedo: history.future.length > 0,
   };
 }
+
+/** The selection edits behind `add`, `remove`, `swap` and
+ *  `toggleCapability`, as pure functions. */
+export const selectionEdits = {
+  add: (s: Selection, moduleId: string): Selection =>
+    s.modules.includes(moduleId)
+      ? s
+      : { ...s, modules: [...s.modules, moduleId] },
+  remove: (s: Selection, moduleId: string): Selection =>
+    s.modules.includes(moduleId)
+      ? {
+          ...s,
+          modules: s.modules.filter((m) => m !== moduleId),
+          knob_overrides: withoutKey(s.knob_overrides, moduleId),
+          hosted: withoutKey(s.hosted ?? {}, moduleId),
+        }
+      : s,
+  swap: (s: Selection, fromId: string, toId: string): Selection => ({
+    ...s,
+    modules: [...s.modules.filter((m) => m !== fromId && m !== toId), toId],
+    knob_overrides: withoutKey(s.knob_overrides, fromId),
+    hosted: withoutKey(s.hosted ?? {}, fromId),
+  }),
+  toggleCapability: (s: Selection, capability: string): Selection => ({
+    ...s,
+    capabilities: s.capabilities.includes(capability)
+      ? s.capabilities.filter((c) => c !== capability)
+      : [...s.capabilities, capability],
+  }),
+};
 
 export function isEmptySelection(selection: Selection): boolean {
   return (

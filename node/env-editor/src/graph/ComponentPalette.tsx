@@ -1,20 +1,6 @@
-import {
-  cn,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-  Input,
-} from "@open-lakehouse/ui-kit";
-import { Search, Sparkles } from "lucide-react";
-import {
-  type KeyboardEvent,
-  type ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { cn } from "@open-lakehouse/ui-kit";
+import { Sparkles } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import {
   capabilityIndex,
   capabilityLabel,
@@ -25,6 +11,12 @@ import {
 } from "../selection/catalogIndex.js";
 import { describeOrigin, formatList, type Origin } from "../state/origin.js";
 import type { CatalogDto, ModuleDto, Selection } from "../types.js";
+import {
+  PaletteDialog,
+  PaletteGroup,
+  PaletteRow,
+  usePaletteNav,
+} from "./paletteList.js";
 import { ModuleIcon } from "./projectIcons.js";
 import { roleStyle } from "./roleTheme.js";
 
@@ -39,12 +31,13 @@ export interface ComponentPaletteProps {
   onAdd: (moduleId: string) => void;
   onRemove: (moduleId: string) => void;
   onSwap: (fromId: string, toId: string) => void;
-  /** Add a capability, or remove a selected one. */
+  /** Ask for a role (capability) and let the planner pick its provider, or
+   *  drop one asked for. */
   onToggleCapability: (capability: string) => void;
 }
 
 /** What picking a palette row does, or why it can't be picked. */
-type RowAction =
+export type RowAction =
   | { kind: "add" }
   | { kind: "remove" }
   | { kind: "replace"; fromId: string; fromName: string }
@@ -52,14 +45,15 @@ type RowAction =
   | { kind: "switch"; fromId: string; fromName: string }
   | { kind: "unavailable"; reason: string };
 
-interface ModuleRow {
+export interface ModuleRow {
   type: "module";
   key: string;
   module: ModuleDto;
   action: RowAction;
 }
 
-interface CapabilityRow {
+/** "Any provider of this role": the planner picks. */
+export interface CapabilityRow {
   type: "capability";
   key: string;
   capability: string;
@@ -67,15 +61,36 @@ interface CapabilityRow {
   action: RowAction;
 }
 
-type Row = ModuleRow | CapabilityRow;
+export type Row = ModuleRow | CapabilityRow;
+
+/** The edit picking a row asks for. */
+export type RowIntent =
+  | { kind: "add"; moduleId: string }
+  | { kind: "remove"; moduleId: string }
+  | { kind: "swap"; fromId: string; toId: string }
+  | { kind: "toggleCapability"; capability: string };
+
+/** What picking `row` does, or `undefined` when it can't be picked. */
+export function rowIntent(row: Row): RowIntent | undefined {
+  const { action } = row;
+  if (action.kind === "unavailable") return undefined;
+  if (row.type === "capability")
+    return { kind: "toggleCapability", capability: row.capability };
+  if (action.kind === "replace" || action.kind === "switch")
+    return { kind: "swap", fromId: action.fromId, toId: row.module.id };
+  if (action.kind === "remove")
+    return { kind: "remove", moduleId: row.module.id };
+  return { kind: "add", moduleId: row.module.id };
+}
 
 /**
- * A searchable command palette over the catalog: add a module, replace a
+ * Add module…: a searchable picker over the catalog. Add a module, replace a
  * conflicting one, switch the provider of a one-per-environment slot (the
- * database, the object store), remove one you added, or ask for a capability
- * and let the planner pick its provider. Browsing lists what's in the environment first;
- * a query starting with "remove" narrows to what can be removed. Arrow keys
- * move, Enter picks.
+ * database, the object store), or remove one you added. The role chips (or a
+ * `role:<name>` query) narrow it to one role's providers and offer "any
+ * provider", which leaves the pick to the planner. Browsing lists what's in
+ * the environment first; a query starting with "remove" narrows to what can
+ * be removed. Arrow keys move, Enter picks.
  */
 export function ComponentPalette({
   open,
@@ -90,275 +105,245 @@ export function ComponentPalette({
   onToggleCapability,
 }: ComponentPaletteProps) {
   const [query, setQuery] = useState("");
-  /** The highlighted pickable row; `null` follows the default. */
-  const [active, setActive] = useState<number | null>(null);
-
+  const [role, setRole] = useState<string | undefined>();
   useEffect(() => {
     if (open) {
       setQuery("");
-      setActive(null);
+      setRole(undefined);
     }
   }, [open]);
 
+  const roles = useMemo(
+    () => (catalog ? capabilityIndex(catalog).map(([r]) => r) : []),
+    [catalog],
+  );
   const groups = useMemo(
     () =>
       catalog
-        ? paletteRows(catalog, selection, planned, originOf, query)
-        : { modules: [], capabilities: [] },
-    [catalog, selection, planned, originOf, query],
+        ? paletteRows(catalog, selection, planned, originOf, query, role)
+        : { capability: undefined, modules: [] },
+    [catalog, selection, planned, originOf, query, role],
   );
   const pickable = useMemo(
     () =>
       [
+        ...(groups.capability ? [groups.capability] : []),
         ...groups.modules.flatMap(([, rows]) => rows),
-        ...groups.capabilities,
       ].filter((r) => r.action.kind !== "unavailable"),
     [groups],
   );
-  // Enter on a fresh palette adds, never removes: the default highlight skips
-  // removals unless the query asks for them.
-  const fallback = Math.max(
-    0,
-    pickable.findIndex((r) => r.action.kind !== "remove"),
-  );
-  const current = Math.min(active ?? fallback, pickable.length - 1);
-  const activeKey = pickable[current]?.key;
-
-  // Keep the highlighted row in view as the arrow keys move it. Only for the
-  // keyboard: scrolling a half-visible row under the pointer would jitter.
-  const listRef = useRef<HTMLDivElement>(null);
-  const movedByKey = useRef(false);
-  useEffect(() => {
-    if (!activeKey || !movedByKey.current) return;
-    listRef.current
-      ?.querySelector(`[data-key="${CSS.escape(activeKey)}"]`)
-      ?.scrollIntoView({ block: "nearest" });
-  }, [activeKey]);
 
   const pick = (row: Row) => {
-    const { action } = row;
-    if (action.kind === "unavailable") return;
-    if (row.type === "capability") onToggleCapability(row.capability);
-    else if (action.kind === "replace" || action.kind === "switch")
-      onSwap(action.fromId, row.module.id);
-    else if (action.kind === "remove") onRemove(row.module.id);
-    else onAdd(row.module.id);
+    const intent = rowIntent(row);
+    if (!intent) return;
+    if (intent.kind === "toggleCapability")
+      onToggleCapability(intent.capability);
+    else if (intent.kind === "swap") onSwap(intent.fromId, intent.toId);
+    else if (intent.kind === "remove") onRemove(intent.moduleId);
+    else onAdd(intent.moduleId);
     // Stay open after a removal, so several can go in a row.
-    if (action.kind !== "remove") onOpenChange(false);
+    if (intent.kind !== "remove") onOpenChange(false);
   };
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      movedByKey.current = true;
-      const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive(
-        pickable.length === 0
-          ? null
-          : (current + step + pickable.length) % pickable.length,
-      );
-    } else if (e.key === "Enter") {
-      const row = pickable.find((r) => r.key === activeKey);
-      if (row) {
-        e.preventDefault();
-        pick(row);
-      }
-    }
-  };
+  // Enter on a fresh palette adds, never removes: the default highlight skips
+  // removals unless the query asks for them.
+  const nav = usePaletteNav({
+    open,
+    items: pickable,
+    keyOf: (r) => r.key,
+    fallback: Math.max(
+      0,
+      pickable.findIndex((r) => r.action.kind !== "remove"),
+    ),
+    onPick: pick,
+  });
 
-  const hover = (row: Row) => {
-    const i = pickable.indexOf(row);
-    if (i < 0 || i === current) return;
-    movedByKey.current = false;
-    setActive(i);
-  };
-
-  const empty = groups.modules.length === 0 && groups.capabilities.length === 0;
+  const empty = !groups.capability && groups.modules.length === 0;
+  const rowProps = (row: Row) => ({
+    itemKey: row.key,
+    active: row.key === nav.activeKey,
+    disabled: row.action.kind === "unavailable",
+    onPick: () => pick(row),
+    onHover: () => nav.hover(row),
+    ...actionLabel(row.action, row.key === nav.activeKey),
+  });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="top-[15%] max-w-lg translate-y-0 gap-0 overflow-hidden">
-        <DialogTitle className="sr-only">Add or remove components</DialogTitle>
-        <DialogDescription className="sr-only">
-          Search the catalog to add a module or capability to the environment,
-          or remove one you added.
-        </DialogDescription>
-        <div className="flex items-center gap-2 border-b border-border px-3">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <Input
-            autoFocus
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setActive(null);
+    <PaletteDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add module…"
+      description="Search the catalog to add a module to the environment, pick one by role, or remove one you added."
+      query={query}
+      onQueryChange={(q) => {
+        setQuery(q);
+        nav.reset();
+      }}
+      onKeyDown={nav.onKeyDown}
+      placeholder="Add or remove a module, or filter by role…"
+      listRef={nav.listRef}
+      above={
+        roles.length > 0 && (
+          <RoleFilter
+            roles={roles}
+            role={role}
+            onRole={(r) => {
+              setRole(r);
+              nav.reset();
             }}
-            onKeyDown={onKeyDown}
-            placeholder="Add or remove a component or capability…"
-            className="h-11 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
           />
-        </div>
-        <div ref={listRef} className="max-h-[60vh] overflow-y-auto p-1">
-          {empty && (
-            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              Nothing matches “{query}”.
-            </p>
-          )}
-          {groups.modules.map(([category, rows]) => (
-            <PaletteGroup key={category} title={category.replace(/_/g, " ")}>
-              {rows.map((row) => (
-                <PaletteRow
-                  key={row.key}
-                  row={row}
-                  active={row.key === activeKey}
-                  onPick={() => pick(row)}
-                  onHover={() => hover(row)}
-                  icon={
-                    <ModuleIcon
-                      moduleId={row.module.id}
-                      role={row.module.provider_of}
-                      className={cn(
-                        "h-4 w-4",
-                        roleStyle(row.module.provider_of).accent,
-                      )}
-                    />
-                  }
-                  title={row.module.display_name ?? row.module.id}
-                  subtitle={row.module.summary ?? undefined}
+        )
+      }
+      hints={[
+        "↑↓ to move",
+        "↵ to pick",
+        "role:… to filter",
+        "“remove …” to remove",
+        "esc to close",
+      ]}
+    >
+      {empty && (
+        <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+          Nothing matches “{query}”.
+        </p>
+      )}
+      {groups.capability && (
+        <PaletteGroup
+          title={`by role: ${capabilityLabel(groups.capability.capability)}`}
+        >
+          <PaletteRow
+            {...rowProps(groups.capability)}
+            icon={<Sparkles className="h-4 w-4 text-primary" />}
+            title={`Any ${capabilityLabel(groups.capability.capability)} provider`}
+            subtitle={`Let the planner pick: ${formatList(groups.capability.providers.map((p) => p.display_name ?? p.id))}`}
+          />
+        </PaletteGroup>
+      )}
+      {groups.modules.map(([category, rows]) => (
+        <PaletteGroup key={category} title={category.replace(/_/g, " ")}>
+          {rows.map((row) => (
+            <PaletteRow
+              key={row.key}
+              {...rowProps(row)}
+              icon={
+                <ModuleIcon
+                  moduleId={row.module.id}
+                  role={row.module.provider_of}
+                  className={cn(
+                    "h-4 w-4",
+                    roleStyle(row.module.provider_of).accent,
+                  )}
                 />
-              ))}
-            </PaletteGroup>
+              }
+              title={row.module.display_name ?? row.module.id}
+              subtitle={row.module.summary ?? undefined}
+            />
           ))}
-          {groups.capabilities.length > 0 && (
-            <PaletteGroup title="Capabilities">
-              {groups.capabilities.map((row) => (
-                <PaletteRow
-                  key={row.key}
-                  row={row}
-                  active={row.key === activeKey}
-                  onPick={() => pick(row)}
-                  onHover={() => hover(row)}
-                  icon={<Sparkles className="h-4 w-4 text-primary" />}
-                  title={capabilityLabel(row.capability)}
-                  subtitle={`Provided by ${formatList(row.providers.map((p) => p.display_name ?? p.id))}`}
-                />
-              ))}
-            </PaletteGroup>
-          )}
-        </div>
-        <div className="flex items-center gap-3 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-          <span>↑↓ to move</span>
-          <span>↵ to pick</span>
-          <span>“remove …” to remove</span>
-          <span>esc to close</span>
-        </div>
-      </DialogContent>
-    </Dialog>
+        </PaletteGroup>
+      ))}
+    </PaletteDialog>
   );
 }
 
-function PaletteGroup({
-  title,
-  children,
+/** The by-role chips: all modules, or one role's providers. */
+function RoleFilter({
+  roles,
+  role,
+  onRole,
 }: {
-  title: string;
-  children: ReactNode;
+  roles: readonly string[];
+  role: string | undefined;
+  onRole: (role: string | undefined) => void;
 }) {
-  return (
-    <div className="py-1">
-      <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function PaletteRow({
-  row,
-  active,
-  onPick,
-  onHover,
-  icon,
-  title,
-  subtitle,
-}: {
-  row: Row;
-  active: boolean;
-  onPick: () => void;
-  onHover: () => void;
-  icon: ReactNode;
-  title: string;
-  subtitle?: string;
-}) {
-  const { action } = row;
-  const unavailable = action.kind === "unavailable";
-  return (
+  const chip = (value: string | undefined, label: string) => (
     <button
+      key={value ?? ""}
       type="button"
-      data-key={row.key}
-      aria-current={active || undefined}
-      disabled={unavailable}
-      onClick={onPick}
-      onMouseMove={onHover}
+      aria-pressed={role === value}
+      onClick={() => onRole(value)}
       className={cn(
-        // The top scroll margin keeps a group's title visible when scrolling
-        // up onto its first row.
-        "flex w-full scroll-mb-1 scroll-mt-8 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors",
-        active
-          ? "bg-primary/[0.07] ring-1 ring-inset ring-primary/25"
-          : !unavailable && "hover:bg-muted/60",
-        unavailable && "cursor-default opacity-55",
+        "shrink-0 rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+        role === value
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:text-foreground",
       )}
     >
-      <div
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
-          active ? "bg-background" : "bg-muted",
-        )}
-      >
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-card-foreground">
-          {title}
-        </div>
-        {subtitle && (
-          <div className="truncate text-xs text-muted-foreground">
-            {subtitle}
-          </div>
-        )}
-      </div>
-      <span
-        className={cn(
-          "max-w-[45%] shrink-0 truncate text-[11px]",
-          action.kind === "replace" || action.kind === "switch"
-            ? "text-primary"
-            : action.kind === "remove"
-              ? "text-destructive"
-              : "text-muted-foreground",
-        )}
-      >
-        {action.kind === "add" && (active ? "Add ↵" : "")}
-        {action.kind === "remove" && (active ? "Remove ↵" : "Remove")}
-        {action.kind === "replace" && `Replace ${action.fromName}`}
-        {action.kind === "switch" &&
-          `Switch from ${action.fromName}${active ? " ↵" : ""}`}
-        {action.kind === "unavailable" && action.reason}
-      </span>
+      {label}
     </button>
+  );
+  return (
+    <fieldset
+      aria-label="Filter by role"
+      className="flex gap-1.5 overflow-x-auto border-b border-border px-3 py-2"
+    >
+      {chip(undefined, "All")}
+      {roles.map((r) => chip(r, capabilityLabel(r)))}
+    </fieldset>
   );
 }
 
-/** Build the palette's rows for a query: modules by category, then capabilities. */
-function paletteRows(
+function actionLabel(action: RowAction, active: boolean) {
+  return {
+    trailing:
+      action.kind === "add"
+        ? active
+          ? "Add ↵"
+          : ""
+        : action.kind === "remove"
+          ? active
+            ? "Remove ↵"
+            : "Remove"
+          : action.kind === "replace"
+            ? `Replace ${action.fromName}`
+            : action.kind === "switch"
+              ? `Switch from ${action.fromName}${active ? " ↵" : ""}`
+              : action.reason,
+    trailingClassName:
+      action.kind === "replace" || action.kind === "switch"
+        ? "text-primary"
+        : action.kind === "remove"
+          ? "text-destructive"
+          : undefined,
+  };
+}
+
+/** The role a `role:<name>` query asks for (by id or label prefix), and the
+ *  rest of the query. */
+export function parseRoleQuery(
+  catalog: CatalogDto,
+  query: string,
+): { role: string | undefined; rest: string } {
+  const m = /^\s*role:(\S*)\s*(.*)$/i.exec(query);
+  if (!m) return { role: undefined, rest: query };
+  const name = (m[1] ?? "").toLowerCase();
+  const role = capabilityIndex(catalog)
+    .map(([r]) => r)
+    .find(
+      (r) =>
+        name !== "" &&
+        (r.startsWith(name) ||
+          capabilityLabel(r).replace(/\s+/g, "_").startsWith(name)),
+    );
+  return { role, rest: m[2] ?? "" };
+}
+
+/**
+ * The palette's rows for a query: with a role (`role`, else a `role:` query),
+ * its "any provider" row and its providers; otherwise every module, by
+ * category.
+ */
+export function paletteRows(
   catalog: CatalogDto,
   selection: Selection,
   planned: Set<string>,
   originOf: (id: string) => Origin,
   query: string,
-): { modules: [string, ModuleRow[]][]; capabilities: CapabilityRow[] } {
+  role?: string,
+): { capability: CapabilityRow | undefined; modules: [string, ModuleRow[]][] } {
+  const asked = parseRoleQuery(catalog, query);
+  const byRole = role ?? asked.role;
   // "remove <name>" (or "rm <name>") narrows to what can be removed.
-  const raw = query.trim().toLowerCase();
+  const raw = asked.rest.trim().toLowerCase();
   const removal = /^(remove|rm)(\s+|$)/.exec(raw);
   const q = removal ? raw.slice(removal[0].length) : raw;
   const matches = (...fields: (string | null | undefined)[]) =>
@@ -407,11 +392,13 @@ function paletteRows(
   // come from its access settings, not from picking.
   const found = catalog.modules
     .filter((m) => present.has(m.id) || !isGatewayManaged(m))
+    .filter((m) => !byRole || m.provider_of === byRole)
     .filter((m) =>
       matches(m.display_name, m.id, m.summary, m.category, m.provider_of),
     )
     .map(toRow)
     .filter(keep);
+
   // Browsing lists the environment first, then the catalog by category; a
   // search ranks name matches first in one list.
   const modules: [string, ModuleRow[]][] = [];
@@ -435,35 +422,31 @@ function paletteRows(
     ]);
   }
 
-  const capabilities = capabilityIndex(catalog)
-    .filter(([capability, providers]) =>
-      matches(
-        capability,
-        capabilityLabel(capability),
-        ...providers.map((p) => p.display_name),
-      ),
-    )
-    .map(([capability, providers]): CapabilityRow => {
-      const provided = providers.find((p) => present.has(p.id));
-      const action: RowAction = selection.capabilities.includes(capability)
-        ? { kind: "remove" }
-        : provided
-          ? {
-              kind: "unavailable",
-              reason: `Via ${provided.display_name ?? provided.id}`,
-            }
-          : { kind: "add" };
-      return {
-        type: "capability",
-        key: `c:${capability}`,
-        capability,
-        providers,
-        action,
-      };
-    })
-    .filter(keep);
+  const providers = byRole
+    ? capabilityIndex(catalog).find(([r]) => r === byRole)?.[1]
+    : undefined;
+  let capability: CapabilityRow | undefined;
+  if (byRole && providers) {
+    const provided = providers.find((p) => present.has(p.id));
+    const action: RowAction = selection.capabilities.includes(byRole)
+      ? { kind: "remove" }
+      : provided
+        ? {
+            kind: "unavailable",
+            reason: `Via ${provided.display_name ?? provided.id}`,
+          }
+        : { kind: "add" };
+    const row: CapabilityRow = {
+      type: "capability",
+      key: `c:${byRole}`,
+      capability: byRole,
+      providers,
+      action,
+    };
+    if (keep(row)) capability = row;
+  }
 
-  return { modules, capabilities };
+  return { capability, modules };
 }
 
 /** 0 when the name or id starts with the query, 1 when it contains it, 2 for

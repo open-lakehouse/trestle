@@ -47,6 +47,7 @@ import {
 } from "../artifacts/bundleZip.js";
 import { CodeViewer } from "../artifacts/CodeViewer.js";
 import { fileSourceOf } from "../artifacts/fileSource.js";
+import { CommandProvider, useCommands } from "../commands/CommandProvider.js";
 import { EnvironmentEditor } from "../EnvironmentEditor.js";
 import { errorMessage } from "../errors.js";
 import type { NodeSlots } from "../graph/nodeSlots.js";
@@ -56,6 +57,7 @@ import {
   ActivityBar,
   BUILTIN_SIDE_VIEWS,
   type SideView,
+  sideViewItems,
 } from "./ActivityBar.js";
 import {
   Breadcrumb,
@@ -73,6 +75,7 @@ import {
   openTab,
   pruneTabs,
   tabKey,
+  tabLabel,
 } from "./editors.js";
 import { DESIGN_TAB, EnvironmentPane } from "./envHeader.js";
 import {
@@ -88,6 +91,7 @@ import {
   workspaceToml,
 } from "./model.js";
 import { CompareEditor, RevisionEditor, RevisionsView } from "./revisions.js";
+import { shellCommands } from "./shellCommands.js";
 import {
   gatewayUrl,
   type MemberPlan,
@@ -107,7 +111,16 @@ export interface WorkspaceShellProps {
 type PanelView = "problems" | "output";
 
 /** The editor for a whole workspace (see the module comment). */
-export function WorkspaceShell({
+export function WorkspaceShell(props: WorkspaceShellProps) {
+  const { contributions } = useContributions();
+  return (
+    <CommandProvider commands={contributions?.commands}>
+      <ShellBody {...props} />
+    </CommandProvider>
+  );
+}
+
+function ShellBody({
   colorMode = "system",
   catalog: seededCatalog,
   statusItems,
@@ -220,29 +233,6 @@ export function WorkspaceShell({
     [nodeStatus, activeEnvId, version],
   );
 
-  // ⌘B toggles the sidebar, ⌘J the panel, ⌘1…9 switch tabs.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      const key = e.key.toLowerCase();
-      if (key === "b") {
-        e.preventDefault();
-        setSidebarOpen((o) => !o);
-      } else if (key === "j") {
-        e.preventDefault();
-        setPanelOpen((o) => !o);
-      } else if (/^[1-9]$/.test(key)) {
-        const tab = open[Number(key) - 1];
-        if (tab) {
-          e.preventDefault();
-          setActiveKey(tabKey(tab));
-        }
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
-
   const conflicts = useMemo(
     () =>
       portConflicts(
@@ -284,6 +274,66 @@ export function WorkspaceShell({
       )
       .finally(() => setDownloading(false));
   }, [workspace, catalog, planner]);
+
+  // The shell's commands (⌘B, ⌘J, ⌘1…9 among them): see shellCommands.
+  const [focusCommit, setFocusCommit] = useState(0);
+  const showView = useCallback((v: SideView) => {
+    setView(v);
+    setSidebarOpen(true);
+  }, []);
+  const commands = useMemo(
+    () =>
+      workspace
+        ? shellCommands(
+            {
+              workspace,
+              open,
+              sideViews: sideViewItems(hasRevisions, hostViews),
+              activeEnv,
+              revisions: hasRevisions,
+              canExport: !!planner.bundle,
+              exporting: downloading,
+            },
+            {
+              openEnv,
+              activate: setActiveKey,
+              showView,
+              toggleSidebar: () => setSidebarOpen((o) => !o),
+              togglePanel: () => setPanelOpen((o) => !o),
+              showProblems: () => {
+                setPanel("problems");
+                setPanelOpen(true);
+              },
+              newEnv: () => {
+                const env = ws.addEnv(freeName(workspace, "dev"));
+                if (typeof env !== "string") openEnv(env.id);
+              },
+              commit: () => {
+                showView("history");
+                setFocusCommit((n) => n + 1);
+              },
+              diff: (env, head) =>
+                openEditor({ env, compare: { from: head, to: "draft" } }),
+              exportWorkspace: downloadWorkspace,
+            },
+          )
+        : [],
+    [
+      workspace,
+      open,
+      hasRevisions,
+      hostViews,
+      activeEnv,
+      planner.bundle,
+      downloading,
+      openEnv,
+      showView,
+      ws.addEnv,
+      openEditor,
+      downloadWorkspace,
+    ],
+  );
+  useCommands(commands);
 
   if (!workspace) {
     return (
@@ -340,6 +390,7 @@ export function WorkspaceShell({
                     env={activeEnv}
                     catalog={catalog}
                     onOpen={openEditor}
+                    focusCommit={focusCommit}
                   />
                 )}
                 {view === "modules" && <ModulesView catalog={catalog} />}
@@ -598,13 +649,7 @@ function TabStrip({
         const env = envs.find((e) => e.id === tab.env);
         if (!env) return null;
         const active = key === activeKey;
-        const label = tab.compare
-          ? `#${tab.compare.from} → ${tab.compare.to === "draft" ? "draft" : `#${tab.compare.to}`}`
-          : tab.revision !== undefined
-            ? `#${tab.revision}`
-            : tab.path
-              ? (tab.path.split("/").at(-1) ?? tab.path)
-              : env.name;
+        const label = tabLabel(tab, env.name);
         // Anything but the diagram also names its environment.
         const secondary =
           tab.path !== undefined || tab.revision !== undefined || !!tab.compare;

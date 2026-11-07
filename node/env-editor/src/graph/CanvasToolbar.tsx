@@ -157,9 +157,9 @@ export function CanvasToolbar({
         onClick={onAdd}
       >
         <Plus className="h-4 w-4" />
-        Add component
+        Add module
         <kbd className="ml-1 rounded bg-primary-foreground/20 px-1 text-[10px] font-medium">
-          {MOD_KEY}K
+          /
         </kbd>
       </Button>
       <div className="mx-1 h-5 w-px bg-border" />

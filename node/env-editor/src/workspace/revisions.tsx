@@ -6,7 +6,7 @@
 import { Badge, Button, Input } from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
 import { GitCommitHorizontal, GitCompare, Loader2, Undo2 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { EnvironmentDiagram } from "../diagram/EnvironmentDiagram.js";
 import { errorMessage } from "../errors.js";
 import { usePlanner } from "../planner.js";
@@ -63,6 +63,8 @@ export interface RevisionsViewProps {
   env: EnvDoc | undefined;
   catalog: CatalogDto | undefined;
   onOpen: (tab: EditorTab) => void;
+  /** Focuses the commit message whenever it changes (the Commit command). */
+  focusCommit?: number;
 }
 
 /** The sidebar's history of `env`: its draft, then its revisions. */
@@ -71,6 +73,7 @@ export function RevisionsView({
   env,
   catalog,
   onOpen,
+  focusCommit,
 }: RevisionsViewProps) {
   const ws = useWorkspace();
   const revisions = ws.revisions;
@@ -84,6 +87,10 @@ export function RevisionsView({
     [draft],
   );
   const [message, setMessage] = useState("");
+  const messageRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focusCommit) messageRef.current?.focus();
+  }, [focusCommit]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -131,6 +138,7 @@ export function RevisionsView({
               </p>
             )}
             <Input
+              ref={messageRef}
               aria-label="Revision message"
               placeholder="Message (optional)"
               value={message}

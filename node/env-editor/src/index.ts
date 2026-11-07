@@ -7,6 +7,28 @@
 
 export { FilesPanel } from "./artifacts/FilesPanel.js";
 export {
+  CommandPalette,
+  type CommandPaletteProps,
+} from "./commands/CommandPalette.js";
+export {
+  CommandProvider,
+  type CommandProviderProps,
+  useCommands,
+  useOpenPalette,
+} from "./commands/CommandProvider.js";
+export {
+  type Command,
+  dispatchKey,
+  EDITOR_SHORTCUTS,
+  filterCommands,
+  formatShortcut,
+  isEditableTarget,
+  type KeyEventLike,
+  matchesShortcut,
+  SECTION_ORDER,
+  shouldHandle,
+} from "./commands/registry.js";
+export {
   createGraphSnapshot,
   type DiagramImageFormat,
   type DiagramImageOptions,
@@ -34,6 +56,9 @@ export {
 export {
   ComponentPalette,
   type ComponentPaletteProps,
+  paletteRows,
+  type RowIntent,
+  rowIntent,
 } from "./graph/ComponentPalette.js";
 export type { CanvasActions } from "./graph/canvasActions.js";
 export {
@@ -73,6 +98,7 @@ export {
 export {
   type EnvironmentOptions,
   type EnvironmentState,
+  selectionEdits,
   useEnvironment,
 } from "./state/useEnvironment.js";
 export type {

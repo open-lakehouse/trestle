@@ -46,14 +46,15 @@ runtime — so it has no wasm coupling and stays reusable.
 the live plan: every edit replans after a short debounce, and a failed plan
 keeps the last good one on screen next to the error.
 
-- **Canvas** (default tab) — a top toolbar (*Add component* `⌘K` / `/`, undo
-  `⌘Z`, redo `⇧⌘Z`, planner status), a hover action bar on each node
-  (configure · swap · remove), and a docked inspector for the selected node
-  (settings, connections, rendered files, swap/remove). `Delete` removes the
-  selected component, `Esc` deselects. The component palette (`⌘K`) adds
-  modules and capabilities and removes the ones you added: browsing lists the
-  environment first, and a query starting with `remove` narrows to what can
-  be removed.
+- **Canvas** (default tab) — a top toolbar (*Add module…* `/`, undo `⌘Z`,
+  redo `⇧⌘Z`, planner status), a hover action bar on each node (configure ·
+  swap · remove), and a docked inspector for the selected node (settings,
+  connections, rendered files, swap/remove). `Delete` removes the selected
+  component, `Esc` deselects. *Add module…* adds modules and removes the ones
+  you added: browsing lists the environment first, and a query starting with
+  `remove` narrows to what can be removed. The role chips (or `role:<name>`)
+  narrow it to one role's providers and offer "any provider", which asks for
+  the capability and leaves the pick to the planner.
 - **Components** — the same selection as a toggle list with inline knobs.
 - **Files** — the rendered artifacts.
 
@@ -75,6 +76,22 @@ kind (the planner enforces the same rules), and removable; resources a component
 without them it renders the same diagram read-only. The actions reach the nodes
 through context, never node `data`, so changing them doesn't re-run the ELK
 layout.
+
+## Commands and keys
+
+Every shortcut is a command in one registry (`commands/registry.ts`,
+`CommandProvider`); `⌘K` opens the palette over all of them, by section (Go
+to, Environment, Edit, View, App, then any other). The editor registers Go to
+(environments, open editors, side views), Edit (Add module…, undo, redo,
+commit, diff, export) and View (`⌘B` sidebar, `⌘J` panel, `⌘1…9` editors).
+A host adds its own through `EditorContributions.commands`; its bindings win
+on a shared key, and `EDITOR_SHORTCUTS` lists the editor's.
+
+One window listener dispatches them. It skips an event that something else
+already handled (`defaultPrevented`), keys typed in a text field (only `⌘K`
+opts in with `allowInInputs`), and anything typed inside an open dialog or
+menu. A host that handles a key itself and calls `preventDefault` keeps the
+editor's binding quiet.
 
 ## Theming contract
 

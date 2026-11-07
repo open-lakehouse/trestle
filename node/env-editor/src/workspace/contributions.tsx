@@ -1,4 +1,4 @@
-// What a host adds to the workspace shell: extra side views, and per
+// What a host adds to the workspace shell: commands, extra side views, and per
 // environment a run status, header actions, sub-tabs next to Design, each
 // service's state on the canvas, and a panel in place of the static Run
 // output. The editor only renders what it is given and learns nothing about
@@ -17,6 +17,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import type { Command } from "../commands/registry.js";
 import type { NodeStatus, RunState } from "../graph/runState.js";
 
 export type { NodeStatus, RunState } from "../graph/runState.js";
@@ -98,6 +99,10 @@ export interface EnvironmentContributions {
 
 /** Everything a host contributes to the workspace shell. */
 export interface EditorContributions {
+  /** Commands for the ⌘K palette, under their own sections (e.g.
+   *  "Environment", "App"). Their key bindings take precedence over the
+   *  editor's (see `EDITOR_SHORTCUTS`). */
+  commands?: Command[];
   sideViews?: SideViewContribution[];
   environment?: EnvironmentContributions;
   panel?: PanelContribution;
