@@ -408,3 +408,209 @@ fn deleting_an_environment_removes_its_revisions_instances_and_leases() {
         Err(Error::NotFound { .. })
     ));
 }
+
+#[test]
+fn renaming_an_environment_keeps_its_id_revisions_and_vars() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    let env = store
+        .create_environment(&ws.id, "dev", draft(&["unity-catalog"]))
+        .unwrap();
+    let mut vars = VarSet::new();
+    vars.set("LOG", VarValue::Literal("info".into()));
+    store.set_environment_vars(&env.id, &vars).unwrap();
+    let r1 = store.commit_draft(&env.id).unwrap();
+
+    store.rename_environment(&env.id, "staging").unwrap();
+    let renamed = store.environment(&env.id).unwrap();
+    assert_eq!(renamed.name, "staging");
+    assert_eq!(renamed.vars, vars);
+    assert_eq!(renamed.head, Some(1));
+    // The draft follows the new name; the revision keeps the name it was committed with.
+    assert_eq!(renamed.draft.manifest.context.env_name, "staging");
+    assert_eq!(store.revision(&env.id, 1).unwrap(), r1);
+    assert_eq!(r1.manifest().context.env_name, "dev");
+    assert_eq!(store.environments(&ws.id).unwrap()[0].id, env.id);
+
+    // A no-op, an invalid name, a taken name and an unknown environment.
+    store.rename_environment(&env.id, "staging").unwrap();
+    assert!(matches!(
+        store.rename_environment(&env.id, "Bad_Name"),
+        Err(Error::InvalidName(_))
+    ));
+    store
+        .create_environment(&ws.id, "prod", draft(&[]))
+        .unwrap();
+    assert!(matches!(
+        store.rename_environment(&env.id, "prod"),
+        Err(Error::Duplicate {
+            kind: "environment",
+            ..
+        })
+    ));
+    assert_eq!(store.environment(&env.id).unwrap().name, "staging");
+    store.delete_environment(&env.id).unwrap();
+    assert!(matches!(
+        store.rename_environment(&env.id, "other"),
+        Err(Error::NotFound {
+            kind: "environment",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn renaming_a_workspace_keeps_its_id_and_environments() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", true).unwrap();
+    let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    store.commit_draft(&env.id).unwrap();
+
+    store.rename_workspace(&ws.id, "lab").unwrap();
+    assert!(store.workspace("demo").unwrap().is_none());
+    let renamed = store.workspace("lab").unwrap().unwrap();
+    assert_eq!((renamed.id.clone(), renamed.mesh), (ws.id.clone(), true));
+    assert_eq!(store.environments(&ws.id).unwrap()[0].id, env.id);
+    assert_eq!(store.revisions(&env.id).unwrap().len(), 1);
+
+    // The old name is free again.
+    store.create_workspace("demo", false).unwrap();
+    assert!(matches!(
+        store.rename_workspace(&ws.id, "demo"),
+        Err(Error::Duplicate {
+            kind: "workspace",
+            ..
+        })
+    ));
+    assert!(matches!(
+        store.rename_workspace(&ws.id, "-x"),
+        Err(Error::InvalidName(_))
+    ));
+    store.rename_workspace(&ws.id, "lab").unwrap();
+}
+
+#[test]
+fn the_mesh_can_be_switched() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    store.set_mesh(&ws.id, true).unwrap();
+    assert!(store.workspace_by_id(&ws.id).unwrap().mesh);
+    store.set_mesh(&ws.id, true).unwrap();
+    store.set_mesh(&ws.id, false).unwrap();
+    assert!(!store.workspace_by_id(&ws.id).unwrap().mesh);
+    store.delete_workspace(&ws.id).unwrap();
+    assert!(matches!(
+        store.set_mesh(&ws.id, true),
+        Err(Error::NotFound {
+            kind: "workspace",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn renames_and_mesh_changes_wait_until_no_instance_is_left() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    let dev = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    let prod = store
+        .create_environment(&ws.id, "prod", draft(&[]))
+        .unwrap();
+    store.commit_draft(&dev.id).unwrap();
+    // Stopped counts: its volumes are still named after the environment.
+    let instance = store.create_instance(&dev.id, 1).unwrap();
+    assert_eq!(instance.desired, Desired::Stopped);
+
+    let has = |r: Result<(), Error>, kind: &str, name: &str| match r {
+        Err(Error::HasInstances {
+            kind: k,
+            name: n,
+            instances: 1,
+        }) => assert_eq!((k, n.as_str()), (kind, name)),
+        other => panic!("expected HasInstances, got {other:?}"),
+    };
+    has(store.rename_environment(&dev.id, "x"), "environment", "dev");
+    has(store.rename_workspace(&ws.id, "x"), "workspace", "demo");
+    has(store.set_mesh(&ws.id, true), "workspace", "demo");
+    // An environment without instances of its own is free to go, and so are no-ops.
+    store.rename_environment(&prod.id, "live").unwrap();
+    store.rename_workspace(&ws.id, "demo").unwrap();
+    store.set_mesh(&ws.id, false).unwrap();
+    let err = store.rename_environment(&dev.id, "x").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "environment `dev` has 1 instance: remove it first"
+    );
+
+    store.delete_instance(&instance.id).unwrap();
+    store.rename_environment(&dev.id, "x").unwrap();
+    store.rename_workspace(&ws.id, "y").unwrap();
+    store.set_mesh(&ws.id, true).unwrap();
+}
+
+#[test]
+fn a_commit_records_its_message_and_time() {
+    let (_dir, store) = store();
+    let ws = store.create_workspace("demo", false).unwrap();
+    let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
+    let before = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+
+    let r1 = store
+        .commit_draft_with(&env.id, Some("  first cut \n"))
+        .unwrap();
+    assert_eq!(r1.message(), Some("first cut"));
+    assert!(r1.created_at() >= before && r1.created_at() <= std::time::SystemTime::now());
+    assert_eq!(store.revision(&env.id, 1).unwrap(), r1);
+
+    // A blank message is none, and the message isn't part of the digest.
+    let r2 = store.commit_draft_with(&env.id, Some("  ")).unwrap();
+    assert_eq!(r2.message(), None);
+    assert_eq!(r2.digest(), r1.digest());
+    assert_eq!(store.commit_draft(&env.id).unwrap().message(), None);
+    let messages: Vec<_> = store
+        .revisions(&env.id)
+        .unwrap()
+        .iter()
+        .map(|r| r.message().map(str::to_owned))
+        .collect();
+    assert_eq!(messages, [Some("first cut".to_owned()), None, None]);
+}
+
+#[test]
+fn a_version_1_store_migrates_and_keeps_its_revisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute_batch(include_str!("../migrations/0001_init.sql"))
+        .unwrap();
+    raw.pragma_update(None, "user_version", 1).unwrap();
+    let manifest = EnvManifest::new(Selection::modules(["unity-catalog"]), PlanCtx::default())
+        .to_toml()
+        .unwrap();
+    raw.execute_batch(&format!(
+        "INSERT INTO workspace (id, name, mesh, created_at) VALUES ('w', 'demo', 0, 0);
+         INSERT INTO environment (id, workspace_id, name, draft, created_at, head)
+             VALUES ('e', 'w', 'dev', '{manifest}', 0, 1);
+         INSERT INTO revision (environment_id, number, manifest, modules, vars, digest, created_at)
+             VALUES ('e', 1, '{manifest}', '{{}}', '{{}}', 'd', 1700000000);"
+    ))
+    .unwrap();
+    drop(raw);
+
+    let store = Store::open(&path).unwrap();
+    let env = store.workspace("demo").unwrap().unwrap();
+    let env = &store.environments(&env.id).unwrap()[0];
+    let r1 = store.revision(&env.id, 1).unwrap();
+    assert_eq!(r1.message(), None);
+    assert_eq!(
+        r1.created_at(),
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)
+    );
+    assert_eq!(
+        store
+            .commit_draft_with(&env.id, Some("after the upgrade"))
+            .unwrap()
+            .message(),
+        Some("after the upgrade")
+    );
+}

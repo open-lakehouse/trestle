@@ -23,7 +23,10 @@ pub const DB_FILE: &str = "state.db";
 
 /// The migrations, in order: migration `n` (1-based) takes the schema from version `n - 1` to
 /// `n`.
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_revision_message.sql"),
+];
 
 /// The schema version this crate writes and reads.
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -45,6 +48,11 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or_default()
+}
+
+/// A `created_at` column (seconds since the epoch) as a time.
+fn time_of(secs: i64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(secs.max(0) as u64)
 }
 
 fn json<T: serde::Serialize>(value: &T) -> Result<String> {
@@ -70,6 +78,44 @@ fn is_unique_violation(e: &rusqlite::Error) -> bool {
             if f.code == rusqlite::ErrorCode::ConstraintViolation
     )
 }
+
+/// `e`, or [`Error::Duplicate`] when it is a unique-constraint violation on `name`.
+fn duplicate_or(e: rusqlite::Error, kind: &'static str, name: &str) -> Error {
+    if is_unique_violation(&e) {
+        Error::Duplicate {
+            kind,
+            name: name.to_owned(),
+        }
+    } else {
+        e.into()
+    }
+}
+
+/// Refuse with [`Error::HasInstances`] when `count` (a `SELECT COUNT(*)` over the instances
+/// named after `name`, taking `id`) finds any.
+fn refuse_instances(
+    tx: &Transaction<'_>,
+    count: &str,
+    id: &str,
+    kind: &'static str,
+    name: &str,
+) -> Result<()> {
+    let instances: usize = tx.query_row(count, [id], |r| r.get(0))?;
+    if instances == 0 {
+        Ok(())
+    } else {
+        Err(Error::HasInstances {
+            kind,
+            name: name.to_owned(),
+            instances,
+        })
+    }
+}
+
+const WORKSPACE_INSTANCES: &str = "SELECT COUNT(*) FROM instance i \
+     JOIN environment e ON e.id = i.environment_id WHERE e.workspace_id = ?1";
+
+const ENVIRONMENT_INSTANCES: &str = "SELECT COUNT(*) FROM instance WHERE environment_id = ?1";
 
 /// The trestle state: workspaces, their environments (each a draft and numbered, immutable
 /// revisions), instances and the host-wide slot leases, in one SQLite database (WAL mode, so
@@ -171,16 +217,7 @@ impl Store {
                     now()
                 ],
             )
-            .map_err(|e| {
-                if is_unique_violation(&e) {
-                    Error::Duplicate {
-                        kind: "workspace",
-                        name: name.to_owned(),
-                    }
-                } else {
-                    e.into()
-                }
-            })?;
+            .map_err(|e| duplicate_or(e, "workspace", name))?;
             Ok(())
         })?;
         Ok(ws)
@@ -222,6 +259,64 @@ impl Store {
                 kind: "workspace",
                 id: id.0.clone(),
             })
+        })
+    }
+
+    /// The name and mesh flag of workspace `id`, read inside `tx`.
+    fn workspace_head(tx: &Transaction<'_>, id: &WorkspaceId) -> Result<(String, bool)> {
+        tx.query_row(
+            "SELECT name, mesh FROM workspace WHERE id = ?1",
+            [&id.0],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| Error::NotFound {
+            kind: "workspace",
+            id: id.0.clone(),
+        })
+    }
+
+    /// Rename the workspace to `name`. Its id, environments, revisions, vars and source config
+    /// stay as they are. Renaming it to its own name does nothing.
+    ///
+    /// Refused with [`Error::HasInstances`] while any of its environments has an instance,
+    /// stopped or not: an instance's compose project, volumes and hostnames are named after the
+    /// workspace, as is the mesh network, so they would be left behind under the old name.
+    pub fn rename_workspace(&self, id: &WorkspaceId, name: &str) -> Result<()> {
+        check_name(name)?;
+        self.write(|tx| {
+            let (old, _) = Self::workspace_head(tx, id)?;
+            if old == name {
+                return Ok(());
+            }
+            refuse_instances(tx, WORKSPACE_INSTANCES, &id.0, "workspace", &old)?;
+            tx.execute(
+                "UPDATE workspace SET name = ?2 WHERE id = ?1",
+                params![id.0, name],
+            )
+            .map_err(|e| duplicate_or(e, "workspace", name))?;
+            Ok(())
+        })
+    }
+
+    /// Set whether the workspace's gateways join a shared mesh network. Setting it to what it
+    /// is does nothing.
+    ///
+    /// Refused with [`Error::HasInstances`] while any of its environments has an instance:
+    /// an instance's gateway joins the mesh when it is created, so changing it under existing
+    /// instances would leave them on (or off) a network the rest no longer share.
+    pub fn set_mesh(&self, id: &WorkspaceId, mesh: bool) -> Result<()> {
+        self.write(|tx| {
+            let (name, current) = Self::workspace_head(tx, id)?;
+            if current == mesh {
+                return Ok(());
+            }
+            refuse_instances(tx, WORKSPACE_INSTANCES, &id.0, "workspace", &name)?;
+            tx.execute(
+                "UPDATE workspace SET mesh = ?2 WHERE id = ?1",
+                params![id.0, mesh],
+            )?;
+            Ok(())
         })
     }
 
@@ -366,12 +461,7 @@ impl Store {
                 ],
             )
             .map_err(|e| {
-                if is_unique_violation(&e) {
-                    Error::Duplicate {
-                        kind: "environment",
-                        name: name.to_owned(),
-                    }
-                } else if matches!(&e, rusqlite::Error::SqliteFailure(f, _)
+                if matches!(&e, rusqlite::Error::SqliteFailure(f, _)
                     if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY)
                 {
                     Error::NotFound {
@@ -379,7 +469,7 @@ impl Store {
                         id: workspace.0.clone(),
                     }
                 } else {
-                    e.into()
+                    duplicate_or(e, "environment", name)
                 }
             })?;
             Ok(())
@@ -412,6 +502,44 @@ impl Store {
                 kind: "environment",
                 id: id.0.clone(),
             })
+        })
+    }
+
+    /// Rename the environment to `name`, within its workspace. Its id, revisions and vars stay
+    /// as they are, and its draft's `env_name` follows the new name. The revisions keep the
+    /// `env_name` they were committed with; an instance is always planned under the
+    /// environment's current name. Renaming it to its own name does nothing.
+    ///
+    /// Refused with [`Error::HasInstances`] while it has an instance, stopped or not: an
+    /// instance's compose project, volumes and hostnames are named after the environment, so
+    /// they would be left behind under the old name.
+    pub fn rename_environment(&self, id: &EnvironmentId, name: &str) -> Result<()> {
+        check_name(name)?;
+        self.write(|tx| {
+            let env = tx
+                .query_row(
+                    &format!("{ENV_COLUMNS} WHERE id = ?1"),
+                    [&id.0],
+                    environment_row,
+                )
+                .optional()?
+                .transpose()?
+                .ok_or_else(|| Error::NotFound {
+                    kind: "environment",
+                    id: id.0.clone(),
+                })?;
+            if env.name == name {
+                return Ok(());
+            }
+            refuse_instances(tx, ENVIRONMENT_INSTANCES, &id.0, "environment", &env.name)?;
+            let mut manifest = env.draft.manifest;
+            manifest.context.env_name = name.to_owned();
+            tx.execute(
+                "UPDATE environment SET name = ?2, draft = ?3 WHERE id = ?1",
+                params![id.0, name, manifest.to_toml()?],
+            )
+            .map_err(|e| duplicate_or(e, "environment", name))?;
+            Ok(())
         })
     }
 
@@ -487,8 +615,19 @@ impl Store {
     }
 
     /// Commit the environment's draft as its next revision (numbered one past its head) and
-    /// make it the head.
+    /// make it the head. The same as [`commit_draft_with`](Self::commit_draft_with) without a
+    /// message.
     pub fn commit_draft(&self, id: &EnvironmentId) -> Result<Revision> {
+        self.commit_draft_with(id, None)
+    }
+
+    /// Commit the environment's draft as its next revision, with `message` (trimmed; a blank
+    /// one counts as none). The message isn't part of the revision's digest.
+    pub fn commit_draft_with(&self, id: &EnvironmentId, message: Option<&str>) -> Result<Revision> {
+        let message = message
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_owned);
         self.write(|tx| {
             let (draft, modules, vars, head): (String, String, String, Option<u32>) = tx
                 .query_row(
@@ -505,9 +644,10 @@ impl Store {
             let modules: BTreeMap<String, String> = from_json(&modules)?;
             let vars: VarSet = from_json(&vars)?;
             let digest = digest(&draft, &modules, &vars)?;
+            let created_at = now();
             tx.execute(
                 "INSERT INTO revision (environment_id, number, manifest, modules, vars, digest, \
-                 created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 message, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     id.0,
                     number,
@@ -515,7 +655,8 @@ impl Store {
                     json(&modules)?,
                     json(&vars)?,
                     digest,
-                    now()
+                    message,
+                    created_at
                 ],
             )?;
             tx.execute(
@@ -530,6 +671,8 @@ impl Store {
                 modules,
                 vars,
                 digest,
+                message,
+                created_at: time_of(created_at),
             })
         })
     }
@@ -829,12 +972,13 @@ fn environment_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Environment
     })())
 }
 
-const REV_COLUMNS: &str =
-    "SELECT environment_id, number, manifest, modules, vars, digest FROM revision";
+const REV_COLUMNS: &str = "SELECT environment_id, number, manifest, modules, vars, digest, \
+     message, created_at FROM revision";
 
 fn revision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Revision>> {
     let (env, number, manifest_toml): (String, u32, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
     let (modules, vars, digest): (String, String, String) = (r.get(3)?, r.get(4)?, r.get(5)?);
+    let (message, created_at): (Option<String>, i64) = (r.get(6)?, r.get(7)?);
     Ok((|| {
         Ok(Revision {
             environment: EnvironmentId(env),
@@ -844,6 +988,8 @@ fn revision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Revision>> {
             modules: from_json(&modules)?,
             vars: from_json(&vars)?,
             digest,
+            message,
+            created_at: time_of(created_at),
         })
     })())
 }

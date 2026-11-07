@@ -38,6 +38,22 @@ pub enum Error {
         /// Its id or name.
         id: String,
     },
+    /// A workspace or environment can't be renamed (or its mesh changed) while it has
+    /// instances: their compose projects, volumes, hostnames and mesh network are named after
+    /// it, so the change would strand what Docker already holds under the old name.
+    #[error(
+        "{kind} `{name}` has {instances} instance{}: remove {} first",
+        if *instances == 1 { "" } else { "s" },
+        if *instances == 1 { "it" } else { "them" }
+    )]
+    HasInstances {
+        /// What kind of thing (`workspace`, `environment`).
+        kind: &'static str,
+        /// Its name.
+        name: String,
+        /// How many instances it has.
+        instances: usize,
+    },
     /// Every slot is leased.
     #[error("no free slot: the host runs at most {} instances", olai_stack_topology::MAX_SLOT + 1)]
     SlotsExhausted,
