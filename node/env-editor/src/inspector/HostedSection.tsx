@@ -52,7 +52,7 @@ export function secretRefs(connection: HostedConnection): string[] {
 }
 
 /** One editable field of a hosted connection. */
-interface Field {
+export interface Field {
   label: string;
   value: string;
   /** Rebuild the connection with this field set to `value`. */
@@ -62,7 +62,7 @@ interface Field {
 
 const SECRET_HINT = `An env-var reference like ${envRef("VAR")}, set when rendering.`;
 
-function fieldsOf(c: HostedConnection): Field[] {
+export function fieldsOf(c: HostedConnection): Field[] {
   switch (c.kind) {
     case "postgres":
       return [
@@ -241,7 +241,7 @@ export function HostedSection({
   );
 }
 
-function TextField({
+export function TextField({
   id,
   label,
   value,

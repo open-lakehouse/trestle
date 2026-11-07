@@ -160,15 +160,17 @@ jobs:
       # its workspace dependencies' dist/ types), then the diagram bundle.
       - run: bun run build:packages
       - run: bun run build:diagram
-      # `bun pm pack` rewrites the `workspace:` protocol in package.json (which
-      # `npm publish` of the directory would leave in place) to the
-      # dependency's package.json version, so every package is stamped from its
-      # placeholder crate first, not only this one.
+      # `bun pm pack` resolves a `workspace:` dependency from the version
+      # bun.lock records for it (`0.0.0`), not from the sibling's package.json.
+      # So stamp-versions.ts stamps every package from its placeholder crate
+      # and pins each `workspace:` dependency to the sibling's version first,
+      # and check-packed.ts fails the build if a tarball still has one
+      # unresolved.
       - name: Pack
         run: |
           bun scripts/stamp-versions.ts
-          cd "$PACKAGE_DIR"
-          bun pm pack --filename "$RUNNER_TEMP/$TGZ"
+          (cd "$PACKAGE_DIR" && bun pm pack --filename "$RUNNER_TEMP/$TGZ")
+          bun scripts/check-packed.ts "$RUNNER_TEMP/$TGZ"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.ARTIFACT }}

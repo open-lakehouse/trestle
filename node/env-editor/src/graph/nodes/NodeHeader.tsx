@@ -1,5 +1,5 @@
 import { cn } from "@open-lakehouse/ui-kit";
-import { FileCode2 } from "lucide-react";
+import { Cloud, FileCode2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { describeOrigin } from "../../state/origin.js";
 import type { GraphNodeDto } from "../../types.js";
@@ -15,6 +15,8 @@ import { NODE_HEADER } from "../useTopologyLayout.js";
  * The heading every card opens with: the project's logo on a tile tinted by
  * the role accent, the implementation's name, and the function it fills. On
  * an editable canvas, a component the planner pulled in carries an "Auto" chip;
+ * one that runs outside the stack (a hosted provider, a module run as a
+ * function) a cloud badge naming its cloud;
  * a node with rendered files (when the host provides them) a count that opens
  * them.
  * A host's `NodeSlots` may render the name and role lines instead, and add
@@ -63,7 +65,18 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
           {role === undefined ? style.label : <Slot>{role}</Slot>}
         </div>
       </div>
-      {node.kind === "external" && <Chip>External</Chip>}
+      {node.kind === "external" && (
+        <Chip
+          icon={<Cloud className="h-2.5 w-2.5" />}
+          title={
+            node.cloud
+              ? `Runs in ${node.cloud.toUpperCase()}, outside the stack`
+              : "Runs outside the stack"
+          }
+        >
+          {node.cloud ? node.cloud.toUpperCase() : "External"}
+        </Chip>
+      )}
       {origin && origin.kind !== "explicit" && (
         <Chip title={describeOrigin(origin)}>Auto</Chip>
       )}
@@ -97,12 +110,21 @@ function Slot({ children }: { children: ReactNode }) {
   );
 }
 
-function Chip({ title, children }: { title?: string; children: string }) {
+function Chip({
+  title,
+  icon,
+  children,
+}: {
+  title?: string;
+  icon?: ReactNode;
+  children: string;
+}) {
   return (
     <span
-      className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground"
+      className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground"
       title={title}
     >
+      {icon}
       {children}
     </span>
   );

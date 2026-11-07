@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Selection } from "../types.js";
-import { diffSelections, isEmptyDiff } from "./diff.js";
+import { describeHostedChange, diffSelections, isEmptyDiff } from "./diff.js";
 
 const base: Selection = {
   modules: ["postgres", "unity-catalog"],
@@ -59,5 +59,76 @@ describe("diffSelections", () => {
       diffSelections(a, { ...b, client: { python: true } }).settings,
     ).toEqual(["client"]);
     expect(diffSelections(a, base).settings).toEqual(["gateway"]);
+  });
+});
+
+describe("hosted changes", () => {
+  const fn: Selection = {
+    ...base,
+    hosted: {
+      "unity-catalog": {
+        vendor: "neon-function",
+        connection: { kind: "function" },
+      },
+    },
+  };
+  const rows = (a: Selection, b: Selection) =>
+    diffSelections(a, b).hosted.map(describeHostedChange);
+
+  test("running a module as a Neon Function reads as such", () => {
+    const diff = diffSelections(base, fn);
+    expect(diff.settings).toEqual([]);
+    expect(diff.hosted).toEqual([
+      {
+        module: "unity-catalog",
+        from: undefined,
+        to: { vendor: "neon-function", connection: { kind: "function" } },
+      },
+    ]);
+    expect(isEmptyDiff(diff)).toBe(false);
+    expect(rows(base, fn)).toEqual(["unity-catalog runs as a Neon Function"]);
+  });
+
+  test("switching back runs it in a local container", () => {
+    expect(rows(fn, base)).toEqual(["unity-catalog runs in a local container"]);
+  });
+
+  test("a function URL change shows both URLs", () => {
+    const withUrl: Selection = {
+      ...base,
+      hosted: {
+        "unity-catalog": {
+          vendor: "neon-function",
+          connection: { kind: "function", url: "https://uc.example" },
+        },
+      },
+    };
+    expect(rows(fn, withUrl)).toEqual([
+      "unity-catalog function URL: (default) → https://uc.example",
+    ]);
+  });
+
+  test("a hosted provider's vendor change names both vendors", () => {
+    const pg = (vendor?: "neon" | "aws-rds"): Selection => ({
+      ...base,
+      hosted: {
+        "hosted-postgres": {
+          vendor,
+          connection: {
+            kind: "postgres",
+            host: "db",
+            username: "u",
+            password: "pw",
+          },
+        },
+      },
+    });
+    expect(rows(base, pg("neon"))).toEqual([
+      "hosted-postgres connection: (default) → Neon",
+    ]);
+    expect(rows(pg("neon"), pg("aws-rds"))).toEqual([
+      "hosted-postgres connection: Neon → Amazon RDS",
+    ]);
+    expect(rows(pg("neon"), structuredClone(pg("neon")))).toEqual([]);
   });
 });

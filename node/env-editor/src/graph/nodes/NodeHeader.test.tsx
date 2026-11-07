@@ -148,3 +148,30 @@ describe("NodeHeader files chip", () => {
     expect(render({ status: () => undefined })).not.toContain("data-run-state");
   });
 });
+
+describe("NodeHeader cloud badge", () => {
+  const external = (cloud: string | null): GraphNodeDto => ({
+    ...node,
+    kind: "external",
+    placement: "external:https://br-example-unitycatalog.neon.tech",
+    cloud,
+  });
+
+  test("a module run as a Neon Function names its cloud", () => {
+    const html = renderToStaticMarkup(<NodeHeader node={external("neon")} />);
+    expect(html).toContain(">NEON</span>");
+    expect(html).toContain('title="Runs in NEON, outside the stack"');
+    expect(html).toContain("lucide-cloud");
+  });
+
+  test("an unnamed cloud reads External", () => {
+    const html = renderToStaticMarkup(<NodeHeader node={external("")} />);
+    expect(html).toContain(">External</span>");
+  });
+
+  test("a local component has no badge", () => {
+    const html = render();
+    expect(html).not.toContain("lucide-cloud");
+    expect(html).not.toContain("outside the stack");
+  });
+});

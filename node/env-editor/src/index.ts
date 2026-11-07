@@ -83,6 +83,13 @@ export {
   InspectorPanel,
   type InspectorPanelProps,
 } from "./inspector/InspectorPanel.js";
+export {
+  hostedFor,
+  NEON_FUNCTION,
+  type RunsAs,
+  RunsAsSection,
+  runsAsFunction,
+} from "./inspector/RunsAsSection.js";
 export { KnobsStep } from "./knobs/KnobsStep.js";
 export {
   PlannerProvider,
