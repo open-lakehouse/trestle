@@ -24,7 +24,9 @@ export {
   useContributions,
 } from "./contributions.js";
 export {
+  describeHostedChange,
   diffSelections,
+  type HostedChange,
   isEmptyDiff,
   type KnobChange,
   type ListDiff,

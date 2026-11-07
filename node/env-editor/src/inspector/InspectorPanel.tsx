@@ -42,6 +42,7 @@ import type {
 } from "../types.js";
 import { AccessSection } from "./AccessSection.js";
 import { HostedSection } from "./HostedSection.js";
+import { RunsAsSection } from "./RunsAsSection.js";
 
 export interface InspectorPanelProps {
   /** The inspected component's module id. */
@@ -60,9 +61,11 @@ export interface InspectorPanelProps {
   onAddResource: (moduleId: string, kind: string, name: string) => void;
   /** Drop an extra resource. */
   onRemoveResource: (kind: string, name: string) => void;
-  /** How this hosted provider is configured, if the selection configures it. */
+  /** How this hosted provider is configured, or where this function-capable
+   *  module runs, if the selection says. */
   hosted: HostedResource | undefined;
-  /** Configure this hosted provider (or use its defaults: `undefined`). */
+  /** Configure this hosted provider (or use its defaults: `undefined`), or
+   *  run this module as a function (a local container: `undefined`). */
   onSetHosted: (moduleId: string, hosted: HostedResource | undefined) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
   /** How the gateway guards access; shown when the gateway is inspected. */
@@ -172,6 +175,14 @@ export function InspectorPanel({
 
         {module?.hosted && (
           <HostedSection
+            module={module}
+            hosted={hosted}
+            onChange={(next) => onSetHosted(moduleId, next)}
+          />
+        )}
+
+        {module?.function && !module.hosted && (
+          <RunsAsSection
             module={module}
             hosted={hosted}
             onChange={(next) => onSetHosted(moduleId, next)}

@@ -12,7 +12,13 @@ import { errorMessage } from "../errors.js";
 import { usePlanner } from "../planner.js";
 import type { CatalogDto, PlanResult, Selection } from "../types.js";
 import { Breadcrumb, SidebarHeader } from "./chrome.js";
-import { diffSelections, isEmptyDiff, type SelectionDiff } from "./diff.js";
+import {
+  describeHosted,
+  describeHostedChange,
+  diffSelections,
+  isEmptyDiff,
+  type SelectionDiff,
+} from "./diff.js";
 import type { EditorTab } from "./editors.js";
 import { contextFor, type EnvDoc, type WorkspaceDoc } from "./model.js";
 import {
@@ -351,6 +357,9 @@ function SelectionSummary({ revision }: { revision: RevisionDoc }) {
     ([module, values]) =>
       Object.entries(values).map(([knob, value]) => ({ module, knob, value })),
   );
+  const hosted = Object.entries(selection.hosted ?? {}).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
   return (
     <aside className="w-64 shrink-0 overflow-y-auto border-l p-3 text-sm">
       <Section title="Revision">
@@ -366,6 +375,17 @@ function SelectionSummary({ revision }: { revision: RevisionDoc }) {
       {selection.capabilities.length > 0 && (
         <Section title="Capabilities">
           <IdList ids={selection.capabilities} />
+        </Section>
+      )}
+      {hosted.length > 0 && (
+        <Section title="Hosted">
+          <ul className="space-y-0.5">
+            {hosted.map(([module, resource]) => (
+              <li key={module} className="font-mono text-[11px]">
+                {module}: {describeHosted(resource)}
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
       {knobs.length > 0 && (
@@ -489,6 +509,10 @@ function DiffList({ diff }: { diff: SelectionDiff }) {
     ...diff.knobs.map((k) => ({
       sign: "~" as const,
       text: `${k.module}.${k.knob}: ${k.from ?? "(default)"} → ${k.to ?? "(default)"}`,
+    })),
+    ...diff.hosted.map((c) => ({
+      sign: "~" as const,
+      text: describeHostedChange(c),
     })),
     ...diff.settings.map((field) => ({
       sign: "~" as const,

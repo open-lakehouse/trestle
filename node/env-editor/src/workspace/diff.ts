@@ -1,7 +1,7 @@
 // What changed between two selections (two revisions, or a revision and the
 // draft), as the revision diff view lists it. Pure, so the rules are testable.
 
-import type { Selection } from "../types.js";
+import type { HostedResource, HostedVendor, Selection } from "../types.js";
 
 /** Ids added to and removed from a list. */
 export interface ListDiff {
@@ -18,18 +18,73 @@ export interface KnobChange {
   to: string | undefined;
 }
 
+/** One module whose `hosted` entry changed. `undefined` means no entry: a
+ *  hosted provider's default, or a function-capable module's local container. */
+export interface HostedChange {
+  module: string;
+  from: HostedResource | undefined;
+  to: HostedResource | undefined;
+}
+
 /** Every difference between two selections. */
 export interface SelectionDiff {
   modules: ListDiff;
   capabilities: ListDiff;
   knobs: KnobChange[];
-  /** The other settings (`gateway`, `hosted`, `client`, `extra_resources`)
-   *  that differ, by field name. */
+  /** The modules whose `hosted` entry changed, sorted by module. */
+  hosted: HostedChange[];
+  /** The other settings (`gateway`, `client`, `extra_resources`) that differ,
+   *  by field name. */
   settings: string[];
 }
 
-/** The settings compared as wholes, besides modules, capabilities and knobs. */
-const SETTINGS = ["gateway", "hosted", "client", "extra_resources"] as const;
+/** The settings compared as wholes, besides modules, capabilities, knobs and
+ *  hosted entries. */
+const SETTINGS = ["gateway", "client", "extra_resources"] as const;
+
+/** What each vendor is called (mirrors `HostedVendor`'s display name). */
+const VENDOR_LABEL: Record<HostedVendor, string> = {
+  generic: "Other server",
+  neon: "Neon",
+  "aws-rds": "Amazon RDS",
+  "azure-postgres": "Azure Database for PostgreSQL",
+  "aws-s3": "Amazon S3",
+  "azure-storage": "Azure Storage",
+  "neon-function": "Neon Function",
+};
+
+/** What a hosted entry is called: its vendor, or "(default)" for none. */
+export function describeHosted(hosted: HostedResource | undefined): string {
+  if (!hosted) return "(default)";
+  if (hosted.vendor) return VENDOR_LABEL[hosted.vendor] ?? hosted.vendor;
+  return hosted.connection.kind === "function" ? "Neon Function" : "custom";
+}
+
+/** One hosted change as the diff view lists it. */
+export function describeHostedChange({
+  module,
+  from,
+  to,
+}: HostedChange): string {
+  const fromFn = from?.connection.kind === "function";
+  const toFn = to?.connection.kind === "function";
+  if (toFn && !fromFn) return `${module} runs as a Neon Function`;
+  if (fromFn && !toFn) {
+    return to
+      ? `${module} runs on ${describeHosted(to)}`
+      : `${module} runs in a local container`;
+  }
+  if (fromFn && toFn) {
+    const url = (h: HostedResource | undefined) =>
+      (h?.connection.kind === "function" && h.connection.url) || "(default)";
+    return `${module} function URL: ${url(from)} → ${url(to)}`;
+  }
+  const a = describeHosted(from);
+  const b = describeHosted(to);
+  return a === b
+    ? `${module} connection changed`
+    : `${module} connection: ${a} → ${b}`;
+}
 
 function listDiff(from: readonly string[], to: readonly string[]): ListDiff {
   const before = new Set(from);
@@ -71,10 +126,19 @@ export function diffSelections(from: Selection, to: Selection): SelectionDiff {
       }
     }
   }
+  const hostedA = from.hosted ?? {};
+  const hostedB = to.hosted ?? {};
+  const hosted: HostedChange[] = [
+    ...new Set([...Object.keys(hostedA), ...Object.keys(hostedB)]),
+  ]
+    .sort()
+    .filter((m) => stable(hostedA[m]) !== stable(hostedB[m]))
+    .map((module) => ({ module, from: hostedA[module], to: hostedB[module] }));
   return {
     modules: listDiff(from.modules, to.modules),
     capabilities: listDiff(from.capabilities, to.capabilities),
     knobs,
+    hosted,
     settings: SETTINGS.filter((f) => stable(from[f]) !== stable(to[f])),
   };
 }
@@ -87,6 +151,7 @@ export function isEmptyDiff(diff: SelectionDiff): boolean {
     diff.capabilities.added.length === 0 &&
     diff.capabilities.removed.length === 0 &&
     diff.knobs.length === 0 &&
+    diff.hosted.length === 0 &&
     diff.settings.length === 0
   );
 }

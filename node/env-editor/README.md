@@ -95,6 +95,18 @@ optional, and with no contributions the shell is unchanged:
 The `WorkspaceShell/WithContributions` story drives every seam from a fake
 runtime.
 
+### Running a module as a Neon Function
+
+A module that can run as a function (its catalog entry sets `function`, the
+slug it deploys under, as Unity Catalog and headwaters do) gets a "Where it
+runs" choice in the inspector. **Local container** is the default and leaves
+`selection.hosted[id]` unset. **Neon Function** writes
+`{ vendor: "neon-function", connection: { kind: "function" } }` there, with an
+optional `url`. On the canvas the module then sits in the Neon cloud frame, and
+nothing of it runs locally. The editor only edits the selection: the host binds
+the Neon branch the function runs on (e.g. `trestle up --neon-branch`). The
+`EnvironmentEditor/NeonFunctions` story shows both modules as functions.
+
 ## Styling
 
 The components use Tailwind utilities and the `@open-lakehouse/ui-kit` token
