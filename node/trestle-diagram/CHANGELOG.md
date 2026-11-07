@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.9.0...trestle-diagram-v0.10.0) - 2026-11-07
+
+### Added
+
+- [**breaking**] activity-bar actions, and no Modules view (#328)
+
 ## [0.9.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.8.0...trestle-diagram-v0.9.0) - 2026-11-07
 
 ### Added

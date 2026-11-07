@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.3...env-editor-v0.0.4) - 2026-11-07
+
+### Added
+
+- [**breaking**] activity-bar actions, and no Modules view (#328)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.2...env-editor-v0.0.3) - 2026-11-07
 
 ### Added
