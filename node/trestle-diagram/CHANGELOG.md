@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.8.0...trestle-diagram-v0.9.0) - 2026-11-07
+
+### Added
+
+- [**breaking**] command registry, ⌘K palette and Add module… (#325)
+- host contributions for side views, status, actions and tabs (#324)
+
 ## [0.8.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.7.1...trestle-diagram-v0.8.0) - 2026-11-06
 
 ### Added

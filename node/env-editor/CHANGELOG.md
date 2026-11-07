@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.2...env-editor-v0.0.3) - 2026-11-07
+
+### Added
+
+- [**breaking**] command registry, ⌘K palette and Add module… (#325)
+- host contributions for side views, status, actions and tabs (#324)
+
 ## [0.0.2](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.1...env-editor-v0.0.2) - 2026-11-06
 
 ### Fixed
