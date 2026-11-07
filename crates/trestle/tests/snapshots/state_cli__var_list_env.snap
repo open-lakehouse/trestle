@@ -17,7 +17,7 @@ expression: "home.json(&[\"var\", \"list\", \"demo/dev\", \"--json\"], \"vars\")
     "name": "TOKEN",
     "scope": "environment",
     "secret": {
-      "key": "demo/dev/TOKEN",
+      "key": "[id]/TOKEN",
       "provider": "keychain"
     }
   },
@@ -25,7 +25,7 @@ expression: "home.json(&[\"var\", \"list\", \"demo/dev\", \"--json\"], \"vars\")
     "name": "DRAFT_PW",
     "scope": "draft",
     "secret": {
-      "key": "demo/dev@r2/DRAFT_PW",
+      "key": "[id]@r2/DRAFT_PW",
       "provider": "keychain"
     }
   },

@@ -343,6 +343,21 @@ pub(super) fn environment_keychain_refs(
     Ok(refs)
 }
 
+/// `e` as a CLI error. A rename or mesh change of `target` that its instances block gets a
+/// hint on removing them.
+pub(super) fn with_instances_hint(e: olai_stack_state::Error, target: &str) -> Error {
+    let blocked = matches!(e, olai_stack_state::Error::HasInstances { .. });
+    let e = Error::from(e);
+    if blocked {
+        e.with_hint(format!(
+            "`trestle down {target} --rm` first; their volumes keep the old name, so add \
+             `--volumes` to drop them too"
+        ))
+    } else {
+        e
+    }
+}
+
 /// The compose project the instance runs as (computed, so no slot is leased for it).
 pub(super) fn project_of(store: &Store, instance: &Instance) -> Result<String> {
     let env = store.environment(&instance.environment)?;

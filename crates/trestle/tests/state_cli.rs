@@ -152,7 +152,23 @@ esac
             Err(_) => Default::default(),
         }
     }
+
+    /// The one keychain key that matches `pattern`.
+    fn keychain_key(&self, pattern: &str) -> String {
+        let re = regex::Regex::new(pattern).unwrap();
+        let keys: Vec<String> = self
+            .keychain()
+            .keys()
+            .filter(|k| re.is_match(k))
+            .cloned()
+            .collect();
+        assert_eq!(keys.len(), 1, "{pattern}: {keys:?}");
+        keys[0].clone()
+    }
 }
+
+/// A store id (a UUID), as a regex.
+const ID: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
 /// `demo` (meshed) with `dev` committed once: Unity Catalog and what it needs.
 fn demo(home: &Home) {
@@ -239,11 +255,16 @@ fn the_draft_is_edited_committed_and_diffed() {
     );
     assert!(diff.contains("+    \"mlflow\","), "{diff}");
 
-    assert!(home.ok(&["env", "commit", "demo/dev"]).contains("r2"));
+    assert!(
+        home.ok(&["env", "commit", "demo/dev", "-m", "add mlflow"])
+            .contains("r2")
+    );
     assert!(
         home.ok(&["env", "commit", "demo/dev"])
             .contains("nothing to commit")
     );
+    let revisions = home.ok(&["env", "revisions", "demo/dev"]);
+    assert!(revisions.contains("      add mlflow"), "{revisions}");
     assert!(
         home.ok(&["env", "diff", "demo/dev"])
             .contains("are the same")
@@ -257,7 +278,7 @@ fn the_draft_is_edited_committed_and_diffed() {
     insta::assert_json_snapshot!(
         "env_revisions",
         home.json(&["env", "revisions", "demo/dev", "--json"], "revisions"),
-        { "[].digest" => "[digest]" }
+        { "[].digest" => "[digest]", "[].created_at" => "[time]" }
     );
     insta::assert_json_snapshot!(
         "env_show_r1",
@@ -296,11 +317,18 @@ fn vars_go_to_their_scope_and_secrets_to_the_keychain() {
         "pw",
     );
 
-    assert_eq!(home.keychain()["demo/dev/TOKEN"], "s3cr3t");
-    assert_eq!(home.keychain()["demo/dev@r2/DRAFT_PW"], "pw");
+    // Keychain keys are built from the environment's id, not its name.
+    let token = home.keychain_key(&format!("^{ID}/TOKEN$"));
+    let draft_pw = home.keychain_key(&format!("^{ID}@r2/DRAFT_PW$"));
+    assert_eq!(home.keychain()[&token], "s3cr3t");
+    assert_eq!(home.keychain()[&draft_pw], "pw");
     insta::assert_json_snapshot!(
         "var_list_env",
-        home.json(&["var", "list", "demo/dev", "--json"], "vars")
+        home.json(&["var", "list", "demo/dev", "--json"], "vars"),
+        { "[].secret.key" => insta::dynamic_redaction(|value, _| {
+            let re = regex::Regex::new(ID).unwrap();
+            re.replace(value.as_str().unwrap(), "[id]").into_owned()
+        }) }
     );
     let ws_vars = home.json(&["var", "list", "demo", "--json"], "vars");
     assert_eq!(ws_vars[0]["value"], "eu");
@@ -333,10 +361,10 @@ fn vars_go_to_their_scope_and_secrets_to_the_keychain() {
     // keeps the keychain entry r2 still uses.
     home.ok(&["env", "commit", "demo/dev"]);
     home.ok(&["var", "unset", "demo/dev", "--draft", "DRAFT_PW"]);
-    assert!(home.keychain().contains_key("demo/dev@r2/DRAFT_PW"));
+    assert!(home.keychain().contains_key(&draft_pw));
     // An environment secret nothing else uses goes with its var.
     home.ok(&["var", "unset", "demo/dev", "TOKEN"]);
-    assert!(!home.keychain().contains_key("demo/dev/TOKEN"));
+    assert!(!home.keychain().contains_key(&token));
 
     // Removing the workspace takes its keychain entries along.
     home.ok(&["ws", "rm", "demo"]);
@@ -401,6 +429,98 @@ fn revisions_run_side_by_side_as_instances() {
         serde_json::json!([])
     );
     assert!(home.fails(&["health", "demo/dev"]).contains("no instance"));
+}
+
+#[test]
+fn environments_and_workspaces_are_renamed_once_no_instance_is_left() {
+    let home = Home::new();
+    demo(&home);
+    home.ok_with_stdin(&["var", "set", "demo/dev", "--secret", "TOKEN"], "s3cr3t");
+    home.ok(&["up", "demo/dev"]);
+
+    // An instance, running or stopped, is named after the workspace and environment.
+    let err = home.fails(&["env", "rename", "demo/dev", "staging"]);
+    assert!(
+        err.contains("environment `dev` has 1 instance")
+            && err.contains("trestle down demo/dev --rm"),
+        "{err}"
+    );
+    let err = home.fails(&["ws", "rename", "demo", "lab"]);
+    assert!(
+        err.contains("workspace `demo` has 1 instance") && err.contains("trestle down demo --rm"),
+        "{err}"
+    );
+    assert!(
+        home.fails(&["ws", "set-mesh", "demo", "off"])
+            .contains("has 1 instance")
+    );
+    home.ok(&["down", "demo/dev"]);
+    assert!(
+        home.fails(&["env", "rename", "demo/dev", "staging"])
+            .contains("has 1 instance")
+    );
+    home.ok(&["down", "demo", "--rm", "--volumes"]);
+
+    home.ok(&["env", "rename", "demo/dev", "staging"]);
+    assert!(
+        home.fails(&["env", "show", "demo/dev"])
+            .contains("no environment `dev`")
+    );
+    // r1 recorded the old name, but a rename alone is nothing to commit.
+    assert!(
+        home.ok(&["env", "commit", "demo/staging"])
+            .contains("nothing to commit")
+    );
+    assert!(
+        home.ok(&["env", "diff", "demo/staging"])
+            .contains("are the same")
+    );
+    home.ok(&["ws", "rename", "demo", "lab"]);
+    home.ok(&["ws", "set-mesh", "lab", "off"]);
+    assert!(
+        home.fails(&["ws", "set-mesh", "lab", "maybe"])
+            .contains("maybe")
+    );
+    let ws = home.json(&["ws", "show", "lab", "--json"], "workspace");
+    assert_eq!(ws["mesh"], false);
+    assert_eq!(ws["environments"][0]["name"], "staging");
+    assert_eq!(ws["environments"][0]["revisions"], 1);
+    assert_eq!(ws["environments"][0]["draft_changed"], false);
+
+    // The revision runs under the new names, with the secret set before the renames.
+    assert!(home.ok(&["up", "lab/staging"]).contains("lab_staging_r1"));
+    let effective = home.json(
+        &["env", "show", "lab/staging@1", "--effective", "--json"],
+        "effective_env",
+    );
+    assert_eq!(
+        effective["vars"]["COMPOSE_PROJECT_NAME"]["value"],
+        "lab_staging_r1"
+    );
+    assert_eq!(effective["vars"]["TOKEN"]["secret"], true);
+    home.ok(&["down", "lab", "--rm"]);
+
+    // The old names are free again, and the new owner's secrets don't touch the renamed
+    // environment's.
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&["env", "create", "demo/dev", "--select", "unity-catalog"]);
+    home.ok_with_stdin(&["var", "set", "demo/dev", "--secret", "TOKEN"], "other");
+    let mut values: Vec<_> = home.keychain().values().cloned().collect();
+    values.sort_by_key(|v| v.to_string());
+    assert_eq!(values, ["other", "s3cr3t"]);
+
+    assert!(
+        home.fails(&["env", "rename", "lab/staging", "Bad_Name"])
+            .contains("Bad_Name")
+    );
+    assert!(
+        home.fails(&["ws", "rename", "lab", "demo"])
+            .contains("workspace `demo` already exists")
+    );
+    assert!(
+        home.fails(&["env", "rename", "lab/staging@1", "x"])
+            .contains("immutable")
+    );
 }
 
 /// A workspace directory as the deprecated `trestle workspace` writes it.

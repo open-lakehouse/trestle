@@ -13,7 +13,7 @@ use olai_stack_state::{Desired, Store, Workspace};
 use serde::Serialize;
 
 use super::output::emit;
-use super::state::{Ctx, any_running, workspace_keychain_refs};
+use super::state::{Ctx, any_running, with_instances_hint, workspace_keychain_refs};
 use super::target::find_workspace;
 use super::util::ensure_writable_dir;
 use super::var::{VarRow, var_rows};
@@ -37,6 +37,34 @@ pub enum WsCommand {
     Export(ExportArgs),
     /// Name the Neon project the workspace's instances bind branches of.
     SetNeon(SetNeonArgs),
+    /// Rename a workspace, keeping its environments and revisions (once it has no instance).
+    Rename(RenameArgs),
+    /// Switch whether the environments' gateways share a mesh network (once the workspace has
+    /// no instance).
+    SetMesh(SetMeshArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct RenameArgs {
+    /// The workspace.
+    pub name: String,
+
+    /// The new name: lowercase letters, digits and dashes.
+    pub new_name: String,
+}
+
+#[derive(Args, Clone)]
+pub struct SetMeshArgs {
+    /// The workspace.
+    pub name: String,
+
+    /// `on` or `off`.
+    #[clap(
+        action = clap::ArgAction::Set,
+        value_parser = clap::builder::BoolishValueParser::new(),
+        value_name = "on|off"
+    )]
+    pub mesh: bool,
 }
 
 #[derive(Args, Clone)]
@@ -125,7 +153,48 @@ pub fn run(cmd: WsCommand) -> Result<()> {
         WsCommand::Import(args) => run_import(&ctx, args),
         WsCommand::Export(args) => run_export(&ctx, args),
         WsCommand::SetNeon(args) => run_set_neon(&ctx, args),
+        WsCommand::Rename(args) => ctx.block_on(run_rename(&ctx, args)),
+        WsCommand::SetMesh(args) => ctx.block_on(run_set_mesh(&ctx, args)),
     }
+}
+
+/// Best effort: remove the mesh network of a workspace called `name`, which nothing of it
+/// uses any more (it was deleted, renamed or left the mesh, none of which the store allows
+/// while it has instances). Otherwise the network would linger under a name nothing joins.
+async fn forget_mesh(ctx: &Ctx, name: &str) {
+    let _ = olai_stack_runtime::ComposeEngine::network_rm(
+        ctx.engine(),
+        &format!("trestle-{name}-mesh"),
+    )
+    .await;
+}
+
+async fn run_rename(ctx: &Ctx, args: RenameArgs) -> Result<()> {
+    let ws = find_workspace(&ctx.store, &args.name)?;
+    ctx.store
+        .rename_workspace(&ws.id, &args.new_name)
+        .map_err(|e| with_instances_hint(e, &ws.name))?;
+    if ws.mesh && ws.name != args.new_name {
+        forget_mesh(ctx, &ws.name).await;
+    }
+    println!("renamed workspace `{}` to `{}`", ws.name, args.new_name);
+    Ok(())
+}
+
+async fn run_set_mesh(ctx: &Ctx, args: SetMeshArgs) -> Result<()> {
+    let ws = find_workspace(&ctx.store, &args.name)?;
+    ctx.store
+        .set_mesh(&ws.id, args.mesh)
+        .map_err(|e| with_instances_hint(e, &ws.name))?;
+    if ws.mesh && !args.mesh {
+        forget_mesh(ctx, &ws.name).await;
+    }
+    println!(
+        "workspace `{}`: mesh {}",
+        ws.name,
+        if args.mesh { "on" } else { "off" }
+    );
+    Ok(())
 }
 
 fn run_set_neon(ctx: &Ctx, args: SetNeonArgs) -> Result<()> {
@@ -333,12 +402,7 @@ async fn run_rm(ctx: &Ctx, args: RmArgs) -> Result<()> {
         ctx.secrets().delete(&r.key)?;
     }
     if ws.mesh {
-        // Best effort: the network goes once nothing uses it.
-        let _ = olai_stack_runtime::ComposeEngine::network_rm(
-            ctx.engine(),
-            &format!("trestle-{}-mesh", ws.name),
-        )
-        .await;
+        forget_mesh(ctx, &ws.name).await;
     }
     println!("deleted workspace `{}`", ws.name);
     Ok(())

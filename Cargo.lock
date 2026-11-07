@@ -3143,6 +3143,7 @@ version = "0.0.24"
 dependencies = [
  "assert_cmd",
  "async-trait",
+ "chrono",
  "clap",
  "cliclack",
  "convert_case",

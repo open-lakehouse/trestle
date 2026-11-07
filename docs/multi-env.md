@@ -64,7 +64,9 @@ Instance = a revision to run ─── SlotLease (host-wide)
 - An environment's **draft** is what its next revision will be. `env
   add-module`, `remove-module` and `set-knob` edit it, and every edit is checked
   by planning the draft. `env commit` freezes it as the next numbered
-  **revision**, which nothing changes afterwards.
+  **revision**, which nothing changes afterwards. `env commit -m <message>`
+  records what it changes; `env revisions` lists each revision's time and
+  message.
 - An **instance** runs one revision. `trestle up demo/dev` runs the head and
   `up demo/dev@2` runs revision 2. Two revisions of one environment run side by
   side, each on its own slot, project and host label.
@@ -75,7 +77,17 @@ Instance = a revision to run ─── SlotLease (host-wide)
   OS keychain, read from stdin and never from the command line, and the store
   keeps only a reference to it. Each revision's draft secrets get keychain keys
   of their own, so editing the draft never changes what a committed revision
-  resolves to.
+  resolves to. Keychain keys are built from ids, not names, so a renamed
+  environment's secrets never clash with a new one that takes its old name.
+- **Renames and the mesh.** `trestle env rename demo/dev staging` and `trestle
+  ws rename demo lab` keep the ids, revisions and vars, and `trestle ws set-mesh
+  demo on|off` switches the gateway mesh. All three wait until the workspace or
+  environment has no instance left, stopped ones included (`trestle down
+  <target> --rm`, plus `--volumes` to drop their data): an instance's Compose
+  project, volumes, host label and mesh network are named after it (see below),
+  so changing the name under it would strand what Docker holds. A revision keeps
+  the `env_name` it was committed with, but instances are always planned under
+  the environment's current name, so a rename alone is nothing to commit.
 
 An instance's environment is layered, lowest precedence first: catalog defaults,
 the revision's manifest, the placement (reserved keys nothing overrides), the
