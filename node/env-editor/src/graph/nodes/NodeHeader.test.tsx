@@ -132,4 +132,19 @@ describe("NodeHeader files chip", () => {
       html.indexOf("aside"),
     );
   });
+  test("a run status is a dot on the logo, keeping the native tooltip", () => {
+    const html = render({
+      status: (n) =>
+        n.id === "unity-catalog"
+          ? { state: "degraded", label: "unhealthy", detail: "2 restarts" }
+          : undefined,
+    });
+    expect(html).toContain('data-run-state="degraded"');
+    expect(html).toContain('title="unhealthy: 2 restarts"');
+    expect(html).toContain('title="Open-source catalog server."');
+  });
+
+  test("no status, no dot", () => {
+    expect(render({ status: () => undefined })).not.toContain("data-run-state");
+  });
 });

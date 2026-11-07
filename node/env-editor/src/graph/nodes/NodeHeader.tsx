@@ -8,6 +8,7 @@ import { useNodeFiles } from "../nodeFiles.js";
 import { useNodeSlots } from "../nodeSlots.js";
 import { ModuleIcon } from "../projectIcons.js";
 import { roleStyle } from "../roleTheme.js";
+import { RunStateDot } from "../runState.js";
 import { NODE_HEADER } from "../useTopologyLayout.js";
 
 /**
@@ -17,7 +18,8 @@ import { NODE_HEADER } from "../useTopologyLayout.js";
  * a node with rendered files (when the host provides them) a count that opens
  * them.
  * A host's `NodeSlots` may render the name and role lines instead, and add
- * trailing content after the chips.
+ * trailing content after the chips. A slotted run status is a dot on the
+ * logo tile; it keeps the native tooltip, being a tooltip of its own.
  * Fixed height (NODE_HEADER) — the layout reserves exactly this.
  */
 export function NodeHeader({ node }: { node: GraphNodeDto }) {
@@ -29,6 +31,7 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
   const name = slots?.name?.(node, title);
   const role = slots?.role?.(node, style.label);
   const aside = slots?.aside?.(node);
+  const status = slots?.status?.(node);
   const slotted =
     name !== undefined || role !== undefined || aside !== undefined;
   return (
@@ -40,11 +43,17 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
     >
       <div
         className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-current/10",
+          "relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-current/10",
           style.accent,
         )}
       >
         <ModuleIcon moduleId={node.id} role={node.role} className="h-4 w-4" />
+        {status && (
+          <RunStateDot
+            status={status}
+            className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 ring-2 ring-card"
+          />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold leading-5 text-card-foreground">

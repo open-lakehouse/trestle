@@ -38,6 +38,7 @@ runtime — so it has no wasm coupling and stays reusable.
 | `planner?` | The `Planner` engine. If omitted, read from an ancestor `PlannerProvider`. |
 | `catalog?` | Pre-seed the catalog to skip the async `catalog()` fetch (stories). |
 | `colorMode?` | Drives the React Flow canvas colors (`"system"` \| `"light"` \| `"dark"`); defaults to `"system"`. A host with a theme toggle passes its active theme so the canvas tracks the app. |
+| `slots?` | Host renderers for the canvas's nodes (`NodeSlots`): name and role lines, trailing content, and a run `status` dot. `WorkspaceShell` fills `status` from a host's `environment.nodeStatus`. |
 
 ## Editing flow
 

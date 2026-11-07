@@ -7,6 +7,7 @@ export {
   type NodeSlots,
   useDiagramPortal,
 } from "../graph/nodeSlots.js";
+export type { NodeStatus, RunState } from "../graph/runState.js";
 export type {
   ExposedDto,
   ExposedKind,

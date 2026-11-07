@@ -23,6 +23,7 @@ import {
   buildFileTree,
   type FileTreeNode,
 } from "../artifacts/buildFileTree.js";
+import { RunStateDot, runStateTitle } from "../graph/runState.js";
 import {
   EnvStatus,
   IconButton,
@@ -30,6 +31,7 @@ import {
   NameInput,
   SidebarHeader,
 } from "./chrome.js";
+import { type EnvironmentStatus, useContributions } from "./contributions.js";
 import type { EditorTab } from "./editors.js";
 import {
   type EnvDoc,
@@ -71,6 +73,7 @@ export function EnvTree({
   downloading,
 }: EnvTreeProps) {
   const ws = useWorkspace();
+  const statusOf = useContributions().contributions?.environment?.status;
   const [edit, setEdit] = useState<NameEdit | null>(null);
   // The environment whose removal is being confirmed.
   const [removing, setRemoving] = useState<string | null>(null);
@@ -153,6 +156,7 @@ export function EnvTree({
               key={env.id}
               env={env}
               plan={plans[env.id]}
+              status={statusOf?.(env.id)}
               clashing={clashing.has(env.name)}
               expanded={expanded}
               onToggle={toggle}
@@ -266,6 +270,7 @@ function Row({
 function EnvNode({
   env,
   plan,
+  status,
   clashing,
   expanded,
   onToggle,
@@ -278,6 +283,8 @@ function EnvNode({
 }: {
   env: EnvDoc;
   plan: MemberPlan | undefined;
+  /** What the host reports about it, if anything. */
+  status?: EnvironmentStatus;
   clashing: boolean;
   expanded: Set<string>;
   onToggle: (key: string, open?: boolean) => void;
@@ -322,8 +329,13 @@ function EnvNode({
         <span className={cn("truncate", here && "font-medium")}>
           {env.name}
         </span>
-        <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground group-hover:hidden">
-          {port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`}
+        {status && <RunStateDot status={status} />}
+        <span
+          className="ml-auto shrink-0 truncate font-mono text-[11px] text-muted-foreground group-hover:hidden"
+          title={status ? runStateTitle(status) : undefined}
+        >
+          {status?.placement ??
+            (port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`)}
         </span>
       </Row>
       {confirm}

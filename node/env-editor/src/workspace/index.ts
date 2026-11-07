@@ -1,7 +1,27 @@
 // The workspace editor: several environments sharing one host, edited in an
 // IDE-like shell and persisted through an injected `WorkspaceStore`.
 
+export {
+  ActivityBar,
+  BUILTIN_SIDE_VIEWS,
+  type SideView,
+  sideViewItems,
+} from "./ActivityBar.js";
 export { Breadcrumb } from "./chrome.js";
+export {
+  ContributionsProvider,
+  type ContributionsProviderProps,
+  type EditorContributions,
+  type EnvironmentContributions,
+  type EnvironmentStatus,
+  type EnvironmentTab,
+  type HostAction,
+  type NodeStatus,
+  type PanelContribution,
+  type RunState,
+  type SideViewContribution,
+  useContributions,
+} from "./contributions.js";
 export {
   diffSelections,
   isEmptyDiff,
@@ -18,6 +38,13 @@ export {
   pruneTabs,
   tabKey,
 } from "./editors.js";
+export {
+  DESIGN_TAB,
+  EnvHeader,
+  EnvironmentPane,
+  EnvSubTabs,
+  type SubTab,
+} from "./envHeader.js";
 export {
   contextFor,
   type EnvDoc,

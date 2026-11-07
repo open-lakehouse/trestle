@@ -3,7 +3,9 @@
 // files, the module catalog, settings), editor tabs (an environment's diagram
 // hosting the environment editor, or one of its files), a bottom panel
 // (problems across the workspace, how to run the active environment) and a
-// status bar. Everything persists through the injected `WorkspaceStore` (see
+// status bar. A host may contribute side views, and per environment a status,
+// actions, sub-tabs, service states and a panel (`ContributionsProvider`).
+// Everything persists through the injected `WorkspaceStore` (see
 // `WorkspaceProvider`); all planning goes through the injected `Planner`.
 
 import {
@@ -11,19 +13,14 @@ import {
   cn,
   ResizeHandle,
   Switch,
-  Tooltip,
-  TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
   usePaneSize,
 } from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
 import {
   AlertTriangle,
-  Blocks,
   CircleCheck,
   CircleX,
-  Files,
   FileText,
   History,
   Layers,
@@ -32,7 +29,6 @@ import {
   PanelLeft,
   Pencil,
   Plus,
-  Settings,
   Terminal,
   X,
 } from "lucide-react";
@@ -53,8 +49,14 @@ import { CodeViewer } from "../artifacts/CodeViewer.js";
 import { fileSourceOf } from "../artifacts/fileSource.js";
 import { EnvironmentEditor } from "../EnvironmentEditor.js";
 import { errorMessage } from "../errors.js";
+import type { NodeSlots } from "../graph/nodeSlots.js";
 import { usePlanner } from "../planner.js";
 import type { Bundle, CatalogDto } from "../types.js";
+import {
+  ActivityBar,
+  BUILTIN_SIDE_VIEWS,
+  type SideView,
+} from "./ActivityBar.js";
 import {
   Breadcrumb,
   EnvStatus,
@@ -62,6 +64,7 @@ import {
   NameInput,
   SidebarHeader,
 } from "./chrome.js";
+import { type PanelContribution, useContributions } from "./contributions.js";
 import { EnvTree } from "./EnvTree.js";
 import {
   closeTab,
@@ -71,6 +74,7 @@ import {
   pruneTabs,
   tabKey,
 } from "./editors.js";
+import { DESIGN_TAB, EnvironmentPane } from "./envHeader.js";
 import {
   contextFor,
   type EnvDoc,
@@ -100,7 +104,6 @@ export interface WorkspaceShellProps {
   statusItems?: ReactNode;
 }
 
-type SideView = "explorer" | "history" | "modules" | "settings";
 type PanelView = "problems" | "output";
 
 /** The editor for a whole workspace (see the module comment). */
@@ -111,6 +114,8 @@ export function WorkspaceShell({
 }: WorkspaceShellProps) {
   const planner = usePlanner();
   const ws = useWorkspace();
+  const { contributions, version } = useContributions();
+  const hostViews = contributions?.sideViews;
   const workspace = ws.workspace;
   const [catalog, setCatalog] = useState<CatalogDto | undefined>(seededCatalog);
   const [notice, setNotice] = useState<string | null>(null);
@@ -191,9 +196,29 @@ export function WorkspaceShell({
   const activeEnv = envs.find((e) => e.id === activeTab?.env);
   // A store without revisions has no history view; leave it if it was open.
   const hasRevisions = !!ws.revisions;
+  // A host side view that went away leaves the same way.
+  const viewExists =
+    (BUILTIN_SIDE_VIEWS as readonly string[]).includes(view) ||
+    !!hostViews?.some((v) => v.id === view);
   useEffect(() => {
-    if (!hasRevisions && view === "history") setView("explorer");
-  }, [hasRevisions, view]);
+    if ((!hasRevisions && view === "history") || !viewExists)
+      setView("explorer");
+  }, [hasRevisions, view, viewExists]);
+  const hostView = hostViews?.find((v) => v.id === view);
+
+  // The active environment's sub-tab (Design, or a host's), per environment.
+  const [subTabs, setSubTabs] = useState<Record<string, string>>({});
+  const activeEnvId = activeEnv?.id;
+  // The services' states on the active environment's canvas, from the host.
+  const nodeStatus = contributions?.environment?.nodeStatus;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` signals that the host's answers changed.
+  const slots = useMemo<NodeSlots | undefined>(
+    () =>
+      nodeStatus && activeEnvId
+        ? { status: (node) => nodeStatus(activeEnvId, node.id) }
+        : undefined,
+    [nodeStatus, activeEnvId, version],
+  );
 
   // ⌘B toggles the sidebar, ⌘J the panel, ⌘1…9 switch tabs.
   useEffect(() => {
@@ -290,6 +315,7 @@ export function WorkspaceShell({
             }}
             problemCount={problemCount}
             history={hasRevisions}
+            extra={hostViews}
           />
           {sidebarOpen && (
             <>
@@ -318,6 +344,7 @@ export function WorkspaceShell({
                 )}
                 {view === "modules" && <ModulesView catalog={catalog} />}
                 {view === "settings" && <SettingsView workspace={workspace} />}
+                {hostView?.render()}
               </aside>
               <ResizeHandle
                 orientation="vertical"
@@ -360,21 +387,32 @@ export function WorkspaceShell({
                   plan={plans[activeEnv.id]}
                 />
               ) : activeEnv ? (
-                <EnvironmentEditor
-                  key={activeEnv.id}
-                  chrome="workspace"
-                  catalog={catalog}
-                  colorMode={colorMode}
-                  initialSelection={activeEnv.selection}
-                  context={contextFor(workspace, activeEnv)}
-                  onSelectionChange={(s) => ws.setSelection(activeEnv.id, s)}
-                  onOpenFile={(path) => openEditor({ env: activeEnv.id, path })}
-                  toolbarLeading={
-                    <Breadcrumb
-                      parts={[workspace.name, activeEnv.name, "Diagram"]}
-                    />
+                <EnvironmentPane
+                  envId={activeEnv.id}
+                  subTab={subTabs[activeEnv.id] ?? DESIGN_TAB}
+                  onSubTab={(tab) =>
+                    setSubTabs((t) => ({ ...t, [activeEnv.id]: tab }))
                   }
-                />
+                >
+                  <EnvironmentEditor
+                    key={activeEnv.id}
+                    chrome="workspace"
+                    catalog={catalog}
+                    colorMode={colorMode}
+                    initialSelection={activeEnv.selection}
+                    context={contextFor(workspace, activeEnv)}
+                    onSelectionChange={(s) => ws.setSelection(activeEnv.id, s)}
+                    onOpenFile={(path) =>
+                      openEditor({ env: activeEnv.id, path })
+                    }
+                    slots={slots}
+                    toolbarLeading={
+                      <Breadcrumb
+                        parts={[workspace.name, activeEnv.name, "Diagram"]}
+                      />
+                    }
+                  />
+                </EnvironmentPane>
               ) : (
                 <EmptyEditor
                   onAdd={() => {
@@ -403,6 +441,7 @@ export function WorkspaceShell({
                   conflicts={conflicts}
                   notice={notice}
                   onOpen={openEnv}
+                  hostPanel={contributions?.panel}
                 />
               </>
             )}
@@ -426,62 +465,6 @@ export function WorkspaceShell({
         </StatusBar>
       </div>
     </TooltipProvider>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Activity bar
-// ---------------------------------------------------------------------------
-
-function ActivityBar({
-  view,
-  onView,
-  problemCount,
-  history,
-}: {
-  view: SideView | undefined;
-  onView: (view: SideView) => void;
-  problemCount: number;
-  /** Whether to offer the revision history (the store keeps revisions). */
-  history: boolean;
-}) {
-  const items: { id: SideView; label: string; icon: ReactNode }[] = [
-    { id: "explorer", label: "Environments", icon: <Files /> },
-    ...(history
-      ? [{ id: "history" as const, label: "History", icon: <History /> }]
-      : []),
-    { id: "modules", label: "Modules", icon: <Blocks /> },
-    { id: "settings", label: "Workspace settings", icon: <Settings /> },
-  ];
-  return (
-    <nav
-      aria-label="Views"
-      className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-activitybar py-2"
-    >
-      {items.map((item) => (
-        <Tooltip key={item.id}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={item.label}
-              aria-pressed={view === item.id}
-              onClick={() => onView(item.id)}
-              className={cn(
-                "relative flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground [&_svg]:h-5 [&_svg]:w-5",
-                view === item.id &&
-                  "text-foreground before:absolute before:inset-y-2 before:-left-1 before:w-0.5 before:rounded-full before:bg-primary",
-              )}
-            >
-              {item.icon}
-              {item.id === "explorer" && problemCount > 0 && (
-                <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-destructive" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{item.label}</TooltipContent>
-        </Tooltip>
-      ))}
-    </nav>
   );
 }
 
@@ -766,6 +749,7 @@ function BottomPanel({
   conflicts,
   notice,
   onOpen,
+  hostPanel,
 }: {
   height: number;
   view: PanelView;
@@ -777,6 +761,8 @@ function BottomPanel({
   conflicts: PortConflict[];
   notice: string | null;
   onOpen: (id: string) => void;
+  /** A host's panel, in place of the Run output. */
+  hostPanel?: PanelContribution;
 }) {
   const failing = workspace.envs.filter((e) => plans[e.id]?.error);
   const count = failing.length + conflicts.length + (notice ? 1 : 0);
@@ -786,7 +772,11 @@ function BottomPanel({
       label: count > 0 ? `Problems (${count})` : "Problems",
       icon: <AlertTriangle />,
     },
-    { id: "output", label: "Run", icon: <Terminal /> },
+    {
+      id: "output",
+      label: hostPanel?.label ?? "Run",
+      icon: hostPanel?.icon ?? <Terminal />,
+    },
   ];
   return (
     <section
@@ -857,6 +847,8 @@ function BottomPanel({
               ))}
             </ul>
           )
+        ) : hostPanel ? (
+          hostPanel.render(env?.id)
         ) : (
           <RunOutput
             workspace={workspace}

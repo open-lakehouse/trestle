@@ -1,11 +1,13 @@
 // The host's seam into a node's header. A host (a docs site linking components
 // to its own concept pages) renders the name and the role line itself, and may
-// add trailing content; the
-// diagram knows nothing about what they point at. Slots travel by context
+// add trailing content; an editor host (a desktop shell running the
+// environment) may report each service's state. The diagram knows nothing
+// about what they point at. Slots travel by context
 // rather than node `data`, so changing them never re-runs the ELK layout.
 
 import { createContext, type ReactNode, useContext } from "react";
 import type { GraphNodeDto } from "../types.js";
+import type { NodeStatus } from "./runState.js";
 
 export interface NodeSlots {
   /**
@@ -23,6 +25,11 @@ export interface NodeSlots {
    * its own popover. Nothing is drawn when it returns `undefined`.
    */
   aside?: (node: GraphNodeDto) => ReactNode;
+  /**
+   * The node's run state, drawn as a dot on its logo tile with the label as
+   * its tooltip. Nothing is drawn when it returns `undefined`.
+   */
+  status?: (node: GraphNodeDto) => NodeStatus | undefined;
 }
 
 export const NodeSlotsContext = createContext<NodeSlots | undefined>(undefined);

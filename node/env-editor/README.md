@@ -55,6 +55,39 @@ and the shell shows nothing revision-related.
 `createMemoryWorkspaceStore(doc, { revisions: true })` keeps revisions in
 memory.
 
+### Host contributions
+
+A host that runs environments (the desktop shell) can put its run state and
+views inside the shell with `<ContributionsProvider contributions>`. The editor
+draws what it is given and knows nothing about how anything runs. Everything is
+optional, and with no contributions the shell is unchanged:
+
+- `sideViews`: extra activity-bar views (`align: "end"` puts one at the
+  bottom).
+- `environment.status(envId)`: a run-state dot and placement (`local slot 0`, a
+  remote branch) in the tree, and the header over the environment's tab, with
+  its revision.
+- `environment.actions(envId)`: buttons in that header (Start, Stop). A disabled
+  one shows its `reason`.
+- `environment.tabs(envId)`: sub-tabs after the editor's Design (Catalog,
+  Logs). A disabled tab can't be picked and says why.
+- `environment.nodeStatus(envId, moduleId)`: each service's state, a dot on its
+  node.
+- `environment.subscribe(onChange)`: tells the shell to ask again, e.g. from a
+  query cache. Re-rendering the provider with a new object works too.
+- `panel`: replaces the bottom panel's static Run output.
+
+```tsx
+<WorkspaceProvider store={store}>
+  <ContributionsProvider contributions={contributions}>
+    <WorkspaceShell />
+  </ContributionsProvider>
+</WorkspaceProvider>
+```
+
+The `WorkspaceShell/WithContributions` story drives every seam from a fake
+runtime.
+
 ## Styling
 
 The components use Tailwind utilities and the `@open-lakehouse/ui-kit` token

@@ -30,6 +30,7 @@ import { ComponentPalette } from "./graph/ComponentPalette.js";
 import type { CanvasActions } from "./graph/canvasActions.js";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas.js";
 import type { NodeFilesTarget } from "./graph/nodeFiles.js";
+import type { NodeSlots } from "./graph/nodeSlots.js";
 import { CLIENTS_NODE_ID } from "./graph/useTopologyLayout.js";
 import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection.js";
 import { InspectorPanel } from "./inspector/InspectorPanel.js";
@@ -80,6 +81,9 @@ export interface EnvironmentEditorProps {
   onOpenFile?: (path: string) => void;
   /** Shown at the start of the workspace toolbar (e.g. a breadcrumb). */
   toolbarLeading?: ReactNode;
+  /** Host renderers for the canvas's nodes, e.g. each service's run state
+   *  (see `NodeSlots`). */
+  slots?: NodeSlots;
 }
 
 /** The host-facing props the editor body reads. */
@@ -123,6 +127,7 @@ function EditorBody({
   chrome = "standalone",
   onOpenFile,
   toolbarLeading,
+  slots,
 }: BodyProps) {
   const planner = usePlanner();
   const env = useEnvironment(seededCatalog, {
@@ -424,6 +429,7 @@ function EditorBody({
           onOpenFilesChange={setOpenFiles}
           onOpenInExplorer={openFile}
           provider={chrome === "standalone"}
+          slots={slots}
         >
           {chrome === "standalone" && toolbarEl}
           <CanvasNotice
