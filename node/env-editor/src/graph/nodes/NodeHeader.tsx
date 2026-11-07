@@ -7,8 +7,8 @@ import { useCanvasContext } from "../canvasActions.js";
 import { useNodeFiles } from "../nodeFiles.js";
 import { useNodeSlots } from "../nodeSlots.js";
 import { ModuleIcon } from "../projectIcons.js";
+import { RunStateDot } from "../RunStateDot.js";
 import { roleStyle } from "../roleTheme.js";
-import { RunStateDot } from "../runState.js";
 import { NODE_HEADER } from "../useTopologyLayout.js";
 
 /**

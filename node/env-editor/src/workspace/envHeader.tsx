@@ -12,7 +12,8 @@ import {
 } from "@open-lakehouse/ui-kit";
 import { Workflow } from "lucide-react";
 import type { ReactNode } from "react";
-import { RunStateDot, runStateLabel } from "../graph/runState.js";
+import { RunStateDot } from "../graph/RunStateDot.js";
+import { runStateLabel } from "../graph/runState.js";
 import {
   type EnvironmentStatus,
   type HostAction,

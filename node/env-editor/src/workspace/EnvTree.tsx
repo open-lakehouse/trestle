@@ -23,7 +23,8 @@ import {
   buildFileTree,
   type FileTreeNode,
 } from "../artifacts/buildFileTree.js";
-import { RunStateDot, runStateTitle } from "../graph/runState.js";
+import { RunStateDot } from "../graph/RunStateDot.js";
+import { runStateTitle } from "../graph/runState.js";
 import {
   EnvStatus,
   IconButton,
