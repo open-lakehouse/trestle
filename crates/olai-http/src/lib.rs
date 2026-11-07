@@ -84,6 +84,9 @@ mod retry;
 mod token;
 mod util;
 
+/// The `reqwest` of this crate, for the types of [`RequestSigner`] and [`CloudClient`].
+pub use reqwest;
+
 pub use client::{Certificate, ClientConfigKey, ClientOptions};
 pub use credential::*;
 pub use error::*;
@@ -334,6 +337,26 @@ impl CloudClient {
         let service = make_service(reqwest_client.clone(), runtime);
         Ok(Self::new_with_signer(
             Arc::new(bearer::BearerProviderSigner(provider)),
+            reqwest_client,
+            service,
+            retry,
+        ))
+    }
+
+    /// Create a client that signs requests with `signer`, for authentication that the other
+    /// constructors do not cover, such as a signer that sends some requests without
+    /// credentials. `options` and `retry` configure requests sent through this client; if
+    /// `runtime` is provided, their I/O is spawned on it.
+    pub fn new_with_request_signer(
+        signer: Arc<dyn RequestSigner>,
+        options: &ClientOptions,
+        retry: RetryConfig,
+        runtime: Option<&Handle>,
+    ) -> Result<Self> {
+        let reqwest_client = options.client()?;
+        let service = make_service(reqwest_client.clone(), runtime);
+        Ok(Self::new_with_signer(
+            signer,
             reqwest_client,
             service,
             retry,
@@ -621,6 +644,17 @@ impl CloudRequestBuilder {
         self
     }
 
+    /// Send a form-encoded body (`application/x-www-form-urlencoded`).
+    ///
+    /// # Errors
+    ///
+    /// Serialization can fail if `T`'s implementation of `Serialize` decides to
+    /// fail, or if `T` is not a sequence of pairs, a map or a struct.
+    pub fn form<T: Serialize + ?Sized>(mut self, form: &T) -> CloudRequestBuilder {
+        self.builder = self.builder.form(form);
+        self
+    }
+
     /// Sign and send the request, returning the [`reqwest::Response`].
     ///
     /// The request is first passed to the client's [`RequestSigner`], which
@@ -650,6 +684,36 @@ impl CloudRequestBuilder {
         {
             self.builder
                 .send_retry(&self.client.retry_config, self.client.service.clone())
+                .await
+                .map_err(|e| e.error())
+        }
+        #[cfg(feature = "recording")]
+        {
+            let response = send_record(self).await?;
+            Ok(response)
+        }
+    }
+
+    /// Sign and send the request, returning the response for any status.
+    ///
+    /// Signs like [`send`](Self::send), but every response is `Ok(response)` at
+    /// once, with its headers and body: only transport failures are retried, as
+    /// [`send`](Self::send) retries them. For callers that read an API's own error
+    /// answers, such as generated clients.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if signing fails, if the request cannot be built, or
+    /// if the underlying HTTP transport returns an error.
+    pub async fn send_unchecked(mut self) -> Result<reqwest::Response> {
+        self.builder = self.client.signer.sign(self.builder).await?;
+
+        #[cfg(not(feature = "recording"))]
+        {
+            self.builder
+                .retryable(&self.client.retry_config, self.client.service.clone())
+                .unchecked()
+                .send()
                 .await
                 .map_err(|e| e.error())
         }

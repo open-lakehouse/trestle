@@ -256,11 +256,20 @@ pub struct PythonOptions {
     /// its classes and enums.
     pub public_modules: bool,
     /// The `User-Agent` product of the Python client (`<product>/<binding crate version>`).
-    /// Needs the `reqwest` transport.
+    /// Needs the generated `reqwest` transport or `olai_http::CloudClient`.
     pub user_agent: Option<String>,
     /// Hand-written classes and functions of the binding crate (Rust paths, e.g.
     /// `crate::extras::PyHelper`) that the extension module also exports.
     pub exports: Vec<String>,
+    /// The Rust path of an
+    /// `async fn(&Url) -> olai_http::Result<Option<Arc<dyn olai_http::RequestSigner>>>` that the
+    /// Python client calls for its signer when it gets neither `token` nor `token_provider`,
+    /// such as one that reads the identity of the environment. Needs `olai_http::CloudClient`.
+    pub default_signer: Option<String>,
+    /// The Rust paths of hand-written `#[pymodule]` modules of the binding crate, such as
+    /// `crate::identity::identity`, exported as submodules of [`module`](Self::module) under
+    /// their last segment, so that they are in the stubs and in `sys.modules`.
+    pub submodules: Vec<String>,
 }
 
 /// Where the generated pure-Python files go.
@@ -415,8 +424,9 @@ pub struct RestClientOptions {
     /// key is the proto name, or the field's explicit `json_name`.
     pub json_query_packages: Vec<String>,
 
-    /// The `User-Agent` product of the generated `reqwest` transport
-    /// (`<product>/<client crate version>`); not sent in the browser. Needs that transport.
+    /// The `User-Agent` product of the client (`<product>/<client crate version>`), of the
+    /// generated `reqwest` transport or of the aggregate client's `olai_http::CloudClient`; not
+    /// sent in the browser.
     pub user_agent: Option<String>,
 
     /// Gate each service behind a cargo feature named after its model package
@@ -493,6 +503,13 @@ impl CodeGenConfig {
     /// WASM/browser one) gets only the generic `new(transport, base_url)`.
     pub fn uses_default_transport(&self) -> bool {
         self.transport_type_path == DEFAULT_TRANSPORT_TYPE_PATH
+    }
+
+    /// Whether the native client is an `olai_http::CloudClient`: the default transport, or the
+    /// native half of [`dual_transport`](Self::dual_transport). Its aggregate client then has
+    /// the constructors that take olai-http's signers and bearer providers.
+    pub fn uses_cloud_client(&self) -> bool {
+        self.uses_default_transport() || self.dual_transport()
     }
 
     /// Whether generated clients use the generated `reqwest` transport
@@ -599,28 +616,35 @@ impl CodeGenConfig {
                 "`CodeGenOutput::common` (the Axum extractors)",
             );
         }
-        if self.rest_client.user_agent.is_some() && !self.uses_reqwest_transport() {
+        let user_agent_transport = self.uses_reqwest_transport() || self.uses_cloud_client();
+        if self.rest_client.user_agent.is_some() && !user_agent_transport {
             return needs(
                 "RestClientOptions::user_agent",
-                "the generated `reqwest` transport",
+                "the generated `reqwest` transport or `olai_http::CloudClient`",
             );
         }
         if self.output.python.is_some() {
             let Some(python) = self.bindings_python() else {
                 return needs("CodeGenOutput::python", "`BindingsConfig::python`");
             };
-            for path in &python.exports {
+            let paths = (python.exports.iter().map(|p| (p, "PythonOptions::exports")))
+                .chain((python.default_signer.iter()).map(|p| (p, "PythonOptions::default_signer")))
+                .chain((python.submodules.iter()).map(|p| (p, "PythonOptions::submodules")));
+            for (path, option) in paths {
                 syn::parse_str::<syn::Path>(path).map_err(|source| Error::InvalidRustPath {
                     path: path.clone(),
-                    message: "PythonOptions::exports".to_string(),
+                    message: option.to_string(),
                     source,
                 })?;
             }
-            if python.user_agent.is_some() && !self.uses_reqwest_transport() {
+            if python.user_agent.is_some() && !user_agent_transport {
                 return needs(
                     "PythonOptions::user_agent",
-                    "the generated `reqwest` transport",
+                    "the generated `reqwest` transport or `olai_http::CloudClient`",
                 );
+            }
+            if python.default_signer.is_some() && !self.uses_cloud_client() {
+                return needs("PythonOptions::default_signer", "`olai_http::CloudClient`");
             }
         }
         if self.rest_client.json_int64_as_number

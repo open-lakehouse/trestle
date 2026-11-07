@@ -139,6 +139,13 @@ Generated clients are decoupled from their HTTP transport via
 add `output.wasm` + `runtime: buffa` to also emit `#[wasm_bindgen]` JS bindings
 and a `client.d.ts`. See the `olai-http-wasm` README for details.
 
+With `CloudClient` (the default, or the native half of `dual_transport`), the aggregate client
+also has `new_with_bearer(base_url, provider)`, which takes any bearer provider of
+`olai_http::bearer::BearerAuth` (OAuth clients, cloud identities, token files, token exchange),
+and `new_with_signer(base_url, signer)`, which takes any `olai_http::RequestSigner`. Both build
+the `CloudClient` from `client_options()`. The generated requests use
+`CloudRequestBuilder::send_unchecked`, so that an error status comes back with its body.
+
 ## REST client options
 
 `CodeGenConfig::rest_client` (`clients.rust` in `trestle.yaml`) shapes the REST client. Every
@@ -153,6 +160,7 @@ option is off by default.
 | `form_encoded_methods` | `form_encoded_methods: [pkg.Service.Method]` | Send the request body of these RPCs form-encoded. |
 | `path_fields_in_body_methods` | `path_fields_in_body_methods: [pkg.Service.Method]` | Keep the path values in the request body of these RPCs too, for APIs that check that both match. |
 | `json_query_packages` | `json_field_names_by_package: {pkg: json}` | Send the query parameters of these packages by their JSON name (`startIndex`), as their bodies. Elsewhere a query key is the proto name, or a `json_name` that differs from the default. |
+| `user_agent` | `user_agent: <product>` | Send `<product>/<client crate version>` as the `User-Agent`, from the `reqwest` transport or the aggregate client's `client_options()`; not in the browser. |
 
 Path values are percent-encoded (`/` too, except in multi-segment patterns such as
 `{name=catalogs/*}`) and left out of the request body, as `google.api.http` specifies. With
@@ -193,6 +201,15 @@ The generated API:
 | `async_methods` | Each method gets a `<name>_async` twin that returns an `asyncio.Future` (needs `pyo3-async-runtimes`). |
 | `keyword_only` | Optional parameters are keyword-only. |
 | `public_modules` | A module `<package>/<service>.py` per submodule of `module`, re-exporting its classes and enums. |
+| `user_agent` | The `User-Agent` product of the Python client, `<product>/<binding crate version>`. Needs the `reqwest` transport or `CloudClient`. |
+| `exports` | The Rust paths of hand-written classes and functions of the binding crate that the extension module also exports. |
+| `default_signer` | The Rust path of an `async fn(&Url) -> olai_http::Result<Option<Arc<dyn olai_http::RequestSigner>>>` that the client calls when it gets neither `token` nor `token_provider`, such as one that reads the identity of the environment. Needs `CloudClient`. |
+| `submodules` | The Rust paths of hand-written `#[pymodule]` modules of the binding crate, such as `crate::identity::identity`, exported as submodules of `module` under their last segment: in the stubs, and in `sys.modules`. |
+
+With `CloudClient`, the root client also takes `token_provider=`: a Python callable that returns
+the token or a `(token, expires_at)` pair, or a `TokenProvider` that the binding crate makes in
+Rust from any `olai_http::RequestSigner` (`RustTokenProvider::new(signer)`). The binding crate
+then depends on `olai-http` and `futures` too.
 
 In `trestle.yaml`, `package` and `module` sit under `clients.python` and the rest under
 `clients.python.options`. `tests/rest_client_e2e` runs a client and Python bindings with all of

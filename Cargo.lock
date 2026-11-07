@@ -3030,7 +3030,8 @@ name = "olai-http-wasm"
 version = "0.0.6"
 dependencies = [
  "futures",
- "reqwest 0.12.28",
+ "http",
+ "reqwest 0.13.5",
  "serde",
  "url",
  "web-sys",

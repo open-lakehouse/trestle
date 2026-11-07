@@ -212,9 +212,21 @@ pub(crate) struct RetryableRequest {
 
     sensitive: bool,
     idempotent: Option<bool>,
+    error_for_status: bool,
 }
 
 impl RetryableRequest {
+    /// Return the response for any status at once, with its headers and body, rather than an
+    /// [`Error`]: only transport failures are retried.
+    // The `recording` build sends once, without the retry layer.
+    #[cfg_attr(feature = "recording", allow(dead_code))]
+    pub(crate) fn unchecked(self) -> Self {
+        Self {
+            error_for_status: false,
+            ..self
+        }
+    }
+
     /// Set whether this request is idempotent
     ///
     /// An idempotent request will be retried on timeout even if the request
@@ -241,6 +253,7 @@ impl RetryableRequest {
         let now = Instant::now();
 
         let mut backoff = self.backoff;
+        let error_for_status = self.error_for_status;
         let is_idempotent = self
             .idempotent
             .unwrap_or_else(|| self.request.method().is_safe());
@@ -257,6 +270,7 @@ impl RetryableRequest {
                 .expect("request body must be cloneable");
 
             match self.service.call(request).await {
+                Ok(r) if !error_for_status => return Ok(r),
                 Ok(r) => match r.error_for_status_ref() {
                     Ok(_) if r.status().is_success() => {
                         return Ok(r);
@@ -422,6 +436,7 @@ impl RetryExt for reqwest::RequestBuilder {
             backoff: Backoff::new(&config.backoff),
             sensitive: false,
             idempotent: None,
+            error_for_status: true,
         }
     }
 
@@ -666,6 +681,61 @@ mod tests {
         // final 502 status.
         assert!(matches!(err, Error::Reqwest { .. }), "{err:?}");
         assert_eq!(err.status(), Some(StatusCode::BAD_GATEWAY));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn unchecked_requests_return_the_response_for_any_status() {
+        let mut server = mockito::Server::new_async().await;
+        let retry = RetryConfig {
+            backoff: crate::backoff::BackoffConfig {
+                init_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(2),
+                base: 2.,
+            },
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(1000),
+        };
+        let client = Client::new();
+        let service = Arc::new(ReqwestService::new(client.clone()));
+        let url = server.url();
+
+        // A client error comes back at once, with its headers and body.
+        let mock = server
+            .mock("GET", "/")
+            .with_status(404)
+            .with_header("x-reason", "gone")
+            .with_body("no such thing")
+            .expect(1)
+            .create_async()
+            .await;
+        let response = (client.request(Method::GET, &url))
+            .retryable(&retry, service.clone())
+            .unchecked()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()["x-reason"], "gone");
+        assert_eq!(response.text().await.unwrap(), "no such thing");
+        mock.assert_async().await;
+
+        // So does a server error: the API's answer, not retried.
+        let mock = server
+            .mock("GET", "/")
+            .with_status(502)
+            .with_body("upstream boom")
+            .expect(1)
+            .create_async()
+            .await;
+        let response = (client.request(Method::GET, &url))
+            .retryable(&retry, service.clone())
+            .unchecked()
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(response.text().await.unwrap(), "upstream boom");
         mock.assert_async().await;
     }
 

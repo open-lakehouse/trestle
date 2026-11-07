@@ -48,8 +48,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::{Body, Client, IntoUrl, Method};
 use serde::Serialize;
 
 /// Re-export of the `reqwest` this crate is built against.
@@ -232,7 +232,7 @@ impl WasmClient {
 }
 
 /// A single in-flight request. Mirrors the slice of `olai_http::CloudRequestBuilder` that
-/// generated client bodies use (`json`, `query`, `send`).
+/// generated client bodies use (`header`, `body`, `json`, `form`, `query`, `send`).
 pub struct WasmRequestBuilder {
     builder: reqwest::RequestBuilder,
     auth: Option<AuthHook>,
@@ -248,6 +248,33 @@ impl WasmRequestBuilder {
     /// [`send`](Self::send) rather than reported here.
     pub fn json<T: Serialize + ?Sized>(mut self, json: &T) -> WasmRequestBuilder {
         self.builder = self.builder.json(json);
+        self
+    }
+
+    /// Add a header to the request.
+    pub fn header<K, V>(mut self, key: K, value: V) -> WasmRequestBuilder
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        self.builder = self.builder.header(key, value);
+        self
+    }
+
+    /// Set the request body.
+    pub fn body<T: Into<Body>>(mut self, body: T) -> WasmRequestBuilder {
+        self.builder = self.builder.body(body);
+        self
+    }
+
+    /// Set a form-encoded request body (`application/x-www-form-urlencoded`).
+    ///
+    /// If `form` fails to serialize, the error is stored and surfaced later by
+    /// [`send`](Self::send) rather than reported here.
+    pub fn form<T: Serialize + ?Sized>(mut self, form: &T) -> WasmRequestBuilder {
+        self.builder = self.builder.form(form);
         self
     }
 
@@ -299,6 +326,20 @@ impl WasmRequestBuilder {
     /// Returns an error only for a transport/network failure, exactly like
     /// [`send`](Self::send); a non-success HTTP status is `Ok(response)`.
     pub async fn send_raw(self) -> reqwest::Result<reqwest::Response> {
+        self.send().await
+    }
+
+    /// Send the request, returning the [`reqwest::Response`] for any status.
+    ///
+    /// The wasm counterpart of `olai_http::CloudRequestBuilder::send_unchecked`, so
+    /// target-agnostic code can call `send_unchecked()` on either builder. An alias for
+    /// [`send`](Self::send).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only for a transport/network failure, exactly like
+    /// [`send`](Self::send); a non-success HTTP status is `Ok(response)`.
+    pub async fn send_unchecked(self) -> reqwest::Result<reqwest::Response> {
         self.send().await
     }
 
@@ -376,6 +417,37 @@ mod tests {
             "Bearer test-token"
         );
         assert_eq!(request.url().query(), Some("dry_run=true"));
+    }
+
+    /// The header, raw-body and form-body steps of generated bodies reach the built request.
+    #[test]
+    fn headers_and_bodies_reach_the_built_request() {
+        let url = Url::parse("https://example.test/api/blobs/a").unwrap();
+        let request = (WasmClient::new().put(url.clone()))
+            .header("content-type", "application/octet-stream")
+            .body(vec![0u8, 1, 255])
+            .builder
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()["content-type"],
+            "application/octet-stream"
+        );
+        assert_eq!(request.body().unwrap().as_bytes(), Some(&[0u8, 1, 255][..]));
+
+        let request = (WasmClient::new().post(url))
+            .form(&[("grant_type", "client_credentials"), ("scope", "a b")])
+            .builder
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()["content-type"],
+            "application/x-www-form-urlencoded"
+        );
+        assert_eq!(
+            request.body().unwrap().as_bytes(),
+            Some(&b"grant_type=client_credentials&scope=a+b"[..])
+        );
     }
 
     /// Debug must not render the auth closure's contents (it may close over a secret token).

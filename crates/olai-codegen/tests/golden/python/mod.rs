@@ -27,17 +27,75 @@ pub struct PyExampleClient {
 
 #[pymethods]
 impl PyExampleClient {
-    /// A client of the API at `base_url`. `token`, when set, goes in every
-    /// request as the bearer token.
+    /// A client of the API at `base_url`. `token`, when set, goes in every request as
+    /// the bearer token. `token_provider` is asked for the token instead: a
+    /// `TokenProvider`, or a callable that returns the token, or a pair of the token
+    /// and the time it expires, in seconds since the epoch; a token with its expiry is
+    /// kept until a minute before it, a bare token is asked for at every request.
     #[new]
-    #[pyo3(signature = (base_url, token = None))]
-    pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
-        let base_url = base_url.parse().map_err(PyExampleError::from)?;
-        let client = match token {
-            Some(token) => ExampleClient::new_with_token(base_url, token),
-            None => ExampleClient::new_unauthenticated(base_url),
+    #[pyo3(signature = (base_url, token = None, token_provider = None))]
+    pub fn new(
+        py: Python<'_>,
+        base_url: String,
+        token: Option<String>,
+        token_provider: Option<::pyo3::Py<::pyo3::PyAny>>,
+    ) -> PyResult<Self> {
+        let base_url: ::url::Url = base_url.parse().map_err(PyExampleError::from)?;
+        let signer: Option<::std::sync::Arc<dyn ::olai_http::RequestSigner>> = match (
+            token,
+            token_provider,
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    ::pyo3::exceptions::PyValueError::new_err(
+                        "token and token_provider cannot both be set",
+                    ),
+                );
+            }
+            (Some(token), None) => {
+                Some(
+                    ::std::sync::Arc::new(
+                        ::olai_http::bearer::BearerProviderSigner(
+                            ::olai_http::bearer::BearerAuth::static_token(token),
+                        ),
+                    ),
+                )
+            }
+            (None, Some(provider)) => {
+                Some(
+                    match provider.bind(py).cast::<RustTokenProvider>() {
+                        Ok(provider) => provider.get().signer.clone(),
+                        Err(_) => ::std::sync::Arc::new(PyTokenProvider::new(provider)),
+                    },
+                )
+            }
+            (None, None) => None,
         };
-        Ok(Self { client })
+        let options = ExampleClient::client_options();
+        let retry = ::olai_http::RetryConfig::default();
+        let client = match signer {
+            Some(signer) => {
+                ::olai_http::CloudClient::new_with_request_signer(
+                    signer,
+                    &options,
+                    retry,
+                    None,
+                )
+            }
+            None => {
+                ::olai_http::CloudClient::new_unauthenticated_with_options(
+                    &options,
+                    retry,
+                    None,
+                )
+            }
+        }
+            .map_err(|e: ::olai_http::Error| PyExampleError::from(
+                example_client::error::Error::from(e),
+            ))?;
+        Ok(Self {
+            client: ExampleClient::new(client, base_url),
+        })
     }
 
     /// Returns:
@@ -302,6 +360,108 @@ impl PyExampleClient {
     }
 }
 
+/// A token provider made in Rust, for `token_provider=`. The binding crate makes one
+/// from any `olai_http::RequestSigner`, such as a bearer provider in a
+/// `BearerProviderSigner`.
+#[pyclass(name = "TokenProvider", frozen, module = "example._core")]
+pub struct RustTokenProvider {
+    pub(crate) signer: ::std::sync::Arc<dyn ::olai_http::RequestSigner>,
+}
+
+impl RustTokenProvider {
+    pub fn new(signer: ::std::sync::Arc<dyn ::olai_http::RequestSigner>) -> Self {
+        Self { signer }
+    }
+}
+
+/// The bearer tokens of a `token_provider` callable: the token, or a
+/// `(token, expires_at)` pair with the expiry in seconds since the epoch, kept until a
+/// minute before it. The callable runs on a blocking thread, one call at a time: it may
+/// block, and call the blocking methods of this module.
+pub struct PyTokenProvider {
+    provider: ::std::sync::Arc<::pyo3::Py<::pyo3::PyAny>>,
+    kept: ::futures::lock::Mutex<Option<(String, ::std::time::Instant)>>,
+}
+
+impl PyTokenProvider {
+    fn new(provider: ::pyo3::Py<::pyo3::PyAny>) -> Self {
+        Self {
+            provider: ::std::sync::Arc::new(provider),
+            kept: ::futures::lock::Mutex::new(None),
+        }
+    }
+
+    /// Ask the callable: the token, and its expiry when it gives one.
+    fn ask(provider: &::pyo3::Py<::pyo3::PyAny>) -> PyResult<(String, Option<f64>)> {
+        ::pyo3::Python::attach(|py| {
+            let value = provider.bind(py).call0()?;
+            if let Ok(token) = value.extract::<String>() {
+                return Ok((token, None));
+            }
+            let (token, expires_at) = value
+                .extract::<(String, f64)>()
+                .map_err(|_| {
+                    ::pyo3::exceptions::PyTypeError::new_err(
+                        "token_provider must return the token, or a (token, \
+                                 expires_at) pair with the expiry in seconds since the epoch",
+                    )
+                })?;
+            Ok((token, Some(expires_at)))
+        })
+    }
+
+    /// The token: the kept one, else the callable's.
+    async fn token(&self) -> ::olai_http::Result<String> {
+        let failed = |source: Box<dyn ::std::error::Error + Send + Sync>| {
+            ::olai_http::Error::Generic {
+                source,
+            }
+        };
+        let mut kept = self.kept.lock().await;
+        if let Some((token, until)) = kept.as_ref()
+            && ::std::time::Instant::now() < *until
+        {
+            return Ok(token.clone());
+        }
+        let provider = self.provider.clone();
+        let (token, expires_at) = ::tokio::task::spawn_blocking(move || Self::ask(
+                &provider,
+            ))
+            .await
+            .map_err(|e| failed(Box::new(e)))?
+            .map_err(|e| failed(Box::new(e)))?;
+        if let Some(expires_at) = expires_at {
+            let now = ::std::time::SystemTime::now()
+                .duration_since(::std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64());
+            let left = expires_at - now - 60.0;
+            let left = if left.is_finite() { left.clamp(0.0, 1e9) } else { 0.0 };
+            let until = ::std::time::Instant::now()
+                + ::std::time::Duration::from_secs_f64(left);
+            *kept = Some((token.clone(), until));
+        }
+        Ok(token)
+    }
+}
+
+impl ::std::fmt::Debug for PyTokenProvider {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.debug_struct("PyTokenProvider").finish_non_exhaustive()
+    }
+}
+
+impl ::olai_http::RequestSigner for PyTokenProvider {
+    fn sign<'a>(
+        &'a self,
+        request: ::olai_http::reqwest::RequestBuilder,
+    ) -> ::futures::future::BoxFuture<
+        'a,
+        ::olai_http::Result<::olai_http::reqwest::RequestBuilder>,
+    > {
+        Box::pin(async move { Ok(request.bearer_auth(self.token().await?)) })
+    }
+}
+
 /// The extension module, as Python imports it.
 pub const CORE_MODULE: &str = "example._core";
 /// The submodules of the extension module.
@@ -318,6 +478,9 @@ pub mod extension_module {
     const __version__: &str = env!("CARGO_PKG_VERSION");
     #[pymodule_export]
     use super::PyExampleClient;
+
+    #[pymodule_export]
+    use super::RustTokenProvider;
 
     #[pymodule_export]
     use crate::codegen::error::{

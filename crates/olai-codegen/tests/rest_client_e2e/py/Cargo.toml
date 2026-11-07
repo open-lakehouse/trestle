@@ -11,8 +11,13 @@ publish = false
 # stubs of.
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The client on `olai_http::CloudClient`, with `token_provider=` and the default signer.
+cloud = ["rest-client-e2e/cloud", "dep:olai-http"]
+
 [dependencies]
 rest-client-e2e = { path = "..", features = ["python"] }
+olai-http = { path = "../../../../olai-http", optional = true }
 
 futures = "0.3"
 pyo3 = { version = "0.30", features = ["experimental-inspect"] }

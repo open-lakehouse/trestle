@@ -25,7 +25,7 @@ impl SchemaServiceClient {
 
     pub async fn create_schema(&self, request: &CreateSchemaRequest) -> Result<Schema> {
         let url = self.base_url.join("schemas")?;
-        let response = self.client.post(url).json(request).send().await?;
+        let response = self.client.post(url).json(request).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }
@@ -39,7 +39,7 @@ impl SchemaServiceClient {
         );
         let mut url = self.base_url.join(&formatted_path)?;
         url.query_pairs_mut().append_pair("view", &request.view.to_string());
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }
@@ -56,7 +56,7 @@ impl SchemaServiceClient {
         url.query_pairs_mut()
             .append_pair("max_results", &request.max_results.to_string());
         url.query_pairs_mut().append_pair("page_token", &request.page_token);
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }
@@ -71,7 +71,7 @@ impl SchemaServiceClient {
         let url = self.base_url.join(&formatted_path)?;
         let mut body = request.clone();
         body.full_name = Default::default();
-        let response = self.client.patch(url).json(&body).send().await?;
+        let response = self.client.patch(url).json(&body).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }
@@ -87,7 +87,7 @@ impl SchemaServiceClient {
             "schemas/{}", encode_path_value(& request.full_name, false)
         );
         let url = self.base_url.join(&formatted_path)?;
-        let response = self.client.delete(url).send().await?;
+        let response = self.client.delete(url).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }

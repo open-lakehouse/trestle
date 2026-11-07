@@ -152,6 +152,32 @@ fn convenience_ctors(config: &CodeGenConfig, transport_ident: &syn::Ident) -> To
     } else {
         None
     };
+    // `CloudClient` takes its `User-Agent` when it is made, from `ClientOptions`.
+    let cloud_user_agent = (config.rest_client.user_agent.as_ref())
+        .filter(|_| config.uses_cloud_client())
+        .map(|product| format!("{product}/"));
+    let token_ctors = match (&cloud_user_agent, token_ctors) {
+        (Some(_), Some(_)) => Some((
+            quote! {
+                #transport_ident::new_unauthenticated_with_options(
+                    &Self::client_options(),
+                    ::olai_http::RetryConfig::default(),
+                    None,
+                )
+                .expect("the HTTP client of the default options")
+            },
+            quote! {
+                #transport_ident::new_with_bearer(
+                    ::olai_http::bearer::BearerAuth::static_token(token.to_string()),
+                    &Self::client_options(),
+                    ::olai_http::RetryConfig::default(),
+                    None,
+                )
+                .expect("the HTTP client of the default options")
+            },
+        )),
+        (_, token_ctors) => token_ctors,
+    };
     let token_ctors = token_ctors.map(|(unauthenticated, with_token)| {
         quote! {
             #native_cfg
@@ -165,6 +191,65 @@ fn convenience_ctors(config: &CodeGenConfig, transport_ident: &syn::Ident) -> To
             // `token` stays `impl ToString` to match `CloudClient::new_with_token`'s own signature.
             pub fn new_with_token(base_url: Url, token: impl ToString) -> Self {
                 Self::new(#with_token, base_url)
+            }
+        }
+    });
+    // `CloudClient` also takes olai-http's signers and bearer providers.
+    let cloud_ctors = config.uses_cloud_client().then(|| {
+        let user_agent = cloud_user_agent.as_ref().map(|prefix| {
+            quote! {
+                .with_config(
+                    ::olai_http::ClientConfigKey::UserAgent,
+                    concat!(#prefix, env!("CARGO_PKG_VERSION")),
+                )
+            }
+        });
+        let user_agent_doc = cloud_user_agent.as_ref().map(|prefix| {
+            let doc = format!(" The `User-Agent` is `{prefix}<client crate version>`.");
+            quote! { #[doc = #doc] }
+        });
+        quote! {
+            #native_cfg
+            /// The HTTP settings of the constructors that make the `CloudClient`: plain
+            /// `http` URLs are allowed, and no timeout ends a request.
+            #user_agent_doc
+            pub fn client_options() -> ::olai_http::ClientOptions {
+                ::olai_http::ClientOptions::new()
+                    .with_allow_http(true)
+                    .with_timeout_disabled()
+                    #user_agent
+            }
+
+            #native_cfg
+            /// Create a new aggregate client whose bearer token comes from `provider`, such as
+            /// one of [`olai_http::bearer::BearerAuth`], which keeps and refreshes its tokens.
+            pub fn new_with_bearer(
+                base_url: Url,
+                provider: ::olai_http::bearer::BearerCredentialProvider,
+            ) -> ::olai_http::Result<Self> {
+                let client = #transport_ident::new_with_bearer(
+                    provider,
+                    &Self::client_options(),
+                    ::olai_http::RetryConfig::default(),
+                    None,
+                )?;
+                Ok(Self::new(client, base_url))
+            }
+
+            #native_cfg
+            /// Create a new aggregate client that signs its requests with `signer`, for
+            /// authentication that a bearer provider does not cover.
+            pub fn new_with_signer(
+                base_url: Url,
+                signer: ::std::sync::Arc<dyn ::olai_http::RequestSigner>,
+            ) -> ::olai_http::Result<Self> {
+                let client = #transport_ident::new_with_request_signer(
+                    signer,
+                    &Self::client_options(),
+                    ::olai_http::RetryConfig::default(),
+                    None,
+                )?;
+                Ok(Self::new(client, base_url))
             }
         }
     });
@@ -189,6 +274,7 @@ fn convenience_ctors(config: &CodeGenConfig, transport_ident: &syn::Ident) -> To
     });
     quote! {
         #token_ctors
+        #cloud_ctors
         #wasm_ctor
         #user_agent
     }

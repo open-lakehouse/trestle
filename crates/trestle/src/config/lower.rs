@@ -321,6 +321,8 @@ fn lower_python(
         public_modules: options.public_modules,
         user_agent: options.user_agent.clone(),
         exports: options.exports.clone(),
+        default_signer: options.default_signer.clone(),
+        submodules: options.submodules.clone(),
     })
 }
 

@@ -289,7 +289,8 @@ pub struct RustClient {
     /// RPCs (`package.Service.Method`) whose request body keeps the path fields.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_fields_in_body_methods: Vec<String>,
-    /// The `User-Agent` product of the `reqwest` transport (`<product>/<client crate version>`).
+    /// The `User-Agent` product of the client (`<product>/<client crate version>`), with the
+    /// `reqwest` or `cloud` transport.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
     /// Gate each service behind a cargo feature named after its model package
@@ -415,13 +416,24 @@ pub struct PythonOptions {
     #[serde(default)]
     pub public_modules: bool,
     /// The `User-Agent` product of the Python client (`<product>/<binding crate version>`).
-    /// Needs the `reqwest` transport.
+    /// Needs the `reqwest` or `cloud` transport.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
     /// Hand-written classes and functions of the binding crate (Rust paths) that the
     /// extension module also exports.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<String>,
+    /// The Rust path of an
+    /// `async fn(&Url) -> olai_http::Result<Option<Arc<dyn olai_http::RequestSigner>>>` that
+    /// the Python client calls for its signer when it gets neither `token` nor
+    /// `token_provider`. Needs the `cloud` transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_signer: Option<String>,
+    /// The Rust paths of hand-written `#[pymodule]` modules of the binding crate, such as
+    /// `crate::identity::identity`, exported as submodules of `module` under their last
+    /// segment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submodules: Vec<String>,
 }
 
 /// The pure-Python package of the generated files.

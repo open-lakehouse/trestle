@@ -615,10 +615,14 @@ async fn bearer_token_goes_in_every_request_and_form_bodies_are_encoded() {
             .to_string()
     ));
 
-    let transport = crate::codegen::transport::HttpClient::default().with_token("secret");
-    assert!(!format!("{transport:?}").contains("secret"));
+    #[cfg(not(feature = "cloud"))]
+    {
+        let transport = crate::codegen::transport::HttpClient::default().with_token("secret");
+        assert!(!format!("{transport:?}").contains("secret"));
+    }
 }
 
+#[cfg(not(feature = "cloud"))]
 #[tokio::test]
 async fn user_agent_goes_in_every_request() {
     let (base, seen) = serve().await;
@@ -648,4 +652,72 @@ async fn user_agent_goes_in_every_request() {
         agents,
         [default.clone(), default, "user-agent demo-cli/1.0".into()]
     );
+}
+
+/// The `User-Agent` of `CloudClient` comes from `client_options()`, for every constructor.
+#[cfg(feature = "cloud")]
+#[tokio::test]
+async fn cloud_user_agent_goes_in_every_request() {
+    let (base, seen) = serve().await;
+    let default = format!("user-agent demo-client/{}", env!("CARGO_PKG_VERSION"));
+    let bearer = olai_http::bearer::BearerAuth::static_token("secret");
+    let clients = [
+        DemoClient::new_unauthenticated(base.clone()),
+        DemoClient::new_with_token(base.clone(), "secret"),
+        DemoClient::new_with_bearer(base.clone(), bearer).unwrap(),
+    ];
+    for client in clients {
+        client.widget("w").delete().await.unwrap();
+    }
+    let agents: Vec<String> = seen
+        .all()
+        .into_iter()
+        .filter(|e| e.starts_with("user-agent "))
+        .collect();
+    assert_eq!(agents, [default.clone(), default.clone(), default]);
+}
+
+/// Signs with a bearer token once it has one, and sends requests without one until then,
+/// as a signer that asks the server what it takes.
+#[cfg(feature = "cloud")]
+#[derive(Debug, Default)]
+struct Late(std::sync::Mutex<Option<String>>);
+
+#[cfg(feature = "cloud")]
+impl olai_http::RequestSigner for Late {
+    fn sign<'a>(
+        &'a self,
+        request: olai_http::reqwest::RequestBuilder,
+    ) -> futures::future::BoxFuture<'a, olai_http::Result<olai_http::reqwest::RequestBuilder>> {
+        let token = self.0.lock().unwrap().clone();
+        Box::pin(async move {
+            Ok(match token {
+                Some(token) => request.bearer_auth(token),
+                None => request,
+            })
+        })
+    }
+}
+
+#[cfg(feature = "cloud")]
+#[tokio::test]
+async fn cloud_client_takes_bearer_providers_and_signers() {
+    let (base, seen) = serve().await;
+    let provider = olai_http::bearer::BearerAuth::static_token("provided");
+    let client = DemoClient::new_with_bearer(base.clone(), provider).unwrap();
+    client.widget("w").delete().await.unwrap();
+    assert!(seen.all().contains(&"auth Bearer provided".to_string()));
+
+    let (base, seen) = serve().await;
+    let late = Arc::new(Late::default());
+    let client = DemoClient::new_with_signer(base, late.clone()).unwrap();
+    client.widget("w").delete().await.unwrap();
+    assert!(
+        !seen.all().iter().any(|e| e.starts_with("auth ")),
+        "{:?}",
+        seen.all()
+    );
+    *late.0.lock().unwrap() = Some("late".into());
+    client.widget("w").delete().await.unwrap();
+    assert!(seen.all().contains(&"auth Bearer late".to_string()));
 }

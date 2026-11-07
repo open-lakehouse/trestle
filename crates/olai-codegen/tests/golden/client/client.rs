@@ -39,6 +39,42 @@ impl ExampleClient {
         Self::new(CloudClient::new_with_token(token), base_url)
     }
 
+    /// The HTTP settings of the constructors that make the `CloudClient`: plain
+    /// `http` URLs are allowed, and no timeout ends a request.
+    pub fn client_options() -> ::olai_http::ClientOptions {
+        ::olai_http::ClientOptions::new().with_allow_http(true).with_timeout_disabled()
+    }
+
+    /// Create a new aggregate client whose bearer token comes from `provider`, such as
+    /// one of [`olai_http::bearer::BearerAuth`], which keeps and refreshes its tokens.
+    pub fn new_with_bearer(
+        base_url: Url,
+        provider: ::olai_http::bearer::BearerCredentialProvider,
+    ) -> ::olai_http::Result<Self> {
+        let client = CloudClient::new_with_bearer(
+            provider,
+            &Self::client_options(),
+            ::olai_http::RetryConfig::default(),
+            None,
+        )?;
+        Ok(Self::new(client, base_url))
+    }
+
+    /// Create a new aggregate client that signs its requests with `signer`, for
+    /// authentication that a bearer provider does not cover.
+    pub fn new_with_signer(
+        base_url: Url,
+        signer: ::std::sync::Arc<dyn ::olai_http::RequestSigner>,
+    ) -> ::olai_http::Result<Self> {
+        let client = CloudClient::new_with_request_signer(
+            signer,
+            &Self::client_options(),
+            ::olai_http::RetryConfig::default(),
+            None,
+        )?;
+        Ok(Self::new(client, base_url))
+    }
+
     ///Low-level `catalog` client exposing request/response passthrough methods.
     pub fn catalog_client(&self) -> crate::codegen::catalog::CatalogServiceClient {
         crate::codegen::catalog::CatalogServiceClient::new(
