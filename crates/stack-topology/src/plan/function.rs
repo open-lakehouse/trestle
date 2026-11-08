@@ -69,6 +69,8 @@ impl FunctionHosted {
             client_env: own.client_env.clone(),
             python: own.python.clone(),
             function: own.function.clone(),
+            function_env: own.function_env.clone(),
+            function_secrets: own.function_secrets.clone(),
             // Still the API's server: consumers reach it at the function's URL.
             api: own.api.clone(),
             hosted: Some(HostedKind::Function),

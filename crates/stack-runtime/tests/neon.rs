@@ -202,6 +202,8 @@ fn requirements() -> NeonRequirements {
         module: ModuleId::from(module),
         slug: slug.into(),
         url_var: Some(format!("{}_FUNCTION_URL", slug.to_uppercase())),
+        env: Default::default(),
+        secrets: vec![],
     };
     NeonRequirements {
         databases: vec!["mlflow".into(), "omnigent".into()],

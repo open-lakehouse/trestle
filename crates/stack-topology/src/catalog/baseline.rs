@@ -155,6 +155,7 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
         neon_storage(),
         mlflow(),
         unity_catalog(),
+        unity_catalog_rs(),
         jaeger(),
         headwaters(),
         omnigent(),
@@ -162,9 +163,11 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
         puppygraph(),
         rivers(),
         opa(),
-    ] as [Arc<dyn Module>; 18])
+    ] as [Arc<dyn Module>; 19])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     .with_default_provider(Role::RELATIONAL_DB, "postgres")
+    // Selecting the `data_catalog` capability picks the OSS server.
+    .with_default_provider(Role::DATA_CATALOG, "unity-catalog")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
     // check.
@@ -1846,6 +1849,110 @@ impl Module for UnityCatalog {
     }
 }
 
+/// The configuration mangrove's Unity Catalog server runs with wherever it runs: mounted in its
+/// container, and the `UC_SERVER_CONFIG_YAML` a Neon Function is deployed with.
+const UNITY_CATALOG_RS_CONFIG: &str =
+    include_str!("../../templates/modules/unity-catalog-rs/uc-server.yaml");
+/// What the container adds to [`UNITY_CATALOG_RS_CONFIG`]: where it listens, and its database.
+const UNITY_CATALOG_RS_LOCAL: &str =
+    include_str!("../../templates/modules/unity-catalog-rs/server.local.yaml");
+/// The variable mangrove's server reads its key-encryption key from.
+const UNITY_CATALOG_RS_KEK: &str = "UC_SERVER_KEK";
+
+/// `unity-catalog-rs` — mangrove's Rust Unity Catalog server, another implementation of
+/// [`UNITY_CATALOG_API`]. It keeps the OSS server's service name, port and REST path, so
+/// consumers reach either one the same way.
+///
+/// One configuration document ([`UNITY_CATALOG_RS_CONFIG`]) serves both placements. The
+/// container mounts it, with the listen address and the database added. Run as a Neon
+/// Function, the deployment sets it as `UC_SERVER_CONFIG_YAML`, and the branch supplies the
+/// database. The key-encryption key is never rendered: the server reads `UC_SERVER_KEK` from
+/// its environment, which Compose passes through from the process that starts it.
+fn unity_catalog_rs() -> Arc<dyn Module> {
+    let mut provides = Provides {
+        helpers: vec![HelperService::init("unitycatalog-migrate")],
+        // The Neon Function deployed from mangrove's server library.
+        function: Some("unitycatalog".into()),
+        function_env: [(
+            "UC_SERVER_CONFIG_YAML".to_string(),
+            UNITY_CATALOG_RS_CONFIG.to_string(),
+        )]
+        .into(),
+        function_secrets: vec![UNITY_CATALOG_RS_KEK.into()],
+        api: Some(UNITY_CATALOG_API.into()),
+        // As a function, the function's own step says where the key goes instead.
+        deploy: vec![DeployStepSpec::new(
+            "kek",
+            DeployPhase::Configure,
+            "Set Unity Catalog's key-encryption key",
+            include_str!("../../templates/modules/unity-catalog-rs/kek.deploy.md.jinja"),
+        )],
+        ..Provides::default()
+    };
+    provides.client_env.insert(
+        "UNITY_CATALOG_URL".into(),
+        ClientValue::endpoint(UNITY_CATALOG_SERVICE, "rest", UrlPart::Full),
+    );
+    Arc::new(DataModule {
+        id: ModuleId::from("unity-catalog-rs"),
+        model: Some("mangrove".into()),
+        display_name: Some("Unity Catalog (Rust)".into()),
+        summary: Some(
+            "mangrove's Rust Unity Catalog server; the same REST API, in a container or as a \
+             Neon Function."
+                .into(),
+        ),
+        category: Some("catalog".into()),
+        provider_of: Some(Role::DATA_CATALOG.into()),
+        requires: vec![ModuleId::from("envoy")],
+        conflicts_with: vec![],
+        // The database URL is read straight from the resolved connection in the env file, so
+        // nothing is bound into the module's env here.
+        needs: vec![ResourceDemand {
+            resource: Role::RELATIONAL_DB.into(),
+            name: "unitycatalog".into(),
+            provider: None,
+            bind: ConnectionBinding::default(),
+        }],
+        service_specs: vec![ServiceSpec {
+            name: UNITY_CATALOG_SERVICE.into(),
+            role: Role::data_catalog(),
+            placement: container(UNITY_CATALOG_SERVICE),
+            base_path: String::new(),
+            endpoints: vec![Endpoint::api(
+                "rest",
+                UNITY_CATALOG_PORT,
+                "/api/2.1/unity-catalog",
+                Rewrite::Inherit,
+            )],
+            depends_on: vec![],
+        }],
+        provides,
+        knobs: vec![string_knob(
+            "image",
+            "Unity Catalog image",
+            Some(images::UNITY_CATALOG_RS),
+            IMAGE_HELP,
+            None,
+        )],
+        renders: template_with_files(
+            include_str!("../../templates/modules/unity-catalog-rs/compose.yaml.jinja"),
+            vec![
+                config_file(
+                    "config.yaml",
+                    "unity_catalog_rs_config",
+                    &format!("{UNITY_CATALOG_RS_LOCAL}\n{UNITY_CATALOG_RS_CONFIG}"),
+                ),
+                sensitive_file(
+                    ".env/unitycatalog.env",
+                    include_str!("../../templates/modules/unity-catalog-rs/database.env.jinja"),
+                ),
+            ],
+        )
+        .for_compose(),
+    })
+}
+
 /// `jaeger` — all-in-one OTLP tracing backend, UI fronted at `/jaeger`.
 fn jaeger() -> Arc<dyn Module> {
     let mut provides = Provides::default();
@@ -2723,6 +2830,7 @@ mod tests {
             ("neon-storage", "neonObjectStorage"),
             ("mlflow", "mlflow"),
             ("unity-catalog", "unityCatalogServer"),
+            ("unity-catalog-rs", "mangrove"),
             ("jaeger", "jaeger"),
             ("headwaters", "headwaters"),
             ("omnigent", "omnigent"),

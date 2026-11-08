@@ -1,0 +1,59 @@
+# Unity Catalog: mangrove's Rust server
+services:
+  # One-shot: apply the database migrations, then exit. `serve` never migrates and refuses a
+  # schema that is behind, so it waits for this job. The database gate is planner-injected.
+  unitycatalog-migrate:
+    image: {{ knobs.image }}
+    restart: "no"
+    command: ["migrate", "--config", "/etc/uc-server/config.yaml"]
+{%- if dependencies %}
+    depends_on:
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: service_{{ dep.readiness }}
+{%- endfor %}
+{%- endif %}
+    env_file:
+      - path: ./modules/unity-catalog-rs/.env/unitycatalog.env
+        format: raw
+    environment:
+      UC_SERVER_KEK:
+    configs:
+      - source: unity_catalog_rs_config
+        target: /etc/uc-server/config.yaml
+
+  unitycatalog:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+    command: ["serve", "--config", "/etc/uc-server/config.yaml"]
+    depends_on:
+      unitycatalog-migrate:
+        condition: service_completed_successfully
+{%- for dep in dependencies %}
+      {{ dep.service }}:
+        condition: service_{{ dep.readiness }}
+{%- endfor %}
+    env_file:
+      - path: ./modules/unity-catalog-rs/.env/unitycatalog.env
+        format: raw
+    environment:
+      # The key-encryption key, passed through from the process that starts Compose (a bare
+      # name takes its value, or stays unset): never written into the rendered stack.
+      UC_SERVER_KEK:
+    configs:
+      - source: unity_catalog_rs_config
+        target: /etc/uc-server/config.yaml
+    expose:
+      - "8080"
+{%- if published_ports %}
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+{%- endif %}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/uc-server", "healthcheck", "--url", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5

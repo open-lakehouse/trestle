@@ -193,7 +193,10 @@ mod tests {
         );
         assert_eq!(
             cat.providers_of("data_catalog"),
-            vec![&ModuleId::from("unity-catalog")]
+            vec![
+                &ModuleId::from("unity-catalog"),
+                &ModuleId::from("unity-catalog-rs")
+            ]
         );
     }
 

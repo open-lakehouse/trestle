@@ -1,0 +1,9 @@
+Unity Catalog seals the credentials it stores with a key-encryption key, read from
+`UC_SERVER_KEK` (32 bytes, base64) in the environment of the process that starts the stack.
+Compose passes it through to the server; it is never written into this directory, and without
+it the server refuses to start. Generate one once and keep it: credentials sealed under it
+can't be read with another.
+
+```sh
+export UC_SERVER_KEK="$(openssl rand -base64 32)"
+```

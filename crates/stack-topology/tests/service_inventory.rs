@@ -24,6 +24,8 @@ fn selections() -> Vec<Selection> {
     ]);
     let azure = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog", "mlflow"]);
     let bare_store = Selection::modules(["envoy", "rustfs"]);
+    // The other Unity Catalog implementation (one per environment).
+    let uc_rs = Selection::modules(["envoy", "postgres", "unity-catalog-rs", "mlflow"]);
     let mut mounts = Selection::modules(["unity-catalog"]);
     mounts.knob_overrides.insert(
         "unity-catalog".into(),
@@ -33,7 +35,7 @@ fn selections() -> Vec<Selection> {
         ]
         .into(),
     );
-    vec![everything, azure, bare_store, mounts]
+    vec![everything, azure, bare_store, uc_rs, mounts]
 }
 
 fn rendered_services(fragment: &str) -> BTreeSet<String> {

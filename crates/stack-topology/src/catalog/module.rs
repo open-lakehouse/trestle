@@ -161,6 +161,17 @@ pub struct Provides {
     /// [`plan::hosted`](crate::plan::hosted)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function: Option<String>,
+    /// For a module that can run as a function: the environment it is deployed with (e.g. its
+    /// configuration document), the same configuration its container renders, so both
+    /// placements behave alike. Listed in the function's deployment step and in
+    /// [`NeonRequirements`](crate::NeonRequirements); never a secret.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub function_env: BTreeMap<String, String>,
+    /// For a module that can run as a function: the secret variables the deployment must set
+    /// (a key-encryption key, say). Only their names are known here; trestle never writes the
+    /// values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub function_secrets: Vec<String>,
     /// The API this module serves its consumers, when other implementations serve the same one
     /// (e.g. `unity-catalog` for every Unity Catalog server). Consumers that integrate with
     /// such a server look it up by this API ([`StackFacts::serves`]), never by module id, so
@@ -848,6 +859,10 @@ pub struct HostedFunction {
     pub slug: String,
     /// Its origin: the function's URL, or the `${VAR}` reference it is read from.
     pub url: String,
+    /// The environment it is deployed with (see [`Provides::function_env`]).
+    pub env: BTreeMap<String, String>,
+    /// The secret variables its deployment must set (see [`Provides::function_secrets`]).
+    pub secrets: Vec<String>,
 }
 
 impl StackFacts {

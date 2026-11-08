@@ -14,9 +14,15 @@ use crate::render::InjectedEnv;
 
 /// Resolve a selection into a flat list of directly-selected module ids (capabilities
 /// mapped through the catalog's provider index), preserving order and deduplicating.
+///
+/// A capability with several providers (two Unity Catalog servers) selects one: the
+/// environment's first [preferred](PlanCtx::provider_preference) provider, else the catalog's
+/// [default](Catalog::with_default_provider). With neither, it selects them all, and the
+/// planner rejects the clash.
 pub(super) fn resolve_selection(
     selection: &Selection,
     catalog: &Catalog,
+    ctx: &PlanCtx,
 ) -> Result<Vec<ModuleId>, PlanError> {
     let mut out: Vec<ModuleId> = Vec::new();
     let push = |id: ModuleId, out: &mut Vec<ModuleId>| {
@@ -32,8 +38,27 @@ pub(super) fn resolve_selection(
         if providers.is_empty() {
             return Err(PlanError::UnknownCapability(cap.clone()));
         }
-        for id in providers {
-            push(id.clone(), &mut out);
+        let chosen = (providers.len() > 1)
+            .then(|| {
+                ctx.provider_preference
+                    .get(cap)
+                    .into_iter()
+                    .flatten()
+                    .find(|id| providers.contains(id))
+                    .or_else(|| {
+                        catalog
+                            .default_provider_for(cap)
+                            .filter(|id| providers.contains(id))
+                    })
+            })
+            .flatten();
+        match chosen {
+            Some(id) => push(id.clone(), &mut out),
+            None => {
+                for id in providers {
+                    push(id.clone(), &mut out);
+                }
+            }
         }
     }
     Ok(out)
@@ -57,7 +82,7 @@ pub(super) fn resolve_with_demands(
     // (provider ordered before consumer, like a `requires`). These are passed to `resolve`
     // as `extra_edges` rather than folded into any module — a module is never mutated.
     let mut demand_edges: ExtraEdges = ExtraEdges::new();
-    let mut selected = resolve_selection(selection, catalog)?;
+    let mut selected = resolve_selection(selection, catalog, ctx)?;
     // Without a gateway, a surface module's `requires` on it is moot — unless the augment
     // phase selected it anyway, for emulated hostnames.
     let omit: BTreeSet<ModuleId> = if selection.gateway.enabled {
