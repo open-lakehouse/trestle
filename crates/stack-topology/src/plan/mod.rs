@@ -654,6 +654,18 @@ pub enum PlanError {
         /// The provider module ids present for the role (sorted).
         providers: Vec<ModuleId>,
     },
+    /// Two or more implementations of the same [API](crate::Provides::api) are in one
+    /// environment (two Unity Catalog servers, say). They are alternatives: keep one.
+    #[error(
+        "{providers:?} all serve the `{api}` API; an environment runs one of them, so \
+         remove all but one"
+    )]
+    ConflictingApiProviders {
+        /// The API.
+        api: String,
+        /// The modules that serve it (sorted).
+        providers: Vec<ModuleId>,
+    },
     /// A module declares a [`required`](crate::Knob::required) knob with no
     /// [`default`](crate::Knob::default), and the [`Selection`] supplied no override for
     /// it. The fix is to set the knob in

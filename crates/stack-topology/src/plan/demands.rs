@@ -306,7 +306,8 @@ pub(super) fn resolve_demand_providers(
     Ok(chosen)
 }
 
-/// Reject an environment that contains two or more providers of the same resource role: an
+/// Reject an environment that contains two or more providers of the same resource role, or two
+/// implementations of the same [API](crate::Provides::api): an
 /// environment has one instance per capability — RustFS *or* Azurite *or* a hosted S3 bucket,
 /// never two side by side.
 ///
@@ -350,6 +351,23 @@ pub(super) fn check_role_exclusivity(graph: &ResolvedGraph) -> Result<(), PlanEr
             providers.sort();
             return Err(PlanError::ConflictingRoleProviders {
                 role: role.to_string(),
+                providers,
+            });
+        }
+    }
+    // Two implementations of one API are alternatives: consumers address the API's server by
+    // one service name, so only one may be in the environment.
+    let mut apis: BTreeMap<&str, Vec<ModuleId>> = BTreeMap::new();
+    for module in &graph.nodes {
+        if let Some(api) = module.provides().api.as_deref() {
+            apis.entry(api).or_default().push(module.id().clone());
+        }
+    }
+    for (api, mut providers) in apis {
+        if providers.len() > 1 {
+            providers.sort();
+            return Err(PlanError::ConflictingApiProviders {
+                api: api.to_string(),
                 providers,
             });
         }

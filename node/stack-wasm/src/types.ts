@@ -53,6 +53,10 @@ export interface ModuleDto {
    *  the slug it is deployed under. A `hosted` entry with a `function`
    *  connection runs it as one. */
   function?: string;
+  /** The API it serves, when other implementations serve the same one (e.g.
+   *  `unity-catalog`): modules with the same `api` are alternatives for one
+   *  component. */
+  api?: string;
 }
 
 /** A container a module runs to support its services (mirrors

@@ -106,6 +106,10 @@ pub struct ModuleDto {
     /// selection hosts it with a `hosted` entry whose connection is `{ kind = "function" }`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function: Option<String>,
+    /// The API it serves, when other implementations serve the same one (e.g.
+    /// `unity-catalog`): modules with the same `api` are alternatives for one component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
 }
 
 /// A hosted provider module's kind and default configuration (see [`ModuleDto::hosted`]).
@@ -334,6 +338,7 @@ pub fn catalog_dto_of(catalog: &Catalog) -> CatalogDto {
                     .unwrap_or_else(|| kind.default_resource()),
             }),
             function: m.provides().function.clone(),
+            api: m.provides().api.clone(),
         })
         .collect();
     CatalogDto {

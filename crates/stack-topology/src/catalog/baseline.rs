@@ -1320,8 +1320,8 @@ fn mlflow() -> Arc<dyn Module> {
     }))
 }
 
-/// [`mlflow`]: a data module whose model registry moves to Unity Catalog when
-/// `unity-catalog` is in the stack.
+/// [`mlflow`]: a data module whose model registry moves to Unity Catalog when a Unity Catalog
+/// server (any module serving [`UNITY_CATALOG_API`]) is in the stack.
 ///
 /// Both serve registered models, and an environment should have one registry. With UC present,
 /// the server's registry store is UC (`--registry-store-uri uc:…`, see the fragment), so
@@ -1377,7 +1377,8 @@ impl Module for Mlflow {
         stack: &StackFacts,
     ) -> Cow<'_, BTreeMap<String, ClientValue>> {
         let hosted_store = stack.is_hosted(Role::OBJECT_STORE);
-        if hosted_store && !stack.has("unity-catalog") {
+        let uc = stack.serves(UNITY_CATALOG_API);
+        if hosted_store && uc.is_none() {
             return Cow::Borrowed(&self.0.provides.client_env);
         }
         let mut env = self.0.provides.client_env.clone();
@@ -1394,7 +1395,7 @@ impl Module for Mlflow {
                 env.insert(key.into(), ClientValue::literal("false"));
             }
         }
-        if stack.has("unity-catalog") {
+        if let Some(uc) = uc {
             // The MLflow client's OSS Unity Catalog registry: `uc:` + the origin it appends
             // `/api/2.1/unity-catalog` to (UC's REST mount sits at the gateway root). The server's
             // UC store already serves clients that only set the tracking URI, but just for
@@ -1404,7 +1405,7 @@ impl Module for Mlflow {
             env.insert(
                 "MLFLOW_REGISTRY_URI".into(),
                 ClientValue::module_endpoint(
-                    "unity-catalog",
+                    uc.as_str(),
                     UNITY_CATALOG_SERVICE,
                     "rest",
                     UrlPart::Origin,
@@ -1416,15 +1417,19 @@ impl Module for Mlflow {
     }
     fn integrates_with_in(&self, _knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
         // The server's model registry is UC's when both are in the stack.
-        if stack.has("unity-catalog") {
-            vec![ModuleId::from("unity-catalog")]
-        } else {
-            Vec::new()
-        }
+        stack
+            .serves(UNITY_CATALOG_API)
+            .cloned()
+            .into_iter()
+            .collect()
     }
 }
 
-/// Unity Catalog's compose service, and the port its REST API listens on in the container.
+/// The API every Unity Catalog server serves (see [`Provides::api`]). Consumers find the
+/// stack's UC by it, whichever implementation runs.
+const UNITY_CATALOG_API: &str = "unity-catalog";
+/// Unity Catalog's compose service, and the port its REST API listens on in the container: the
+/// same for every implementation of [`UNITY_CATALOG_API`].
 /// Shared with consumers that call UC directly on the compose network (see [`puppygraph`]).
 const UNITY_CATALOG_SERVICE: &str = "unitycatalog";
 /// The helper that registers the stack's object stores in Unity Catalog's database, then
@@ -1445,6 +1450,7 @@ fn unity_catalog() -> Arc<dyn Module> {
         // It can also run as a Neon Function, whose slug can't hold a dash (see
         // `plan::function`).
         function: Some("unitycatalog".into()),
+        api: Some(UNITY_CATALOG_API.into()),
         ..Provides::default()
     };
     provides.client_env.insert(
