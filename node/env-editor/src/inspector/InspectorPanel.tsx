@@ -29,6 +29,7 @@ import { moduleFiles, relativePath } from "../artifacts/fileSource.js";
 import { ModuleIcon } from "../graph/projectIcons.js";
 import { roleStyle } from "../graph/roleTheme.js";
 import { KnobField } from "../knobs/KnobField.js";
+import { implementationsOf } from "../selection/catalogIndex.js";
 import { describeOrigin, type Origin } from "../state/origin.js";
 import type {
   CatalogDto,
@@ -42,7 +43,8 @@ import type {
 } from "../types.js";
 import { AccessSection } from "./AccessSection.js";
 import { HostedSection } from "./HostedSection.js";
-import { RunsAsSection } from "./RunsAsSection.js";
+import { ImplementationSection } from "./ImplementationSection.js";
+import { RunsAsSection, runsAsFunction } from "./RunsAsSection.js";
 
 export interface InspectorPanelProps {
   /** The inspected component's module id. */
@@ -114,6 +116,8 @@ export function InspectorPanel({
   const role = node?.role ?? module?.provider_of;
   const summary = node?.summary ?? module?.summary;
   const knobs = module?.knobs ?? [];
+  // A module run as a function has no container for its settings to configure.
+  const asFunction = !!module?.function && runsAsFunction(hosted);
   const names = new Map(
     plan?.graph.nodes.map((n) => [n.id, n.display_name ?? n.id]) ?? [],
   );
@@ -173,6 +177,14 @@ export function InspectorPanel({
           <p className="px-4 pt-3 text-xs text-muted-foreground">{summary}</p>
         )}
 
+        {module && catalog && (
+          <ImplementationSection
+            module={module}
+            implementations={implementationsOf(catalog, module)}
+            onSwap={onSwap}
+          />
+        )}
+
         {module?.hosted && (
           <HostedSection
             module={module}
@@ -196,7 +208,13 @@ export function InspectorPanel({
         )}
 
         <Section ref={settingsRef} title="Settings">
-          {knobs.length === 0 ? (
+          {asFunction && knobs.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              As a Neon Function, its settings don't apply: they configure the
+              local container. The function runs with the configuration it was
+              deployed with.
+            </p>
+          ) : knobs.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               This component has no settings.
             </p>

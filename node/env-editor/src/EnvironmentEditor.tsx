@@ -217,10 +217,17 @@ function EditorBody({
 
   const alternativesOf = useCallback(
     (id: string) => {
-      const role = catalog?.modules.find((m) => m.id === id)?.provider_of;
+      const module = catalog?.modules.find((m) => m.id === id);
+      const role = module?.provider_of;
       if (!catalog || !role) return [];
+      // Another implementation of the same API is picked in the inspector's
+      // Implementation control instead.
       return catalog.modules.filter(
-        (m) => m.id !== id && m.provider_of === role && !planned.has(m.id),
+        (m) =>
+          m.id !== id &&
+          m.provider_of === role &&
+          !planned.has(m.id) &&
+          !(module.api && m.api === module.api),
       );
     },
     [catalog, planned],

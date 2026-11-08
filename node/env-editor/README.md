@@ -98,7 +98,7 @@ runtime.
 ### Running a module as a Neon Function
 
 A module that can run as a function (its catalog entry sets `function`, the
-slug it deploys under, as Unity Catalog and headwaters do) gets a "Where it
+slug it deploys under, as `unity-catalog-rs` and headwaters do) gets a "Where it
 runs" choice in the inspector. **Local container** is the default and leaves
 `selection.hosted[id]` unset. **Neon Function** writes
 `{ vendor: "neon-function", connection: { kind: "function" } }` there, with an
@@ -106,6 +106,20 @@ optional `url`. On the canvas the module then sits in the Neon cloud frame, and
 nothing of it runs locally. The editor only edits the selection: the host binds
 the Neon branch the function runs on (e.g. `trestle up --neon-branch`). The
 `EnvironmentEditor/NeonFunctions` story shows both modules as functions.
+
+While a module runs as a function its settings are hidden: they configure the
+local container, and the function runs with the configuration it was deployed
+with.
+
+### Choosing an implementation
+
+Modules that serve the same API (the catalog's `api`, e.g. `unity-catalog` for
+both `unity-catalog-oss` and `unity-catalog-rs`) are alternatives for one
+component, one per environment. The inspector shows an "Implementation" choice
+between them, which swaps the module (its settings reset; they belong to the
+implementation). The component palette offers the other one as a switch, like
+a second object store. Where it runs is a separate choice, offered only by an
+implementation that can run as a function.
 
 ## Styling
 
