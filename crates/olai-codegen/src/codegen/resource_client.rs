@@ -850,7 +850,6 @@ mod tests {
                 svc("CatalogService", "example.catalog.v1", vec![child_link]),
                 svc("SchemaService", "example.schema.v1", vec![]),
             ],
-            skipped_methods: vec![],
         };
         let metadata = CodeGenMetadata::default();
         let config = test_config();

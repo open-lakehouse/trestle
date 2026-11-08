@@ -35,41 +35,6 @@ pub enum RenderContext {
     NapiParameter,
 }
 
-/// Trait for rendering a [`UnifiedType`] into a language-specific string.
-///
-/// Each language backend provides a concrete impl over its free function (`unified_to_rust`,
-/// `unified_to_napi`, `unified_to_typescript`).
-pub trait TypeRenderer {
-    fn render(&self, ty: &UnifiedType) -> String;
-}
-
-/// Rust type renderer — handles optional `impl Into<>` / `Option<>` wrapping.
-pub struct RustRenderer(pub RenderContext, pub Runtime);
-
-impl TypeRenderer for RustRenderer {
-    fn render(&self, ty: &UnifiedType) -> String {
-        unified_to_rust(ty, self.0, self.1)
-    }
-}
-
-/// Rust NAPI parameter type renderer.
-pub struct NapiRenderer;
-
-impl TypeRenderer for NapiRenderer {
-    fn render(&self, ty: &UnifiedType) -> String {
-        unified_to_napi(ty)
-    }
-}
-
-/// TypeScript type annotation renderer.
-pub struct TypeScriptRenderer;
-
-impl TypeRenderer for TypeScriptRenderer {
-    fn render(&self, ty: &UnifiedType) -> String {
-        unified_to_typescript(ty)
-    }
-}
-
 /// Convert a unified type to a Rust type string.
 ///
 /// The `runtime` only selects the crate of the free-form JSON types ([`JsonType::rust_path`]).
@@ -397,7 +362,7 @@ fn convert_enum_name_to_rust(enum_name: &str) -> String {
 ///
 /// `UnifiedType` is the bridge between parsing and generation: a proto field's type and
 /// cardinality are normalized into this single shape once, then each language backend renders it
-/// via a [`TypeRenderer`] (e.g. [`unified_to_rust`]). The [`base_type`](Self::base_type) carries
+/// with its own function ([`unified_to_rust`], [`unified_to_napi`], [`unified_to_typescript`]). The [`base_type`](Self::base_type) carries
 /// the underlying category while [`is_optional`](Self::is_optional) and
 /// [`is_repeated`](Self::is_repeated) describe the cardinality wrapping applied around it.
 #[derive(Debug, Clone)]

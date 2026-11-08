@@ -1140,7 +1140,6 @@ mod tests {
                 resource_accessor_params: None,
                 direct_children: vec![],
             }],
-            skipped_methods: vec![],
         }
     }
 
