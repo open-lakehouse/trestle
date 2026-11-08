@@ -7,7 +7,8 @@ platform data directory, and it holds:
 - **workspaces** with their vars
 - **environments**: an editable draft (the placement-free `env.toml`, the `module.yaml`
   texts it lists, vars) and a head
-- **revisions**: numbered, immutable snapshots of a draft, with a digest
+- **revisions**: numbered, immutable snapshots of a draft, with a digest, the time they
+  were committed and an optional message
 - **instances**: a revision to run, its desired state, overrides and overlay sources
 - **slot leases**: host-wide, so two instances never share a slot, whatever their
   workspace

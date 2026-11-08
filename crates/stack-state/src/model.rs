@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::SystemTime;
 
 use olai_stack_topology::EnvManifest;
 use serde::{Deserialize, Serialize};
@@ -204,8 +205,9 @@ pub struct Environment {
 }
 
 /// A numbered, immutable snapshot of an environment: the placement-free manifest, the module
-/// manifests it lists and its vars, with a digest of all three. Nothing in the API changes a
-/// revision once committed; the type has no setters, and the store refuses an update.
+/// manifests it lists and its vars, with a digest of all three, plus when it was committed and
+/// with what message. Nothing in the API changes a revision once committed; the type has no
+/// setters, and the store refuses an update.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Revision {
     pub(crate) environment: EnvironmentId,
@@ -215,6 +217,8 @@ pub struct Revision {
     pub(crate) modules: BTreeMap<String, String>,
     pub(crate) vars: VarSet,
     pub(crate) digest: String,
+    pub(crate) message: Option<String>,
+    pub(crate) created_at: SystemTime,
 }
 
 impl Revision {
@@ -251,6 +255,17 @@ impl Revision {
     /// The SHA-256 (hex) over the manifest text, the module texts and the vars.
     pub fn digest(&self) -> &str {
         &self.digest
+    }
+
+    /// The message it was committed with, if any (see
+    /// [`commit_draft_with`](crate::Store::commit_draft_with)). Not part of the digest.
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
+    /// When it was committed, to the second.
+    pub fn created_at(&self) -> SystemTime {
+        self.created_at
     }
 }
 

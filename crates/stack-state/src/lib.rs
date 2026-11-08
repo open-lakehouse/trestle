@@ -6,14 +6,21 @@
 //! - [`Workspace`]s: sets of environments sharing a host, with their [`VarSet`]s.
 //! - [`Environment`]s: an editable [`Draft`] (the placement-free `env.toml`, the
 //!   `module.yaml` texts it lists, vars) and a head.
-//! - [`Revision`]s: numbered, immutable snapshots of a draft with a digest. Nothing in the
-//!   API changes one, and the database refuses an update.
+//! - [`Revision`]s: numbered, immutable snapshots of a draft with a digest, the time they
+//!   were committed and an optional message. Nothing in the API changes one, and the
+//!   database refuses an update.
 //! - [`Instance`]s: a revision to run, whether it should run, overrides and the overlay
 //!   [sources](SourceBinding) it takes.
 //! - [`SlotLease`]s: host-wide, so two instances never share a slot whatever their
 //!   workspace (slots per workspace clashed across workspaces).
 //!
 //! Secrets are stored as [`SecretRef`]s only; their values stay with their provider.
+//!
+//! Workspaces and environments are renamed by id ([`Store::rename_workspace`],
+//! [`Store::rename_environment`]), keeping their revisions. A rename, like a change of the
+//! workspace's mesh ([`Store::set_mesh`]), waits until no instance of it is left
+//! ([`Error::HasInstances`]): Docker holds an instance's containers and volumes under names
+//! derived from the workspace and environment names.
 //!
 //! Several processes use the store at once: writes are serialized (a writer waits for
 //! another's), and a [`Watcher`] notices commits made elsewhere. A store with a newer schema
