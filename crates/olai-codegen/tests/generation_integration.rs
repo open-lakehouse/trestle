@@ -1101,3 +1101,35 @@ fn validate_rejects_invalid_context_and_result_paths() {
         ));
     }
 }
+
+// ── Edge-case fixture: keyword names and multiple oneofs ────────────────────
+
+/// `proto/example_edge_cases.bin`, compiled from `proto/example_edge_cases.proto`. Regenerate it
+/// from the crate root with:
+///
+/// ```sh
+/// protoc -I proto -I tests/rest_client_e2e/proto --include_imports --include_source_info \
+///   -o proto/example_edge_cases.bin proto/example_edge_cases.proto
+/// ```
+fn edge_case_metadata() -> CodeGenMetadata {
+    let bytes = include_bytes!("../proto/example_edge_cases.bin");
+    let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
+    parse_file_descriptor_set(&fds).expect("parse succeeds")
+}
+
+/// A message's oneof fields keep their declaration order, not hash order: it drives the order of
+/// builder setters and binding constructor arguments.
+#[test]
+fn oneof_fields_keep_declaration_order() {
+    for _ in 0..8 {
+        let metadata = edge_case_metadata();
+        let route = &metadata.messages[".example.edge.v1.Route"];
+        let oneofs: Vec<&str> = route
+            .fields
+            .iter()
+            .filter(|f| f.oneof_variants.is_some())
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(oneofs, ["target", "source"]);
+    }
+}

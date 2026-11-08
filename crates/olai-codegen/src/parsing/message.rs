@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use convert_case::{Case, Casing};
 use prost::Message as _;
@@ -30,7 +30,8 @@ pub(super) fn process_message(
     let map_entries = collect_map_entries(message, &full_type_name);
 
     let mut fields = Vec::new();
-    let mut oneof_fields: HashMap<String, Vec<OneofVariant>> = HashMap::new();
+    // Keyed by `oneof_index`, so the synthetic oneof fields come out in declaration order.
+    let mut oneof_fields: BTreeMap<i32, (String, Vec<OneofVariant>)> = BTreeMap::new();
 
     // First pass: collect regular fields and identify oneof groups
     for (field_index, field) in message.field.iter().enumerate() {
@@ -85,7 +86,11 @@ pub(super) fn process_message(
             };
 
             let oneof_name = format!("{}.{}", full_type_name, oneof_desc.name());
-            oneof_fields.entry(oneof_name).or_default().push(variant);
+            oneof_fields
+                .entry(field.oneof_index())
+                .or_insert_with(|| (oneof_name, Vec::new()))
+                .1
+                .push(variant);
             continue;
         }
 
@@ -126,7 +131,7 @@ pub(super) fn process_message(
     }
 
     // Second pass: create single fields for each oneof group
-    for (oneof_name, variants) in oneof_fields {
+    for (oneof_name, variants) in oneof_fields.into_values() {
         // Create a single field representing the oneof enum.
         // The enum type name follows the pattern: message_name::OneofName
         let oneof_field_name = last_segment(&oneof_name).to_string();
