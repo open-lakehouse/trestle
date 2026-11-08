@@ -1186,3 +1186,28 @@ fn keyword_named_params_generate_raw_identifiers() {
         );
     }
 }
+
+/// The TS scoped client surfaces the same instance methods as the native one, including a
+/// resource-targeted existence check, which resolves to the native method's `boolean`.
+#[test]
+fn ts_scoped_client_surfaces_existence_checks() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    let node = tmp.path().join("node");
+    let node_ts = tmp.path().join("node_ts");
+    config.output.node = Some(node.clone());
+    config.output.node_ts = Some(node_ts.clone());
+    generate_code(&edge_case_metadata(), &config).expect("generation succeeds");
+
+    let native = read_all(&node);
+    assert!(
+        native.contains("pub async fn check_kind(&self) -> napi::Result<bool>"),
+        "native scoped client exposes check_kind:\n{native}"
+    );
+    let ts = read_all(&node_ts);
+    assert!(
+        ts.contains("async checkKind(): Promise<boolean>")
+            && ts.contains("return await this.inner.checkKind();"),
+        "TS scoped client forwards checkKind's boolean:\n{ts}"
+    );
+}

@@ -1453,12 +1453,12 @@ impl MethodHandler<'_> {
         crate::analysis::emit_shape(&self.plan.request_type, self.is_collection_method())
     }
 
-    /// Whether this method is emitted as an instance method on a resource-scoped client
-    /// (`get`/`update`/`delete` or a resource-targeted custom `POST`/`PATCH`).
+    /// Whether this method is emitted as an instance method on a resource-scoped client.
     ///
-    /// The set is standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
-    /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
-    /// deliberately **not** surfaced on the scoped client.
+    /// The set is standard `Get`/`Update`/`Delete`, plus any *resource-targeted* custom RPC: one
+    /// with a path param that is not a collection method, whatever its verb (e.g.
+    /// `POST /catalogs/{name}:rotateToken` or `GET /catalogs/{name}/status`). The Python, NAPI and
+    /// TypeScript scoped clients all route on this.
     pub(crate) fn is_scoped_instance_method(&self) -> bool {
         // Standard instance verbs are always scoped.
         if matches!(

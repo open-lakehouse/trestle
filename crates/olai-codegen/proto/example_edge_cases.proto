@@ -4,6 +4,7 @@ package example.edge.v1;
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
+import "google/protobuf/empty.proto";
 
 // Edge cases the main `example.bin` fixture doesn't reach. Compiled into the committed
 // `example_edge_cases.bin` (see `tests/generation_integration.rs` for the protoc command).
@@ -34,6 +35,12 @@ service KindService {
   rpc DeleteKind(DeleteKindRequest) returns (DeleteKindResponse) {
     option (google.api.http) = {delete: "/kinds/{type}"};
   }
+  // A resource-targeted existence check: the native scoped client returns its `bool`.
+  rpc CheckKind(CheckKindRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      custom: {kind: "HEAD", path: "/kinds/{type}"}
+    };
+  }
 }
 
 message ListKindsRequest {
@@ -57,6 +64,10 @@ message DeleteKindRequest {
 }
 
 message DeleteKindResponse {}
+
+message CheckKindRequest {
+  string type = 1;
+}
 
 // A resource-less service with keyword path params and a message with two oneofs.
 service RouteService {

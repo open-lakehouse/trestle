@@ -44,7 +44,7 @@ fn emit_for_shape(
 }
 
 /// Emit an instance method for a resource-scoped client (`get`/`update`/`delete` and
-/// resource-targeted custom POST/PATCH RPCs), or `None` if the method does not belong on the scoped
+/// resource-targeted custom RPCs), or `None` if the method does not belong on the scoped
 /// client. Always [`BindingMode::Scoped`].
 fn scoped_instance_method(
     backend: &dyn BindingBackend,
