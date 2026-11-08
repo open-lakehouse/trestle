@@ -116,10 +116,13 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
     // UC declares it needs a relational_db + object_store; selecting *only* UC must
     // pull in the relational store and object store (plus its envoy `requires`).
     let p = baseline_catalog()
-        .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
+        .plan(
+            &Selection::modules(["unity-catalog-oss"]),
+            &PlanCtx::default(),
+        )
         .expect("UC alone should plan, auto-provisioning its providers");
 
-    for id in ["unity-catalog", "postgres", "rustfs", "envoy"] {
+    for id in ["unity-catalog-oss", "postgres", "rustfs", "envoy"] {
         assert!(
             p.graph.module(&ModuleId::from(id)).is_some(),
             "expected {id} in the auto-provisioned graph"
@@ -152,8 +155,8 @@ fn selecting_only_unity_catalog_auto_provisions_its_providers() {
         .map(|i| i.module.as_str())
         .collect();
     let pos = |id: &str| order.iter().position(|x| *x == id);
-    assert!(pos("postgres") < pos("unity-catalog"));
-    assert!(pos("rustfs") < pos("unity-catalog"));
+    assert!(pos("postgres") < pos("unity-catalog-oss"));
+    assert!(pos("rustfs") < pos("unity-catalog-oss"));
 }
 
 #[test]
@@ -162,11 +165,17 @@ fn provider_connection_is_resolved_for_the_consumer_without_binding() {
     // render context rather than round-tripping coordinates through `.env`. The planner must
     // still resolve the demand, expose the typed connection on the plan, and inject nothing.
     let p = baseline_catalog()
-        .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
+        .plan(
+            &Selection::modules(["unity-catalog-oss"]),
+            &PlanCtx::default(),
+        )
         .unwrap();
 
     // No coordinate is injected into UC's env.
-    let uc_env = p.injected.get(&ModuleId::from("unity-catalog")).unwrap();
+    let uc_env = p
+        .injected
+        .get(&ModuleId::from("unity-catalog-oss"))
+        .unwrap();
     assert_eq!(uc_env.get("UC_DATABASE_URL"), None);
     assert_eq!(p.env.get("UC_DATABASE_URL"), None);
 
@@ -174,7 +183,7 @@ fn provider_connection_is_resolved_for_the_consumer_without_binding() {
     // demanded database — what UC's hibernate.properties reads as `connections.relational_db.0`.
     let conn = p
         .connections
-        .get(&(ModuleId::from("unity-catalog"), 0))
+        .get(&(ModuleId::from("unity-catalog-oss"), 0))
         .expect("UC's first demand (relational_db) resolves a connection");
     match conn {
         Connection::RelationalDb { url, database, .. } => {

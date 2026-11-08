@@ -11,7 +11,7 @@ fn hybrid_selection() -> Selection {
         "envoy",
         "hosted-postgres",
         "aws-s3",
-        "unity-catalog",
+        "unity-catalog-oss",
         "mlflow",
     ]);
     selection.hosted.insert(
@@ -102,7 +102,7 @@ fn hosted_providers_replace_the_in_stack_ones_and_are_not_rendered() {
     let compose = file(&out, "compose.yaml");
     assert!(!compose.contains("modules/hosted-postgres/"), "{compose}");
     assert!(!compose.contains("modules/aws-s3/"), "{compose}");
-    assert!(compose.contains("modules/unity-catalog/compose.yaml"));
+    assert!(compose.contains("modules/unity-catalog-oss/compose.yaml"));
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn consumers_bind_the_hosted_connection_with_resolved_secrets() {
     let (_, uc) = arts
         .modules
         .iter()
-        .find(|(id, _)| id.as_str() == "unity-catalog")
+        .find(|(id, _)| id.as_str() == "unity-catalog-oss")
         .unwrap();
     let hibernate = uc
         .files
@@ -128,7 +128,11 @@ fn consumers_bind_the_hosted_connection_with_resolved_secrets() {
     // A file holding a resolved secret is sensitive; this one already sits under the
     // git-ignored `modules/*/secrets/`.
     assert!(hibernate.sensitive);
-    assert!(hibernate.path.starts_with("modules/unity-catalog/secrets/"));
+    assert!(
+        hibernate
+            .path
+            .starts_with("modules/unity-catalog-oss/secrets/")
+    );
     assert!(arts.gitignore.contains("modules/*/secrets/"));
 }
 
@@ -308,7 +312,7 @@ fn a_preview_without_secrets_keeps_the_references() {
     let (_, uc) = arts
         .modules
         .iter()
-        .find(|(id, _)| id.as_str() == "unity-catalog")
+        .find(|(id, _)| id.as_str() == "unity-catalog-oss")
         .unwrap();
     assert!(
         uc.files
@@ -350,7 +354,7 @@ fn a_hosted_entry_must_configure_a_hosted_module_of_its_kind() {
 fn configuring_a_hosted_provider_selects_it() {
     // Only UC is selected; configuring hosted Postgres pulls it in as the relational provider.
     let mut selection = hybrid_selection();
-    selection.modules = vec!["unity-catalog".into()];
+    selection.modules = vec!["unity-catalog-oss".into()];
     selection.hosted.remove(&ModuleId::from("aws-s3"));
     let plan = baseline_catalog()
         .plan(&selection, &PlanCtx::default())
@@ -361,7 +365,7 @@ fn configuring_a_hosted_provider_selects_it() {
 
 #[test]
 fn an_unconfigured_hosted_provider_reads_the_conventional_env_vars() {
-    let selection = Selection::modules(["envoy", "hosted-postgres", "aws-s3", "unity-catalog"]);
+    let selection = Selection::modules(["envoy", "hosted-postgres", "aws-s3", "unity-catalog-oss"]);
     let plan = baseline_catalog()
         .plan(&selection, &PlanCtx::default())
         .unwrap();
@@ -392,7 +396,7 @@ fn an_unconfigured_hosted_provider_reads_the_conventional_env_vars() {
 
 #[test]
 fn azure_storage_binds_abfss_uris_for_the_account() {
-    let mut selection = Selection::modules(["envoy", "azure-storage", "unity-catalog"]);
+    let mut selection = Selection::modules(["envoy", "azure-storage", "unity-catalog-oss"]);
     selection.hosted.insert(
         ModuleId::from("azure-storage"),
         HostedResource {
@@ -427,7 +431,7 @@ fn azure_storage_binds_abfss_uris_for_the_account() {
 
 #[test]
 fn a_hosted_and_an_in_stack_provider_of_one_role_conflict() {
-    let selection = Selection::modules(["envoy", "rustfs", "aws-s3", "unity-catalog"]);
+    let selection = Selection::modules(["envoy", "rustfs", "aws-s3", "unity-catalog-oss"]);
     let err = baseline_catalog()
         .plan(&selection, &PlanCtx::default())
         .unwrap_err();

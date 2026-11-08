@@ -76,7 +76,7 @@ fn the_schema_rejects_a_malformed_catalog() {
     let mut unversioned = good.clone();
     unversioned.as_object_mut().unwrap().remove("version");
     let mut bad_model = good.clone();
-    bad_model["modules"][0]["model"] = "unity-catalog".into();
+    bad_model["modules"][0]["model"] = "unity-catalog-oss".into();
     let mut bad_helper = good.clone();
     bad_helper["modules"]
         .as_array_mut()

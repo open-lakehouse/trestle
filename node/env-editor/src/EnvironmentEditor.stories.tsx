@@ -43,7 +43,12 @@ export const Default: Story = {
 // Unity Catalog and headwaters run as Neon Functions: the selection hosts them
 // as `neon-function`, and the plan places them outside the stack, in the
 // "neon" cloud, with nothing of theirs rendered (as the real planner does).
-const FUNCTIONS = ["unity-catalog", "headwaters"];
+// The Unity Catalog function is mangrove's server (`unity-catalog-rs`), so the
+// fixture's OSS server is swapped for it.
+const FUNCTIONS = ["unity-catalog-rs", "headwaters"];
+const OSS = "unity-catalog-oss";
+const RS = "unity-catalog-rs";
+const asRs = (id: string) => (id === OSS ? RS : id);
 const functionNode = (
   id: string,
   node?: Partial<GraphNodeDto>,
@@ -73,22 +78,31 @@ const functionsPlan: PlanResult = {
   graph: {
     nodes: [
       ...FIXTURE_PLAN.graph.nodes.map((n) =>
-        n.id === "unity-catalog" ? functionNode(n.id, n) : n,
+        n.id === OSS
+          ? functionNode(RS, {
+              ...n,
+              model: "mangrove",
+              display_name: "Unity Catalog (Rust)",
+            })
+          : n,
       ),
       headwaters,
     ],
     // A function is reached at its URL, never through the gateway.
-    edges: FIXTURE_PLAN.graph.edges.filter(
-      (e) => !(e.kind === "route" && FUNCTIONS.includes(e.to)),
-    ),
+    edges: FIXTURE_PLAN.graph.edges
+      .map((e) => ({ ...e, from: asRs(e.from), to: asRs(e.to) }))
+      .filter((e) => !(e.kind === "route" && FUNCTIONS.includes(e.to))),
   },
   files: FIXTURE_PLAN.files.filter(
-    (f) => !FUNCTIONS.some((id) => f.path.startsWith(`modules/${id}/`)),
+    (f) => !f.path.startsWith(`modules/${OSS}/`),
   ),
 };
 const functionsSelection: Selection = {
   ...FIXTURE_CATALOG.default_selection,
-  modules: [...FIXTURE_CATALOG.default_selection.modules, "headwaters"],
+  modules: [
+    ...FIXTURE_CATALOG.default_selection.modules.map(asRs),
+    "headwaters",
+  ],
   hosted: Object.fromEntries(
     FUNCTIONS.map((id) => [id, hostedFor("function")]),
   ) as Selection["hosted"],

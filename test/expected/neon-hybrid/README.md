@@ -16,7 +16,7 @@ flowchart LR
         n2["<b>Headwaters</b><br/>lineage"]:::external
         n3["<b>Hosted Postgres</b><br/>relational db"]:::external
         n4["<b>Neon Object Storage</b><br/>object store"]:::external
-        n7["<b>Unity Catalog</b><br/>data catalog"]:::external
+        n7["<b>Unity Catalog (Rust)</b><br/>data catalog"]:::external
     end
     n0 -->|":9080"| n1
     n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n5
@@ -75,15 +75,33 @@ key that may read and write them.
 bash deploy/neon-storage-buckets.sh
 ```
 
-### 5. Deploy the function (`unity-catalog`)
+### 5. Deploy the function (`unity-catalog-rs`)
 
-`unity-catalog` runs as the Neon Function `unitycatalog` on the Neon branch the environment is
+`unity-catalog-rs` runs as the Neon Function `unitycatalog` on the Neon branch the environment is
 bound to, reached at `https://br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech`; nothing of it runs locally. Deploy it on the branch's parent
 (`neon functions deploy`): a branch created from a parent that has the function gets a copy of
 it, but a branch that existed before the deploy, or one reset since, needs it deployed again.
 `trestle up --neon-branch <branch>` reads the function's URL from the branch and fails when the
 function is missing. Function URLs are public: the function must check the caller's Neon Auth
 token itself.
+
+Deploy it with the same configuration it runs with in a container:
+
+`UC_SERVER_CONFIG_YAML`:
+
+```yaml
+# What mangrove's Unity Catalog server runs with wherever it runs: this file in a container,
+# or `UC_SERVER_CONFIG_YAML` for a Neon Function. API-only, and anonymous until the services
+# verify callers' tokens. The key-encryption key is read from `UC_SERVER_KEK` when the server
+# starts, so it is never written here. Without it the server refuses to start; there is no
+# fallback key.
+ui: { serve: false }
+auth: { mode: anonymous }
+encryption:
+  active: { id: kek-1, key: { env: UC_SERVER_KEK } }
+```
+
+Set `UC_SERVER_KEK` on the deployment yourself (`neon functions deploy --env`): it holds a secret, so trestle never writes it.
 
 ## Configure
 

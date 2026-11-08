@@ -146,7 +146,7 @@ fn mlflow_accepts_the_secure_gateway_host() {
 fn an_object_store_on_its_own_port_answers_like_the_service_it_emulates() {
     let p = baseline_catalog()
         .plan(
-            &Selection::modules(["envoy", "unity-catalog", "rustfs", "postgres"]),
+            &Selection::modules(["envoy", "unity-catalog-oss", "rustfs", "postgres"]),
             &PlanCtx::default(),
         )
         .expect("plan should succeed");
@@ -465,7 +465,7 @@ fn fragments_see_the_stack_wide_render_variables() {
 #[test]
 fn publish_admin_controls_the_admin_port() {
     let ports = |admin: Option<&str>| {
-        let mut selection = olai_stack_topology::Selection::modules(["unity-catalog"]);
+        let mut selection = olai_stack_topology::Selection::modules(["unity-catalog-oss"]);
         if let Some(value) = admin {
             selection.knob_overrides.insert(
                 "envoy".into(),
@@ -497,7 +497,7 @@ fn publish_admin_controls_the_admin_port() {
     assert!(!off.contains(&"9901:9901".to_string()), "{off:?}");
     assert!(!off.is_empty(), "the routing listeners stay published");
 
-    let mut selection = olai_stack_topology::Selection::modules(["unity-catalog"]);
+    let mut selection = olai_stack_topology::Selection::modules(["unity-catalog-oss"]);
     selection.knob_overrides.insert(
         "envoy".into(),
         [("publish_admin".to_string(), "sometimes".to_string())].into(),

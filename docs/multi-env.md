@@ -204,14 +204,18 @@ the same ports. Values from `secrets.env` need setting again as vars, with
 A service runs in the instance's compose project, or, if it can, as a Neon
 Function on the Neon branch the instance is bound to. MLflow and Omnigent always
 run locally. Unity Catalog and Headwaters can run either way, and other services
-will be added as they ship as functions. Local services may use the branch's
+will be added as they ship as functions. Unity Catalog has two implementations,
+`unity-catalog-oss` (the open-source Java server) and `unity-catalog-rs`
+(mangrove's Rust server). Only `unity-catalog-rs` runs as a function: the Unity
+Catalog Neon Function is mangrove's server, deployed with the same configuration
+document its container mounts (see [Implementations and placements](#implementations-and-placements)). Local services may use the branch's
 Postgres and object storage too:
 
 ```toml
 [selection]
-modules = ["mlflow", "omnigent", "unity-catalog", "headwaters", "hosted-postgres", "neon-storage"]
+modules = ["mlflow", "omnigent", "unity-catalog-rs", "headwaters", "hosted-postgres", "neon-storage"]
 
-[selection.hosted.unity-catalog]          # run Unity Catalog as a function
+[selection.hosted.unity-catalog-rs]       # run Unity Catalog as a function
 vendor = "neon-function"
 connection = { kind = "function" }
 
@@ -269,8 +273,37 @@ instance's branch, and `env show --effective` shows what the branch supplies as
 `source:neon`.
 
 A fully local environment, with no Neon at all, plans and renders exactly as
-before, and needs no Neon CLI. PuppyGraph calls Unity Catalog on the compose network, so it needs a
-local Unity Catalog.
+before, and needs no Neon CLI. PuppyGraph calls Unity Catalog on the compose network, so it needs the
+local OSS server (`unity-catalog-oss`).
+
+### Implementations and placements
+
+Two questions decide how a component is modeled:
+
+- **Which implementation?** A different configuration surface is a different
+  module. `unity-catalog-oss` and `unity-catalog-rs` share nothing but their API,
+  so each is its own module. Both declare that they serve the `unity-catalog`
+  API (`Provides::api`), keep the same service name, port and REST path, and are
+  alternatives: an environment has one (`ConflictingApiProviders` otherwise).
+  Consumers find the stack's server by the API, never by module id: MLflow's
+  model registry follows whichever one runs, and a host should look up the node
+  whose `api` is `unity-catalog` in the plan's graph.
+- **Where does it run?** That's a choice on the module, not another module: a
+  local container, or a Neon Function (`selection.hosted[id]`), offered only by
+  a module whose implementation runs as one (`Provides::function`). One
+  configuration document serves both placements. `unity-catalog-rs` mounts
+  `uc-server.yaml` in its container, and its function is deployed with the same
+  document as `UC_SERVER_CONFIG_YAML` (`Provides::function_env`, listed in the
+  function's deploy step and in `Plan::neon_requirements()`). Secrets such as its
+  key-encryption key `UC_SERVER_KEK` are only named (`function_secrets`): the
+  container gets the value from the process that starts Compose, and the
+  function's deployment sets it.
+
+Headwaters is one implementation that runs both ways, so it is one module.
+
+Manifest version 6 split `unity-catalog`: an older environment's
+`unity-catalog` becomes `unity-catalog-oss`, or `unity-catalog-rs` when it ran as
+a function (`migrate_selection`).
 
 ## Networks
 

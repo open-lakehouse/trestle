@@ -61,7 +61,7 @@ impl Module for OtherUc {
 fn catalog() -> Catalog {
     let mut catalog = baseline_catalog();
     let inner = catalog
-        .get(&ModuleId::from("unity-catalog"))
+        .get(&ModuleId::from("unity-catalog-oss"))
         .expect("baseline UC")
         .clone();
     catalog.insert(Arc::new(OtherUc {
@@ -81,18 +81,21 @@ fn plan(modules: &[&str]) -> Result<olai_stack_topology::Plan, PlanError> {
 #[test]
 fn unity_catalog_serves_the_unity_catalog_api() {
     let cat = baseline_catalog();
-    let uc = cat.get(&ModuleId::from("unity-catalog")).unwrap();
+    let uc = cat.get(&ModuleId::from("unity-catalog-oss")).unwrap();
     assert_eq!(uc.provides().api.as_deref(), Some("unity-catalog"));
 }
 
 #[test]
 fn two_servers_of_one_api_are_alternatives() {
-    let err = plan(&["unity-catalog", "other-uc"]).unwrap_err();
+    let err = plan(&["unity-catalog-oss", "other-uc"]).unwrap_err();
     assert_eq!(
         err,
         PlanError::ConflictingApiProviders {
             api: "unity-catalog".into(),
-            providers: vec![ModuleId::from("other-uc"), ModuleId::from("unity-catalog")],
+            providers: vec![
+                ModuleId::from("other-uc"),
+                ModuleId::from("unity-catalog-oss")
+            ],
         }
     );
 }
@@ -110,6 +113,14 @@ fn mlflow_uses_whichever_module_serves_the_api() {
         "{:?}",
         graph.edges
     );
+    // A host finds the API's server in the graph by its `api`.
+    let server: Vec<&str> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.api.as_deref() == Some("unity-catalog"))
+        .map(|n| n.id.as_str())
+        .collect();
+    assert_eq!(server, ["other-uc"]);
     let env = p.client_env(Vantage::Host);
     let uc_url = env.get("UNITY_CATALOG_URL").expect("UC address");
     let origin = uc_url

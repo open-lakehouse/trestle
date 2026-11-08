@@ -12,7 +12,7 @@ flowchart LR
     n1{{"<b>Envoy</b><br/>gateway"}}:::gateway
     n2["<b>Postgres</b><br/>relational db"]:::component
     n3["<b>RustFS</b><br/>object store"]:::component
-    n4["<b>Unity Catalog</b><br/>data catalog"]:::component
+    n4["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component
     n5["<b>MLflow</b><br/>experiment tracking"]:::component
     n0 -->|":9080"| n1
     n0 -->|":9100"| n1

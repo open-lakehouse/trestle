@@ -195,7 +195,7 @@ mod tests {
     fn report_states_the_key_facts() {
         let plan = baseline_catalog()
             .plan(
-                &Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog", "mlflow"]),
+                &Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog-oss", "mlflow"]),
                 &PlanCtx::default(),
             )
             .unwrap();

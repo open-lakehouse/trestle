@@ -20,14 +20,14 @@ fn hybrid() -> Selection {
     let mut selection = Selection::modules([
         "mlflow",
         "omnigent",
-        "unity-catalog",
+        "unity-catalog-rs",
         "headwaters",
         "hosted-postgres",
         "neon-storage",
     ]);
     selection
         .hosted
-        .insert(ModuleId::from("unity-catalog"), function());
+        .insert(ModuleId::from("unity-catalog-rs"), function());
     selection
         .hosted
         .insert(ModuleId::from("headwaters"), function());
@@ -94,7 +94,7 @@ fn function_hosted_modules_run_nothing_and_demand_nothing() {
     for absent in ["postgres", "rustfs"] {
         assert!(!ids.contains(&absent), "{absent} in {ids:?}");
     }
-    for id in ["unity-catalog", "headwaters"] {
+    for id in ["unity-catalog-rs", "headwaters"] {
         assert!(ids.contains(&id), "{id} in {ids:?}");
         assert!(plan.stack_facts.functions.contains_key(id));
         assert!(!plan.stack_facts.runs(id));
@@ -111,7 +111,7 @@ fn function_hosted_modules_run_nothing_and_demand_nothing() {
     assert!(
         compose
             .iter()
-            .all(|p| !p.contains("unity-catalog") && !p.contains("headwaters")),
+            .all(|p| !p.contains("unity-catalog-rs") && !p.contains("headwaters")),
         "{compose:?}"
     );
     // MLflow's registry is the function's, and it doesn't wait for a local UC.
@@ -214,14 +214,16 @@ fn the_plan_lists_what_the_branch_must_supply() {
                 secrets: vec![],
             },
             FunctionRequirement {
-                module: ModuleId::from("unity-catalog"),
+                module: ModuleId::from("unity-catalog-rs"),
                 slug: "unitycatalog".into(),
                 url_var: Some("UNITYCATALOG_FUNCTION_URL".into()),
-                env: Default::default(),
-                secrets: vec![],
+                // mangrove's server is deployed with its configuration and a KEK.
+                env: req.functions[1].env.clone(),
+                secrets: vec!["UC_SERVER_KEK".into()],
             },
         ]
     );
+    assert!(req.functions[1].env.contains_key("UC_SERVER_CONFIG_YAML"));
     for var in [
         "HEADWATERS_FUNCTION_URL",
         "NEON_S3_ACCESS_KEY_ID",
@@ -232,14 +234,14 @@ fn the_plan_lists_what_the_branch_must_supply() {
     }
 
     // A fully local environment needs no branch.
-    let local = plan(&Selection::modules(["mlflow", "unity-catalog"]), None).unwrap();
+    let local = plan(&Selection::modules(["mlflow", "unity-catalog-rs"]), None).unwrap();
     assert!(local.neon_requirements().is_empty());
 }
 
 #[test]
 fn a_fully_local_environment_is_unchanged() {
     let local = plan(
-        &Selection::modules(["mlflow", "unity-catalog", "headwaters"]),
+        &Selection::modules(["mlflow", "unity-catalog-rs", "headwaters"]),
         None,
     )
     .unwrap();
@@ -269,9 +271,9 @@ fn only_a_function_capable_module_runs_as_one() {
     );
 
     // A function needs the function vendor, and the function vendor runs nothing else.
-    let mut selection = Selection::modules(["unity-catalog"]);
+    let mut selection = Selection::modules(["unity-catalog-rs"]);
     selection.hosted.insert(
-        ModuleId::from("unity-catalog"),
+        ModuleId::from("unity-catalog-rs"),
         HostedResource {
             vendor: Some(HostedVendor::Neon),
             ..function()

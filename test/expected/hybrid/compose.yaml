@@ -14,20 +14,20 @@ configs:
   mlflow_uc_registry_module:
     file: ./modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py
   unitycatalog_bootstrap_storage:
-    file: ./modules/unity-catalog/bootstrap_storage.py
+    file: ./modules/unity-catalog-oss/bootstrap_storage.py
   unitycatalog_storage:
-    file: ./modules/unity-catalog/storage.txt
+    file: ./modules/unity-catalog-oss/storage.txt
 
 secrets:
   unitycatalog_hibernate_properties:
-    file: ./modules/unity-catalog/secrets/hibernate.properties
+    file: ./modules/unity-catalog-oss/secrets/hibernate.properties
   unitycatalog_server_properties:
-    file: ./modules/unity-catalog/secrets/server.properties
+    file: ./modules/unity-catalog-oss/secrets/server.properties
 
 include:
   - path: ./modules/envoy/compose.yaml
     project_directory: .
-  - path: ./modules/unity-catalog/compose.yaml
+  - path: ./modules/unity-catalog-oss/compose.yaml
     project_directory: .
   - path: ./modules/mlflow/compose.yaml
     project_directory: .

@@ -110,7 +110,7 @@ fn examples_only_when_asked_for_and_preserved() {
 
 #[test]
 fn no_example_for_an_unselected_module() {
-    let out = materialize(&["envoy", "postgres", "unity-catalog"], EXAMPLES);
+    let out = materialize(&["envoy", "postgres", "unity-catalog-oss"], EXAMPLES);
     assert!(file(&out, "client/notebooks/mlflow_quickstart.py").is_none());
 }
 

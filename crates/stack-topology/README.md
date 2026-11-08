@@ -115,7 +115,7 @@ provider reads its ecosystem's usual env vars (`PGHOST`/`PGUSER`/`PGPASSWORD`,
 
 ```toml
 [selection]
-modules = ["hosted-postgres", "aws-s3", "unity-catalog"]
+modules = ["hosted-postgres", "aws-s3", "unity-catalog-oss"]
 
 [selection.hosted.hosted-postgres]
 vendor = "neon"         # decides the setup steps; the `cloud` label defaults from it
@@ -173,7 +173,7 @@ the stack serves:
 
 | Module | Variables |
 | --- | --- |
-| `unity-catalog` | `UNITY_CATALOG_URL` |
+| `unity-catalog-oss`, `unity-catalog-rs` | `UNITY_CATALOG_URL` |
 | `mlflow` | `MLFLOW_TRACKING_URI`, `MLFLOW_AI_GATEWAY_URL` |
 | `headwaters` | `OPENLINEAGE_URL`, `OPENLINEAGE_ENDPOINT` |
 | `jaeger` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` |
@@ -275,7 +275,8 @@ while the gateway authenticates.
 
 The `puppygraph` module runs [PuppyGraph](https://docs.puppygraph.com), which answers
 openCypher and Gremlin queries over Unity Catalog's Delta tables in place, with no copy into a
-graph store. Selecting it pulls in `unity-catalog` and the stores it needs. PuppyGraph needs
+graph store. Selecting it pulls in `unity-catalog-oss` (the OSS server, whose storage
+registration it reads through) and the stores it needs. PuppyGraph needs
 a lot of memory: give Docker about 8 GB.
 
 - **Schema.** Which tables are nodes and edges lives in `graphs/puppygraph/schema.json`, next

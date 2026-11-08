@@ -38,7 +38,7 @@
 //! # fn run() -> olai_stack_state::Result<()> {
 //! let store = Store::open_default()?;
 //! let ws = store.create_workspace("demo", false)?;
-//! let manifest = EnvManifest::new(Selection::modules(["unity-catalog"]), PlanCtx::default());
+//! let manifest = EnvManifest::new(Selection::modules(["unity-catalog-oss"]), PlanCtx::default());
 //! let env = store.create_environment(&ws.id, "dev", Draft::new(manifest))?;
 //! let rev = store.commit_draft(&env.id)?;
 //! let instance = store.create_instance(&env.id, rev.number())?;

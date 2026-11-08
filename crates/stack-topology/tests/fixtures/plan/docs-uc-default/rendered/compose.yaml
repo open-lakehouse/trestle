@@ -8,10 +8,10 @@ configs:
 
 secrets:
   unitycatalog_server_properties:
-    file: ./modules/unity-catalog/secrets/server.properties
+    file: ./modules/unity-catalog-oss/secrets/server.properties
 
 include:
   - path: ./modules/envoy/compose.yaml
     project_directory: .
-  - path: ./modules/unity-catalog/compose.yaml
+  - path: ./modules/unity-catalog-oss/compose.yaml
     project_directory: .

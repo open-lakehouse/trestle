@@ -4,7 +4,7 @@
 //! This separation is the crate's forward-looking invariant: the framework names
 //! **roles** (`data_catalog`, `object_store`, `gateway`, …), never
 //! implementations. "Unity Catalog" is a *value* — a [`ServiceSpec`] with
-//! `name: "unity-catalog"` and `role: Role::data_catalog()` — not a type. A second
+//! `name: "unity-catalog-oss"` and `role: Role::data_catalog()` — not a type. A second
 //! `data_catalog` (an Iceberg REST Catalog) or a hybrid (both present) drops into a
 //! catalog without touching any type here.
 
@@ -168,7 +168,7 @@ impl std::fmt::Display for Role {
 /// consuming tool; this type only describes a spec once chosen.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceSpec {
-    /// The implementation identifier (e.g. `"unity-catalog"`, `"iceberg-rest"`,
+    /// The implementation identifier (e.g. `"unity-catalog-oss"`, `"iceberg-rest"`,
     /// `"rustfs"`, `"azurite"`, `"marquez"`). Unique within an environment.
     pub name: String,
     /// What this service *is* in the architecture, independent of `name`.

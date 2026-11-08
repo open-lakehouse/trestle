@@ -155,7 +155,7 @@ fn the_docs_aws_environment_keeps_the_docs_contract() {
     let files = rendered_files("docs-uc-aws");
     // Inline secrets: the properties are ordinary files, and match the docs' hand-written
     // server.aws.properties key for key.
-    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    let props = &files["modules/unity-catalog-oss/secrets/server.properties"];
     let keys: Vec<&str> = props
         .lines()
         .filter(|l| !l.starts_with('#') && l.contains('='))
@@ -172,7 +172,7 @@ fn the_docs_aws_environment_keeps_the_docs_contract() {
             "aws.masterRoleArn",
         ]
     );
-    assert!(!files.contains_key("modules/unity-catalog/storage.txt"));
+    assert!(!files.contains_key("modules/unity-catalog-oss/storage.txt"));
 
     let plan = manifest("docs-uc-aws").plan(&baseline_catalog()).unwrap();
     let host = &plan.client_env_host;
@@ -184,7 +184,7 @@ fn the_docs_aws_environment_keeps_the_docs_contract() {
     assert_eq!(host.get("AWS_ALLOW_HTTP"), Some("true"));
 
     let compose: serde_yaml::Value =
-        serde_yaml::from_str(&files["modules/unity-catalog/compose.yaml"]).unwrap();
+        serde_yaml::from_str(&files["modules/unity-catalog-oss/compose.yaml"]).unwrap();
     let uc = &compose["services"]["unitycatalog"];
     assert_eq!(uc["container_name"], "unitycatalog");
     assert_eq!(uc["build"]["context"], "./image");
@@ -198,7 +198,7 @@ fn the_docs_default_environment_runs_only_the_server() {
         .unwrap();
     let mut ids: Vec<&str> = plan.graph.nodes.iter().map(|m| m.id().as_str()).collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["envoy", "unity-catalog"]);
+    assert_eq!(ids, ["envoy", "unity-catalog-oss"]);
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn a_custom_context_survives_into_the_export() {
 fn containers_are_services_and_helpers_with_their_component() {
     let (export, _) = export_of(&manifest("baseline-uc"));
     let find = |name: &str| export.containers.iter().find(|c| c.name == name);
-    assert_eq!(find("unitycatalog").unwrap().component, "unity-catalog");
+    assert_eq!(find("unitycatalog").unwrap().component, "unity-catalog-oss");
     let init = find("rustfs-init").expect("rustfs-init listed");
     assert_eq!(init.component, "rustfs");
     assert!(export.files.iter().any(|f| f.path == "compose.yaml"));
@@ -334,7 +334,7 @@ fn the_schema_rejects_a_malformed_export() {
         .unwrap()
         .remove("key");
     let mut bad_model = good.clone();
-    bad_model["graph"]["nodes"][1]["model"] = "unity-catalog".into();
+    bad_model["graph"]["nodes"][1]["model"] = "unity-catalog-oss".into();
     let mut leaked_body = good.clone();
     leaked_body["files"][0]["contents"] = "x".into();
     let mut future = good;

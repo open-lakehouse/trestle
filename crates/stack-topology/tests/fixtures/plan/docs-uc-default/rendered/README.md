@@ -10,7 +10,7 @@ runs from anywhere and is safe to re-run. The services, their routes and address
 flowchart LR
     n0(["<b>Clients</b>"]):::clients
     n1{{"<b>Envoy</b><br/>gateway"}}:::gateway
-    n2["<b>Unity Catalog</b><br/>data catalog"]:::component
+    n2["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component
     n0 -->|":8080"| n1
     n1 -->|"/api/2.1/unity-catalog, /unity-catalog"| n2
     classDef clients fill:#f1f5f9,stroke:#64748b

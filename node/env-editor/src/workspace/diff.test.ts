@@ -3,7 +3,7 @@ import type { Selection } from "../types.js";
 import { describeHostedChange, diffSelections, isEmptyDiff } from "./diff.js";
 
 const base: Selection = {
-  modules: ["postgres", "unity-catalog"],
+  modules: ["postgres", "unity-catalog-oss"],
   capabilities: ["catalog"],
   knob_overrides: { postgres: { version: "16" } },
 };
@@ -16,7 +16,7 @@ describe("diffSelections", () => {
   test("modules and capabilities added and removed, sorted", () => {
     const diff = diffSelections(base, {
       ...base,
-      modules: ["unity-catalog", "rustfs", "mlflow"],
+      modules: ["unity-catalog-oss", "rustfs", "mlflow"],
       capabilities: [],
     });
     expect(diff.modules).toEqual({
@@ -66,7 +66,7 @@ describe("hosted changes", () => {
   const fn: Selection = {
     ...base,
     hosted: {
-      "unity-catalog": {
+      "unity-catalog-rs": {
         vendor: "neon-function",
         connection: { kind: "function" },
       },
@@ -80,31 +80,35 @@ describe("hosted changes", () => {
     expect(diff.settings).toEqual([]);
     expect(diff.hosted).toEqual([
       {
-        module: "unity-catalog",
+        module: "unity-catalog-rs",
         from: undefined,
         to: { vendor: "neon-function", connection: { kind: "function" } },
       },
     ]);
     expect(isEmptyDiff(diff)).toBe(false);
-    expect(rows(base, fn)).toEqual(["unity-catalog runs as a Neon Function"]);
+    expect(rows(base, fn)).toEqual([
+      "unity-catalog-rs runs as a Neon Function",
+    ]);
   });
 
   test("switching back runs it in a local container", () => {
-    expect(rows(fn, base)).toEqual(["unity-catalog runs in a local container"]);
+    expect(rows(fn, base)).toEqual([
+      "unity-catalog-rs runs in a local container",
+    ]);
   });
 
   test("a function URL change shows both URLs", () => {
     const withUrl: Selection = {
       ...base,
       hosted: {
-        "unity-catalog": {
+        "unity-catalog-rs": {
           vendor: "neon-function",
           connection: { kind: "function", url: "https://uc.example" },
         },
       },
     };
     expect(rows(fn, withUrl)).toEqual([
-      "unity-catalog function URL: (default) → https://uc.example",
+      "unity-catalog-rs function URL: (default) → https://uc.example",
     ]);
   });
 

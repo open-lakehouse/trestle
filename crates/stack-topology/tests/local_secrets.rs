@@ -15,7 +15,7 @@ fn ctx(local_secrets: LocalSecrets) -> PlanCtx {
 fn separate_marks_credentials_sensitive_and_ignores_them() {
     let plan = baseline_catalog()
         .plan(
-            &Selection::modules(["unity-catalog"]),
+            &Selection::modules(["unity-catalog-oss"]),
             &ctx(LocalSecrets::Separate),
         )
         .unwrap();
@@ -23,7 +23,7 @@ fn separate_marks_credentials_sensitive_and_ignores_them() {
     let props = out
         .files
         .iter()
-        .find(|f| f.path == "modules/unity-catalog/secrets/server.properties")
+        .find(|f| f.path == "modules/unity-catalog-oss/secrets/server.properties")
         .unwrap();
     assert!(props.sensitive);
     let gitignore = &out
@@ -39,7 +39,7 @@ fn separate_marks_credentials_sensitive_and_ignores_them() {
 fn inline_renders_every_file_as_ordinary() {
     let plan = baseline_catalog()
         .plan(
-            &Selection::modules(["unity-catalog"]),
+            &Selection::modules(["unity-catalog-oss"]),
             &ctx(LocalSecrets::Inline),
         )
         .unwrap();
@@ -53,8 +53,8 @@ fn inline_renders_every_file_as_ordinary() {
     assert!(sensitive.is_empty(), "{sensitive:?}");
     for path in [
         ".env",
-        "modules/unity-catalog/secrets/server.properties",
-        "modules/unity-catalog/secrets/hibernate.properties",
+        "modules/unity-catalog-oss/secrets/server.properties",
+        "modules/unity-catalog-oss/secrets/hibernate.properties",
     ] {
         assert!(out.files.iter().any(|f| f.path == path), "{path}");
     }
@@ -73,14 +73,14 @@ fn inline_renders_every_file_as_ordinary() {
         .unwrap()
         .contents;
     assert!(
-        compose.contains("file: ./modules/unity-catalog/secrets/server.properties"),
+        compose.contains("file: ./modules/unity-catalog-oss/secrets/server.properties"),
         "{compose}"
     );
 }
 
 #[test]
 fn inline_is_refused_with_hosted_modules() {
-    let selection = Selection::modules(["unity-catalog", "aws-s3"]);
+    let selection = Selection::modules(["unity-catalog-oss", "aws-s3"]);
     let err = baseline_catalog()
         .plan(&selection, &ctx(LocalSecrets::Inline))
         .unwrap_err();

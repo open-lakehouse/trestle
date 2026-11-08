@@ -27,7 +27,7 @@ fn drafts_commit_to_numbered_revisions() {
     let (_dir, store) = store();
     let ws = store.create_workspace("demo", true).unwrap();
     let env = store
-        .create_environment(&ws.id, "dev", draft(&["unity-catalog"]))
+        .create_environment(&ws.id, "dev", draft(&["unity-catalog-oss"]))
         .unwrap();
     assert_eq!(env.head, None);
     assert_eq!(env.draft.manifest.context.env_name, "dev");
@@ -35,7 +35,7 @@ fn drafts_commit_to_numbered_revisions() {
     let r1 = store.commit_draft(&env.id).unwrap();
     assert_eq!(r1.number(), 1);
 
-    let mut next = draft(&["unity-catalog", "mlflow"]);
+    let mut next = draft(&["unity-catalog-oss", "mlflow"]);
     next.vars
         .set("LOG_LEVEL", VarValue::Literal("debug".into()));
     store.update_draft(&env.id, &next).unwrap();
@@ -414,7 +414,7 @@ fn renaming_an_environment_keeps_its_id_revisions_and_vars() {
     let (_dir, store) = store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store
-        .create_environment(&ws.id, "dev", draft(&["unity-catalog"]))
+        .create_environment(&ws.id, "dev", draft(&["unity-catalog-oss"]))
         .unwrap();
     let mut vars = VarSet::new();
     vars.set("LOG", VarValue::Literal("info".into()));
@@ -584,9 +584,12 @@ fn a_version_1_store_migrates_and_keeps_its_revisions() {
     raw.execute_batch(include_str!("../migrations/0001_init.sql"))
         .unwrap();
     raw.pragma_update(None, "user_version", 1).unwrap();
-    let manifest = EnvManifest::new(Selection::modules(["unity-catalog"]), PlanCtx::default())
-        .to_toml()
-        .unwrap();
+    let manifest = EnvManifest::new(
+        Selection::modules(["unity-catalog-oss"]),
+        PlanCtx::default(),
+    )
+    .to_toml()
+    .unwrap();
     raw.execute_batch(&format!(
         "INSERT INTO workspace (id, name, mesh, created_at) VALUES ('w', 'demo', 0, 0);
          INSERT INTO environment (id, workspace_id, name, draft, created_at, head)

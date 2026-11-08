@@ -14,7 +14,7 @@ fn selections() -> Vec<Selection> {
         "postgres",
         "rustfs",
         "mlflow",
-        "unity-catalog",
+        "unity-catalog-oss",
         "jaeger",
         "headwaters",
         "omnigent",
@@ -22,13 +22,19 @@ fn selections() -> Vec<Selection> {
         "puppygraph",
         "rivers",
     ]);
-    let azure = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog", "mlflow"]);
+    let azure = Selection::modules([
+        "envoy",
+        "postgres",
+        "azurite",
+        "unity-catalog-oss",
+        "mlflow",
+    ]);
     let bare_store = Selection::modules(["envoy", "rustfs"]);
     // The other Unity Catalog implementation (one per environment).
     let uc_rs = Selection::modules(["envoy", "postgres", "unity-catalog-rs", "mlflow"]);
-    let mut mounts = Selection::modules(["unity-catalog"]);
+    let mut mounts = Selection::modules(["unity-catalog-oss"]);
     mounts.knob_overrides.insert(
-        "unity-catalog".into(),
+        "unity-catalog-oss".into(),
         [
             ("extra_mounts".to_string(), "./data:/data".to_string()),
             ("writable_mounts".to_string(), "/data".to_string()),

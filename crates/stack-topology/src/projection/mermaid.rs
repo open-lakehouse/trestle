@@ -187,6 +187,7 @@ mod tests {
             role: None,
             placement: None,
             cloud: None,
+            api: None,
             surfaces: vec![],
             offers: vec![],
             provisions: vec![],

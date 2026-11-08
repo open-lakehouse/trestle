@@ -5,7 +5,7 @@
 //! selection's [`hosted`](super::Selection::hosted) entry for it is a
 //! [`HostedConnection::Function`], the planner plans against a catalog in which the module is
 //! wrapped in a [`FunctionHosted`]: the same id, services, knobs and client environment, so
-//! everything that refers to it (a `stack.has("unity-catalog")` check, a client value naming
+//! everything that refers to it (a `stack.has("unity-catalog-oss")` check, a client value naming
 //! its endpoint) still does, but hosted like any [hosted provider](super::hosted). Nothing of
 //! it renders: no compose service, no helpers, no resource demands (the function brings its own
 //! storage), and no module it requires. Its services are reached at the function's URL.

@@ -28,4 +28,4 @@
 | `omnigent` | `omnigent-host` | `agent_platform` | container `omnigent-host` | — |
 | `postgres` | `db` | `relational_db` | container `db` | sql:5432 |
 | `rustfs` | `rustfs` | `object_store` | container `rustfs` | s3:9000 |
-| `unity-catalog` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |
+| `unity-catalog-oss` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |

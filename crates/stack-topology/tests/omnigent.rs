@@ -14,7 +14,11 @@ fn plan_with(knobs: &[(&str, &str, &str)]) -> Plan {
             .insert((*key).to_string(), (*value).to_string());
     }
     let selection = Selection {
-        modules: vec!["envoy".into(), "unity-catalog".into(), "omnigent".into()],
+        modules: vec![
+            "envoy".into(),
+            "unity-catalog-oss".into(),
+            "omnigent".into(),
+        ],
         knob_overrides,
         ..Default::default()
     };

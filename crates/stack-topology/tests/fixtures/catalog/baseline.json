@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:4e814524d4bbeb70c707fbc6c9765eb506413e5cc280f916c01c883c376d286f"
+    "digest": "sha256:436cd625900e27b6bdc5a09feed2474005605c03f59ef626cee46662240b3e98"
   },
   "modules": [
     {
@@ -501,9 +501,9 @@
       "hosted": null
     },
     {
-      "id": "unity-catalog",
+      "id": "unity-catalog-oss",
       "model": "unityCatalogServer",
-      "display_name": "Unity Catalog",
+      "display_name": "Unity Catalog (OSS)",
       "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
       "category": "catalog",
       "provider_of": "data_catalog",
@@ -650,7 +650,6 @@
         }
       ],
       "hosted": null,
-      "function": "unitycatalog",
       "api": "unity-catalog"
     },
     {
@@ -900,7 +899,7 @@
       "provider_of": "graph",
       "requires": [
         "envoy",
-        "unity-catalog"
+        "unity-catalog-oss"
       ],
       "conflicts_with": [],
       "resource_kinds": [],
@@ -1066,7 +1065,7 @@
     "modules": [
       "postgres",
       "rustfs",
-      "unity-catalog"
+      "unity-catalog-oss"
     ],
     "capabilities": [],
     "knob_overrides": {},

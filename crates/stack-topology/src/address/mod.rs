@@ -481,7 +481,7 @@ mod tests {
     /// process.
     fn host_catalog(port: u16) -> ServiceSpec {
         ServiceSpec {
-            name: "unity-catalog".into(),
+            name: "unity-catalog-oss".into(),
             role: Role::data_catalog(),
             placement: Placement::Host,
             endpoints: vec![Endpoint {
@@ -721,7 +721,11 @@ mod tests {
         };
         uc.endpoints[0].intent = RouteIntent::Api;
         let mut plan = RoutePlan::new();
-        plan.assign("unity-catalog", "rest", api_route("/api/2.1/unity-catalog"));
+        plan.assign(
+            "unity-catalog-oss",
+            "rest",
+            api_route("/api/2.1/unity-catalog"),
+        );
         // prefix (no trailing slash) + path (leading slash) join cleanly.
         assert_eq!(
             addr(Vantage::Container, &uc, "rest", &plan),

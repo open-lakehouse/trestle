@@ -66,7 +66,7 @@ fn mlflow_alone_keeps_its_own_registry() {
 
 #[test]
 fn with_unity_catalog_the_server_serves_its_registry_from_uc() {
-    let p = plan(&["mlflow", "unity-catalog"]);
+    let p = plan(&["mlflow", "unity-catalog-oss"]);
     let out = mlflow(&p);
     let svc = service(&out);
 
@@ -132,7 +132,7 @@ fn with_unity_catalog_the_server_serves_its_registry_from_uc() {
 
 #[test]
 fn with_unity_catalog_clients_use_uc_as_their_registry() {
-    let p = plan(&["mlflow", "unity-catalog"]);
+    let p = plan(&["mlflow", "unity-catalog-oss"]);
     for vantage in [Vantage::Host, Vantage::Container] {
         let env = p.client_env(vantage);
         // The MLflow client appends `/api/2.1/unity-catalog` to the `uc:` origin itself.
@@ -154,7 +154,7 @@ fn the_uc_url_knob_moves_the_server_side_registry() {
         ModuleId::from("mlflow"),
         BTreeMap::from([("uc_url".to_string(), "http://uc.internal:9000".to_string())]),
     )]);
-    let p = plan_with(&["mlflow", "unity-catalog"], knobs);
+    let p = plan_with(&["mlflow", "unity-catalog-oss"], knobs);
     let args = command(&service(&mlflow(&p)));
     assert!(
         args.iter().any(|a| a == "uc:http://uc.internal:9000"),
