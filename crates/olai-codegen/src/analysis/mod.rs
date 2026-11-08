@@ -50,7 +50,7 @@ pub(crate) use types::MethodPlanner;
 pub use types::{
     BodyField, ChildLink, EmitShape, GenerationPlan, ManagedResource, MethodPlan, MethodShape,
     PathParam, QueryParam, RequestParam, RequestType, ResourceHierarchy, ServicePlan,
-    SkippedMethod, extract_managed_resources, split_body_fields,
+    extract_managed_resources, split_body_fields,
 };
 pub(crate) use types::{emit_shape, is_collection_method};
 
@@ -63,7 +63,7 @@ mod types;
 /// full REST shape (path/query/body split, URL template) and one without carries the routeless
 /// shape (all request fields as body). [`MethodPlan::has_http_route`] distinguishes them: the REST
 /// emitters generate only routed methods; the ConnectRPC emitter generates all. No method is
-/// dropped here, so [`GenerationPlan::skipped_methods`] is empty.
+/// dropped here.
 ///
 /// Hierarchy derivation uses a two-phase cross-service algorithm:
 /// 1. Build all service plans (hierarchy empty).
@@ -98,10 +98,7 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
     // so it runs as a separate sub-pass over the now-complete set.
     assign_direct_children(&mut services);
 
-    Ok(GenerationPlan {
-        services,
-        skipped_methods: Vec::new(),
-    })
+    Ok(GenerationPlan { services })
 }
 
 // ── Cross-service hierarchy resolution ────────────────────────────────────────────────────────

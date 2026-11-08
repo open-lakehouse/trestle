@@ -108,27 +108,11 @@ pub(crate) fn emit_shape(request_type: &RequestType, is_collection: bool) -> Emi
     }
 }
 
-/// A method that was skipped during analysis due to incomplete metadata.
-#[derive(Debug, Clone)]
-pub struct SkippedMethod {
-    /// Fully-qualified name of the service containing the skipped method.
-    pub service_name: String,
-    /// Name of the skipped method (e.g. `"GetCatalog"`).
-    pub method_name: String,
-    /// Human-readable reason the method was skipped (e.g. `"missing HTTP annotation"`).
-    pub reason: String,
-}
-
 /// High-level plan for what code to generate
 #[derive(Debug)]
 pub struct GenerationPlan {
     /// Services to generate handlers for
     pub services: Vec<ServicePlan>,
-    /// Methods that were excluded from the plan due to incomplete metadata.
-    ///
-    /// Callers can inspect this list to distinguish "service has zero methods" from "all methods
-    /// were skipped due to missing HTTP annotations", and to surface actionable warnings.
-    pub skipped_methods: Vec<SkippedMethod>,
 }
 
 /// Plan for generating code for a single service
