@@ -5,5 +5,3 @@ description: |
   generate) lands in `frontend/src/api/`; this component sets up package.json,
   vite.config.ts, tsconfig.json, and a sample component that calls the
   generated client.
-
-provides: {}

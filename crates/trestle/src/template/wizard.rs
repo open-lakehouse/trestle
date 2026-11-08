@@ -4,8 +4,8 @@
 //! the same structured inputs the non-interactive code path takes:
 //!
 //! - which apps to layer on top of the base (`apps: Vec<String>`),
-//! - which components to enable per lakehouse category and per app-private
-//!   category (`selections: BTreeMap<String, Vec<String>>`),
+//! - which option to pick in each app category
+//!   (`selections: BTreeMap<String, Vec<String>>`),
 //! - variable values for prompts the manifest still declares (`overrides`).
 //!
 //! Anything already supplied via CLI flags or `--values` is honoured: the
@@ -15,7 +15,6 @@
 use std::collections::BTreeMap;
 
 use crate::error::{Error, Result};
-use crate::template::catalog::ComponentCatalog;
 use crate::template::loader::LoadedTemplate;
 use crate::template::manifest::Category;
 
@@ -23,8 +22,7 @@ use crate::template::manifest::Category;
 pub struct WizardOutput {
     /// App names the user picked (may be empty).
     pub apps: Vec<String>,
-    /// Selection map keyed by category id (`storage`, `catalog`, …) or
-    /// app-private namespace (`app.<app-name>.<category>`).
+    /// Selection map keyed by `app.<app-name>.<category>`.
     pub selections: BTreeMap<String, Vec<String>>,
     /// Variable values to feed into the existing `collect_variables` pipeline.
     pub overrides: BTreeMap<String, String>,
@@ -37,47 +35,23 @@ pub struct WizardOutput {
 /// pre-fill so the user isn't asked twice.
 pub struct WizardInput<'a> {
     pub project_name: &'a str,
-    pub base: &'a LoadedTemplate,
-    /// App names *available* to layer on top of the base (catalog ordering).
+    /// Apps *available* to layer on top of the base.
     pub available_apps: &'a [&'a LoadedTemplate],
     /// Pre-selected app names (e.g. `--app databricks-app-rust`).
     pub preselected_apps: &'a [String],
-    /// Pre-supplied selections (e.g. `--select storage=local-stack-seaweedfs`).
+    /// Pre-supplied selections (e.g. `--select app.databricks-app-rust.frontend=none`).
     pub preselected_selections: &'a BTreeMap<String, Vec<String>>,
     /// Pre-supplied variable values (e.g. `--set gh_owner=acme`).
     pub preselected_overrides: &'a BTreeMap<String, String>,
-    /// Component metadata index used to build the multiselect items.
-    pub catalog: &'a ComponentCatalog,
 }
 
 /// Run the wizard. Returns the user's choices.
 pub fn run_wizard(input: WizardInput<'_>) -> Result<WizardOutput> {
     cliclack::intro(format!("trestle new {}", input.project_name)).map_err(Error::prompt)?;
-    cliclack::log::info(
-        "Baseline: Envoy gateway with Databricks-shaped URLs + forwarded-user headers",
-    )
-    .map_err(Error::prompt)?;
 
     let mut selections: BTreeMap<String, Vec<String>> = input.preselected_selections.clone();
 
-    // 1. Walk every base category that the user hasn't already pinned via --select.
-    cliclack::log::step("Configure lakehouse environment").map_err(Error::prompt)?;
-    for cat in &input.base.manifest.categories {
-        if let Some(chosen) = selections.get(&cat.id) {
-            // CLI already chose for this category; show what it picked.
-            cliclack::log::info(format!(
-                "  {} → {} (pre-selected)",
-                category_display(cat),
-                fmt_list(chosen),
-            ))
-            .map_err(Error::prompt)?;
-            continue;
-        }
-        let chosen = ask_category(cat, input.catalog)?;
-        selections.insert(cat.id.clone(), chosen);
-    }
-
-    // 2. Multi-select apps.
+    // 1. Multi-select apps.
     let app_picks = if input.available_apps.is_empty() {
         cliclack::log::info("No app templates available to layer on top.")
             .map_err(Error::prompt)?;
@@ -117,8 +91,7 @@ pub fn run_wizard(input: WizardInput<'_>) -> Result<WizardOutput> {
             .map_err(Error::prompt)?
     };
 
-    // 3. For each picked app, apply lakehouse_requires nudges and walk its
-    //    private categories.
+    // 2. Walk each picked app's categories.
     let picked_app_manifests: Vec<&LoadedTemplate> = input
         .available_apps
         .iter()
@@ -129,11 +102,6 @@ pub fn run_wizard(input: WizardInput<'_>) -> Result<WizardOutput> {
     for app in &picked_app_manifests {
         cliclack::log::step(format!("Configure app: {}", app.manifest.name))
             .map_err(Error::prompt)?;
-
-        // The resolver enables both hard and soft requirements; list the hard ones.
-        for name in &app.manifest.lakehouse_requires.hard {
-            cliclack::log::info(format!("  pulls in: {name} (required)")).map_err(Error::prompt)?;
-        }
 
         for cat in &app.manifest.categories {
             let key = format!("app.{}.{}", app.manifest.name, cat.id);
@@ -146,20 +114,18 @@ pub fn run_wizard(input: WizardInput<'_>) -> Result<WizardOutput> {
                 .map_err(Error::prompt)?;
                 continue;
             }
-            let chosen = ask_category(cat, input.catalog)?;
+            let chosen = ask_category(cat)?;
             selections.insert(key, chosen);
         }
     }
 
-    // 4. Variable collection happens in the existing `collect_variables`
+    // 3. Variable collection happens in the existing `collect_variables`
     //    pipeline; the wizard just contributes its overrides map. Defaults from
     //    the manifest cover everything; the CLI's `--set` already pre-fills the
     //    map.
     let overrides = input.preselected_overrides.clone();
 
-    // 5. Confirmation step. The actual wiring preview is rendered by the
-    //    caller (which has the resolved component set + stack context); the
-    //    wizard just gates the proceed boolean.
+    // 4. Confirmation step.
     let proceed = cliclack::confirm("Continue and render the project?")
         .initial_value(true)
         .interact()
@@ -177,44 +143,20 @@ pub fn run_wizard(input: WizardInput<'_>) -> Result<WizardOutput> {
     })
 }
 
-/// Ask the user about one category. Auto-discovers eligible components by
-/// category id when `cat.options` is empty.
-fn ask_category(cat: &Category, catalog: &ComponentCatalog) -> Result<Vec<String>> {
+/// Ask the user to pick from one category's `options:`.
+fn ask_category(cat: &Category) -> Result<Vec<String>> {
     let prompt = category_display(cat);
-
-    if !cat.options.is_empty() {
-        // Explicit option list — values aren't necessarily component names
-        // (e.g. `frontend: [react, none]`).
-        return ask_options(&prompt, cat);
-    }
-
-    let eligible = catalog.components_for_category(&cat.id);
-    if eligible.is_empty() {
-        // Nothing to pick. Still print the category for clarity.
-        cliclack::log::info(format!("  {prompt} → (no components available)"))
+    if cat.options.is_empty() {
+        cliclack::log::info(format!("  {prompt} → (no options declared)"))
             .map_err(Error::prompt)?;
         return Ok(Vec::new());
     }
-
-    let items: Vec<(String, String, String)> = eligible
-        .iter()
-        .map(|c| {
-            let label = c.display_name.clone().unwrap_or_else(|| c.name.clone());
-            let hint = c.summary.clone().unwrap_or_default();
-            (c.name.clone(), label, hint)
-        })
-        .collect();
-    ask_items(&prompt, &items, cat)
-}
-
-/// Ask about a category whose `options:` is explicit (e.g. `frontend: [react, none]`).
-fn ask_options(prompt: &str, cat: &Category) -> Result<Vec<String>> {
     let items: Vec<(String, String, String)> = cat
         .options
         .iter()
         .map(|o| (o.clone(), o.clone(), String::new()))
         .collect();
-    ask_items(prompt, &items, cat)
+    ask_items(&prompt, &items, cat)
 }
 
 /// Pick from `items` for `cat`: a multiselect when the category is `multi`, otherwise a

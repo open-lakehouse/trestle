@@ -34,9 +34,6 @@ pub enum Error {
     #[error("component `{name}` not found")]
     ComponentNotFound { name: String },
 
-    #[error("profile `{name}` not found in template `{template}`")]
-    ProfileNotFound { template: String, name: String },
-
     #[error("variable `{name}` is required but was not provided")]
     MissingVariable { name: String },
 

@@ -71,14 +71,9 @@ category you don't pick takes its default. `databricks-app-rust` declares:
 | `ci` | `github`, `none` | `github` |
 | `connect` | `on`, `none` | `none` (`on` forces the buffa runtime) |
 
-Templates also declare **components** (`components:`), reusable subtrees that
-are enabled by a `when:` expression. Each component declares typed contributions
-under `provides:`: compose includes, Postgres databases, Envoy routes, env vars
-and free-form `extras`. trestle merges the `provides:` blocks of every active
-component into one `stack.*` context that the parent templates render.
-
-`--profile` and `--with` are legacy shims over a base's `profiles:` block and
-component names. `--select` is the way to choose.
+The picks turn on the app's **components** (`components:`): subtrees under the
+app's `components/` directory, each enabled by a `when:` expression
+(`frontend=react` sets `with_frontend`, and so on).
 
 ## Advanced usage
 
@@ -97,12 +92,12 @@ trestle new my-app \
   --set gh_owner=acme
 ```
 
-### Selecting components and options
+### Selecting options
 
-`--select <category>=<value>[,<value>...]` makes explicit category picks instead
-of answering the wizard. Repeat the flag for multiple categories; comma-separate
-values for a multi-select category. App-private categories are namespaced as
-`app.<app-name>.<category>`. Values must be among the category's options.
+`--select app.<app-name>.<category>=<value>[,<value>...]` picks a category's
+option instead of answering the wizard. Repeat the flag for multiple categories;
+comma-separate values for a multi-select category. Values must be among the
+category's options.
 
 Individual variables are set with `--set <name>=<value>` (short form `-D`).
 
@@ -146,7 +141,7 @@ CLI flags win over the file. A `--set` overrides the same `variables:` key, a
 
 ```text
 my-template/
-├── template.yaml     # manifest: variables, components, profiles, post_init
+├── template.yaml     # manifest: variables, categories, components, post_init
 ├── template/         # files copied + MiniJinja-rendered (.tmpl suffix stripped)
 ├── components/       # local components (one directory each, with a template.yaml)
 └── hooks/            # optional post-init scripts
@@ -164,20 +159,13 @@ variables:
   - { name: project_name, prompt: "Name", validate: "^[a-z][a-z0-9-]*$" }
   - { name: with_x, type: bool, default: true }
 components:
-  - { name: x, kind: local, path: components/x, when: "with_x" }
-profiles:
-  small: [x]
+  - { name: x, when: "with_x" }   # path defaults to components/x
 post_init:
   - { run: "git init && git add -A", confirm: true, description: "Initialise git" }
 
 # component template.yaml (components/x/template.yaml)
 name: x
-provides:
-  compose_includes: [./docker/compose/x.yaml]
-  postgres_databases: []
-  envoy_routes: []
-  env_vars: {}
-  extras: {}   # surfaced as stack.extras["x__<key>"]
+depends_on: []   # other components to enable with this one
 ```
 
 ## Tests

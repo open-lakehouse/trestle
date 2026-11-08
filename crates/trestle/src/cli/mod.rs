@@ -92,12 +92,6 @@ pub enum Commands {
     ListTemplates,
     /// Alias for `list-templates` filtered to apps only.
     ListApps,
-    /// List embedded shared components (and optionally a template's local components).
-    ///
-    /// Pass `--by-category` to group by category id.
-    ListComponents(list::ListComponentsArgs),
-    /// List all categories declared on the base or a given app's manifest.
-    ListCategories(list::ListCategoriesArgs),
 }
 
 pub fn run() -> Result<()> {
@@ -119,8 +113,6 @@ pub fn run() -> Result<()> {
         Commands::Workspace(cmd) => workspace::run(cmd),
         Commands::ListTemplates => list::run_templates(),
         Commands::ListApps => list::run_apps(),
-        Commands::ListComponents(args) => list::run_components(args),
-        Commands::ListCategories(args) => list::run_categories(args),
     }
 }
 
@@ -214,6 +206,18 @@ mod tests {
     #[test]
     fn unknown_subcommand_errors() {
         assert!(Cli::try_parse_from(["trestle", "frobnicate"]).is_err());
+    }
+
+    #[test]
+    fn removed_component_commands_and_flags_error() {
+        for args in [
+            &["trestle", "list-components"][..],
+            &["trestle", "list-categories"],
+            &["trestle", "new", "x", "--with", "y"],
+            &["trestle", "new", "x", "--profile", "p"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
     }
 
     fn env_new(args: &[&str]) -> env::EnvNewArgs {

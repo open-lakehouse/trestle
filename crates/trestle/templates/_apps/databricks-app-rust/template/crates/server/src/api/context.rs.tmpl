@@ -1,14 +1,15 @@
-//! Per-request context, extracted from Databricks Apps headers (or local-dev
-//! emulation when running behind the trestle Envoy stack).
+//! Per-request context, extracted from Databricks Apps headers (or env vars in
+//! local dev).
 //!
 //! Databricks Apps injects these headers on every request:
 //! - `X-Forwarded-Access-Token`: OAuth On-Behalf-Of token for the calling user
 //! - `X-Forwarded-User`: the user's `userName`
 //! - `X-Forwarded-Email`: the user's email
 //!
-//! In local-dev mode (`LOCAL_DEV=1`), the local stack injects synthetic values
-//! through Envoy header transforms, so the same extraction code works in both
-//! environments.
+//! Locally there is no Databricks Apps proxy to set these headers. A missing
+//! header falls back to an env var: `DATABRICKS_TOKEN` (only with `LOCAL_DEV=1`),
+//! `DATABRICKS_FORWARDED_USER` and `DATABRICKS_FORWARDED_EMAIL`, so the same
+//! extraction code works in both environments.
 
 use std::env;
 
