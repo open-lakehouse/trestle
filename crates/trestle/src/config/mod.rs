@@ -11,7 +11,7 @@
 //! — and makes the cross-cell constraints explicit (Connect RPC and the WASM
 //! browser client both require buffa). It is the single source of truth: it
 //! lowers to [`olai_codegen::CodeGenConfig`] for `trestle generate` *and* emits
-//! the project's `buf.gen.yaml` (see [`buf_gen`]).
+//! the project's `buf.gen.yaml` (see the `buf_gen` module).
 //!
 //! The file also carries project identity ([`ProjectMeta`]) — a stable root
 //! `name` that most crate names derive from, plus a generated `id` used to

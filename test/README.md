@@ -1,8 +1,11 @@
 # `trestle env` scenario fixtures
 
 Curated environment manifests for manual smoke-testing and golden render tests.
-Each scenario is a source `env.toml` under `scenarios/`; rendered compose stacks
-land in `scratch/env/<scenario>/` (gitignored).
+Each scenario is a source `env.toml` under `scenarios/` (plus a placeholder
+`secrets.env` for the hosted ones); rendered compose stacks land in
+`scratch/env/<scenario>/` (gitignored), and the committed golden renders are in
+`expected/<scenario>/`. `smoke/` holds the S3 vending check behind
+`just env-smoke-s3`.
 
 ## Scenarios (simple → complex)
 
@@ -11,8 +14,11 @@ land in `scratch/env/<scenario>/` (gitignored).
 | **minimal** | postgres, rustfs (+ the always-on gateway) | Baseline gateway + relational DB + S3 object store (with STS) |
 | **lakehouse** | minimal + unity-catalog, mlflow | Resource demands (auto-created DBs/buckets), multi-route gateway, UC S3 credential vending |
 | **authenticated** | lakehouse + `[selection.gateway] auth = true` | Authelia pulled in automatically; forward-auth on API/UI routes |
+| **authorized** | lakehouse + headwaters, `[selection.gateway] auth = true, policy = true` | Authelia plus OPA policy checks at the gateway (`policies/authz.rego`) |
+| **agents** | lakehouse + jaeger, omnigent | The agent runtime on MLflow's AI gateway, with tracing |
 | **full-azure** | lakehouse modules on Azurite + jaeger, headwaters | Provider substitution (`object_store=azurite`), tracing, lineage UI |
 | **hybrid** | lakehouse on the hosted `hosted-postgres` and `aws-s3` providers (AWS RDS + S3) | Hosted resources: nothing rendered for them, consumers bind the hosted connection, `${VAR}` secrets resolved from `secrets.env` (placeholders) |
+| **neon-hybrid** | mlflow, omnigent on a Neon branch (`hosted-postgres` vendor `neon`, `neon-storage`); unity-catalog, headwaters as Neon Functions | Hosted modules running as `neon-function`s; `secrets.env` stands in for what binding the branch supplies (`trestle up --neon-branch`) |
 
 Gateway URL for every scenario: `http://localhost:9080` (dedicated object-store listener: `:9100`).
 With auth on (**authenticated**, **authorized**) it is `https://<scenario>.localhost:9080` instead,

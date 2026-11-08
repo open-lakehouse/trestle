@@ -1,6 +1,6 @@
 //! Walk a template tree and render each file into the destination directory.
 //!
-//! Rules (see also `docs/templates.md`):
+//! Rules (see also "Authoring a template" in `crates/trestle/README.md`):
 //!
 //! - The `template/` subdirectory of a template or component is the only thing
 //!   copied into the project.

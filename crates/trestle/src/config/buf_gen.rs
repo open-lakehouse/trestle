@@ -142,8 +142,8 @@ fn is_managed(entry: &serde_yaml::Value) -> bool {
 /// Reconcile trestle's managed plugins into an existing `buf.gen.yaml`, preserving
 /// adopter-added plugins and any top-level keys trestle doesn't own.
 ///
-/// - Managed plugin entries (identified by [`plugin_ref`] against
-///   [`MANAGED_PLUGIN_REFS`]) are **replaced** by the current set derived from
+/// - Managed plugin entries (identified by `plugin_ref` against
+///   `MANAGED_PLUGIN_REFS`) are **replaced** by the current set derived from
 ///   `cfg`, so a config change (e.g. prost→buffa) is reflected.
 /// - Non-managed plugins keep their relative order and are appended after the
 ///   managed block.

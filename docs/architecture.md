@@ -45,13 +45,18 @@ links against.
 | [`olai-store`](../crates/olai-store) | runtime | Generic, graph-based object/association store. Generic over `L: Label`, so any proto-defined resource taxonomy plugs in. |
 | [`olai-http`](../crates/olai-http) | runtime | Cloud credential abstraction + HTTP client (AWS, Azure, GCP, Databricks) behind one `CloudClient` / `RequestSigner` seam. |
 | [`olai-http-wasm`](../crates/olai-http-wasm) | runtime (browser) | The `wasm32` transport for generated clients: same client bodies, browser Fetch backend, browser-managed session. |
+| [`olai-auth`](../crates/olai-auth) | runtime | Authentication and authorization for axum services: EdDSA JWT verification, API keys, a `Principal` extractor and a Cedar `Authorizer` port. |
+| [`olai-storage-credentials`](../crates/olai-storage-credentials) | runtime | The canonical model, storage locations and wire adapters for vended cloud storage credentials (see [credential vending](credential-vending.md)). |
+| [`olai-vended-store`](../crates/olai-vended-store) | runtime | `object_store` stores backed by vended, auto-refreshing credentials, with one source per protocol (see [credential vending](credential-vending.md)). |
+| [`olai-credential-vending`](../crates/olai-credential-vending) | runtime (server) | Server-side minting of downscoped cloud storage credentials for registered principals (see [credential vending](credential-vending.md)). |
 | [`olai-stack-topology`](../crates/stack-topology) | tooling | Plans and renders environments: module catalog, planner, Compose/Envoy renderers, the `env.toml` and `trestle-workspace.toml` manifests. Pure and wasm-clean. |
 | [`olai-stack-runtime`](../crates/stack-runtime) | tooling | Runs environments on Docker Compose: the `ComposeEngine` trait, `DockerCli`, typed status/health/events, a `FakeEngine` for tests (see [runtime.md](runtime.md)). |
 | [`olai-stack-state`](../crates/stack-state) | tooling | The state the CLI and the desktop app share: workspaces, environments with immutable revisions, instances and host-wide slot leases, in SQLite under `TRESTLE_HOME`. |
 | [`olai-trestle`](../crates/trestle) | tooling | The `trestle` CLI: project scaffolding (`trestle new`) and the codegen entry point (`trestle generate`). |
+| [`stack-topology-wasm`](../crates/stack-topology-wasm) | tooling (browser) | Browser/WASM bindings for the `olai-stack-topology` planner, used by the env editor in [`node/`](../node). Not published. |
+| [`olai-test-emulators`](../crates/olai-test-emulators) | tooling (tests) | Containerized cloud storage emulators for the integration tests. Not published. |
 
-The credential vending crates, which build on `olai-http`, are described in
-[Credential vending](credential-vending.md).
+The three credential vending crates build on `olai-http`.
 
 ## Key design decisions
 

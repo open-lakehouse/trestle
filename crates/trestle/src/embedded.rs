@@ -9,10 +9,11 @@
 //! │   └── lakehouse/                     # the always-rendered base
 //! ├── _apps/
 //! │   └── databricks-app-rust/           # opt-in apps layered on top
-//! └── _components/                       # shared component library
-//!     ├── local-stack-envoy/
-//!     ├── local-stack-postgres/
-//!     └── ...
+//! │       └── components/                # the app's own (local) components
+//! │           ├── ci-github/
+//! │           ├── connect-rust/
+//! │           └── frontend-react/
+//! └── _components/                       # shared component library (currently empty)
 //! ```
 //!
 //! Use [`Templates::iter()`] to discover entries.

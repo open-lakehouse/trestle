@@ -1,5 +1,5 @@
-//! Template engine: manifest parsing, component resolution, context aggregation,
-//! file rendering, and post-init hooks.
+//! Template engine: manifest parsing, component resolution, validation, file
+//! rendering, and post-init hooks.
 //!
 //! ## High-level flow
 //!
@@ -7,7 +7,7 @@
 //! load TemplateSource ──► parse manifest ──► resolve active components (profile + deps)
 //!                                                         │
 //!                                                         ▼
-//! prompt for variables ◄── manifest.variables ──► aggregate provides → `stack` context
+//! prompt for variables ◄── manifest.variables ──► validate (conflicts, port clashes)
 //!         │
 //!         ▼
 //! render parent template tree + each active component tree ──► output dir

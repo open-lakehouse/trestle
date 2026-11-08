@@ -4,13 +4,15 @@
 //! message, enum, and service in a [`FileDescriptorSet`] and extracts the
 //! annotations that drive generation into a structured, runtime-friendly form.
 //!
-//! The generator reads **standard Google API extensions only** — there are no
-//! custom Trestle proto extensions. The recognized extensions and their field
-//! numbers are the `*_EXTENSION` module constants below (`google.api.http`,
+//! The generator reads the standard Google API extensions (`google.api.http`,
 //! `google.api.resource`, `google.api.field_behavior`,
-//! `google.api.resource_reference`, and `gnostic.openapi.v3.operation`), plus the
-//! core `debug_redact` option (`google.protobuf.FieldOptions` field 16, handled
-//! in the `message` submodule). [`parse_file_descriptor_set`] is the entry point.
+//! `google.api.resource_reference`), `gnostic.openapi.v3.operation`, and four
+//! trestle field options from `proto/olai/trestle/v1/annotations.proto`
+//! (`olai.trestle.v1.response_header`, `emit_unpopulated`, `raw_body`,
+//! `request_header`). Their field numbers are the `*_EXTENSION` module constants
+//! below. The core `debug_redact` option (`google.protobuf.FieldOptions` field 16)
+//! is handled in the `message` submodule. [`parse_file_descriptor_set`] is the
+//! entry point.
 
 use std::collections::HashMap;
 
