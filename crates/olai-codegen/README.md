@@ -19,6 +19,7 @@ your own build tool. For how it fits the wider Trestle pipeline, see the
 | `server/` | Handler traits (one async method per RPC) + Axum route handlers |
 | `client/` | HTTP client struct with typed request builders |
 | `python/` `node/` `node_ts/` | PyO3 / NAPI-RS / TypeScript bindings |
+| `wasm/` | `#[wasm_bindgen]` browser bindings and a `client.d.ts` (buffa only) |
 
 ```text
 proto/  ──────────────── trestle generate ────────────────▶  Rust / Python / TS
@@ -27,7 +28,7 @@ proto/  ──────────────── trestle generate ──
 
 ## Proto annotations
 
-The generator reads standard [Google API extensions](https://github.com/googleapis/googleapis/tree/master/google/api) — no custom annotations:
+The generator reads the standard [Google API extensions](https://github.com/googleapis/googleapis/tree/master/google/api), plus a few trestle field options:
 
 | Annotation | Effect |
 |---|---|
@@ -35,7 +36,9 @@ The generator reads standard [Google API extensions](https://github.com/googleap
 | `google.api.http` | Maps each RPC to an HTTP method/URI; drives routes and client methods |
 | `google.api.field_behavior` | `IDENTIFIER`/`REQUIRED`/`OUTPUT_ONLY`/`OPTIONAL`/`INPUT_ONLY`/`IMMUTABLE`/`UNORDERED_LIST`/`NON_EMPTY_DEFAULT`; shapes extractors, builders, and store field roles |
 | `google.api.resource_reference` | Parent-child relationships; drives hierarchical names |
-| `debug_redact` | Marks a secret field; routed to a `SecretManager` and redacted (see `olai-store`) |
+| `debug_redact` | Marks a secret field: a `Sensitive` field role in the resource registry, sealed by `olai-store`'s envelope encryptor and left out of the Python `repr()` |
+| `gnostic.openapi.v3.operation` | Optional OpenAPI operation metadata (operation id) for an RPC |
+| `olai.trestle.v1` field options | `response_header`, `request_header`, `emit_unpopulated` and `raw_body`: carry a field in an HTTP header instead of JSON, send it even when unpopulated, or send or read a `bytes` field as the raw HTTP body. Copy [`proto/olai/trestle/v1/annotations.proto`](https://github.com/open-lakehouse/trestle/blob/main/crates/olai-codegen/proto/olai/trestle/v1/annotations.proto) next to your protos. |
 
 ```proto
 message Catalog {
@@ -118,11 +121,12 @@ use olai_codegen::{parse_file_descriptor_set, generate_code, CodeGenConfig, Code
 
 let fds = /* protobuf::descriptor::FileDescriptorSet parsed from api.bin */;
 let metadata = parse_file_descriptor_set(&fds)?;
+// Neither type implements `Default`: set every field (see the rustdoc).
 let config = CodeGenConfig {
     context_type_path: "crate::RequestContext".into(),
     result_type_path: "crate::Result".into(),
-    output: CodeGenOutput { common: Some("src/gen/common".into()), ..Default::default() },
-    ..Default::default()
+    output: CodeGenOutput { common: Some("src/gen/common".into()), /* … */ },
+    /* … */
 };
 generate_code(&metadata, &config)?;
 ```
@@ -136,20 +140,31 @@ Generated clients are decoupled from their HTTP transport via
 `transport_type_path` (default [`olai_http::CloudClient`]). Set it to
 [`olai-http-wasm`](https://crates.io/crates/olai-http-wasm)'s `WasmClient` (or
 `transport: wasm` in `trestle.yaml`) to emit a `wasm32`-buildable browser client;
-add `output.wasm` + `runtime: buffa` to also emit `#[wasm_bindgen]` JS bindings
-and a `client.d.ts`. See the `olai-http-wasm` README for details.
+add `output.wasm` (`clients.node.wasm`) with the buffa runtime to also emit
+`#[wasm_bindgen]` JS bindings and a `client.d.ts`. See the `olai-http-wasm` README
+for details.
+
+## Runtime and protocols
+
+`CodeGenConfig::runtime` picks the protobuf runtime the generated code consumes:
+`Runtime::Prost` or `Runtime::Buffa` (`generate.proto_lib` in `trestle.yaml`).
+Buffa is required for the WASM client, the Connect protocol and the buffa-only
+options below. `client_protocols` (`ClientProtocols { rest, connect }`,
+`clients.rust.protocols`) emits a REST client (the default), a Connect client, or
+both side by side; a Connect client also needs `connect_client_path`.
 
 ## REST client options
 
-`CodeGenConfig::rest_client` (`clients.rust` in `trestle.yaml`) shapes the REST client. Every
-option is off by default.
+`CodeGenConfig::rest_client` (`clients.rust` in `trestle.yaml`) shapes the REST client, together
+with the top-level `transport_type_path` (default `olai_http::CloudClient`). Every option below is
+off by default.
 
 | Option | `trestle.yaml` | Effect |
 |---|---|---|
 | `transport_type_path = REQWEST_TRANSPORT_TYPE_PATH` | `transport: reqwest` | Emit `transport.rs`: an `HttpClient` over `reqwest::Client` with an optional bearer token. No cloud credential providers, no retries; builds for native and `wasm32`. |
-| `error_module` | `error_module: { code_field, message_field, details_field, code_enum }` | Emit `error.rs`: `Error`, `Result`, `ApiError` (HTTP status, code, message, details of the JSON error body) and `parse_error_response`. The clients return this `Result`; `result_type` stays the server's. A code not in `code_enum` is kept as a string. Required with the Python bindings. |
-| `json_int64_as_number` | `json_int64: number` (under `generate`) | 64-bit integers are JSON numbers, not proto3-JSON strings, and the whole numbers of `google.protobuf.Value`/`Struct`/`ListValue` fields are integers (`1`, not `1.0`). Reading accepts both. |
-| `ignore_unknown_enum_values` | `ignore_unknown_enum_values: true` | An unknown enum name in a response becomes the zero value instead of failing the response. |
+| `error_module` | `error_module: { code_field, message_field, details_field, code_enum }` | Emit `error.rs`: `Error`, `Result`, `ApiError` (HTTP status, code, message, details of the JSON error body) and `parse_error_response`. The clients return this `Result`; `result_type` stays the server's. A code not in `code_enum` is kept as a string. The Python bindings need it, unless the binding crate implements `ApiErrorAnswer` itself. |
+| `json_int64_as_number` | `json_int64: number` (under `generate`) | 64-bit integers are JSON numbers, not proto3-JSON strings, and the whole numbers of `google.protobuf.Value`/`Struct`/`ListValue` fields are integers (`1`, not `1.0`). Reading accepts both. Buffa only. |
+| `ignore_unknown_enum_values` | `ignore_unknown_enum_values: true` | An unknown enum name in a response becomes the zero value instead of failing the response. Buffa only. |
 | `form_encoded_methods` | `form_encoded_methods: [pkg.Service.Method]` | Send the request body of these RPCs form-encoded. |
 | `path_fields_in_body_methods` | `path_fields_in_body_methods: [pkg.Service.Method]` | Keep the path values in the request body of these RPCs too, for APIs that check that both match. |
 | `json_query_packages` | `json_field_names_by_package: {pkg: json}` | Send the query parameters of these packages by their JSON name (`startIndex`), as their bodies. Elsewhere a query key is the proto name, or a `json_name` that differs from the default. |
@@ -163,8 +178,8 @@ overrides the style per proto package.
 
 `BindingsConfig::python` (`clients.python` in `trestle.yaml`) shapes the PyO3 API. The bindings
 crate and the models crate depend on `pyo3` 0.30 with the `experimental-inspect` feature, the
-bindings crate also on `tokio`, and the Rust client needs the `error_module` above: the Python
-exception classes raise its errors.
+bindings crate also on `tokio`. The Python exception classes raise the errors of the
+`error_module` above, or of a binding crate that implements `ApiErrorAnswer`.
 
 The generated API:
 

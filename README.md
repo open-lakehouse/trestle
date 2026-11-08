@@ -27,7 +27,10 @@ The pipeline, the crate map, and the design decisions behind it are documented i
 | [`olai-codegen`](crates/olai-codegen) | Proto-driven code generation for REST handlers, clients, resource registries, and language bindings |
 | [`olai-store`](crates/olai-store) | Generic, TAO-inspired object and association store with field-role enforcement |
 | [`olai-http`](crates/olai-http) | Cloud credential abstraction and HTTP client (AWS, Azure, GCP, Databricks) |
-| [`olai-http-wasm`](crates/olai-http-wasm) | Browser/WASM HTTP transport for generated clients |
+
+These are the entry points. The other crates (browser transport, auth, credential
+vending, the environment planner and runtime) are listed in
+[`docs/architecture.md`](docs/architecture.md#the-crates).
 
 ## Quick start
 

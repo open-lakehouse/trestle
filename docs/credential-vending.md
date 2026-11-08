@@ -1,7 +1,8 @@
 # Credential vending and `object_store`
 
-Status: **accepted, in progress**. This is a design record. The per-phase status is
-in the [Roadmap](#roadmap) table, which is the only status source in this document.
+Status: **accepted; P1–P4 landed, P5 next**. This is a design record. The per-phase
+status is in the [Roadmap](#roadmap) table; the protocol and minter tables mark what
+each one implements.
 The sketches below follow the code. Where the code settled differently from the first
 draft, the text says so.
 
@@ -452,7 +453,7 @@ Adoption:
   - The DataFusion and wasm catalogs use `VendingRouter`.
   - The sharing server uses (3) for local access and the `unity` sources for delegated
     access.
-  - The Neon factory planned for mangrove becomes the `neon` feature.
+  - The Neon factory once planned for mangrove is the `neon` feature.
 
 ## Upstream
 
@@ -505,8 +506,8 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 
 - trestle gains a direct `object_store` dependency (0.13, matching mangrove and
   delta-rs). `olai-http`'s own dependencies are unchanged.
-- The delta-rs `object_store_unity` stack (roeap/delta-rs#331–#335) waits for (1)+(2)
-  with `unity` to be published, then adopts them. The new crate drops out of the
+- The delta-rs `object_store_unity` stack (roeap/delta-rs#331–#335) adopts (1)+(2)
+  with `unity`, now that they are published. The new crate drops out of the
   upstream PR, so delta-rs takes on a dependency on an Open Lakehouse crate, as it
   already does for `olai-http`.
 - One place to fix: future credential bugs (encoding, expiry, endpoints) land once.
@@ -543,15 +544,15 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P2.1 | routing store and presign (**done**, #203) | #180 |
 | P2a | `unity` protocol module, with the dispatcher and the auth config tiers (**done**, #204 #205) | #187 |
 | P2b | `delta-api` protocol module (**done**, #206) | #188 |
-| P2c | `iceberg` protocol module (**done**) | #189 |
-| P2d | `sharing` protocol module (**done**) | #190 |
-| P2e | `neon` protocol module (**done**) | #191 |
+| P2c | `iceberg` protocol module (**done**, #220) | #189 |
+| P2d | `sharing` protocol module (**done**, #221) | #190 |
+| P2e | `neon` protocol module (**done**, #222) | #191 |
 | P3 | `olai-credential-vending`: minters, caching, resolver (**done**, #207 #208 #210 #211 #212 #213) | #181 |
-| P4 | GCS downscoped minter (**done**) | #182 |
+| P4 | GCS downscoped minter (**done**, #228 #229 #230) | #182 |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
-| P6 | mangrove migration | open-lakehouse/mangrove#247 |
-| P7 | delta-rs adopts `olai-vended-store` + `unity` | tracked in #185 (fork has no issues) |
-| P8 | `apache/object_store` proposals | #184 |
+| P6 | mangrove migration (external; status not tracked here) | open-lakehouse/mangrove#247 |
+| P7 | delta-rs adopts `olai-vended-store` + `unity` (external; status not tracked here) | tracked in #185 (fork has no issues) |
+| P8 | `apache/object_store` proposals (external; status not tracked here) | #184 |
 
 P7 (delta-rs) is unblocked, because the critical path P1, P2 and P2a is released. P5
 (`VendingRouter`) is the next phase in this repo.

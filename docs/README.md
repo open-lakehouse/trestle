@@ -27,11 +27,20 @@ development and the release process, see [`CONTRIBUTING.md`](../CONTRIBUTING.md)
 Each crate also has its own README with usage detail:
 
 - [`olai-codegen`](../crates/olai-codegen/README.md): the generator, covering
-  annotations, config, and the library API.
+  annotations, config, and the library API. Its internals are in
+  [`codegen-design.md`](../crates/olai-codegen/docs/codegen-design.md).
 - [`olai-store`](../crates/olai-store/README.md): the resource store traits and
   field-role enforcement.
 - [`olai-http`](../crates/olai-http/README.md): cloud credentials and the HTTP client.
 - [`olai-http-wasm`](../crates/olai-http-wasm/README.md): the browser/WASM transport.
+- [`olai-auth`](../crates/olai-auth/README.md): bearer-token authentication and
+  authorization for axum services.
+- [`olai-storage-credentials`](../crates/olai-storage-credentials/README.md),
+  [`olai-vended-store`](../crates/olai-vended-store/README.md) and
+  [`olai-credential-vending`](../crates/olai-credential-vending/README.md): the
+  credential vending model, client-side stores and server-side minting.
+- [`olai-stack-topology`](../crates/stack-topology/README.md): the environment
+  planner and renderer behind `trestle env`.
 - [`olai-stack-runtime`](../crates/stack-runtime/README.md): running environments
   on Docker Compose.
 - [`olai-stack-state`](../crates/stack-state/README.md): the shared state store.
