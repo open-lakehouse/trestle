@@ -402,14 +402,13 @@ fn default_component_kind() -> ComponentKind {
     ComponentKind::Local
 }
 
-/// Typed contributions a component makes to the aggregated `stack.*` render
-/// context.
+/// Typed contributions a component declares in its `provides:` block.
 ///
-/// Every active component's `Provides` block is merged into a single
-/// [`StackContext`](crate::template::StackContext) in dependency-resolved
-/// order. Order-sensitive lists (like [`envoy_routes`](Self::envoy_routes),
-/// where order is match priority) are preserved verbatim; set-like lists (like
-/// [`postgres_databases`](Self::postgres_databases)) are deduplicated.
+/// Only [`ports`](Self::ports) is read today, to catch port clashes between
+/// active components. The other fields are still parsed (the manifest schema is
+/// `deny_unknown_fields`), but the aggregated `stack.*` render context they fed
+/// was removed together with the `local-stack-*` components; local environments
+/// come from `trestle env`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provides {

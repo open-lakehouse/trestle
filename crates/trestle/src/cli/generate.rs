@@ -7,7 +7,7 @@
 //!    Connect facade) to write the proto message types. trestle keeps its
 //!    *managed* plugins in `buf.gen.yaml` in sync with `trestle.yaml` on every run
 //!    while preserving any plugins an adopter added (see
-//!    [`merge_buf_gen`](crate::config::merge_buf_gen)).
+//!    [`crate::config::merge_buf_gen`]).
 //! 2. `buf build` — compiles `proto/` to a `FileDescriptorSet` (a temp file).
 //! 3. trestle codegen — parses the descriptor and emits handlers/clients/bindings.
 //!

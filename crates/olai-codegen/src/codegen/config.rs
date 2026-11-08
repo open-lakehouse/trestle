@@ -279,14 +279,16 @@ pub struct PyPackageConfig {
 pub struct CodeGenConfig {
     /// Fully-qualified path to the request context type used in handler methods.
     ///
-    /// Default: `"crate::api::RequestContext"`
+    /// No library default; `trestle generate` uses `"crate::api::RequestContext"` unless
+    /// `generate.server.context_type` is set.
     pub context_type_path: String,
 
     /// Fully-qualified path to the `Result` alias used in generated handler and client code.
     /// The clients use the `Result` of the generated error module instead when
     /// [`RestClientOptions::error_module`] is set.
     ///
-    /// Default: `"crate::Result"`
+    /// No library default; `trestle generate` uses `"crate::Result"` unless
+    /// `generate.server.result_type` is set.
     pub result_type_path: String,
 
     /// Template for the external model import path. `{service}` is replaced with the service's
