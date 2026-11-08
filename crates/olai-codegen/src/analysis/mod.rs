@@ -36,7 +36,7 @@
 //! The analysis will extract that `CatalogService` manages the `Catalog` resource,
 //! making this information available for subsequent code generation phases.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::warn;
 
@@ -108,7 +108,9 @@ pub fn analyze_metadata(metadata: &CodeGenMetadata) -> Result<GenerationPlan> {
 
 /// Maps `(parent_resource_type, child_resource_type)` → proto field name that carries the
 /// parent identifier on the child service's List request (e.g. `"catalog_name"`).
-type GlobalParentMap = HashMap<(String, String), String>;
+///
+/// A `BTreeMap` so every walk over it is in a stable order, run to run.
+type GlobalParentMap = BTreeMap<(String, String), String>;
 
 /// Build a map of immediate-parent relationships by scanning every service's List method query
 /// params for `child_type`-annotated fields.
@@ -119,7 +121,7 @@ type GlobalParentMap = HashMap<(String, String), String>;
 /// Schema's own List method, `catalog_name` (child_type = Schema) is recorded as `(Catalog, Schema)`.
 /// The chain `Catalog → Schema → Table` is then reconstructable via depth analysis.
 fn build_global_parent_map(plans: &[ServicePlan], metadata: &CodeGenMetadata) -> GlobalParentMap {
-    let mut map: GlobalParentMap = HashMap::new();
+    let mut map = GlobalParentMap::new();
 
     for plan in plans {
         let managed_type = match plan.managed_resources.first() {
@@ -183,8 +185,8 @@ fn derive_ordered_hierarchy(
         return Ok(vec![]);
     }
 
-    // Sort root-first (ascending depth).
-    ancestors.sort_by_key(|(depth, _, _)| *depth);
+    // Sort root-first (ascending depth); the parent type breaks ties so the order is stable.
+    ancestors.sort_by(|(da, ta, _), (db, tb, _)| da.cmp(db).then_with(|| ta.cmp(tb)));
 
     Ok(ancestors
         .into_iter()
@@ -206,26 +208,28 @@ fn derive_ordered_hierarchy(
 
 /// Compute the depth of a resource type in the parent chain (0 = root, no parent in map).
 ///
+/// A child records an entry for **every** ancestor it names (a table lists both its catalog and its
+/// schema), so the depth is the longest chain through any of its parents, not the first one found.
+/// `path` holds the types on the current walk; a type that reappears on it is a cycle, while two
+/// branches that reach the same ancestor (a diamond) are fine.
+///
 /// Returns `Err` if a cycle is detected in the resource hierarchy annotations.
 fn compute_depth(
     resource_type: &str,
     map: &GlobalParentMap,
-    visited: &mut HashSet<String>,
+    path: &mut HashSet<String>,
 ) -> Result<usize> {
-    if !visited.insert(resource_type.to_string()) {
+    if !path.insert(resource_type.to_string()) {
         return Err(crate::Error::Build(format!(
             "Cycle detected in resource hierarchy at type: {resource_type}"
         )));
     }
-    let parent = map
-        .iter()
-        .find(|((_, child), _)| child == resource_type)
-        .map(|((parent, _), _)| parent.clone());
-
-    match parent {
-        None => Ok(0),
-        Some(parent_type) => Ok(1 + compute_depth(&parent_type, map, visited)?),
+    let mut depth = 0;
+    for (parent, _) in map.keys().filter(|(_, child)| child == resource_type) {
+        depth = depth.max(1 + compute_depth(parent, map, path)?);
     }
+    path.remove(resource_type);
+    Ok(depth)
 }
 
 /// Resolve the resource type string for a proto field name by stripping `"_name"` and looking up
@@ -1537,12 +1541,35 @@ mod tests {
     #[test]
     fn test_compute_depth_cycle_guard() {
         // A ↔ B mutual cycle: compute_depth should return Err, not panic or recurse infinitely.
-        let mut map: GlobalParentMap = HashMap::new();
+        let mut map = GlobalParentMap::new();
         map.insert(("A".to_string(), "B".to_string()), "a_name".to_string());
         map.insert(("B".to_string(), "A".to_string()), "b_name".to_string());
 
         assert!(compute_depth("A", &map, &mut HashSet::new()).is_err());
         assert!(compute_depth("B", &map, &mut HashSet::new()).is_err());
+    }
+
+    #[test]
+    fn test_compute_depth_takes_the_longest_parent_chain() {
+        // Catalog → Schema → Table → Column, where every child names all of its ancestors (as
+        // List requests do). Column's depth is its longest chain (through Table), whichever
+        // parent entry comes first.
+        let mut map = GlobalParentMap::new();
+        for (parent, child) in [
+            ("Catalog", "Schema"),
+            ("Catalog", "Table"),
+            ("Schema", "Table"),
+            ("Catalog", "Column"),
+            ("Schema", "Column"),
+            ("Table", "Column"),
+        ] {
+            map.insert((parent.to_string(), child.to_string()), String::new());
+        }
+        let depth = |t: &str| compute_depth(t, &map, &mut HashSet::new()).unwrap();
+        assert_eq!(depth("Catalog"), 0);
+        assert_eq!(depth("Schema"), 1);
+        assert_eq!(depth("Table"), 2);
+        assert_eq!(depth("Column"), 3);
     }
 
     #[test]

@@ -313,7 +313,10 @@ fn path_extractions(method: &MethodHandler<'_>) -> TokenStream {
     if params.is_empty() {
         quote! {}
     } else {
-        let param_names: Vec<Ident> = params.iter().map(|p| format_ident!("{}", p.name)).collect();
+        let param_names: Vec<Ident> = params
+            .iter()
+            .map(|p| crate::utils::field_ident(&p.name))
+            .collect();
         let param_types: Vec<Type> = params
             .iter()
             .map(|p| method.field_type(&p.field_type, RenderContext::Extractor))
@@ -348,7 +351,7 @@ fn query_extractions(method: &MethodHandler<'_>) -> TokenStream {
         quote! {}
     } else {
         let query_fields = params.iter().map(|p| {
-            let name = format_ident!("{}", p.name);
+            let name = crate::utils::field_ident(&p.name);
             // Use QueryExtractor so enums render as their actual type (not i32):
             // query strings carry variant names as strings, not integers.
             let type_tokens = method.field_type(&p.field_type, RenderContext::QueryExtractor);
@@ -365,7 +368,10 @@ fn query_extractions(method: &MethodHandler<'_>) -> TokenStream {
             }
         });
 
-        let param_names: Vec<Ident> = params.iter().map(|p| format_ident!("{}", p.name)).collect();
+        let param_names: Vec<Ident> = params
+            .iter()
+            .map(|p| crate::utils::field_ident(&p.name))
+            .collect();
 
         quote! {
             #[derive(serde::Deserialize)]

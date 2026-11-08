@@ -641,14 +641,30 @@ impl CodeGenConfig {
     /// Checks that:
     /// - `models_path_template` and `models_path_crate_template` produce valid Rust paths after
     ///   `{service}` substitution.
+    /// - `context_type_path` and `result_type_path` parse as Rust paths.
     /// - `bindings` is `Some` whenever `output.python`, `output.node`, `output.node_ts`, or
     ///   `output.wasm` is `Some`; `output.python` also needs `BindingsConfig::python`.
+    /// - language bindings have the REST client protocol enabled.
+    /// - the Connect client has a `connect_client_path`.
     /// - the REST client and Python options that need other options have them.
     ///
-    /// Call this at construction time to surface misconfiguration early, before generation runs.
+    /// [`generate_code`](crate::generate_code) runs the same checks, so calling this first only
+    /// moves the error to construction time.
     pub fn validate(&self) -> Result<()> {
         ModelsPath::new(&self.models_path_template)?;
         ModelsPath::new(&self.models_path_crate_template)?;
+        // The context/result type paths are parsed as `syn::Path` deep in the per-method
+        // generators; check them once here so a typo is a clean error, not a panic.
+        for (field, path) in [
+            ("context_type", &self.context_type_path),
+            ("result_type", &self.result_type_path),
+        ] {
+            syn::parse_str::<syn::Path>(path).map_err(|source| Error::InvalidConfigPath {
+                field,
+                path: path.clone(),
+                source,
+            })?;
+        }
         let wants_bindings = self.output.python.is_some()
             || self.output.node.is_some()
             || self.output.node_ts.is_some()

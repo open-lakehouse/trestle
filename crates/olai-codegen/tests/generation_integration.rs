@@ -1035,3 +1035,179 @@ fn python_bindings_without_error_module_leave_api_error_answer_to_the_crate() {
         "the ApiErrorAnswer impl is the client crate's without the error module:\n{errors}"
     );
 }
+
+// ── Config validation (one path for `validate` and `generate_code`) ─────────
+
+/// Wasm output needs a bindings config; `generate_code` reports it instead of panicking later in
+/// the wasm emitter.
+#[test]
+fn generate_code_rejects_wasm_output_without_bindings() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.output.wasm = Some(tmp.path().join("wasm"));
+    let err = generate_code(&metadata(), &config).unwrap_err();
+    assert!(
+        matches!(err, olai_codegen::Error::MissingBindingsConfig),
+        "{err:?}"
+    );
+    assert!(matches!(
+        config.validate(),
+        Err(olai_codegen::Error::MissingBindingsConfig)
+    ));
+}
+
+/// Bindings call the REST aggregate client, so `generate_code` refuses them with REST disabled
+/// rather than emitting bindings against a client that isn't generated.
+#[test]
+fn generate_code_rejects_bindings_without_rest() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    config.output.node_ts = Some(tmp.path().join("node_ts"));
+    config.client_protocols = olai_codegen::ClientProtocols {
+        rest: false,
+        connect: true,
+    };
+    config.connect_client_path = Some("crate::connect".into());
+    let err = generate_code(&metadata(), &config).unwrap_err();
+    assert!(
+        matches!(err, olai_codegen::Error::BindingsRequireRest),
+        "{err:?}"
+    );
+}
+
+/// `validate` rejects an unparsable context/result type path, the same as `generate_code`.
+#[test]
+fn validate_rejects_invalid_context_and_result_paths() {
+    let tmp = TempDir::new().unwrap();
+    for (field, set) in [
+        (
+            "context_type",
+            (|c: &mut CodeGenConfig| c.context_type_path = "not a path".into())
+                as fn(&mut CodeGenConfig),
+        ),
+        ("result_type", |c: &mut CodeGenConfig| {
+            c.result_type_path = "crate::".into()
+        }),
+    ] {
+        let mut config = rust_config(tmp.path());
+        set(&mut config);
+        match config.validate() {
+            Err(olai_codegen::Error::InvalidConfigPath { field: f, .. }) => assert_eq!(f, field),
+            other => panic!("expected InvalidConfigPath for {field}, got {other:?}"),
+        }
+        assert!(matches!(
+            generate_code(&metadata(), &config),
+            Err(olai_codegen::Error::InvalidConfigPath { .. })
+        ));
+    }
+}
+
+// ── Edge-case fixture: keyword names and multiple oneofs ────────────────────
+
+/// `proto/example_edge_cases.bin`, compiled from `proto/example_edge_cases.proto`. Regenerate it
+/// from the crate root with:
+///
+/// ```sh
+/// protoc -I proto -I tests/rest_client_e2e/proto --include_imports --include_source_info \
+///   -o proto/example_edge_cases.bin proto/example_edge_cases.proto
+/// ```
+fn edge_case_metadata() -> CodeGenMetadata {
+    let bytes = include_bytes!("../proto/example_edge_cases.bin");
+    let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
+    parse_file_descriptor_set(&fds).expect("parse succeeds")
+}
+
+/// A message's oneof fields keep their declaration order, not hash order: it drives the order of
+/// builder setters and binding constructor arguments.
+#[test]
+fn oneof_fields_keep_declaration_order() {
+    for _ in 0..8 {
+        let metadata = edge_case_metadata();
+        let route = &metadata.messages[".example.edge.v1.Route"];
+        let oneofs: Vec<&str> = route
+            .fields
+            .iter()
+            .filter(|f| f.oneof_variants.is_some())
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(oneofs, ["target", "source"]);
+    }
+}
+
+/// Path params, query params and resource name components named after Rust keywords generate
+/// as raw identifiers (`r#type`), in every output, for both runtimes.
+#[test]
+fn keyword_named_params_generate_raw_identifiers() {
+    for runtime in [olai_codegen::Runtime::Prost, olai_codegen::Runtime::Buffa] {
+        let tmp = TempDir::new().unwrap();
+        let mut config = full_client_config(tmp.path());
+        config.runtime = runtime;
+        // The `ResourceName` / `qualified_name()` accessors come with the object conversions.
+        config.generate_object_conversions = true;
+        config.output.node = Some(tmp.path().join("node"));
+        config.output.node_ts = Some(tmp.path().join("node_ts"));
+        config.output.python = Some(tmp.path().join("python"));
+        config.bindings.as_mut().unwrap().python = Some(olai_codegen::PythonOptions {
+            package: olai_codegen::PyPackageConfig {
+                dir: tmp.path().join("pkg"),
+                name: "example".into(),
+            },
+            error_base_class: "ExampleError".into(),
+            module: "example._core".into(),
+            async_methods: true,
+            keyword_only: true,
+            public_modules: false,
+            user_agent: None,
+            exports: vec![],
+        });
+        generate_code(&edge_case_metadata(), &config)
+            .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
+
+        for path in walk(tmp.path())
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        {
+            let src = std::fs::read_to_string(&path).unwrap();
+            syn::parse_file(&src)
+                .unwrap_or_else(|e| panic!("{runtime:?}: {} does not parse: {e}", path.display()));
+        }
+
+        let common = read_all(&tmp.path().join("common"));
+        for ident in ["r#type", "r#ref", "r#match"] {
+            assert!(
+                common.contains(ident),
+                "{runtime:?}: extractors bind `{ident}`:\n{common}"
+            );
+        }
+        let models = read_all(&tmp.path().join("models"));
+        assert!(
+            models.contains("self.r#type"),
+            "{runtime:?}: resource name accessors read `self.r#type`:\n{models}"
+        );
+    }
+}
+
+/// The TS scoped client surfaces the same instance methods as the native one, including a
+/// resource-targeted existence check, which resolves to the native method's `boolean`.
+#[test]
+fn ts_scoped_client_surfaces_existence_checks() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    let node = tmp.path().join("node");
+    let node_ts = tmp.path().join("node_ts");
+    config.output.node = Some(node.clone());
+    config.output.node_ts = Some(node_ts.clone());
+    generate_code(&edge_case_metadata(), &config).expect("generation succeeds");
+
+    let native = read_all(&node);
+    assert!(
+        native.contains("pub async fn check_kind(&self) -> napi::Result<bool>"),
+        "native scoped client exposes check_kind:\n{native}"
+    );
+    let ts = read_all(&node_ts);
+    assert!(
+        ts.contains("async checkKind(): Promise<boolean>")
+            && ts.contains("return await this.inner.checkKind();"),
+        "TS scoped client forwards checkKind's boolean:\n{ts}"
+    );
+}

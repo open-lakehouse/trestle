@@ -2,6 +2,8 @@
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
   type Catalog,
+  type CatalogStatus,
+  type CatalogToken,
   type DeleteCatalogResponse,
   type DeleteSchemaResponse,
   type DeleteTagAssignmentResponse,
@@ -10,6 +12,8 @@ import {
   type Schema,
   type TagAssignment,
   CatalogSchema,
+  CatalogStatusSchema,
+  CatalogTokenSchema,
   DeleteCatalogResponseSchema,
   DeleteSchemaResponseSchema,
   DeleteTagAssignmentResponseSchema,
@@ -149,6 +153,17 @@ export class CatalogClient {
     } catch (e) { throw parseNativeError(e); }
   }
 
+  /**
+     * Resource-targeted custom GET (path param, not a collection method) — exercises surfacing a
+     * custom read on the scoped client (`catalog.get_catalog_status()`) instead of leaving its
+     * generated builder orphaned.
+     */
+  async getCatalogStatus(): Promise<CatalogStatus> {
+    try {
+      return fromBinary(CatalogStatusSchema, await this.inner.getCatalogStatus());
+    } catch (e) { throw parseNativeError(e); }
+  }
+
 }
 
 export class SchemaClient {
@@ -205,6 +220,17 @@ export class ExampleClient {
       for await (const data of this.inner.listCatalogsStream(maxResults, pageToken)) {
         yield fromBinary(CatalogSchema, data);
       }
+    } catch (e) { throw parseNativeError(e); }
+  }
+
+  /**
+     * Custom POST RPC without path params — covers `RequestType::Custom(Post)`
+     * dispatched as a collection method (the shape used by factory-style
+     * RPCs like `GenerateTemporary*Credentials`).
+     */
+  async generateCatalogToken(catalogId: string): Promise<CatalogToken> {
+    try {
+      return fromBinary(CatalogTokenSchema, await this.inner.generateCatalogToken(catalogId));
     } catch (e) { throw parseNativeError(e); }
   }
 

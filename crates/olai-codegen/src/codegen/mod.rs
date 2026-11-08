@@ -138,8 +138,10 @@ impl MethodPlan {
 /// # Required fields
 ///
 /// - `output.server` needs `output.common` (the extractors).
-/// - `bindings` must be `Some` when any of `output.python`, `output.node`, or `output.node_ts`
-///   is `Some`; otherwise returns [`Error::MissingBindingsConfig`].
+/// - `bindings` must be `Some` when any of `output.python`, `output.node`, `output.node_ts`, or
+///   `output.wasm` is `Some`; otherwise returns [`Error::MissingBindingsConfig`].
+/// - Language bindings call the REST aggregate client, so they need `client_protocols.rest`;
+///   otherwise returns [`Error::BindingsRequireRest`].
 /// - `models_path_template` and `models_path_crate_template` must be valid Rust path templates
 ///   (containing `{service}`); invalid templates return [`Error::InvalidModelsPathTemplate`].
 ///
@@ -148,8 +150,8 @@ impl MethodPlan {
 /// Setting `generate_resource_enum` to `false` skips `labels.rs` generation.
 /// Setting `bindings` to `None` skips all language-binding output.
 ///
-/// Call [`CodeGenConfig::validate`] before this function to surface config errors at
-/// construction time rather than mid-generation.
+/// This function runs [`CodeGenConfig::validate`] first, so it accepts exactly the configs
+/// `validate` accepts. Call `validate` yourself to surface config errors at construction time.
 ///
 /// # Errors
 ///
@@ -159,8 +161,12 @@ impl MethodPlan {
 ///   is not a valid Rust path template.
 /// - [`Error::InvalidConfigPath`] if `context_type_path` or `result_type_path` is not a valid Rust
 ///   path.
-/// - [`Error::MissingBindingsConfig`] if any of the `python`, `node`, or `node_ts` outputs is
-///   requested without a `bindings` config.
+/// - [`Error::MissingBindingsConfig`] if any of the `python`, `node`, `node_ts`, or `wasm` outputs
+///   is requested without a `bindings` config.
+/// - [`Error::BindingsRequireRest`] if language bindings are requested with the REST client
+///   protocol disabled.
+/// - [`Error::MissingConnectClientPath`] if the Connect client is requested without
+///   `connect_client_path`.
 /// - [`Error::Build`] if a REST client or Python option lacks an option it needs.
 /// - [`Error::MissingAnnotation`] or [`Error::Build`] surfaced while analyzing the metadata (e.g. a
 ///   required `google.api` annotation is missing, or a service cannot be planned).
@@ -170,42 +176,10 @@ impl MethodPlan {
 ///   file.
 /// - [`Error::Io`] if creating the models directory or writing any generated file fails.
 pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Result<()> {
-    // Validate templates early so callers get a clean error before any generation starts.
+    // One source of truth for config errors: fail cleanly before any generation starts.
+    config.validate()?;
     let models_path = ModelsPath::new(&config.models_path_template)?;
     let models_path_crate = ModelsPath::new(&config.models_path_crate_template)?;
-
-    // The context/result type paths come from user config and are parsed as `syn::Path` deep in
-    // the per-method generators (handler/client/server/builder). Validate them once here so a
-    // typo surfaces as a clean error instead of panicking mid-generation.
-    for (field, path) in [
-        ("context_type", &config.context_type_path),
-        ("result_type", &config.result_type_path),
-    ] {
-        syn::parse_str::<syn::Path>(path).map_err(|source| Error::InvalidConfigPath {
-            field,
-            path: path.clone(),
-            source,
-        })?;
-    }
-
-    // Validate that bindings config is present when language-binding output is requested.
-    if (config.output.python.is_some()
-        || config.output.node.is_some()
-        || config.output.node_ts.is_some())
-        && config.bindings.is_none()
-    {
-        return Err(Error::MissingBindingsConfig);
-    }
-
-    // The Connect client emitter needs the connect-rust client's import path.
-    if config.client_protocols.connect
-        && config.output.client.is_some()
-        && config.connect_client_path.is_none()
-    {
-        return Err(Error::MissingConnectClientPath);
-    }
-
-    config.validate_options()?;
 
     let plan = analyze_metadata(metadata)?;
 
@@ -1269,7 +1243,7 @@ impl ServiceHandler<'_> {
     /// `connect_client_path` is unset.
     pub(crate) fn connect_inner_client_path(&self) -> crate::Result<syn::Path> {
         let base = self.config.connect_client_path.as_deref().ok_or_else(|| {
-            crate::Error::Build(
+            Error::Build(
                 "client_protocol = Connect requires `connect_client_path` to be set".to_string(),
             )
         })?;
@@ -1277,7 +1251,7 @@ impl ServiceHandler<'_> {
             "{base}::{}Client",
             self.plan.service_name.to_case(Case::Pascal)
         );
-        syn::parse_str(&full).map_err(|source| crate::error::Error::InvalidRustPath {
+        syn::parse_str(&full).map_err(|source| Error::InvalidRustPath {
             path: full.clone(),
             message: "connect_client_path + service client name".to_string(),
             source,
@@ -1479,12 +1453,12 @@ impl MethodHandler<'_> {
         crate::analysis::emit_shape(&self.plan.request_type, self.is_collection_method())
     }
 
-    /// Whether this method is emitted as an instance method on a resource-scoped client
-    /// (`get`/`update`/`delete` or a resource-targeted custom `POST`/`PATCH`).
+    /// Whether this method is emitted as an instance method on a resource-scoped client.
     ///
-    /// The set is standard `Get`/`Update`/`Delete`, plus a non-collection custom `POST`/`PATCH`
-    /// (e.g. `POST /catalogs/{name}:rotateToken`). Other custom verbs (a custom `GET`/`DELETE`) are
-    /// deliberately **not** surfaced on the scoped client.
+    /// The set is standard `Get`/`Update`/`Delete`, plus any *resource-targeted* custom RPC: one
+    /// with a path param that is not a collection method, whatever its verb (e.g.
+    /// `POST /catalogs/{name}:rotateToken` or `GET /catalogs/{name}/status`). The Python, NAPI and
+    /// TypeScript scoped clients all route on this.
     pub(crate) fn is_scoped_instance_method(&self) -> bool {
         // Standard instance verbs are always scoped.
         if matches!(

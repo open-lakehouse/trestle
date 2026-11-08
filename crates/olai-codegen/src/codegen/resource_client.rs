@@ -52,7 +52,11 @@ pub(crate) fn generate(
     }
 
     let low_level_ident = service.low_level_client_type(crate::codegen::ClientProtocol::Rest);
-    let components: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
+    let components: Vec<_> = spec
+        .params
+        .iter()
+        .map(|p| crate::utils::field_ident(p))
+        .collect();
     let join_format = spec.join_format();
 
     let struct_def = scoped_struct(&components);
@@ -188,7 +192,7 @@ fn child_nav_method(
     let method_name = format_ident!("{}", link.child_singular);
     // The child's accessor params are parent params + one trailing leaf; the leaf is the new arg.
     let leaf = link.child_accessor_params.last()?;
-    let leaf_ident = format_ident!("{}", leaf);
+    let leaf_ident = crate::utils::field_ident(leaf);
 
     let parent_args = parent_components.iter().map(|c| quote! { &self.#c });
     let low_level = child_low_level_ctor(&module, &child_low_level);

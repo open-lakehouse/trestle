@@ -44,7 +44,7 @@ fn emit_for_shape(
 }
 
 /// Emit an instance method for a resource-scoped client (`get`/`update`/`delete` and
-/// resource-targeted custom POST/PATCH RPCs), or `None` if the method does not belong on the scoped
+/// resource-targeted custom RPCs), or `None` if the method does not belong on the scoped
 /// client. Always [`BindingMode::Scoped`].
 fn scoped_instance_method(
     backend: &dyn BindingBackend,
@@ -160,7 +160,11 @@ pub(crate) fn resource_accessor(
     let method_name = format_ident!("{}", spec.singular);
     let client_name = format_ident!("{client_prefix}{}", service.client_type());
 
-    let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
+    let param_idents: Vec<_> = spec
+        .params
+        .iter()
+        .map(|p| crate::utils::field_ident(p))
+        .collect();
     let param_list = param_idents.iter().map(|id| quote! { #id: String });
 
     let client = if spec.nested {

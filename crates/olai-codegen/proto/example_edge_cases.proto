@@ -1,0 +1,112 @@
+syntax = "proto3";
+package example.edge.v1;
+
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/empty.proto";
+
+// Edge cases the main `example.bin` fixture doesn't reach. Compiled into the committed
+// `example_edge_cases.bin` (see `tests/generation_integration.rs` for the protoc command).
+
+// A resource whose name component is a Rust keyword (`type`): the extractors, accessors and
+// `qualified_name()` must emit it as `r#type`.
+message Kind {
+  option (google.api.resource) = {
+    type: "example.io/Kind"
+    pattern: "kinds/{type}"
+    plural: "kinds"
+    singular: "kind"
+    name_field: "type"
+  };
+
+  string type = 1;
+  string comment = 2 [(google.api.field_behavior) = OPTIONAL];
+  string kind_id = 3 [(google.api.field_behavior) = IDENTIFIER];
+}
+
+service KindService {
+  rpc ListKinds(ListKindsRequest) returns (ListKindsResponse) {
+    option (google.api.http) = {get: "/kinds"};
+  }
+  rpc GetKind(GetKindRequest) returns (Kind) {
+    option (google.api.http) = {get: "/kinds/{type}"};
+  }
+  rpc DeleteKind(DeleteKindRequest) returns (DeleteKindResponse) {
+    option (google.api.http) = {delete: "/kinds/{type}"};
+  }
+  // A resource-targeted existence check: the native scoped client returns its `bool`.
+  rpc CheckKind(CheckKindRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      custom: {kind: "HEAD", path: "/kinds/{type}"}
+    };
+  }
+}
+
+message ListKindsRequest {
+  // A keyword-named optional query param.
+  optional string match = 1;
+  int32 max_results = 2;
+  string page_token = 3;
+}
+
+message ListKindsResponse {
+  repeated Kind kinds = 1;
+  string next_page_token = 2;
+}
+
+message GetKindRequest {
+  string type = 1;
+}
+
+message DeleteKindRequest {
+  string type = 1;
+}
+
+message DeleteKindResponse {}
+
+message CheckKindRequest {
+  string type = 1;
+}
+
+// A resource-less service with keyword path params and a message with two oneofs.
+service RouteService {
+  rpc PutRoute(PutRouteRequest) returns (Route) {
+    option (google.api.http) = {
+      post: "/routes/{type}/{ref}"
+      body: "route"
+    };
+  }
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse) {
+    option (google.api.http) = {get: "/routes"};
+  }
+}
+
+message ListRoutesRequest {
+  // A keyword-named required query param.
+  string ref = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ListRoutesResponse {
+  repeated Route routes = 1;
+}
+
+message PutRouteRequest {
+  string type = 1;
+  string ref = 2;
+  Route route = 3 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Two oneofs, declared out of alphabetical order: the parsed fields must keep declaration order
+// (`target`, then `source`), not hash order.
+message Route {
+  oneof target {
+    string target_url = 1;
+    int64 target_id = 2;
+  }
+  oneof source {
+    string source_url = 3;
+    int64 source_id = 4;
+  }
+  string note = 5;
+}

@@ -392,26 +392,27 @@ fn decoded_type_name(method: &MethodHandler<'_>) -> Option<String> {
 
 /// Whether a method produces any code on the generated client surface — and therefore contributes
 /// imports. This mirrors the emit decisions made by [`generate_resource_client_class`] (the scoped
-/// client) and [`generate_aggregate_client_sorted`] (the root client):
+/// client) and [`generate_aggregate_client_sorted`] (the root client), which route on the same IR
+/// predicates as the Python/NAPI binding driver:
 ///
 /// - **Flat** services emit *every* method onto the root client.
-/// - **Scoped** services emit only their standard instance verbs (`Get`/`Update`/`Delete`) onto the
-///   scoped client, plus their `List`/`Create` collection methods onto the root client. Both
-///   surfaces match strictly on `request_type` — a `Custom` verb on a Scoped service is emitted by
-///   neither, so its decoded/body types must not be imported or Biome flags them as unused.
+/// - **Scoped** services emit their [scoped instance
+///   methods](MethodHandler::is_scoped_instance_method) onto the scoped client, plus their
+///   collection methods of the `List`/`Create` [`EmitShape`] (including `Generate*` factories) onto
+///   the root client. Anything else lands on neither, so its decoded/body types must not be
+///   imported or Biome flags them as unused.
 fn method_is_emitted(service: &ServiceHandler<'_>, method: &MethodHandler<'_>) -> bool {
     match service.binding_mode() {
         BindingMode::Flat => true,
-        BindingMode::Scoped => match &method.plan.request_type {
-            // Surfaced on the scoped client (see `generate_resource_client_class`).
-            RequestType::Get | RequestType::Update | RequestType::Delete => true,
-            // Surfaced on the root client when classified as a collection method
-            // (see `generate_aggregate_client_sorted`).
-            RequestType::List | RequestType::Create => method.is_collection_method(),
-            // Custom verbs on a Scoped service land on neither surface.
-            RequestType::Custom(_) => false,
-        },
+        BindingMode::Scoped => method.is_scoped_instance_method() || is_root_collection(method),
     }
+}
+
+/// Whether a Scoped service's method goes on the root client: a collection method of the
+/// `List`/`Create` shape (the same rule as the binding driver's `root_method`).
+fn is_root_collection(method: &MethodHandler<'_>) -> bool {
+    method.is_collection_method()
+        && matches!(method.emit_shape(), EmitShape::List | EmitShape::Create)
 }
 
 /// Generate an options interface for a method's optional parameters.
@@ -468,32 +469,18 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
 
     let mut methods = String::new();
 
-    // The TS scoped class surfaces only the standard instance verbs (get/update/delete). Other
-    // methods (collection methods, resource-targeted customs) live on the aggregate client.
-    for method in service.methods() {
-        match &method.plan.request_type {
-            RequestType::Get => {
-                methods.push_str(&generate_resource_get_method(
-                    &method,
-                    type_name,
-                    BindingMode::Scoped,
-                ));
+    // The scoped class surfaces the same instance methods as the native scoped client: the
+    // standard verbs (get/update/delete) plus resource-targeted customs. Collection methods live on
+    // the aggregate client.
+    let mode = BindingMode::Scoped;
+    for method in service.methods().filter(|m| m.is_scoped_instance_method()) {
+        methods.push_str(&match (&method.plan.request_type, method.emit_shape()) {
+            (RequestType::Get | RequestType::Update, _) => {
+                generate_instance_returning_method(&method, type_name, mode)
             }
-            RequestType::Update => {
-                methods.push_str(&generate_resource_update_method(
-                    &method,
-                    type_name,
-                    BindingMode::Scoped,
-                ));
-            }
-            RequestType::Delete => {
-                methods.push_str(&generate_resource_delete_method(
-                    &method,
-                    BindingMode::Scoped,
-                ));
-            }
-            _ => {}
-        }
+            (_, EmitShape::Delete) => generate_resource_delete_method(&method, mode),
+            _ => generate_output_method(&method, mode),
+        });
     }
 
     // A scoped resource with no instance verbs (no get/update/delete) yields a class with no
@@ -580,39 +567,34 @@ fn ts_capability_filter(
         .collect()
 }
 
-/// The TS method name and the native (NAPI) call name for a get/update/delete-style method.
+/// The TS method name of an instance-style method, which is also the native (NAPI) method it calls.
 ///
-/// - [`BindingMode::Scoped`]: short verb (`get`/`update`/`delete`) on the scoped client.
+/// - [`BindingMode::Scoped`]: the scoped client's method name, camelCased: the short verb
+///   (`get`/`update`/`delete`) for the standard verbs, the handler name for a resource-targeted
+///   custom (`getCatalogStatus`).
 /// - [`BindingMode::Flat`]: the full base method name (camelCased) on the root client, matching
 ///   the NAPI-exposed flat method (snake_case Rust → camelCase JS).
-fn instance_method_names(
-    method: &MethodHandler<'_>,
-    mode: BindingMode,
-    verb: &str,
-) -> (String, String) {
+fn instance_method_name(method: &MethodHandler<'_>, mode: BindingMode) -> String {
     match mode {
-        BindingMode::Scoped => (verb.to_string(), verb.to_string()),
-        BindingMode::Flat => {
-            let name = method.js_method_name();
-            (name.clone(), name)
-        }
+        BindingMode::Scoped => method
+            .plan
+            .resource_client_method()
+            .to_string()
+            .to_case(Case::Camel),
+        BindingMode::Flat => method.js_method_name(),
     }
 }
 
-fn generate_resource_get_method(
-    method: &MethodHandler<'_>,
-    type_name: &str,
-    mode: BindingMode,
-) -> String {
-    generate_instance_returning_method(method, type_name, mode, "get")
-}
-
-fn generate_resource_update_method(
-    method: &MethodHandler<'_>,
-    type_name: &str,
-    mode: BindingMode,
-) -> String {
-    generate_instance_returning_method(method, type_name, mode, "update")
+/// A get/update-style or custom method, by what the native method returns: the decoded output
+/// message, the `bool` of an existence check, or nothing.
+fn generate_output_method(method: &MethodHandler<'_>, mode: BindingMode) -> String {
+    match method.output_type() {
+        Some(output_type) => {
+            generate_instance_returning_method(method, &output_type.to_string(), mode)
+        }
+        None if method.is_existence_check() => generate_existence_check_method(method, mode),
+        None => generate_resource_delete_method(method, mode),
+    }
 }
 
 /// Shared body for get/update-style methods: forward params and decode a typed response.
@@ -620,12 +602,11 @@ fn generate_instance_returning_method(
     method: &MethodHandler<'_>,
     type_name: &str,
     mode: BindingMode,
-    verb: &str,
 ) -> String {
     let schema_name = format!("{type_name}Schema");
     let type_ref = ts_type_ident(type_name);
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let (ts_name, native_name) = instance_method_names(method, mode, verb);
+    let name = instance_method_name(method, mode);
 
     let (required_params, optional_params) = ts_param_split(method, mode);
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
@@ -636,9 +617,32 @@ fn generate_instance_returning_method(
     } = spec;
 
     format!(
-        r#"{jsdoc}  async {ts_name}({full_param_list}): Promise<{type_ref}> {{
+        r#"{jsdoc}  async {name}({full_param_list}): Promise<{type_ref}> {{
 {optional_destructure}    try {{
-      return fromBinary({schema_name}, await this.inner.{native_name}({all_args}));
+      return fromBinary({schema_name}, await this.inner.{name}({all_args}));
+    }} catch (e) {{ throw parseNativeError(e); }}
+  }}
+
+"#
+    )
+}
+
+/// A `HEAD` existence check without an output: the native method resolves to its `bool`.
+fn generate_existence_check_method(method: &MethodHandler<'_>, mode: BindingMode) -> String {
+    let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
+    let name = instance_method_name(method, mode);
+
+    let (required_params, optional_params) = ts_param_split(method, mode);
+    let MethodCallSpec {
+        full_param_list,
+        optional_destructure,
+        all_args,
+    } = MethodCallSpec::build(method, &required_params, &optional_params);
+
+    format!(
+        r#"{jsdoc}  async {name}({full_param_list}): Promise<boolean> {{
+{optional_destructure}    try {{
+      return await this.inner.{name}({all_args});
     }} catch (e) {{ throw parseNativeError(e); }}
   }}
 
@@ -648,7 +652,7 @@ fn generate_instance_returning_method(
 
 fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode) -> String {
     let jsdoc = format_jsdoc(method.plan.metadata.documentation.as_deref(), "  ");
-    let (ts_name, native_name) = instance_method_names(method, mode, "delete");
+    let name = instance_method_name(method, mode);
 
     let (required_params, optional_params) = ts_param_split(method, mode);
     let spec = MethodCallSpec::build(method, &required_params, &optional_params);
@@ -659,9 +663,9 @@ fn generate_resource_delete_method(method: &MethodHandler<'_>, mode: BindingMode
     } = spec;
 
     format!(
-        r#"{jsdoc}  async {ts_name}({full_param_list}): Promise<void> {{
+        r#"{jsdoc}  async {name}({full_param_list}): Promise<void> {{
 {optional_destructure}    try {{
-      await this.inner.{native_name}({all_args});
+      await this.inner.{name}({all_args});
     }} catch (e) {{ throw parseNativeError(e); }}
   }}
 
@@ -687,13 +691,9 @@ fn generate_flat_method(method: &MethodHandler<'_>) -> String {
         EmitShape::Create => generate_collection_create_method(method, false),
         EmitShape::Delete => generate_resource_delete_method(method, mode),
         // Get / Update / resource-targeted custom: forward all params and decode the typed response.
-        // An `Empty`-returning RPC produces a `Promise<void>`.
-        EmitShape::GetUpdate => match method.output_type() {
-            Some(output_type) => {
-                generate_resource_get_method(method, &output_type.to_string(), mode)
-            }
-            None => generate_resource_delete_method(method, mode),
-        },
+        // An `Empty`-returning RPC produces a `Promise<void>`, an existence check a
+        // `Promise<boolean>`.
+        EmitShape::GetUpdate => generate_output_method(method, mode),
     }
 }
 
@@ -711,20 +711,12 @@ fn generate_aggregate_client_sorted(
             // Resource-scoped services contribute only collection-style methods to the root client;
             // their instance methods live on the scoped client. Path params are dropped here.
             BindingMode::Scoped => {
-                for method in service.methods() {
-                    if !method.is_collection_method() {
-                        continue;
-                    }
-                    match &method.plan.request_type {
-                        RequestType::List => {
-                            methods.push_str(&generate_collection_list_method(&method, true));
-                            methods
-                                .push_str(&generate_collection_list_stream_method(&method, true));
-                        }
-                        RequestType::Create => {
-                            methods.push_str(&generate_collection_create_method(&method, true));
-                        }
-                        _ => {}
+                for method in service.methods().filter(is_root_collection) {
+                    if method.emit_shape() == EmitShape::List {
+                        methods.push_str(&generate_collection_list_method(&method, true));
+                        methods.push_str(&generate_collection_list_stream_method(&method, true));
+                    } else {
+                        methods.push_str(&generate_collection_create_method(&method, true));
                     }
                 }
 

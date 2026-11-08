@@ -368,7 +368,7 @@ fn build_object_conversions(
                 message: r.rust_path.clone(),
                 source: e,
             })?;
-        let id_ident = format_ident!("{}", id_field);
+        let id_ident = crate::utils::field_ident(id_field);
         let is_optional = r.id_is_optional;
 
         // Per-segment accessor expressions, each evaluating to a `&String`: string fields
@@ -385,7 +385,7 @@ fn build_object_conversions(
                     .chain(std::iter::repeat(true)),
             )
             .map(|(n, is_string)| {
-                let ident = format_ident!("{}", n);
+                let ident = crate::utils::field_ident(n);
                 if is_string {
                     quote! { &self.#ident }
                 } else {
@@ -733,7 +733,7 @@ fn build_qualified_name_expr(path_names: &[String], is_string: &[bool]) -> Token
     let field_exprs: Vec<TokenStream> = path_names
         .iter()
         .map(|n| {
-            let ident = format_ident!("{}", n);
+            let ident = crate::utils::field_ident(n);
             quote! { self.#ident }
         })
         .collect();
