@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.4...env-editor-v0.0.5) - 2026-11-08
+
+### Added
+
+- run a service module as a Neon Function from the inspector (#331)
+
 ## [0.0.4](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.3...env-editor-v0.0.4) - 2026-11-07
 
 ### Added

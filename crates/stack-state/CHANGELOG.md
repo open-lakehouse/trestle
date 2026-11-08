@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/open-lakehouse/trestle/compare/olai-stack-state-v0.0.4...olai-stack-state-v0.0.5) - 2026-11-08
+
+### Added
+
+- [**breaking**] renames, mesh switch and commit messages (#333)
+
 ## [0.0.3](https://github.com/open-lakehouse/trestle/compare/olai-stack-state-v0.0.2...olai-stack-state-v0.0.3) - 2026-11-03
 
 ### Added
