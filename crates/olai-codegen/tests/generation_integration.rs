@@ -1035,3 +1035,69 @@ fn python_bindings_without_error_module_leave_api_error_answer_to_the_crate() {
         "the ApiErrorAnswer impl is the client crate's without the error module:\n{errors}"
     );
 }
+
+// ── Config validation (one path for `validate` and `generate_code`) ─────────
+
+/// Wasm output needs a bindings config; `generate_code` reports it instead of panicking later in
+/// the wasm emitter.
+#[test]
+fn generate_code_rejects_wasm_output_without_bindings() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = rust_config(tmp.path());
+    config.output.wasm = Some(tmp.path().join("wasm"));
+    let err = generate_code(&metadata(), &config).unwrap_err();
+    assert!(
+        matches!(err, olai_codegen::Error::MissingBindingsConfig),
+        "{err:?}"
+    );
+    assert!(matches!(
+        config.validate(),
+        Err(olai_codegen::Error::MissingBindingsConfig)
+    ));
+}
+
+/// Bindings call the REST aggregate client, so `generate_code` refuses them with REST disabled
+/// rather than emitting bindings against a client that isn't generated.
+#[test]
+fn generate_code_rejects_bindings_without_rest() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = full_client_config(tmp.path());
+    config.output.node_ts = Some(tmp.path().join("node_ts"));
+    config.client_protocols = olai_codegen::ClientProtocols {
+        rest: false,
+        connect: true,
+    };
+    config.connect_client_path = Some("crate::connect".into());
+    let err = generate_code(&metadata(), &config).unwrap_err();
+    assert!(
+        matches!(err, olai_codegen::Error::BindingsRequireRest),
+        "{err:?}"
+    );
+}
+
+/// `validate` rejects an unparsable context/result type path, the same as `generate_code`.
+#[test]
+fn validate_rejects_invalid_context_and_result_paths() {
+    let tmp = TempDir::new().unwrap();
+    for (field, set) in [
+        (
+            "context_type",
+            (|c: &mut CodeGenConfig| c.context_type_path = "not a path".into())
+                as fn(&mut CodeGenConfig),
+        ),
+        ("result_type", |c: &mut CodeGenConfig| {
+            c.result_type_path = "crate::".into()
+        }),
+    ] {
+        let mut config = rust_config(tmp.path());
+        set(&mut config);
+        match config.validate() {
+            Err(olai_codegen::Error::InvalidConfigPath { field: f, .. }) => assert_eq!(f, field),
+            other => panic!("expected InvalidConfigPath for {field}, got {other:?}"),
+        }
+        assert!(matches!(
+            generate_code(&metadata(), &config),
+            Err(olai_codegen::Error::InvalidConfigPath { .. })
+        ));
+    }
+}
