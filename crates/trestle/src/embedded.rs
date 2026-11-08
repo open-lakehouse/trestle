@@ -1,4 +1,4 @@
-//! Built-in templates and shared components, embedded into the binary at build time.
+//! Built-in templates, embedded into the binary at build time.
 //!
 //! The `templates/` directory at the crate root is packed into the binary via
 //! [`rust_embed::RustEmbed`]. The directory layout looks like:
@@ -7,13 +7,12 @@
 //! templates/
 //! ├── _base/
 //! │   └── lakehouse/                     # the always-rendered base
-//! ├── _apps/
-//! │   └── databricks-app-rust/           # opt-in apps layered on top
-//! │       └── components/                # the app's own (local) components
-//! │           ├── ci-github/
-//! │           ├── connect-rust/
-//! │           └── frontend-react/
-//! └── _components/                       # shared component library (currently empty)
+//! └── _apps/
+//!     └── databricks-app-rust/           # opt-in apps layered on top
+//!         └── components/                # the app's components
+//!             ├── ci-github/
+//!             ├── connect-rust/
+//!             └── frontend-react/
 //! ```
 //!
 //! Use [`Templates::iter()`] to discover entries.
@@ -38,8 +37,6 @@ pub struct Templates;
 pub const BASE_TEMPLATES_PREFIX: &str = "_base/";
 /// Prefix that marks the opt-in app templates that can be layered on top of a base.
 pub const APP_TEMPLATES_PREFIX: &str = "_apps/";
-/// Prefix that marks the shared (cross-template) component library.
-pub const SHARED_COMPONENTS_PREFIX: &str = "_components/";
 
 /// Subdirectory names of all embedded base templates (e.g. `lakehouse`).
 pub fn embedded_base_names() -> Vec<String> {
@@ -49,11 +46,6 @@ pub fn embedded_base_names() -> Vec<String> {
 /// Subdirectory names of all embedded apps (e.g. `databricks-app-rust`).
 pub fn embedded_app_names() -> Vec<String> {
     immediate_children(APP_TEMPLATES_PREFIX)
-}
-
-/// Subdirectory names of all embedded shared components.
-pub fn embedded_shared_component_names() -> Vec<String> {
-    immediate_children(SHARED_COMPONENTS_PREFIX)
 }
 
 /// Back-compat: legacy callers want every embedded "top-level template" (base or

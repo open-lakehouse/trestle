@@ -8,16 +8,16 @@
 //!   Subsequent invocations reuse the clone unless `refresh = true`.
 //! - **Local**: a path to a directory on disk; used as-is (read-only).
 //!
-//! Both top-level templates and shared components share the same on-disk shape and use
-//! the same loader; the only difference is the manifest type ([`Manifest`] vs
+//! A template's components live under its own `components/` directory and share the
+//! template's on-disk shape; only the manifest type differs ([`Manifest`] vs
 //! [`ComponentManifest`]).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::embedded::{
-    APP_TEMPLATES_PREFIX, BASE_TEMPLATES_PREFIX, RustEmbed, SHARED_COMPONENTS_PREFIX, Templates,
-    embedded_app_names, embedded_base_names,
+    APP_TEMPLATES_PREFIX, BASE_TEMPLATES_PREFIX, RustEmbed, Templates, embedded_app_names,
+    embedded_base_names,
 };
 use crate::error::{Error, Result};
 
@@ -86,55 +86,16 @@ pub fn load_template(source: &TemplateSource) -> Result<LoadedTemplate> {
     }
 }
 
-/// Materialise an embedded shared component into a tempdir and parse its manifest.
-///
-/// Used during component resolution; not exposed to end users directly.
-pub fn load_shared_component(name: &str) -> Result<LoadedComponent> {
-    let prefix = format!("{SHARED_COMPONENTS_PREFIX}{name}/");
-    if !<Templates as RustEmbed>::iter().any(|p| p.starts_with(&prefix)) {
-        return Err(Error::ComponentNotFound {
-            name: name.to_string(),
-        });
-    }
-    let tmp = tempfile::tempdir()?;
-    extract_embedded_subtree(&prefix, tmp.path())?;
-    let manifest = read_component_manifest(tmp.path())?;
-    Ok(LoadedComponent {
-        root: tmp.path().to_path_buf(),
-        manifest,
-        _keepalive: Some(tmp),
-    })
-}
-
 /// A component on disk, plus its parsed manifest.
 pub struct LoadedComponent {
     pub root: PathBuf,
     pub manifest: ComponentManifest,
-    _keepalive: Option<tempfile::TempDir>,
-}
-
-impl LoadedComponent {
-    /// Build a synthetic [`LoadedComponent`] without touching the filesystem.
-    /// Test-only — production code always goes through one of the `load_*`
-    /// entry points so paths are tracked properly.
-    #[cfg(test)]
-    pub(crate) fn synthetic(root: PathBuf, manifest: ComponentManifest) -> Self {
-        Self {
-            root,
-            manifest,
-            _keepalive: None,
-        }
-    }
 }
 
 /// Load a component from a path under the parent template's `components/` directory.
 pub fn load_local_component(root: PathBuf) -> Result<LoadedComponent> {
     let manifest = read_component_manifest(&root)?;
-    Ok(LoadedComponent {
-        root,
-        manifest,
-        _keepalive: None,
-    })
+    Ok(LoadedComponent { root, manifest })
 }
 
 fn load_embedded(name: &str) -> Result<LoadedTemplate> {

@@ -3,13 +3,11 @@
 //!
 //! 1. Load the base and each app (embedded name, git URL, or local path).
 //! 2. Collect variables from `--set`, `--values`, the wizard, and manifest defaults.
-//! 3. Map category selections onto the `with_*` flags the templates read.
-//! 4. Resolve the component set from the base's `always:` baseline, the selections,
-//!    each app's `lakehouse_requires:`, and the `--profile` / `--with` shims.
-//! 5. Merge the `provides:` blocks of all components into one `stack` context.
-//! 6. Render the base, then each app, then each component. Write `trestle.yaml` and
+//! 3. Map app category selections onto the `with_*` flags the templates read.
+//! 4. Resolve the components whose `when:` holds, plus their `depends_on`.
+//! 5. Render the base, then each app, then each component. Write `trestle.yaml` and
 //!    `buf.gen.yaml`.
-//! 7. Run each root's `post_init:` hooks.
+//! 6. Run each root's `post_init:` hooks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -23,11 +21,8 @@ use crate::error::{Error, Result};
 use crate::template::hooks::run_post_init;
 use crate::template::loader::{LoadedTemplate, load_embedded_app, load_embedded_base};
 use crate::template::resolve::{ResolveInput, ScaffoldRoot, resolve_components};
-use crate::template::validate::validate_resolved;
 use crate::template::wizard::{WizardInput, run_wizard};
-use crate::template::{
-    ComponentCatalog, Renderer, TemplateSource, collect_variables, load_template, render_tree,
-};
+use crate::template::{Renderer, TemplateSource, collect_variables, load_template, render_tree};
 
 use super::util::{ensure_writable_dir, parse_selection, validate_name};
 
@@ -52,20 +47,10 @@ pub struct NewArgs {
     #[clap(long = "app", short = 'a', value_name = "APP")]
     pub apps: Vec<String>,
 
-    /// Explicit component / option selections, formatted as
-    /// `category=value[,value...]`. App-private categories use the
-    /// `app.<app-name>.<category>` namespace. May be repeated.
+    /// App category picks, formatted as `app.<app-name>.<category>=value[,value...]`.
+    /// May be repeated.
     #[clap(long = "select", value_name = "CATEGORY=VALUE[,VALUE]", value_parser = parse_selection)]
     pub selections: Vec<(String, Vec<String>)>,
-
-    /// Legacy: named profile (from the base's `profiles:` block). Kept as a
-    /// compatibility shim; `--select` is the new way.
-    #[clap(long, short)]
-    pub profile: Option<String>,
-
-    /// Legacy: extra components to enable by name.
-    #[clap(long = "with", short = 'w', value_name = "COMPONENT")]
-    pub with: Vec<String>,
 
     /// YAML file containing variable values, selections, and apps.
     #[clap(long, short)]
@@ -138,15 +123,12 @@ pub fn run(args: NewArgs) -> Result<()> {
     if !args.non_interactive {
         let available_app_templates = load_available_apps()?;
         let available_refs: Vec<&LoadedTemplate> = available_app_templates.iter().collect();
-        let catalog = ComponentCatalog::from_embedded()?;
         let wizard_in = WizardInput {
             project_name: &args.name,
-            base: &base,
             available_apps: &available_refs,
             preselected_apps: &chosen_app_names,
             preselected_selections: &selections,
             preselected_overrides: &overrides,
-            catalog: &catalog,
         };
         let out = run_wizard(wizard_in)?;
         if !out.proceed {
@@ -187,11 +169,6 @@ pub fn run(args: NewArgs) -> Result<()> {
 
     let initial_ctx = build_intermediate_ctx(&vars, &merged_manifest.template_context)?;
 
-    // The explicit selection list = component-typed picks for lakehouse categories
-    // (option strings for app-private categories are *not* components, so they're
-    // filtered out by the catalog check).
-    let explicit_selections: Vec<String> = collect_component_selections(&base, &selections);
-
     let roots: Vec<ScaffoldRoot<'_>> = std::iter::once(ScaffoldRoot {
         root: base.root.as_path(),
         manifest: &base.manifest,
@@ -205,12 +182,8 @@ pub fn run(args: NewArgs) -> Result<()> {
     let resolve_in = ResolveInput {
         roots: &roots,
         vars: &initial_ctx,
-        explicit_selections: &explicit_selections,
-        profile: args.profile.as_deref(),
-        extra_with: &args.with,
     };
     let components = resolve_components(resolve_in, &renderer)?;
-    validate_resolved(&components)?;
 
     let merged_static_ctx = merge_static_context(&base, &apps);
     let final_ctx = build_final_ctx(&vars, &merged_static_ctx, &renderer)?;
@@ -264,7 +237,7 @@ pub fn run(args: NewArgs) -> Result<()> {
     if !components.is_empty() {
         println!("Active components:");
         for rc in &components {
-            println!("  - {} ({:?})", rc.loaded.manifest.name, rc.kind);
+            println!("  - {}", rc.name());
         }
     }
     println!("\nNext steps:");
@@ -580,64 +553,6 @@ fn apply_app_category_compat(
             }
         }
     }
-}
-
-/// Pick out the component-typed selections (i.e. lakehouse categories declared
-/// on the base) so the resolver gets them in its explicit-selections channel.
-/// App-private category picks (`app.X.frontend=react`) are filtered out — they
-/// drive the compat var-fill above and aren't components.
-fn collect_component_selections(
-    base: &LoadedTemplate,
-    selections: &BTreeMap<String, Vec<String>>,
-) -> Vec<String> {
-    let lakehouse_category_ids: BTreeSet<&str> = base
-        .manifest
-        .categories
-        .iter()
-        .map(|c| c.id.as_str())
-        .collect();
-
-    // Gather defaults from base categories that the user didn't explicitly
-    // override (everything is "optional", but the defaults survive unless the
-    // selection explicitly deselects).
-    let mut chosen: Vec<String> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-
-    for cat in &base.manifest.categories {
-        let picks = match selections.get(&cat.id) {
-            Some(v) => v.clone(),
-            None => cat.default.clone().into_vec(),
-        };
-        for name in picks {
-            if seen.insert(name.clone()) {
-                chosen.push(name);
-            }
-        }
-    }
-
-    // Allow overriding via `--select <unknown-category>=...` to flow through as
-    // raw component names. Useful for ad-hoc components that don't belong to
-    // any declared category yet.
-    for (key, values) in selections {
-        if lakehouse_category_ids.contains(key.as_str()) {
-            continue;
-        }
-        if key.starts_with("app.") {
-            continue;
-        }
-        for v in values {
-            if seen.insert(v.clone()) {
-                chosen.push(v.clone());
-            }
-        }
-    }
-
-    // Drop `none` placeholders that may sneak in from app-private categories;
-    // they aren't component names. (App-private picks are filtered above, but
-    // belt-and-braces in case someone passes them at the top level.)
-    chosen.retain(|n| n != "none");
-
-    chosen
 }
 
 /// The JSON value a resolved variable takes in the MiniJinja context.

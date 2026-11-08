@@ -4,9 +4,8 @@ display_name: "Databricks app (Rust + Axum)"
 summary: "Service + optional frontend + proto codegen; deployable to Databricks Apps."
 description: |
   Rust-Axum service ready to deploy to Databricks Apps, with proto-driven code
-  generation (server, client, TS bindings) and the Databricks-shaped local env
-  contract (DATABRICKS_HOST / TOKEN / forwarded-user headers) wired up via the
-  always-on Envoy gateway.
+  generation (server, client, TS bindings). The request context reads the
+  Databricks Apps forwarded-user headers, with an env-var fallback for local dev.
 authors: [trestle]
 trestle_min_version: 0.1.0
 
@@ -56,13 +55,12 @@ categories:
       `buf.build/anthropics/connect-rust` plugin; only the local
       `protoc-gen-buffa-packaging` plugin needs a cargo install. Off by default.
 
-# Local app-private components. Selection comes from the `frontend` / `ci`
-# categories via the resolver's compat shim (`when:` against the derived
-# `with_frontend` / `with_ci` flags below).
+# The app's components (under `components/<name>`). `trestle new` maps the
+# `frontend` / `ci` / `connect` picks onto the `with_*` flags their `when:` reads.
 components:
-  - { name: frontend-react, kind: local, path: components/frontend-react, when: "with_frontend" }
-  - { name: ci-github,      kind: local, path: components/ci-github,      when: "with_ci" }
-  - { name: connect-rust,   kind: local, path: components/connect-rust,   when: "with_connect" }
+  - { name: frontend-react, when: "with_frontend" }
+  - { name: ci-github,      when: "with_ci" }
+  - { name: connect-rust,   when: "with_connect" }
 
 template_context:
   has_app: true

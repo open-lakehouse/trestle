@@ -1,28 +1,24 @@
-//! Resolve the active component set: apply `--profile`, `--with`, the new
-//! `--select`/`--app` channels, `when:` filters and `always:` baselines; load
-//! each component's manifest; transitively resolve `depends_on`; topologically
-//! sort the result so context aggregation runs in dependency order.
+//! Resolve the active component set: evaluate each root's `components:` `when:`
+//! expressions, load each component's manifest, transitively resolve
+//! `depends_on`, and order the result dependencies-first.
 //!
-//! Resolution now operates over **multiple roots** to support the base+apps
-//! model: one base template (e.g. `_base/lakehouse/`) plus zero or more app
-//! templates (e.g. `_apps/databricks-app-rust/`). Each root may contribute its
-//! own `always:`, `lakehouse_requires:`, and (legacy) `components:` block, and
-//! each local component is resolved against the root that declared it.
+//! Resolution runs over **multiple roots**: one base template (e.g.
+//! `_base/lakehouse/`) plus zero or more apps (e.g. `_apps/databricks-app-rust/`).
+//! Each component is resolved against the root that declares it.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use minijinja::Value;
 
 use crate::error::{Error, Result};
 
-use super::loader::{LoadedComponent, load_local_component, load_shared_component};
-use super::manifest::{Component, ComponentKind, Manifest};
+use super::loader::{LoadedComponent, load_local_component};
+use super::manifest::{Component, Manifest};
 use super::render::Renderer;
 
-/// A resolved component, loaded from disk and tagged with its declared `kind`.
+/// A resolved component, loaded from disk.
 pub struct ResolvedComponent {
-    pub kind: ComponentKind,
     pub loaded: LoadedComponent,
 }
 
@@ -34,8 +30,8 @@ impl ResolvedComponent {
 
 /// One template root (base or app) participating in a scaffold.
 ///
-/// The base is always first; apps follow. Local components declared in a root's
-/// `components:` block are resolved against that root's `components/` subtree.
+/// The base is always first; apps follow. Components declared in a root's
+/// `components:` block are resolved against that root's directory.
 #[derive(Clone, Copy)]
 pub struct ScaffoldRoot<'a> {
     pub root: &'a Path,
@@ -44,107 +40,37 @@ pub struct ScaffoldRoot<'a> {
 
 /// Inputs to component resolution.
 pub struct ResolveInput<'a> {
-    /// Base + apps, in render order. The first entry is the base; the rest are
-    /// apps. The resolver pulls `always:`, `lakehouse_requires:`, and the
-    /// legacy `components:` block from every entry.
+    /// Base + apps, in render order.
     pub roots: &'a [ScaffoldRoot<'a>],
 
-    /// Variable + stack context used to evaluate `when:` expressions.
+    /// Variable context used to evaluate `when:` expressions.
     pub vars: &'a Value,
-
-    /// Component names explicitly selected by the user (wizard / `--select`).
-    /// These layer on top of the baseline and `lakehouse_requires`.
-    pub explicit_selections: &'a [String],
-
-    /// Back-compat: `--profile <name>` against the *first* root's `profiles:` block.
-    pub profile: Option<&'a str>,
-
-    /// Back-compat: bare component names to enable from `--with`.
-    pub extra_with: &'a [String],
 }
 
 /// Resolve the active set of components for this scaffold run.
 ///
-/// Order of inclusion (deduped; first hit wins):
-/// 1. Every root's `always:` list (the opinionated baseline).
-/// 2. Explicit `--select` / wizard picks.
-/// 3. App `lakehouse_requires.hard` and `.soft` lists, in app order.
-/// 4. `--profile <name>` (against the first root's `profiles:` block).
-/// 5. `--with <name>`.
-/// 6. Each root's `components:` whose `when:` evaluates truthy.
-/// 7. Recursive `depends_on` closure for everything above.
-///
-/// The returned vector is topologically sorted (dependencies first).
+/// Every root's `components:` whose `when:` evaluates truthy (or has no `when:`)
+/// is enabled, in declaration order, together with the transitive `depends_on`
+/// closure. The returned vector is topologically sorted (dependencies first).
 pub fn resolve_components(
     input: ResolveInput<'_>,
     renderer: &Renderer,
 ) -> Result<Vec<ResolvedComponent>> {
     let mut requested: Vec<String> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let push = |name: &str, requested: &mut Vec<String>, seen: &mut BTreeSet<String>| {
-        if seen.insert(name.to_string()) {
-            requested.push(name.to_string());
-        }
-    };
-
-    // 1. always:
-    for root in input.roots {
-        for name in &root.manifest.always {
-            push(name, &mut requested, &mut seen);
-        }
-    }
-
-    // 2. explicit selections
-    for name in input.explicit_selections {
-        push(name, &mut requested, &mut seen);
-    }
-
-    // 3. lakehouse_requires from each app (skip the first root, which is the base)
-    for root in input.roots.iter().skip(1) {
-        for name in &root.manifest.lakehouse_requires.hard {
-            push(name, &mut requested, &mut seen);
-        }
-        for name in &root.manifest.lakehouse_requires.soft {
-            push(name, &mut requested, &mut seen);
-        }
-    }
-
-    // 4. profile (against the base's profiles block) — legacy back-compat
-    if let Some(profile) = input.profile
-        && let Some(first) = input.roots.first()
-    {
-        if let Some(list) = first.manifest.profiles.get(profile) {
-            for name in list {
-                push(name, &mut requested, &mut seen);
-            }
-        } else if !profile.is_empty() {
-            return Err(Error::ProfileNotFound {
-                template: first.manifest.name.clone(),
-                name: profile.to_string(),
-            });
-        }
-    }
-
-    // 5. --with
-    for name in input.extra_with {
-        push(name, &mut requested, &mut seen);
-    }
-
-    // 6. Legacy `components:` blocks with `when:` from every root, in declaration order.
     for root in input.roots {
         for c in &root.manifest.components {
             let when_ok = match &c.when {
                 Some(expr) => renderer.eval_when(expr, input.vars)?,
                 None => true,
             };
-            if !when_ok {
-                continue;
+            if when_ok && seen.insert(c.name.clone()) {
+                requested.push(c.name.clone());
             }
-            push(&c.name, &mut requested, &mut seen);
         }
     }
 
-    // Build a name → (declared component, owning root) map for local-path lookups.
+    // Build a name → (declared component, owning root) map for path lookups.
     let mut declared: BTreeMap<String, (&Component, &Path)> = BTreeMap::new();
     for root in input.roots {
         for c in &root.manifest.components {
@@ -181,68 +107,43 @@ fn load_one(
     order_hint: &mut Vec<String>,
     stack: &mut Vec<String>,
 ) -> Result<()> {
-    if loaded.contains_key(name) {
-        return Ok(());
-    }
+    // A component is recorded in `loaded` before its dependencies are walked, so check
+    // the in-progress stack first or a cycle would look like an already-loaded component.
     if stack.iter().any(|n| n == name) {
         return Err(Error::DependencyCycle(name.to_string()));
     }
+    if loaded.contains_key(name) {
+        return Ok(());
+    }
     stack.push(name.to_string());
 
-    let resolved = match declared.get(name) {
-        Some((c, owner_root)) if matches!(c.kind, ComponentKind::Local) => {
+    let component = match declared.get(name) {
+        Some((c, owner_root)) => {
             let path = c
                 .path
                 .clone()
                 .unwrap_or_else(|| format!("components/{name}"));
-            let root: PathBuf = owner_root.join(&path);
-            let component = load_local_component(root)?;
-            ResolvedComponent {
-                kind: ComponentKind::Local,
-                loaded: component,
-            }
-        }
-        Some((c, _owner_root)) if matches!(c.kind, ComponentKind::Shared) => {
-            let component = load_shared_component(&c.name)?;
-            ResolvedComponent {
-                kind: ComponentKind::Shared,
-                loaded: component,
-            }
+            load_local_component(owner_root.join(path))?
         }
         None => {
-            // Not declared: try shared library first, then look in each
-            // declared root's `components/<name>` directory.
-            match load_shared_component(name) {
-                Ok(component) => ResolvedComponent {
-                    kind: ComponentKind::Shared,
-                    loaded: component,
-                },
-                Err(_) => {
-                    let mut found = None;
-                    for (_, root) in declared.values() {
-                        let root = root.join(format!("components/{name}"));
-                        if root.is_dir() {
-                            found = Some(load_local_component(root)?);
-                            break;
-                        }
-                    }
-                    match found {
-                        Some(component) => ResolvedComponent {
-                            kind: ComponentKind::Local,
-                            loaded: component,
-                        },
-                        None => {
-                            stack.pop();
-                            return Err(Error::ComponentNotFound {
-                                name: name.to_string(),
-                            });
-                        }
-                    }
+            // Not declared (a `depends_on` target): look in each declaring root's
+            // `components/<name>` directory.
+            let found = declared
+                .values()
+                .map(|(_, root)| root.join(format!("components/{name}")))
+                .find(|dir| dir.is_dir());
+            match found {
+                Some(dir) => load_local_component(dir)?,
+                None => {
+                    stack.pop();
+                    return Err(Error::ComponentNotFound {
+                        name: name.to_string(),
+                    });
                 }
             }
         }
-        Some(_) => unreachable!("kind pattern is exhaustive"),
     };
+    let resolved = ResolvedComponent { loaded: component };
 
     let deps = resolved.loaded.manifest.depends_on.clone();
     loaded.insert(name.to_string(), resolved);
@@ -254,4 +155,108 @@ fn load_one(
     order_hint.push(name.to_string());
     stack.pop();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// Write `components/<name>/template.yaml` under `root`.
+    fn component(root: &Path, name: &str, depends_on: &[&str]) {
+        let dir = root.join("components").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        let deps = depends_on.join(", ");
+        fs::write(
+            dir.join("template.yaml"),
+            format!("name: {name}\ndepends_on: [{deps}]\n"),
+        )
+        .unwrap();
+    }
+
+    fn manifest(yaml: &str) -> Manifest {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    fn resolve(root: &Path, m: &Manifest, vars: serde_json::Value) -> Result<Vec<String>> {
+        let roots = [ScaffoldRoot { root, manifest: m }];
+        let vars = Value::from_serialize(&vars);
+        let input = ResolveInput {
+            roots: &roots,
+            vars: &vars,
+        };
+        Ok(resolve_components(input, &Renderer::new())?
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect())
+    }
+
+    #[test]
+    fn when_filters_components() {
+        let tmp = tempfile::tempdir().unwrap();
+        component(tmp.path(), "a", &[]);
+        component(tmp.path(), "b", &[]);
+        let m = manifest(
+            "name: t\ncomponents:\n  - { name: a, when: with_a }\n  - { name: b, when: with_b }\n",
+        );
+        let names = resolve(
+            tmp.path(),
+            &m,
+            serde_json::json!({ "with_a": true, "with_b": false }),
+        )
+        .unwrap();
+        assert_eq!(names, ["a"]);
+    }
+
+    #[test]
+    fn depends_on_is_pulled_in_dependencies_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        component(tmp.path(), "app", &["lib"]);
+        component(tmp.path(), "lib", &[]);
+        let m = manifest("name: t\ncomponents:\n  - { name: app }\n");
+        let names = resolve(tmp.path(), &m, serde_json::json!({})).unwrap();
+        assert_eq!(names, ["lib", "app"]);
+    }
+
+    #[test]
+    fn missing_component_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        component(tmp.path(), "app", &["ghost"]);
+        let m = manifest("name: t\ncomponents:\n  - { name: app }\n");
+        let err = resolve(tmp.path(), &m, serde_json::json!({})).unwrap_err();
+        assert!(matches!(err, Error::ComponentNotFound { name } if name == "ghost"));
+    }
+
+    #[test]
+    fn dependency_cycle_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        component(tmp.path(), "a", &["b"]);
+        component(tmp.path(), "b", &["a"]);
+        let m = manifest("name: t\ncomponents:\n  - { name: a }\n");
+        let err = resolve(tmp.path(), &m, serde_json::json!({})).unwrap_err();
+        assert!(matches!(err, Error::DependencyCycle(_)));
+    }
+
+    #[test]
+    fn removed_manifest_keys_are_rejected() {
+        for yaml in [
+            "name: t\nalways: [x]\n",
+            "name: t\nprofiles: { small: [x] }\n",
+            "name: t\nlakehouse_requires: { hard: [x] }\n",
+            "name: t\ncomponents:\n  - { name: x, kind: shared }\n",
+        ] {
+            assert!(serde_yaml::from_str::<Manifest>(yaml).is_err(), "{yaml}");
+        }
+        for yaml in [
+            "name: x\nprovides: {}\n",
+            "name: x\ncategory: storage\n",
+            "name: x\nconflicts_with: [y]\n",
+        ] {
+            assert!(
+                serde_yaml::from_str::<crate::template::ComponentManifest>(yaml).is_err(),
+                "{yaml}"
+            );
+        }
+    }
 }
