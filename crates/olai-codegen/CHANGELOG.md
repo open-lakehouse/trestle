@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.13...olai-codegen-v0.0.14) - 2026-11-08
+
+### Changed
+
+- [**breaking**] remove unused public API (#337)
+
+### Documentation
+
+- fix drifted paths, crate tables, and the template tree (#339)
+- drop private intra-doc link from ClientProtocol (#338)
+
+### Fixed
+
+- fix keyword params, TS method routing, nondeterministic order and config validation (#336)
+
 ## [0.0.13](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.12...olai-codegen-v0.0.13) - 2026-11-06
 
 ### Added

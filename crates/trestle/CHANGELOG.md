@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.25](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.24...olai-trestle-v0.0.25) - 2026-11-08
+
+### Added
+
+- env rename, ws rename/set-mesh and commit messages (#334)
+
+### Changed
+
+- [**breaking**] remove the shared component library (#340)
+
+### Documentation
+
+- fix drifted paths, crate tables, and the template tree (#339)
+
 ## [0.0.24](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.23...olai-trestle-v0.0.24) - 2026-11-06
 
 ### Added
