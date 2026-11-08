@@ -19,8 +19,9 @@ message Kind {
     name_field: "type"
   };
 
-  string type = 1 [(google.api.field_behavior) = IDENTIFIER];
+  string type = 1;
   string comment = 2 [(google.api.field_behavior) = OPTIONAL];
+  string kind_id = 3 [(google.api.field_behavior) = IDENTIFIER];
 }
 
 service KindService {
@@ -36,11 +37,10 @@ service KindService {
 }
 
 message ListKindsRequest {
-  // Keyword-named query params, one required and one optional.
-  string ref = 1 [(google.api.field_behavior) = REQUIRED];
-  optional string match = 2;
-  int32 max_results = 3;
-  string page_token = 4;
+  // A keyword-named optional query param.
+  optional string match = 1;
+  int32 max_results = 2;
+  string page_token = 3;
 }
 
 message ListKindsResponse {
@@ -66,6 +66,18 @@ service RouteService {
       body: "route"
     };
   }
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse) {
+    option (google.api.http) = {get: "/routes"};
+  }
+}
+
+message ListRoutesRequest {
+  // A keyword-named required query param.
+  string ref = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+message ListRoutesResponse {
+  repeated Route routes = 1;
 }
 
 message PutRouteRequest {

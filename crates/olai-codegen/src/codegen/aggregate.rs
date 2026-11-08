@@ -391,7 +391,11 @@ fn resource_accessor_method(service: &ServiceHandler<'_>) -> Option<TokenStream>
     let method_name = format_ident!("{}", spec.singular);
     let ctor = low_level_client_ctor(service);
 
-    let param_idents: Vec<_> = spec.params.iter().map(|p| format_ident!("{}", p)).collect();
+    let param_idents: Vec<_> = spec
+        .params
+        .iter()
+        .map(|p| crate::utils::field_ident(p))
+        .collect();
     let param_defs: Vec<_> = param_idents
         .iter()
         .map(|id| quote! { #id: impl Into<String> })

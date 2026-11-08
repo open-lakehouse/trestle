@@ -1133,3 +1133,56 @@ fn oneof_fields_keep_declaration_order() {
         assert_eq!(oneofs, ["target", "source"]);
     }
 }
+
+/// Path params, query params and resource name components named after Rust keywords generate
+/// as raw identifiers (`r#type`), in every output, for both runtimes.
+#[test]
+fn keyword_named_params_generate_raw_identifiers() {
+    for runtime in [olai_codegen::Runtime::Prost, olai_codegen::Runtime::Buffa] {
+        let tmp = TempDir::new().unwrap();
+        let mut config = full_client_config(tmp.path());
+        config.runtime = runtime;
+        // The `ResourceName` / `qualified_name()` accessors come with the object conversions.
+        config.generate_object_conversions = true;
+        config.output.node = Some(tmp.path().join("node"));
+        config.output.node_ts = Some(tmp.path().join("node_ts"));
+        config.output.python = Some(tmp.path().join("python"));
+        config.bindings.as_mut().unwrap().python = Some(olai_codegen::PythonOptions {
+            package: olai_codegen::PyPackageConfig {
+                dir: tmp.path().join("pkg"),
+                name: "example".into(),
+            },
+            error_base_class: "ExampleError".into(),
+            module: "example._core".into(),
+            async_methods: true,
+            keyword_only: true,
+            public_modules: false,
+            user_agent: None,
+            exports: vec![],
+        });
+        generate_code(&edge_case_metadata(), &config)
+            .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
+
+        for path in walk(tmp.path())
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        {
+            let src = std::fs::read_to_string(&path).unwrap();
+            syn::parse_file(&src)
+                .unwrap_or_else(|e| panic!("{runtime:?}: {} does not parse: {e}", path.display()));
+        }
+
+        let common = read_all(&tmp.path().join("common"));
+        for ident in ["r#type", "r#ref", "r#match"] {
+            assert!(
+                common.contains(ident),
+                "{runtime:?}: extractors bind `{ident}`:\n{common}"
+            );
+        }
+        let models = read_all(&tmp.path().join("models"));
+        assert!(
+            models.contains("self.r#type"),
+            "{runtime:?}: resource name accessors read `self.r#type`:\n{models}"
+        );
+    }
+}
