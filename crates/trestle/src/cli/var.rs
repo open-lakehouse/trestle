@@ -83,29 +83,30 @@ pub fn run(cmd: VarCommand) -> Result<()> {
 }
 
 /// The var set `target` (with `--draft`) names, and the keychain key prefix of its secrets.
+///
+/// The prefix is built from ids, not names: a workspace or environment can be renamed, and a
+/// new one may then take the old name. Name-based keys would let its secrets overwrite the
+/// keychain entries the renamed one still refers to.
 fn scope(ctx: &Ctx, target: &Target, draft: bool) -> Result<(VarScope, String)> {
     target.no_rev()?;
     match &target.env {
         None if draft => Err(Error::other("--draft needs an environment (<ws>/<env>)")),
         None => {
             let ws = target.workspace(&ctx.store)?;
-            Ok((VarScope::Workspace(ws.id), ws.name))
+            let prefix = ws.id.0.clone();
+            Ok((VarScope::Workspace(ws.id), prefix))
         }
         Some(_) => {
-            let (ws, env) = target.environment(&ctx.store)?;
+            let (_, env) = target.environment(&ctx.store)?;
             if draft {
                 // Each revision's secrets get keys of their own, so a later edit of the draft
                 // never changes what a committed revision resolves to.
                 let next = env.head.unwrap_or(0) + 1;
-                Ok((
-                    VarScope::Draft(env.id),
-                    format!("{}/{}@r{next}", ws.name, env.name),
-                ))
+                let prefix = format!("{}@r{next}", env.id);
+                Ok((VarScope::Draft(env.id), prefix))
             } else {
-                Ok((
-                    VarScope::Environment(env.id),
-                    format!("{}/{}", ws.name, env.name),
-                ))
+                let prefix = env.id.0.clone();
+                Ok((VarScope::Environment(env.id), prefix))
             }
         }
     }

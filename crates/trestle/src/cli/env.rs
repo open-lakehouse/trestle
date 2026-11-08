@@ -63,13 +63,15 @@ pub enum EnvCommand {
     /// Set knob overrides in the draft: `module.key=value`.
     SetKnob(super::env_store::SetKnobArgs),
     /// Commit the draft as the environment's next revision.
-    Commit(super::env_store::EnvTargetArgs),
+    Commit(super::env_store::CommitArgs),
     /// List the environment's revisions.
     Revisions(super::env_store::RevisionsArgs),
     /// Diff two revisions, or a revision and the draft (head → draft by default).
     Diff(super::env_store::DiffArgs),
     /// Export a revision as an environment directory (`env.toml` and module manifests).
     Export(super::env_store::ExportArgs),
+    /// Rename an environment, keeping its revisions and vars (once it has no instance).
+    Rename(super::env_store::RenameArgs),
     /// Delete an environment from its workspace, with its revisions and instances.
     Rm(super::env_store::RmArgs),
 }
@@ -231,6 +233,7 @@ pub fn run(cmd: EnvCommand) -> Result<()> {
         EnvCommand::Revisions(args) => super::env_store::run_revisions(args),
         EnvCommand::Diff(args) => super::env_store::run_diff(args),
         EnvCommand::Export(args) => super::env_store::run_export(args),
+        EnvCommand::Rename(args) => super::env_store::run_rename(args),
         EnvCommand::Rm(args) => super::env_store::run_rm(args),
     }
 }

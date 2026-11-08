@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use super::env::{map_plan_err, parse_knob_override};
 use super::output::emit;
-use super::state::{Ctx, environment_keychain_refs};
+use super::state::{Ctx, environment_keychain_refs, with_instances_hint};
 use super::target::{Rev, Target, revision};
 use super::util::ensure_writable_dir;
 use super::var::{VarRow, var_rows};
@@ -76,9 +76,22 @@ pub struct SetKnobArgs {
 }
 
 #[derive(Args, Clone)]
-pub struct EnvTargetArgs {
+pub struct CommitArgs {
     /// `<ws>/<env>`.
     pub target: Target,
+
+    /// What the revision changes, shown by `env revisions` and the editor's history.
+    #[clap(short, long)]
+    pub message: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct RenameArgs {
+    /// `<ws>/<env>`.
+    pub target: Target,
+
+    /// The new name: lowercase letters, digits and dashes.
+    pub name: String,
 }
 
 #[derive(Args, Clone)]
@@ -225,23 +238,38 @@ pub(super) fn run_set_knob(args: SetKnobArgs) -> Result<()> {
     })
 }
 
-/// The `env.toml` text a draft commits as.
-fn draft_toml(env: &Environment) -> Result<String> {
-    let mut manifest = env.draft.manifest.clone();
+/// `manifest` as `env.toml` text, under the environment's current name.
+fn toml_as(env: &Environment, manifest: &EnvManifest) -> Result<String> {
+    let mut manifest = manifest.clone();
     manifest.context.env_name = env.name.clone();
     manifest
         .to_toml()
-        .map_err(|e| Error::other(format!("serializing the draft: {e}")))
+        .map_err(|e| Error::other(format!("serializing the manifest: {e}")))
+}
+
+/// The `env.toml` text a draft commits as.
+fn draft_toml(env: &Environment) -> Result<String> {
+    toml_as(env, &env.draft.manifest)
+}
+
+/// A revision's `env.toml` text under the environment's current name. A revision keeps the
+/// `env_name` it was committed with, but an instance is planned under the current one, so a
+/// rename alone changes nothing a diff or a commit should show.
+fn revision_toml(env: &Environment, rev: &Revision) -> Result<String> {
+    if rev.manifest().context.env_name == env.name {
+        return Ok(rev.manifest_toml().to_owned());
+    }
+    toml_as(env, rev.manifest())
 }
 
 /// Whether the environment's draft would commit as something other than `rev`.
 pub(super) fn draft_differs(env: &Environment, rev: &Revision) -> Result<bool> {
-    Ok(draft_toml(env)? != rev.manifest_toml()
+    Ok(draft_toml(env)? != revision_toml(env, rev)?
         || &env.draft.modules != rev.modules()
         || &env.draft.vars != rev.vars())
 }
 
-pub(super) fn run_commit(args: EnvTargetArgs) -> Result<()> {
+pub(super) fn run_commit(args: CommitArgs) -> Result<()> {
     let ctx = Ctx::open()?;
     args.target.no_rev()?;
     let (ws, env) = args.target.environment(&ctx.store)?;
@@ -257,7 +285,9 @@ pub(super) fn run_commit(args: EnvTargetArgs) -> Result<()> {
             return Ok(());
         }
     }
-    let rev = ctx.store.commit_draft(&env.id)?;
+    let rev = ctx
+        .store
+        .commit_draft_with(&env.id, args.message.as_deref())?;
     println!(
         "committed {}/{} r{} ({})",
         ws.name,
@@ -268,12 +298,28 @@ pub(super) fn run_commit(args: EnvTargetArgs) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn run_rename(args: RenameArgs) -> Result<()> {
+    let ctx = Ctx::open()?;
+    args.target.no_rev()?;
+    let (ws, env) = args.target.environment(&ctx.store)?;
+    let from = format!("{}/{}", ws.name, env.name);
+    ctx.store
+        .rename_environment(&env.id, &args.name)
+        .map_err(|e| with_instances_hint(e, &from))?;
+    println!("renamed {from} to {}/{}", ws.name, args.name);
+    Ok(())
+}
+
 /// A revision in `env revisions`.
 #[derive(Serialize)]
 struct RevRow {
     number: u32,
     digest: String,
     head: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    /// When it was committed (RFC 3339, UTC).
+    created_at: chrono::DateTime<chrono::Utc>,
     modules: Vec<String>,
     vars: usize,
     instances: usize,
@@ -291,6 +337,8 @@ pub(super) fn run_revisions(args: RevisionsArgs) -> Result<()> {
             number: r.number(),
             digest: r.digest().to_owned(),
             head: env.head == Some(r.number()),
+            message: r.message().map(str::to_owned),
+            created_at: r.created_at().into(),
             modules: module_names(r.manifest()),
             vars: r.vars().0.len(),
             instances: instances
@@ -305,16 +353,20 @@ pub(super) fn run_revisions(args: RevisionsArgs) -> Result<()> {
         }
         for r in rows {
             println!(
-                "{} r{:<3} {}  {}{}",
+                "{} r{:<3} {}  {}  {}{}",
                 if r.head { "*" } else { " " },
                 r.number,
                 &r.digest[..12],
+                r.created_at.format("%Y-%m-%d %H:%M"),
                 r.modules.join(","),
                 match r.instances {
                     0 => String::new(),
                     n => format!("  ({n} instance{})", if n == 1 { "" } else { "s" }),
                 }
             );
+            if let Some(message) = &r.message {
+                println!("      {message}");
+            }
         }
     })
 }
@@ -358,7 +410,7 @@ fn texts(store: &Store, env: &Environment, rev: Rev) -> Result<Texts> {
             let r = revision(store, env, Some(rev))?;
             Texts {
                 label: format!("r{}", r.number()),
-                manifest: r.manifest_toml().to_owned(),
+                manifest: revision_toml(env, &r)?,
                 modules: r.modules().clone(),
                 vars: vars_text(r.vars()),
             }

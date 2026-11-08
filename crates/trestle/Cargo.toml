@@ -49,6 +49,7 @@ olai-stack-topology = { path = "../stack-topology", version = "0.0.15", features
 
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
+chrono = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
