@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 /// A single client layer. The set of layers to emit is [`ClientProtocols`]; a server that exposes
 /// both REST and ConnectRPC for the same proto can emit both from one generation run.
 ///
-/// - [`ClientProtocol::Rest`]: the HTTP/JSON low-level client ([`super::client`]) plus fluent
+/// - [`ClientProtocol::Rest`]: the HTTP/JSON low-level client (the `client` module) plus fluent
 ///   builders. Methods are routed from `google.api.http`; a method without an annotation has no
 ///   route and is skipped by the REST emitter.
 /// - [`ClientProtocol::Connect`]: fluent builders over the **connect-rust** (BSR plugin) generated
