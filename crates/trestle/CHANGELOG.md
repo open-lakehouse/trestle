@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.26](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.25...olai-trestle-v0.0.26) - 2026-11-09
+
+### Changed
+
+- [**breaking**] split unity-catalog into unity-catalog-oss and -rs (#343)
+
 ## [0.0.25](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.24...olai-trestle-v0.0.25) - 2026-11-08
 
 ### Added

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.10.1...trestle-diagram-v0.11.0) - 2026-11-09
+
+### Added
+
+- pick a component's implementation and where it runs (#344)
+
+### Changed
+
+- [**breaking**] split unity-catalog into unity-catalog-oss and -rs (#343)
+- find Unity Catalog by the API it serves (#341)
+
 ## [0.10.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.10.0...trestle-diagram-v0.10.1) - 2026-11-08
 
 ### Added
