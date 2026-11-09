@@ -41,16 +41,27 @@ export function conflictsWith(
 }
 
 /**
- * The role `module` holds a unique slot for, if any: a resource role it
- * provisions (a database, an object store). An environment has one provider
- * per such role — RustFS *or* Azurite *or* Amazon S3 — so picking another
- * means switching (mirrors the planner's role exclusivity).
+ * The unique slot `module` holds, if any: a resource role it provisions (a
+ * database, an object store), or the API it implements. An environment has one
+ * provider per such role (RustFS *or* Azurite *or* Amazon S3) and one server
+ * per API (the OSS *or* the Rust Unity Catalog), so picking another means
+ * switching (mirrors the planner's role and API exclusivity).
  */
 export function uniqueSlot(
-  module: Pick<ModuleDto, "provider_of" | "resource_kinds">,
+  module: Pick<ModuleDto, "provider_of" | "resource_kinds" | "api">,
 ): string | undefined {
+  if (module.api) return `api:${module.api}`;
   const role = module.provider_of;
   return role && module.resource_kinds.includes(role) ? role : undefined;
+}
+
+/** The modules implementing the same API as `module` (itself included), in
+ *  catalog order; empty when it declares none. */
+export function implementationsOf(
+  catalog: CatalogDto,
+  module: Pick<ModuleDto, "api">,
+): ModuleDto[] {
+  return module.api ? catalog.modules.filter((m) => m.api === module.api) : [];
 }
 
 /**
