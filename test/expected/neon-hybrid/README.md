@@ -19,13 +19,17 @@ flowchart LR
         n7["<b>Unity Catalog (Rust)</b><br/>data catalog"]:::external
     end
     n0 -->|":9080"| n1
+    n1 -->|"/lineage, /api/v1/lineage"| n2
     n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n5
     n1 -->|"/omnigent"| n6
+    n1 -->|"/api/2.1/unity-catalog"| n7
     n5 -->|"PostgreSQL: mlflow"| n3
     n5 -->|"S3: mlflow"| n4
     n6 -->|"PostgreSQL: omnigent"| n3
     n5 -->|"HTTP"| n7
     n6 -->|"HTTP"| n5
+    n2 -->|"PostgreSQL"| n3
+    n7 -->|"PostgreSQL"| n3
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb

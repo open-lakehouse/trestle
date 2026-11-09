@@ -59,7 +59,12 @@ pub fn layout_report(plan: &Plan) -> String {
                 let upstream = clusters
                     .get(route.cluster.as_str())
                     .map_or("—", String::as_str);
-                let rewrite = route.rewrite.as_deref().unwrap_or("—");
+                let rewrite = match route.rewrite.as_deref() {
+                    None => "—",
+                    // The prefix is cut (see `GatewayRoute::rewrite`).
+                    Some("") => "/",
+                    Some(path) => path,
+                };
                 let _ = writeln!(
                     out,
                     "| {} | `{}` | `{}` | {} | {} |",

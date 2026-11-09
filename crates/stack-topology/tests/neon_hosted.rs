@@ -329,3 +329,126 @@ fn an_explicit_function_url_is_used_as_is() {
             .any(|f| f.slug == "headwaters" && f.url_var.is_none())
     );
 }
+
+fn edges(plan: &Plan) -> Vec<(String, String, String)> {
+    let graph = olai_stack_topology::projection::graph_dto(plan);
+    serde_json::to_value(&graph.edges)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let s = |k: &str| e[k].as_str().unwrap_or_default().to_string();
+            (s("from"), s("kind"), s("to"))
+        })
+        .collect()
+}
+
+fn has_edge(edges: &[(String, String, String)], from: &str, kind: &str, to: &str) -> bool {
+    edges
+        .iter()
+        .any(|(f, k, t)| f == from && k == kind && t == to)
+}
+
+#[test]
+fn the_graph_shows_what_a_function_uses_on_its_branch() {
+    let plan = plan(&hybrid(), None).unwrap();
+    let edges = edges(&plan);
+    // The functions keep their database, the branch's Postgres, and the gateway fronts them.
+    for function in ["unity-catalog-rs", "headwaters"] {
+        assert!(
+            has_edge(&edges, function, "uses", "hosted-postgres"),
+            "{function} in {edges:?}"
+        );
+        assert!(
+            has_edge(&edges, "envoy", "route", function),
+            "{function} in {edges:?}"
+        );
+    }
+    // Drawn, not provisioned: the branch's function brings its own database.
+    assert_eq!(plan.neon_requirements().databases, ["mlflow", "omnigent"]);
+
+    // With the stack's Postgres local, the function's isn't drawn there: it isn't that one.
+    let mut local_db = Selection::modules(["mlflow", "unity-catalog-rs"]);
+    local_db
+        .hosted
+        .insert(ModuleId::from("unity-catalog-rs"), function());
+    let edges = self::edges(&plan_ok(&local_db));
+    assert!(
+        !has_edge(&edges, "unity-catalog-rs", "uses", "postgres"),
+        "{edges:?}"
+    );
+    assert!(
+        has_edge(&edges, "envoy", "route", "unity-catalog-rs"),
+        "{edges:?}"
+    );
+}
+
+fn plan_ok(selection: &Selection) -> Plan {
+    plan(selection, None).unwrap()
+}
+
+#[test]
+fn the_gateway_fronts_the_functions_over_tls() {
+    let plan = plan(&hybrid(), Some(branch())).unwrap();
+    let uc = plan
+        .gateway
+        .clusters
+        .iter()
+        .find(|c| c.name == "unitycatalog")
+        .expect("a cluster for the function");
+    assert_eq!(uc.host, "br-x-unitycatalog.compute.example.neon.tech");
+    assert_eq!(uc.port, 443);
+    assert_eq!(uc.tls.as_deref(), Some(uc.host.as_str()));
+
+    let envoy = olai_stack_topology::render_envoy(&plan.gateway);
+    let route = |prefix: &str| {
+        let at = envoy
+            .find(&format!("prefix: \"{prefix}\" }}"))
+            .unwrap_or_else(|| panic!("no route {prefix} in {envoy}"));
+        let rest = &envoy[at..];
+        let end = rest[1..].find("- match:").map_or(rest.len(), |i| i + 1);
+        rest[..end].to_string()
+    };
+    // Unity Catalog serves its API at the function's root, as in its container.
+    let api = route("/api/2.1/unity-catalog");
+    assert!(api.contains("cluster: unitycatalog"), "{api}");
+    assert!(api.contains("auto_host_rewrite: true"), "{api}");
+    assert!(!api.contains("regex_rewrite"), "{api}");
+    // Headwaters serves at its root what its container serves under `/lineage`.
+    let ui = route("/lineage");
+    assert!(ui.contains("regex: \"^/lineage/?(.*)$\""), "{ui}");
+    assert!(ui.contains("substitution: \"/\\\\1\""), "{ui}");
+    let ingest = route("/api/v1/lineage");
+    assert!(!ingest.contains("regex_rewrite"), "{ingest}");
+    // Verified TLS to the function's host.
+    assert!(
+        envoy.contains("sni: br-x-unitycatalog.compute.example.neon.tech"),
+        "{envoy}"
+    );
+    assert!(envoy.contains("UpstreamTlsContext"), "{envoy}");
+    // MLflow stays a plaintext in-stack upstream.
+    assert!(!route("/mlflow").contains("auto_host_rewrite"));
+}
+
+#[test]
+fn a_function_url_with_a_path_is_reached_but_not_fronted() {
+    let mut selection = hybrid();
+    selection.hosted.insert(
+        ModuleId::from("headwaters"),
+        HostedResource {
+            connection: HostedConnection::Function {
+                url: Some("https://example.com/lineage-fn".into()),
+            },
+            ..function()
+        },
+    );
+    let plan = plan(&selection, Some(branch())).unwrap();
+    assert!(!plan.gateway.clusters.iter().any(|c| c.name == "headwaters"));
+    assert!(!has_edge(&edges(&plan), "envoy", "route", "headwaters"));
+    // Its consumers still reach it at its URL.
+    assert_eq!(
+        plan.client_env(Vantage::Host).get("OPENLINEAGE_URL"),
+        Some("https://example.com")
+    );
+}

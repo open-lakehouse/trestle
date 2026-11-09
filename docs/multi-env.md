@@ -233,7 +233,11 @@ connection = { kind = "postgres", host = "${PGHOST}", username = "${PGUSER}", pa
   resource demands (the function has its own storage). Everything that refers to
   it still works. MLflow's model registry, for example, becomes the function's
   (`--registry-store-uri uc:<function URL>`), and MLflow no longer waits for a
-  local Unity Catalog.
+  local Unity Catalog. The environment graph still draws what the function uses
+  where it runs: a uses edge from it to the stack's Neon-hosted provider of each
+  resource kind its container would demand (`hosted-postgres` with vendor
+  `neon`). Nothing is provisioned for those, since the function's deployment owns
+  its database.
 - **`neon-storage`** is the branch's S3-compatible object storage
   (`NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_ACCESS_KEY_ID`,
   `NEON_S3_SECRET_ACCESS_KEY`). `hosted-postgres` with vendor `neon` is its
@@ -245,13 +249,18 @@ connection = { kind = "postgres", host = "${PGHOST}", username = "${PGUSER}", pa
   preview keeps the references, so `UNITY_CATALOG_URL` reads
   `${UNITYCATALOG_FUNCTION_URL}/api/2.1/unity-catalog`.
 
-**Clients call a function at its URL, not through the local gateway.** The
-plan's client env points dependants straight at the function. Fronting remote
-functions with the local Envoy would give local clients one origin, but it needs
-an outbound-TLS cluster kind the gateway doesn't have, and it would hide nothing:
-function URLs are public, so each function checks the caller's Neon Auth token
-itself either way (in the desktop, the Rust proxy holds that token). Gateway
-fronting can follow if one origin turns out to matter.
+**The gateway fronts a function; its dependants call it at its URL.** The plan's
+client env points dependants (MLflow's registry, say) straight at the function.
+The local Envoy still routes the function's API and UI prefixes, so host-side
+clients get one origin for the whole environment. Each such route goes to an
+outbound-TLS cluster at the function's host: `LOGICAL_DNS`, SNI and certificate
+check against the system trust store, and `auto_host_rewrite`, because the
+function's edge routes on its own host name. A function serves at its root what
+its container serves under its base path, so a route cuts the base path
+(`/lineage/…` → `/…`). Envoy can only front a function whose URL is an origin
+with no path. One with a path is reached at its URL only. Fronting hides
+nothing: function URLs are public, so each function checks the caller's Neon
+Auth token itself either way.
 
 Running one binds an instance to a branch:
 

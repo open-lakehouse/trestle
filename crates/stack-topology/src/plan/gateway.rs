@@ -23,6 +23,11 @@ pub struct ClusterConfig {
     pub port: u16,
     /// Whether the upstream speaks HTTP/2 (a gRPC endpoint), so Envoy must too.
     pub http2: bool,
+    /// For an upstream outside the stack reached over HTTPS (a function at its public URL):
+    /// the TLS server name Envoy connects with. Envoy verifies the upstream's certificate
+    /// against the system trust store and sends the upstream's own host as `Host`. `None` is
+    /// plaintext, as to every in-stack service.
+    pub tls: Option<String>,
 }
 
 /// One route on a gateway listener.
@@ -34,7 +39,8 @@ pub struct GatewayRoute {
     pub cluster: String,
     /// The upstream rewrite, if the path is changed before forwarding. `None`
     /// forwards the matched path unchanged (no rewrite emitted); `Some(path)`
-    /// rewrites the matched prefix to `path`.
+    /// rewrites the matched prefix to `path`; `Some("")` cuts it (and a `/` after it), so
+    /// `<prefix>/a` is forwarded as `/a`.
     pub rewrite: Option<String>,
     /// How the gateway treats requests on this route, carried from the fronted endpoint's
     /// [`Endpoint::route`](crate::Endpoint::route).
@@ -449,19 +455,52 @@ pub(super) fn ensure_cluster(
     service: &ServiceSpec,
     endpoint: &Endpoint,
 ) -> Result<String, PlanError> {
-    let host = match &service.placement {
-        Placement::Container { service } => service.clone(),
+    let (host, port, tls) = match &service.placement {
+        Placement::Container { service } => (service.clone(), endpoint.internal_port, None),
+        // A service outside the stack (a function) is reached at its origin.
+        Placement::External { origin } => {
+            external_upstream(origin).ok_or_else(|| PlanError::InvalidHosted {
+                module: ModuleId::from(service.name.as_str()),
+                reason: format!("the gateway can't front its origin `{origin}`"),
+            })?
+        }
         // Host/in-process services are reached via the host gateway DNS from a
         // container; the gateway cluster targets that.
-        _ => HOST_GATEWAY_DNS.to_string(),
+        _ => (HOST_GATEWAY_DNS.to_string(), endpoint.internal_port, None),
     };
-    let port = endpoint.internal_port;
     let name = match gateway.clusters.iter().find(|c| c.name == service.name) {
         Some(existing) if existing.port != port => format!("{}_{}", service.name, endpoint.id),
         _ => service.name.clone(),
     };
     ensure_named_cluster(gateway, &name, host, port, endpoint.scheme == Scheme::Grpc)?;
+    if let Some(cluster) = gateway.clusters.iter_mut().find(|c| c.name == name) {
+        cluster.tls = tls;
+    }
     Ok(name)
+}
+
+/// Whether the gateway can front a service outside the stack at `origin` (see
+/// [`external_upstream`]); one it can't is only reached at its origin.
+pub(super) fn frontable(origin: &str) -> bool {
+    external_upstream(origin).is_some()
+}
+
+/// The upstream `(host, port, TLS server name)` of an external origin: an `https` origin's
+/// host over TLS on its port (443 by default), an `http` one's in plaintext. Only an origin at
+/// its root can be fronted (the gateway forwards the client's path unchanged); `None`
+/// otherwise.
+fn external_upstream(origin: &str) -> Option<(String, u16, Option<String>)> {
+    let url = crate::address::origin_url(origin)?;
+    if !matches!(url.path(), "" | "/") {
+        return None;
+    }
+    let host = url.host_str()?.to_string();
+    let port = url.port_or_known_default()?;
+    match url.scheme() {
+        "https" => Some((host.clone(), port, Some(host))),
+        "http" => Some((host, port, None)),
+        _ => None,
+    }
 }
 
 /// Add the cluster `name` → `host:port` unless it already exists. An existing cluster of the
@@ -488,6 +527,7 @@ pub(super) fn ensure_named_cluster(
         host,
         port,
         http2,
+        tls: None,
     });
     Ok(())
 }
@@ -601,6 +641,7 @@ pub(super) fn wire_app_upstream(
         host: app.service.clone(),
         port: app.port,
         http2: false,
+        tls: None,
     });
     shared_routes.push(GatewayRoute {
         prefix: "/".into(),

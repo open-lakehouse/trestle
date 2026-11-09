@@ -88,10 +88,11 @@ const functionsPlan: PlanResult = {
       ),
       headwaters,
     ],
-    // A function is reached at its URL, never through the gateway.
+    // The gateway still fronts a function, but its database is the branch's:
+    // with the stack's Postgres and storage local, it uses neither.
     edges: FIXTURE_PLAN.graph.edges
       .map((e) => ({ ...e, from: asRs(e.from), to: asRs(e.to) }))
-      .filter((e) => !(e.kind === "route" && FUNCTIONS.includes(e.to))),
+      .filter((e) => !(e.kind === "uses" && FUNCTIONS.includes(e.from))),
   },
   files: FIXTURE_PLAN.files.filter(
     (f) => !f.path.startsWith(`modules/${OSS}/`),
