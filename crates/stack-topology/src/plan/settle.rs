@@ -200,14 +200,20 @@ pub(super) fn settle(
     let mut services = BTreeMap::new();
     for module in &graph.nodes {
         let mut module_services = module.services_in(&knobs[module.id()], &stack_facts);
-        // A hosted provider's services are reached directly at its origin, never routed.
+        // A hosted provider's services are reached directly at its origin. A database or a
+        // bucket is never routed; a function's HTTP surface keeps its routes, so the gateway
+        // fronts it at its URL like an in-stack service (its consumers still call the URL).
         if let Some(provider) = hosted.modules.get(module.id()) {
+            let fronted = stack_facts.functions.contains_key(module.id().as_str())
+                && super::gateway::frontable(&provider.origin);
             for service in &mut module_services {
                 service.placement = Placement::External {
                     origin: provider.origin.clone(),
                 };
                 for endpoint in &mut service.endpoints {
-                    endpoint.intent = RouteIntent::Internal;
+                    if !fronted {
+                        endpoint.intent = RouteIntent::Internal;
+                    }
                 }
             }
         } else {

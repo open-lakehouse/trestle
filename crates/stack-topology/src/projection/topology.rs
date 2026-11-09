@@ -571,6 +571,54 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         }
     }
 
+    // What each function-hosted module uses where it is deployed: one edge per resource kind it
+    // would demand as a container, to the stack's provider of that kind on the function's own
+    // cloud (a Neon branch's Postgres for a Neon Function). Nothing is provisioned for it, so
+    // the edge names no resources; without such a provider in the stack it has no edge.
+    for module in &plan.graph.nodes {
+        let from = module.id().as_str();
+        let Some(cloud) = plan
+            .stack_facts
+            .functions
+            .contains_key(from)
+            .then(|| {
+                plan.hosted
+                    .get(module.id())
+                    .and_then(|h| h.cloud.as_deref())
+            })
+            .flatten()
+        else {
+            continue;
+        };
+        for kind in &module.provides().function_uses {
+            let Some((provider, template)) = plan.graph.nodes.iter().find_map(|p| {
+                let template = p.provides().resource_kinds.get(kind)?;
+                let on_cloud = plan
+                    .hosted
+                    .get(p.id())
+                    .is_some_and(|h| h.cloud.as_deref() == Some(cloud));
+                on_cloud.then_some((p, template))
+            }) else {
+                continue;
+            };
+            let to = provider.id().as_str();
+            if uses
+                .iter()
+                .any(|e| matches!(e, TopologyEdgeDto::Uses { from: f, to: t, role, .. } if f == from && t == to && role == kind))
+            {
+                continue;
+            }
+            uses.push(TopologyEdgeDto::Uses {
+                key: String::new(),
+                from: from.to_string(),
+                to: to.to_string(),
+                role: kind.clone(),
+                protocol: protocol(&template.0, false),
+                resources: Vec::new(),
+            });
+        }
+    }
+
     // The gateway's surfaces, one per listener in listener order (the shared one first). A
     // service surface names the protocols its backends offer.
     let offers_of = |id: &str| -> Vec<String> {

@@ -80,6 +80,10 @@ static_resources:
                         - match: { prefix: "{{ r.prefix }}" }
                           route:
                             cluster: {{ r.cluster }}
+{%- if r.host_rewrite %}
+                            # An upstream outside the stack routes on its own host name.
+                            auto_host_rewrite: true
+{%- endif %}
 {%- if r.streaming %}
                             # No timeout: the upstream holds requests open (SSE, streamed output).
                             timeout: 0s
@@ -90,6 +94,12 @@ static_resources:
                                 google_re2: {}
                                 regex: "^{{ r.prefix_regex }}(.*)$"
                               substitution: "{{ r.rewrite }}\\1"
+{%- elif r.strip %}
+                            regex_rewrite:
+                              pattern:
+                                google_re2: {}
+                                regex: "^{{ r.prefix_regex }}/?(.*)$"
+                              substitution: "/\\1"
 {%- endif %}
 {%- if r.strip_client_credentials %}
                           # The upstream authenticates with credentials it holds itself: drop the
@@ -249,8 +259,15 @@ static_resources:
   clusters:
 {%- for c in clusters %}
     - name: {{ c.name }}
+{%- if c.tls %}
+      # Outside the stack, over TLS: verified against the system trust store.
+      type: LOGICAL_DNS
+      dns_lookup_family: V4_PREFERRED
+      connect_timeout: 5s
+{%- else %}
       type: STRICT_DNS
       connect_timeout: 2s
+{%- endif %}
 {%- if c.http2 %}
       typed_extension_protocol_options:
         envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
@@ -267,6 +284,19 @@ static_resources:
                     socket_address:
                       address: {{ c.host }}
                       port_value: {{ c.port }}
+{%- if c.tls %}
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: {{ c.tls }}
+          common_tls_context:
+            validation_context:
+              trusted_ca: { filename: /etc/ssl/certs/ca-certificates.crt }
+              match_typed_subject_alt_names:
+                - san_type: DNS
+                  matcher: { exact: "{{ c.tls }}" }
+{%- endif %}
 {%- endfor %}
 
 admin:

@@ -8,7 +8,12 @@
 //! everything that refers to it (a `stack.has("unity-catalog-oss")` check, a client value naming
 //! its endpoint) still does, but hosted like any [hosted provider](super::hosted). Nothing of
 //! it renders: no compose service, no helpers, no resource demands (the function brings its own
-//! storage), and no module it requires. Its services are reached at the function's URL.
+//! storage), and no module it requires. Its services are reached at the function's URL, and the
+//! gateway fronts them there like a local service's (see [`route`](super::route)).
+//!
+//! What it would demand as a container is kept as [`Provides::function_uses`]: the environment
+//! graph draws it as uses edges to the stack's Neon-hosted providers (the branch's Postgres),
+//! which is where the function finds it.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -74,11 +79,23 @@ impl FunctionHosted {
             // Still the API's server: consumers reach it at the function's URL.
             api: own.api.clone(),
             hosted: Some(HostedKind::Function),
+            function_uses: demanded_kinds(inner.needs()),
             deploy: function_steps(),
             ..Provides::default()
         };
         FunctionHosted { inner, provides }
     }
+}
+
+/// The resource kinds `needs` demands, deduplicated in order.
+fn demanded_kinds(needs: &[ResourceDemand]) -> Vec<String> {
+    let mut kinds: Vec<String> = Vec::new();
+    for demand in needs {
+        if !kinds.contains(&demand.resource) {
+            kinds.push(demand.resource.clone());
+        }
+    }
+    kinds
 }
 
 /// The step that deploys the function on the branch.

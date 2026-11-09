@@ -33,6 +33,11 @@ static_resources:
                     - name: all
                       domains: ["*"]
                       routes:
+                        - match: { prefix: "/api/2.1/unity-catalog" }
+                          route:
+                            cluster: unitycatalog
+                            # An upstream outside the stack routes on its own host name.
+                            auto_host_rewrite: true
                         - match: { prefix: "/api/2.0/mlflow" }
                           route:
                             cluster: mlflow
@@ -57,6 +62,11 @@ static_resources:
                                 google_re2: {}
                                 regex: "^/api/4\\x{2E}0/mlflow(.*)$"
                               substitution: "/mlflow/api/4.0/mlflow\\1"
+                        - match: { prefix: "/api/v1/lineage" }
+                          route:
+                            cluster: headwaters
+                            # An upstream outside the stack routes on its own host name.
+                            auto_host_rewrite: true
                         - match: { prefix: "/api/2.0/otel" }
                           route:
                             cluster: mlflow
@@ -83,6 +93,16 @@ static_resources:
                             cluster: omnigent
                             # No timeout: the upstream holds requests open (SSE, streamed output).
                             timeout: 0s
+                        - match: { prefix: "/lineage" }
+                          route:
+                            cluster: headwaters
+                            # An upstream outside the stack routes on its own host name.
+                            auto_host_rewrite: true
+                            regex_rewrite:
+                              pattern:
+                                google_re2: {}
+                                regex: "^/lineage/?(.*)$"
+                              substitution: "/\\1"
                         - match: { prefix: "/mlflow" }
                           route:
                             cluster: mlflow
@@ -91,6 +111,31 @@ static_resources:
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
   clusters:
+    - name: headwaters
+      # Outside the stack, over TLS: verified against the system trust store.
+      type: LOGICAL_DNS
+      dns_lookup_family: V4_PREFERRED
+      connect_timeout: 5s
+      load_assignment:
+        cluster_name: headwaters
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech
+                      port_value: 443
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech
+          common_tls_context:
+            validation_context:
+              trusted_ca: { filename: /etc/ssl/certs/ca-certificates.crt }
+              match_typed_subject_alt_names:
+                - san_type: DNS
+                  matcher: { exact: "br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech" }
     - name: mlflow
       type: STRICT_DNS
       connect_timeout: 2s
@@ -115,6 +160,31 @@ static_resources:
                     socket_address:
                       address: omnigent
                       port_value: 8000
+    - name: unitycatalog
+      # Outside the stack, over TLS: verified against the system trust store.
+      type: LOGICAL_DNS
+      dns_lookup_family: V4_PREFERRED
+      connect_timeout: 5s
+      load_assignment:
+        cluster_name: unitycatalog
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech
+                      port_value: 443
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech
+          common_tls_context:
+            validation_context:
+              trusted_ca: { filename: /etc/ssl/certs/ca-certificates.crt }
+              match_typed_subject_alt_names:
+                - san_type: DNS
+                  matcher: { exact: "br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech" }
 
 admin:
   address:

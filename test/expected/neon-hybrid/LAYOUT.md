@@ -4,12 +4,15 @@
 
 | Listener | Prefix | Service (cluster) | Upstream | Rewrite |
 | --- | --- | --- | --- | --- |
+| shared :9080 | `/api/2.1/unity-catalog` | `unitycatalog` | br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech:443 | — |
 | shared :9080 | `/api/2.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/2.0/mlflow |
 | shared :9080 | `/api/3.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/3.0/mlflow |
 | shared :9080 | `/api/4.0/mlflow` | `mlflow` | mlflow:5000 | /mlflow/api/4.0/mlflow |
+| shared :9080 | `/api/v1/lineage` | `headwaters` | br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech:443 | — |
 | shared :9080 | `/api/2.0/otel` | `mlflow` | mlflow:5000 | /mlflow |
 | shared :9080 | `/ai-gateway` | `mlflow` | mlflow:5000 | /mlflow/gateway |
 | shared :9080 | `/omnigent` | `omnigent` | omnigent:8000 | — |
+| shared :9080 | `/lineage` | `headwaters` | br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech:443 | / |
 | shared :9080 | `/mlflow` | `mlflow` | mlflow:5000 | — |
 
 ## Services

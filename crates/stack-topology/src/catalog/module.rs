@@ -172,6 +172,14 @@ pub struct Provides {
     /// values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_secrets: Vec<String>,
+    /// For a module hosted as a function: the resource kinds it demands as a container
+    /// (`relational_db`, …), which the function finds where it is deployed (its branch's
+    /// Postgres) rather than in the stack. The planner sets it on the
+    /// [function-hosted](crate::plan) wrapper, and the environment graph draws each as a uses
+    /// edge to the stack's provider of that kind on the same cloud; nothing is provisioned for
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub function_uses: Vec<String>,
     /// The API this module serves its consumers, when other implementations serve the same one
     /// (e.g. `unity-catalog` for every Unity Catalog server). Consumers that integrate with
     /// such a server look it up by this API ([`StackFacts::serves`]), never by module id, so

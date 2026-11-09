@@ -193,6 +193,17 @@ fn external_url(origin: &str, endpoint: &Endpoint) -> Result<Url, AddressError> 
     Ok(url)
 }
 
+/// An [`External`](Placement::External) origin as a URL: the origin itself, or, when it is one
+/// `${VAR}` reference not resolved yet (a plan without secrets), its
+/// [placeholder origin](placeholder_origin). `None` for anything else that isn't a URL.
+pub(crate) fn origin_url(origin: &str) -> Option<Url> {
+    match whole_ref(origin) {
+        Some(var) => Url::parse(&placeholder_origin(var)).ok(),
+        None if origin.contains("${") => None,
+        None => Url::parse(origin).ok(),
+    }
+}
+
 /// The host a placeholder origin's URL carries, before the hex-encoded variable name.
 const PLACEHOLDER_HOST_PREFIX: &str = "trestle-ref-";
 /// The reserved TLD placeholder hosts sit under, so one is never a real host.

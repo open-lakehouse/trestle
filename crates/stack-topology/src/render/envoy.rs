@@ -101,6 +101,8 @@ struct RouteCtx<'a> {
     prefix_regex: String,
     cluster: &'a str,
     rewrite: Option<&'a str>,
+    /// Cut the prefix from the path (and a `/` after it), keeping the rest rooted at `/`.
+    strip: bool,
     /// Hold the request open with no route timeout (SSE, streamed model output).
     streaming: bool,
     /// Drop caller credentials before forwarding (the upstream holds its own).
@@ -108,6 +110,9 @@ struct RouteCtx<'a> {
     /// The headers the cluster's emulated hostnames add, so a backend reached on its own port
     /// answers like the public service it stands in for there too.
     response_headers: Option<&'a BTreeMap<String, String>>,
+    /// Send the upstream's own host as `Host` (an external upstream over TLS, which routes on
+    /// it), not the client's `localhost`.
+    host_rewrite: bool,
 }
 
 /// Escape `literal` so RE2 matches it verbatim, in a form that is also valid inside a YAML
@@ -133,6 +138,8 @@ struct ClusterCtx<'a> {
     host: &'a str,
     port: u16,
     http2: bool,
+    /// The TLS server name of an external upstream (see [`ClusterConfig::tls`]).
+    tls: Option<&'a str>,
 }
 
 /// Render the Envoy bootstrap config for the plan's gateway.
@@ -153,6 +160,12 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
             .find(|v| v.cluster == cluster && !v.response_headers.is_empty())
             .map(|v| &v.response_headers)
     };
+    let tls_clusters: Vec<&str> = gateway
+        .clusters
+        .iter()
+        .filter(|c| c.tls.is_some())
+        .map(|c| c.name.as_str())
+        .collect();
     // Each planner listener becomes an Envoy listener. The shared listener is first (it carries
     // the API/UI routes and, when present, the app catch-all the planner already appended);
     // dedicated listeners (their own port, a single `/` route) follow. An empty gateway still
@@ -175,10 +188,13 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
                     prefix: &r.prefix,
                     prefix_regex: re2_literal(&r.prefix),
                     cluster: &r.cluster,
-                    rewrite: r.rewrite.as_deref(),
+                    // An empty rewrite strips the prefix (see `strip`).
+                    rewrite: r.rewrite.as_deref().filter(|r| !r.is_empty()),
+                    strip: r.rewrite.as_deref() == Some(""),
                     streaming: r.options.streaming,
                     strip_client_credentials: r.options.strip_client_credentials,
                     response_headers: impersonated_headers(&r.cluster),
+                    host_rewrite: tls_clusters.contains(&r.cluster.as_str()),
                 })
                 .collect(),
             // The shared listener is gated: it carries the API/UI routes. Dedicated listeners
@@ -207,6 +223,7 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
             host: &c.host,
             port: c.port,
             http2: c.http2,
+            tls: c.tls.as_deref(),
         })
         .collect();
 

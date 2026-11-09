@@ -42,6 +42,27 @@ pub(super) struct Routed {
     pub direct: Option<BTreeMap<ModuleId, Vec<PortMapping>>>,
 }
 
+/// The rewrite of a route at `prefix` to `service`, given the one its container would get
+/// (`rewrite`, `None` for the path unchanged).
+///
+/// A service outside the stack (a function) serves at its origin's root what its container
+/// serves under its base path, so the base path is cut from the upstream path. `Some("")`
+/// strips the prefix entirely.
+fn upstream_rewrite(
+    service: &ServiceSpec,
+    prefix: &str,
+    rewrite: Option<String>,
+) -> Option<String> {
+    if !matches!(service.placement, Placement::External { .. }) || service.base_path.is_empty() {
+        return rewrite;
+    }
+    let path = rewrite.as_deref().unwrap_or(prefix);
+    let upstream = path
+        .strip_prefix(service.base_path.as_str())
+        .unwrap_or(path);
+    (upstream != prefix).then(|| upstream.to_string())
+}
+
 /// Run the route phase (see the [module docs](self)), rewriting `settled.chosen`'s gatewayed
 /// and emulated object-store connections in place.
 pub(super) fn route(
@@ -113,7 +134,11 @@ pub(super) fn route(
                         let prefix = endpoint.mount_prefix.clone().unwrap_or_default();
                         require_prefix(&prefix, service, &endpoint.id)?;
                         claim(&mut claimed, &prefix, service, &endpoint.id)?;
-                        let rewrite = api_rewrite(&endpoint.rewrite, &service.base_path, &prefix);
+                        let rewrite = upstream_rewrite(
+                            service,
+                            &prefix,
+                            api_rewrite(&endpoint.rewrite, &service.base_path, &prefix),
+                        );
                         let cluster = ensure_cluster(&mut gateway, service, endpoint)?;
                         shared_routes.push(GatewayRoute {
                             prefix: prefix.clone(),
@@ -143,10 +168,11 @@ pub(super) fn route(
                         require_prefix(&base, service, &endpoint.id)?;
                         claim(&mut claimed, &base, service, &endpoint.id)?;
                         let cluster = ensure_cluster(&mut gateway, service, endpoint)?;
+                        let rewrite = upstream_rewrite(service, &base, None);
                         shared_routes.push(GatewayRoute {
                             prefix: base.clone(),
                             cluster: cluster.clone(),
-                            rewrite: None,
+                            rewrite: rewrite.clone(),
                             options: endpoint.route.clone(),
                         });
                         routes.assign(
@@ -154,7 +180,7 @@ pub(super) fn route(
                             &endpoint.id,
                             AssignedRoute {
                                 prefix: base.clone(),
-                                rewrite: None,
+                                rewrite,
                                 listener: Listener::Shared,
                                 base_path: Some(base),
                             },
