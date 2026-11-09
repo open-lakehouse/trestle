@@ -23,6 +23,13 @@ callers). This crate makes the topology a single, tested model:
   REST Catalog tomorrow without a framework change. Implementation names live in catalog
   data. The hosted-provider types are the exception: `HostedVendor` names the managed
   services it knows.
+- **API / implementation** — when several implementations serve the same API (two Unity
+  Catalog servers), each is its own module and declares the API it serves
+  (`Provides::api`). Consumers integrate with the API's server through
+  `StackFacts::serves(api)` (`stack.apis[api]` in a template), never by module id. The
+  implementations are alternatives: one per environment (`ConflictingApiProviders`), with
+  the same service name, port and paths. *Where* one runs (in the stack, or as a function)
+  is a choice on the module, not another module.
 - **Placement / vantage** — where a service runs and where a caller sits.
 - **Endpoint / route intent** — what a service offers (port, scheme) and its
   *intent*, declared once and vantage-free. A module declares only intent, never

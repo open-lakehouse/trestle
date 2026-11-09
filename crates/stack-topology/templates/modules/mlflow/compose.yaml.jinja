@@ -3,7 +3,9 @@ services:
   mlflow:
     image: {{ knobs.image }}
     restart: unless-stopped
-{%- set uc_runs = "unity-catalog" in stack.modules and "unity-catalog" not in stack.functions %}
+{#- The stack's Unity Catalog server, whichever implementation serves the API. #}
+{%- set uc = stack.apis["unity-catalog"] %}
+{%- set uc_runs = uc and uc not in stack.functions %}
 {%- if dependencies or uc_runs %}
     depends_on:
 {%- for dep in dependencies %}
@@ -26,12 +28,12 @@ services:
       - "5000"
       - "--static-prefix"
       - "{{ env.BASE_PATH }}"
-{%- if "unity-catalog" in stack.modules %}
-{%- if "unity-catalog" in stack.functions %}
+{%- if uc %}
+{%- if uc in stack.functions %}
       # One model registry per environment: MLflow's registry API and UI read and write the
       # models of Unity Catalog, which runs as a function and is called at its URL.
       - "--registry-store-uri"
-      - "uc:{{ stack.functions["unity-catalog"].url }}"
+      - "uc:{{ stack.functions[uc].url }}"
 {%- else %}
       # One model registry per environment: with Unity Catalog in the stack, MLflow's registry
       # API and UI read and write UC models, called directly on the compose network.
@@ -47,7 +49,7 @@ services:
       # name under auth), in-network callers through the gateway, and the gateway-init job
       # calling it directly.
       MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,{% if env.GATEWAY_INTERNAL_URL %}{{ env.GATEWAY_INTERNAL_URL | replace('http://', '') }},{% endif %}mlflow:5000{% if env.GATEWAY_AUTH == "true" %},{{ env.GATEWAY_HOST }},{{ env.GATEWAY_HOST }}:*{% endif %}"
-{%- if "unity-catalog" in stack.modules %}
+{%- if uc %}
       # Makes the mounted package visible: its entry point registers MLflow's OSS Unity Catalog
       # store for the `uc:` scheme, which the server otherwise doesn't accept.
       PYTHONPATH: /opt/trestle/mlflow-plugins

@@ -161,6 +161,14 @@ pub struct Provides {
     /// [`plan::hosted`](crate::plan::hosted)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function: Option<String>,
+    /// The API this module serves its consumers, when other implementations serve the same one
+    /// (e.g. `unity-catalog` for every Unity Catalog server). Consumers that integrate with
+    /// such a server look it up by this API ([`StackFacts::serves`]), never by module id, so
+    /// any implementation fills in. Implementations of one API are alternatives: at most one
+    /// is in an environment, and they keep the same service name, port and paths, so a
+    /// consumer's addresses don't depend on which one runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
     /// The helper containers this module's fragment may run beside its services (an init job,
     /// a sidecar). They get no routes and fold into the module's node, so only this list lets
     /// an export name every container the stack runs. Whether one runs can depend on knobs or
@@ -812,7 +820,7 @@ fn render_template(
 /// [`Module::client_env_in`]).
 ///
 /// The same facts reach every fragment, as render-only variables (e.g. `GATEWAY_AUTH`) and as
-/// the `stack` global (`{% if "unity-catalog" in stack.modules %}`), so a module's services and
+/// the `stack` global (`{% if "mlflow" in stack.modules %}`), so a module's services and
 /// its rendered compose can't disagree.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct StackFacts {
@@ -828,6 +836,9 @@ pub struct StackFacts {
     /// The modules hosted as functions, by id: none of them runs in the stack, and each is
     /// reached at its function's URL (see [`plan::function`](crate::plan)).
     pub functions: BTreeMap<String, HostedFunction>,
+    /// The module serving each API in the stack, by API (see [`Provides::api`]). A template
+    /// reads it as `stack.apis["unity-catalog"]`.
+    pub apis: BTreeMap<String, ModuleId>,
 }
 
 /// A module hosted as a function (see [`StackFacts::functions`]).
@@ -848,6 +859,11 @@ impl StackFacts {
     /// Whether a hosted provider serves the resource `role`.
     pub fn is_hosted(&self, role: &str) -> bool {
         self.hosted_roles.contains(role)
+    }
+
+    /// The module serving `api` in the stack, if any (see [`Provides::api`]).
+    pub fn serves(&self, api: &str) -> Option<&ModuleId> {
+        self.apis.get(api)
     }
 
     /// Whether the module `id` is in the stack and runs there (not hosted as a function).

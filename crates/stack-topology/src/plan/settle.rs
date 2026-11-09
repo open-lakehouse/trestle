@@ -183,6 +183,11 @@ pub(super) fn settle(
                 )
             })
             .collect(),
+        apis: graph
+            .nodes
+            .iter()
+            .filter_map(|m| Some((m.provides().api.clone()?, m.id().clone())))
+            .collect(),
     };
     let mut services = BTreeMap::new();
     for module in &graph.nodes {
