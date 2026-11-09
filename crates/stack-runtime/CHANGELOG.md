@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/olai-stack-runtime-v0.0.6...olai-stack-runtime-v0.0.7) - 2026-11-09
+
+### Added
+
+- run mangrove's Unity Catalog as unity-catalog-rs (#342)
+
+### Changed
+
+- [**breaking**] split unity-catalog into unity-catalog-oss and -rs (#343)
+
 ## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-stack-runtime-v0.0.3...olai-stack-runtime-v0.0.4) - 2026-11-04
 
 ### Fixed
