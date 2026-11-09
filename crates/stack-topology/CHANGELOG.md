@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.17](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.16...olai-stack-topology-v0.0.17) - 2026-11-09
+
+### Added
+
+- [**breaking**] front Neon Functions at the gateway, draw their database (#347)
+
 ## [0.0.16](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.15...olai-stack-topology-v0.0.16) - 2026-11-09
 
 ### Added
