@@ -210,11 +210,15 @@ fn the_plan_lists_what_the_branch_must_supply() {
                 module: ModuleId::from("headwaters"),
                 slug: "headwaters".into(),
                 url_var: Some("HEADWATERS_FUNCTION_URL".into()),
+                env: Default::default(),
+                secrets: vec![],
             },
             FunctionRequirement {
                 module: ModuleId::from("unity-catalog"),
                 slug: "unitycatalog".into(),
                 url_var: Some("UNITYCATALOG_FUNCTION_URL".into()),
+                env: Default::default(),
+                secrets: vec![],
             },
         ]
     );

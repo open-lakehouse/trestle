@@ -988,12 +988,7 @@ impl Plan {
         hosted::neon_requirements(
             &self.hosted,
             |m| self.provisioned_by(m),
-            |m| {
-                self.stack_facts
-                    .functions
-                    .get(m.as_str())
-                    .map(|f| f.slug.clone())
-            },
+            |m| self.stack_facts.functions.get(m.as_str()),
         )
     }
 

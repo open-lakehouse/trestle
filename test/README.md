@@ -13,6 +13,7 @@ Each scenario is a source `env.toml` under `scenarios/` (plus a placeholder
 | --- | --- | --- |
 | **minimal** | postgres, rustfs (+ the always-on gateway) | Baseline gateway + relational DB + S3 object store (with STS) |
 | **lakehouse** | minimal + unity-catalog, mlflow | Resource demands (auto-created DBs/buckets), multi-route gateway, UC S3 credential vending |
+| **lakehouse-rs** | lakehouse on `unity-catalog-rs` (mangrove's Rust server) | A second implementation of the `unity-catalog` API: same service and routes, YAML config, migrate job, KEK passed through from the environment |
 | **authenticated** | lakehouse + `[selection.gateway] auth = true` | Authelia pulled in automatically; forward-auth on API/UI routes |
 | **authorized** | lakehouse + headwaters, `[selection.gateway] auth = true, policy = true` | Authelia plus OPA policy checks at the gateway (`policies/authz.rego`) |
 | **agents** | lakehouse + jaeger, omnigent | The agent runtime on MLflow's AI gateway, with tracing |

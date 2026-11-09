@@ -1,0 +1,9 @@
+# What mangrove's Unity Catalog server runs with wherever it runs: this file in a container,
+# or `UC_SERVER_CONFIG_YAML` for a Neon Function. API-only, and anonymous until the services
+# verify callers' tokens. The key-encryption key is read from `UC_SERVER_KEK` when the server
+# starts, so it is never written here. Without it the server refuses to start; there is no
+# fallback key.
+ui: { serve: false }
+auth: { mode: anonymous }
+encryption:
+  active: { id: kek-1, key: { env: UC_SERVER_KEK } }

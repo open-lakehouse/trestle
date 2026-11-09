@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::module::ModuleId;
+use crate::catalog::module::{HostedFunction, ModuleId};
 use crate::model::connection::{Connection, ConnectionTemplate, ObjectStoreCredential};
 use crate::model::role::Role;
 
@@ -1009,14 +1009,21 @@ pub struct FunctionRequirement {
     pub slug: String,
     /// The variable its URL is read from, when it is one `${VAR}`.
     pub url_var: Option<String>,
+    /// The environment it is deployed with: the module's configuration, the same one its
+    /// container would run with.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// The secret variables its deployment must set; only their names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
 }
 
 /// The [`NeonRequirements`] of `hosted` resources, with each provider's provisioned names from
-/// `provisioned` and each function's slug from `slugs`.
+/// `provisioned` and each function's slug and deployment from `functions`.
 pub(super) fn neon_requirements<'a>(
     hosted: &BTreeMap<ModuleId, HostedResource>,
     provisioned: impl Fn(&ModuleId) -> &'a [String],
-    slugs: impl Fn(&ModuleId) -> Option<String>,
+    functions: impl Fn(&ModuleId) -> Option<&'a HostedFunction>,
 ) -> NeonRequirements {
     let mut out = NeonRequirements::default();
     let mut vars = BTreeSet::new();
@@ -1028,10 +1035,13 @@ pub(super) fn neon_requirements<'a>(
             }
             (HostedVendor::Neon, HostedConnection::S3 { .. }) => out.buckets.extend(view.resources),
             (HostedVendor::NeonFunction, HostedConnection::Function { url }) => {
+                let function = functions(module);
                 out.functions.push(FunctionRequirement {
                     module: module.clone(),
-                    slug: slugs(module).unwrap_or_default(),
+                    slug: function.map(|f| f.slug.clone()).unwrap_or_default(),
                     url_var: url.as_deref().and_then(single_ref).map(str::to_string),
+                    env: function.map(|f| f.env.clone()).unwrap_or_default(),
+                    secrets: function.map(|f| f.secrets.clone()).unwrap_or_default(),
                 })
             }
             _ => continue,

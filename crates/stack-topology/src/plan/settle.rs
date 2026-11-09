@@ -179,6 +179,14 @@ pub(super) fn settle(
                         slug: hosted_modules[id].function_slug.clone().unwrap_or_default(),
                         // Resolved when the plan has secrets, a `${VAR}` in a preview.
                         url: hosted.modules[id].origin.clone(),
+                        env: graph
+                            .module(id)
+                            .map(|m| m.provides().function_env.clone())
+                            .unwrap_or_default(),
+                        secrets: graph
+                            .module(id)
+                            .map(|m| m.provides().function_secrets.clone())
+                            .unwrap_or_default(),
                     },
                 )
             })

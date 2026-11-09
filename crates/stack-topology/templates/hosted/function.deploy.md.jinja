@@ -6,3 +6,19 @@ it, but a branch that existed before the deploy, or one reset since, needs it de
 `trestle up --neon-branch <branch>` reads the function's URL from the branch and fails when the
 function is missing. Function URLs are public: the function must check the caller's Neon Auth
 token itself.
+{%- if f.env or f.secrets %}
+
+Deploy it with the same configuration it runs with in a container:
+{%- for name, value in f.env | items %}
+
+`{{ name }}`:
+
+```yaml
+{{ value | trim }}
+```
+{%- endfor %}
+{%- if f.secrets %}
+
+Set {% for name in f.secrets %}`{{ name }}`{% if not loop.last %}, {% endif %}{% endfor %} on the deployment yourself (`neon functions deploy --env`): {% if f.secrets | length == 1 %}it holds a secret{% else %}they hold secrets{% endif %}, so trestle never writes {% if f.secrets | length == 1 %}it{% else %}them{% endif %}.
+{%- endif %}
+{%- endif %}
