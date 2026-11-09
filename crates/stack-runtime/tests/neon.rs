@@ -210,7 +210,7 @@ fn requirements() -> NeonRequirements {
         buckets: vec!["mlflow".into()],
         functions: vec![
             function("headwaters", "headwaters"),
-            function("unity-catalog", "unitycatalog"),
+            function("unity-catalog-rs", "unitycatalog"),
         ],
         vars: vec!["NEON_S3_ENDPOINT".into(), "PGHOST".into()],
     }
@@ -464,7 +464,7 @@ async fn a_hybrid_instance_runs_on_its_branch() {
     let started = instances.start(&instance).await.unwrap();
     // Nothing of the functions runs locally, and no credential lands in the tree.
     let compose = std::fs::read_to_string(started.dir.join("compose.yaml")).unwrap();
-    assert!(!compose.contains("unity-catalog") && !compose.contains("headwaters"));
+    assert!(!compose.contains("unity-catalog-rs") && !compose.contains("headwaters"));
     let secret = keychain.0.lock().unwrap().values().next().unwrap().clone();
     for entry in walkdir(&started.dir) {
         let text = std::fs::read_to_string(&entry).unwrap_or_default();

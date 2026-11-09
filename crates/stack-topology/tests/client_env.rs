@@ -18,7 +18,7 @@ fn full_stack() -> Selection {
         "envoy",
         "rustfs",
         "postgres",
-        "unity-catalog",
+        "unity-catalog-oss",
         "mlflow",
         "jaeger",
         "headwaters",

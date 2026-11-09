@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use olai_stack_topology::{ModuleId, Plan, PlanCtx, PlanError, Selection, baseline_catalog};
 
 fn plan_with(knobs: &[(&str, &str)]) -> Result<Plan, PlanError> {
-    let mut selection = Selection::modules(["unity-catalog"]);
+    let mut selection = Selection::modules(["unity-catalog-oss"]);
     selection.knob_overrides.insert(
-        "unity-catalog".into(),
+        "unity-catalog-oss".into(),
         knobs
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -27,7 +27,7 @@ fn files(plan: &Plan) -> BTreeMap<String, String> {
 }
 
 fn service(plan: &Plan) -> serde_yaml::Value {
-    let fragment = &files(plan)["modules/unity-catalog/compose.yaml"];
+    let fragment = &files(plan)["modules/unity-catalog-oss/compose.yaml"];
     let yaml: serde_yaml::Value = serde_yaml::from_str(fragment).expect("fragment is YAML");
     yaml["services"]["unitycatalog"].clone()
 }
@@ -35,7 +35,7 @@ fn service(plan: &Plan) -> serde_yaml::Value {
 fn rejected_key(err: PlanError) -> String {
     match err {
         PlanError::RejectedKnob { module, key, .. } => {
-            assert_eq!(module, ModuleId::from("unity-catalog"));
+            assert_eq!(module, ModuleId::from("unity-catalog-oss"));
             key
         }
         other => panic!("expected RejectedKnob, got {other:?}"),
@@ -53,7 +53,7 @@ fn defaults_render_the_postgres_backed_server() {
     assert!(svc.get("container_name").is_none());
     assert!(svc.get("build").is_none());
     assert_eq!(svc["secrets"].as_sequence().unwrap().len(), 2);
-    assert!(files(&plan).contains_key("modules/unity-catalog/secrets/hibernate.properties"));
+    assert!(files(&plan).contains_key("modules/unity-catalog-oss/secrets/hibernate.properties"));
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn embedded_metadata_drops_both_stores() {
     }
     assert!(
         plan.graph
-            .needs(&ModuleId::from("unity-catalog"))
+            .needs(&ModuleId::from("unity-catalog-oss"))
             .is_empty()
     );
     let svc = service(&plan);
@@ -74,8 +74,8 @@ fn embedded_metadata_drops_both_stores() {
     assert_eq!(secrets.len(), 1);
     assert_eq!(secrets[0]["source"], "unitycatalog_server_properties");
     let files = files(&plan);
-    assert!(!files.contains_key("modules/unity-catalog/secrets/hibernate.properties"));
-    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    assert!(!files.contains_key("modules/unity-catalog-oss/secrets/hibernate.properties"));
+    let props = &files["modules/unity-catalog-oss/secrets/server.properties"];
     assert!(!props.contains("s3.") && !props.contains("aws."), "{props}");
 }
 
@@ -149,7 +149,7 @@ fn invalid_knob_values_are_rejected() {
 }
 
 fn compose(plan: &Plan) -> serde_yaml::Value {
-    serde_yaml::from_str(&files(plan)["modules/unity-catalog/compose.yaml"]).unwrap()
+    serde_yaml::from_str(&files(plan)["modules/unity-catalog-oss/compose.yaml"]).unwrap()
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn storage_is_registered_through_the_api_by_default() {
     let init = &compose(&plan)["services"]["unitycatalog-storage"];
     assert_eq!(init["image"], "python:3.15-alpine");
     let files = files(&plan);
-    let storage = &files["modules/unity-catalog/storage.txt"];
+    let storage = &files["modules/unity-catalog-oss/storage.txt"];
     let entries: Vec<&str> = storage.lines().filter(|l| !l.starts_with('#')).collect();
     assert_eq!(
         entries,
@@ -167,8 +167,8 @@ fn storage_is_registered_through_the_api_by_default() {
             "catalog main",
         ]
     );
-    assert!(files.contains_key("modules/unity-catalog/bootstrap_storage.py"));
-    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    assert!(files.contains_key("modules/unity-catalog-oss/bootstrap_storage.py"));
+    let props = &files["modules/unity-catalog-oss/secrets/server.properties"];
     assert!(!props.contains("s3."), "{props}");
     assert!(props.contains("aws.accessKey="), "{props}");
 }
@@ -182,10 +182,10 @@ fn storage_bootstrap_none_renders_no_storage_helper() {
             .is_none()
     );
     let files = files(&plan);
-    assert!(!files.contains_key("modules/unity-catalog/storage.txt"));
-    assert!(!files.contains_key("modules/unity-catalog/bootstrap_storage.py"));
+    assert!(!files.contains_key("modules/unity-catalog-oss/storage.txt"));
+    assert!(!files.contains_key("modules/unity-catalog-oss/bootstrap_storage.py"));
     // The master identity stays: storage credentials created later still vend.
-    let props = &files["modules/unity-catalog/secrets/server.properties"];
+    let props = &files["modules/unity-catalog-oss/secrets/server.properties"];
     assert!(props.contains("aws.masterRoleArn="), "{props}");
 }
 
@@ -197,7 +197,7 @@ fn embedded_metadata_renders_no_storage_helper() {
             .get("unitycatalog-storage")
             .is_none()
     );
-    assert!(!files(&plan).contains_key("modules/unity-catalog/storage.txt"));
+    assert!(!files(&plan).contains_key("modules/unity-catalog-oss/storage.txt"));
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn default_catalog_needs_api_registration_and_a_valid_name() {
 #[test]
 fn master_role_arn_overrides_the_store_role() {
     let props =
-        |plan: &Plan| files(plan)["modules/unity-catalog/secrets/server.properties"].clone();
+        |plan: &Plan| files(plan)["modules/unity-catalog-oss/secrets/server.properties"].clone();
     let default = plan_with(&[]).unwrap();
     assert!(
         props(&default).contains("aws.masterRoleArn=arn:aws:iam::000000000000:role/local-storage")

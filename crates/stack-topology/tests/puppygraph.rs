@@ -47,7 +47,7 @@ fn catalog(p: &Plan) -> serde_yaml::Value {
 #[test]
 fn selecting_puppygraph_brings_the_catalog_and_its_stores() {
     let p = plan(&["puppygraph"]);
-    for id in ["envoy", "unity-catalog", "postgres", "rustfs"] {
+    for id in ["envoy", "unity-catalog-oss", "postgres", "rustfs"] {
         assert!(
             p.services.contains_key(&ModuleId::from(id)),
             "{id} not planned"

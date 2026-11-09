@@ -88,7 +88,7 @@ const GLYPHS: Record<string, Glyph> = {
     ],
   },
   // LF AI & Data artwork `unity-catalog-icon-black`
-  "unity-catalog": {
+  "unity-catalog-oss": {
     viewBox: "0 0 639 650.5",
     paths: [
       {
@@ -118,9 +118,18 @@ function glyphIcon(id: string, glyph: Glyph): ComponentType<IconProps> {
   return ProjectGlyph;
 }
 
-const ICONS: Record<string, ComponentType<IconProps>> = Object.fromEntries(
-  Object.entries(GLYPHS).map(([id, glyph]) => [id, glyphIcon(id, glyph)]),
-);
+/** Modules that are another implementation of a project, and share its logo. */
+const SAME_PROJECT: Record<string, string> = {
+  "unity-catalog-rs": "unity-catalog-oss",
+};
+
+const ICONS: Record<string, ComponentType<IconProps>> = Object.fromEntries([
+  ...Object.entries(GLYPHS).map(([id, glyph]) => [id, glyphIcon(id, glyph)]),
+  ...Object.entries(SAME_PROJECT).map(([id, of]) => [
+    id,
+    glyphIcon(id, GLYPHS[of]),
+  ]),
+]);
 
 /** The logo for a module id, if one is vendored. */
 export function projectIcon(

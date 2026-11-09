@@ -86,6 +86,11 @@ pub struct GraphNodeDto {
     /// (e.g. `"aws"`), or `""` when it is unnamed. The UI groups these nodes by it. `None`
     /// for everything the stack runs.
     pub cloud: Option<String>,
+    /// The API it serves, when other implementations serve the same one (e.g.
+    /// `unity-catalog`): a host finds the stack's server of an API by it, whichever module
+    /// implements it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
     /// For the gateway: what it exposes, one surface per listener — the platform surface
     /// first, then each service surface.
     pub surfaces: Vec<SurfaceDto>,
@@ -653,6 +658,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 .hosted
                 .get(m.id())
                 .map(|e| e.cloud.clone().unwrap_or_default()),
+            api: m.provides().api.clone(),
             offers: offers_of(id),
             surfaces: if kind == NodeKind::Gateway {
                 surfaces.clone()
@@ -674,6 +680,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         role: None,
         placement: None,
         cloud: None,
+        api: None,
         offers: Vec::new(),
         surfaces: Vec::new(),
         provisions: Vec::new(),
@@ -796,7 +803,7 @@ mod tests {
             "envoy",
             "postgres",
             "rustfs",
-            "unity-catalog",
+            "unity-catalog-oss",
             "mlflow",
             "jaeger",
             "headwaters",
@@ -836,7 +843,7 @@ mod tests {
         let g = graph_dto(&plan(&lakehouse(false)));
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids[0], CLIENTS_NODE_ID);
-        for module in ["envoy", "postgres", "rustfs", "unity-catalog", "mlflow"] {
+        for module in ["envoy", "postgres", "rustfs", "unity-catalog-oss", "mlflow"] {
             assert!(ids.contains(&module), "{module} missing: {ids:?}");
         }
         // Helper containers are part of their component, never nodes of their own.
@@ -862,7 +869,7 @@ mod tests {
         let (proto, dbs) = uses(&g, "mlflow", "postgres").expect("mlflow uses postgres");
         assert_eq!(proto, "PostgreSQL");
         assert_eq!(dbs, ["mlflow"]);
-        let (proto, buckets) = uses(&g, "unity-catalog", "rustfs").expect("UC uses rustfs");
+        let (proto, buckets) = uses(&g, "unity-catalog-oss", "rustfs").expect("UC uses rustfs");
         assert_eq!(proto, "S3");
         assert_eq!(buckets, ["unity"]);
         // STS is part of what the object store offers, not a separate shim component.
@@ -905,7 +912,7 @@ mod tests {
             .find(|p| p.name == "unitycatalog")
             .expect("UC's database");
         assert_eq!(uc_db.resource, "relational_db");
-        assert_eq!(uc_db.consumers, ["unity-catalog"]);
+        assert_eq!(uc_db.consumers, ["unity-catalog-oss"]);
         // An extra resource comes last, with the provider's kind and no consumers.
         let extra = postgres.last().expect("provisions");
         assert_eq!(
@@ -956,7 +963,7 @@ mod tests {
         assert!(
             platform
                 .iter()
-                .any(|e| e.module == "unity-catalog" && e.prefix == "/api/2.1/unity-catalog")
+                .any(|e| e.module == "unity-catalog-oss" && e.prefix == "/api/2.1/unity-catalog")
         );
         assert!(
             platform
@@ -974,7 +981,7 @@ mod tests {
             )));
         }
         for (backend, port) in [
-            ("unity-catalog", surfaces[0].host_port),
+            ("unity-catalog-oss", surfaces[0].host_port),
             ("mlflow", surfaces[0].host_port),
             ("jaeger", surfaces[0].host_port),
             ("rustfs", s3[0].host_port),
@@ -1092,12 +1099,12 @@ mod tests {
                 .iter()
                 .filter(|e| {
                     matches!(e, TopologyEdgeDto::Uses { from, to, .. }
-                        if from == "mlflow" && to == "unity-catalog")
+                        if from == "mlflow" && to == "unity-catalog-oss")
                 })
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        let with_uc = graph_dto(&plan(&Selection::modules(["mlflow", "unity-catalog"])));
+        let with_uc = graph_dto(&plan(&Selection::modules(["mlflow", "unity-catalog-oss"])));
         assert!(matches!(
             mlflow_uses_uc(&with_uc).as_slice(),
             [TopologyEdgeDto::Uses { role, protocol, resources, .. }]
@@ -1134,7 +1141,7 @@ mod tests {
             "postgres",
             "rustfs",
             "mlflow",
-            "unity-catalog",
+            "unity-catalog-oss",
             "jaeger",
             "headwaters",
             "omnigent",
@@ -1187,7 +1194,7 @@ mod tests {
         let g = graph_dto(&plan(&lakehouse(false)));
         assert_eq!(node(&g, "postgres").model.as_deref(), Some("postgresql"));
         assert_eq!(
-            node(&g, "unity-catalog").model.as_deref(),
+            node(&g, "unity-catalog-oss").model.as_deref(),
             Some("unityCatalogServer")
         );
         assert_eq!(node(&g, CLIENTS_NODE_ID).model, None);
@@ -1197,7 +1204,7 @@ mod tests {
     fn without_a_gateway_clients_reach_each_component_directly() {
         let selection = Selection {
             gateway: crate::GatewaySettings::DIRECT,
-            ..Selection::modules(["unity-catalog", "postgres", "rustfs"])
+            ..Selection::modules(["unity-catalog-oss", "postgres", "rustfs"])
         };
         let g = graph_dto(&plan(&selection));
         let ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -1205,7 +1212,7 @@ mod tests {
         // RustFS's helper, not a node.
         assert_eq!(
             ids,
-            [CLIENTS_NODE_ID, "postgres", "rustfs", "unity-catalog"]
+            [CLIENTS_NODE_ID, "postgres", "rustfs", "unity-catalog-oss"]
         );
         let access: Vec<(&str, u16)> = g
             .edges
@@ -1215,7 +1222,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(access, [("rustfs", 9000), ("unity-catalog", 8080)]);
+        assert_eq!(access, [("rustfs", 9000), ("unity-catalog-oss", 8080)]);
         assert!(
             !g.edges
                 .iter()

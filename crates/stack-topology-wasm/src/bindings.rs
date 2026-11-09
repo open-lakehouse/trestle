@@ -56,8 +56,10 @@ pub fn plan(
     target: Option<String>,
     context_json: Option<String>,
 ) -> Result<JsValue, JsValue> {
-    let selection: Selection = serde_json::from_str(selection_json)
+    let mut selection: Selection = serde_json::from_str(selection_json)
         .map_err(|e| JsValue::from_str(&format!("invalid selection JSON: {e}")))?;
+    // A selection stored before a module was renamed (e.g. a browser draft) still plans.
+    olai_stack_topology::migrate_selection(&mut selection);
     let ctx = plan_ctx(context_json.as_deref(), target)?;
     let result =
         dto::plan_result_in(&selection, &ctx).map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -93,8 +95,10 @@ pub fn bundle(
     credentials_json: &str,
     context_json: Option<String>,
 ) -> Result<JsValue, JsValue> {
-    let selection: Selection = serde_json::from_str(selection_json)
+    let mut selection: Selection = serde_json::from_str(selection_json)
         .map_err(|e| JsValue::from_str(&format!("invalid selection JSON: {e}")))?;
+    // A selection stored before a module was renamed (e.g. a browser draft) still plans.
+    olai_stack_topology::migrate_selection(&mut selection);
     let values: std::collections::BTreeMap<String, String> = serde_json::from_str(credentials_json)
         .map_err(|e| JsValue::from_str(&format!("invalid credentials JSON: {e}")))?;
     let credentials = olai_stack_topology::LocalCredentials::from_map(values)

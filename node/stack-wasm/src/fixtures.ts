@@ -3,7 +3,6 @@
 
 import { FIXTURE_FILES } from "./fixture-files.js";
 import type { CatalogDto, PlanResult } from "./types.js";
-
 export const FIXTURE_CATALOG: CatalogDto = {
   modules: [
     {
@@ -463,9 +462,9 @@ export const FIXTURE_CATALOG: CatalogDto = {
       hosted: null,
     },
     {
-      id: "unity-catalog",
+      id: "unity-catalog-oss",
       model: "unityCatalogServer",
-      display_name: "Unity Catalog",
+      display_name: "Unity Catalog (OSS)",
       summary: "Open-source Unity Catalog server; Databricks-shaped REST API.",
       category: "catalog",
       provider_of: "data_catalog",
@@ -604,7 +603,42 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
       hosted: null,
+      api: "unity-catalog",
+    },
+    {
+      id: "unity-catalog-rs",
+      model: "mangrove",
+      display_name: "Unity Catalog (Rust)",
+      summary:
+        "mangrove's Rust Unity Catalog server; the same REST API, in a container or as a Neon Function.",
+      category: "catalog",
+      provider_of: "data_catalog",
+      requires: ["envoy"],
+      conflicts_with: [],
+      resource_kinds: [],
+      resource_nouns: [],
+      knobs: [
+        {
+          key: "image",
+          title: "Unity Catalog image",
+          kind: {
+            kind: "string",
+          },
+          default: "ghcr.io/open-lakehouse/mangrove:0.0.12",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          advanced: true,
+        },
+      ],
+      helpers: [
+        {
+          name: "unitycatalog-migrate",
+          kind: "init",
+        },
+      ],
+      hosted: null,
       function: "unitycatalog",
+      api: "unity-catalog",
     },
     {
       id: "jaeger",
@@ -796,7 +830,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       summary: "Graph queries (Cypher, Gremlin) over Unity Catalog tables.",
       category: "graph",
       provider_of: "graph",
-      requires: ["envoy", "unity-catalog"],
+      requires: ["envoy", "unity-catalog-oss"],
       conflicts_with: [],
       resource_kinds: [],
       resource_nouns: [],
@@ -945,7 +979,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
     },
   ],
   default_selection: {
-    modules: ["postgres", "rustfs", "unity-catalog"],
+    modules: ["postgres", "rustfs", "unity-catalog-oss"],
     capabilities: [],
     knob_overrides: {},
     extra_resources: [],
@@ -1071,14 +1105,14 @@ export const FIXTURE_PLAN: PlanResult = {
                 gated: true,
               },
               {
-                module: "unity-catalog",
+                module: "unity-catalog-oss",
                 endpoint: "rest",
                 kind: "api",
                 prefix: "/api/2.1/unity-catalog",
                 gated: true,
               },
               {
-                module: "unity-catalog",
+                module: "unity-catalog-oss",
                 endpoint: "rest_alias",
                 kind: "api",
                 prefix: "/unity-catalog",
@@ -1193,7 +1227,7 @@ export const FIXTURE_PLAN: PlanResult = {
           {
             resource: "relational_db",
             name: "unitycatalog",
-            consumers: ["unity-catalog"],
+            consumers: ["unity-catalog-oss"],
           },
           {
             resource: "relational_db",
@@ -1226,7 +1260,7 @@ export const FIXTURE_PLAN: PlanResult = {
           {
             resource: "object_store",
             name: "unity",
-            consumers: ["unity-catalog"],
+            consumers: ["unity-catalog-oss"],
           },
           {
             resource: "object_store",
@@ -1243,16 +1277,17 @@ export const FIXTURE_PLAN: PlanResult = {
         ],
       },
       {
-        id: "unity-catalog",
+        id: "unity-catalog-oss",
         model: "unityCatalogServer",
         kind: "component",
-        display_name: "Unity Catalog",
+        display_name: "Unity Catalog (OSS)",
         summary:
           "Open-source Unity Catalog server; Databricks-shaped REST API.",
         category: "catalog",
         role: "data_catalog",
         placement: "container:unitycatalog",
         cloud: null,
+        api: "unity-catalog",
         surfaces: [],
         offers: [],
         provisions: [],
@@ -1300,9 +1335,9 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "route",
-        key: "route:envoy→unity-catalog:9080",
+        key: "route:envoy→unity-catalog-oss:9080",
         from: "envoy",
-        to: "unity-catalog",
+        to: "unity-catalog-oss",
         host_port: 9080,
         gated: true,
       },
@@ -1339,8 +1374,8 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "uses",
-        key: "uses:unity-catalog→postgres:relational_db",
-        from: "unity-catalog",
+        key: "uses:unity-catalog-oss→postgres:relational_db",
+        from: "unity-catalog-oss",
         to: "postgres",
         role: "relational_db",
         protocol: "PostgreSQL",
@@ -1348,8 +1383,8 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "uses",
-        key: "uses:unity-catalog→rustfs:object_store",
-        from: "unity-catalog",
+        key: "uses:unity-catalog-oss→rustfs:object_store",
+        from: "unity-catalog-oss",
         to: "rustfs",
         role: "object_store",
         protocol: "S3",
@@ -1375,9 +1410,9 @@ export const FIXTURE_PLAN: PlanResult = {
       },
       {
         kind: "uses",
-        key: "uses:mlflow→unity-catalog:data_catalog",
+        key: "uses:mlflow→unity-catalog-oss:data_catalog",
         from: "mlflow",
-        to: "unity-catalog",
+        to: "unity-catalog-oss",
         role: "data_catalog",
         protocol: "HTTP",
         resources: [],
@@ -1385,7 +1420,7 @@ export const FIXTURE_PLAN: PlanResult = {
     ],
   },
   mermaid:
-    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    n8 -->|"HTTP"| n7\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
+    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    n8 -->|"HTTP"| n7\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
   services: {
     authelia: [
       {
@@ -1624,7 +1659,7 @@ export const FIXTURE_PLAN: PlanResult = {
         depends_on: [],
       },
     ],
-    "unity-catalog": [
+    "unity-catalog-oss": [
       {
         name: "unitycatalog",
         role: "data_catalog",

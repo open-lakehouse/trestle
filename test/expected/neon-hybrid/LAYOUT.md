@@ -23,7 +23,7 @@
 | `neon-storage` | `s3` | `object_store` | external `https://br-example-123456.storage.eu-central-1.aws.neon.tech` | s3:443 |
 | `omnigent` | `omnigent` | `agent_platform` | container `omnigent` | ui:8000 |
 | `omnigent` | `omnigent-host` | `agent_platform` | container `omnigent-host` | — |
-| `unity-catalog` | `unitycatalog` | `data_catalog` | external `https://br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech` | rest:8080, rest_alias:8080 |
+| `unity-catalog-rs` | `unitycatalog` | `data_catalog` | external `https://br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech` | rest:8080 |
 
 ## Hosted resources
 
@@ -35,4 +35,4 @@ and setting the secrets before the stack starts.
 | `headwaters` | Neon Function | neon | `https://br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech` | — | `HEADWATERS_FUNCTION_URL` |
 | `hosted-postgres` | Neon | neon | `tcp://ep-example-123456-pooler.eu-central-1.aws.neon.tech:5432` | `mlflow`, `omnigent` | `PGHOST`, `PGPASSWORD`, `PGUSER` |
 | `neon-storage` | Neon | neon | `https://br-example-123456.storage.eu-central-1.aws.neon.tech` | `mlflow` | `NEON_S3_ACCESS_KEY_ID`, `NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_SECRET_ACCESS_KEY` |
-| `unity-catalog` | Neon Function | neon | `https://br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech` | — | `UNITYCATALOG_FUNCTION_URL` |
+| `unity-catalog-rs` | Neon Function | neon | `https://br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech` | — | `UNITYCATALOG_FUNCTION_URL` |

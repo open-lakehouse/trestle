@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn members_run_side_by_side() {
         let ws = demo();
-        let selection = Selection::modules(["envoy", "rustfs", "unity-catalog", "puppygraph"]);
+        let selection = Selection::modules(["envoy", "rustfs", "unity-catalog-oss", "puppygraph"]);
         let dev = plan_member(&ws, "dev", &selection);
         let prod = plan_member(&ws, "prod", &selection);
         assert!(port_conflicts([("dev", &dev), ("prod", &prod)]).is_empty());

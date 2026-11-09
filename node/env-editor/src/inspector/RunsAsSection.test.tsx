@@ -47,17 +47,18 @@ const module = (id: string) => {
 
 describe("Where it runs", () => {
   test("the fixtures mark the function-capable modules", () => {
-    expect(module("unity-catalog").function).toBe("unitycatalog");
+    expect(module("unity-catalog-rs").function).toBe("unitycatalog");
     expect(module("headwaters").function).toBe("headwaters");
   });
 
   test("shown only for modules that can run as a function", () => {
-    for (const id of ["unity-catalog", "headwaters"]) {
+    for (const id of ["unity-catalog-rs", "headwaters"]) {
       const html = inspect(id);
       expect(html).toContain("Where it runs");
       expect(html).not.toContain("Hosted connection");
     }
-    for (const id of ["postgres", "mlflow", "rustfs"]) {
+    // The OSS Unity Catalog can't: the Neon Function is mangrove's server.
+    for (const id of ["postgres", "mlflow", "rustfs", "unity-catalog-oss"]) {
       expect(inspect(id)).not.toContain("Where it runs");
     }
   });
@@ -76,7 +77,7 @@ describe("Where it runs", () => {
   });
 
   test("defaults to the local container", () => {
-    const html = inspect("unity-catalog");
+    const html = inspect("unity-catalog-rs");
     expect(html).toMatch(
       /role="radio" aria-checked="true"[^>]*>.*?Local container/,
     );
@@ -85,7 +86,7 @@ describe("Where it runs", () => {
   });
 
   test("as a function it names the slug and offers the URL", () => {
-    const html = inspect("unity-catalog", NEON_FUNCTION);
+    const html = inspect("unity-catalog-rs", NEON_FUNCTION);
     expect(html).toMatch(/role="radio" aria-checked="true"[^>]*>.*?Neon/);
     expect(html).toContain("Nothing of it runs locally");
     expect(html).toContain("<code");
@@ -111,7 +112,7 @@ describe("Where it runs", () => {
   test("the section ignores a non-function entry", () => {
     const html = renderToStaticMarkup(
       <RunsAsSection
-        module={module("unity-catalog")}
+        module={module("unity-catalog-rs")}
         hosted={{
           connection: { kind: "s3", access_key_id: "", secret_access_key: "" },
         }}

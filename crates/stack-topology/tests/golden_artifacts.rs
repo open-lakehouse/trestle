@@ -22,7 +22,7 @@ const COMPOSE_FIXTURE: &str = include_str!("fixtures/default/compose.yaml");
 
 /// The default lakehouse selection used to capture the fixtures.
 fn default_selection() -> Selection {
-    Selection::modules(["envoy", "rustfs", "postgres", "unity-catalog", "mlflow"])
+    Selection::modules(["envoy", "rustfs", "postgres", "unity-catalog-oss", "mlflow"])
 }
 
 fn render(selection: &Selection) -> olai_stack_topology::Artifacts {
@@ -266,9 +266,18 @@ fn compose_includes_the_same_fragments() {
             })
             .collect()
     };
+    // The fixture predates Unity Catalog's split by implementation: its `unity-catalog` is
+    // the OSS server.
+    let captured: BTreeSet<String> = module_ids(COMPOSE_FIXTURE)
+        .into_iter()
+        .map(|id| match id.as_str() {
+            "unity-catalog" => "unity-catalog-oss".to_string(),
+            _ => id,
+        })
+        .collect();
     assert_eq!(
         module_ids(&arts.compose),
-        module_ids(COMPOSE_FIXTURE),
+        captured,
         "rendered compose includes a different set of modules than trestle"
     );
     // Unlike the captured fixture (generated without a name), the planner always
@@ -343,13 +352,16 @@ fn unity_catalog_keeps_its_metadata_in_the_relational_db_provider() {
     // provisioned database goes unused. The rendered file points Hibernate at the provider,
     // and the fragment mounts it (as a secret) over the image's own.
     let p = baseline_catalog()
-        .plan(&Selection::modules(["unity-catalog"]), &PlanCtx::default())
+        .plan(
+            &Selection::modules(["unity-catalog-oss"]),
+            &PlanCtx::default(),
+        )
         .expect("plan succeeds");
     let (_, out) = olai_stack_topology::render_all(&p)
         .unwrap()
         .modules
         .into_iter()
-        .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
+        .find(|(id, _)| id == &ModuleId::from("unity-catalog-oss"))
         .expect("UC is in the render set");
     let hibernate = out
         .files
@@ -404,13 +416,13 @@ fn unity_catalog_template_branches_on_the_object_store_credential() {
             .map(|file| file.contents.clone())
     };
     let uc_render = |ctx: PlanCtx| -> (String, String, Option<String>) {
-        let sel = Selection::modules(["unity-catalog"]);
+        let sel = Selection::modules(["unity-catalog-oss"]);
         let p = baseline_catalog().plan(&sel, &ctx).expect("plan succeeds");
         let (_, out) = olai_stack_topology::render_all(&p)
             .unwrap()
             .modules
             .into_iter()
-            .find(|(id, _)| id == &ModuleId::from("unity-catalog"))
+            .find(|(id, _)| id == &ModuleId::from("unity-catalog-oss"))
             .expect("UC is in the render set");
         // Valid YAML in either branch.
         let _: Value =
@@ -1273,7 +1285,7 @@ fn data_root_is_injected_and_relocatable() {
     let p = baseline_catalog()
         .plan(&default_selection(), &PlanCtx::default())
         .unwrap();
-    for module in ["postgres", "rustfs", "unity-catalog", "mlflow", "envoy"] {
+    for module in ["postgres", "rustfs", "unity-catalog-oss", "mlflow", "envoy"] {
         assert_eq!(
             p.injected
                 .get(&ModuleId::from(module))
@@ -1342,7 +1354,7 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
                 "envoy",
                 "rustfs",
                 "postgres",
-                "unity-catalog",
+                "unity-catalog-oss",
                 "mlflow",
                 "jaeger",
             ]),
@@ -1381,7 +1393,13 @@ fn fragments_are_rendered_concrete_with_no_compose_fallbacks() {
             .filter(|l| !l.trim_start().starts_with('#'))
             .collect()
     };
-    for id in ["postgres", "rustfs", "jaeger", "unity-catalog", "mlflow"] {
+    for id in [
+        "postgres",
+        "rustfs",
+        "jaeger",
+        "unity-catalog-oss",
+        "mlflow",
+    ] {
         let f = frag(id);
         assert!(
             !body(&f).contains("${"),

@@ -173,7 +173,7 @@ const ID: &str = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 /// `demo` (meshed) with `dev` committed once: Unity Catalog and what it needs.
 fn demo(home: &Home) {
     home.ok(&["ws", "create", "demo", "--mesh"]);
-    home.ok(&["env", "create", "demo/dev", "--select", "unity-catalog"]);
+    home.ok(&["env", "create", "demo/dev", "--select", "unity-catalog-oss"]);
     home.ok(&["env", "commit", "demo/dev"]);
 }
 
@@ -290,7 +290,7 @@ fn the_draft_is_edited_committed_and_diffed() {
     home.ok(&["env", "export", "demo/dev@1", "out/dev"]);
     let toml = std::fs::read_to_string(home.path("out/dev/env.toml")).unwrap();
     assert!(
-        toml.contains("unity-catalog") && !toml.contains("mlflow"),
+        toml.contains("unity-catalog-oss") && !toml.contains("mlflow"),
         "{toml}"
     );
     home.ok(&["env", "render", "out/dev"]);
@@ -503,7 +503,7 @@ fn environments_and_workspaces_are_renamed_once_no_instance_is_left() {
     // The old names are free again, and the new owner's secrets don't touch the renamed
     // environment's.
     home.ok(&["ws", "create", "demo"]);
-    home.ok(&["env", "create", "demo/dev", "--select", "unity-catalog"]);
+    home.ok(&["env", "create", "demo/dev", "--select", "unity-catalog-oss"]);
     home.ok_with_stdin(&["var", "set", "demo/dev", "--secret", "TOKEN"], "other");
     let mut values: Vec<_> = home.keychain().values().cloned().collect();
     values.sort_by_key(|v| v.to_string());
@@ -536,7 +536,14 @@ fn workspace_dir(home: &Home) -> PathBuf {
     assert!(String::from_utf8_lossy(&out.stderr).contains("deprecated"));
     for env in ["dev", "prod"] {
         let out = home
-            .cmd(&["workspace", "add", env, "--select", "unity-catalog", "-y"])
+            .cmd(&[
+                "workspace",
+                "add",
+                env,
+                "--select",
+                "unity-catalog-oss",
+                "-y",
+            ])
             .current_dir(&dir)
             .output()
             .unwrap();

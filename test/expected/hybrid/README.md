@@ -10,7 +10,7 @@ runs from anywhere and is safe to re-run. The services, their routes and address
 flowchart LR
     n0(["<b>Clients</b>"]):::clients
     n2{{"<b>Envoy</b><br/>gateway"}}:::gateway
-    n4["<b>Unity Catalog</b><br/>data catalog"]:::component
+    n4["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component
     n5["<b>MLflow</b><br/>experiment tracking"]:::component
     subgraph cloud0["aws"]
         n1["<b>Amazon S3</b><br/>object store"]:::external

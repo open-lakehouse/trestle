@@ -52,7 +52,7 @@ fn local_credentials_leave_no_trace_in_the_tree() {
         "postgres",
         "rustfs",
         "mlflow",
-        "unity-catalog",
+        "unity-catalog-oss",
         "jaeger",
         "headwaters",
         "omnigent",
@@ -78,7 +78,13 @@ fn local_credentials_leave_no_trace_in_the_tree() {
         );
     }
     // Azurite instead of RustFS.
-    let selection = Selection::modules(["envoy", "postgres", "azurite", "mlflow", "unity-catalog"]);
+    let selection = Selection::modules([
+        "envoy",
+        "postgres",
+        "azurite",
+        "mlflow",
+        "unity-catalog-oss",
+    ]);
     let (out, _) = catalog
         .plan(&selection, &PlanCtx::default())
         .unwrap()
@@ -95,7 +101,7 @@ fn hosted_secrets_leave_no_trace_in_the_tree() {
         "envoy",
         "hosted-postgres",
         "aws-s3",
-        "unity-catalog",
+        "unity-catalog-oss",
         "mlflow",
     ]);
     selection.hosted.insert(

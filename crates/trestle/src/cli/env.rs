@@ -1601,7 +1601,7 @@ mod tests {
 
     #[test]
     fn hosted_reference_shows_the_default_connection_to_uncomment() {
-        let selection = Selection::modules(["aws-s3", "unity-catalog"]);
+        let selection = Selection::modules(["aws-s3", "unity-catalog-oss"]);
         let plan = baseline_catalog()
             .plan(&selection, &PlanCtx::default())
             .unwrap();

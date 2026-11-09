@@ -10,7 +10,7 @@ mock.module("elkjs/lib/elk.bundled.js", () => ({ default: class {} }));
 const { NodeHeader } = await import("./NodeHeader.js");
 
 const node: GraphNodeDto = {
-  id: "unity-catalog",
+  id: "unity-catalog-oss",
   model: "unityCatalogServer",
   kind: "component",
   display_name: "Unity Catalog",
@@ -102,9 +102,9 @@ describe("NodeHeader files chip", () => {
     const html = render(
       undefined,
       filesContext({
-        "unity-catalog": [
-          "modules/unity-catalog/compose.yaml",
-          "modules/unity-catalog/server.properties",
+        "unity-catalog-oss": [
+          "modules/unity-catalog-oss/compose.yaml",
+          "modules/unity-catalog-oss/server.properties",
         ],
       }),
     );
@@ -125,7 +125,9 @@ describe("NodeHeader files chip", () => {
   test("the chip comes before a host's aside", () => {
     const html = render(
       { aside: () => <span>aside</span> },
-      filesContext({ "unity-catalog": ["modules/unity-catalog/compose.yaml"] }),
+      filesContext({
+        "unity-catalog-oss": ["modules/unity-catalog-oss/compose.yaml"],
+      }),
     );
     expect(html).toContain('aria-label="View 1 config file"');
     expect(html.indexOf("View 1 config file")).toBeLessThan(
@@ -135,7 +137,7 @@ describe("NodeHeader files chip", () => {
   test("a run status is a dot on the logo, keeping the native tooltip", () => {
     const html = render({
       status: (n) =>
-        n.id === "unity-catalog"
+        n.id === "unity-catalog-oss"
           ? { state: "degraded", label: "unhealthy", detail: "2 restarts" }
           : undefined,
     });

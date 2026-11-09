@@ -284,6 +284,9 @@ export interface GraphNodeDto {
   /** For a resource provided by an external cloud: its environment's label
    *  (e.g. "aws"; "" when unnamed). External nodes are grouped by it. */
   cloud?: string | null;
+  /** The API it serves, when other implementations serve the same one (e.g.
+   *  `unity-catalog`): a host finds the stack's server of an API by it. */
+  api?: string | null;
   /** For a provider: the APIs it offers (e.g. "S3 + STS"). */
   offers: string[];
   /** For the gateway: one surface per listener, platform first. */

@@ -132,11 +132,11 @@ Every credential ends up in a file:
 
 | Credential | Files |
 |---|---|
-| `LOCAL_POSTGRES_PASSWORD` | `modules/postgres/secrets/postgres_password` (compose secret), `modules/unity-catalog/secrets/hibernate.properties` (compose secret), the `env_file`s of mlflow, headwaters (+ migrate) and omnigent |
-| `LOCAL_RUSTFS_ACCESS_KEY`, `LOCAL_RUSTFS_SECRET_KEY` | `modules/rustfs/.env/rustfs.env`, `modules/mlflow/.env/mlflow.env`, `modules/unity-catalog/secrets/server.properties` |
+| `LOCAL_POSTGRES_PASSWORD` | `modules/postgres/secrets/postgres_password` (compose secret), `modules/unity-catalog-oss/secrets/hibernate.properties` (compose secret), the `env_file`s of mlflow, headwaters (+ migrate) and omnigent |
+| `LOCAL_RUSTFS_ACCESS_KEY`, `LOCAL_RUSTFS_SECRET_KEY` | `modules/rustfs/.env/rustfs.env`, `modules/mlflow/.env/mlflow.env`, `modules/unity-catalog-oss/secrets/server.properties` |
 | `LOCAL_AUTHELIA_*` (3) | `modules/authelia/secrets/<name>` (compose secrets) |
-| Hosted `${PG_PASSWORD}` | `modules/mlflow/.env/mlflow.env`, `modules/unity-catalog/secrets/hibernate.properties` |
-| Hosted `${AWS_ACCESS_KEY_ID}`, `${AWS_SECRET_ACCESS_KEY}` | `modules/mlflow/.env/mlflow.env`, `modules/unity-catalog/secrets/server.properties`, and the root `.env` |
+| Hosted `${PG_PASSWORD}` | `modules/mlflow/.env/mlflow.env`, `modules/unity-catalog-oss/secrets/hibernate.properties` |
+| Hosted `${AWS_ACCESS_KEY_ID}`, `${AWS_SECRET_ACCESS_KEY}` | `modules/mlflow/.env/mlflow.env`, `modules/unity-catalog-oss/secrets/server.properties`, and the root `.env` |
 
 Each of these files is marked `sensitive` and git-ignored, and each is one of
 three kinds:

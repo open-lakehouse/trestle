@@ -32,18 +32,28 @@ const uses = (from: string, to: string): TopologyEdgeDto => ({
 });
 
 describe("isLateral", () => {
-  const components = new Set(["mlflow", "unity-catalog", "aws-s3"]);
+  const components = new Set(["mlflow", "unity-catalog-oss", "aws-s3"]);
   const framed = new Set(["aws-s3"]);
 
   test("a component using a peer's API", () => {
     expect(
-      isLateral(uses("mlflow", "unity-catalog"), undefined, components, framed),
+      isLateral(
+        uses("mlflow", "unity-catalog-oss"),
+        undefined,
+        components,
+        framed,
+      ),
     ).toBe(true);
   });
 
   test("not a use landing on a resource row", () => {
     expect(
-      isLateral(uses("mlflow", "unity-catalog"), "mlflow", components, framed),
+      isLateral(
+        uses("mlflow", "unity-catalog-oss"),
+        "mlflow",
+        components,
+        framed,
+      ),
     ).toBe(false);
   });
 

@@ -9,10 +9,10 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:4e814524d4bbeb70c707fbc6c9765eb506413e5cc280f916c01c883c376d286f"
+    "digest": "sha256:436cd625900e27b6bdc5a09feed2474005605c03f59ef626cee46662240b3e98"
   },
   "recipe": {
-    "digest": "sha256:1162f0eb34590fb9d412a77b08fc8c6e78ffbed692066c4833c46376d5b8c3fd"
+    "digest": "sha256:7457039fb113a76caef88a7e54a03d2f1ea191cd62c408b42c896899a8b6913e"
   },
   "context": {
     "env_name": "uc-docs",
@@ -63,14 +63,14 @@
             "protocols": [],
             "exposes": [
               {
-                "module": "unity-catalog",
+                "module": "unity-catalog-oss",
                 "endpoint": "rest",
                 "kind": "api",
                 "prefix": "/api/2.1/unity-catalog",
                 "gated": false
               },
               {
-                "module": "unity-catalog",
+                "module": "unity-catalog-oss",
                 "endpoint": "rest_alias",
                 "kind": "api",
                 "prefix": "/unity-catalog",
@@ -118,7 +118,7 @@
             "resource": "relational_db",
             "name": "unitycatalog",
             "consumers": [
-              "unity-catalog"
+              "unity-catalog-oss"
             ]
           }
         ],
@@ -149,7 +149,7 @@
             "resource": "object_store",
             "name": "uc-docs",
             "consumers": [
-              "unity-catalog"
+              "unity-catalog-oss"
             ]
           }
         ],
@@ -162,15 +162,16 @@
         ]
       },
       {
-        "id": "unity-catalog",
+        "id": "unity-catalog-oss",
         "model": "unityCatalogServer",
         "kind": "component",
-        "display_name": "Unity Catalog",
+        "display_name": "Unity Catalog (OSS)",
         "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
         "category": "catalog",
         "role": "data_catalog",
         "placement": "container:unitycatalog",
         "cloud": null,
+        "api": "unity-catalog",
         "surfaces": [],
         "offers": [],
         "provisions": [],
@@ -194,9 +195,9 @@
       },
       {
         "kind": "route",
-        "key": "route:envoy→unity-catalog:8080",
+        "key": "route:envoy→unity-catalog-oss:8080",
         "from": "envoy",
-        "to": "unity-catalog",
+        "to": "unity-catalog-oss",
         "host_port": 8080,
         "gated": false
       },
@@ -210,8 +211,8 @@
       },
       {
         "kind": "uses",
-        "key": "uses:unity-catalog→postgres:relational_db",
-        "from": "unity-catalog",
+        "key": "uses:unity-catalog-oss→postgres:relational_db",
+        "from": "unity-catalog-oss",
         "to": "postgres",
         "role": "relational_db",
         "protocol": "PostgreSQL",
@@ -221,8 +222,8 @@
       },
       {
         "kind": "uses",
-        "key": "uses:unity-catalog→rustfs:object_store",
-        "from": "unity-catalog",
+        "key": "uses:unity-catalog-oss→rustfs:object_store",
+        "from": "unity-catalog-oss",
         "to": "rustfs",
         "role": "object_store",
         "protocol": "S3",
@@ -265,7 +266,7 @@
     },
     {
       "name": "unitycatalog",
-      "component": "unity-catalog",
+      "component": "unity-catalog-oss",
       "kind": "service"
     }
   ],
@@ -338,7 +339,7 @@
         "depends_on": []
       }
     ],
-    "unity-catalog": [
+    "unity-catalog-oss": [
       {
         "name": "unitycatalog",
         "role": "data_catalog",
@@ -536,15 +537,15 @@
       "sensitive": false
     },
     {
-      "path": "modules/unity-catalog/compose.yaml",
+      "path": "modules/unity-catalog-oss/compose.yaml",
       "sensitive": false
     },
     {
-      "path": "modules/unity-catalog/secrets/server.properties",
+      "path": "modules/unity-catalog-oss/secrets/server.properties",
       "sensitive": false
     },
     {
-      "path": "modules/unity-catalog/secrets/hibernate.properties",
+      "path": "modules/unity-catalog-oss/secrets/hibernate.properties",
       "sensitive": false
     }
   ],

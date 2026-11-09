@@ -747,7 +747,7 @@ pub struct RenderCtx<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshNetwork>,
     /// The stack-wide facts (see [`StackFacts`]), as the `stack` global: a fragment branches on
-    /// an optional partner with `{% if "unity-catalog" in stack.modules %}`.
+    /// an optional partner with `{% if "unity-catalog-oss" in stack.modules %}`.
     pub stack: StackFacts,
 }
 
@@ -848,7 +848,7 @@ pub struct StackFacts {
     /// reached at its function's URL (see [`plan::function`](crate::plan)).
     pub functions: BTreeMap<String, HostedFunction>,
     /// The module serving each API in the stack, by API (see [`Provides::api`]). A template
-    /// reads it as `stack.apis["unity-catalog"]`.
+    /// reads it as `stack.apis["unity-catalog-oss"]`.
     pub apis: BTreeMap<String, ModuleId>,
 }
 

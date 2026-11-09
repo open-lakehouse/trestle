@@ -164,7 +164,7 @@ fn the_data_catalog_capability_picks_one_server() {
     let has = |p: &Plan, id: &str| p.graph.module(&ModuleId::from(id)).is_some();
     // The catalog's default: the OSS server.
     let p = plan(&selection);
-    assert!(has(&p, "unity-catalog") && !has(&p, "unity-catalog-rs"));
+    assert!(has(&p, "unity-catalog-oss") && !has(&p, "unity-catalog-rs"));
     // The environment's preference wins.
     let ctx = PlanCtx {
         provider_preference: [(
@@ -175,5 +175,5 @@ fn the_data_catalog_capability_picks_one_server() {
         ..PlanCtx::default()
     };
     let p = baseline_catalog().plan(&selection, &ctx).expect("plans");
-    assert!(has(&p, "unity-catalog-rs") && !has(&p, "unity-catalog"));
+    assert!(has(&p, "unity-catalog-rs") && !has(&p, "unity-catalog-oss"));
 }

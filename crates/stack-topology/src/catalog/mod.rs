@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn baseline_has_the_default_lakehouse_modules() {
         let cat = baseline_catalog();
-        for id in ["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"] {
+        for id in ["envoy", "postgres", "rustfs", "mlflow", "unity-catalog-oss"] {
             assert!(cat.get(&id.into()).is_some(), "baseline missing {id}");
         }
     }
@@ -194,7 +194,7 @@ mod tests {
         assert_eq!(
             cat.providers_of("data_catalog"),
             vec![
-                &ModuleId::from("unity-catalog"),
+                &ModuleId::from("unity-catalog-oss"),
                 &ModuleId::from("unity-catalog-rs")
             ]
         );
@@ -214,7 +214,7 @@ mod tests {
     #[cfg(feature = "catalog")]
     #[test]
     fn manifest_rejects_a_malformed_model_ref() {
-        for bad in ["unity-catalog", "lakehouse..table", "9lives", ""] {
+        for bad in ["unity-catalog-oss", "lakehouse..table", "9lives", ""] {
             let err = Catalog::from_manifests([format!("id: probe\nmodel: '{bad}'\n").as_str()])
                 .err()
                 .unwrap_or_else(|| panic!("`{bad}` was accepted"));

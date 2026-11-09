@@ -1195,7 +1195,7 @@ mod tests {
     use knobs::resolve_knob;
 
     fn default_selection() -> Selection {
-        Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "unity-catalog"])
+        Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "unity-catalog-oss"])
     }
 
     fn shared_routes(plan: &Plan) -> &[GatewayRoute] {
@@ -1802,7 +1802,7 @@ mod tests {
         let cat = baseline_catalog();
         let a = plan_env(&default_selection(), &cat, &PlanCtx::default()).unwrap();
         let reversed =
-            Selection::modules(["unity-catalog", "mlflow", "rustfs", "postgres", "envoy"]);
+            Selection::modules(["unity-catalog-oss", "mlflow", "rustfs", "postgres", "envoy"]);
         let b = plan_env(&reversed, &cat, &PlanCtx::default()).unwrap();
         // `Plan` is not `Eq` (its graph holds trait objects); compare the
         // observable, contracted-deterministic artifacts instead.
@@ -2147,7 +2147,7 @@ mod tests {
     #[test]
     fn a_direct_environment_publishes_each_service_on_its_own_port() {
         let p = plan_env(
-            &direct(&["unity-catalog", "postgres", "azurite"]),
+            &direct(&["unity-catalog-oss", "postgres", "azurite"]),
             &baseline_catalog(),
             &PlanCtx::default(),
         )
@@ -2160,13 +2160,19 @@ mod tests {
         assert!(!p.has_gateway() && p.gateway_url().is_none());
 
         assert_eq!(
-            host_url(&p, "unity-catalog", "unitycatalog", "rest", Vantage::Host),
+            host_url(
+                &p,
+                "unity-catalog-oss",
+                "unitycatalog",
+                "rest",
+                Vantage::Host
+            ),
             "http://localhost:8080/api/2.1/unity-catalog"
         );
         assert_eq!(
             host_url(
                 &p,
-                "unity-catalog",
+                "unity-catalog-oss",
                 "unitycatalog",
                 "rest",
                 Vantage::Container
@@ -2178,7 +2184,7 @@ mod tests {
             "http://localhost:10000/"
         );
         // Both UC mounts share the one published port.
-        let uc = &p.bindings[&ModuleId::from("unity-catalog")];
+        let uc = &p.bindings[&ModuleId::from("unity-catalog-oss")];
         assert_eq!(
             uc.published_ports,
             vec![crate::catalog::module::PortMapping {
@@ -2225,8 +2231,14 @@ mod tests {
             dedicated_listener_ports: vec![18080],
             ..PlanCtx::default()
         };
-        let p = plan_env(&direct(&["unity-catalog", "other"]), &catalog, &ctx).unwrap();
-        let uc = host_url(&p, "unity-catalog", "unitycatalog", "rest", Vantage::Host);
+        let p = plan_env(&direct(&["unity-catalog-oss", "other"]), &catalog, &ctx).unwrap();
+        let uc = host_url(
+            &p,
+            "unity-catalog-oss",
+            "unitycatalog",
+            "rest",
+            Vantage::Host,
+        );
         let other = host_url(&p, "other", "other", "api", Vantage::Host);
         // Graph order decides who keeps 8080; the other gets the pinned fallback.
         let mut ports = [uc, other].map(|u| u.split(':').nth(2).unwrap()[..5].to_string());
@@ -2238,7 +2250,7 @@ mod tests {
     fn a_direct_environment_keeps_the_gateway_only_for_emulated_hostnames() {
         // RustFS answers the AWS hostnames UC vends credentials against, in-network.
         let p = plan_env(
-            &direct(&["unity-catalog", "rustfs"]),
+            &direct(&["unity-catalog-oss", "rustfs"]),
             &baseline_catalog(),
             &PlanCtx::default(),
         )
@@ -2256,7 +2268,8 @@ mod tests {
             "http://localhost:9000/"
         );
         // Consumers reach the store directly, trusting the gateway CA for the AWS hostnames.
-        let uc_store = &p.bindings[&ModuleId::from("unity-catalog")].connections["object_store"][0];
+        let uc_store =
+            &p.bindings[&ModuleId::from("unity-catalog-oss")].connections["object_store"][0];
         let Connection::ObjectStore {
             endpoint,
             tls_trust,

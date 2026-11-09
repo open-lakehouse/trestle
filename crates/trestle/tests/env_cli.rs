@@ -26,7 +26,7 @@ fn new_env(dir: &Path) {
         "--out-dir",
         dir.to_str().unwrap(),
         "--select",
-        "unity-catalog",
+        "unity-catalog-oss",
         "--defaults",
     ]);
 }
@@ -68,7 +68,7 @@ fn every_render_writes_the_same_plan_json() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|n| n["id"] == "unity-catalog")
+        .find(|n| n["id"] == "unity-catalog-oss")
         .unwrap();
     assert_eq!(uc["model"], "unityCatalogServer");
 }
@@ -179,7 +179,7 @@ fn diagram_prints_the_environment_as_mermaid() {
     let out = trestle(&["env", "diagram", env.to_str().unwrap()]);
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.starts_with("flowchart LR\n"), "got:\n{text}");
-    assert!(text.contains("<b>Unity Catalog</b>"), "got:\n{text}");
+    assert!(text.contains("<b>Unity Catalog (OSS)</b>"), "got:\n{text}");
 
     let readme = fs::read_to_string(env.join("README.md")).unwrap();
     assert!(

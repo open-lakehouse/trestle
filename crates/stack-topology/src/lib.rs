@@ -134,7 +134,9 @@ pub use target::{Compose, DeployTarget, TargetId, builtin_targets};
 
 pub use address::{AddressError, ServiceRef};
 
-pub use manifest::{CatalogSource, EnvManifest, ManifestError, pin_dedicated_ports};
+pub use manifest::{
+    CatalogSource, EnvManifest, ManifestError, migrate_selection, pin_dedicated_ports,
+};
 
 pub use workspace::{
     MAX_SLOT, PortConflict, RuntimePlacement, SLOT_PORT_STRIDE, WORKSPACE_FILE, WorkspaceEnv,

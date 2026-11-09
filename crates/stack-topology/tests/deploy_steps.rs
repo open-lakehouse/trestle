@@ -14,7 +14,7 @@ fn selection(vendor: HostedVendor) -> Selection {
         "envoy",
         "hosted-postgres",
         "aws-s3",
-        "unity-catalog",
+        "unity-catalog-oss",
         "mlflow",
     ]);
     let HostedConnection::Postgres {
@@ -214,7 +214,7 @@ fn rendered_scripts_are_valid_bash() {
     let dir = std::env::temp_dir().join(format!("trestle-deploy-steps-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut checked = 0;
-    let mut azure = Selection::modules(["envoy", "postgres", "azure-storage", "unity-catalog"]);
+    let mut azure = Selection::modules(["envoy", "postgres", "azure-storage", "unity-catalog-oss"]);
     azure.hosted.insert(
         ModuleId::from("azure-storage"),
         HostedKind::AzureBlob.default_resource(),
@@ -299,7 +299,10 @@ fn managed_postgres_vendors_connect_over_tls() {
     let out = plan.materialize().unwrap();
     let mlflow = file(&out, "modules/mlflow/.env/mlflow.env");
     assert!(mlflow.contains("/mlflow?sslmode=require"), "{mlflow}");
-    let hibernate = file(&out, "modules/unity-catalog/secrets/hibernate.properties");
+    let hibernate = file(
+        &out,
+        "modules/unity-catalog-oss/secrets/hibernate.properties",
+    );
     assert!(
         hibernate.contains("/unitycatalog?sslmode=require"),
         "{hibernate}"

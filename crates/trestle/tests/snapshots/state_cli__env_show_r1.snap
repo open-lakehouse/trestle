@@ -8,7 +8,7 @@ expression: "home.json(&[\"env\", \"show\", \"demo/dev@1\", \"--json\"], \"envir
   "knobs": {},
   "module_manifests": [],
   "modules": [
-    "unity-catalog"
+    "unity-catalog-oss"
   ],
   "name": "dev",
   "revision": "1",

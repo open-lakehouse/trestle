@@ -167,7 +167,7 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     .with_default_provider(Role::RELATIONAL_DB, "postgres")
     // Selecting the `data_catalog` capability picks the OSS server.
-    .with_default_provider(Role::DATA_CATALOG, "unity-catalog")
+    .with_default_provider(Role::DATA_CATALOG, "unity-catalog-oss")
     // No coordinate contracts: a provider vends a typed `Connection`, whose variant fields
     // are all mandatory, so completeness is a compile-time guarantee rather than a runtime
     // check.
@@ -380,7 +380,7 @@ fn hosted_placement() -> Placement {
 /// listed: every plan includes it. Other modules (ml, query engine, observability, ...)
 /// are opt-in.
 pub fn baseline_selection() -> crate::plan::Selection {
-    crate::plan::Selection::modules(["postgres", "rustfs", "unity-catalog"])
+    crate::plan::Selection::modules(["postgres", "rustfs", "unity-catalog-oss"])
 }
 
 /// A container-placed service.
@@ -1441,7 +1441,8 @@ const UNITY_CATALOG_STORAGE: &str = "unitycatalog-storage";
 const UNITY_CATALOG_MOUNTS: &str = "unitycatalog-mounts";
 const UNITY_CATALOG_PORT: u16 = 8080;
 
-/// `unity-catalog` — the data catalog.
+/// `unity-catalog-oss` — the open-source (Java) Unity Catalog server, one implementation of
+/// [`UNITY_CATALOG_API`] (`unity-catalog-rs` is the other).
 /// Databricks-shaped path at root, so `/api/2.1/unity-catalog` fronts with no rewrite;
 /// a second `/unity-catalog` alias points at the same service.
 fn unity_catalog() -> Arc<dyn Module> {
@@ -1450,9 +1451,8 @@ fn unity_catalog() -> Arc<dyn Module> {
             HelperService::sidecar(UNITY_CATALOG_STORAGE),
             HelperService::init(UNITY_CATALOG_MOUNTS),
         ],
-        // It can also run as a Neon Function, whose slug can't hold a dash (see
-        // `plan::function`).
-        function: Some("unitycatalog".into()),
+        // Not a function: the Unity Catalog Neon Function is mangrove's server
+        // (`unity-catalog-rs`).
         api: Some(UNITY_CATALOG_API.into()),
         ..Provides::default()
     };
@@ -1470,9 +1470,9 @@ fn unity_catalog() -> Arc<dyn Module> {
     // the fragment trusts the gateway's local CA when the connection carries a `tls_trust`.
 
     Arc::new(UnityCatalog(DataModule {
-        id: ModuleId::from("unity-catalog"),
+        id: ModuleId::from("unity-catalog-oss"),
         model: Some("unityCatalogServer".into()),
-        display_name: Some("Unity Catalog".into()),
+        display_name: Some("Unity Catalog (OSS)".into()),
         summary: Some("Open-source Unity Catalog server; Databricks-shaped REST API.".into()),
         category: Some("catalog".into()),
         provider_of: Some(Role::DATA_CATALOG.into()),
@@ -1636,12 +1636,14 @@ fn unity_catalog() -> Arc<dyn Module> {
             ),
         ],
         renders: template_with_files(
-            include_str!("../../templates/modules/unity-catalog/compose.yaml.jinja"),
+            include_str!("../../templates/modules/unity-catalog-oss/compose.yaml.jinja"),
             vec![
                 secret_file(
                     "secrets/server.properties",
                     "unitycatalog_server_properties",
-                    include_str!("../../templates/modules/unity-catalog/server.properties.jinja"),
+                    include_str!(
+                        "../../templates/modules/unity-catalog-oss/server.properties.jinja"
+                    ),
                 ),
                 // The metadata store: the relational_db demand's connection, as the
                 // Hibernate config the server reads (a secret: it holds the password).
@@ -1649,20 +1651,20 @@ fn unity_catalog() -> Arc<dyn Module> {
                     "secrets/hibernate.properties",
                     "unitycatalog_hibernate_properties",
                     include_str!(
-                        "../../templates/modules/unity-catalog/hibernate.properties.jinja"
+                        "../../templates/modules/unity-catalog-oss/hibernate.properties.jinja"
                     ),
                 ),
                 // What `unitycatalog-storage` registers (no secrets: names, URLs, role ARNs).
                 config_file(
                     "storage.txt",
                     "unitycatalog_storage",
-                    include_str!("../../templates/modules/unity-catalog/storage.txt.jinja"),
+                    include_str!("../../templates/modules/unity-catalog-oss/storage.txt.jinja"),
                 ),
                 config_file(
                     "bootstrap_storage.py",
                     "unitycatalog_bootstrap_storage",
                     include_str!(
-                        "../../templates/modules/unity-catalog/bootstrap_storage.py.jinja"
+                        "../../templates/modules/unity-catalog-oss/bootstrap_storage.py.jinja"
                     ),
                 ),
             ],
@@ -2522,7 +2524,9 @@ fn puppygraph() -> Arc<dyn Module> {
         summary: Some("Graph queries (Cypher, Gremlin) over Unity Catalog tables.".into()),
         category: Some("graph".into()),
         provider_of: Some(Role::GRAPH.into()),
-        requires: vec![ModuleId::from("envoy"), ModuleId::from("unity-catalog")],
+        // It maps UC tables and reads them with the credentials the OSS server's storage
+        // registration vends.
+        requires: vec![ModuleId::from("envoy"), ModuleId::from("unity-catalog-oss")],
         conflicts_with: vec![],
         // Named like UC's demand, so it resolves to the store UC vends credentials for. Nothing
         // is bound into env: the fragment reads the connection's CA trust directly.
@@ -2829,7 +2833,7 @@ mod tests {
             ("azure-storage", "azureBlobStorage"),
             ("neon-storage", "neonObjectStorage"),
             ("mlflow", "mlflow"),
-            ("unity-catalog", "unityCatalogServer"),
+            ("unity-catalog-oss", "unityCatalogServer"),
             ("unity-catalog-rs", "mangrove"),
             ("jaeger", "jaeger"),
             ("headwaters", "headwaters"),

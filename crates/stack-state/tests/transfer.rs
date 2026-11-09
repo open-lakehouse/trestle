@@ -18,7 +18,7 @@ fn workspace_dir(root: &Path) {
     ws.write_to(&root.join("trestle-workspace.toml")).unwrap();
 
     let mut dev = EnvManifest::new(
-        Selection::modules(["unity-catalog", "probe"]),
+        Selection::modules(["unity-catalog-oss", "probe"]),
         PlanCtx {
             env_name: "dev".into(),
             ..PlanCtx::default()

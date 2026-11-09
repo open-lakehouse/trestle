@@ -35,7 +35,14 @@ fn demo(root: &Path) -> std::path::PathBuf {
     for env in ["dev", "prod"] {
         trestle(
             &ws,
-            &["workspace", "add", env, "--select", "unity-catalog", "-y"],
+            &[
+                "workspace",
+                "add",
+                env,
+                "--select",
+                "unity-catalog-oss",
+                "-y",
+            ],
         );
     }
     ws

@@ -9,10 +9,10 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:4e814524d4bbeb70c707fbc6c9765eb506413e5cc280f916c01c883c376d286f"
+    "digest": "sha256:436cd625900e27b6bdc5a09feed2474005605c03f59ef626cee46662240b3e98"
   },
   "recipe": {
-    "digest": "sha256:e872d3b6efc1a21fe30be92d1afca28925aef66b1c2d953ae25f1d11bacce8cd"
+    "digest": "sha256:a0664a86f5ed9438f10f10a786a428d1fae9dcd61015e00be1a82cc54bfbdca1"
   },
   "context": {
     "env_name": "uc-direct",
@@ -62,7 +62,7 @@
             "resource": "relational_db",
             "name": "unitycatalog",
             "consumers": [
-              "unity-catalog"
+              "unity-catalog-oss"
             ]
           }
         ],
@@ -93,7 +93,7 @@
             "resource": "object_store",
             "name": "unity",
             "consumers": [
-              "unity-catalog"
+              "unity-catalog-oss"
             ]
           }
         ],
@@ -106,15 +106,16 @@
         ]
       },
       {
-        "id": "unity-catalog",
+        "id": "unity-catalog-oss",
         "model": "unityCatalogServer",
         "kind": "component",
-        "display_name": "Unity Catalog",
+        "display_name": "Unity Catalog (OSS)",
         "summary": "Open-source Unity Catalog server; Databricks-shaped REST API.",
         "category": "catalog",
         "role": "data_catalog",
         "placement": "container:unitycatalog",
         "cloud": null,
+        "api": "unity-catalog",
         "surfaces": [],
         "offers": [],
         "provisions": [],
@@ -131,15 +132,15 @@
       },
       {
         "kind": "access",
-        "key": "access:@clients→unity-catalog:8080",
+        "key": "access:@clients→unity-catalog-oss:8080",
         "from": "@clients",
-        "to": "unity-catalog",
+        "to": "unity-catalog-oss",
         "host_port": 8080
       },
       {
         "kind": "uses",
-        "key": "uses:unity-catalog→postgres:relational_db",
-        "from": "unity-catalog",
+        "key": "uses:unity-catalog-oss→postgres:relational_db",
+        "from": "unity-catalog-oss",
         "to": "postgres",
         "role": "relational_db",
         "protocol": "PostgreSQL",
@@ -149,8 +150,8 @@
       },
       {
         "kind": "uses",
-        "key": "uses:unity-catalog→rustfs:object_store",
-        "from": "unity-catalog",
+        "key": "uses:unity-catalog-oss→rustfs:object_store",
+        "from": "unity-catalog-oss",
         "to": "rustfs",
         "role": "object_store",
         "protocol": "S3",
@@ -193,17 +194,17 @@
     },
     {
       "name": "unitycatalog",
-      "component": "unity-catalog",
+      "component": "unity-catalog-oss",
       "kind": "service"
     },
     {
       "name": "unitycatalog-storage",
-      "component": "unity-catalog",
+      "component": "unity-catalog-oss",
       "kind": "sidecar"
     },
     {
       "name": "unitycatalog-mounts",
-      "component": "unity-catalog",
+      "component": "unity-catalog-oss",
       "kind": "init"
     }
   ],
@@ -277,7 +278,7 @@
         "depends_on": []
       }
     ],
-    "unity-catalog": [
+    "unity-catalog-oss": [
       {
         "name": "unitycatalog",
         "role": "data_catalog",
@@ -444,23 +445,23 @@
       "sensitive": false
     },
     {
-      "path": "modules/unity-catalog/compose.yaml",
+      "path": "modules/unity-catalog-oss/compose.yaml",
       "sensitive": false
     },
     {
-      "path": "modules/unity-catalog/secrets/server.properties",
+      "path": "modules/unity-catalog-oss/secrets/server.properties",
       "sensitive": true
     },
     {
-      "path": "modules/unity-catalog/secrets/hibernate.properties",
+      "path": "modules/unity-catalog-oss/secrets/hibernate.properties",
       "sensitive": true
     },
     {
-      "path": "modules/unity-catalog/storage.txt",
+      "path": "modules/unity-catalog-oss/storage.txt",
       "sensitive": false
     },
     {
-      "path": "modules/unity-catalog/bootstrap_storage.py",
+      "path": "modules/unity-catalog-oss/bootstrap_storage.py",
       "sensitive": false
     }
   ],

@@ -13,7 +13,7 @@ flowchart LR
     n2{{"<b>Envoy</b><br/>gateway"}}:::gateway
     n3["<b>Jaeger</b><br/>tracing"]:::component
     n4["<b>Postgres</b><br/>relational db"]:::component
-    n5["<b>Unity Catalog</b><br/>data catalog"]:::component
+    n5["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component
     n6["<b>MLflow</b><br/>experiment tracking"]:::component
     n7["<b>Headwaters</b><br/>lineage"]:::component
     n0 -->|":9080"| n2

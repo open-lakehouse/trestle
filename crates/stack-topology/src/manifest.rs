@@ -133,9 +133,12 @@ impl EnvManifest {
     /// gateway-less environments ([`GatewaySettings::enabled`](crate::GatewaySettings::enabled));
     /// an older file always has a gateway, so it reads unchanged. Version 5 moved the runtime
     /// placement (project name, mesh network, port offset) out of `[context]`; an older file's
-    /// placement is dropped on read and its slot-shifted ports moved back to slot 0.
+    /// placement is dropped on read and its slot-shifted ports moved back to slot 0. Version 6
+    /// split `unity-catalog` into its two implementations, `unity-catalog-oss` and
+    /// `unity-catalog-rs`; an older file's selection is migrated on read (see
+    /// [`migrate_selection`]).
     pub fn current_version() -> u32 {
-        5
+        6
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -178,6 +181,17 @@ impl EnvManifest {
                 found: manifest.version,
                 supported: Self::current_version(),
             });
+        }
+        if migrate_selection(&mut manifest.selection) {
+            migrated = true;
+        }
+        for providers in manifest.context.provider_preference.values_mut() {
+            for id in providers.iter_mut() {
+                if id.as_str() == LEGACY_UNITY_CATALOG {
+                    *id = ModuleId::from(UNITY_CATALOG_OSS);
+                    migrated = true;
+                }
+            }
         }
         let placement_free = manifest.context.without_placement();
         if placement_free != manifest.context {
@@ -356,6 +370,57 @@ fn legacy_name_placeholder() -> String {
     "{name}".into()
 }
 
+/// The module id Unity Catalog had before it was split by implementation (manifest version 6).
+const LEGACY_UNITY_CATALOG: &str = "unity-catalog";
+/// The open-source server, what [`LEGACY_UNITY_CATALOG`] ran in a container.
+const UNITY_CATALOG_OSS: &str = "unity-catalog-oss";
+/// mangrove's server, what [`LEGACY_UNITY_CATALOG`] ran as a Neon Function.
+const UNITY_CATALOG_RS: &str = "unity-catalog-rs";
+
+/// Rewrite module ids a selection made before they were renamed. Returns whether anything
+/// changed. Idempotent, and a no-op for a current selection, so a consumer that stores bare
+/// selections (not manifests) can run it on every load.
+///
+/// `unity-catalog` was the open-source server in a container, and the Unity Catalog Neon
+/// Function, which runs mangrove's server. It becomes `unity-catalog-oss`, with its knob
+/// overrides, unless the selection runs it as a function: then it becomes `unity-catalog-rs`,
+/// keeping the function entry and dropping the overrides (they were the OSS server's).
+pub fn migrate_selection(selection: &mut Selection) -> bool {
+    let legacy = ModuleId::from(LEGACY_UNITY_CATALOG);
+    let selected = selection.modules.contains(&legacy);
+    let hosted = selection.hosted.remove(&legacy);
+    let overrides = selection.knob_overrides.remove(&legacy);
+    if !selected && hosted.is_none() && overrides.is_none() {
+        return false;
+    }
+    let function = matches!(
+        hosted,
+        Some(HostedResource {
+            connection: HostedConnection::Function { .. },
+            ..
+        })
+    );
+    let to = ModuleId::from(if function {
+        UNITY_CATALOG_RS
+    } else {
+        UNITY_CATALOG_OSS
+    });
+    for id in &mut selection.modules {
+        if *id == legacy {
+            *id = to.clone();
+        }
+    }
+    if let Some(hosted) = hosted {
+        selection.hosted.insert(to.clone(), hosted);
+    }
+    if let Some(overrides) = overrides
+        && !function
+    {
+        selection.knob_overrides.insert(to, overrides);
+    }
+    true
+}
+
 /// Rewrite a pre-version-3 manifest's `selection.external` table in place into
 /// `selection.hosted`, swapping each in-stack module for its hosted provider. Returns whether
 /// anything was migrated.
@@ -490,7 +555,7 @@ mod tests {
 
     fn sample_manifest() -> EnvManifest {
         EnvManifest::new(
-            Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog", "mlflow"]),
+            Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog-oss", "mlflow"]),
             PlanCtx::default(),
         )
     }
@@ -671,7 +736,7 @@ mod tests {
             dedicated_listener_ports = [10100]
         "#;
         let manifest = EnvManifest::from_toml(v4).unwrap();
-        assert_eq!(manifest.version, 5);
+        assert_eq!(manifest.version, EnvManifest::current_version());
         let ctx = &manifest.context;
         assert_eq!(ctx.env_name, "prod");
         assert_eq!(ctx.project_name, None);
@@ -732,7 +797,7 @@ mod tests {
         let manifest = EnvManifest::new(
             Selection {
                 gateway: crate::GatewaySettings::DIRECT,
-                ..Selection::modules(["unity-catalog"])
+                ..Selection::modules(["unity-catalog-oss"])
             },
             PlanCtx::default(),
         );
@@ -743,7 +808,10 @@ mod tests {
         );
         assert_eq!(EnvManifest::from_toml(&text).unwrap(), manifest);
         // A gateway is the default, so it is never written out.
-        let open = EnvManifest::new(Selection::modules(["unity-catalog"]), PlanCtx::default());
+        let open = EnvManifest::new(
+            Selection::modules(["unity-catalog-oss"]),
+            PlanCtx::default(),
+        );
         assert!(!open.to_toml().unwrap().contains("enabled"));
         // Normalizing keeps it off.
         let mut normalized = manifest.clone();
@@ -774,6 +842,58 @@ mod tests {
     }
 
     #[test]
+    fn a_v5_unity_catalog_in_a_container_becomes_the_oss_server() {
+        let m = EnvManifest::from_toml(
+            "version = 5\n[selection]\nmodules = [\"postgres\", \"unity-catalog\"]\n\
+             [selection.knob_overrides.unity-catalog]\nbucket = \"lake\"\n\
+             [context.provider_preference]\ndata_catalog = [\"unity-catalog\"]\n",
+        )
+        .unwrap();
+        assert_eq!(m.version, EnvManifest::current_version());
+        let oss = ModuleId::from("unity-catalog-oss");
+        assert_eq!(
+            m.selection.modules,
+            vec![ModuleId::from("postgres"), oss.clone()]
+        );
+        assert_eq!(m.selection.knob_overrides[&oss]["bucket"], "lake");
+        assert_eq!(m.context.provider_preference["data_catalog"], vec![oss]);
+        assert!(m.selection.hosted.is_empty());
+    }
+
+    #[test]
+    fn a_v5_unity_catalog_function_becomes_the_rust_server() {
+        let m = EnvManifest::from_toml(
+            "version = 5\n[selection]\nmodules = [\"mlflow\", \"unity-catalog\"]\n\
+             [selection.knob_overrides.unity-catalog]\nimage = \"unitycatalog/unitycatalog:v0.6.0\"\n\
+             [selection.hosted.unity-catalog]\nvendor = \"neon-function\"\n\
+             connection = { kind = \"function\" }\n",
+        )
+        .unwrap();
+        let rs = ModuleId::from("unity-catalog-rs");
+        assert_eq!(
+            m.selection.modules,
+            vec![ModuleId::from("mlflow"), rs.clone()]
+        );
+        assert!(matches!(
+            m.selection.hosted[&rs].connection,
+            HostedConnection::Function { url: None }
+        ));
+        // The OSS server's image would be wrong for mangrove's.
+        assert!(m.selection.knob_overrides.is_empty());
+        // It plans: mangrove's server runs as the function.
+        let plan = m.plan(&baseline_catalog()).expect("plans");
+        assert_eq!(plan.neon_requirements().functions[0].module, rs);
+    }
+
+    #[test]
+    fn migrating_a_current_selection_changes_nothing() {
+        let mut selection = Selection::modules(["unity-catalog-oss", "mlflow"]);
+        let before = selection.clone();
+        assert!(!migrate_selection(&mut selection));
+        assert_eq!(selection, before);
+    }
+
+    #[test]
     fn a_v2_external_entry_migrates_to_its_hosted_provider() {
         let m = EnvManifest::from_toml(
             "version = 2\n[selection]\nmodules = [\"postgres\", \"rustfs\", \"unity-catalog\"]\n\
@@ -789,7 +909,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.version, EnvManifest::current_version());
-        assert_eq!(m.selection.modules, vec![ModuleId::from("unity-catalog")]);
+        // And `unity-catalog` is the OSS server now (version 6).
+        assert_eq!(
+            m.selection.modules,
+            vec![ModuleId::from("unity-catalog-oss")]
+        );
         assert!(m.selection.knob_overrides.is_empty());
         let pg = &m.selection.hosted[&ModuleId::from("hosted-postgres")];
         assert_eq!(pg.cloud.as_deref(), Some("aws"));

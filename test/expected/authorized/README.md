@@ -15,7 +15,7 @@ flowchart LR
     n4["<b>Postgres</b><br/>relational db"]:::component
     n5["<b>Headwaters</b><br/>lineage"]:::component
     n6["<b>RustFS</b><br/>object store"]:::component
-    n7["<b>Unity Catalog</b><br/>data catalog"]:::component
+    n7["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component
     n8["<b>MLflow</b><br/>experiment tracking"]:::component
     n0 -->|":9080"| n2
     n0 -->|":9100"| n2

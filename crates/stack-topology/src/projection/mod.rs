@@ -640,7 +640,7 @@ mod tests {
             "postgres",
             "rustfs",
             "mlflow",
-            "unity-catalog",
+            "unity-catalog-oss",
             "omnigent",
         ] {
             assert!(
@@ -675,7 +675,7 @@ mod tests {
             gateway_admin_port: 10901,
             ..PlanCtx::default()
         };
-        let result = plan_result_in(&Selection::modules(["unity-catalog"]), &ctx).unwrap();
+        let result = plan_result_in(&Selection::modules(["unity-catalog-oss"]), &ctx).unwrap();
         let ports: Vec<u16> = result.host_ports.iter().map(|p| p.port).collect();
         assert!(
             ports.contains(&10080) && ports.contains(&10901),
@@ -747,7 +747,13 @@ mod tests {
     fn fixture_selection() -> Selection {
         Selection {
             gateway: crate::GatewaySettings::POLICY,
-            ..Selection::modules(["postgres", "rustfs", "unity-catalog", "mlflow", "jaeger"])
+            ..Selection::modules([
+                "postgres",
+                "rustfs",
+                "unity-catalog-oss",
+                "mlflow",
+                "jaeger",
+            ])
         }
     }
 
@@ -819,7 +825,7 @@ mod tests {
 
     #[test]
     fn a_selected_provider_replaces_the_default() {
-        let selection = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog"]);
+        let selection = Selection::modules(["envoy", "postgres", "azurite", "unity-catalog-oss"]);
         let result = plan_result(&selection, None).expect("plan should succeed");
         let ids: Vec<&str> = result.graph.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains(&"azurite"), "{ids:?}");
@@ -888,7 +894,7 @@ mod tests {
 
     #[test]
     fn a_manifest_plans_with_its_whole_context() {
-        let selection = Selection::modules(["unity-catalog"]);
+        let selection = Selection::modules(["unity-catalog-oss"]);
         let ctx = PlanCtx {
             gateway_host_port: 8080,
             ..PlanCtx::default()
@@ -932,7 +938,7 @@ mod tests {
     #[test]
     fn bundle_carries_generated_credentials_only_in_sensitive_files() {
         let creds = generated_credentials();
-        let selection = Selection::modules(["mlflow", "unity-catalog", "rustfs", "authelia"]);
+        let selection = Selection::modules(["mlflow", "unity-catalog-oss", "rustfs", "authelia"]);
         let bundle = bundle_result(&selection, None, &creds).unwrap();
         for spec in LOCAL_CREDENTIALS {
             let value = creds.get(spec.key);

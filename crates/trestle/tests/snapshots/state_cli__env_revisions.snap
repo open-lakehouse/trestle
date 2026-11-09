@@ -9,7 +9,7 @@ expression: "home.json(&[\"env\", \"revisions\", \"demo/dev\", \"--json\"], \"re
     "head": false,
     "instances": 0,
     "modules": [
-      "unity-catalog"
+      "unity-catalog-oss"
     ],
     "number": 1,
     "vars": 0
@@ -21,7 +21,7 @@ expression: "home.json(&[\"env\", \"revisions\", \"demo/dev\", \"--json\"], \"re
     "instances": 0,
     "message": "add mlflow",
     "modules": [
-      "unity-catalog",
+      "unity-catalog-oss",
       "mlflow"
     ],
     "number": 2,

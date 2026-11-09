@@ -23,4 +23,4 @@
 | `mlflow` | `mlflow` | `experiment_tracking` | container `mlflow` | tracking:5000, tracking_v3:5000, tracking_v4:5000, otel:5000, ai_gateway:5000, ui:5000 |
 | `postgres` | `db` | `relational_db` | container `db` | sql:5432 |
 | `rustfs` | `rustfs` | `object_store` | container `rustfs` | s3:9000 |
-| `unity-catalog` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |
+| `unity-catalog-oss` | `unitycatalog` | `data_catalog` | container `unitycatalog` | rest:8080, rest_alias:8080 |

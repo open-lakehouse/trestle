@@ -74,8 +74,9 @@ around deploy) as text.
 
 ## Functions
 
-- Slugs are `[a-z0-9]{1,20}`, so they can't contain hyphens. Module ids such as
-  `unity-catalog` need a slug mapping (`unitycatalog`) in #281.
+- Slugs are `[a-z0-9]{1,20}`, so they can't contain hyphens. A module names the
+  slug it deploys under (`Provides::function`): `unity-catalog-rs` deploys as
+  `unitycatalog`.
 - `invocation_url` is `https://<branch-id>-<slug>.compute.c-8.<region>.aws.neon.tech/`.
 - **A new branch copies its parent's functions when it is created.** It gets its
   own deployment and its own URL. Branches created before a deploy don't get the
@@ -104,8 +105,9 @@ The planner (#281) reads every Neon coordinate from a variable:
 
 `Plan::neon_requirements()` lists the databases, buckets and functions (by
 slug) one plan needs, plus these variables, so binding a branch can check it
-before anything starts. `unity-catalog` deploys as `unitycatalog`, `headwaters`
-as `headwaters`.
+before anything starts. `unity-catalog-rs` deploys as `unitycatalog`, `headwaters`
+as `headwaters`. A function's entry also carries the environment it is deployed
+with and the names of the secrets its deployment must set.
 
 ## Running `neon` from the desktop app
 
