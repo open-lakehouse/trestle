@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.8...env-editor-v0.0.9) - 2026-11-10
+
+### Added
+
+- several host panels in the bottom panel (#360)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.7...env-editor-v0.0.8) - 2026-11-10
 
 ### Fixed
