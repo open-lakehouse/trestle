@@ -33,8 +33,9 @@ pub struct OutputFile {
     pub sensitive: bool,
     /// Skip writing when the destination already exists (operator-owned files).
     pub preserve: bool,
-    /// For a `preserve`d file, the path older renders wrote it to: an existing file there is
-    /// moved to `path` instead of seeding the default (see [`RenderFile::moved_from`]).
+    /// The path older renders wrote this file to (see [`RenderFile::moved_from`]): for a
+    /// `preserve`d file, an existing copy there is moved to `path` instead of seeding the
+    /// default; for any other file, it is removed once `path` is written.
     ///
     /// [`RenderFile::moved_from`]: crate::render::RenderFile::moved_from
     pub moved_from: Option<String>,
@@ -132,9 +133,36 @@ impl MaterializedOutput {
                 use std::os::unix::fs::PermissionsExt as _;
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
             }
+            // A regenerated file that moved: drop the copy an older render left behind (a
+            // module's credentials shouldn't outlive the path the environment reads them at).
+            if let Some(old) = file.moved_from.as_deref() {
+                remove_stale(dir, std::path::Path::new(old))?;
+            }
         }
         Ok(())
     }
+}
+
+/// Remove `dir/old` if it is a file, then each parent directory it leaves empty, up to `dir`.
+#[cfg(feature = "std-io")]
+fn remove_stale(dir: &std::path::Path, old: &std::path::Path) -> std::io::Result<()> {
+    let path = dir.join(old);
+    if !path.is_file() {
+        return Ok(());
+    }
+    std::fs::remove_file(&path)?;
+    let mut parent = path.parent();
+    while let Some(p) = parent
+        && p != dir
+        && p.starts_with(dir)
+    {
+        // Not empty (or gone): leave it and everything above it.
+        if std::fs::remove_dir(p).is_err() {
+            break;
+        }
+        parent = p.parent();
+    }
+    Ok(())
 }
 
 #[cfg(all(test, feature = "std-io"))]
@@ -237,6 +265,41 @@ mod tests {
             !dir.join("users.yml").exists(),
             "the old copy is moved, not left behind"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_to_removes_a_moved_secret_left_by_an_older_render() {
+        let out = baseline_catalog()
+            .plan(
+                &Selection::modules(["envoy", "postgres", "rustfs", "unity-catalog-oss"]),
+                &PlanCtx::default(),
+            )
+            .unwrap()
+            .materialize()
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("stack-topology-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Rendered before Unity Catalog's module was renamed `unity-catalog-oss`.
+        let old = dir.join("modules/unity-catalog/secrets");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("server.properties"), "password=stale\n").unwrap();
+        std::fs::write(old.join("hibernate.properties"), "password=stale\n").unwrap();
+        std::fs::write(
+            dir.join("modules/unity-catalog/compose.yaml"),
+            "services: {}\n",
+        )
+        .unwrap();
+
+        out.write_to(&dir).unwrap();
+
+        assert!(
+            dir.join("modules/unity-catalog-oss/secrets/server.properties")
+                .is_file()
+        );
+        assert!(!old.exists(), "the stale credentials are removed");
+        // What the writer doesn't own is left alone.
+        assert!(dir.join("modules/unity-catalog/compose.yaml").is_file());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

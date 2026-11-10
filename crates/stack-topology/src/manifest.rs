@@ -172,8 +172,19 @@ impl EnvManifest {
     /// `project_name`, `mesh_network` and `port_offset`) is dropped, and the ports the offset
     /// shifted are moved back by it (see [`PlanCtx::without_placement`]); the workspace supplies
     /// the placement at plan time.
+    ///
+    /// A pre-version-6 file's `unity-catalog` (in the selection and the provider preferences)
+    /// becomes the implementation it ran (see [`migrate_selection`]); a version-6 file's is
+    /// left alone, so a custom module can use that id.
     pub fn from_toml(s: &str) -> Result<Self, ManifestError> {
         let mut table: toml::Table = toml::from_str(s)?;
+        // Only a file older than version 6 (or one that doesn't say) means the Unity Catalog
+        // of before the split by `unity-catalog`: from then on the id is free, for a custom
+        // module that reuses it.
+        let pre_uc_split = table
+            .get("version")
+            .and_then(toml::Value::as_integer)
+            .is_none_or(|v| v < 6);
         let mut migrated = migrate_external(&mut table)?;
         let mut manifest: Self = toml::Value::Table(table).try_into()?;
         if manifest.version > Self::current_version() {
@@ -182,15 +193,18 @@ impl EnvManifest {
                 supported: Self::current_version(),
             });
         }
-        if migrate_selection(&mut manifest.selection) {
-            migrated = true;
-        }
-        for providers in manifest.context.provider_preference.values_mut() {
-            for id in providers.iter_mut() {
-                if id.as_str() == LEGACY_UNITY_CATALOG {
-                    *id = ModuleId::from(UNITY_CATALOG_OSS);
-                    migrated = true;
+        if pre_uc_split {
+            if migrate_selection(&mut manifest.selection) {
+                migrated = true;
+            }
+            for providers in manifest.context.provider_preference.values_mut() {
+                for id in providers.iter_mut() {
+                    if id.as_str() == LEGACY_UNITY_CATALOG {
+                        *id = ModuleId::from(UNITY_CATALOG_OSS);
+                        migrated = true;
+                    }
                 }
+                dedup_in_order(providers);
             }
         }
         let placement_free = manifest.context.without_placement();
@@ -384,7 +398,12 @@ const UNITY_CATALOG_RS: &str = "unity-catalog-rs";
 /// `unity-catalog` was the open-source server in a container, and the Unity Catalog Neon
 /// Function, which runs mangrove's server. It becomes `unity-catalog-oss`, with its knob
 /// overrides, unless the selection runs it as a function: then it becomes `unity-catalog-rs`,
-/// keeping the function entry and dropping the overrides (they were the OSS server's).
+/// keeping the function entry and dropping the overrides (they were the OSS server's). When the
+/// selection already names the new id too, it is selected once, and its own `hosted` entry and
+/// knob overrides win over the legacy ones, which only fill what it leaves unset.
+///
+/// [`EnvManifest::from_toml`] runs it only on a file older than version 6: from then on
+/// `unity-catalog` may be a custom module's id.
 pub fn migrate_selection(selection: &mut Selection) -> bool {
     let legacy = ModuleId::from(LEGACY_UNITY_CATALOG);
     let selected = selection.modules.contains(&legacy);
@@ -405,20 +424,32 @@ pub fn migrate_selection(selection: &mut Selection) -> bool {
     } else {
         UNITY_CATALOG_OSS
     });
+    // A selection can name both ids (an editor that added the new one beside a stale draft):
+    // what is already under the new id wins, and the module is selected once.
     for id in &mut selection.modules {
         if *id == legacy {
             *id = to.clone();
         }
     }
+    dedup_in_order(&mut selection.modules);
     if let Some(hosted) = hosted {
-        selection.hosted.insert(to.clone(), hosted);
+        selection.hosted.entry(to.clone()).or_insert(hosted);
     }
     if let Some(overrides) = overrides
         && !function
     {
-        selection.knob_overrides.insert(to, overrides);
+        let current = selection.knob_overrides.entry(to).or_default();
+        for (knob, value) in overrides {
+            current.entry(knob).or_insert(value);
+        }
     }
     true
+}
+
+/// Drop every repeat of an id in `ids`, keeping the first, in order.
+fn dedup_in_order(ids: &mut Vec<ModuleId>) {
+    let mut seen = std::collections::BTreeSet::new();
+    ids.retain(|id| seen.insert(id.clone()));
 }
 
 /// Rewrite a pre-version-3 manifest's `selection.external` table in place into
@@ -552,6 +583,7 @@ fn azure_account(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::catalog::baseline::baseline_catalog;
+    use std::collections::BTreeMap;
 
     fn sample_manifest() -> EnvManifest {
         EnvManifest::new(
@@ -883,6 +915,94 @@ mod tests {
         // It plans: mangrove's server runs as the function.
         let plan = m.plan(&baseline_catalog()).expect("plans");
         assert_eq!(plan.neon_requirements().functions[0].module, rs);
+    }
+
+    #[test]
+    fn a_selection_naming_both_ids_keeps_the_new_ones_settings() {
+        let mut selection = Selection::modules(["unity-catalog", "mlflow", "unity-catalog-oss"]);
+        let legacy = ModuleId::from("unity-catalog");
+        let oss = ModuleId::from("unity-catalog-oss");
+        selection.knob_overrides.insert(
+            legacy.clone(),
+            BTreeMap::from([
+                ("bucket".to_string(), "lake".to_string()),
+                ("image".to_string(), "old".to_string()),
+            ]),
+        );
+        selection.knob_overrides.insert(
+            oss.clone(),
+            BTreeMap::from([("image".to_string(), "new".to_string())]),
+        );
+        assert!(migrate_selection(&mut selection));
+        assert_eq!(
+            selection.modules,
+            vec![oss.clone(), ModuleId::from("mlflow")]
+        );
+        // The edit made under the new id survives; the legacy one fills only the rest.
+        assert_eq!(
+            selection.knob_overrides[&oss],
+            BTreeMap::from([
+                ("bucket".to_string(), "lake".to_string()),
+                ("image".to_string(), "new".to_string()),
+            ])
+        );
+        assert!(!selection.knob_overrides.contains_key(&legacy));
+        // And it plans: one Unity Catalog.
+        EnvManifest::new(selection, PlanCtx::default())
+            .plan(&baseline_catalog())
+            .expect("plans");
+    }
+
+    #[test]
+    fn a_selection_naming_both_ids_keeps_the_new_hosted_entry() {
+        let mut selection = Selection::modules(["unity-catalog-rs"]);
+        let function = |url: &str| HostedResource {
+            cloud: None,
+            vendor: None,
+            connection: HostedConnection::Function {
+                url: Some(url.into()),
+            },
+        };
+        let rs = ModuleId::from("unity-catalog-rs");
+        selection.hosted.insert(
+            ModuleId::from("unity-catalog"),
+            function("https://old.example.com"),
+        );
+        selection
+            .hosted
+            .insert(rs.clone(), function("https://new.example.com"));
+        assert!(migrate_selection(&mut selection));
+        assert_eq!(selection.hosted.len(), 1);
+        assert!(matches!(
+            &selection.hosted[&rs].connection,
+            HostedConnection::Function { url: Some(url) } if url == "https://new.example.com"
+        ));
+    }
+
+    #[test]
+    fn a_v6_file_keeps_a_module_named_unity_catalog() {
+        let m = EnvManifest::from_toml(
+            "version = 6\n[selection]\nmodules = [\"unity-catalog\"]\n\
+             [selection.knob_overrides.unity-catalog]\nimage = \"custom\"\n\
+             [context.provider_preference]\ndata_catalog = [\"unity-catalog\"]\n",
+        )
+        .unwrap();
+        let legacy = ModuleId::from("unity-catalog");
+        assert_eq!(m.selection.modules, vec![legacy.clone()]);
+        assert_eq!(m.selection.knob_overrides[&legacy]["image"], "custom");
+        assert_eq!(
+            m.context.provider_preference.values().next().unwrap(),
+            &vec![legacy]
+        );
+    }
+
+    #[test]
+    fn a_file_without_a_version_migrates() {
+        let m = EnvManifest::from_toml("[selection]\nmodules = [\"unity-catalog\"]\n").unwrap();
+        assert_eq!(
+            m.selection.modules,
+            vec![ModuleId::from("unity-catalog-oss")]
+        );
     }
 
     #[test]

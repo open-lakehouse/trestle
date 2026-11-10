@@ -1638,22 +1638,30 @@ fn unity_catalog() -> Arc<dyn Module> {
         renders: template_with_files(
             include_str!("../../templates/modules/unity-catalog-oss/compose.yaml.jinja"),
             vec![
-                secret_file(
-                    "secrets/server.properties",
-                    "unitycatalog_server_properties",
-                    include_str!(
-                        "../../templates/modules/unity-catalog-oss/server.properties.jinja"
-                    ),
-                ),
+                // Rendered under `modules/unity-catalog/` before the split (manifest version 6).
+                RenderFile {
+                    moved_from: Some("modules/unity-catalog/secrets/server.properties".into()),
+                    ..secret_file(
+                        "secrets/server.properties",
+                        "unitycatalog_server_properties",
+                        include_str!(
+                            "../../templates/modules/unity-catalog-oss/server.properties.jinja"
+                        ),
+                    )
+                },
                 // The metadata store: the relational_db demand's connection, as the
                 // Hibernate config the server reads (a secret: it holds the password).
-                secret_file(
-                    "secrets/hibernate.properties",
-                    "unitycatalog_hibernate_properties",
-                    include_str!(
-                        "../../templates/modules/unity-catalog-oss/hibernate.properties.jinja"
-                    ),
-                ),
+                // Rendered under `modules/unity-catalog/` before the split (manifest version 6).
+                RenderFile {
+                    moved_from: Some("modules/unity-catalog/secrets/hibernate.properties".into()),
+                    ..secret_file(
+                        "secrets/hibernate.properties",
+                        "unitycatalog_hibernate_properties",
+                        include_str!(
+                            "../../templates/modules/unity-catalog-oss/hibernate.properties.jinja"
+                        ),
+                    )
+                },
                 // What `unitycatalog-storage` registers (no secrets: names, URLs, role ARNs).
                 config_file(
                     "storage.txt",
