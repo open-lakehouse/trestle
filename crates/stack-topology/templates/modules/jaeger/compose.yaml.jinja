@@ -8,6 +8,12 @@ services:
       - "16686"
       - "4317"
       - "4318"
+    healthcheck:
+      # The collector's built-in health extension (`healthcheckv2`, loopback port 13133).
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:13133/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 {%- if published_ports %}
     ports:
 {%- for p in published_ports %}

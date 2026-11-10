@@ -2751,7 +2751,14 @@ fn opa() -> Arc<dyn Module> {
             depends_on: vec![],
             base_path: String::new(),
         }],
-        provides: Provides::default(),
+        // The gateway waits for the engine to report healthy: the check fails closed.
+        provides: Provides {
+            ready_gate: Some(ReadyGate {
+                service: "opa".into(),
+                readiness: Readiness::Healthy,
+            }),
+            ..Provides::default()
+        },
         knobs: vec![
             string_knob(
                 "image",

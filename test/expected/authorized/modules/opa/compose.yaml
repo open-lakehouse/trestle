@@ -21,3 +21,16 @@ services:
         target: /policies/authz_test.rego
     expose:
       - "9191"
+    healthcheck:
+      # OPA's `/health?plugins` (200 once the policies are loaded and the ext_authz plugin is up),
+      # on the loopback REST API. The image is distroless, so OPA's own `http.send` probes it:
+      # the query is undefined, failing `--fail`, unless the status is 200.
+      test:
+        - "CMD"
+        - "/opa"
+        - "eval"
+        - "--fail"
+        - 's := http.send({"method": "GET", "url": "http://localhost:8181/health?plugins"}).status_code; s == 200'
+      interval: 5s
+      timeout: 5s
+      retries: 10

@@ -744,6 +744,10 @@ pub struct RenderCtx<'a> {
     /// fragment hard-coding a port list. Empty for every non-gateway module.
     #[serde(default)]
     pub published_ports: Vec<PortMapping>,
+    /// The in-container port of the gateway's admin endpoint, populated only for the gateway
+    /// module. Its health check probes it, whether or not the port is published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_port: Option<u16>,
     /// The gateway's TLS material, populated only for the gateway module and only when some
     /// module declares [`impersonated_hosts`](Provides::impersonated_hosts) or forward-auth
     /// serves the shared listener over HTTPS. The gateway fragment reads it to add network
@@ -806,6 +810,7 @@ impl<'a> RenderCtx<'a> {
             dependencies: Vec::new(),
             objects: Vec::new(),
             published_ports: Vec::new(),
+            admin_port: None,
             tls: None,
             mesh: None,
             stack: StackFacts::default(),
@@ -1291,6 +1296,7 @@ mod tests {
                 dependencies: Vec::new(),
                 objects: Vec::new(),
                 published_ports: Vec::new(),
+                admin_port: None,
                 tls: None,
                 mesh: None,
                 stack: StackFacts::default(),
@@ -1338,6 +1344,7 @@ mod tests {
             ],
             objects: Vec::new(),
             published_ports: Vec::new(),
+            admin_port: None,
             tls: None,
             mesh: None,
             stack: StackFacts::default(),

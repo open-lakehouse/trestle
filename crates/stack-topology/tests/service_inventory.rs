@@ -114,3 +114,37 @@ fn every_rendered_container_is_a_service_or_a_declared_helper() {
         );
     }
 }
+
+/// Long-running services (`restart: unless-stopped`) with nothing to probe: a worker with no
+/// listener of its own.
+const UNPROBED: &[&str] = &["omnigent-host"];
+
+#[test]
+fn every_long_running_service_has_a_health_check() {
+    let catalog = baseline_catalog();
+    for selection in selections() {
+        let plan = catalog.plan(&selection, &PlanCtx::default()).unwrap();
+        for file in plan.materialize().unwrap().files {
+            if !file.path.ends_with("compose.yaml") {
+                continue;
+            }
+            let yaml: serde_yaml::Value = serde_yaml::from_str(&file.contents).unwrap();
+            let Some(services) = yaml["services"].as_mapping() else {
+                continue;
+            };
+            for (name, service) in services {
+                let name = name.as_str().unwrap();
+                // One-shots (`restart: "no"` / `on-failure`) are gated on their exit instead.
+                if service["restart"].as_str() != Some("unless-stopped") {
+                    continue;
+                }
+                assert_eq!(
+                    service["healthcheck"]["test"].is_sequence(),
+                    !UNPROBED.contains(&name),
+                    "{}: `{name}` health check (or a stale UNPROBED entry)",
+                    file.path
+                );
+            }
+        }
+    }
+}
