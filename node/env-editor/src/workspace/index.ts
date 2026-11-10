@@ -16,7 +16,6 @@ export {
   type EditorContributions,
   type EnvironmentContributions,
   type EnvironmentDetail,
-  type EnvironmentLayer,
   type EnvironmentStatus,
   type EnvironmentTab,
   type FileViewerProps,
@@ -26,6 +25,7 @@ export {
   type RunState,
   type SideViewContribution,
   useContributions,
+  type WorkbenchViewContribution,
 } from "./contributions.js";
 export {
   describeHostedChange,
@@ -40,38 +40,31 @@ export {
 } from "./diff.js";
 export { EnvTree, type EnvTreeProps } from "./EnvTree.js";
 export {
+  CHANGES_TAB,
+  type ChangesAvailability,
   closeTab,
+  DIAGRAM_TAB,
   type EditorTab,
+  type EnvView,
+  envSubTabs,
+  FILES_TAB,
+  INITIAL_VIEW,
   neighbourAfterClose,
   openTab,
   pruneTabs,
+  resolveSubTab,
+  type SubTab,
   tabKey,
+  withFile,
 } from "./editors.js";
 export {
-  appsAvailable,
   DESIGN_TAB,
   EnvHeader,
   EnvironmentPane,
   type EnvironmentPaneProps,
   EnvSubTabs,
-  useLayerTabs,
+  useEnvSubTabs,
 } from "./envHeader.js";
-export {
-  CHANGES_TAB,
-  type ChangesAvailability,
-  DIAGRAM_TAB,
-  type EnvView,
-  FILES_TAB,
-  hasLayer,
-  INITIAL_VIEW,
-  type LayerTabs,
-  layerTabs,
-  resolveView,
-  type SubTab,
-  withFile,
-  withLayer,
-  withSubTab,
-} from "./layers.js";
 export {
   contextFor,
   type EnvDoc,
@@ -117,3 +110,13 @@ export {
 } from "./useWorkspace.js";
 export { useDiffViewer, useFileViewer } from "./viewers.js";
 export { WorkspaceShell, type WorkspaceShellProps } from "./WorkspaceShell.js";
+export {
+  createWorkbench,
+  EDITOR_VIEW,
+  useWorkbench,
+  useWorkbenchStore,
+  WorkbenchArea,
+  WorkbenchProvider,
+  type WorkbenchProviderProps,
+  type WorkbenchStore,
+} from "./workbench.js";

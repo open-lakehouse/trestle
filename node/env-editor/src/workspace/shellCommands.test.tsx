@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CommandList } from "../commands/CommandPalette.js";
 import { filterCommands } from "../commands/registry.js";
 import { sideViewItems } from "./ActivityBar.js";
-import { layerTabs } from "./layers.js";
 import type { WorkspaceDoc } from "./model.js";
 import { type ShellCommandActions, shellCommands } from "./shellCommands.js";
 
@@ -24,8 +23,7 @@ function actions(log: string[]): ShellCommandActions {
   return {
     openEnv: note("openEnv"),
     activate: note("activate"),
-    showLayer: note("showLayer"),
-    showSubTab: note("showSubTab"),
+    openWorkbench: note("openWorkbench"),
     showView: note("showView"),
     toggleSidebar: note("toggleSidebar"),
     togglePanel: note("togglePanel"),
@@ -47,6 +45,8 @@ const build = (
       open: [{ env: "dev" }, { env: "dev", revision: 1 }],
       sideViews: sideViewItems(false),
       activeEnv: workspace.envs[0],
+      workbenchViews: [],
+      workbench: "editor",
       revisions: false,
       canExport: false,
       exporting: false,
@@ -76,71 +76,36 @@ describe("the shell's commands", () => {
     expect(html).not.toContain("Go to editor 1");
   });
 
-  test("⌘B and ⌘J are commands; no positional editor jumps", () => {
+  test("⌘B, ⌘J and ⌘1…9 are commands", () => {
     const log: string[] = [];
     const byShortcut = (s: string) =>
       build(log).find((c) => [c.shortcut].flat().includes(s));
     byShortcut("mod+b")?.run();
     byShortcut("mod+j")?.run();
-    expect(log).toEqual(["toggleSidebar", "togglePanel"]);
-    for (const n of [1, 2, 3, 9]) {
-      expect(byShortcut(`mod+${n}`)).toBeUndefined();
-    }
-  });
-
-  const appsTab = {
-    id: "catalog",
-    label: "Catalog",
-    enabled: true,
-    render: () => null,
-  };
-
-  test("⌘1 shows Configure; ⌘2 Apps, only when there are apps", () => {
-    const log: string[] = [];
-    const configureOnly = build(log, {
-      layers: layerTabs([], { revisions: true, head: 2 }),
-      current: { layer: "configure", subTab: "diagram" },
-    });
-    const byShortcut = (list: typeof configureOnly, s: string) =>
-      list.find((c) => [c.shortcut].flat().includes(s));
-    byShortcut(configureOnly, "mod+1")?.run();
-    expect(byShortcut(configureOnly, "mod+2")).toBeUndefined();
-    const withApps = build(log, {
-      layers: layerTabs([appsTab], { revisions: false }),
-      current: { layer: "configure", subTab: "diagram" },
-    });
-    byShortcut(withApps, "mod+2")?.run();
-    expect(log).toEqual(["showLayer:configure", "showLayer:apps"]);
-  });
-
-  test("each sub-tab has a Show command; the current one is disabled", () => {
-    const log: string[] = [];
-    const list = build(log, {
-      layers: layerTabs(
-        [
-          appsTab,
-          {
-            id: "logs",
-            label: "Logs",
-            enabled: false,
-            reason: "dev isn't running",
-            render: () => null,
-          },
-        ],
-        { revisions: true },
-      ),
-      current: { layer: "configure", subTab: "diagram" },
-    });
-    const show = (id: string) => list.find((c) => c.id === id);
-    expect(show("view.configure.diagram")?.enabled).toBe(false);
-    expect(show("view.configure.changes")?.enabled).toBe(false);
-    expect(show("view.apps.logs")?.reason).toBe("dev isn't running");
-    show("view.configure.files")?.run();
-    show("view.apps.catalog")?.run();
+    byShortcut("mod+2")?.run();
+    expect(byShortcut("mod+3")).toBeUndefined();
     expect(log).toEqual([
-      "showSubTab:configure:files",
-      "showSubTab:apps:catalog",
+      "toggleSidebar",
+      "togglePanel",
+      "activate:dev\nrevision:1",
     ]);
+  });
+
+  test("a Show command per workbench view, and one back to the editors", () => {
+    const log: string[] = [];
+    const views = [{ id: "apps", label: "Apps" }];
+    const onEditor = build(log, { workbenchViews: views });
+    const find = (list: typeof onEditor, id: string) =>
+      list.find((c) => c.id === id);
+    expect(find(onEditor, "goto.workbench.editor")?.enabled).toBe(false);
+    find(onEditor, "goto.workbench.apps")?.run();
+    const onApps = build(log, { workbenchViews: views, workbench: "apps" });
+    expect(find(onApps, "goto.workbench.apps")?.enabled).toBe(false);
+    find(onApps, "goto.workbench.editor")?.run();
+    expect(log).toEqual(["openWorkbench:apps", "openWorkbench:editor"]);
+    expect(build(log).some((c) => c.id.startsWith("goto.workbench"))).toBe(
+      false,
+    );
   });
 
   test("commit and diff come with revisions; diff needs a head", () => {

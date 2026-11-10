@@ -7,6 +7,7 @@ import {
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
   Activity,
+  AppWindow,
   Play,
   Settings2,
   ShieldCheck,
@@ -14,7 +15,7 @@ import {
   Stethoscope,
   Wrench,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { Command } from "../commands/registry.js";
 import { PlannerProvider } from "../planner.js";
 import type { Planner, Selection } from "../types.js";
@@ -31,6 +32,7 @@ import {
 } from "./store.js";
 import { WorkspaceProvider } from "./useWorkspace.js";
 import { WorkspaceShell } from "./WorkspaceShell.js";
+import { useWorkbench, WorkbenchProvider } from "./workbench.js";
 
 // The fixture planner: the captured catalog, and one representative plan,
 // plus a file listing the selection's modules so Changes has a diff to show.
@@ -253,11 +255,10 @@ function fakeRuntime(): EditorContributions & {
           reason: notRunning(id),
           render: view(label, `${label} of ${id}, from the host.`),
         })),
-        // A host view of the environment's setup: in Configure, always on.
+        // A host view of the environment's setup, always on.
         {
           id: "policies",
           label: "Policies",
-          layer: "configure" as const,
           icon: <ShieldCheck />,
           enabled: true,
           render: view("Policies", `Who may reach what in ${id}.`),
@@ -295,14 +296,14 @@ export default meta;
 type Story = StoryObj<typeof Shell>;
 
 /** A store with drafts only (like browser storage): no history view, and an
- *  environment tab of Configure alone (Diagram, Files; no Apps switch). */
+ *  environment tab of Diagram and Files. */
 export const DraftsOnly: Story = {
   render: () => <Shell store={createMemoryWorkspaceStore(workspace)} />,
 };
 
 /** A store that keeps revisions: the History view lists, opens and compares
- *  them, and commits the draft; Configure → Changes diffs the draft against
- *  the last revision. */
+ *  them, and commits the draft; the Changes tab diffs the draft against the
+ *  last revision. */
 export const WithRevisions: Story = {
   loaders: [async () => ({ store: await storeWithHistory() })],
   render: (_args, { loaded }) => <Shell store={loaded.store} />,
@@ -310,10 +311,9 @@ export const WithRevisions: Story = {
 
 /** A host's contributions: Doctor and App settings side views, run-state
  *  badges with placement in the tree, a header with details (target, a
- *  copyable gateway URL) and Start/Stop, a Policies tab in Configure, Catalog
- *  / Lineage / Logs as Apps (`dev` starts stopped, so its Apps asks to start
- *  it; `staging` runs), each service's state on the canvas, and an Output
- *  panel. */
+ *  copyable gateway URL) and Start/Stop, Catalog / Lineage / Logs sub-tabs
+ *  (disabled until the environment runs) and an always-on Policies tab, each
+ *  service's state on the canvas, and an Output panel. */
 export const WithContributions: Story = {
   render: () => <LiveShell />,
 };
@@ -337,7 +337,7 @@ function LiveShell() {
 }
 
 /** Host viewers in place of the editor's: a bordered stand-in for Monaco
- *  under Configure → Files and in every diff (Changes, comparisons). */
+ *  under Files and in every diff (Changes, comparisons). */
 export const WithViewerSeams: Story = {
   loaders: [async () => ({ store: await storeWithHistory() })],
   render: (_args, { loaded }) => (
@@ -358,3 +358,67 @@ export const WithViewerSeams: Story = {
     />
   ),
 };
+
+/** A host's workbench view: an Apps item in the activity bar that takes over
+ *  the main area (with its own sidebar) while the ⌘K palette, bottom panel
+ *  and status bar stay. Each environment's header has an "Open apps" action
+ *  that opens it through `useWorkbench()`; the activity-bar item, ⌘K "Show
+ *  the editors" or opening an environment switches back, with the diagram
+ *  as it was. */
+export const WithWorkbenchView: Story = {
+  render: () => (
+    <WorkbenchProvider>
+      <WorkbenchShell />
+    </WorkbenchProvider>
+  ),
+};
+
+function WorkbenchShell() {
+  const { open } = useWorkbench();
+  const [store] = useState(() => createMemoryWorkspaceStore(workspace));
+  const [picked, setPicked] = useState("MLflow");
+  const apps = ["MLflow", "Unity Catalog", "Marimo"];
+  const row = (label: string): ReactNode => (
+    <button
+      key={label}
+      type="button"
+      onClick={() => setPicked(label)}
+      className={`block w-full px-3 py-1 text-left text-sm ${label === picked ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60"}`}
+    >
+      {label}
+    </button>
+  );
+  const contributions: EditorContributions = {
+    workbenchViews: [
+      {
+        id: "apps",
+        label: "Apps",
+        icon: <AppWindow />,
+        sidebar: () => (
+          <div className="py-2">
+            <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Apps
+            </div>
+            {apps.map(row)}
+          </div>
+        ),
+        render: () => (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            {picked}, as the host would embed it.
+          </div>
+        ),
+      },
+    ],
+    environment: {
+      actions: () => [
+        {
+          id: "open-apps",
+          label: "Open apps",
+          icon: <AppWindow />,
+          run: () => open("apps"),
+        },
+      ],
+    },
+  };
+  return <Shell store={store} contributions={contributions} />;
+}

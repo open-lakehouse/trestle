@@ -1,13 +1,11 @@
 // The workspace shell's own commands, for the ⌘K palette and its keymap:
-// Go to (environments, open editors, side views), View (the active
-// environment's layers and sub-tabs, sidebar, panel, problems) and Edit (new
-// environment, commit, diff, export). Built from the
+// Go to (environments, open editors, side views, workbench views), View
+// (sidebar, panel, problems) and Edit (new environment, commit, diff,
+// export). Built from the
 // shell's state by a pure function, so the list is testable on its own.
 
 import type { Command } from "../commands/registry.js";
-import type { EnvironmentLayer } from "./contributions.js";
 import { type EditorTab, tabKey, tabLabel } from "./editors.js";
-import { hasLayer, type LayerTabs } from "./layers.js";
 import type { EnvDoc, WorkspaceDoc } from "./model.js";
 
 export interface ShellCommandState {
@@ -17,10 +15,10 @@ export interface ShellCommandState {
   /** The side views, the editor's and a host's. */
   sideViews: readonly { id: string; label: string; run?: () => void }[];
   activeEnv: EnvDoc | undefined;
-  /** The active environment's layers and their sub-tabs. */
-  layers?: LayerTabs;
-  /** Where the active environment's tab is. */
-  current?: { layer: EnvironmentLayer; subTab: string };
+  /** A host's workbench views. */
+  workbenchViews: readonly { id: string; label: string }[];
+  /** The view with the main area: `"editor"` or a workbench view's id. */
+  workbench: string;
   /** The store keeps revisions. */
   revisions: boolean;
   /** The planner can bundle (download) environments. */
@@ -31,10 +29,9 @@ export interface ShellCommandState {
 export interface ShellCommandActions {
   openEnv: (id: string) => void;
   activate: (tabKey: string) => void;
-  /** Show the active environment's tab on `layer`. */
-  showLayer: (layer: EnvironmentLayer) => void;
-  /** Show sub-tab `id` of the active environment's `layer`. */
-  showSubTab: (layer: EnvironmentLayer, id: string) => void;
+  /** Give the main area to workbench view `id`, or the editor tabs
+   *  (`"editor"`). */
+  openWorkbench: (id: string) => void;
   showView: (id: string) => void;
   toggleSidebar: () => void;
   togglePanel: () => void;
@@ -57,7 +54,7 @@ export function shellCommands(
       id: `goto.env.${env.id}`,
       title: `Go to ${env.name}`,
       section: "Go to",
-      keywords: ["environment", "open"],
+      keywords: ["environment", "diagram", "open"],
       run: () => actions.openEnv(env.id),
     })),
     // Open revisions and comparisons (the environments are above).
@@ -87,7 +84,16 @@ export function shellCommands(
             run: () => actions.showView(view.id),
           },
     ),
-    ...layerCommands(state, actions),
+    ...workbenchCommands(state, actions),
+    // ⌘1…9: the open editors by position.
+    ...open.slice(0, 9).map((tab, i) => ({
+      id: `goto.tab-index.${i + 1}`,
+      title: `Go to editor ${i + 1}`,
+      section: "Go to",
+      shortcut: `mod+${i + 1}`,
+      hidden: true,
+      run: () => actions.activate(tabKey(tab)),
+    })),
     {
       id: "view.toggle-sidebar",
       title: "Toggle sidebar",
@@ -159,50 +165,32 @@ export function shellCommands(
   return commands;
 }
 
-/** ⌘1 / ⌘2 switch the active environment between Configure and Apps; each
- *  sub-tab of either has a "Show" command. */
-function layerCommands(
-  { activeEnv, layers, current }: ShellCommandState,
+/** One "Show" command per workbench view, and one back to the editor tabs
+ *  while a view has the main area. */
+function workbenchCommands(
+  { workbenchViews, workbench }: ShellCommandState,
   actions: ShellCommandActions,
 ): Command[] {
-  if (!activeEnv || !layers) return [];
-  const apps = hasLayer(layers, "apps");
-  const commands: Command[] = [
+  if (workbenchViews.length === 0) return [];
+  const onView = workbenchViews.some((v) => v.id === workbench);
+  return [
+    ...workbenchViews.map((view) => ({
+      id: `goto.workbench.${view.id}`,
+      title: `Show ${view.label}`,
+      section: "Go to",
+      keywords: ["view", "workbench"],
+      enabled: view.id !== workbench,
+      reason: "Already showing",
+      run: () => actions.openWorkbench(view.id),
+    })),
     {
-      id: "view.layer.configure",
-      title: `Configure ${activeEnv.name}`,
-      section: "View",
-      keywords: ["layer", "diagram", "files", "changes"],
-      shortcut: "mod+1",
-      run: () => actions.showLayer("configure"),
+      id: "goto.workbench.editor",
+      title: "Show the editors",
+      section: "Go to",
+      keywords: ["editor", "tabs", "environments", "back"],
+      enabled: onView,
+      reason: "Already showing",
+      run: () => actions.openWorkbench("editor"),
     },
   ];
-  if (apps) {
-    commands.push({
-      id: "view.layer.apps",
-      title: `${activeEnv.name}'s apps`,
-      section: "View",
-      keywords: ["layer", "apps", "run"],
-      shortcut: "mod+2",
-      run: () => actions.showLayer("apps"),
-    });
-  }
-  for (const layer of ["configure", "apps"] as const) {
-    if (layer === "apps" && !apps) continue;
-    for (const tab of layers[layer]) {
-      commands.push({
-        id: `view.${layer}.${tab.id}`,
-        title: `Show ${tab.label}`,
-        section: "View",
-        keywords: [layer, activeEnv.name],
-        hint: layer === "apps" ? "Apps" : "Configure",
-        enabled:
-          tab.enabled &&
-          !(current?.layer === layer && current.subTab === tab.id),
-        reason: tab.enabled ? "Already showing" : tab.reason,
-        run: () => actions.showSubTab(layer, tab.id),
-      });
-    }
-  }
-  return commands;
 }

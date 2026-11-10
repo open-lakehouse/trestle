@@ -1,8 +1,8 @@
-// What a host adds to the workspace shell: commands, extra side views, viewers
-// for files and diffs, and per environment a run status with header details,
-// header actions, sub-tabs (its apps, or extra Configure views), each
-// service's state on the canvas, and a panel in place of the static Run
-// output. The editor only renders what it is given and learns nothing about
+// What a host adds to the workspace shell: commands, extra side views,
+// workbench views that take over the main area, viewers for files and diffs,
+// and per environment a run status with header details, header actions,
+// sub-tabs after the editor's own, each service's state on the canvas, and a
+// panel in place of the static Run output. The editor only renders what it is given and learns nothing about
 // how the host runs anything (containers, remote branches, ...). A host that
 // contributes nothing gets the shell as it always was.
 //
@@ -64,17 +64,12 @@ export interface HostAction {
   run: () => void;
 }
 
-/** An environment tab's two layers: setting it up, and using what it runs. */
-export type EnvironmentLayer = "configure" | "apps";
-
-/** A sub-tab of an environment's editor. Configure-layer tabs follow the
- *  editor's own Diagram, Files and Changes; apps-layer tabs make up Apps. */
+/** A sub-tab of an environment's tab, after the editor's own Diagram, Files
+ *  and Changes. */
 export interface EnvironmentTab {
   /** Unique per environment; `"diagram"`, `"files"` and `"changes"` (and
    *  the older `"design"`) are the editor's. */
   id: string;
-  /** Defaults to `"apps"`. */
-  layer?: EnvironmentLayer;
   label: string;
   icon?: ReactNode;
   /** A disabled tab is listed but can't be picked. */
@@ -94,6 +89,25 @@ export interface SideViewContribution {
   /** `"end"` puts it at the bottom of the activity bar (e.g. app settings). */
   align?: "start" | "end";
   /** The sidebar's content while the view is open. */
+  render: () => ReactNode;
+}
+
+/** A view that takes over the shell's main area: an activity-bar item that,
+ *  while active, shows `render` in place of the editor tabs (which stay
+ *  mounted, hidden, so the diagram and viewers keep their state) and
+ *  `sidebar`, if given, in place of the sidebar. The ⌘K palette, bottom
+ *  panel and status bar stay. Open one from code with `useWorkbench`. */
+export interface WorkbenchViewContribution {
+  /** Unique among the activity bar's items; `"editor"` is reserved. */
+  id: string;
+  label: string;
+  icon: ReactNode;
+  /** `"end"` puts it at the bottom of the activity bar. */
+  align?: "start" | "end";
+  /** The sidebar's content while the view is active; without it the
+   *  sidebar keeps its side view. */
+  sidebar?: () => ReactNode;
+  /** The main area's content while the view is active. */
   render: () => ReactNode;
 }
 
@@ -157,6 +171,9 @@ export interface EditorContributions {
   sideViews?: SideViewContribution[];
   /** Activity-bar buttons that run an action (also listed in the ⌘K palette). */
   activityActions?: ActivityActionContribution[];
+  /** Views that take over the main area (e.g. a host's Apps), each with an
+   *  activity-bar item. */
+  workbenchViews?: WorkbenchViewContribution[];
   environment?: EnvironmentContributions;
   panel?: PanelContribution;
   /** Renders a rendered file read-only (e.g. Monaco); the editor's

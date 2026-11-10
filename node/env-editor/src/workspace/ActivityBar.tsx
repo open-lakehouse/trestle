@@ -1,7 +1,8 @@
 // The shell's activity bar: one button per side view, the editor's own first,
-// then a host's (see `SideViewContribution`), then a host's actions (see
-// `ActivityActionContribution`), which run instead of opening a sidebar; those
-// aligned to the end sit at the bottom.
+// then a host's (see `SideViewContribution`), then a host's workbench views
+// (see `WorkbenchViewContribution`), which take over the main area, then a
+// host's actions (see `ActivityActionContribution`), which run instead of
+// opening a sidebar; those aligned to the end sit at the bottom.
 
 import {
   cn,
@@ -14,6 +15,7 @@ import type { ReactNode } from "react";
 import type {
   ActivityActionContribution,
   SideViewContribution,
+  WorkbenchViewContribution,
 } from "./contributions.js";
 
 /** A side view's id: the editor's, or a host's `SideViewContribution.id`. */
@@ -30,14 +32,17 @@ export interface ActivityItem {
   align?: "start" | "end";
   /** An action: runs on a click instead of opening a sidebar view. */
   run?: () => void;
+  /** A workbench view: takes over the main area instead of the sidebar. */
+  workbench?: boolean;
 }
 
 /** What the activity bar lists: the editor's side views (history only with
- *  revisions), then the host's, then the host's actions. */
+ *  revisions), then the host's, its workbench views, then its actions. */
 export function sideViewItems(
   history: boolean,
   extra: readonly SideViewContribution[] = [],
   actions: readonly ActivityActionContribution[] = [],
+  workbench: readonly WorkbenchViewContribution[] = [],
 ): ActivityItem[] {
   return [
     { id: "explorer", label: "Environments", icon: <Files /> },
@@ -46,6 +51,13 @@ export function sideViewItems(
       : []),
     { id: "settings", label: "Workspace settings", icon: <Settings /> },
     ...extra.map(({ id, label, icon, align }) => ({ id, label, icon, align })),
+    ...workbench.map(({ id, label, icon, align }) => ({
+      id,
+      label,
+      icon,
+      align,
+      workbench: true,
+    })),
     ...actions.map(({ id, label, icon, align, run }) => ({
       id,
       label,
@@ -63,7 +75,10 @@ export function ActivityBar({
   history,
   extra,
   actions,
+  workbench,
 }: {
+  /** The highlighted item: the open side view, or the active workbench
+   *  view. */
   view: SideView | undefined;
   onView: (view: SideView) => void;
   problemCount: number;
@@ -73,8 +88,10 @@ export function ActivityBar({
   extra?: readonly SideViewContribution[];
   /** A host's actions. */
   actions?: readonly ActivityActionContribution[];
+  /** A host's workbench views. */
+  workbench?: readonly WorkbenchViewContribution[];
 }) {
-  const items = sideViewItems(history, extra, actions);
+  const items = sideViewItems(history, extra, actions, workbench);
   const button = (item: ActivityItem) => (
     <Tooltip key={item.id}>
       <TooltipTrigger asChild>

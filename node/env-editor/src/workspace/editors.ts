@@ -1,6 +1,8 @@
-// The shell's open editors: each tab is an environment (its Configure and
-// Apps layers), one of its revisions or a comparison of two. Pure helpers, so
-// the tab rules are testable on their own.
+// The shell's open editors: each tab is an environment (its diagram, files,
+// changes and a host's sub-tabs), one of its revisions or a comparison of
+// two. Pure helpers, so the tab rules are testable on their own.
+
+import type { ReactNode } from "react";
 
 /** An open editor: environment `env`, one of its revisions (read-only), or a
  *  comparison of two of them. At most one of `revision` and `compare` is
@@ -68,4 +70,89 @@ export function tabLabel(tab: EditorTab, envName: string): string {
   }
   if (tab.revision !== undefined) return `#${tab.revision}`;
   return envName;
+}
+
+// ---------------------------------------------------------------------------
+// An environment tab's sub-tabs: the editor's Diagram, Files and Changes, then
+// a host's. Each environment remembers the one picked and the file open under
+// Files.
+// ---------------------------------------------------------------------------
+
+/** The editor's own sub-tabs. */
+export const DIAGRAM_TAB = "diagram";
+export const FILES_TAB = "files";
+export const CHANGES_TAB = "changes";
+/** The Diagram tab's id before 0.0.7, still accepted. */
+const LEGACY_DESIGN_TAB = "design";
+
+/** One sub-tab, as `EnvSubTabs` lists it. */
+export interface SubTab {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  enabled: boolean;
+  reason?: string;
+}
+
+/** Where an environment tab is: its sub-tab, and the file open under Files. */
+export interface EnvView {
+  subTab: string;
+  filePath?: string;
+}
+
+/** A fresh environment tab, on its diagram. */
+export const INITIAL_VIEW: EnvView = { subTab: DIAGRAM_TAB };
+
+/** What the editor knows about an environment's revisions, for Changes. */
+export interface ChangesAvailability {
+  /** The store keeps revisions; without, there is no Changes tab. */
+  revisions: boolean;
+  /** The revision the draft is compared against. */
+  head?: number;
+}
+
+/** An environment tab's sub-tabs: Diagram, Files, Changes (where the store
+ *  keeps revisions; enabled once there is one), then the host's. */
+export function envSubTabs(
+  hostTabs: readonly SubTab[],
+  changes: ChangesAvailability,
+): SubTab[] {
+  const tabs: SubTab[] = [
+    { id: DIAGRAM_TAB, label: "Diagram", enabled: true },
+    { id: FILES_TAB, label: "Files", enabled: true },
+  ];
+  if (changes.revisions) {
+    tabs.push({
+      id: CHANGES_TAB,
+      label: "Changes",
+      enabled: changes.head !== undefined,
+      reason: "No revision yet: commit one to compare the draft against",
+    });
+  }
+  return [
+    ...tabs,
+    ...hostTabs.map(({ id, label, icon, enabled, reason }) => ({
+      id,
+      label,
+      icon,
+      enabled,
+      reason,
+    })),
+  ];
+}
+
+/** The sub-tab to draw for `view`: the picked one while it exists (even
+ *  disabled, so it can say why), else the first enabled one. */
+export function resolveSubTab(view: EnvView, tabs: readonly SubTab[]): string {
+  const wanted = view.subTab === LEGACY_DESIGN_TAB ? DIAGRAM_TAB : view.subTab;
+  return (
+    tabs.find((t) => t.id === wanted)?.id ??
+    tabs.find((t) => t.enabled)?.id ??
+    DIAGRAM_TAB
+  );
+}
+
+/** `view` showing the rendered file at `path`, under Files. */
+export function withFile(view: EnvView, path: string): EnvView {
+  return { ...view, subTab: FILES_TAB, filePath: path };
 }

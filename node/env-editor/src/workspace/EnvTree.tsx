@@ -1,6 +1,6 @@
 // The explorer: the workspace's environments, one row each; picking one opens
-// its environment tab (its diagram, files and changes live in that tab's
-// Configure layer). Environments are added, renamed, duplicated and removed
+// its environment tab (its diagram, files and changes are that tab's
+// sub-tabs). Environments are added, renamed, duplicated and removed
 // here.
 
 import { cn } from "@open-lakehouse/ui-kit";

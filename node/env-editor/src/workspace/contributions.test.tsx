@@ -9,17 +9,24 @@ import {
   useContributions,
 } from "./contributions.js";
 import { EnvTree } from "./EnvTree.js";
+import { type EnvView, INITIAL_VIEW } from "./editors.js";
 import {
   designTab,
   EnvHeader,
   EnvironmentPane,
   EnvSubTabs,
 } from "./envHeader.js";
-import { type EnvView, INITIAL_VIEW } from "./layers.js";
 import type { WorkspaceDoc } from "./model.js";
+import { shellCommands } from "./shellCommands.js";
 import { createMemoryWorkspaceStore } from "./store.js";
 import { WorkspaceProvider } from "./useWorkspace.js";
 import { useDiffViewer, useFileViewer } from "./viewers.js";
+import {
+  createWorkbench,
+  useWorkbench,
+  WorkbenchArea,
+  WorkbenchProvider,
+} from "./workbench.js";
 
 const html = (node: ReactNode) =>
   renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>);
@@ -164,23 +171,6 @@ describe("environment header", () => {
     expect(out).toContain('aria-label="Copy gateway"');
     expect(out).not.toContain('aria-label="Copy target"');
     expect(out).not.toContain("replaced by the host");
-  });
-
-  test("the layer switch only once there are apps", () => {
-    const header = (apps: boolean) =>
-      html(
-        <EnvHeader
-          status={undefined}
-          actions={[]}
-          layer="configure"
-          onLayer={() => {}}
-          apps={apps}
-        />,
-      );
-    expect(header(false)).not.toContain('aria-label="Environment layer"');
-    const out = header(true);
-    expect(out).toContain('aria-label="Environment layer"');
-    expect(out).toMatch(/aria-checked="true"[^>]*>.*?Configure/);
   });
 });
 
@@ -331,53 +321,43 @@ describe("EnvironmentPane", () => {
       </ContributionsProvider>,
     );
 
-  test("without contributions: the header, Configure's tabs, the diagram", () => {
+  test("without contributions: the header, the editor's tabs, the diagram", () => {
     const out = pane();
     expect(out).toContain(">dev<");
     expect(out).toContain("https://dev.localhost");
+    expect(out).toContain('aria-label="Copy gateway"');
     expect(out).toContain('aria-label="Environment views"');
     expect(out).toContain(">Diagram<");
     expect(out).toContain(">Files<");
     expect(out).not.toContain(">Changes<");
-    expect(out).not.toContain('aria-label="Environment layer"');
     expect(out).toContain('<div id="diagram"></div>');
   });
 
   test("Files and Changes render their bodies; Changes needs a revision", () => {
-    expect(pane(undefined, { configure: "files" })).toContain(
+    expect(pane(undefined, { subTab: "files" })).toContain(
       '<div id="files"></div>',
     );
     const unrevised = pane(
       undefined,
-      { configure: "changes" },
+      { subTab: "changes" },
       { revisions: true },
     );
     expect(unrevised).toContain("Changes is unavailable: No revision yet");
     expect(unrevised).not.toContain('id="changes"');
     expect(
-      pane(undefined, { configure: "changes" }, { revisions: true, head: 1 }),
+      pane(undefined, { subTab: "changes" }, { revisions: true, head: 1 }),
     ).toContain('<div id="changes"></div>');
   });
 
-  test("Apps without apps is Configure", () => {
-    expect(pane(undefined, { layer: "apps" })).toContain(
-      '<div id="diagram"></div>',
-    );
-  });
-
-  const host = (state: "running" | "stopped"): EditorContributions => ({
+  const host: EditorContributions = {
     environment: {
-      status: () => ({ state }),
-      actions: () => [
-        { id: "start", label: "Start", variant: "primary", run: () => {} },
-        { id: "reset", label: "Reset", run: () => {} },
-      ],
+      status: () => ({ state: "stopped" }),
       tabs: (id) => [
         {
           id: "catalog",
           label: "Catalog",
           enabled: false,
-          reason: `${id}'s catalog is warming up`,
+          reason: `${id} isn't running`,
           render: () => <div id="catalog" />,
         },
         {
@@ -386,45 +366,142 @@ describe("EnvironmentPane", () => {
           enabled: true,
           render: () => <div id="logs" />,
         },
-        {
-          id: "policies",
-          label: "Policies",
-          layer: "configure",
-          enabled: true,
-          render: () => <div id="policies" />,
-        },
       ],
     },
+  };
+
+  test("a host's status and tabs follow the editor's", () => {
+    const out = pane(host);
+    expect(out).toContain('data-run-state="stopped"');
+    expect(out.indexOf(">Files<")).toBeLessThan(out.indexOf(">Catalog<"));
+    expect(out).toContain('<div id="diagram"></div>');
   });
 
-  test("a host's configure tab follows the editor's, and renders", () => {
-    const out = pane(host("running"), { configure: "policies" });
-    expect(out.indexOf(">Files<")).toBeLessThan(out.indexOf(">Policies<"));
-    expect(out).not.toContain(">Logs<");
-    expect(out).toContain('aria-label="Environment layer"');
-    expect(out).toContain('<div id="policies"></div>');
+  test("an enabled host tab renders in place of the editor", () => {
+    const out = pane(host, { subTab: "logs" });
+    expect(out).toContain('<div id="logs"></div>');
+    expect(out).not.toContain('id="diagram"');
   });
 
-  test("Apps while it isn't running: one prompt to start it", () => {
-    const out = pane(host("stopped"), { layer: "apps", apps: "logs" });
-    expect(out).toContain("Start dev to use its apps.");
-    // Its primary action, not every action, in the prompt as well as the header.
-    expect(out.match(/>Start</g)?.length).toBe(2);
-    expect(out.match(/>Reset</g)?.length).toBe(1);
-    expect(out).not.toContain('id="logs"');
-    expect(out).not.toContain("unavailable");
-  });
-
-  test("Apps while running: the host's tab, or why it is unavailable", () => {
-    const running = host("running");
-    expect(pane(running, { layer: "apps", apps: "logs" })).toContain(
-      '<div id="logs"></div>',
-    );
-    const out = pane(running, { layer: "apps", apps: "catalog" });
-    expect(out).toContain(
-      "Catalog is unavailable: dev&#x27;s catalog is warming up",
-    );
+  test("a disabled host tab says why instead of rendering", () => {
+    const out = pane(host, { subTab: "catalog" });
+    expect(out).toContain("Catalog is unavailable: dev isn&#x27;t running");
     expect(out).not.toContain('id="catalog"');
+  });
+});
+
+describe("workbench views", () => {
+  const apps = {
+    id: "apps",
+    label: "Apps",
+    icon: null,
+    sidebar: () => <nav id="apps-sidebar" />,
+    render: () => <div id="apps" />,
+  };
+  const area = (active: string) =>
+    html(
+      <WorkbenchArea views={[apps]} active={active}>
+        <div id="editor" />
+      </WorkbenchArea>,
+    );
+  const editorHidden = /data-workbench-editor=""[^>]*hidden/;
+
+  test("the editor tabs have the main area by default", () => {
+    const out = area("editor");
+    expect(out).toContain('<div id="editor"></div>');
+    expect(out).not.toContain('id="apps"');
+    expect(out).not.toMatch(editorHidden);
+  });
+
+  test("an active view takes over; the editor stays mounted, hidden", () => {
+    const out = area("apps");
+    expect(out).toContain('<div id="apps"></div>');
+    expect(out).toContain('<div id="editor"></div>');
+    expect(out).toMatch(editorHidden);
+  });
+
+  test("an unknown view is the editor", () => {
+    expect(area("gone")).not.toMatch(editorHidden);
+  });
+
+  test("its activity-bar item comes after the host's side views", () => {
+    const ids = sideViewItems(
+      false,
+      [{ id: "doctor", label: "Doctor", icon: null, render: () => null }],
+      [{ id: "gear", label: "Settings", icon: null, run: () => {} }],
+      [apps],
+    ).map((i) => [i.id, !!i.workbench]);
+    expect(ids).toEqual([
+      ["explorer", false],
+      ["settings", false],
+      ["doctor", false],
+      ["apps", true],
+      ["gear", false],
+    ]);
+    const out = html(
+      <ActivityBar
+        view="apps"
+        onView={() => {}}
+        problemCount={0}
+        history={false}
+        workbench={[apps]}
+      />,
+    );
+    expect(out).toContain('aria-label="Apps" aria-pressed="true"');
+  });
+
+  test("open() switches, from a host's code and from a command", () => {
+    const store = createWorkbench();
+    function Probe() {
+      const { active } = useWorkbench();
+      return (
+        <WorkbenchArea views={[apps]} active={active}>
+          <div id="editor" />
+        </WorkbenchArea>
+      );
+    }
+    const render = () =>
+      html(
+        <WorkbenchProvider workbench={store}>
+          <Probe />
+        </WorkbenchProvider>,
+      );
+    expect(render()).not.toContain('id="apps"');
+    const seen: string[] = [];
+    const unsubscribe = store.subscribe(() => seen.push(store.active()));
+    // A host action (say, in an environment's header) opens the view.
+    store.open("apps");
+    expect(render()).toContain('<div id="apps"></div>');
+    // The shell's ⌘K command back to the editors.
+    const back = shellCommands(
+      {
+        workspace,
+        open: [],
+        sideViews: [],
+        activeEnv: undefined,
+        workbenchViews: [apps],
+        workbench: store.active(),
+        revisions: false,
+        canExport: false,
+        exporting: false,
+      },
+      {
+        openWorkbench: store.open,
+      } as unknown as Parameters<typeof shellCommands>[1],
+    ).find((c) => c.id === "goto.workbench.editor");
+    expect(back?.enabled).toBe(true);
+    back?.run();
+    expect(render()).not.toContain('id="apps"');
+    expect(seen).toEqual(["apps", "editor"]);
+    unsubscribe();
+  });
+
+  test("useWorkbench needs a provider", () => {
+    function Bare() {
+      useWorkbench();
+      return null;
+    }
+    expect(() => html(<Bare />)).toThrow("WorkbenchProvider");
   });
 });
 
