@@ -116,12 +116,14 @@ pub struct RenderFile {
     /// edits alone across subsequent `trestle env render` / `env new --force` runs.
     #[serde(default)]
     pub preserve: bool,
-    /// Where older renders wrote this [`preserve`](Self::preserve)d file, relative to the
-    /// environment root (not rooted under `modules/<id>/`).
+    /// Where older renders wrote this file, relative to the environment root (not rooted
+    /// under `modules/<id>/`).
     ///
-    /// Lets a module relocate an operator-owned file without dropping the operator's edits:
-    /// when the file is missing at its new path but exists here, the writer moves it rather
-    /// than seeding the default (e.g. Authelia's `users.yml`, once written at the root).
+    /// Lets a module relocate a file. A [`preserve`](Self::preserve)d one keeps the
+    /// operator's edits: when it is missing at its new path but exists here, the writer moves
+    /// it rather than seeding the default (e.g. Authelia's `users.yml`, once written at the
+    /// root). Any other file is written at its new path and the old copy removed, so
+    /// credentials don't linger where nothing reads them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_from: Option<String>,
 }

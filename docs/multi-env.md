@@ -312,7 +312,10 @@ Headwaters is one implementation that runs both ways, so it is one module.
 
 Manifest version 6 split `unity-catalog`: an older environment's
 `unity-catalog` becomes `unity-catalog-oss`, or `unity-catalog-rs` when it ran as
-a function (`migrate_selection`).
+a function (`migrate_selection`). Settings already saved under the new id win
+over the old ones. A version-6 file's `unity-catalog` is left alone, so a custom
+module can reuse the id. The secrets an older render wrote under
+`modules/unity-catalog/secrets/` are removed on the next render.
 
 ## Networks
 
@@ -357,9 +360,9 @@ Choices made with phase 3 in mind:
 
 ```bash
 trestle ws create demo --mesh
-trestle env create demo/dev --select unity-catalog,mlflow   # a draft
+trestle env create demo/dev --select unity-catalog-oss,mlflow   # a draft
 trestle env set-knob demo/dev mlflow.log_level=debug
-trestle env commit demo/dev                                 # r1
+trestle env commit demo/dev                                     # r1
 trestle var set demo/dev LOG_LEVEL=info
 printf %s "$TOKEN" | trestle var set demo/dev --secret TOKEN
 trestle up demo/dev                     # the head; `demo/dev@1` for a revision
