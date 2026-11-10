@@ -61,13 +61,25 @@ import {
   sideViewItems,
 } from "./ActivityBar.js";
 import {
+  activePanelTab,
+  BottomPanelProvider,
+  PROBLEMS_PANEL,
+  RUN_OUTPUT_PANEL,
+  useBottomPanelState,
+  useBottomPanelStore,
+} from "./bottomPanel.js";
+import {
   Breadcrumb,
   EnvStatus,
   IconButton,
   NameInput,
   SidebarHeader,
 } from "./chrome.js";
-import { type PanelContribution, useContributions } from "./contributions.js";
+import {
+  hostPanels,
+  type PanelContribution,
+  useContributions,
+} from "./contributions.js";
 import { EnvTree } from "./EnvTree.js";
 import {
   closeTab,
@@ -125,23 +137,23 @@ export interface WorkspaceShellProps {
   statusItems?: ReactNode;
 }
 
-type PanelView = "problems" | "output";
-
 /** The editor for a whole workspace (see the module comment). */
 export function WorkspaceShell(props: WorkspaceShellProps) {
   const { contributions } = useContributions();
-  const body = (
+  let node = (
     <CommandProvider commands={contributions?.commands}>
       <ShellBody {...props} />
     </CommandProvider>
   );
-  // A host's provider shares the workbench with its own code; without one
-  // the shell keeps its own.
-  return useWorkbenchStore() ? (
-    body
-  ) : (
-    <WorkbenchProvider>{body}</WorkbenchProvider>
-  );
+  // A host's providers share the workbench and the bottom panel with its own
+  // code; without one the shell keeps its own.
+  if (!useBottomPanelStore()) {
+    node = <BottomPanelProvider>{node}</BottomPanelProvider>;
+  }
+  if (!useWorkbenchStore()) {
+    node = <WorkbenchProvider>{node}</WorkbenchProvider>;
+  }
+  return node;
 }
 
 function ShellBody({
@@ -183,8 +195,13 @@ function ShellBody({
   const plans = useMemberPlans(workspace, catalog);
   const [view, setView] = useState<SideView>("explorer");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [panel, setPanel] = useState<PanelView>("problems");
+  const {
+    view: panelView,
+    shown: panelOpen,
+    set: setPanelState,
+    toggle: togglePanelShown,
+  } = useBottomPanelState();
+  const panels = useMemo(() => hostPanels(contributions), [contributions]);
   const [sidebarWidth, resizeSidebar] = usePaneSize(260, {
     min: 180,
     max: 480,
@@ -354,11 +371,9 @@ function ShellBody({
               openWorkbench: showEditor,
               showView,
               toggleSidebar: () => setSidebarOpen((o) => !o),
-              togglePanel: () => setPanelOpen((o) => !o),
-              showProblems: () => {
-                setPanel("problems");
-                setPanelOpen(true);
-              },
+              togglePanel: togglePanelShown,
+              showProblems: () =>
+                setPanelState({ view: PROBLEMS_PANEL, shown: true }),
               newEnv: () => {
                 const env = ws.addEnv(freeName(workspace, "dev"));
                 if (typeof env !== "string") openEnv(env.id);
@@ -390,6 +405,8 @@ function ShellBody({
       ws.addEnv,
       openEditor,
       downloadWorkspace,
+      togglePanelShown,
+      setPanelState,
     ],
   );
   useCommands(commands);
@@ -594,16 +611,16 @@ function ShellBody({
                 />
                 <BottomPanel
                   height={panelHeight}
-                  view={panel}
-                  onView={setPanel}
-                  onClose={() => setPanelOpen(false)}
+                  view={panelView}
+                  onView={(id) => setPanelState({ view: id })}
+                  onClose={() => setPanelState({ shown: false })}
                   workspace={workspace}
                   env={activeEnv}
                   plans={plans}
                   conflicts={conflicts}
                   notice={notice}
                   onOpen={openEnv}
-                  hostPanel={contributions?.panel}
+                  panels={panels}
                 />
               </>
             )}
@@ -617,11 +634,10 @@ function ShellBody({
           sidebarOpen={sidebarOpen}
           panelOpen={panelOpen}
           onToggleSidebar={() => setSidebarOpen((o) => !o)}
-          onTogglePanel={() => setPanelOpen((o) => !o)}
-          onShowProblems={() => {
-            setPanel("problems");
-            setPanelOpen(true);
-          }}
+          onTogglePanel={togglePanelShown}
+          onShowProblems={() =>
+            setPanelState({ view: PROBLEMS_PANEL, shown: true })
+          }
         >
           {statusItems}
         </StatusBar>
@@ -838,7 +854,10 @@ function EmptyEditor({ onAdd }: { onAdd: () => void }) {
 // Bottom panel
 // ---------------------------------------------------------------------------
 
-function BottomPanel({
+/** The bottom panel: Problems, then the host's panels as tabs (or the static
+ *  Run output when the host has none). `view` is the selected tab; one that is
+ *  no longer listed shows the first host panel, else Problems. */
+export function BottomPanel({
   height,
   view,
   onView,
@@ -849,11 +868,11 @@ function BottomPanel({
   conflicts,
   notice,
   onOpen,
-  hostPanel,
+  panels,
 }: {
   height: number;
-  view: PanelView;
-  onView: (view: PanelView) => void;
+  view: string;
+  onView: (id: string) => void;
   onClose: () => void;
   workspace: WorkspaceDoc;
   env: EnvDoc | undefined;
@@ -861,38 +880,44 @@ function BottomPanel({
   conflicts: PortConflict[];
   notice: string | null;
   onOpen: (id: string) => void;
-  /** A host's panel, in place of the Run output. */
-  hostPanel?: PanelContribution;
+  /** The host's panels, in tab order (see `hostPanels`). */
+  panels: readonly PanelContribution[];
 }) {
   const failing = workspace.envs.filter((e) => plans[e.id]?.error);
   const count = failing.length + conflicts.length + (notice ? 1 : 0);
-  const tabs: { id: PanelView; label: string; icon: ReactNode }[] = [
+  const tabs: { id: string; label: string; icon: ReactNode }[] = [
     {
-      id: "problems",
+      id: PROBLEMS_PANEL,
       label: count > 0 ? `Problems (${count})` : "Problems",
       icon: <AlertTriangle />,
     },
-    {
-      id: "output",
-      label: hostPanel?.label ?? "Run",
-      icon: hostPanel?.icon ?? <Terminal />,
-    },
+    ...(panels.length > 0
+      ? panels.map((p) => ({ id: p.id, label: p.label, icon: p.icon }))
+      : [{ id: RUN_OUTPUT_PANEL, label: "Run", icon: <Terminal /> }]),
   ];
+  const active = activePanelTab(view, panels);
+  const hostPanel = panels.find((p) => p.id === active);
   return (
     <section
       className="flex shrink-0 flex-col bg-background"
       style={{ height }}
       aria-label="Panel"
     >
-      <div className="flex h-8 shrink-0 items-center gap-1 px-2">
+      <div
+        role="tablist"
+        aria-label="Panel tabs"
+        className="flex h-8 shrink-0 items-center gap-1 px-2"
+      >
         {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
+            role="tab"
+            aria-selected={active === t.id}
             onClick={() => onView(t.id)}
             className={cn(
               "inline-flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wider [&_svg]:h-3.5 [&_svg]:w-3.5",
-              view === t.id
+              active === t.id
                 ? "text-foreground"
                 : "text-muted-foreground hover:text-foreground",
             )}
@@ -908,7 +933,7 @@ function BottomPanel({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2 font-mono text-xs">
-        {view === "problems" ? (
+        {active === PROBLEMS_PANEL ? (
           count === 0 ? (
             <p className="text-muted-foreground">
               No problems: every environment plans, and no two bind the same

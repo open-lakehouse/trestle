@@ -7,6 +7,14 @@ export {
   type SideView,
   sideViewItems,
 } from "./ActivityBar.js";
+export {
+  BottomPanelProvider,
+  type BottomPanelProviderProps,
+  type BottomPanelState,
+  type BottomPanelStore,
+  createBottomPanel,
+  useBottomPanel,
+} from "./bottomPanel.js";
 export { Breadcrumb } from "./chrome.js";
 export {
   type ActivityActionContribution,
@@ -20,6 +28,7 @@ export {
   type EnvironmentTab,
   type FileViewerProps,
   type HostAction,
+  type LegacyPanelContribution,
   type NodeStatus,
   type PanelContribution,
   type RunState,

@@ -101,7 +101,12 @@ optional, and with no contributions the shell is unchanged:
   node.
 - `environment.subscribe(onChange)`: tells the shell to ask again, e.g. from a
   query cache. Re-rendering the provider with a new object works too.
-- `panel`: replaces the bottom panel's static Run output.
+- `panels`: tabs of the bottom panel, after Problems, in place of its static
+  Run output (`{ id, label, icon?, render(envId) }`; `id` is unique, and
+  `"problems"` is reserved). To open one from code, a ⌘K command say, wrap the
+  shell and the code that builds the contributions in `<BottomPanelProvider>`
+  and call `useBottomPanel().open(id)`. `panel` is the deprecated single panel
+  (its id is `"output"`).
 - `fileViewer({ envId, path, read })` and `diffViewer({ envId, path, original,
   modified })`: render a file under Files, and each file's change in Changes
   and comparisons, e.g. with Monaco. The editor's own are the Shiki
