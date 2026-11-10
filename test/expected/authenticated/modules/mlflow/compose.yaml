@@ -31,10 +31,12 @@ services:
       - path: ./modules/mlflow/.env/mlflow.env
         format: raw
     environment:
-      # The Host headers MLflow accepts: browsers on localhost (or the gateway's `*.localhost`
-      # name under auth), in-network callers through the gateway, and the gateway-init job
-      # calling it directly.
-      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,127.0.0.1,127.0.0.1:*,authenticated.internal:10000,mlflow:5000,authenticated.localhost,authenticated.localhost:*"
+      # The Host headers MLflow accepts: browsers on localhost, or on any `*.localhost` name
+      # (an instance's own host label, which keeps its cookies apart from another
+      # instance's, or the gateway's name under auth), in-network callers through the
+      # gateway, and the gateway-init job calling it directly. A `.localhost` name only ever
+      # resolves to the loopback address (RFC 6761), so it can't be rebound to another host.
+      MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,*.localhost,*.localhost:*,127.0.0.1,127.0.0.1:*,authenticated.internal:10000,mlflow:5000,authenticated.localhost,authenticated.localhost:*"
       # Makes the mounted package visible: its entry point registers MLflow's OSS Unity Catalog
       # store for the `uc:` scheme, which the server otherwise doesn't accept.
       PYTHONPATH: /opt/trestle/mlflow-plugins
