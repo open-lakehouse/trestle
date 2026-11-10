@@ -7,9 +7,9 @@ import type {
   EnvironmentScope,
   HostKind,
   LakehouseHost,
-  ModuleId,
   Placement,
   ServiceBinding,
+  ServiceKey,
 } from "./types.js";
 
 /** Answers one service's requests. */
@@ -25,8 +25,8 @@ export type FakeService =
 export interface FakeHostOptions {
   /** Defaults to `"storybook"`. */
   kind?: HostKind;
-  /** The services, by module id. */
-  services?: Record<ModuleId, FakeService>;
+  /** The services, by {@link ServiceKey} (`"unity-catalog"`, `"headwaters"`). */
+  services?: Record<ServiceKey, FakeService>;
   /** The starting environment; defaults to `{ id: "dev", name: "dev" }`. */
   environment?: EnvironmentRef | null;
   /** Extra capabilities (secrets, notebooks, files, shell). */
@@ -41,9 +41,9 @@ export interface FakeHost extends LakehouseHost {
   /** Switch environments; bumps the key and notifies subscribers. */
   setEnvironment(environment: EnvironmentRef | null): void;
   /** Add, replace or (with `undefined`) remove one service binding. */
-  setService(moduleId: ModuleId, service: FakeService | undefined): void;
+  setService(moduleId: ServiceKey, service: FakeService | undefined): void;
   /** Every request a fake service received, in order. */
-  readonly requests: { moduleId: ModuleId; request: Request }[];
+  readonly requests: { moduleId: ServiceKey; request: Request }[];
 }
 
 /** The base every fake service's relative paths resolve against. */
@@ -80,9 +80,9 @@ export function createFakeHost(options: FakeHostOptions = {}): FakeHost {
       : options.environment;
   let generation = 0;
   const requests: FakeHost["requests"] = [];
-  const bindings = new Map<ModuleId, ServiceBinding>();
+  const bindings = new Map<ServiceKey, ServiceBinding>();
 
-  const bind = (moduleId: ModuleId, service: FakeService): ServiceBinding => {
+  const bind = (moduleId: ServiceKey, service: FakeService): ServiceBinding => {
     const placement: Placement = "local";
     if (isBinding(service)) {
       return {

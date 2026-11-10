@@ -6,6 +6,7 @@ import {
   hostTransport,
   registerHost,
   ServiceUnavailableError,
+  serviceKey,
 } from "./index.js";
 import { createFakeHost } from "./testing.js";
 
@@ -144,4 +145,29 @@ test("registerHost(null) clears the host", () => {
   expect(getHost()).not.toBeNull();
   registerHost(null);
   expect(getHost()).toBeNull();
+});
+
+describe("service keys", () => {
+  test("a service is keyed by the API it serves, else its module id", () => {
+    expect(serviceKey({ id: "unity-catalog-oss", api: "unity-catalog" })).toBe(
+      "unity-catalog",
+    );
+    expect(serviceKey({ id: "unity-catalog-rs", api: "unity-catalog" })).toBe(
+      "unity-catalog",
+    );
+    expect(serviceKey({ id: "headwaters", api: null })).toBe("headwaters");
+    expect(serviceKey({ id: "mlflow" })).toBe("mlflow");
+  });
+
+  test("a UI reaches Unity Catalog whichever server the plan runs", async () => {
+    for (const id of ["unity-catalog-oss", "unity-catalog-rs"]) {
+      // A host keys its bindings from the plan graph's nodes.
+      const node = { id, api: "unity-catalog" };
+      registerHost(
+        createFakeHost({ services: { [serviceKey(node)]: uc(id) } }),
+      );
+      const client = createClient(hostFetch("unity-catalog"));
+      expect(await client.catalogs()).toEqual([{ name: id }]);
+    }
+  });
 });

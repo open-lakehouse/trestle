@@ -7,8 +7,8 @@
 import type {
   ConnectTransport,
   LakehouseHost,
-  ModuleId,
   ServiceBinding,
+  ServiceKey,
 } from "./types.js";
 
 let current: LakehouseHost | null = null;
@@ -25,20 +25,19 @@ export function getHost(): LakehouseHost | null {
 
 /** Raised when a UI calls a service the host doesn't bind. */
 export class ServiceUnavailableError extends Error {
-  readonly moduleId: ModuleId;
-  constructor(moduleId: ModuleId, reason: string) {
+  /** The {@link ServiceKey} the UI asked for. */
+  readonly moduleId: ServiceKey;
+  constructor(moduleId: ServiceKey, reason: string) {
     super(`service "${moduleId}" is unavailable: ${reason}`);
     this.name = "ServiceUnavailableError";
     this.moduleId = moduleId;
   }
 }
 
-/** The binding for `moduleId` in the registered host, or why there is none. */
-function lookup(moduleId: ModuleId): ServiceBinding | string {
+/** The binding for `key` in the registered host, or why there is none. */
+function lookup(key: ServiceKey): ServiceBinding | string {
   if (!current) return "no host is registered";
-  return (
-    current.services.get(moduleId) ?? "the current environment doesn't bind it"
-  );
+  return current.services.get(key) ?? "the current environment doesn't bind it";
 }
 
 /** Options for {@link hostFetch}. */
@@ -52,12 +51,12 @@ export interface HostFetchOptions {
 }
 
 /**
- * A `fetch` for `moduleId` that resolves the registered host's binding on every
- * call. Hand it to a client once, at any time:
- * `setDefaultUnityCatalogFetch(hostFetch("unity-catalog"))`.
+ * A `fetch` for the service `moduleId` (its {@link ServiceKey}) that resolves
+ * the registered host's binding on every call. Hand it to a client once, at any
+ * time: `setDefaultUnityCatalogFetch(hostFetch("unity-catalog"))`.
  */
 export function hostFetch(
-  moduleId: ModuleId,
+  moduleId: ServiceKey,
   { fallback }: HostFetchOptions = {},
 ): typeof globalThis.fetch {
   return (input, init) => {
@@ -69,7 +68,7 @@ export function hostFetch(
 }
 
 /** The transport for `moduleId` now, or the error to raise. */
-function transportOf(moduleId: ModuleId): ConnectTransport {
+function transportOf(moduleId: ServiceKey): ConnectTransport {
   const binding = lookup(moduleId);
   if (typeof binding === "string") {
     throw new ServiceUnavailableError(moduleId, binding);
@@ -84,11 +83,12 @@ function transportOf(moduleId: ModuleId): ConnectTransport {
 }
 
 /**
- * A ConnectRPC `Transport` for `moduleId` that resolves the registered host's
- * binding on every call: `registerTransport(hostTransport("headwaters"))`.
+ * A ConnectRPC `Transport` for the service `moduleId` (its {@link ServiceKey})
+ * that resolves the registered host's binding on every call:
+ * `registerTransport(hostTransport("headwaters"))`.
  * Calls without a bound transport reject with {@link ServiceUnavailableError}.
  */
-export function hostTransport(moduleId: ModuleId): ConnectTransport {
+export function hostTransport(moduleId: ServiceKey): ConnectTransport {
   return {
     async unary(...args) {
       return transportOf(moduleId).unary(...args);

@@ -1,8 +1,9 @@
 // The host contract: what an Open Lakehouse service UI may ask of whatever runs
 // it (the desktop shell, a standalone web app, Storybook). It is transport-level
-// only. A host says how to reach a service, keyed by its trestle catalog module
-// id, but knows nothing about the service's API. Each service's spec, client and
-// components stay in the service's own repo and version together there.
+// only. A host says how to reach a service, keyed by its service key (the API
+// it serves, else its trestle catalog module id), but knows nothing about the
+// service's API beyond that name. Each service's spec, client and components
+// stay in the service's own repo and version together there.
 
 /**
  * A ConnectRPC transport, typed structurally so this package needs no
@@ -20,8 +21,26 @@ export interface ConnectTransport {
 /** Which kind of host is running the UI. */
 export type HostKind = "desktop" | "web" | "storybook";
 
-/** A trestle catalog module id, e.g. `"unity-catalog"` or `"mlflow"`. */
-export type ModuleId = string;
+/**
+ * What a UI asks for a service by: the API it serves when its trestle module
+ * declares one (the plan graph node's `api`), else its module id. Unity Catalog
+ * is `"unity-catalog"` whichever server implements it (`unity-catalog-oss` or
+ * `unity-catalog-rs`); Headwaters is `"headwaters"`, MLflow `"mlflow"`. A host
+ * keys its directory with {@link serviceKey}.
+ */
+export type ServiceKey = string;
+
+/** @deprecated The directory is keyed by {@link ServiceKey}, which is the module
+ *  id only for a service that declares no API. */
+export type ModuleId = ServiceKey;
+
+/** The {@link ServiceKey} of a plan graph node: its `api`, else its `id`. */
+export function serviceKey(node: {
+  id: string;
+  api?: string | null;
+}): ServiceKey {
+  return node.api ?? node.id;
+}
 
 /** Where a bound service runs, as far as the UI needs to know. */
 export type Placement = "local" | "remote";
@@ -42,12 +61,12 @@ export interface ServiceBinding {
   placement: Placement;
 }
 
-/** The services the current environment binds, by module id. */
+/** The services the current environment binds, by {@link ServiceKey}. */
 export interface ServiceDirectory {
-  /** The binding for `moduleId`, or `undefined` when the environment has none. */
-  get(moduleId: ModuleId): ServiceBinding | undefined;
-  /** The module ids with a binding, where the host can list them. */
-  list?(): ModuleId[];
+  /** The binding for `key`, or `undefined` when the environment has none. */
+  get(key: ServiceKey): ServiceBinding | undefined;
+  /** The keys with a binding, where the host can list them. */
+  list?(): ServiceKey[];
 }
 
 /** The environment a host is showing. */
