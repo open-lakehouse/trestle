@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.11.2...trestle-diagram-v0.11.3) - 2026-11-10
+
+### Added
+
+- several host panels in the bottom panel (#360)
+
 ## [0.11.2](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.11.1...trestle-diagram-v0.11.2) - 2026-11-10
 
 ### Fixed
