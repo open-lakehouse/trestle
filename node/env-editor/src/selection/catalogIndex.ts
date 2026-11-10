@@ -65,6 +65,28 @@ export function implementationsOf(
 }
 
 /**
+ * What "Replace with…" offers for module `id`: the catalog's other providers
+ * of its role that aren't planned yet. Another implementation of the same API
+ * is left out: the inspector's Implementation control picks it.
+ */
+export function replacementsOf(
+  catalog: CatalogDto | undefined,
+  id: string,
+  planned: ReadonlySet<string>,
+): ModuleDto[] {
+  const module = catalog?.modules.find((m) => m.id === id);
+  const role = module?.provider_of;
+  if (!catalog || !role) return [];
+  return catalog.modules.filter(
+    (m) =>
+      m.id !== id &&
+      m.provider_of === role &&
+      !planned.has(m.id) &&
+      !(module.api && m.api === module.api),
+  );
+}
+
+/**
  * For each module that fills a unique slot (see `uniqueSlot`), the module in
  * `present` already holding it, if another one does.
  */

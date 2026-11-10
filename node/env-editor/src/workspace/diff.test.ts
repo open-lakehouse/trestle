@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { Selection } from "../types.js";
 import {
+  compareSelections,
   describeHostedChange,
   diffFiles,
   diffSelections,
   isEmptyDiff,
+  isSameEnvironment,
 } from "./diff.js";
 
 const base: Selection = {
@@ -159,5 +161,66 @@ describe("diffFiles", () => {
 
   test("equal plans have no changes", () => {
     expect(diffFiles([f("a", "1")], [f("a", "1")])).toEqual([]);
+  });
+});
+
+describe("compareSelections", () => {
+  const file = (path: string, contents: string) => ({ path, contents });
+  /** A planner whose files follow the selection: one per module. */
+  const plan = async (s: Selection) => ({
+    files: s.modules.map((m) =>
+      file(
+        `modules/${m}/compose.yaml`,
+        JSON.stringify(s.knob_overrides[m] ?? {}),
+      ),
+    ),
+  });
+  const failing = (bad: Selection) => async (s: Selection) => {
+    if (s === bad) throw new Error("unknown module `gone`");
+    return plan(s);
+  };
+
+  test("lists the selection change and the files, before to after", async () => {
+    const after = { ...base, modules: [...base.modules, "mlflow"] };
+    const c = await compareSelections(base, after, plan);
+    expect(c.selection.modules.added).toEqual(["mlflow"]);
+    expect(c.files).toEqual([
+      {
+        path: "modules/mlflow/compose.yaml",
+        original: undefined,
+        modified: "{}",
+      },
+    ]);
+    expect(isSameEnvironment(c)).toBe(false);
+  });
+
+  test("a change only in the files is not the same environment", async () => {
+    let n = 0;
+    const drifting = async () => ({ files: [file("README.md", `${n++}`)] });
+    const c = await compareSelections(base, base, drifting);
+    expect(isEmptyDiff(c.selection)).toBe(true);
+    expect(c.files).toEqual([
+      { path: "README.md", original: "0", modified: "1" },
+    ]);
+    expect(isSameEnvironment(c)).toBe(false);
+  });
+
+  test("identical sides are the same environment", async () => {
+    expect(isSameEnvironment(await compareSelections(base, base, plan))).toBe(
+      true,
+    );
+  });
+
+  test("a side that no longer plans keeps the selection diff", async () => {
+    const old = { ...base, modules: ["gone"] };
+    for (const [before, after] of [
+      [old, base],
+      [base, old],
+    ] as const) {
+      const c = await compareSelections(before, after, failing(old));
+      expect(c.files).toEqual({ error: "unknown module `gone`" });
+      expect(isEmptyDiff(c.selection)).toBe(false);
+      expect(isSameEnvironment(c)).toBe(false);
+    }
   });
 });

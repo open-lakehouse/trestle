@@ -38,7 +38,7 @@ import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection.js";
 import { InspectorPanel } from "./inspector/InspectorPanel.js";
 import { ConfigPanel } from "./layout/ConfigPanel.js";
 import { PlannerProvider, usePlanner } from "./planner.js";
-import { moduleName } from "./selection/catalogIndex.js";
+import { moduleName, replacementsOf } from "./selection/catalogIndex.js";
 import { componentOrigin, describeOrigin } from "./state/origin.js";
 import { isEmptySelection, useEnvironment } from "./state/useEnvironment.js";
 import type {
@@ -216,20 +216,7 @@ function EditorBody({
   );
 
   const alternativesOf = useCallback(
-    (id: string) => {
-      const module = catalog?.modules.find((m) => m.id === id);
-      const role = module?.provider_of;
-      if (!catalog || !role) return [];
-      // Another implementation of the same API is picked in the inspector's
-      // Implementation control instead.
-      return catalog.modules.filter(
-        (m) =>
-          m.id !== id &&
-          m.provider_of === role &&
-          !planned.has(m.id) &&
-          !(module.api && m.api === module.api),
-      );
-    },
+    (id: string) => replacementsOf(catalog, id, planned),
     [catalog, planned],
   );
 
