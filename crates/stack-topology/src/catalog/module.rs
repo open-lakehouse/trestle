@@ -758,6 +758,11 @@ pub struct RenderCtx<'a> {
     /// and only when [`PlanCtx::mesh_network`](crate::PlanCtx::mesh_network) is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshNetwork>,
+    /// The variables the gateway's upstreams still read, populated only for the gateway
+    /// module and only when the plan was made without them (a function's URL): its
+    /// `envoy.yaml` names them, so the fragment refuses to start until a render resolves them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_upstreams: Vec<String>,
     /// The stack-wide facts (see [`StackFacts`]), as the `stack` global: a fragment branches on
     /// an optional partner with `{% if "unity-catalog-oss" in stack.modules %}`.
     pub stack: StackFacts,
@@ -813,6 +818,7 @@ impl<'a> RenderCtx<'a> {
             admin_port: None,
             tls: None,
             mesh: None,
+            unresolved_upstreams: Vec::new(),
             stack: StackFacts::default(),
         }
     }
@@ -1299,6 +1305,7 @@ mod tests {
                 admin_port: None,
                 tls: None,
                 mesh: None,
+                unresolved_upstreams: Vec::new(),
                 stack: StackFacts::default(),
             })
             .expect("template renders");
@@ -1347,6 +1354,7 @@ mod tests {
             admin_port: None,
             tls: None,
             mesh: None,
+            unresolved_upstreams: Vec::new(),
             stack: StackFacts::default(),
         };
         let out = spec.render(&ctx).expect("template renders");

@@ -365,7 +365,9 @@ pub fn render_all(plan: &Plan) -> Result<Artifacts, RenderError> {
         env: render_env(&plan.env, &referenced),
         compose: render_compose(&head),
         gitignore: render_gitignore(plan, &modules),
-        envoy,
+        // A function URL the plan hasn't resolved shows as the reference it reads (Envoy
+        // can't: the gateway fragment refuses to start until a render resolves it).
+        envoy: crate::address::restore_refs(&envoy),
         modules,
         head,
     })

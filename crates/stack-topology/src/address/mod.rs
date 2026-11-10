@@ -233,6 +233,17 @@ fn hex_encode(s: &str) -> String {
     s.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The variable a bare [placeholder](placeholder_origin) host stands for (a function's URL
+/// not resolved yet, as an Envoy cluster's address); `None` for a real host.
+pub(crate) fn placeholder_var(host: &str) -> Option<String> {
+    if !host.starts_with(PLACEHOLDER_HOST_PREFIX) {
+        return None;
+    }
+    let restored = restore_refs(host);
+    let var = restored.strip_prefix("${")?.strip_suffix('}')?;
+    Some(var.to_string())
+}
+
 /// `s` with every [placeholder origin](placeholder_origin), and every bare placeholder host,
 /// put back as the `${VAR}` reference it stands for.
 pub(crate) fn restore_refs(s: &str) -> String {
