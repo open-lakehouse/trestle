@@ -1,7 +1,8 @@
-// What a host adds to the workspace shell: commands, extra side views, and per
-// environment a run status, header actions, sub-tabs next to Design, each
-// service's state on the canvas, and a panel in place of the static Run
-// output. The editor only renders what it is given and learns nothing about
+// What a host adds to the workspace shell: commands, extra side views,
+// workbench views that take over the main area, viewers for files and diffs,
+// and per environment a run status with header details, header actions,
+// sub-tabs after the editor's own, each service's state on the canvas, and a
+// panel in place of the static Run output. The editor only renders what it is given and learns nothing about
 // how the host runs anything (containers, remote branches, ...). A host that
 // contributes nothing gets the shell as it always was.
 //
@@ -17,6 +18,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import type { FileSource } from "../artifacts/fileSource.js";
 import type { Command } from "../commands/registry.js";
 import type { NodeStatus, RunState } from "../graph/runState.js";
 
@@ -33,6 +35,18 @@ export interface EnvironmentStatus {
   placement?: string;
   /** More detail, shown in tooltips. */
   detail?: string;
+  /** Facts for the header, e.g. a remote target or the gateway's URL. */
+  details?: EnvironmentDetail[];
+}
+
+/** One fact in an environment's header: `label value`, optionally copyable. */
+export interface EnvironmentDetail {
+  label: string;
+  value: string;
+  /** Offer a button that copies `value`. */
+  copy?: boolean;
+  /** Tooltip; defaults to `value`. */
+  title?: string;
 }
 
 /** A button a host offers, e.g. in an environment's header. */
@@ -50,9 +64,11 @@ export interface HostAction {
   run: () => void;
 }
 
-/** A sub-tab of an environment's editor, after the editor's own Design. */
+/** A sub-tab of an environment's tab, after the editor's own Diagram, Files
+ *  and Changes. */
 export interface EnvironmentTab {
-  /** Unique per environment; `"design"` is the editor's. */
+  /** Unique per environment; `"diagram"`, `"files"` and `"changes"` (and
+   *  the older `"design"`) are the editor's. */
   id: string;
   label: string;
   icon?: ReactNode;
@@ -73,6 +89,25 @@ export interface SideViewContribution {
   /** `"end"` puts it at the bottom of the activity bar (e.g. app settings). */
   align?: "start" | "end";
   /** The sidebar's content while the view is open. */
+  render: () => ReactNode;
+}
+
+/** A view that takes over the shell's main area: an activity-bar item that,
+ *  while active, shows `render` in place of the editor tabs (which stay
+ *  mounted, hidden, so the diagram and viewers keep their state) and
+ *  `sidebar`, if given, in place of the sidebar. The ⌘K palette, bottom
+ *  panel and status bar stay. Open one from code with `useWorkbench`. */
+export interface WorkbenchViewContribution {
+  /** Unique among the activity bar's items; `"editor"` is reserved. */
+  id: string;
+  label: string;
+  icon: ReactNode;
+  /** `"end"` puts it at the bottom of the activity bar. */
+  align?: "start" | "end";
+  /** The sidebar's content while the view is active; without it the
+   *  sidebar keeps its side view. */
+  sidebar?: () => ReactNode;
+  /** The main area's content while the view is active. */
   render: () => ReactNode;
 }
 
@@ -98,6 +133,23 @@ export interface PanelContribution {
   render: (envId: string | undefined) => ReactNode;
 }
 
+/** What a host's file viewer gets: one rendered file of an environment. */
+export interface FileViewerProps {
+  envId: string;
+  path: string;
+  /** The file's contents (see `FileSource`). */
+  read: FileSource["read"];
+}
+
+/** What a host's diff viewer gets: one file before and after. `original`
+ *  is absent for an added file, `modified` for a removed one. */
+export interface DiffViewerProps {
+  envId: string;
+  path: string;
+  original?: string;
+  modified?: string;
+}
+
 /** What a host knows about each environment, by the workspace's env id. */
 export interface EnvironmentContributions {
   status?: (envId: string) => EnvironmentStatus | undefined;
@@ -119,8 +171,17 @@ export interface EditorContributions {
   sideViews?: SideViewContribution[];
   /** Activity-bar buttons that run an action (also listed in the ⌘K palette). */
   activityActions?: ActivityActionContribution[];
+  /** Views that take over the main area (e.g. a host's Apps), each with an
+   *  activity-bar item. */
+  workbenchViews?: WorkbenchViewContribution[];
   environment?: EnvironmentContributions;
   panel?: PanelContribution;
+  /** Renders a rendered file read-only (e.g. Monaco); the editor's
+   *  syntax-highlighted viewer otherwise. */
+  fileViewer?: (props: FileViewerProps) => ReactNode;
+  /** Renders one file's change (e.g. Monaco's diff editor); the editor's
+   *  unified line diff otherwise. */
+  diffViewer?: (props: DiffViewerProps) => ReactNode;
 }
 
 interface ContributionsValue {

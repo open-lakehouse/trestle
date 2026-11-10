@@ -82,8 +82,9 @@ layout.
 Every shortcut is a command in one registry (`commands/registry.ts`,
 `CommandProvider`); `⌘K` opens the palette over all of them, by section (Go
 to, Environment, Edit, View, App, then any other). The editor registers Go to
-(environments, open editors, side views), Edit (Add module…, undo, redo,
-commit, diff, export) and View (`⌘B` sidebar, `⌘J` panel, `⌘1…9` editors).
+(environments, open editors, side views, workbench views and back to the
+editors), Edit (Add module…, undo, redo, commit, diff, export) and View (`⌘B`
+sidebar, `⌘J` panel, `⌘1…9` editors).
 A host adds its own through `EditorContributions.commands`; its bindings win
 on a shared key, and `EDITOR_SHORTCUTS` lists the editor's.
 

@@ -23,6 +23,7 @@ function actions(log: string[]): ShellCommandActions {
   return {
     openEnv: note("openEnv"),
     activate: note("activate"),
+    openWorkbench: note("openWorkbench"),
     showView: note("showView"),
     toggleSidebar: note("toggleSidebar"),
     togglePanel: note("togglePanel"),
@@ -41,9 +42,11 @@ const build = (
   shellCommands(
     {
       workspace,
-      open: [{ env: "dev" }, { env: "dev", path: "compose.yaml" }],
+      open: [{ env: "dev" }, { env: "dev", revision: 1 }],
       sideViews: sideViewItems(false),
       activeEnv: workspace.envs[0],
+      workbenchViews: [],
+      workbench: "editor",
       revisions: false,
       canExport: false,
       exporting: false,
@@ -66,7 +69,7 @@ describe("the shell's commands", () => {
       />,
     );
     expect(html).toContain("Go to dev");
-    expect(html).toContain("Go to compose.yaml (dev)");
+    expect(html).toContain("Go to #1 (dev)");
     expect(html).toContain("Show Workspace settings");
     expect(html).not.toContain("Show Modules");
     expect(html).toContain("Toggle sidebar");
@@ -84,8 +87,25 @@ describe("the shell's commands", () => {
     expect(log).toEqual([
       "toggleSidebar",
       "togglePanel",
-      "activate:dev\ncompose.yaml",
+      "activate:dev\nrevision:1",
     ]);
+  });
+
+  test("a Show command per workbench view, and one back to the editors", () => {
+    const log: string[] = [];
+    const views = [{ id: "apps", label: "Apps" }];
+    const onEditor = build(log, { workbenchViews: views });
+    const find = (list: typeof onEditor, id: string) =>
+      list.find((c) => c.id === id);
+    expect(find(onEditor, "goto.workbench.editor")?.enabled).toBe(false);
+    find(onEditor, "goto.workbench.apps")?.run();
+    const onApps = build(log, { workbenchViews: views, workbench: "apps" });
+    expect(find(onApps, "goto.workbench.apps")?.enabled).toBe(false);
+    find(onApps, "goto.workbench.editor")?.run();
+    expect(log).toEqual(["openWorkbench:apps", "openWorkbench:editor"]);
+    expect(build(log).some((c) => c.id.startsWith("goto.workbench"))).toBe(
+      false,
+    );
   });
 
   test("commit and diff come with revisions; diff needs a head", () => {

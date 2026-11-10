@@ -5,7 +5,14 @@
 // injected `Planner` (see ./planner and DESIGN.md); this package has no runtime
 // dependency on the wasm engine.
 
-export { FilesPanel } from "./artifacts/FilesPanel.js";
+export { DiffViewer } from "./artifacts/DiffViewer.js";
+export { FilesPanel, type FilesPanelProps } from "./artifacts/FilesPanel.js";
+export {
+  type DiffFold,
+  type DiffLine,
+  foldContext,
+  lineDiff,
+} from "./artifacts/lineDiff.js";
 export {
   CommandPalette,
   type CommandPaletteProps,

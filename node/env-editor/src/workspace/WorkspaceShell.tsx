@@ -1,10 +1,13 @@
 // The workspace editor, laid out like an IDE (Zed, VS Code): an activity bar,
-// a sidebar (the workspace's environments as a tree of diagrams and rendered
-// files, the module catalog, settings), editor tabs (an environment's diagram
-// hosting the environment editor, or one of its files), a bottom panel
-// (problems across the workspace, how to run the active environment) and a
-// status bar. A host may contribute side views, and per environment a status,
-// actions, sub-tabs, service states and a panel (`ContributionsProvider`).
+// a sidebar (the workspace's environments, revision history, settings), editor
+// tabs (an environment, or one of its revisions or comparisons), a bottom
+// panel (problems across the workspace, how to run the active environment)
+// and a status bar. An environment tab has a header, then the environment
+// editor's diagram, the rendered files, the changes since the last revision
+// and a host's sub-tabs. A host may contribute side views, workbench views
+// that take over the main area (see `workbench.tsx`), file and diff viewers,
+// and per environment a status, actions, sub-tabs, service states and a
+// panel (`ContributionsProvider`).
 // Everything persists through the injected `WorkspaceStore` (see
 // `WorkspaceProvider`); all planning goes through the injected `Planner`.
 
@@ -21,7 +24,6 @@ import {
   AlertTriangle,
   CircleCheck,
   CircleX,
-  FileText,
   History,
   Layers,
   Loader2,
@@ -45,8 +47,7 @@ import {
   downloadZip,
   generateCredentials,
 } from "../artifacts/bundleZip.js";
-import { CodeViewer } from "../artifacts/CodeViewer.js";
-import { fileSourceOf } from "../artifacts/fileSource.js";
+import { FilesPanel } from "../artifacts/FilesPanel.js";
 import { CommandProvider, useCommands } from "../commands/CommandProvider.js";
 import { EnvironmentEditor } from "../EnvironmentEditor.js";
 import { errorMessage } from "../errors.js";
@@ -71,13 +72,16 @@ import { EnvTree } from "./EnvTree.js";
 import {
   closeTab,
   type EditorTab,
+  type EnvView,
+  INITIAL_VIEW,
   neighbourAfterClose,
   openTab,
   pruneTabs,
   tabKey,
   tabLabel,
+  withFile,
 } from "./editors.js";
-import { DESIGN_TAB, EnvironmentPane } from "./envHeader.js";
+import { EnvironmentPane } from "./envHeader.js";
 import {
   contextFor,
   type EnvDoc,
@@ -90,7 +94,12 @@ import {
   type WorkspaceDoc,
   workspaceToml,
 } from "./model.js";
-import { CompareEditor, RevisionEditor, RevisionsView } from "./revisions.js";
+import {
+  ChangesView,
+  CompareEditor,
+  RevisionEditor,
+  RevisionsView,
+} from "./revisions.js";
 import { shellCommands } from "./shellCommands.js";
 import {
   gatewayUrl,
@@ -98,6 +107,14 @@ import {
   useMemberPlans,
 } from "./useMemberPlans.js";
 import { useWorkspace } from "./useWorkspace.js";
+import { useFileViewer } from "./viewers.js";
+import {
+  EDITOR_VIEW,
+  useWorkbench,
+  useWorkbenchStore,
+  WorkbenchArea,
+  WorkbenchProvider,
+} from "./workbench.js";
 
 export interface WorkspaceShellProps {
   /** Drives the diagram canvas colors; defaults to `"system"`. */
@@ -113,10 +130,17 @@ type PanelView = "problems" | "output";
 /** The editor for a whole workspace (see the module comment). */
 export function WorkspaceShell(props: WorkspaceShellProps) {
   const { contributions } = useContributions();
-  return (
+  const body = (
     <CommandProvider commands={contributions?.commands}>
       <ShellBody {...props} />
     </CommandProvider>
+  );
+  // A host's provider shares the workbench with its own code; without one
+  // the shell keeps its own.
+  return useWorkbenchStore() ? (
+    body
+  ) : (
+    <WorkbenchProvider>{body}</WorkbenchProvider>
   );
 }
 
@@ -130,6 +154,12 @@ function ShellBody({
   const { contributions, version } = useContributions();
   const hostViews = contributions?.sideViews;
   const hostActions = contributions?.activityActions;
+  const workbenchViews = contributions?.workbenchViews;
+  const workbench = useWorkbench();
+  // The workbench view that has the main area, if any (an id that went away
+  // is the editor tabs).
+  const workbenchView = workbenchViews?.find((v) => v.id === workbench.active);
+  const showEditor = workbench.open;
   const workspace = ws.workspace;
   const [catalog, setCatalog] = useState<CatalogDto | undefined>(seededCatalog);
   const [notice, setNotice] = useState<string | null>(null);
@@ -165,8 +195,8 @@ function ShellBody({
     invert: true,
   });
 
-  // Open editor tabs (an environment's diagram, or one of its files) and the
-  // active one. A member that leaves the workspace closes its tabs.
+  // Open editor tabs (an environment, or one of its revisions or comparisons)
+  // and the active one. A member that leaves the workspace closes its tabs.
   const [open, setOpen] = useState<EditorTab[]>([]);
   const [activeKey, setActiveKey] = useState<string>();
   const envs = workspace?.envs ?? [];
@@ -175,7 +205,7 @@ function ShellBody({
     if (!workspace) return;
     const ids = new Set(workspace.envs.map((e) => e.id));
     setOpen((tabs) => {
-      // Start with the first environment's diagram open.
+      // Start with the first environment open.
       if (!started.current && workspace.envs[0]) {
         started.current = true;
         return [{ env: workspace.envs[0].id }];
@@ -189,10 +219,14 @@ function ShellBody({
       setActiveKey(last && tabKey(last));
     }
   }, [open, activeKey]);
-  const openEditor = useCallback((tab: EditorTab) => {
-    setOpen((tabs) => openTab(tabs, tab));
-    setActiveKey(tabKey(tab));
-  }, []);
+  const openEditor = useCallback(
+    (tab: EditorTab) => {
+      setOpen((tabs) => openTab(tabs, tab));
+      setActiveKey(tabKey(tab));
+      showEditor(EDITOR_VIEW);
+    },
+    [showEditor],
+  );
   const openEnv = useCallback(
     (id: string) => openEditor({ env: id }),
     [openEditor],
@@ -220,9 +254,18 @@ function ShellBody({
   }, [hasRevisions, view, viewExists]);
   const hostView = hostViews?.find((v) => v.id === view);
 
-  // The active environment's sub-tab (Design, or a host's), per environment.
-  const [subTabs, setSubTabs] = useState<Record<string, string>>({});
+  // Where each environment's tab is: its sub-tab, the file open under Files.
+  const [envViews, setEnvViews] = useState<Record<string, EnvView>>({});
+  const updateView = useCallback(
+    (id: string, update: (view: EnvView) => EnvView) =>
+      setEnvViews((views) => ({
+        ...views,
+        [id]: update(views[id] ?? INITIAL_VIEW),
+      })),
+    [],
+  );
   const activeEnvId = activeEnv?.id;
+  const activeView = (activeEnvId && envViews[activeEnvId]) || INITIAL_VIEW;
   // The services' states on the active environment's canvas, from the host.
   const nodeStatus = contributions?.environment?.nodeStatus;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `version` signals that the host's answers changed.
@@ -277,11 +320,16 @@ function ShellBody({
   }, [workspace, catalog, planner]);
 
   // The shell's commands (⌘B, ⌘J, ⌘1…9 among them): see shellCommands.
+  // Picking a side view brings the editor tabs back.
   const [focusCommit, setFocusCommit] = useState(0);
-  const showView = useCallback((v: SideView) => {
-    setView(v);
-    setSidebarOpen(true);
-  }, []);
+  const showView = useCallback(
+    (v: SideView) => {
+      setView(v);
+      setSidebarOpen(true);
+      showEditor(EDITOR_VIEW);
+    },
+    [showEditor],
+  );
   const commands = useMemo(
     () =>
       workspace
@@ -291,13 +339,19 @@ function ShellBody({
               open,
               sideViews: sideViewItems(hasRevisions, hostViews, hostActions),
               activeEnv,
+              workbenchViews: workbenchViews ?? [],
+              workbench: workbench.active,
               revisions: hasRevisions,
               canExport: !!planner.bundle,
               exporting: downloading,
             },
             {
               openEnv,
-              activate: setActiveKey,
+              activate: (key) => {
+                setActiveKey(key);
+                showEditor(EDITOR_VIEW);
+              },
+              openWorkbench: showEditor,
               showView,
               toggleSidebar: () => setSidebarOpen((o) => !o),
               togglePanel: () => setPanelOpen((o) => !o),
@@ -326,6 +380,9 @@ function ShellBody({
       hostViews,
       hostActions,
       activeEnv,
+      workbenchViews,
+      workbench.active,
+      showEditor,
       planner.bundle,
       downloading,
       openEnv,
@@ -357,9 +414,14 @@ function ShellBody({
       <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
         <div className="flex min-h-0 flex-1">
           <ActivityBar
-            view={sidebarOpen ? view : undefined}
+            view={workbenchView?.id ?? (sidebarOpen ? view : undefined)}
             onView={(v) => {
-              if (sidebarOpen && v === view) setSidebarOpen(false);
+              if (workbenchViews?.some((w) => w.id === v)) {
+                // A workbench view toggles with the editor tabs.
+                showEditor(v === workbench.active ? EDITOR_VIEW : v);
+              } else if (workbenchView) {
+                showView(v);
+              } else if (sidebarOpen && v === view) setSidebarOpen(false);
               else {
                 setView(v);
                 setSidebarOpen(true);
@@ -369,112 +431,159 @@ function ShellBody({
             history={hasRevisions}
             extra={hostViews}
             actions={hostActions}
+            workbench={workbenchViews}
           />
-          {sidebarOpen && (
-            <>
-              <aside
-                className="flex shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
-                style={{ width: sidebarWidth }}
-              >
-                {view === "explorer" && (
-                  <EnvTree
-                    workspace={workspace}
-                    plans={plans}
-                    conflicts={conflicts}
-                    active={activeTab}
-                    onOpen={openEditor}
-                    onDownload={planner.bundle ? downloadWorkspace : undefined}
-                    downloading={downloading}
+          {workbenchView?.sidebar
+            ? // A workbench view's own sidebar; ⌘B still hides it.
+              sidebarOpen && (
+                <>
+                  <aside
+                    aria-label={`${workbenchView.label} sidebar`}
+                    className="flex shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
+                    style={{ width: sidebarWidth }}
+                  >
+                    {workbenchView.sidebar()}
+                  </aside>
+                  <ResizeHandle
+                    orientation="vertical"
+                    size={sidebarWidth}
+                    aria-label="Resize sidebar"
+                    onResize={resizeSidebar}
                   />
-                )}
-                {view === "history" && (
-                  <RevisionsView
+                </>
+              )
+            : sidebarOpen && (
+                <>
+                  <aside
+                    className="flex shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
+                    style={{ width: sidebarWidth }}
+                  >
+                    {view === "explorer" && (
+                      <EnvTree
+                        workspace={workspace}
+                        plans={plans}
+                        conflicts={conflicts}
+                        active={activeTab}
+                        onOpen={openEditor}
+                        onDownload={
+                          planner.bundle ? downloadWorkspace : undefined
+                        }
+                        downloading={downloading}
+                      />
+                    )}
+                    {view === "history" && (
+                      <RevisionsView
+                        workspace={workspace}
+                        env={activeEnv}
+                        catalog={catalog}
+                        onOpen={openEditor}
+                        focusCommit={focusCommit}
+                      />
+                    )}
+                    {view === "settings" && (
+                      <SettingsView workspace={workspace} />
+                    )}
+                    {hostView?.render()}
+                  </aside>
+                  <ResizeHandle
+                    orientation="vertical"
+                    size={sidebarWidth}
+                    aria-label="Resize sidebar"
+                    onResize={resizeSidebar}
+                  />
+                </>
+              )}
+          <main className="flex min-w-0 flex-1 flex-col">
+            <WorkbenchArea views={workbenchViews} active={workbench.active}>
+              <TabStrip
+                tabs={open}
+                envs={envs}
+                activeKey={activeKey}
+                plans={plans}
+                onSelect={setActiveKey}
+                onClose={closeEditor}
+              />
+              <div className="min-h-0 flex-1">
+                {activeEnv && activeTab?.compare ? (
+                  <CompareEditor
                     workspace={workspace}
                     env={activeEnv}
+                    from={activeTab.compare.from}
+                    to={activeTab.compare.to}
                     catalog={catalog}
-                    onOpen={openEditor}
-                    focusCommit={focusCommit}
                   />
-                )}
-                {view === "settings" && <SettingsView workspace={workspace} />}
-                {hostView?.render()}
-              </aside>
-              <ResizeHandle
-                orientation="vertical"
-                size={sidebarWidth}
-                aria-label="Resize sidebar"
-                onResize={resizeSidebar}
-              />
-            </>
-          )}
-          <main className="flex min-w-0 flex-1 flex-col">
-            <TabStrip
-              tabs={open}
-              envs={envs}
-              activeKey={activeKey}
-              plans={plans}
-              onSelect={setActiveKey}
-              onClose={closeEditor}
-            />
-            <div className="min-h-0 flex-1">
-              {activeEnv && activeTab?.compare ? (
-                <CompareEditor
-                  workspace={workspace}
-                  env={activeEnv}
-                  from={activeTab.compare.from}
-                  to={activeTab.compare.to}
-                  catalog={catalog}
-                />
-              ) : activeEnv && activeTab?.revision !== undefined ? (
-                <RevisionEditor
-                  workspace={workspace}
-                  env={activeEnv}
-                  number={activeTab.revision}
-                  colorMode={colorMode}
-                />
-              ) : activeEnv && activeTab?.path !== undefined ? (
-                <FileEditor
-                  workspace={workspace}
-                  env={activeEnv}
-                  path={activeTab.path}
-                  plan={plans[activeEnv.id]}
-                />
-              ) : activeEnv ? (
-                <EnvironmentPane
-                  envId={activeEnv.id}
-                  subTab={subTabs[activeEnv.id] ?? DESIGN_TAB}
-                  onSubTab={(tab) =>
-                    setSubTabs((t) => ({ ...t, [activeEnv.id]: tab }))
-                  }
-                >
-                  <EnvironmentEditor
-                    key={activeEnv.id}
-                    chrome="workspace"
-                    catalog={catalog}
+                ) : activeEnv && activeTab?.revision !== undefined ? (
+                  <RevisionEditor
+                    workspace={workspace}
+                    env={activeEnv}
+                    number={activeTab.revision}
                     colorMode={colorMode}
-                    initialSelection={activeEnv.selection}
-                    context={contextFor(workspace, activeEnv)}
-                    onSelectionChange={(s) => ws.setSelection(activeEnv.id, s)}
-                    onOpenFile={(path) =>
-                      openEditor({ env: activeEnv.id, path })
+                  />
+                ) : activeEnv ? (
+                  <EnvironmentPane
+                    envId={activeEnv.id}
+                    name={activeEnv.name}
+                    view={activeView}
+                    onView={(v) => updateView(activeEnv.id, () => v)}
+                    revisions={{
+                      revisions: hasRevisions,
+                      head: activeEnv.head,
+                    }}
+                    planStatus={<EnvStatus plan={plans[activeEnv.id]} />}
+                    details={envDetails(activeEnv, plans[activeEnv.id])}
+                    diagram={
+                      <EnvironmentEditor
+                        key={activeEnv.id}
+                        chrome="workspace"
+                        catalog={catalog}
+                        colorMode={colorMode}
+                        initialSelection={activeEnv.selection}
+                        context={contextFor(workspace, activeEnv)}
+                        onSelectionChange={(s) =>
+                          ws.setSelection(activeEnv.id, s)
+                        }
+                        onOpenFile={(path) =>
+                          updateView(activeEnv.id, (v) => withFile(v, path))
+                        }
+                        slots={slots}
+                        toolbarLeading={
+                          <Breadcrumb
+                            parts={[workspace.name, activeEnv.name, "Diagram"]}
+                          />
+                        }
+                      />
                     }
-                    slots={slots}
-                    toolbarLeading={
-                      <Breadcrumb
-                        parts={[workspace.name, activeEnv.name, "Diagram"]}
+                    files={
+                      <EnvFiles
+                        env={activeEnv}
+                        plan={plans[activeEnv.id]}
+                        path={activeView.filePath}
+                        onSelect={(path) =>
+                          updateView(activeEnv.id, (v) => ({
+                            ...v,
+                            filePath: path,
+                          }))
+                        }
+                      />
+                    }
+                    changes={
+                      <ChangesView
+                        workspace={workspace}
+                        env={activeEnv}
+                        catalog={catalog}
                       />
                     }
                   />
-                </EnvironmentPane>
-              ) : (
-                <EmptyEditor
-                  onAdd={() => {
-                    const env = ws.addEnv(freeName(workspace, "dev"));
-                    if (typeof env !== "string") openEnv(env.id);
-                  }}
-                />
-              )}
-            </div>
+                ) : (
+                  <EmptyEditor
+                    onAdd={() => {
+                      const env = ws.addEnv(freeName(workspace, "dev"));
+                      if (typeof env !== "string") openEnv(env.id);
+                    }}
+                  />
+                )}
+              </div>
+            </WorkbenchArea>
             {panelOpen && (
               <>
                 <ResizeHandle
@@ -606,19 +715,12 @@ function TabStrip({
         if (!env) return null;
         const active = key === activeKey;
         const label = tabLabel(tab, env.name);
-        // Anything but the diagram also names its environment.
-        const secondary =
-          tab.path !== undefined || tab.revision !== undefined || !!tab.compare;
+        // A revision or comparison also names its environment.
+        const secondary = tab.revision !== undefined || !!tab.compare;
         return (
           <div
             key={key}
-            title={
-              tab.path
-                ? `${env.name}/${tab.path}`
-                : secondary
-                  ? `${env.name} ${label}`
-                  : `${env.name} diagram`
-            }
+            title={secondary ? `${env.name} ${label}` : env.name}
             className={cn(
               "group flex items-center gap-1.5 border-r pl-3 pr-1 text-sm",
               active
@@ -638,8 +740,6 @@ function TabStrip({
             >
               {tab.revision !== undefined || tab.compare ? (
                 <History className="h-3.5 w-3.5 text-muted-foreground" />
-              ) : tab.path ? (
-                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
               ) : (
                 <EnvStatus plan={plans[env.id]} />
               )}
@@ -668,50 +768,49 @@ function TabStrip({
   );
 }
 
-/** A rendered file of `env`, read-only, under a breadcrumb toolbar. */
-function FileEditor({
-  workspace,
+/** The editor's own header facts for `env`: where its gateway answers. */
+function envDetails(env: EnvDoc, plan: MemberPlan | undefined) {
+  const url = gatewayUrl(plan?.plan, env.name);
+  return url ? [{ label: "gateway", value: url, copy: true }] : [];
+}
+
+/** `env`'s rendered files (the Files sub-tab), the one at `path` open,
+ *  through the host's file viewer where it gives one. */
+function EnvFiles({
   env,
-  path,
   plan,
+  path,
+  onSelect,
 }: {
-  workspace: WorkspaceDoc;
   env: EnvDoc;
-  path: string;
   plan: MemberPlan | undefined;
+  path: string | undefined;
+  onSelect: (path: string) => void;
 }) {
-  const files = plan?.plan?.files;
-  const source = useMemo(
-    () => (files ? fileSourceOf(files) : undefined),
-    [files],
-  );
-  const exists = !!files?.some((f) => f.path === path);
+  const viewer = useFileViewer();
+  if (!plan) {
+    return (
+      <Centered>
+        <Loader2 className="h-4 w-4 animate-spin" /> Rendering…
+      </Centered>
+    );
+  }
+  if (!plan.plan) {
+    return (
+      <Centered>
+        {plan.error
+          ? `${env.name} doesn't plan: ${plan.error}`
+          : `${env.name} renders nothing yet.`}
+      </Centered>
+    );
+  }
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 shrink-0 items-center border-b px-3">
-        <Breadcrumb parts={[workspace.name, env.name, ...path.split("/")]} />
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col">
-        {!plan ? (
-          <Centered>
-            <Loader2 className="h-4 w-4 animate-spin" /> Rendering…
-          </Centered>
-        ) : !source || !exists ? (
-          <Centered>
-            {plan.error
-              ? `${env.name} doesn't plan: ${plan.error}`
-              : `${env.name} no longer renders ${path}.`}
-          </Centered>
-        ) : (
-          <CodeViewer
-            key={path}
-            path={path}
-            read={source.read}
-            header="compact"
-          />
-        )}
-      </div>
-    </div>
+    <FilesPanel
+      plan={plan.plan}
+      selectedPath={path}
+      onSelect={onSelect}
+      renderFile={(file, read) => viewer({ envId: env.id, path: file, read })}
+    />
   );
 }
 

@@ -1,6 +1,6 @@
 import { cn } from "@open-lakehouse/ui-kit";
 import { ChevronRight, FileText, Folder } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { OutputFile, PlanResult } from "../types.js";
 import {
   buildFileTree,
@@ -8,12 +8,19 @@ import {
   type FileTreeNode,
 } from "./buildFileTree.js";
 import { CodeViewer } from "./CodeViewer.js";
-import { fileSourceOf } from "./fileSource.js";
+import { type FileSource, fileSourceOf } from "./fileSource.js";
 
 export interface FilesPanelProps {
   plan: PlanResult | null;
   /** The file to open first, if the plan has it (e.g. picked in the inspector). */
   initialPath?: string;
+  /** The open file, to drive the panel from outside (with `onSelect`). A
+   *  path the plan doesn't render opens its first file instead. */
+  selectedPath?: string;
+  /** Called with the file picked in the tree. */
+  onSelect?: (path: string) => void;
+  /** Renders the open file; the syntax-highlighted `CodeViewer` otherwise. */
+  renderFile?: (path: string, read: FileSource["read"]) => ReactNode;
 }
 
 // A stable identity so the default-selection effect doesn't re-run every render
@@ -89,21 +96,33 @@ function FileTreeItem({
  * Browse every non-sensitive file the planner materialized: tree on the left,
  * read-only content viewer on the right.
  */
-export function FilesPanel({ plan, initialPath }: FilesPanelProps) {
+export function FilesPanel({
+  plan,
+  initialPath,
+  selectedPath: controlled,
+  onSelect,
+  renderFile,
+}: FilesPanelProps) {
   const files = plan?.files ?? EMPTY_FILES;
   const tree = useMemo(() => buildFileTree(files), [files]);
   const source = useMemo(() => fileSourceOf(files), [files]);
-  const [selectedPath, setSelectedPath] = useState<string | null>(
-    initialPath ?? null,
-  );
+  const [own, setOwn] = useState<string | null>(initialPath ?? null);
 
   useEffect(() => {
     const next = defaultFilePath(files);
-    setSelectedPath((current) =>
+    setOwn((current) =>
       current && files.some((f) => f.path === current) ? current : next,
     );
   }, [files]);
 
+  const selectedPath =
+    controlled !== undefined && files.some((f) => f.path === controlled)
+      ? controlled
+      : own;
+  const select = (path: string) => {
+    setOwn(path);
+    onSelect?.(path);
+  };
   const selectedFile =
     files.find((f) => f.path === selectedPath) ?? files[0] ?? null;
 
@@ -131,18 +150,22 @@ export function FilesPanel({ plan, initialPath }: FilesPanelProps) {
             key={node.path}
             node={node}
             depth={0}
-            selectedPath={selectedPath}
-            onSelect={setSelectedPath}
+            selectedPath={selectedFile?.path ?? null}
+            onSelect={select}
           />
         ))}
       </div>
       <div className="flex min-h-[240px] flex-col">
         {selectedFile ? (
-          <CodeViewer
-            key={selectedFile.path}
-            path={selectedFile.path}
-            read={source.read}
-          />
+          renderFile ? (
+            renderFile(selectedFile.path, source.read)
+          ) : (
+            <CodeViewer
+              key={selectedFile.path}
+              path={selectedFile.path}
+              read={source.read}
+            />
+          )
         ) : (
           <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
             Select a file to preview its contents.

@@ -48,12 +48,25 @@ History view, where you can:
 - commit the draft
 - open a revision read-only (its diagram and selection), and restore it to the
   draft
-- compare two revisions, or a revision and the draft (`diffSelections`)
+- compare two revisions, or a revision and the draft (`diffSelections`, then
+  each rendered file that differs, `diffFiles`)
+
+Each environment's tab also gets a Changes tab: the draft against its last
+revision.
 
 A store without the revision methods, such as browser storage, has drafts only,
 and the shell shows nothing revision-related.
 `createMemoryWorkspaceStore(doc, { revisions: true })` keeps revisions in
 memory.
+
+### Environment tabs
+
+The explorer lists one row per environment, and picking one opens its tab.
+Every environment tab has a header (name, state, details, actions), then its
+sub-tabs: the editor's Diagram, Files (the rendered files) and Changes (with a
+store that keeps revisions), then a host's. Opening a file from the canvas or
+the inspector lands on Files at that file. Revision and comparison tabs open
+as tabs of their own.
 
 ### Host contributions
 
@@ -64,21 +77,35 @@ optional, and with no contributions the shell is unchanged:
 
 - `sideViews`: extra activity-bar views (`align: "end"` puts one at the
   bottom).
+- `workbenchViews`: activity-bar items for views that take over the main area
+  (e.g. a host's Apps). While one is active its `render` replaces the editor
+  tabs, which stay mounted and hidden so the diagram and viewers keep their
+  state, and its `sidebar`, if given, replaces the sidebar. The ⌘K palette,
+  bottom panel and status bar stay. To switch from code (a header action, a
+  command), wrap the shell and the code that builds the contributions in
+  `<WorkbenchProvider>` and call `useWorkbench().open(id)`, or
+  `open("editor")` to go back.
 - `activityActions`: activity-bar buttons that run instead of opening a sidebar
   view, e.g. a host's settings in a dialog over the workspace. They are listed
   in the ⌘K palette as well.
 - `environment.status(envId)`: a run-state dot and placement (`local slot 0`, a
   remote branch) in the tree, and the header over the environment's tab, with
-  its revision.
+  its revision. `details` adds facts to that header (`{ label, value, copy?,
+  title? }`, e.g. a remote target or the gateway URL with a copy button); they
+  replace the editor's own gateway detail.
 - `environment.actions(envId)`: buttons in that header (Start, Stop). A disabled
   one shows its `reason`.
-- `environment.tabs(envId)`: sub-tabs after the editor's Design (Catalog,
-  Logs). A disabled tab can't be picked and says why.
+- `environment.tabs(envId)`: sub-tabs after the editor's Diagram, Files and
+  Changes (Catalog, Logs). A disabled tab can't be picked and says why.
 - `environment.nodeStatus(envId, moduleId)`: each service's state, a dot on its
   node.
 - `environment.subscribe(onChange)`: tells the shell to ask again, e.g. from a
   query cache. Re-rendering the provider with a new object works too.
 - `panel`: replaces the bottom panel's static Run output.
+- `fileViewer({ envId, path, read })` and `diffViewer({ envId, path, original,
+  modified })`: render a file under Files, and each file's change in Changes
+  and comparisons, e.g. with Monaco. The editor's own are the Shiki
+  `CodeViewer` and a unified line diff (`DiffViewer`).
 - `commands`: ⌘K palette commands under their own sections (`Environment`,
   `App`), each with an optional `shortcut`, `hint` (e.g. the `trestle` CLI
   equivalent) and `enabled`/`reason`. Their bindings take precedence over the
@@ -93,7 +120,9 @@ optional, and with no contributions the shell is unchanged:
 ```
 
 The `WorkspaceShell/WithContributions` story drives every seam from a fake
-runtime.
+runtime, `WorkspaceShell/WithViewerSeams` swaps in host viewers, and
+`WorkspaceShell/WithWorkbenchView` adds an Apps workbench view that header
+actions open.
 
 ### Running a module as a Neon Function
 

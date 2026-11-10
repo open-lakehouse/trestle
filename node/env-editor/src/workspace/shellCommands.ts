@@ -1,6 +1,7 @@
 // The workspace shell's own commands, for the ⌘K palette and its keymap:
-// Go to (environments, open editors, side views), View (sidebar, panel,
-// problems) and Edit (new environment, commit, diff, export). Built from the
+// Go to (environments, open editors, side views, workbench views), View
+// (sidebar, panel, problems) and Edit (new environment, commit, diff,
+// export). Built from the
 // shell's state by a pure function, so the list is testable on its own.
 
 import type { Command } from "../commands/registry.js";
@@ -14,6 +15,10 @@ export interface ShellCommandState {
   /** The side views, the editor's and a host's. */
   sideViews: readonly { id: string; label: string; run?: () => void }[];
   activeEnv: EnvDoc | undefined;
+  /** A host's workbench views. */
+  workbenchViews: readonly { id: string; label: string }[];
+  /** The view with the main area: `"editor"` or a workbench view's id. */
+  workbench: string;
   /** The store keeps revisions. */
   revisions: boolean;
   /** The planner can bundle (download) environments. */
@@ -24,6 +29,9 @@ export interface ShellCommandState {
 export interface ShellCommandActions {
   openEnv: (id: string) => void;
   activate: (tabKey: string) => void;
+  /** Give the main area to workbench view `id`, or the editor tabs
+   *  (`"editor"`). */
+  openWorkbench: (id: string) => void;
   showView: (id: string) => void;
   toggleSidebar: () => void;
   togglePanel: () => void;
@@ -49,16 +57,14 @@ export function shellCommands(
       keywords: ["environment", "diagram", "open"],
       run: () => actions.openEnv(env.id),
     })),
-    // Open editors other than the diagrams (those are the environments).
+    // Open revisions and comparisons (the environments are above).
     ...open
-      .filter(
-        (t) => t.path !== undefined || t.revision !== undefined || t.compare,
-      )
+      .filter((t) => t.revision !== undefined || t.compare)
       .map((tab) => ({
         id: `goto.tab.${tabKey(tab)}`,
         title: `Go to ${tabLabel(tab, name(tab.env))} (${name(tab.env)})`,
         section: "Go to",
-        keywords: ["tab", "editor", tab.path ?? ""],
+        keywords: ["tab", "editor", "revision"],
         run: () => actions.activate(tabKey(tab)),
       })),
     ...state.sideViews.map((view) =>
@@ -78,6 +84,7 @@ export function shellCommands(
             run: () => actions.showView(view.id),
           },
     ),
+    ...workbenchCommands(state, actions),
     // ⌘1…9: the open editors by position.
     ...open.slice(0, 9).map((tab, i) => ({
       id: `goto.tab-index.${i + 1}`,
@@ -156,4 +163,34 @@ export function shellCommands(
     });
   }
   return commands;
+}
+
+/** One "Show" command per workbench view, and one back to the editor tabs
+ *  while a view has the main area. */
+function workbenchCommands(
+  { workbenchViews, workbench }: ShellCommandState,
+  actions: ShellCommandActions,
+): Command[] {
+  if (workbenchViews.length === 0) return [];
+  const onView = workbenchViews.some((v) => v.id === workbench);
+  return [
+    ...workbenchViews.map((view) => ({
+      id: `goto.workbench.${view.id}`,
+      title: `Show ${view.label}`,
+      section: "Go to",
+      keywords: ["view", "workbench"],
+      enabled: view.id !== workbench,
+      reason: "Already showing",
+      run: () => actions.openWorkbench(view.id),
+    })),
+    {
+      id: "goto.workbench.editor",
+      title: "Show the editors",
+      section: "Go to",
+      keywords: ["editor", "tabs", "environments", "back"],
+      enabled: onView,
+      reason: "Already showing",
+      run: () => actions.openWorkbench("editor"),
+    },
+  ];
 }

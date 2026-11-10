@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { Selection } from "../types.js";
-import { describeHostedChange, diffSelections, isEmptyDiff } from "./diff.js";
+import {
+  describeHostedChange,
+  diffFiles,
+  diffSelections,
+  isEmptyDiff,
+} from "./diff.js";
 
 const base: Selection = {
   modules: ["postgres", "unity-catalog-oss"],
@@ -134,5 +139,25 @@ describe("hosted changes", () => {
       "hosted-postgres connection: Neon → Amazon RDS",
     ]);
     expect(rows(pg("neon"), structuredClone(pg("neon")))).toEqual([]);
+  });
+});
+
+describe("diffFiles", () => {
+  const f = (path: string, contents: string) => ({ path, contents });
+  test("added, removed and changed files, by path; equal ones left out", () => {
+    expect(
+      diffFiles(
+        [f("b.yaml", "1"), f("same", "x"), f("gone", "old")],
+        [f("same", "x"), f("b.yaml", "2"), f("a.new", "hi")],
+      ),
+    ).toEqual([
+      { path: "a.new", original: undefined, modified: "hi" },
+      { path: "b.yaml", original: "1", modified: "2" },
+      { path: "gone", original: "old", modified: undefined },
+    ]);
+  });
+
+  test("equal plans have no changes", () => {
+    expect(diffFiles([f("a", "1")], [f("a", "1")])).toEqual([]);
   });
 });

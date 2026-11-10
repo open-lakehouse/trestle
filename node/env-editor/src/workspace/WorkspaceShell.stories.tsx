@@ -7,13 +7,15 @@ import {
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
   Activity,
+  AppWindow,
   Play,
   Settings2,
+  ShieldCheck,
   Square,
   Stethoscope,
   Wrench,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { Command } from "../commands/registry.js";
 import { PlannerProvider } from "../planner.js";
 import type { Planner, Selection } from "../types.js";
@@ -30,11 +32,19 @@ import {
 } from "./store.js";
 import { WorkspaceProvider } from "./useWorkspace.js";
 import { WorkspaceShell } from "./WorkspaceShell.js";
+import { useWorkbench, WorkbenchProvider } from "./workbench.js";
 
-// The fixture planner: the captured catalog, and one representative plan.
+// The fixture planner: the captured catalog, and one representative plan,
+// plus a file listing the selection's modules so Changes has a diff to show.
 const planner: Planner = {
   catalog: async () => FIXTURE_CATALOG,
-  plan: async () => FIXTURE_PLAN,
+  plan: async (s) => ({
+    ...FIXTURE_PLAN,
+    files: [
+      ...FIXTURE_PLAN.files,
+      { path: "modules.txt", contents: `${s.modules.join("\n")}\n` },
+    ],
+  }),
 };
 
 const selection: Selection = FIXTURE_CATALOG.default_selection;
@@ -204,6 +214,17 @@ function fakeRuntime(): EditorContributions & {
           revision: id === "dev" ? 2 : 1,
           placement: placement[id],
           detail: running(id) ? "all services healthy" : undefined,
+          details: [
+            {
+              label: "target",
+              value: id === "dev" ? "docker (colima)" : "neon br-staging",
+            },
+            {
+              label: "gateway",
+              value: `https://${id}.localhost:8443`,
+              copy: true,
+            },
+          ],
         },
       actions: (id) =>
         running(id)
@@ -226,14 +247,23 @@ function fakeRuntime(): EditorContributions & {
                 run: () => transition(id, "starting", "running"),
               },
             ],
-      tabs: (id) =>
-        ["Catalog", "Lineage", "Logs"].map((label) => ({
+      tabs: (id) => [
+        ...["Catalog", "Lineage", "Logs"].map((label) => ({
           id: label.toLowerCase(),
           label,
           enabled: running(id),
           reason: notRunning(id),
           render: view(label, `${label} of ${id}, from the host.`),
         })),
+        // A host view of the environment's setup, always on.
+        {
+          id: "policies",
+          label: "Policies",
+          icon: <ShieldCheck />,
+          enabled: true,
+          render: view("Policies", `Who may reach what in ${id}.`),
+        },
+      ],
       nodeStatus: (id, moduleId) =>
         state[id] === "stopped"
           ? undefined
@@ -265,21 +295,24 @@ export default meta;
 
 type Story = StoryObj<typeof Shell>;
 
-/** A store with drafts only (like browser storage): no history view. */
+/** A store with drafts only (like browser storage): no history view, and an
+ *  environment tab of Diagram and Files. */
 export const DraftsOnly: Story = {
   render: () => <Shell store={createMemoryWorkspaceStore(workspace)} />,
 };
 
 /** A store that keeps revisions: the History view lists, opens and compares
- *  them, and commits the draft. */
+ *  them, and commits the draft; the Changes tab diffs the draft against the
+ *  last revision. */
 export const WithRevisions: Story = {
   loaders: [async () => ({ store: await storeWithHistory() })],
   render: (_args, { loaded }) => <Shell store={loaded.store} />,
 };
 
 /** A host's contributions: Doctor and App settings side views, run-state
- *  badges with placement in the tree, a header with Start/Stop, Catalog /
- *  Lineage / Logs sub-tabs (disabled until the environment runs), each
+ *  badges with placement in the tree, a header with details (target, a
+ *  copyable gateway URL) and Start/Stop, Catalog / Lineage / Logs sub-tabs
+ *  (disabled until the environment runs) and an always-on Policies tab, each
  *  service's state on the canvas, and an Output panel. */
 export const WithContributions: Story = {
   render: () => <LiveShell />,
@@ -300,5 +333,92 @@ function LiveShell() {
     () => ({ ...runtime, commands: runtime.commandsNow() }),
     [runtime, version],
   );
+  return <Shell store={store} contributions={contributions} />;
+}
+
+/** Host viewers in place of the editor's: a bordered stand-in for Monaco
+ *  under Files and in every diff (Changes, comparisons). */
+export const WithViewerSeams: Story = {
+  loaders: [async () => ({ store: await storeWithHistory() })],
+  render: (_args, { loaded }) => (
+    <Shell
+      store={loaded.store}
+      contributions={{
+        fileViewer: ({ envId, path, read }) => (
+          <pre className="m-3 overflow-auto rounded border-2 border-dashed border-primary p-3 font-mono text-xs">
+            {`host file viewer: ${envId}/${path}\n\n${String(read(path))}`}
+          </pre>
+        ),
+        diffViewer: ({ path, original, modified }) => (
+          <pre className="m-3 overflow-auto rounded border-2 border-dashed border-primary p-3 font-mono text-xs">
+            {`host diff viewer: ${path}\n--- ${original === undefined ? "(new)" : `${original.length} chars`}\n+++ ${modified === undefined ? "(gone)" : `${modified.length} chars`}`}
+          </pre>
+        ),
+      }}
+    />
+  ),
+};
+
+/** A host's workbench view: an Apps item in the activity bar that takes over
+ *  the main area (with its own sidebar) while the ⌘K palette, bottom panel
+ *  and status bar stay. Each environment's header has an "Open apps" action
+ *  that opens it through `useWorkbench()`; the activity-bar item, ⌘K "Show
+ *  the editors" or opening an environment switches back, with the diagram
+ *  as it was. */
+export const WithWorkbenchView: Story = {
+  render: () => (
+    <WorkbenchProvider>
+      <WorkbenchShell />
+    </WorkbenchProvider>
+  ),
+};
+
+function WorkbenchShell() {
+  const { open } = useWorkbench();
+  const [store] = useState(() => createMemoryWorkspaceStore(workspace));
+  const [picked, setPicked] = useState("MLflow");
+  const apps = ["MLflow", "Unity Catalog", "Marimo"];
+  const row = (label: string): ReactNode => (
+    <button
+      key={label}
+      type="button"
+      onClick={() => setPicked(label)}
+      className={`block w-full px-3 py-1 text-left text-sm ${label === picked ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60"}`}
+    >
+      {label}
+    </button>
+  );
+  const contributions: EditorContributions = {
+    workbenchViews: [
+      {
+        id: "apps",
+        label: "Apps",
+        icon: <AppWindow />,
+        sidebar: () => (
+          <div className="py-2">
+            <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Apps
+            </div>
+            {apps.map(row)}
+          </div>
+        ),
+        render: () => (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            {picked}, as the host would embed it.
+          </div>
+        ),
+      },
+    ],
+    environment: {
+      actions: () => [
+        {
+          id: "open-apps",
+          label: "Open apps",
+          icon: <AppWindow />,
+          run: () => open("apps"),
+        },
+      ],
+    },
+  };
   return <Shell store={store} contributions={contributions} />;
 }

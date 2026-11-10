@@ -1,28 +1,20 @@
-// The explorer: the workspace's environments as a tree. Each environment
-// expands into its diagram and the files it renders; picking one opens it in
-// an editor tab. Environments are added, renamed, duplicated and removed here.
+// The explorer: the workspace's environments, one row each; picking one opens
+// its environment tab (its diagram, files and changes are that tab's
+// sub-tabs). Environments are added, renamed, duplicated and removed
+// here.
 
 import { cn } from "@open-lakehouse/ui-kit";
 import {
-  ChevronRight,
   Copy,
   Download,
-  FileText,
-  Folder,
-  FolderOpen,
   Layers,
   Loader2,
   Network,
   Pencil,
   Plus,
   Trash2,
-  Workflow,
 } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
-import {
-  buildFileTree,
-  type FileTreeNode,
-} from "../artifacts/buildFileTree.js";
+import { type ReactNode, useState } from "react";
 import { RunStateDot } from "../graph/RunStateDot.js";
 import { runStateTitle } from "../graph/runState.js";
 import {
@@ -50,14 +42,11 @@ type NameEdit =
   | { kind: "rename"; id: string }
   | { kind: "duplicate"; id: string };
 
-/** How far each tree level indents, in pixels. */
-const INDENT = 12;
-
 export interface EnvTreeProps {
   workspace: WorkspaceDoc;
   plans: Record<string, MemberPlan>;
   conflicts: PortConflict[];
-  /** The active editor, highlighted in the tree. */
+  /** The active editor; its environment is highlighted. */
   active: EditorTab | undefined;
   onOpen: (tab: EditorTab) => void;
   onDownload?: () => void;
@@ -78,21 +67,6 @@ export function EnvTree({
   const [edit, setEdit] = useState<NameEdit | null>(null);
   // The environment whose removal is being confirmed.
   const [removing, setRemoving] = useState<string | null>(null);
-  // Expanded environments and folders, by env id / `<env id>:<path>`. The
-  // active environment starts expanded.
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () =>
-      new Set(
-        active ? [active.env] : workspace.envs.slice(0, 1).map((e) => e.id),
-      ),
-  );
-  const toggle = (key: string, open?: boolean) =>
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (open ?? !next.has(key)) next.add(key);
-      else next.delete(key);
-      return next;
-    });
   const clashing = new Set(
     conflicts.flatMap((c) => [c.first.env, c.second.env]),
   );
@@ -103,7 +77,6 @@ export function EnvTree({
     const env =
       edit.kind === "add" ? ws.addEnv(name) : ws.duplicateEnv(edit.id, name);
     if (typeof env === "string") return env;
-    toggle(env.id, true);
     onOpen({ env: env.id });
     return undefined;
   };
@@ -159,10 +132,8 @@ export function EnvTree({
               plan={plans[env.id]}
               status={statusOf?.(env.id)}
               clashing={clashing.has(env.name)}
-              expanded={expanded}
-              onToggle={toggle}
-              active={active}
-              onOpen={onOpen}
+              active={active?.env === env.id}
+              onOpen={() => onOpen({ env: env.id })}
               onRename={() => setEdit({ kind: "rename", id: env.id })}
               onDuplicate={() => setEdit({ kind: "duplicate", id: env.id })}
               onRemove={() => setRemoving(env.id)}
@@ -210,20 +181,15 @@ export function EnvTree({
   );
 }
 
-/** One tree row: indented, with an optional disclosure chevron. */
+/** One environment's row, with its actions on hover. */
 function Row({
-  depth,
   selected,
-  disclosure,
   onClick,
   children,
   actions,
   title,
 }: {
-  depth: number;
   selected?: boolean;
-  /** `true`/`false` draws an open/closed chevron; absent, a spacer. */
-  disclosure?: boolean;
   onClick: () => void;
   children: ReactNode;
   actions?: ReactNode;
@@ -233,13 +199,11 @@ function Row({
     <div
       role="treeitem"
       aria-selected={!!selected}
-      aria-expanded={disclosure}
       tabIndex={-1}
       className={cn(
-        "group flex h-6 items-center pr-2 text-[13px]",
+        "group flex h-6 items-center pl-3 pr-2 text-[13px]",
         selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
       )}
-      style={{ paddingLeft: depth * INDENT + 6 }}
       title={title}
     >
       <button
@@ -247,16 +211,6 @@ function Row({
         onClick={onClick}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
       >
-        {disclosure === undefined ? (
-          <span className="w-3 shrink-0" />
-        ) : (
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
-              disclosure && "rotate-90",
-            )}
-          />
-        )}
         {children}
       </button>
       {actions && (
@@ -273,8 +227,6 @@ function EnvNode({
   plan,
   status,
   clashing,
-  expanded,
-  onToggle,
   active,
   onOpen,
   onRename,
@@ -287,27 +239,21 @@ function EnvNode({
   /** What the host reports about it, if anything. */
   status?: EnvironmentStatus;
   clashing: boolean;
-  expanded: Set<string>;
-  onToggle: (key: string, open?: boolean) => void;
-  active: EditorTab | undefined;
-  onOpen: (tab: EditorTab) => void;
+  /** Its tab is the active editor. */
+  active: boolean;
+  onOpen: () => void;
   onRename: () => void;
   onDuplicate: () => void;
   onRemove: () => void;
   /** The removal confirmation, drawn under the row while it asks. */
   confirm?: ReactNode;
 }) {
-  const open = expanded.has(env.id);
-  const files = plan?.plan?.files;
-  const tree = useMemo(() => (files ? buildFileTree(files) : []), [files]);
   const port = plan?.plan?.gateway.listeners[0]?.host_port;
-  const here = active?.env === env.id;
   return (
     <>
       <Row
-        depth={0}
-        disclosure={open}
-        onClick={() => onToggle(env.id)}
+        selected={active}
+        onClick={onOpen}
         title={`slot ${env.slot}: host ports +${env.slot * SLOT_PORT_STRIDE}`}
         actions={
           <>
@@ -327,7 +273,7 @@ function EnvNode({
         }
       >
         <EnvStatus plan={plan} clashing={clashing} />
-        <span className={cn("truncate", here && "font-medium")}>
+        <span className={cn("truncate", active && "font-medium")}>
           {env.name}
         </span>
         {status && <RunStateDot status={status} />}
@@ -340,96 +286,6 @@ function EnvNode({
         </span>
       </Row>
       {confirm}
-      {open && (
-        <div>
-          <Row
-            depth={1}
-            selected={here && active?.path === undefined}
-            onClick={() => onOpen({ env: env.id })}
-          >
-            <Workflow className="h-3.5 w-3.5 shrink-0 text-primary" />
-            <span className="truncate">Diagram</span>
-          </Row>
-          {plan === undefined && (
-            <div
-              className="flex h-6 items-center gap-1.5 text-xs text-muted-foreground"
-              style={{ paddingLeft: INDENT + 24 }}
-            >
-              <Loader2 className="h-3 w-3 animate-spin" /> Rendering…
-            </div>
-          )}
-          {tree.map((node) => (
-            <FileNode
-              key={node.path}
-              env={env.id}
-              node={node}
-              depth={1}
-              expanded={expanded}
-              onToggle={onToggle}
-              active={here ? active : undefined}
-              onOpen={onOpen}
-            />
-          ))}
-        </div>
-      )}
     </>
-  );
-}
-
-function FileNode({
-  env,
-  node,
-  depth,
-  expanded,
-  onToggle,
-  active,
-  onOpen,
-}: {
-  env: string;
-  node: FileTreeNode;
-  depth: number;
-  expanded: Set<string>;
-  onToggle: (key: string, open?: boolean) => void;
-  active: EditorTab | undefined;
-  onOpen: (tab: EditorTab) => void;
-}) {
-  if (node.children) {
-    const key = `${env}:${node.path}`;
-    const open = expanded.has(key);
-    return (
-      <>
-        <Row depth={depth} disclosure={open} onClick={() => onToggle(key)}>
-          {open ? (
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          ) : (
-            <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate">{node.name}</span>
-        </Row>
-        {open &&
-          node.children.map((child) => (
-            <FileNode
-              key={child.path}
-              env={env}
-              node={child}
-              depth={depth + 1}
-              expanded={expanded}
-              onToggle={onToggle}
-              active={active}
-              onOpen={onOpen}
-            />
-          ))}
-      </>
-    );
-  }
-  return (
-    <Row
-      depth={depth}
-      selected={active?.path === node.path}
-      onClick={() => onOpen({ env, path: node.path })}
-    >
-      <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-      <span className="truncate">{node.name}</span>
-    </Row>
   );
 }
