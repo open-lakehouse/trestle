@@ -1,14 +1,13 @@
-// The shell's open editors: each tab is an environment's diagram, one of its
-// rendered files, one of its revisions or a comparison of two. Pure helpers, so the tab rules are testable on their own.
+// The shell's open editors: each tab is an environment (its Configure and
+// Apps layers), one of its revisions or a comparison of two. Pure helpers, so
+// the tab rules are testable on their own.
 
-/** An open editor: `env`'s diagram, its rendered file at `path`, one of its
- *  revisions (read-only), or a comparison of two of them. At most one of
- *  `path`, `revision` and `compare` is set. */
+/** An open editor: environment `env`, one of its revisions (read-only), or a
+ *  comparison of two of them. At most one of `revision` and `compare` is
+ *  set. */
 export interface EditorTab {
   /** The environment's id. */
   env: string;
-  /** The file's path in the environment; absent for its diagram. */
-  path?: string;
   /** A revision's number, to view it read-only. */
   revision?: number;
   /** Two revisions to compare; `"draft"` is the environment's draft. */
@@ -21,7 +20,7 @@ export function tabKey(tab: EditorTab): string {
     ? `compare:${tab.compare.from}..${tab.compare.to}`
     : tab.revision !== undefined
       ? `revision:${tab.revision}`
-      : (tab.path ?? "");
+      : "";
   return `${tab.env}\n${what}`;
 }
 
@@ -60,14 +59,13 @@ export function neighbourAfterClose(
   return next && tabKey(next);
 }
 
-/** A tab's label: the file's name, `#n` for a revision, `#a → b` for a
- *  comparison, else the environment's name (its diagram). */
+/** A tab's label: `#n` for a revision, `#a → b` for a comparison, else the
+ *  environment's name. */
 export function tabLabel(tab: EditorTab, envName: string): string {
   if (tab.compare) {
     const to = tab.compare.to === "draft" ? "draft" : `#${tab.compare.to}`;
     return `#${tab.compare.from} → ${to}`;
   }
   if (tab.revision !== undefined) return `#${tab.revision}`;
-  if (tab.path) return tab.path.split("/").at(-1) ?? tab.path;
   return envName;
 }

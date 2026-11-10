@@ -1,7 +1,10 @@
 // The shell's revision views, shown only when the store keeps revisions: the
 // sidebar's history of an environment (commit its draft, open or compare a
 // revision), a read-only revision editor (its diagram and what it selects), and
-// a comparison of two revisions or of a revision and the draft.
+// a comparison of two revisions or of a revision and the draft, and an
+// environment's Changes (its draft against its last revision). Comparisons
+// list what the selection changed, then each rendered file that differs,
+// through the host's diff viewer where it gives one.
 
 import { Badge, Button, Input } from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
@@ -15,7 +18,9 @@ import { Breadcrumb, SidebarHeader } from "./chrome.js";
 import {
   describeHosted,
   describeHostedChange,
+  diffFiles,
   diffSelections,
+  type FileChange,
   isEmptyDiff,
   type SelectionDiff,
 } from "./diff.js";
@@ -27,6 +32,7 @@ import {
   selectionDigest,
 } from "./store.js";
 import { useWorkspace } from "./useWorkspace.js";
+import { useDiffViewer } from "./viewers.js";
 
 /** A pending, loaded or failed async value. */
 type Loaded<T> = { value: T } | { error: string } | undefined;
@@ -449,9 +455,67 @@ export function CompareEditor({
   to,
   catalog,
 }: CompareEditorProps) {
+  const label = (n: number | "draft") => (n === "draft" ? "draft" : `#${n}`);
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-10 shrink-0 items-center border-b px-3">
+        <Breadcrumb
+          parts={[workspace.name, env.name, `${label(from)} → ${label(to)}`]}
+        />
+      </div>
+      <Comparison
+        workspace={workspace}
+        env={env}
+        from={from}
+        to={to}
+        catalog={catalog}
+      />
+    </div>
+  );
+}
+
+export interface ChangesViewProps {
+  workspace: WorkspaceDoc;
+  env: EnvDoc;
+  catalog: CatalogDto | undefined;
+}
+
+/** An environment's Changes: its draft against its last revision. */
+export function ChangesView({ workspace, env, catalog }: ChangesViewProps) {
+  if (env.head === undefined) {
+    return (
+      <Pending>
+        {env.name} has no revision yet: commit one to compare the draft against.
+      </Pending>
+    );
+  }
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Comparison
+        workspace={workspace}
+        env={env}
+        from={env.head}
+        to="draft"
+        catalog={catalog}
+      />
+    </div>
+  );
+}
+
+/** Both sides of a comparison: what the selection changed, and the rendered
+ *  files that differ. */
+interface ComparisonResult {
+  selection: SelectionDiff;
+  files: FileChange[];
+}
+
+/** Revision `from` against `to` (a revision or the draft), both planned in
+ *  the environment's context. */
+function Comparison({ workspace, env, from, to, catalog }: CompareEditorProps) {
   const ws = useWorkspace();
+  const planner = usePlanner();
   const draft = env.selection ?? catalog?.default_selection;
-  const diff = useLoaded(async (): Promise<SelectionDiff> => {
+  const result = useLoaded(async (): Promise<ComparisonResult> => {
     const load = async (n: number): Promise<Selection> => {
       const doc = await ws.revisions?.load(env.id, n);
       if (!doc) throw new Error(`${env.name} has no revision #${n}`);
@@ -460,31 +524,78 @@ export function CompareEditor({
     const before = await load(from);
     const after = to === "draft" ? draft : await load(to);
     if (!after) throw new Error("The catalog is still loading.");
-    return diffSelections(before, after);
-  }, [env.id, from, to, draft, ws.revisions]);
+    const context = contextFor(workspace, env);
+    const [was, now] = await Promise.all([
+      planner.plan(before, undefined, context),
+      planner.plan(after, undefined, context),
+    ]);
+    return {
+      selection: diffSelections(before, after),
+      files: diffFiles(was.files, now.files),
+    };
+  }, [env.id, from, to, draft, ws.revisions, planner, workspace]);
   const label = (n: number | "draft") => (n === "draft" ? "draft" : `#${n}`);
 
+  if (result === undefined) {
+    return (
+      <Pending>
+        <Loader2 className="h-4 w-4 animate-spin" /> Comparing…
+      </Pending>
+    );
+  }
+  if ("error" in result) return <Pending>{result.error}</Pending>;
+  const { selection, files } = result.value;
+  if (isEmptyDiff(selection) && files.length === 0) {
+    return (
+      <Pending>
+        {label(from)} and {label(to)} select the same environment.
+      </Pending>
+    );
+  }
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-10 shrink-0 items-center border-b px-3">
-        <Breadcrumb
-          parts={[workspace.name, env.name, `${label(from)} → ${label(to)}`]}
-        />
-      </div>
-      {diff === undefined ? (
-        <Pending>
-          <Loader2 className="h-4 w-4 animate-spin" /> Comparing…
-        </Pending>
-      ) : "error" in diff ? (
-        <Pending>{diff.error}</Pending>
-      ) : isEmptyDiff(diff.value) ? (
-        <Pending>
-          {label(from)} and {label(to)} select the same environment.
-        </Pending>
-      ) : (
-        <DiffList diff={diff.value} />
-      )}
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      {!isEmptyDiff(selection) && <DiffList diff={selection} />}
+      <FileChanges envId={env.id} files={files} />
     </div>
+  );
+}
+
+/** Each rendered file that differs, through the diff viewer. */
+function FileChanges({
+  envId,
+  files,
+}: {
+  envId: string;
+  files: readonly FileChange[];
+}) {
+  const viewer = useDiffViewer();
+  if (files.length === 0) return null;
+  return (
+    <section aria-label="Changed files" className="border-t">
+      <h3 className="px-4 pt-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        Files ({files.length})
+      </h3>
+      {files.map((file) => (
+        <div key={file.path} className="mt-2 border-y">
+          <div className="flex items-center gap-2 bg-muted/40 px-3 py-1 font-mono text-xs">
+            <span className="truncate">{file.path}</span>
+            <Badge variant="outline" className="text-[10px]">
+              {file.original === undefined
+                ? "added"
+                : file.modified === undefined
+                  ? "removed"
+                  : "changed"}
+            </Badge>
+          </div>
+          {viewer({
+            envId,
+            path: file.path,
+            original: file.original,
+            modified: file.modified,
+          })}
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -525,10 +636,7 @@ function DiffList({ diff }: { diff: SelectionDiff }) {
     "~": "text-[hsl(var(--status-ready))]",
   };
   return (
-    <ul
-      aria-label="Changes"
-      className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4 font-mono text-sm"
-    >
+    <ul aria-label="Changes" className="space-y-1 p-4 font-mono text-sm">
       {rows.map((row) => (
         <li key={`${row.sign}${row.text}`} className="flex gap-2">
           <span className={tone[row.sign]}>{row.sign}</span>

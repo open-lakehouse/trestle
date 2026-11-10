@@ -9,6 +9,7 @@ import {
   Activity,
   Play,
   Settings2,
+  ShieldCheck,
   Square,
   Stethoscope,
   Wrench,
@@ -31,10 +32,17 @@ import {
 import { WorkspaceProvider } from "./useWorkspace.js";
 import { WorkspaceShell } from "./WorkspaceShell.js";
 
-// The fixture planner: the captured catalog, and one representative plan.
+// The fixture planner: the captured catalog, and one representative plan,
+// plus a file listing the selection's modules so Changes has a diff to show.
 const planner: Planner = {
   catalog: async () => FIXTURE_CATALOG,
-  plan: async () => FIXTURE_PLAN,
+  plan: async (s) => ({
+    ...FIXTURE_PLAN,
+    files: [
+      ...FIXTURE_PLAN.files,
+      { path: "modules.txt", contents: `${s.modules.join("\n")}\n` },
+    ],
+  }),
 };
 
 const selection: Selection = FIXTURE_CATALOG.default_selection;
@@ -204,6 +212,17 @@ function fakeRuntime(): EditorContributions & {
           revision: id === "dev" ? 2 : 1,
           placement: placement[id],
           detail: running(id) ? "all services healthy" : undefined,
+          details: [
+            {
+              label: "target",
+              value: id === "dev" ? "docker (colima)" : "neon br-staging",
+            },
+            {
+              label: "gateway",
+              value: `https://${id}.localhost:8443`,
+              copy: true,
+            },
+          ],
         },
       actions: (id) =>
         running(id)
@@ -226,14 +245,24 @@ function fakeRuntime(): EditorContributions & {
                 run: () => transition(id, "starting", "running"),
               },
             ],
-      tabs: (id) =>
-        ["Catalog", "Lineage", "Logs"].map((label) => ({
+      tabs: (id) => [
+        ...["Catalog", "Lineage", "Logs"].map((label) => ({
           id: label.toLowerCase(),
           label,
           enabled: running(id),
           reason: notRunning(id),
           render: view(label, `${label} of ${id}, from the host.`),
         })),
+        // A host view of the environment's setup: in Configure, always on.
+        {
+          id: "policies",
+          label: "Policies",
+          layer: "configure" as const,
+          icon: <ShieldCheck />,
+          enabled: true,
+          render: view("Policies", `Who may reach what in ${id}.`),
+        },
+      ],
       nodeStatus: (id, moduleId) =>
         state[id] === "stopped"
           ? undefined
@@ -265,22 +294,26 @@ export default meta;
 
 type Story = StoryObj<typeof Shell>;
 
-/** A store with drafts only (like browser storage): no history view. */
+/** A store with drafts only (like browser storage): no history view, and an
+ *  environment tab of Configure alone (Diagram, Files; no Apps switch). */
 export const DraftsOnly: Story = {
   render: () => <Shell store={createMemoryWorkspaceStore(workspace)} />,
 };
 
 /** A store that keeps revisions: the History view lists, opens and compares
- *  them, and commits the draft. */
+ *  them, and commits the draft; Configure → Changes diffs the draft against
+ *  the last revision. */
 export const WithRevisions: Story = {
   loaders: [async () => ({ store: await storeWithHistory() })],
   render: (_args, { loaded }) => <Shell store={loaded.store} />,
 };
 
 /** A host's contributions: Doctor and App settings side views, run-state
- *  badges with placement in the tree, a header with Start/Stop, Catalog /
- *  Lineage / Logs sub-tabs (disabled until the environment runs), each
- *  service's state on the canvas, and an Output panel. */
+ *  badges with placement in the tree, a header with details (target, a
+ *  copyable gateway URL) and Start/Stop, a Policies tab in Configure, Catalog
+ *  / Lineage / Logs as Apps (`dev` starts stopped, so its Apps asks to start
+ *  it; `staging` runs), each service's state on the canvas, and an Output
+ *  panel. */
 export const WithContributions: Story = {
   render: () => <LiveShell />,
 };
@@ -302,3 +335,26 @@ function LiveShell() {
   );
   return <Shell store={store} contributions={contributions} />;
 }
+
+/** Host viewers in place of the editor's: a bordered stand-in for Monaco
+ *  under Configure → Files and in every diff (Changes, comparisons). */
+export const WithViewerSeams: Story = {
+  loaders: [async () => ({ store: await storeWithHistory() })],
+  render: (_args, { loaded }) => (
+    <Shell
+      store={loaded.store}
+      contributions={{
+        fileViewer: ({ envId, path, read }) => (
+          <pre className="m-3 overflow-auto rounded border-2 border-dashed border-primary p-3 font-mono text-xs">
+            {`host file viewer: ${envId}/${path}\n\n${String(read(path))}`}
+          </pre>
+        ),
+        diffViewer: ({ path, original, modified }) => (
+          <pre className="m-3 overflow-auto rounded border-2 border-dashed border-primary p-3 font-mono text-xs">
+            {`host diff viewer: ${path}\n--- ${original === undefined ? "(new)" : `${original.length} chars`}\n+++ ${modified === undefined ? "(gone)" : `${modified.length} chars`}`}
+          </pre>
+        ),
+      }}
+    />
+  ),
+};

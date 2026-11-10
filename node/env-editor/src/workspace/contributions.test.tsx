@@ -15,9 +15,11 @@ import {
   EnvironmentPane,
   EnvSubTabs,
 } from "./envHeader.js";
+import { type EnvView, INITIAL_VIEW } from "./layers.js";
 import type { WorkspaceDoc } from "./model.js";
 import { createMemoryWorkspaceStore } from "./store.js";
 import { WorkspaceProvider } from "./useWorkspace.js";
+import { useDiffViewer, useFileViewer } from "./viewers.js";
 
 const html = (node: ReactNode) =>
   renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>);
@@ -141,10 +143,49 @@ describe("environment header", () => {
     // The disabled action says why.
     expect(out).toMatch(/title="No logs yet"[^>]*>\s*<button[^>]*disabled/);
   });
+
+  test("names the environment and shows details, copyable where asked", () => {
+    const out = html(
+      <EnvHeader
+        name="dev"
+        status={{
+          state: "running",
+          details: [
+            { label: "target", value: "branch preview" },
+            { label: "gateway", value: "https://dev.localhost", copy: true },
+          ],
+        }}
+        details={[{ label: "editor", value: "replaced by the host's" }]}
+        actions={[]}
+      />,
+    );
+    expect(out).toContain(">dev<");
+    expect(out).toContain("branch preview");
+    expect(out).toContain('aria-label="Copy gateway"');
+    expect(out).not.toContain('aria-label="Copy target"');
+    expect(out).not.toContain("replaced by the host");
+  });
+
+  test("the layer switch only once there are apps", () => {
+    const header = (apps: boolean) =>
+      html(
+        <EnvHeader
+          status={undefined}
+          actions={[]}
+          layer="configure"
+          onLayer={() => {}}
+          apps={apps}
+        />,
+      );
+    expect(header(false)).not.toContain('aria-label="Environment layer"');
+    const out = header(true);
+    expect(out).toContain('aria-label="Environment layer"');
+    expect(out).toMatch(/aria-checked="true"[^>]*>.*?Configure/);
+  });
 });
 
 describe("environment sub-tabs", () => {
-  test("Design first; a disabled tab says why and can't be picked", () => {
+  test("Diagram first; a disabled tab says why and can't be picked", () => {
     const picked: string[] = [];
     const out = html(
       <EnvSubTabs
@@ -162,7 +203,7 @@ describe("environment sub-tabs", () => {
         onSelect={(id) => picked.push(id)}
       />,
     );
-    expect(out.indexOf("Design")).toBeLessThan(out.indexOf("Catalog"));
+    expect(out.indexOf("Diagram")).toBeLessThan(out.indexOf("Catalog"));
     expect(out).toMatch(/aria-selected="true"[^>]*>(<svg.*?<\/svg>)?Catalog/);
     expect(out).toContain(
       'aria-selected="false" aria-disabled="true" title="dev isn&#x27;t running"',
@@ -179,13 +220,19 @@ const workspace: WorkspaceDoc = {
   ],
 };
 
-function Tree({ contributions }: { contributions?: EditorContributions }) {
+function Tree({
+  contributions,
+  plans = {},
+}: {
+  contributions?: EditorContributions;
+  plans?: Record<string, never>;
+}) {
   return (
     <WorkspaceProvider store={createMemoryWorkspaceStore(workspace)}>
       <ContributionsProvider contributions={contributions}>
         <EnvTree
           workspace={workspace}
-          plans={{}}
+          plans={plans}
           conflicts={[]}
           active={undefined}
           onOpen={() => {}}
@@ -222,6 +269,19 @@ describe("environment tree", () => {
     expect(out).toContain("+0");
     expect(out).toContain("+1000");
   });
+
+  test("one row per environment: no diagram or file rows", () => {
+    const plan = {
+      plan: {
+        files: [{ path: "modules/postgres/compose.yaml", contents: "" }],
+        gateway: { listeners: [] },
+      },
+    };
+    const out = html(<Tree plans={{ dev: plan, prod: plan } as never} />);
+    expect(out.match(/role="treeitem"/g)?.length).toBe(2);
+    expect(out).not.toContain("Diagram");
+    expect(out).not.toContain("compose.yaml");
+  });
 });
 
 describe("ContributionsProvider", () => {
@@ -248,31 +308,76 @@ describe("ContributionsProvider", () => {
 });
 
 describe("EnvironmentPane", () => {
-  const pane = (contributions?: EditorContributions, subTab = "design") =>
+  const pane = (
+    contributions?: EditorContributions,
+    view: Partial<EnvView> = {},
+    revisions: { revisions: boolean; head?: number } = { revisions: false },
+  ) =>
     html(
       <ContributionsProvider contributions={contributions}>
-        <EnvironmentPane envId="dev" subTab={subTab} onSubTab={() => {}}>
-          <div id="design" />
-        </EnvironmentPane>
+        <EnvironmentPane
+          envId="dev"
+          name="dev"
+          view={{ ...INITIAL_VIEW, ...view }}
+          onView={() => {}}
+          revisions={revisions}
+          details={[
+            { label: "gateway", value: "https://dev.localhost", copy: true },
+          ]}
+          diagram={<div id="diagram" />}
+          files={<div id="files" />}
+          changes={<div id="changes" />}
+        />
       </ContributionsProvider>,
     );
 
-  test("without contributions it is the editor alone", () => {
-    expect(pane()).toBe('<div id="design"></div>');
-    expect(pane({ environment: { status: () => undefined } })).toBe(
-      '<div id="design"></div>',
+  test("without contributions: the header, Configure's tabs, the diagram", () => {
+    const out = pane();
+    expect(out).toContain(">dev<");
+    expect(out).toContain("https://dev.localhost");
+    expect(out).toContain('aria-label="Environment views"');
+    expect(out).toContain(">Diagram<");
+    expect(out).toContain(">Files<");
+    expect(out).not.toContain(">Changes<");
+    expect(out).not.toContain('aria-label="Environment layer"');
+    expect(out).toContain('<div id="diagram"></div>');
+  });
+
+  test("Files and Changes render their bodies; Changes needs a revision", () => {
+    expect(pane(undefined, { configure: "files" })).toContain(
+      '<div id="files"></div>',
+    );
+    const unrevised = pane(
+      undefined,
+      { configure: "changes" },
+      { revisions: true },
+    );
+    expect(unrevised).toContain("Changes is unavailable: No revision yet");
+    expect(unrevised).not.toContain('id="changes"');
+    expect(
+      pane(undefined, { configure: "changes" }, { revisions: true, head: 1 }),
+    ).toContain('<div id="changes"></div>');
+  });
+
+  test("Apps without apps is Configure", () => {
+    expect(pane(undefined, { layer: "apps" })).toContain(
+      '<div id="diagram"></div>',
     );
   });
 
-  const host: EditorContributions = {
+  const host = (state: "running" | "stopped"): EditorContributions => ({
     environment: {
-      status: () => ({ state: "stopped" }),
+      status: () => ({ state }),
+      actions: () => [
+        { id: "start", label: "Start", variant: "primary", run: () => {} },
+        { id: "reset", label: "Reset", run: () => {} },
+      ],
       tabs: (id) => [
         {
           id: "catalog",
           label: "Catalog",
           enabled: false,
-          reason: `${id} isn't running`,
+          reason: `${id}'s catalog is warming up`,
           render: () => <div id="catalog" />,
         },
         {
@@ -281,26 +386,87 @@ describe("EnvironmentPane", () => {
           enabled: true,
           render: () => <div id="logs" />,
         },
+        {
+          id: "policies",
+          label: "Policies",
+          layer: "configure",
+          enabled: true,
+          render: () => <div id="policies" />,
+        },
       ],
     },
-  };
-
-  test("a host's header and sub-tabs frame the editor", () => {
-    const out = pane(host);
-    expect(out).toContain('data-run-state="stopped"');
-    expect(out).toContain('aria-label="Environment views"');
-    expect(out).toContain('<div id="design"></div>');
   });
 
-  test("an enabled host tab renders in place of the editor", () => {
-    const out = pane(host, "logs");
-    expect(out).toContain('<div id="logs"></div>');
-    expect(out).not.toContain('id="design"');
+  test("a host's configure tab follows the editor's, and renders", () => {
+    const out = pane(host("running"), { configure: "policies" });
+    expect(out.indexOf(">Files<")).toBeLessThan(out.indexOf(">Policies<"));
+    expect(out).not.toContain(">Logs<");
+    expect(out).toContain('aria-label="Environment layer"');
+    expect(out).toContain('<div id="policies"></div>');
   });
 
-  test("a disabled host tab says why instead of rendering", () => {
-    const out = pane(host, "catalog");
-    expect(out).toContain("Catalog is unavailable: dev isn&#x27;t running");
+  test("Apps while it isn't running: one prompt to start it", () => {
+    const out = pane(host("stopped"), { layer: "apps", apps: "logs" });
+    expect(out).toContain("Start dev to use its apps.");
+    // Its primary action, not every action, in the prompt as well as the header.
+    expect(out.match(/>Start</g)?.length).toBe(2);
+    expect(out.match(/>Reset</g)?.length).toBe(1);
+    expect(out).not.toContain('id="logs"');
+    expect(out).not.toContain("unavailable");
+  });
+
+  test("Apps while running: the host's tab, or why it is unavailable", () => {
+    const running = host("running");
+    expect(pane(running, { layer: "apps", apps: "logs" })).toContain(
+      '<div id="logs"></div>',
+    );
+    const out = pane(running, { layer: "apps", apps: "catalog" });
+    expect(out).toContain(
+      "Catalog is unavailable: dev&#x27;s catalog is warming up",
+    );
     expect(out).not.toContain('id="catalog"');
+  });
+});
+
+describe("viewers", () => {
+  function Viewers() {
+    const file = useFileViewer();
+    const diff = useDiffViewer();
+    return (
+      <>
+        {file({ envId: "dev", path: "a.yaml", read: () => "x: 1" })}
+        {diff({
+          envId: "dev",
+          path: "a.yaml",
+          original: "x: 1",
+          modified: "x: 2",
+        })}
+      </>
+    );
+  }
+
+  test("the editor's own by default", () => {
+    const out = html(<Viewers />);
+    expect(out).toContain("a.yaml");
+    expect(out).toContain('aria-label="Changes to a.yaml"');
+    expect(out).toContain("x: 2");
+  });
+
+  test("a host's in their place", () => {
+    const out = html(
+      <ContributionsProvider
+        contributions={{
+          fileViewer: ({ envId, path }) => <i id={`file-${envId}-${path}`} />,
+          diffViewer: ({ path, modified }) => (
+            <i id={`diff-${path}`}>{modified}</i>
+          ),
+        }}
+      >
+        <Viewers />
+      </ContributionsProvider>,
+    );
+    expect(out).toContain('<i id="file-dev-a.yaml"></i>');
+    expect(out).toContain('<i id="diff-a.yaml">x: 2</i>');
+    expect(out).not.toContain("Changes to");
   });
 });

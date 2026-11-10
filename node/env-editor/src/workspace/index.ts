@@ -12,10 +12,14 @@ export {
   type ActivityActionContribution,
   ContributionsProvider,
   type ContributionsProviderProps,
+  type DiffViewerProps,
   type EditorContributions,
   type EnvironmentContributions,
+  type EnvironmentDetail,
+  type EnvironmentLayer,
   type EnvironmentStatus,
   type EnvironmentTab,
+  type FileViewerProps,
   type HostAction,
   type NodeStatus,
   type PanelContribution,
@@ -25,7 +29,9 @@ export {
 } from "./contributions.js";
 export {
   describeHostedChange,
+  diffFiles,
   diffSelections,
+  type FileChange,
   type HostedChange,
   isEmptyDiff,
   type KnobChange,
@@ -42,12 +48,30 @@ export {
   tabKey,
 } from "./editors.js";
 export {
+  appsAvailable,
   DESIGN_TAB,
   EnvHeader,
   EnvironmentPane,
+  type EnvironmentPaneProps,
   EnvSubTabs,
-  type SubTab,
+  useLayerTabs,
 } from "./envHeader.js";
+export {
+  CHANGES_TAB,
+  type ChangesAvailability,
+  DIAGRAM_TAB,
+  type EnvView,
+  FILES_TAB,
+  hasLayer,
+  INITIAL_VIEW,
+  type LayerTabs,
+  layerTabs,
+  resolveView,
+  type SubTab,
+  withFile,
+  withLayer,
+  withSubTab,
+} from "./layers.js";
 export {
   contextFor,
   type EnvDoc,
@@ -91,4 +115,5 @@ export {
   type WorkspaceRevisions,
   type WorkspaceState,
 } from "./useWorkspace.js";
+export { useDiffViewer, useFileViewer } from "./viewers.js";
 export { WorkspaceShell, type WorkspaceShellProps } from "./WorkspaceShell.js";

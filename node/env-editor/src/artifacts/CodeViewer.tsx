@@ -203,7 +203,16 @@ function tokenSpan(token: CodeLine[number], i: number): ReactNode {
   );
 }
 
-function CopyButton({ text }: { text: string | undefined }) {
+/** Copies `text` to the clipboard, ticking for a moment once it has. */
+export function CopyButton({
+  text,
+  label = "Copy file contents",
+  className,
+}: {
+  text: string | undefined;
+  label?: string;
+  className?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -217,13 +226,16 @@ function CopyButton({ text }: { text: string | undefined }) {
   return (
     <button
       type="button"
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+      className={cn(
+        "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50 [&_svg]:h-4 [&_svg]:w-4",
+        className,
+      )}
       onClick={copy}
       disabled={text === undefined}
-      aria-label="Copy file contents"
-      title="Copy file contents"
+      aria-label={label}
+      title={label}
     >
-      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+      {copied ? <Check /> : <Copy />}
     </button>
   );
 }

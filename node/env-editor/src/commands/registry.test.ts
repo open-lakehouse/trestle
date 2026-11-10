@@ -90,12 +90,13 @@ describe("shortcuts", () => {
   });
 
   test("the editor's own bindings are listed for hosts", () => {
+    expect(EDITOR_SHORTCUTS).not.toContain("mod+3");
     for (const s of [
       "mod+k",
       "mod+b",
       "mod+j",
       "mod+1",
-      "mod+9",
+      "mod+2",
       "mod+z",
       "/",
     ]) {

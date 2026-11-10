@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CommandList } from "../commands/CommandPalette.js";
 import { filterCommands } from "../commands/registry.js";
 import { sideViewItems } from "./ActivityBar.js";
+import { layerTabs } from "./layers.js";
 import type { WorkspaceDoc } from "./model.js";
 import { type ShellCommandActions, shellCommands } from "./shellCommands.js";
 
@@ -23,6 +24,8 @@ function actions(log: string[]): ShellCommandActions {
   return {
     openEnv: note("openEnv"),
     activate: note("activate"),
+    showLayer: note("showLayer"),
+    showSubTab: note("showSubTab"),
     showView: note("showView"),
     toggleSidebar: note("toggleSidebar"),
     togglePanel: note("togglePanel"),
@@ -41,7 +44,7 @@ const build = (
   shellCommands(
     {
       workspace,
-      open: [{ env: "dev" }, { env: "dev", path: "compose.yaml" }],
+      open: [{ env: "dev" }, { env: "dev", revision: 1 }],
       sideViews: sideViewItems(false),
       activeEnv: workspace.envs[0],
       revisions: false,
@@ -66,25 +69,77 @@ describe("the shell's commands", () => {
       />,
     );
     expect(html).toContain("Go to dev");
-    expect(html).toContain("Go to compose.yaml (dev)");
+    expect(html).toContain("Go to #1 (dev)");
     expect(html).toContain("Show Workspace settings");
     expect(html).not.toContain("Show Modules");
     expect(html).toContain("Toggle sidebar");
     expect(html).not.toContain("Go to editor 1");
   });
 
-  test("⌘B, ⌘J and ⌘1…9 are commands", () => {
+  test("⌘B and ⌘J are commands; no positional editor jumps", () => {
     const log: string[] = [];
     const byShortcut = (s: string) =>
       build(log).find((c) => [c.shortcut].flat().includes(s));
     byShortcut("mod+b")?.run();
     byShortcut("mod+j")?.run();
-    byShortcut("mod+2")?.run();
-    expect(byShortcut("mod+3")).toBeUndefined();
+    expect(log).toEqual(["toggleSidebar", "togglePanel"]);
+    for (const n of [1, 2, 3, 9]) {
+      expect(byShortcut(`mod+${n}`)).toBeUndefined();
+    }
+  });
+
+  const appsTab = {
+    id: "catalog",
+    label: "Catalog",
+    enabled: true,
+    render: () => null,
+  };
+
+  test("⌘1 shows Configure; ⌘2 Apps, only when there are apps", () => {
+    const log: string[] = [];
+    const configureOnly = build(log, {
+      layers: layerTabs([], { revisions: true, head: 2 }),
+      current: { layer: "configure", subTab: "diagram" },
+    });
+    const byShortcut = (list: typeof configureOnly, s: string) =>
+      list.find((c) => [c.shortcut].flat().includes(s));
+    byShortcut(configureOnly, "mod+1")?.run();
+    expect(byShortcut(configureOnly, "mod+2")).toBeUndefined();
+    const withApps = build(log, {
+      layers: layerTabs([appsTab], { revisions: false }),
+      current: { layer: "configure", subTab: "diagram" },
+    });
+    byShortcut(withApps, "mod+2")?.run();
+    expect(log).toEqual(["showLayer:configure", "showLayer:apps"]);
+  });
+
+  test("each sub-tab has a Show command; the current one is disabled", () => {
+    const log: string[] = [];
+    const list = build(log, {
+      layers: layerTabs(
+        [
+          appsTab,
+          {
+            id: "logs",
+            label: "Logs",
+            enabled: false,
+            reason: "dev isn't running",
+            render: () => null,
+          },
+        ],
+        { revisions: true },
+      ),
+      current: { layer: "configure", subTab: "diagram" },
+    });
+    const show = (id: string) => list.find((c) => c.id === id);
+    expect(show("view.configure.diagram")?.enabled).toBe(false);
+    expect(show("view.configure.changes")?.enabled).toBe(false);
+    expect(show("view.apps.logs")?.reason).toBe("dev isn't running");
+    show("view.configure.files")?.run();
+    show("view.apps.catalog")?.run();
     expect(log).toEqual([
-      "toggleSidebar",
-      "togglePanel",
-      "activate:dev\ncompose.yaml",
+      "showSubTab:configure:files",
+      "showSubTab:apps:catalog",
     ]);
   });
 

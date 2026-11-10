@@ -1,7 +1,9 @@
-// An environment tab's host chrome: a header with what the host reports
-// about the environment (state, revision, placement) and the actions it
-// offers, and the sub-tabs next to the editor's own Design. Drawn only when a
-// host contributes them (see `contributions.tsx`).
+// An environment tab's chrome: a header with the environment's name, what the
+// host reports about it (state, revision, placement, details), a Configure |
+// Apps switch and the host's actions; under it the active layer's sub-tabs.
+// Configure is the editor's Diagram, Files and Changes (plus a host's
+// configure-layer tabs); Apps is the host's tabs, once the environment runs.
+// See `layers.ts` for the rules and `contributions.tsx` for what a host gives.
 
 import {
   Button,
@@ -10,29 +12,86 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@open-lakehouse/ui-kit";
-import { Workflow } from "lucide-react";
+import {
+  AppWindow,
+  FileText,
+  GitCompare,
+  Settings2,
+  Workflow,
+} from "lucide-react";
 import type { ReactNode } from "react";
+import { CopyButton } from "../artifacts/CodeViewer.js";
 import { RunStateDot } from "../graph/RunStateDot.js";
 import { runStateLabel } from "../graph/runState.js";
+import { Segmented } from "../inspector/Segmented.js";
 import {
+  type EnvironmentDetail,
+  type EnvironmentLayer,
   type EnvironmentStatus,
   type HostAction,
   useContributions,
 } from "./contributions.js";
+import {
+  CHANGES_TAB,
+  type ChangesAvailability,
+  DIAGRAM_TAB,
+  type EnvView,
+  FILES_TAB,
+  hasLayer,
+  type LayerTabs,
+  layerTabs,
+  resolveView,
+  type SubTab,
+  withLayer,
+  withSubTab,
+} from "./layers.js";
 
-/** The editor's own sub-tab. */
-export const DESIGN_TAB = "design";
+export type { SubTab } from "./layers.js";
 
-/** The header over an environment tab: its status, then the host's actions. */
+/** The Diagram sub-tab's id (it was Design before 0.0.7). */
+export const DESIGN_TAB = DIAGRAM_TAB;
+
+const BUILTIN_ICONS: Record<string, ReactNode> = {
+  [DIAGRAM_TAB]: <Workflow />,
+  [FILES_TAB]: <FileText />,
+  [CHANGES_TAB]: <GitCompare />,
+};
+
+/** The header over an environment tab: its name and status, the host's
+ *  details, the layer switch, then the host's actions. */
 export function EnvHeader({
+  name,
   status,
+  planStatus,
+  details = [],
   actions,
+  layer,
+  onLayer,
+  apps = false,
 }: {
+  name?: string;
   status: EnvironmentStatus | undefined;
+  /** Drawn in place of a host's status, e.g. whether the environment plans. */
+  planStatus?: ReactNode;
+  /** The editor's own facts (e.g. the gateway URL), shown when the host
+   *  reports none. */
+  details?: readonly EnvironmentDetail[];
   actions: readonly HostAction[];
+  /** The active layer; without it (or `onLayer`) there is no switch. */
+  layer?: EnvironmentLayer;
+  onLayer?: (layer: EnvironmentLayer) => void;
+  /** The Apps layer has tabs; without, the switch is hidden. */
+  apps?: boolean;
 }) {
+  const facts = status?.details ?? details;
   return (
-    <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 text-xs">
+    <div className="flex h-10 shrink-0 items-center gap-3 border-b px-3 text-xs">
+      {name && (
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-sm font-medium">
+          {!status && planStatus}
+          <span className="truncate">{name}</span>
+        </span>
+      )}
       {status && (
         <>
           <span
@@ -54,12 +113,47 @@ export function EnvHeader({
           )}
         </>
       )}
-      <div className="ml-auto flex items-center gap-1.5">
+      {facts.map((fact) => (
+        <Detail key={fact.label} detail={fact} />
+      ))}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {layer && onLayer && apps && (
+          <div className="w-44">
+            <Segmented<EnvironmentLayer>
+              label="Environment layer"
+              value={layer}
+              options={[
+                { value: "configure", label: "Configure", icon: <Settings2 /> },
+                { value: "apps", label: "Apps", icon: <AppWindow /> },
+              ]}
+              onChange={onLayer}
+            />
+          </div>
+        )}
         {actions.map((action) => (
           <ActionButton key={action.id} action={action} />
         ))}
       </div>
     </div>
+  );
+}
+
+function Detail({ detail }: { detail: EnvironmentDetail }) {
+  return (
+    <span
+      className="inline-flex min-w-0 items-center gap-1 text-muted-foreground"
+      title={detail.title ?? detail.value}
+    >
+      <span>{detail.label}</span>
+      <span className="truncate font-mono text-foreground">{detail.value}</span>
+      {detail.copy && (
+        <CopyButton
+          text={detail.value}
+          label={`Copy ${detail.label}`}
+          className="h-5 w-5 [&_svg]:h-3 [&_svg]:w-3"
+        />
+      )}
+    </span>
   );
 }
 
@@ -99,17 +193,7 @@ function ActionButton({ action }: { action: HostAction }) {
   );
 }
 
-/** One sub-tab, as `EnvSubTabs` lists it. */
-export interface SubTab {
-  id: string;
-  label: string;
-  icon?: ReactNode;
-  enabled: boolean;
-  reason?: string;
-}
-
-/** Design, then the host's tabs. A disabled tab says why and can't be
- *  picked. */
+/** A layer's sub-tabs. A disabled tab says why and can't be picked. */
 export function EnvSubTabs({
   tabs,
   active,
@@ -148,7 +232,7 @@ export function EnvSubTabs({
                 : "cursor-not-allowed opacity-50",
             )}
           >
-            {tab.icon}
+            {tab.icon ?? BUILTIN_ICONS[tab.id]}
             {tab.label}
           </button>
         );
@@ -157,15 +241,15 @@ export function EnvSubTabs({
   );
 }
 
-/** The editor's own sub-tab, as listed first. */
+/** The Diagram sub-tab, as Configure lists it first. */
 export const designTab: SubTab = {
-  id: DESIGN_TAB,
-  label: "Design",
+  id: DIAGRAM_TAB,
+  label: "Diagram",
   icon: <Workflow />,
   enabled: true,
 };
 
-/** The body of a host tab that is selected but no longer enabled. */
+/** The body of a tab that is selected but not enabled. */
 export function UnavailableTab({
   label,
   reason,
@@ -182,49 +266,133 @@ export function UnavailableTab({
   );
 }
 
+/** Whether an environment in `status` serves its apps. With no status the
+ *  host doesn't say, so its tabs speak for themselves. */
+export function appsAvailable(status: EnvironmentStatus | undefined): boolean {
+  return !status || status.state === "running" || status.state === "degraded";
+}
+
+/** The Apps layer while the environment isn't running: one prompt to start
+ *  it, with the host's primary actions (all of them if none is primary). */
+function StartApps({
+  name,
+  status,
+  actions,
+}: {
+  name: string;
+  status: EnvironmentStatus;
+  actions: readonly HostAction[];
+}) {
+  const primary = actions.filter((a) => a.variant === "primary");
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5">
+        <RunStateDot status={status} />
+        {name} is {runStateLabel(status)}.
+      </span>
+      <span>Start {name} to use its apps.</span>
+      {actions.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          {(primary.length > 0 ? primary : actions).map((action) => (
+            <ActionButton key={action.id} action={action} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The sub-tabs of each layer of environment `envId`: the editor's and the
+ *  host's. */
+export function useLayerTabs(
+  envId: string | undefined,
+  revisions: ChangesAvailability,
+): LayerTabs {
+  const env = useContributions().contributions?.environment;
+  return layerTabs((envId && env?.tabs?.(envId)) || [], revisions);
+}
+
+export interface EnvironmentPaneProps {
+  envId: string;
+  /** The environment's name, for its header. */
+  name: string;
+  view: EnvView;
+  onView: (view: EnvView) => void;
+  /** Whether there is a Changes tab, and whether it has a revision to show. */
+  revisions: ChangesAvailability;
+  /** The environment's plan state, in the header when the host reports no
+   *  status. */
+  planStatus?: ReactNode;
+  /** The editor's own header facts (e.g. the gateway URL). */
+  details?: readonly EnvironmentDetail[];
+  /** The Configure layer's own bodies. */
+  diagram: ReactNode;
+  files: ReactNode;
+  changes: ReactNode;
+}
+
 /**
- * An environment's editor under the host's header and sub-tabs, when the host
- * contributes any: Design (`children`, the environment editor) first, then
- * the host's tabs. Without contributions it is the editor alone.
+ * An environment tab: its header, the active layer's sub-tabs, then the
+ * active sub-tab's body. Configure shows `diagram`, `files`, `changes` or a
+ * host's configure-layer tab; Apps a host's tab, or a prompt to start the
+ * environment while it isn't running.
  */
 export function EnvironmentPane({
   envId,
-  subTab,
-  onSubTab,
-  children,
-}: {
-  envId: string;
-  subTab: string;
-  onSubTab: (id: string) => void;
-  children: ReactNode;
-}) {
+  name,
+  view,
+  onView,
+  revisions,
+  planStatus,
+  details,
+  diagram,
+  files,
+  changes,
+}: EnvironmentPaneProps) {
   const env = useContributions().contributions?.environment;
   const status = env?.status?.(envId);
   const actions = env?.actions?.(envId) ?? [];
-  const tabs = env?.tabs?.(envId) ?? [];
-  if (!status && actions.length === 0 && tabs.length === 0) return children;
-  const hostTab = tabs.find((t) => t.id === subTab);
+  const hostTabs = env?.tabs?.(envId) ?? [];
+  const tabs = layerTabs(hostTabs, revisions);
+  const { layer, subTab } = resolveView(view, tabs);
+  const active = tabs[layer].find((t) => t.id === subTab);
+  const host = hostTabs.find(
+    (t) => t.id === subTab && (t.layer ?? "apps") === layer,
+  );
+
+  let body: ReactNode;
+  if (layer === "apps" && status && !appsAvailable(status)) {
+    body = <StartApps name={name} status={status} actions={actions} />;
+  } else if (active && !active.enabled) {
+    body = <UnavailableTab label={active.label} reason={active.reason} />;
+  } else if (host) {
+    body = host.render();
+  } else if (subTab === FILES_TAB) {
+    body = files;
+  } else if (subTab === CHANGES_TAB) {
+    body = changes;
+  } else {
+    body = diagram;
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {(status || actions.length > 0) && (
-        <EnvHeader status={status} actions={actions} />
-      )}
-      {tabs.length > 0 && (
-        <EnvSubTabs
-          tabs={[designTab, ...tabs]}
-          active={hostTab ? subTab : DESIGN_TAB}
-          onSelect={onSubTab}
-        />
-      )}
-      <div className="min-h-0 flex-1">
-        {!hostTab ? (
-          children
-        ) : hostTab.enabled ? (
-          hostTab.render()
-        ) : (
-          <UnavailableTab label={hostTab.label} reason={hostTab.reason} />
-        )}
-      </div>
+      <EnvHeader
+        name={name}
+        status={status}
+        planStatus={planStatus}
+        details={details}
+        actions={actions}
+        layer={layer}
+        onLayer={(l) => onView(withLayer(view, l))}
+        apps={hasLayer(tabs, "apps")}
+      />
+      <EnvSubTabs
+        tabs={tabs[layer]}
+        active={subTab}
+        onSelect={(id) => onView(withSubTab(view, layer, id))}
+      />
+      <div className="min-h-0 flex-1">{body}</div>
     </div>
   );
 }

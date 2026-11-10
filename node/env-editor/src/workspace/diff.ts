@@ -1,7 +1,12 @@
 // What changed between two selections (two revisions, or a revision and the
 // draft), as the revision diff view lists it. Pure, so the rules are testable.
 
-import type { HostedResource, HostedVendor, Selection } from "../types.js";
+import type {
+  HostedResource,
+  HostedVendor,
+  OutputFile,
+  Selection,
+} from "../types.js";
 
 /** Ids added to and removed from a list. */
 export interface ListDiff {
@@ -154,4 +159,31 @@ export function isEmptyDiff(diff: SelectionDiff): boolean {
     diff.hosted.length === 0 &&
     diff.settings.length === 0
   );
+}
+
+/** One rendered file that differs between two plans. */
+export interface FileChange {
+  path: string;
+  /** Absent: the file is new. */
+  original?: string;
+  /** Absent: the file is gone. */
+  modified?: string;
+}
+
+/** The files that differ from `before` to `after` (added, removed or
+ *  changed), by path. */
+export function diffFiles(
+  before: readonly OutputFile[],
+  after: readonly OutputFile[],
+): FileChange[] {
+  const was = new Map(before.map((f) => [f.path, f.contents]));
+  const now = new Map(after.map((f) => [f.path, f.contents]));
+  const paths = [...new Set([...was.keys(), ...now.keys()])].sort();
+  return paths
+    .filter((path) => was.get(path) !== now.get(path))
+    .map((path) => ({
+      path,
+      original: was.get(path),
+      modified: now.get(path),
+    }));
 }

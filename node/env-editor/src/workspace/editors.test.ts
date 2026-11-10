@@ -8,32 +8,31 @@ import {
 } from "./editors.js";
 
 const diagram = { env: "a" };
-const compose = { env: "a", path: "compose.yaml" };
+const rev1 = { env: "a", revision: 1 };
 const prod = { env: "b" };
 
 describe("editor tabs", () => {
   test("opening is idempotent and keeps order", () => {
-    const tabs = openTab(openTab(openTab([], diagram), compose), diagram);
-    expect(tabs).toEqual([diagram, compose]);
+    const tabs = openTab(openTab(openTab([], diagram), rev1), diagram);
+    expect(tabs).toEqual([diagram, rev1]);
   });
 
   test("closing activates a neighbour", () => {
-    const tabs = [diagram, compose, prod];
-    expect(neighbourAfterClose(tabs, tabKey(compose))).toBe(tabKey(prod));
-    expect(neighbourAfterClose(tabs, tabKey(prod))).toBe(tabKey(compose));
-    expect(closeTab(tabs, tabKey(compose))).toEqual([diagram, prod]);
+    const tabs = [diagram, rev1, prod];
+    expect(neighbourAfterClose(tabs, tabKey(rev1))).toBe(tabKey(prod));
+    expect(neighbourAfterClose(tabs, tabKey(prod))).toBe(tabKey(rev1));
+    expect(closeTab(tabs, tabKey(rev1))).toEqual([diagram, prod]);
   });
 
   test("a removed environment's tabs close", () => {
-    const tabs = [diagram, compose, prod];
+    const tabs = [diagram, rev1, prod];
     expect(pruneTabs(tabs, new Set(["b"]))).toEqual([prod]);
     expect(pruneTabs(tabs, new Set(["a", "b"]))).toBe(tabs);
   });
 
-  test("revision and comparison tabs are distinct from the diagram and files", () => {
+  test("revision and comparison tabs are distinct from the environment's", () => {
     const keys = [
       diagram,
-      compose,
       { env: "a", revision: 1 },
       { env: "a", revision: 2 },
       { env: "a", compare: { from: 1, to: 2 } },

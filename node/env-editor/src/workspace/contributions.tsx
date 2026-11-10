@@ -1,5 +1,6 @@
-// What a host adds to the workspace shell: commands, extra side views, and per
-// environment a run status, header actions, sub-tabs next to Design, each
+// What a host adds to the workspace shell: commands, extra side views, viewers
+// for files and diffs, and per environment a run status with header details,
+// header actions, sub-tabs (its apps, or extra Configure views), each
 // service's state on the canvas, and a panel in place of the static Run
 // output. The editor only renders what it is given and learns nothing about
 // how the host runs anything (containers, remote branches, ...). A host that
@@ -17,6 +18,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import type { FileSource } from "../artifacts/fileSource.js";
 import type { Command } from "../commands/registry.js";
 import type { NodeStatus, RunState } from "../graph/runState.js";
 
@@ -33,6 +35,18 @@ export interface EnvironmentStatus {
   placement?: string;
   /** More detail, shown in tooltips. */
   detail?: string;
+  /** Facts for the header, e.g. a remote target or the gateway's URL. */
+  details?: EnvironmentDetail[];
+}
+
+/** One fact in an environment's header: `label value`, optionally copyable. */
+export interface EnvironmentDetail {
+  label: string;
+  value: string;
+  /** Offer a button that copies `value`. */
+  copy?: boolean;
+  /** Tooltip; defaults to `value`. */
+  title?: string;
 }
 
 /** A button a host offers, e.g. in an environment's header. */
@@ -50,10 +64,17 @@ export interface HostAction {
   run: () => void;
 }
 
-/** A sub-tab of an environment's editor, after the editor's own Design. */
+/** An environment tab's two layers: setting it up, and using what it runs. */
+export type EnvironmentLayer = "configure" | "apps";
+
+/** A sub-tab of an environment's editor. Configure-layer tabs follow the
+ *  editor's own Diagram, Files and Changes; apps-layer tabs make up Apps. */
 export interface EnvironmentTab {
-  /** Unique per environment; `"design"` is the editor's. */
+  /** Unique per environment; `"diagram"`, `"files"` and `"changes"` (and
+   *  the older `"design"`) are the editor's. */
   id: string;
+  /** Defaults to `"apps"`. */
+  layer?: EnvironmentLayer;
   label: string;
   icon?: ReactNode;
   /** A disabled tab is listed but can't be picked. */
@@ -98,6 +119,23 @@ export interface PanelContribution {
   render: (envId: string | undefined) => ReactNode;
 }
 
+/** What a host's file viewer gets: one rendered file of an environment. */
+export interface FileViewerProps {
+  envId: string;
+  path: string;
+  /** The file's contents (see `FileSource`). */
+  read: FileSource["read"];
+}
+
+/** What a host's diff viewer gets: one file before and after. `original`
+ *  is absent for an added file, `modified` for a removed one. */
+export interface DiffViewerProps {
+  envId: string;
+  path: string;
+  original?: string;
+  modified?: string;
+}
+
 /** What a host knows about each environment, by the workspace's env id. */
 export interface EnvironmentContributions {
   status?: (envId: string) => EnvironmentStatus | undefined;
@@ -121,6 +159,12 @@ export interface EditorContributions {
   activityActions?: ActivityActionContribution[];
   environment?: EnvironmentContributions;
   panel?: PanelContribution;
+  /** Renders a rendered file read-only (e.g. Monaco); the editor's
+   *  syntax-highlighted viewer otherwise. */
+  fileViewer?: (props: FileViewerProps) => ReactNode;
+  /** Renders one file's change (e.g. Monaco's diff editor); the editor's
+   *  unified line diff otherwise. */
+  diffViewer?: (props: DiffViewerProps) => ReactNode;
 }
 
 interface ContributionsValue {
