@@ -17,12 +17,15 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   /** What is being chosen (the group's accessible name). */
   label: string;
   value: T;
   options: SegmentedOption<T>[];
   onChange: (value: T) => void;
+  /** Show the choice without letting it change. */
+  disabled?: boolean;
 }) {
   return (
     <div
@@ -39,12 +42,14 @@ export function Segmented<T extends string>({
             type="button"
             role="radio"
             aria-checked={checked}
-            onClick={() => checked || onChange(o.value)}
+            disabled={disabled}
+            onClick={() => checked || disabled || onChange(o.value)}
             className={cn(
               "flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-sm px-1.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-ring",
               checked
                 ? "bg-background font-medium text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
+              disabled && "cursor-not-allowed opacity-60",
             )}
           >
             {o.icon}

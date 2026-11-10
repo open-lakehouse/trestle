@@ -16,12 +16,12 @@ import { usePlanner } from "../planner.js";
 import type { CatalogDto, PlanResult, Selection } from "../types.js";
 import { Breadcrumb, SidebarHeader } from "./chrome.js";
 import {
+  compareSelections,
   describeHosted,
   describeHostedChange,
-  diffFiles,
-  diffSelections,
   type FileChange,
   isEmptyDiff,
+  isSameEnvironment,
   type SelectionDiff,
 } from "./diff.js";
 import type { EditorTab } from "./editors.js";
@@ -502,20 +502,14 @@ export function ChangesView({ workspace, env, catalog }: ChangesViewProps) {
   );
 }
 
-/** Both sides of a comparison: what the selection changed, and the rendered
- *  files that differ. */
-interface ComparisonResult {
-  selection: SelectionDiff;
-  files: FileChange[];
-}
-
 /** Revision `from` against `to` (a revision or the draft), both planned in
- *  the environment's context. */
+ *  the environment's context. A side that no longer plans still shows what
+ *  its selection changed. */
 function Comparison({ workspace, env, from, to, catalog }: CompareEditorProps) {
   const ws = useWorkspace();
   const planner = usePlanner();
   const draft = env.selection ?? catalog?.default_selection;
-  const result = useLoaded(async (): Promise<ComparisonResult> => {
+  const result = useLoaded(async () => {
     const load = async (n: number): Promise<Selection> => {
       const doc = await ws.revisions?.load(env.id, n);
       if (!doc) throw new Error(`${env.name} has no revision #${n}`);
@@ -525,14 +519,9 @@ function Comparison({ workspace, env, from, to, catalog }: CompareEditorProps) {
     const after = to === "draft" ? draft : await load(to);
     if (!after) throw new Error("The catalog is still loading.");
     const context = contextFor(workspace, env);
-    const [was, now] = await Promise.all([
-      planner.plan(before, undefined, context),
-      planner.plan(after, undefined, context),
-    ]);
-    return {
-      selection: diffSelections(before, after),
-      files: diffFiles(was.files, now.files),
-    };
+    return compareSelections(before, after, (s) =>
+      planner.plan(s, undefined, context),
+    );
   }, [env.id, from, to, draft, ws.revisions, planner, workspace]);
   const label = (n: number | "draft") => (n === "draft" ? "draft" : `#${n}`);
 
@@ -545,7 +534,7 @@ function Comparison({ workspace, env, from, to, catalog }: CompareEditorProps) {
   }
   if ("error" in result) return <Pending>{result.error}</Pending>;
   const { selection, files } = result.value;
-  if (isEmptyDiff(selection) && files.length === 0) {
+  if (isSameEnvironment(result.value)) {
     return (
       <Pending>
         {label(from)} and {label(to)} select the same environment.
@@ -555,7 +544,16 @@ function Comparison({ workspace, env, from, to, catalog }: CompareEditorProps) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       {!isEmptyDiff(selection) && <DiffList diff={selection} />}
-      <FileChanges envId={env.id} files={files} />
+      {"error" in files ? (
+        <p
+          role="status"
+          className="border-t px-4 py-3 text-xs text-muted-foreground"
+        >
+          File changes unavailable: {files.error}
+        </p>
+      ) : (
+        <FileChanges envId={env.id} files={files} />
+      )}
     </div>
   );
 }

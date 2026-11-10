@@ -1,6 +1,7 @@
 // What changed between two selections (two revisions, or a revision and the
 // draft), as the revision diff view lists it. Pure, so the rules are testable.
 
+import { errorMessage } from "../errors.js";
 import type {
   HostedResource,
   HostedVendor,
@@ -186,4 +187,38 @@ export function diffFiles(
       original: was.get(path),
       modified: now.get(path),
     }));
+}
+
+/** Two selections compared: what the selection changed, and the rendered
+ *  files that differ, or why a side couldn't be planned. */
+export interface Comparison {
+  selection: SelectionDiff;
+  files: FileChange[] | { error: string };
+}
+
+/** Compare `before` with `after`, planning each with `plan`. A side that no
+ *  longer plans (an old revision, an invalid draft) still shows what its
+ *  selection changed; only the file diff is lost. */
+export async function compareSelections(
+  before: Selection,
+  after: Selection,
+  plan: (selection: Selection) => Promise<{ files: readonly OutputFile[] }>,
+): Promise<Comparison> {
+  const [was, now] = await Promise.allSettled([plan(before), plan(after)]);
+  const selection = diffSelections(before, after);
+  if (was.status === "rejected") {
+    return { selection, files: { error: errorMessage(was.reason) } };
+  }
+  if (now.status === "rejected") {
+    return { selection, files: { error: errorMessage(now.reason) } };
+  }
+  return { selection, files: diffFiles(was.value.files, now.value.files) };
+}
+
+/** Whether a comparison found nothing: the same selection and, as far as
+ *  both sides planned, the same files. */
+export function isSameEnvironment(c: Comparison): boolean {
+  return (
+    isEmptyDiff(c.selection) && !("error" in c.files) && c.files.length === 0
+  );
 }

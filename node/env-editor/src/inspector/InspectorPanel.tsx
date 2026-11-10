@@ -181,6 +181,9 @@ export function InspectorPanel({
           <ImplementationSection
             module={module}
             implementations={implementationsOf(catalog, module)}
+            requiredBy={catalog.modules
+              .filter((m) => m.requires.includes(moduleId) && names.has(m.id))
+              .map((m) => names.get(m.id) ?? m.id)}
             onSwap={onSwap}
           />
         )}

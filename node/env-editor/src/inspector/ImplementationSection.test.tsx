@@ -3,10 +3,11 @@ import { FIXTURE_CATALOG } from "@open-lakehouse/stack-wasm/fixtures";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   implementationsOf,
+  replacementsOf,
   slotHolders,
   uniqueSlot,
 } from "../selection/catalogIndex.js";
-import type { HostedResource } from "../types.js";
+import type { HostedResource, PlanResult } from "../types.js";
 import { implementationLabel } from "./ImplementationSection.js";
 
 // Anything that reaches the layout module builds an ELK instance on import,
@@ -27,16 +28,29 @@ function inspect(
   {
     hosted,
     onSwap = noop,
+    planned,
   }: {
     hosted?: HostedResource;
     onSwap?: (from: string, to: string) => void;
+    /** The components in the plan's graph (no plan when omitted). */
+    planned?: string[];
   } = {},
 ) {
+  const plan = planned && {
+    graph: {
+      nodes: planned.map((id) => ({
+        id,
+        display_name: module(id).display_name,
+      })),
+      edges: [],
+    },
+    files: [],
+  };
   return renderToStaticMarkup(
     <InspectorPanel
       moduleId={moduleId}
       catalog={FIXTURE_CATALOG}
-      plan={null}
+      plan={(plan ?? null) as PlanResult | null}
       overrides={{}}
       origin={{ kind: "explicit" }}
       alternatives={[]}
@@ -103,6 +117,35 @@ describe("Implementation", () => {
     const fn = inspect("unity-catalog-rs", { hosted: NEON_FUNCTION });
     expect(fn).not.toContain("inspector.unity-catalog-rs.image");
     expect(fn).toContain("its settings don&#x27;t apply");
+  });
+
+  test("held in place by a component that requires this implementation", () => {
+    // The planner would add the required OSS server back beside the Rust one.
+    const html = inspect("unity-catalog-oss", {
+      planned: ["puppygraph", "unity-catalog-oss"],
+    });
+    expect(html).toMatch(/role="radio" aria-checked="false" disabled=""/);
+    expect(html).toContain("needs this implementation");
+    expect(html).toContain(module("puppygraph").display_name ?? "puppygraph");
+    // Implied only by what uses the API, it still switches.
+    const free = inspect("unity-catalog-oss", {
+      planned: ["mlflow", "unity-catalog-oss"],
+    });
+    expect(free).not.toContain('disabled=""');
+    expect(free).toContain("Switching resets its settings");
+  });
+
+  test("Replace with… leaves the other implementation to the inspector", () => {
+    const ids = (id: string, planned: string[] = [id]) =>
+      replacementsOf(FIXTURE_CATALOG, id, new Set(planned)).map((m) => m.id);
+    expect(ids("unity-catalog-oss")).not.toContain("unity-catalog-rs");
+    expect(ids("unity-catalog-rs")).not.toContain("unity-catalog-oss");
+    // A role without an API still lists its other providers, unplanned ones only.
+    const stores = ids("rustfs");
+    expect(stores.length).toBeGreaterThan(0);
+    expect(stores).not.toContain("rustfs");
+    expect(ids("rustfs", ["rustfs", ...stores])).toEqual([]);
+    expect(replacementsOf(undefined, "rustfs", new Set())).toEqual([]);
   });
 
   test("an API is a unique slot: picking the other server switches", () => {

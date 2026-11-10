@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { errorMessage } from "../errors.js";
+import { migrateSelection } from "../selection/migrate.js";
 import type { Selection } from "../types.js";
 import {
   type EnvDoc,
@@ -79,6 +80,20 @@ export interface WorkspaceState {
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
 
+/** `workspace` with each environment's selection {@link migrateSelection
+ *  migrated}, or `workspace` itself when none changed. */
+export function migrateWorkspace(workspace: WorkspaceDoc): WorkspaceDoc {
+  let changed = false;
+  const envs = workspace.envs.map((env) => {
+    if (!env.selection) return env;
+    const selection = migrateSelection(env.selection);
+    if (selection === env.selection) return env;
+    changed = true;
+    return { ...env, selection };
+  });
+  return changed ? { ...workspace, envs } : workspace;
+}
+
 /** Load the workspace from `store` and keep it saved there. */
 export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
   const [workspace, setWorkspace] = useState<WorkspaceDoc>();
@@ -92,7 +107,10 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
         .then((loaded) => {
           if (cancelled) return;
           if (loaded) {
-            setWorkspace(loaded);
+            // Adopt renamed module ids once, so edits key on what the graph shows.
+            const migrated = migrateWorkspace(loaded);
+            setWorkspace(migrated);
+            if (migrated !== loaded) void store.save(migrated);
           } else {
             const starter = starterWorkspace();
             setWorkspace(starter);
@@ -202,7 +220,10 @@ export function useWorkspaceState(store: WorkspaceStore): WorkspaceState {
     if (!supportsRevisions(store)) return undefined;
     return {
       list: (envId) => store.listRevisions(envId),
-      load: (envId, number) => store.loadRevision(envId, number),
+      load: async (envId, number) => {
+        const doc = await store.loadRevision(envId, number);
+        return doc && { ...doc, selection: migrateSelection(doc.selection) };
+      },
       async commit(envId, message) {
         const revision = await store.commit(envId, message);
         setWorkspace(

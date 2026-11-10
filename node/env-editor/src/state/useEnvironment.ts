@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorMessage } from "../errors.js";
 import { usePlanner } from "../planner.js";
+import { migrateSelection } from "../selection/migrate.js";
 import type {
   CatalogDto,
   GatewaySettings,
@@ -157,7 +158,10 @@ export function useEnvironment(
     (initial): History => ({
       past: [],
       // A host-given selection is never replaced by the catalog's default.
-      present: initial ? cloneSelection(initial) : EMPTY_SELECTION,
+      // A selection saved before a module was renamed edits under the new id.
+      present: initial
+        ? cloneSelection(migrateSelection(initial))
+        : EMPTY_SELECTION,
       future: [],
       seeded: !!initial,
     }),
