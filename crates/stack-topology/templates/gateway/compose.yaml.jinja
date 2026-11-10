@@ -7,6 +7,12 @@ services:
       - source: envoy_config
         target: /etc/envoy/envoy.yaml
     command: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+{%- if unresolved_upstreams %}
+    environment:
+      # Rendered without {{ unresolved_upstreams | join(", ") }}: envoy.yaml names them, and
+      # Envoy can't read a variable. Compose stops here until a render with them resolves it.
+      TRESTLE_GATEWAY_RENDERED: "${TRESTLE_GATEWAY_RENDERED:?the gateway was rendered without {{ unresolved_upstreams | join(" and ") }}: set the function URLs in secrets.env, then run trestle env render}"
+{%- endif %}
 {%- if admin_port %}
     healthcheck:
       # Envoy's admin `/ready` answers 200 once every listener and cluster has initialized.

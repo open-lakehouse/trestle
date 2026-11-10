@@ -55,6 +55,11 @@ pub struct ModuleBinding {
     /// The cross-environment network the gateway joins (gateway module only, when
     /// [`PlanCtx::mesh_network`] is set).
     pub mesh: Option<MeshNetwork>,
+    /// The variables the gateway's upstreams still read (gateway module only): a function
+    /// fronted at a URL the plan hasn't resolved, which Envoy can't read at start. Empty once
+    /// every one is resolved.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_upstreams: Vec<String>,
     /// The stack-wide facts, identical for every module (the `stack` render global).
     pub stack: StackFacts,
 }
@@ -73,6 +78,7 @@ impl ModuleBinding {
             admin_port: self.admin_port,
             tls: self.tls.clone(),
             mesh: self.mesh.clone(),
+            unresolved_upstreams: self.unresolved_upstreams.clone(),
             stack: self.stack.clone(),
         }
     }
@@ -283,7 +289,9 @@ pub(super) fn bind(
         let is_gateway = services_of[module.id()]
             .iter()
             .any(|s| s.role == Role::gateway());
+        let mut unresolved_upstreams = Vec::new();
         let (published_ports, admin_port, tls, mesh) = if is_gateway {
+            unresolved_upstreams = unresolved_vars(gateway);
             // Under sign-in the gateway gates requests on the auth provider, so it waits for it.
             if gateway.auth.is_some()
                 && let Some(gate) = auth_provider.and_then(|p| provider_ready_gate(catalog, p))
@@ -330,6 +338,7 @@ pub(super) fn bind(
                 admin_port,
                 tls,
                 mesh,
+                unresolved_upstreams,
                 stack: stack_facts.clone(),
             },
         );
@@ -340,6 +349,17 @@ pub(super) fn bind(
         bindings,
         env,
     })
+}
+
+/// The variables `gateway`'s clusters stand for, sorted and deduplicated (see
+/// [`ModuleBinding::unresolved_upstreams`]).
+fn unresolved_vars(gateway: &GatewayConfig) -> Vec<String> {
+    let vars: BTreeSet<String> = gateway
+        .clusters
+        .iter()
+        .filter_map(|c| crate::address::placeholder_var(&c.host))
+        .collect();
+    vars.into_iter().collect()
 }
 
 /// A provider's connection template per role it provisions, in role order: a hosted

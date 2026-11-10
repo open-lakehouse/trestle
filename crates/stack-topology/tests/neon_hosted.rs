@@ -452,3 +452,53 @@ fn a_function_url_with_a_path_is_reached_but_not_fronted() {
         Some("https://example.com")
     );
 }
+
+/// A rendered file of `plan` by path.
+fn rendered(plan: &Plan, path: &str) -> String {
+    let out = plan.materialize().expect("materializes");
+    out.files
+        .iter()
+        .find(|f| f.path == path)
+        .unwrap_or_else(|| panic!("no {path}"))
+        .contents
+        .clone()
+}
+
+#[test]
+fn a_preview_gateway_names_the_function_urls_it_still_needs() {
+    let plan = plan(&hybrid(), None).unwrap();
+    // The gateway still fronts the functions, as it will once the branch is bound.
+    assert!(
+        plan.gateway
+            .clusters
+            .iter()
+            .any(|c| c.name == "unitycatalog")
+    );
+    let envoy = rendered(&plan, "modules/envoy/envoy.yaml");
+    assert!(!envoy.contains("trestle-ref-"), "{envoy}");
+    assert!(!envoy.contains(".invalid"), "{envoy}");
+    assert!(
+        envoy.contains("address: ${UNITYCATALOG_FUNCTION_URL}"),
+        "{envoy}"
+    );
+    assert!(envoy.contains("sni: ${HEADWATERS_FUNCTION_URL}"), "{envoy}");
+    // Envoy can't read them, so Compose refuses to start the gateway until a render does.
+    let compose = rendered(&plan, "modules/envoy/compose.yaml");
+    assert!(
+        compose.contains("${TRESTLE_GATEWAY_RENDERED:?the gateway was rendered without"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("HEADWATERS_FUNCTION_URL and UNITYCATALOG_FUNCTION_URL"),
+        "{compose}"
+    );
+}
+
+#[test]
+fn a_bound_gateway_starts_without_the_guard() {
+    let plan = plan(&hybrid(), Some(branch())).unwrap();
+    let compose = rendered(&plan, "modules/envoy/compose.yaml");
+    assert!(!compose.contains("TRESTLE_GATEWAY_RENDERED"), "{compose}");
+    let envoy = rendered(&plan, "modules/envoy/envoy.yaml");
+    assert!(!envoy.contains("${"), "{envoy}");
+}
