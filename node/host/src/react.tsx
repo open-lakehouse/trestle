@@ -10,7 +10,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { getHost } from "./registry.js";
-import type { LakehouseHost, ModuleId, ServiceBinding } from "./types.js";
+import type { LakehouseHost, ServiceBinding, ServiceKey } from "./types.js";
 
 const HostContext = createContext<LakehouseHost | null>(null);
 
@@ -44,13 +44,14 @@ export function useHost(): LakehouseHost {
 }
 
 /**
- * The binding for `moduleId`, or `undefined` when the environment has none (so
- * a UI can hide what it can't reach). Rerenders when the environment switches.
+ * The binding for `key` (see {@link ServiceKey}), or `undefined` when the
+ * environment has none (so a UI can hide what it can't reach). Rerenders when
+ * the environment switches.
  */
-export function useService(moduleId: ModuleId): ServiceBinding | undefined {
+export function useService(key: ServiceKey): ServiceBinding | undefined {
   const host = useHost();
   useEnvironmentKey();
-  return host.services.get(moduleId);
+  return host.services.get(key);
 }
 
 /**

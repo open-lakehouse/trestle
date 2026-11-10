@@ -3,8 +3,8 @@
 The shared host contract for Open Lakehouse service UIs. With it, a service UI
 (the Unity Catalog explorer, the lineage graph, …) runs unchanged in the desktop
 shell, in a standalone web app and in Storybook. Whatever runs the UI says how to
-reach each service, and the UI asks for the service by its trestle catalog module
-id.
+reach each service, and the UI asks for the service by its service key: the API
+it serves, or its trestle catalog module id when it declares none.
 
 ```bash
 bun add @open-lakehouse/host   # or npm / pnpm
@@ -26,8 +26,20 @@ its client and its components in its own repo, versioned together there:
 | trestle | the env-editor and the planner DTOs | the `Planner` and `WorkspaceStore` seams |
 
 This package standardises only that last column. Every host fills it the same
-way, keyed by the trestle module id (`"unity-catalog"`, `"headwaters"`,
-`"mlflow"`, …), the one piece of vocabulary the repos share.
+way, keyed by the service key, the one piece of vocabulary the repos share:
+
+- a service whose trestle module declares the API it serves is keyed by that
+  API. Unity Catalog is `"unity-catalog"` whether the environment runs the
+  open-source server (`unity-catalog-oss`) or mangrove's (`unity-catalog-rs`).
+- any other service is keyed by its module id (`"headwaters"`, `"mlflow"`, …).
+
+A host building its directory from a plan's graph keys each node with
+`serviceKey(node)` (`node.api ?? node.id`):
+
+```ts
+import { serviceKey } from "@open-lakehouse/host";
+const bindings = new Map(plan.graph.nodes.map((n) => [serviceKey(n), bind(n)]));
+```
 
 ## The contract
 
@@ -35,7 +47,7 @@ way, keyed by the trestle module id (`"unity-catalog"`, `"headwaters"`,
 interface LakehouseHost {
   kind: "desktop" | "web" | "storybook";
   environment: EnvironmentScope;  // current(), key, subscribe()
-  services: ServiceDirectory;     // get(moduleId) -> ServiceBinding | undefined
+  services: ServiceDirectory;     // get(serviceKey) -> ServiceBinding | undefined
   secrets?: SecretsHost;          // values by reference; stored by the host
   notebooks?: NotebookHost;       // open files as live notebooks
   files?: FilePickerHost;         // a native file picker
@@ -84,7 +96,7 @@ Resolution order for a client call:
    if one was given
 
 Without a binding or a fallback, a call rejects with `ServiceUnavailableError`
-(it carries `moduleId`).
+(it carries the key asked for as `moduleId`).
 
 ## Hosts
 

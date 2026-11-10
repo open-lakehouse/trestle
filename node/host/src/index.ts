@@ -27,4 +27,6 @@ export type {
   SecretsHost,
   ServiceBinding,
   ServiceDirectory,
+  ServiceKey,
 } from "./types.js";
+export { serviceKey } from "./types.js";
