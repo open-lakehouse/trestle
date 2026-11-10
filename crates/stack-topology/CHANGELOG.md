@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.19](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.18...olai-stack-topology-v0.0.19) - 2026-11-10
+
+### Fixed
+
+- name unresolved function URLs in envoy.yaml (#355)
+- migrate selections without losing edits (#354)
+- let MLflow accept an instance's *.localhost name (#353)
+
 ## [0.0.18](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.17...olai-stack-topology-v0.0.18) - 2026-11-10
 
 ### Added
