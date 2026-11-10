@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.18](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.17...olai-stack-topology-v0.0.18) - 2026-11-10
+
+### Added
+
+- health-check envoy, opa and jaeger (#349)
+
 ## [0.0.17](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.16...olai-stack-topology-v0.0.17) - 2026-11-09
 
 ### Added
