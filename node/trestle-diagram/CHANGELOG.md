@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.11.0...trestle-diagram-v0.11.1) - 2026-11-10
+
+### Added
+
+- workbench views, environment header details, viewer seams (#352)
+
 ## [0.11.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.10.1...trestle-diagram-v0.11.0) - 2026-11-09
 
 ### Added
