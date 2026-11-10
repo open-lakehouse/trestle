@@ -508,3 +508,68 @@ fn publish_admin_controls_the_admin_port() {
             .is_err()
     );
 }
+
+fn envoy_service(plan: &olai_stack_topology::Plan) -> serde_yaml::Value {
+    let fragment = plan
+        .materialize()
+        .unwrap()
+        .files
+        .into_iter()
+        .find(|f| f.path == "modules/envoy/compose.yaml")
+        .unwrap()
+        .contents;
+    let yaml: serde_yaml::Value = serde_yaml::from_str(&fragment).unwrap();
+    yaml["services"]["envoy"].clone()
+}
+
+#[test]
+fn the_gateway_health_check_probes_its_admin_port_published_or_not() {
+    let probe = |publish_admin: &str, ctx: PlanCtx| {
+        let mut selection = Selection::modules(["unity-catalog-oss"]);
+        selection.knob_overrides.insert(
+            "envoy".into(),
+            [("publish_admin".to_string(), publish_admin.to_string())].into(),
+        );
+        let plan = baseline_catalog().plan(&selection, &ctx).unwrap();
+        let test = envoy_service(&plan)["healthcheck"]["test"].clone();
+        test[3].as_str().expect("a bash probe").to_string()
+    };
+    let default = probe("true", PlanCtx::default());
+    assert!(default.contains("/dev/tcp/127.0.0.1/9901"), "{default}");
+    assert!(default.contains("GET /ready"), "{default}");
+    // Unpublished, the admin endpoint still serves in-network, so it is still probed.
+    assert_eq!(probe("false", PlanCtx::default()), default);
+    let moved = probe(
+        "true",
+        PlanCtx {
+            gateway_admin_port: 9911,
+            ..PlanCtx::default()
+        },
+    );
+    assert!(moved.contains("/dev/tcp/127.0.0.1/9911"), "{moved}");
+}
+
+#[test]
+fn the_gateway_waits_for_the_policy_engine_to_be_healthy() {
+    let p = baseline_catalog()
+        .plan(&with_opa(BTreeMap::new()), &PlanCtx::default())
+        .unwrap();
+    let envoy = envoy_service(&p);
+    assert_eq!(
+        envoy["depends_on"]["opa"]["condition"].as_str(),
+        Some("service_healthy"),
+        "{envoy:?}"
+    );
+    assert_eq!(
+        envoy["depends_on"]["authelia"]["condition"].as_str(),
+        Some("service_healthy")
+    );
+    // Without a policy engine there is nothing to wait for.
+    let open = baseline_catalog()
+        .plan(
+            &Selection::modules(["unity-catalog-oss"]),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+    assert!(envoy_service(&open)["depends_on"]["opa"].is_null());
+}

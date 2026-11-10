@@ -47,6 +47,9 @@ pub struct ModuleBinding {
     /// The `host:container` ports the module publishes: the gateway's listener mappings, or,
     /// without a gateway, the module's own surface endpoints.
     pub published_ports: Vec<PortMapping>,
+    /// The in-container port of the gateway's admin endpoint (gateway module only), which
+    /// its health check probes whether or not the port is published.
+    pub admin_port: Option<u16>,
     /// The gateway's TLS material (gateway module only, when it serves TLS).
     pub tls: Option<GatewayTls>,
     /// The cross-environment network the gateway joins (gateway module only, when
@@ -67,6 +70,7 @@ impl ModuleBinding {
             dependencies: self.dependencies.clone(),
             objects: self.objects.clone(),
             published_ports: self.published_ports.clone(),
+            admin_port: self.admin_port,
             tls: self.tls.clone(),
             mesh: self.mesh.clone(),
             stack: self.stack.clone(),
@@ -91,6 +95,7 @@ pub(super) fn bind(
     catalog: &Catalog,
     ctx: &PlanCtx,
     auth_provider: Option<&ModuleId>,
+    policy_provider: Option<&ModuleId>,
 ) -> Result<Bound, PlanError> {
     let Settled {
         graph,
@@ -278,10 +283,17 @@ pub(super) fn bind(
         let is_gateway = services_of[module.id()]
             .iter()
             .any(|s| s.role == Role::gateway());
-        let (published_ports, tls, mesh) = if is_gateway {
+        let (published_ports, admin_port, tls, mesh) = if is_gateway {
             // Under sign-in the gateway gates requests on the auth provider, so it waits for it.
             if gateway.auth.is_some()
                 && let Some(gate) = auth_provider.and_then(|p| provider_ready_gate(catalog, p))
+            {
+                dependencies.push(gate);
+            }
+            // Likewise the policy engine: the check fails closed, so a gateway that started
+            // first would deny every request until the engine came up.
+            if gateway.policy.is_some()
+                && let Some(gate) = policy_provider.and_then(|p| provider_ready_gate(catalog, p))
             {
                 dependencies.push(gate);
             }
@@ -299,12 +311,13 @@ pub(super) fn bind(
             });
             (
                 published_ports(gateway, ctx, admin),
+                Some(ctx.gateway_admin_port),
                 gateway_render_tls(gateway),
                 mesh,
             )
         } else {
             let direct = routed.direct.as_ref().and_then(|d| d.get(module.id()));
-            (direct.cloned().unwrap_or_default(), None, None)
+            (direct.cloned().unwrap_or_default(), None, None, None)
         };
         bindings.insert(
             module.id().clone(),
@@ -314,6 +327,7 @@ pub(super) fn bind(
                 dependencies,
                 objects,
                 published_ports,
+                admin_port,
                 tls,
                 mesh,
                 stack: stack_facts.clone(),

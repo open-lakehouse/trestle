@@ -1142,6 +1142,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         catalog,
         ctx,
         augmented.auth_provider.as_ref(),
+        augmented.policy_provider.as_ref(),
     )?;
 
     let mut plan = Plan {
