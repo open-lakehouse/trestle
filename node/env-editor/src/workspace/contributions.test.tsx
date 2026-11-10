@@ -4,8 +4,16 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ActivityBar, sideViewItems } from "./ActivityBar.js";
 import {
+  activePanelTab,
+  BottomPanelProvider,
+  createBottomPanel,
+  useBottomPanel,
+} from "./bottomPanel.js";
+import {
   ContributionsProvider,
   type EditorContributions,
+  hostPanels,
+  type PanelContribution,
   useContributions,
 } from "./contributions.js";
 import { EnvTree } from "./EnvTree.js";
@@ -21,6 +29,7 @@ import { shellCommands } from "./shellCommands.js";
 import { createMemoryWorkspaceStore } from "./store.js";
 import { WorkspaceProvider } from "./useWorkspace.js";
 import { useDiffViewer, useFileViewer } from "./viewers.js";
+import { BottomPanel } from "./WorkspaceShell.js";
 import {
   createWorkbench,
   useWorkbench,
@@ -545,5 +554,161 @@ describe("viewers", () => {
     expect(out).toContain('<i id="file-dev-a.yaml"></i>');
     expect(out).toContain('<i id="diff-a.yaml">x: 2</i>');
     expect(out).not.toContain("Changes to");
+  });
+});
+
+describe("bottom panel", () => {
+  const panel = (id: string, label: string): PanelContribution => ({
+    id,
+    label,
+    render: (envId) => <div id={`${id}-body`}>{`${label} for ${envId}`}</div>,
+  });
+  const run = panel("run", "Run");
+  const logs = panel("logs", "Logs");
+  const bottom = (
+    view: string,
+    panels: PanelContribution[] = [],
+    env: string | undefined = undefined,
+  ) =>
+    html(
+      <BottomPanel
+        height={180}
+        view={view}
+        onView={() => {}}
+        onClose={() => {}}
+        workspace={workspace}
+        env={env ? { id: env, name: env, slot: 0 } : undefined}
+        plans={{}}
+        conflicts={[]}
+        notice={null}
+        onOpen={() => {}}
+        panels={panels}
+      />,
+    );
+  // The tab labels, in order, and which one is selected.
+  const tabs = (out: string) =>
+    [
+      ...out.matchAll(
+        /role="tab" aria-selected="(true|false)"[^>]*>(?:<svg.*?<\/svg>)?([^<]*)/g,
+      ),
+    ].map((m) => [m[2], m[1] === "true"] as const);
+
+  test("two host panels are two tabs after Problems, each with its content", () => {
+    const panels = [run, logs];
+    expect(tabs(bottom("problems", panels))).toEqual([
+      ["Problems", true],
+      ["Run", false],
+      ["Logs", false],
+    ]);
+    // Each selected id shows that panel's content, and only that one.
+    const onRun = bottom("run", panels, "dev");
+    expect(onRun).toContain('<div id="run-body">Run for dev</div>');
+    expect(onRun).not.toContain("logs-body");
+    const onLogs = bottom("logs", panels, "dev");
+    expect(onLogs).toContain('<div id="logs-body">Logs for dev</div>');
+    expect(onLogs).not.toContain("run-body");
+    expect(tabs(onLogs)).toEqual([
+      ["Problems", false],
+      ["Run", false],
+      ["Logs", true],
+    ]);
+  });
+
+  test("without host panels the static Run output is the one tab", () => {
+    expect(tabs(bottom("output"))).toEqual([
+      ["Problems", false],
+      ["Run", true],
+    ]);
+    expect(bottom("output")).toContain("No environment open.");
+  });
+
+  test("a selected panel that vanished falls back to the first host panel", () => {
+    expect(tabs(bottom("gone", [run, logs]))).toEqual([
+      ["Problems", false],
+      ["Run", true],
+      ["Logs", false],
+    ]);
+    expect(bottom("gone", [run, logs])).toContain("run-body");
+    // The static output is gone too once the host has panels.
+    expect(tabs(bottom("output", [logs]))[1]).toEqual(["Logs", true]);
+  });
+
+  test("with no panels at all, a vanished selection falls back to Problems", () => {
+    expect(tabs(bottom("logs"))).toEqual([
+      ["Problems", true],
+      ["Run", false],
+    ]);
+    expect(activePanelTab("logs", [])).toBe("problems");
+  });
+
+  test("the pure fallback rules", () => {
+    expect(activePanelTab("logs", [run, logs])).toBe("logs");
+    expect(activePanelTab("problems", [run, logs])).toBe("problems");
+    expect(activePanelTab("gone", [run, logs])).toBe("run");
+    expect(activePanelTab("output", [])).toBe("output");
+    expect(activePanelTab("output", [run])).toBe("run");
+  });
+
+  test('the legacy `panel` is one panel with the id "output"', () => {
+    const legacy = { label: "Output", render: () => <i id="legacy" /> };
+    const contributions: EditorContributions = { panel: legacy };
+    const [only] = hostPanels(contributions);
+    expect(only?.id).toBe("output");
+    expect(hostPanels(contributions)).toHaveLength(1);
+    const out = bottom("output", hostPanels(contributions));
+    expect(tabs(out)).toEqual([
+      ["Problems", false],
+      ["Output", true],
+    ]);
+    expect(out).toContain('<i id="legacy"></i>');
+    // And it keeps its place when a host also has panels.
+    expect(
+      hostPanels({ panels: [logs], panel: legacy }).map((p) => p.id),
+    ).toEqual(["logs", "output"]);
+  });
+
+  test("hostPanels drops the reserved id and repeated ids", () => {
+    const ids = hostPanels({
+      panels: [panel("problems", "Mine"), logs, panel("logs", "Again")],
+      panel: { label: "Output", render: () => null },
+    }).map((p) => [p.id, p.label]);
+    expect(ids).toEqual([
+      ["logs", "Logs"],
+      ["output", "Output"],
+    ]);
+    expect(hostPanels(undefined)).toEqual([]);
+  });
+
+  test("useBottomPanel().open shows a tab, from outside the shell", () => {
+    const store = createBottomPanel({ shown: false });
+    let open: ((id: string) => void) | undefined;
+    function Host() {
+      open = useBottomPanel().open;
+      return null;
+    }
+    renderToStaticMarkup(
+      <BottomPanelProvider panel={store}>
+        <Host />
+      </BottomPanelProvider>,
+    );
+    const seen: string[] = [];
+    const unsubscribe = store.subscribe(() => seen.push(store.state().view));
+    // A host's ⌘K command, say: shows the panel on its Logs tab.
+    open?.("logs");
+    expect(store.state()).toEqual({ view: "logs", shown: true });
+    expect(seen).toEqual(["logs"]);
+    unsubscribe();
+  });
+
+  test("useBottomPanel needs a provider; the shell's own store starts on Problems, shown", () => {
+    function Bare() {
+      useBottomPanel();
+      return null;
+    }
+    expect(() => html(<Bare />)).toThrow("BottomPanelProvider");
+    expect(createBottomPanel().state()).toEqual({
+      view: "problems",
+      shown: true,
+    });
   });
 });

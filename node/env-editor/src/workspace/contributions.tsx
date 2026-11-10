@@ -1,9 +1,10 @@
 // What a host adds to the workspace shell: commands, extra side views,
 // workbench views that take over the main area, viewers for files and diffs,
 // and per environment a run status with header details, header actions,
-// sub-tabs after the editor's own, each service's state on the canvas, and a
-// panel in place of the static Run output. The editor only renders what it is given and learns nothing about
-// how the host runs anything (containers, remote branches, ...). A host that
+// sub-tabs after the editor's own, each service's state on the canvas, and
+// panels: tabs of the bottom panel, after Problems, in place of the static Run
+// output. The editor only renders what it is given and learns nothing about how
+// the host runs anything (containers, remote branches, ...). A host that
 // contributes nothing gets the shell as it always was.
 //
 // Contributions are plain data plus callbacks, so a host can derive them from
@@ -21,6 +22,7 @@ import {
 import type { FileSource } from "../artifacts/fileSource.js";
 import type { Command } from "../commands/registry.js";
 import type { NodeStatus, RunState } from "../graph/runState.js";
+import { PROBLEMS_PANEL, RUN_OUTPUT_PANEL } from "./bottomPanel.js";
 
 export type { NodeStatus, RunState } from "../graph/runState.js";
 
@@ -124,13 +126,41 @@ export interface ActivityActionContribution {
   run: () => void;
 }
 
-/** A host panel, in place of the bottom panel's static Run output. */
+/** A host's tab of the bottom panel, after Problems. Without any, the bottom
+ *  panel shows the static Run output. Open one from code with
+ *  `useBottomPanel`. */
 export interface PanelContribution {
+  /** Unique among the host's panels; `"problems"` is the editor's. */
+  id: string;
   label: string;
   icon?: ReactNode;
   /** The panel's content for the active environment (`undefined` when no
    *  environment is open). */
   render: (envId: string | undefined) => ReactNode;
+}
+
+/** The deprecated single panel: a `PanelContribution` whose `id` may be left
+ *  out, and then is `"output"`. */
+export type LegacyPanelContribution = Omit<PanelContribution, "id"> & {
+  id?: string;
+};
+
+/** The host's panels in tab order: `panels`, then the deprecated `panel`. A
+ *  panel whose id is `"problems"`, or repeats an earlier one, is dropped. */
+export function hostPanels(
+  contributions: EditorContributions | undefined,
+): PanelContribution[] {
+  const legacy = contributions?.panel;
+  const all: PanelContribution[] = [
+    ...(contributions?.panels ?? []),
+    ...(legacy ? [{ ...legacy, id: legacy.id ?? RUN_OUTPUT_PANEL }] : []),
+  ];
+  const seen = new Set<string>([PROBLEMS_PANEL]);
+  return all.filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
 }
 
 /** What a host's file viewer gets: one rendered file of an environment. */
@@ -175,7 +205,12 @@ export interface EditorContributions {
    *  activity-bar item. */
   workbenchViews?: WorkbenchViewContribution[];
   environment?: EnvironmentContributions;
-  panel?: PanelContribution;
+  /** Tabs of the bottom panel, after Problems, in place of the static Run
+   *  output. Open one from code with `useBottomPanel().open(id)`. */
+  panels?: PanelContribution[];
+  /** @deprecated Use `panels`. One panel, with the id `"output"` unless it
+   *  has one. */
+  panel?: LegacyPanelContribution;
   /** Renders a rendered file read-only (e.g. Monaco); the editor's
    *  syntax-highlighted viewer otherwise. */
   fileViewer?: (props: FileViewerProps) => ReactNode;

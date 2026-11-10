@@ -9,6 +9,7 @@ import {
   Activity,
   AppWindow,
   Play,
+  ScrollText,
   Settings2,
   ShieldCheck,
   Square,
@@ -19,6 +20,7 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { Command } from "../commands/registry.js";
 import { PlannerProvider } from "../planner.js";
 import type { Planner, Selection } from "../types.js";
+import { BottomPanelProvider, createBottomPanel } from "./bottomPanel.js";
 import {
   ContributionsProvider,
   type EditorContributions,
@@ -271,17 +273,32 @@ function fakeRuntime(): EditorContributions & {
             ? { state: "degraded", label: "unhealthy", detail: "2 restarts" }
             : { state: state[id] ?? "unknown" },
     },
-    panel: {
-      label: "Output",
-      icon: <Activity />,
-      render: (id) => (
-        <pre className="whitespace-pre-wrap">
-          {id
-            ? `$ trestle up ${id}\n${id} is ${state[id] ?? "unknown"}.`
-            : "No environment open."}
-        </pre>
-      ),
-    },
+    panels: [
+      {
+        id: "output",
+        label: "Run",
+        icon: <Activity />,
+        render: (id) => (
+          <pre className="whitespace-pre-wrap">
+            {id
+              ? `$ trestle up ${id}\n${id} is ${state[id] ?? "unknown"}.`
+              : "No environment open."}
+          </pre>
+        ),
+      },
+      {
+        id: "logs",
+        label: "Logs",
+        icon: <ScrollText />,
+        render: (id) => (
+          <pre className="whitespace-pre-wrap">
+            {id
+              ? `${id} | ready to accept connections\n${id} | ${state[id] ?? "unknown"}`
+              : "No environment open."}
+          </pre>
+        ),
+      },
+    ],
   };
 }
 
@@ -313,7 +330,8 @@ export const WithRevisions: Story = {
  *  badges with placement in the tree, a header with details (target, a
  *  copyable gateway URL) and Start/Stop, Catalog / Lineage / Logs sub-tabs
  *  (disabled until the environment runs) and an always-on Policies tab, each
- *  service's state on the canvas, and an Output panel. */
+ *  service's state on the canvas, and two bottom panel tabs, Run and Logs.
+ *  "Show logs" in ⌘K opens the Logs tab through `useBottomPanel`'s store. */
 export const WithContributions: Story = {
   render: () => <LiveShell />,
 };
@@ -323,6 +341,8 @@ export const WithContributions: Story = {
 function LiveShell() {
   const [runtime] = useState(fakeRuntime);
   const [store] = useState(() => createMemoryWorkspaceStore(workspace));
+  // The host's own bottom panel store: its ⌘K command opens a tab through it.
+  const [bottom] = useState(() => createBottomPanel());
   const [version, setVersion] = useState(0);
   useEffect(
     () => runtime.environment?.subscribe?.(() => setVersion((v) => v + 1)),
@@ -330,10 +350,26 @@ function LiveShell() {
   );
   // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is the runtime's change signal.
   const contributions = useMemo<EditorContributions>(
-    () => ({ ...runtime, commands: runtime.commandsNow() }),
-    [runtime, version],
+    () => ({
+      ...runtime,
+      commands: [
+        ...runtime.commandsNow(),
+        {
+          id: "env.show-logs",
+          title: "Show logs",
+          section: "Environment",
+          keywords: ["panel", "output"],
+          run: () => bottom.set({ view: "logs", shown: true }),
+        },
+      ],
+    }),
+    [runtime, version, bottom],
   );
-  return <Shell store={store} contributions={contributions} />;
+  return (
+    <BottomPanelProvider panel={bottom}>
+      <Shell store={store} contributions={contributions} />
+    </BottomPanelProvider>
+  );
 }
 
 /** Host viewers in place of the editor's: a bordered stand-in for Monaco
