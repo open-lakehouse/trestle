@@ -143,6 +143,32 @@ fn mlflow_accepts_the_secure_gateway_host() {
 }
 
 #[test]
+fn mlflow_accepts_an_instance_host_label_without_auth() {
+    // A host reaches an instance on its own `<label>.localhost` name (its cookies apart from
+    // another instance's), with no auth on the gateway.
+    let p = baseline_catalog()
+        .plan(
+            &Selection::modules(["envoy", "mlflow"]),
+            &PlanCtx::default(),
+        )
+        .expect("plan should succeed");
+    let (_, mlflow) = render_all(&p)
+        .unwrap()
+        .modules
+        .into_iter()
+        .find(|(id, _)| id.as_str() == "mlflow")
+        .expect("mlflow is selected");
+    let doc: serde_yaml::Value = serde_yaml::from_str(&mlflow.fragment).unwrap();
+    let hosts = doc["services"]["mlflow"]["environment"]["MLFLOW_SERVER_ALLOWED_HOSTS"]
+        .as_str()
+        .unwrap();
+    let hosts: Vec<&str> = hosts.split(',').collect();
+    for host in ["localhost:*", "*.localhost", "*.localhost:*"] {
+        assert!(hosts.contains(&host), "{host} in {hosts:?}");
+    }
+}
+
+#[test]
 fn an_object_store_on_its_own_port_answers_like_the_service_it_emulates() {
     let p = baseline_catalog()
         .plan(
