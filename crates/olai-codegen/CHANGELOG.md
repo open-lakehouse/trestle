@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.14...olai-codegen-v0.0.15) - 2026-11-11
+
+### Added
+
+- client credential provider (#330)
+
 ## [0.0.14](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.13...olai-codegen-v0.0.14) - 2026-11-08
 
 ### Changed

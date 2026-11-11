@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.30](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.29...olai-trestle-v0.0.30) - 2026-11-11
+
+### Added
+
+- client credential provider (#330)
+
 ## [0.0.26](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.25...olai-trestle-v0.0.26) - 2026-11-09
 
 ### Changed
