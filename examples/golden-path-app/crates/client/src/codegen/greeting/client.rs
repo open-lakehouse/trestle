@@ -30,7 +30,7 @@ impl GreetingServiceClient {
     /// Create a new greeting.
     pub async fn create_greeting(&self, request: &CreateGreetingRequest) -> Result<Greeting> {
         let url = self.base_url.join("v1/greetings")?;
-        let response = self.client.post(url).json(request).send().await?;
+        let response = self.client.post(url).json(request).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::error::parse_error_response(response).await);
         }
@@ -42,7 +42,7 @@ impl GreetingServiceClient {
     pub async fn get_greeting(&self, request: &GetGreetingRequest) -> Result<Greeting> {
         let formatted_path = format!("v1/{}", encode_path_value(&request.name, true));
         let url = self.base_url.join(&formatted_path)?;
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::error::parse_error_response(response).await);
         }

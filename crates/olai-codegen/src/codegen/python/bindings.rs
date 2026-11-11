@@ -106,7 +106,28 @@ impl<'a> PyBackend<'a> {
         let module_option = parent.map(|parent| quote! { , module = #parent });
         let module_doc = format!(" The extension module `{full_name}`.");
         let exceptions = super::errors::class_idents(self.python);
-        let segments = groups.keys();
+        // The `TokenProvider` class of `token_provider=`, with `CloudClient`.
+        let token_provider_export = first.config.uses_cloud_client().then(|| {
+            quote! {
+                #[pymodule_export]
+                use super::RustTokenProvider;
+            }
+        });
+        // Paths are validated by `CodeGenConfig::validate`.
+        let export = |path: &String| {
+            let path: syn::Path = syn::parse_str(path).expect("validated export path");
+            quote! {
+                #[pymodule_export]
+                use #path;
+            }
+        };
+        let exports = self.python.exports.iter().map(export);
+        // The hand-written submodules of the binding crate, under their last segment.
+        let extra_submodules = self.python.submodules.iter().map(export);
+        let segments = groups.keys().map(|segment| segment.to_string()).chain(
+            (self.python.submodules.iter())
+                .map(|path| path.rsplit("::").next().unwrap_or(path).to_string()),
+        );
         let submodules = groups.iter().map(|(segment, classes)| {
             let ident = crate::utils::field_ident(segment);
             let doc = format!(" The classes of the `{segment}` API.");
@@ -117,14 +138,6 @@ impl<'a> PyBackend<'a> {
                     #[pymodule_export]
                     use super::super::{#(#classes),*};
                 }
-            }
-        });
-        // Paths are validated by `CodeGenConfig::validate`.
-        let exports = self.python.exports.iter().map(|path| {
-            let path: syn::Path = syn::parse_str(path).expect("validated export path");
-            quote! {
-                #[pymodule_export]
-                use #path;
             }
         });
         quote! {
@@ -148,12 +161,16 @@ impl<'a> PyBackend<'a> {
                 #[pymodule_export]
                 use super::#aggregate;
 
+                #token_provider_export
+
                 #[pymodule_export]
                 use crate::codegen::error::{#(#exceptions),*};
 
                 #(#exports)*
 
                 #(#submodules)*
+
+                #(#extra_submodules)*
 
                 /// Put the submodules in `sys.modules`. The import system puts the module there
                 /// before it runs this. Not handed the module, so the stubs still describe the
@@ -180,6 +197,195 @@ impl<'a> PyBackend<'a> {
                     modules.set_item(format!("{name}.{submodule}"), module.getattr(*submodule)?)?;
                 }
                 Ok(())
+            }
+        }
+    }
+}
+
+impl PyBackend<'_> {
+    /// The constructor of the root client with `CloudClient`: a token, a `token_provider`, or
+    /// else the [`default_signer`](PythonOptions::default_signer).
+    fn cloud_constructor(&self, client_crate: &Ident, aggregate: &Ident) -> TokenStream {
+        let py_error_type = &self.py_error_type;
+        let to_py_error = quote! {
+            |e: ::olai_http::Error| #py_error_type::from(#client_crate::error::Error::from(e))
+        };
+        // Paths are validated by `CodeGenConfig::validate`.
+        let default_signer = match self.python.default_signer.as_deref() {
+            Some(path) => {
+                let hook: syn::Path = syn::parse_str(path).expect("validated signer path");
+                quote! {
+                    py.detach(|| crate::codegen::runtime::rt().block_on(#hook(&base_url)))
+                        .map_err(#to_py_error)?
+                }
+            }
+            None => quote! { None },
+        };
+        let user_agent = self.python.user_agent.as_ref().map(|product| {
+            let prefix = format!("{product}/");
+            quote! {
+                let options = options.with_config(
+                    ::olai_http::ClientConfigKey::UserAgent,
+                    concat!(#prefix, env!("CARGO_PKG_VERSION")),
+                );
+            }
+        });
+        quote! {
+            /// A client of the API at `base_url`. `token`, when set, goes in every request as
+            /// the bearer token. `token_provider` is asked for the token instead: a
+            /// `TokenProvider`, or a callable that returns the token, or a pair of the token
+            /// and the time it expires, in seconds since the epoch; a token with its expiry is
+            /// kept until a minute before it, a bare token is asked for at every request.
+            #[new]
+            #[pyo3(signature = (base_url, token = None, token_provider = None))]
+            pub fn new(
+                py: Python<'_>,
+                base_url: String,
+                token: Option<String>,
+                token_provider: Option<::pyo3::Py<::pyo3::PyAny>>,
+            ) -> PyResult<Self> {
+                let base_url: ::url::Url = base_url.parse().map_err(#py_error_type::from)?;
+                let signer: Option<::std::sync::Arc<dyn ::olai_http::RequestSigner>> =
+                    match (token, token_provider) {
+                        (Some(_), Some(_)) => {
+                            return Err(::pyo3::exceptions::PyValueError::new_err(
+                                "token and token_provider cannot both be set",
+                            ));
+                        }
+                        (Some(token), None) => Some(::std::sync::Arc::new(
+                            ::olai_http::bearer::BearerProviderSigner(
+                                ::olai_http::bearer::BearerAuth::static_token(token),
+                            ),
+                        )),
+                        (None, Some(provider)) => {
+                            Some(match provider.bind(py).cast::<RustTokenProvider>() {
+                                Ok(provider) => provider.get().signer.clone(),
+                                Err(_) => ::std::sync::Arc::new(PyTokenProvider::new(provider)),
+                            })
+                        }
+                        (None, None) => #default_signer,
+                    };
+                let options = #aggregate::client_options();
+                #user_agent
+                let retry = ::olai_http::RetryConfig::default();
+                let client = match signer {
+                    Some(signer) => ::olai_http::CloudClient::new_with_request_signer(
+                        signer, &options, retry, None,
+                    ),
+                    None => ::olai_http::CloudClient::new_unauthenticated_with_options(
+                        &options, retry, None,
+                    ),
+                }
+                .map_err(#to_py_error)?;
+                Ok(Self { client: #aggregate::new(client, base_url) })
+            }
+        }
+    }
+}
+
+/// The classes of `token_provider=` with `CloudClient`: `TokenProvider`, a signer made in
+/// Rust, and the signer of a Python callable.
+fn token_provider_classes(root_module_arg: &TokenStream) -> TokenStream {
+    quote! {
+        /// A token provider made in Rust, for `token_provider=`. The binding crate makes one
+        /// from any `olai_http::RequestSigner`, such as a bearer provider in a
+        /// `BearerProviderSigner`.
+        #[pyclass(name = "TokenProvider", frozen, #root_module_arg)]
+        pub struct RustTokenProvider {
+            pub(crate) signer: ::std::sync::Arc<dyn ::olai_http::RequestSigner>,
+        }
+
+        impl RustTokenProvider {
+            pub fn new(signer: ::std::sync::Arc<dyn ::olai_http::RequestSigner>) -> Self {
+                Self { signer }
+            }
+        }
+
+        /// The bearer tokens of a `token_provider` callable: the token, or a
+        /// `(token, expires_at)` pair with the expiry in seconds since the epoch, kept until a
+        /// minute before it. The callable runs on a blocking thread, one call at a time: it may
+        /// block, and call the blocking methods of this module.
+        pub struct PyTokenProvider {
+            provider: ::std::sync::Arc<::pyo3::Py<::pyo3::PyAny>>,
+            kept: ::futures::lock::Mutex<Option<(String, ::std::time::Instant)>>,
+        }
+
+        impl PyTokenProvider {
+            fn new(provider: ::pyo3::Py<::pyo3::PyAny>) -> Self {
+                Self {
+                    provider: ::std::sync::Arc::new(provider),
+                    kept: ::futures::lock::Mutex::new(None),
+                }
+            }
+
+            /// Ask the callable: the token, and its expiry when it gives one.
+            fn ask(provider: &::pyo3::Py<::pyo3::PyAny>) -> PyResult<(String, Option<f64>)> {
+                ::pyo3::Python::attach(|py| {
+                    let value = provider.bind(py).call0()?;
+                    if let Ok(token) = value.extract::<String>() {
+                        return Ok((token, None));
+                    }
+                    let (token, expires_at) =
+                        value.extract::<(String, f64)>().map_err(|_| {
+                            ::pyo3::exceptions::PyTypeError::new_err(
+                                "token_provider must return the token, or a (token, \
+                                 expires_at) pair with the expiry in seconds since the epoch",
+                            )
+                        })?;
+                    Ok((token, Some(expires_at)))
+                })
+            }
+
+            /// The token: the kept one, else the callable's.
+            async fn token(&self) -> ::olai_http::Result<String> {
+                let failed = |source: Box<dyn ::std::error::Error + Send + Sync>| {
+                    ::olai_http::Error::Generic { source }
+                };
+                // The requests that wait take the token of the one that asked.
+                let mut kept = self.kept.lock().await;
+                if let Some((token, until)) = kept.as_ref()
+                    && ::std::time::Instant::now() < *until
+                {
+                    return Ok(token.clone());
+                }
+                // Not on the thread of the request: a blocking method of this module that the
+                // callable calls starts a runtime there.
+                let provider = self.provider.clone();
+                let (token, expires_at) =
+                    ::tokio::task::spawn_blocking(move || Self::ask(&provider))
+                        .await
+                        .map_err(|e| failed(Box::new(e)))?
+                        .map_err(|e| failed(Box::new(e)))?;
+                if let Some(expires_at) = expires_at {
+                    let now = ::std::time::SystemTime::now()
+                        .duration_since(::std::time::UNIX_EPOCH)
+                        .map_or(0.0, |d| d.as_secs_f64());
+                    let left = expires_at - now - 60.0;
+                    let left = if left.is_finite() { left.clamp(0.0, 1e9) } else { 0.0 };
+                    let until =
+                        ::std::time::Instant::now() + ::std::time::Duration::from_secs_f64(left);
+                    *kept = Some((token.clone(), until));
+                }
+                Ok(token)
+            }
+        }
+
+        impl ::std::fmt::Debug for PyTokenProvider {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.debug_struct("PyTokenProvider").finish_non_exhaustive()
+            }
+        }
+
+        impl ::olai_http::RequestSigner for PyTokenProvider {
+            fn sign<'a>(
+                &'a self,
+                request: ::olai_http::reqwest::RequestBuilder,
+            ) -> ::futures::future::BoxFuture<
+                'a,
+                ::olai_http::Result<::olai_http::reqwest::RequestBuilder>,
+            >
+            {
+                Box::pin(async move { Ok(request.bearer_auth(self.token().await?)) })
             }
         }
     }
@@ -316,6 +522,29 @@ impl BindingBackend for PyBackend<'_> {
             }
         });
         let extension_module = self.extension_module(&sorted_services, &py_aggregate_client_ident);
+        let cloud_client = sorted_services
+            .first()
+            .is_some_and(|s| s.config.uses_cloud_client());
+        let constructor = if cloud_client {
+            self.cloud_constructor(&client_crate, &aggregate_client_ident)
+        } else {
+            quote! {
+                /// A client of the API at `base_url`. `token`, when set, goes in every
+                /// request as the bearer token.
+                #[new]
+                #[pyo3(signature = (base_url, token = None))]
+                pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
+                    let base_url = base_url.parse().map_err(#py_error_type::from)?;
+                    let client = match token {
+                        Some(token) => #aggregate_client_ident::new_with_token(base_url, token),
+                        None => #aggregate_client_ident::new_unauthenticated(base_url),
+                    };
+                    #user_agent
+                    Ok(Self { client })
+                }
+            }
+        };
+        let token_provider = cloud_client.then(|| token_provider_classes(&root_module_arg));
 
         let tokens = quote! {
             // The aggregate module file carries the root `#[pyclass]` (flat methods →
@@ -343,24 +572,14 @@ impl BindingBackend for PyBackend<'_> {
 
             #[pymethods]
             impl #py_aggregate_client_ident {
-                /// A client of the API at `base_url`. `token`, when set, goes in every
-                /// request as the bearer token.
-                #[new]
-                #[pyo3(signature = (base_url, token = None))]
-                pub fn new(base_url: String, token: Option<String>) -> PyResult<Self> {
-                    let base_url = base_url.parse().map_err(#py_error_type::from)?;
-                    let client = match token {
-                        Some(token) => #aggregate_client_ident::new_with_token(base_url, token),
-                        None => #aggregate_client_ident::new_unauthenticated(base_url),
-                    };
-                    #user_agent
-                    Ok(Self { client })
-                }
+                #constructor
 
                 #(#methods)*
 
                 #(#resource_accessor_methods)*
             }
+
+            #token_provider
 
             #extension_module
         };

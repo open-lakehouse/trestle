@@ -33,7 +33,9 @@ web-time = { version = "1.1.0" }
 # wasm32. On wasm32 reqwest delegates to the browser Fetch API; the API surface we use
 # (verb builders, .json/.query/.send, response .status/.bytes) is identical across targets,
 # so the same generated client bodies compile natively and on wasm.
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "form"] }
+# The bounds of `WasmRequestBuilder::header`, as reqwest's.
+http = "1"
 
 # Browser glue, only needed when actually targeting wasm32. web-sys' RequestCredentials lets
 # us ask fetch to attach the browser-managed session (cookies / auth headers).

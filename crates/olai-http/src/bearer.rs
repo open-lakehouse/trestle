@@ -15,7 +15,8 @@
 //! | OAuth 2.0 client credentials against any token endpoint | [`BearerAuth::client_credentials`] |
 //! | Token read from an environment variable / a file (e.g. a projected Kubernetes token) | [`BearerAuth::token_env`], [`BearerAuth::token_file`] |
 //! | Azure service principal, managed identity, workload identity, Azure CLI | [`BearerAuth::azure_client_secret`], [`BearerAuth::azure_managed_identity`], [`BearerAuth::azure_workload_identity`], [`BearerAuth::azure_cli`] |
-//! | GCP ID token from the metadata server or a service-account key | [`BearerAuth::gcp_id_token`], [`BearerAuth::gcp_service_account_id_token`] |
+//! | GCP ID token from the metadata server, a service-account key, or the Google Cloud CLI | [`BearerAuth::gcp_id_token`], [`BearerAuth::gcp_service_account_id_token`], [`BearerAuth::gcloud_id_token`] |
+//! | AWS identity as a signed `sts:GetCallerIdentity` request | [`BearerAuth::aws_signed_identity`] |
 //! | RFC 8693 token exchange of any of the above | [`BearerAuth::token_exchange`] |
 //!
 //! Hand a provider to [`CloudClient::new_with_bearer`] to sign requests with it.
@@ -27,11 +28,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use reqwest::header::{ACCEPT, HeaderValue};
-use reqwest::{Client, Method};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HOST, HeaderName, HeaderValue};
+use reqwest::{Client, Method, Request};
 use serde::Deserialize;
 use tokio::runtime::Handle;
 
+use crate::aws::AwsCredentialProvider;
+use crate::aws::credential::AwsAuthorizer;
 use crate::azure::credential::{
     AzureCliCredential, AzureCredential, ClientSecretOAuthProvider, ImdsManagedIdentityProvider,
     WorkloadIdentityOAuthProvider,
@@ -43,7 +46,7 @@ use crate::service::{HttpService, make_service};
 use crate::token::jwt_exp_secs;
 use crate::{
     ClientOptions, CredentialProvider, Result, RetryConfig, StaticCredentialProvider,
-    TemporaryToken, TokenCredentialProvider, TokenProvider,
+    TemporaryToken, TokenCache, TokenCredentialProvider, TokenProvider,
 };
 
 /// How long a token without a known expiry is used before it is fetched again.
@@ -69,6 +72,15 @@ const GCP_DEFAULT_TOKEN_URI: &str = "https://oauth2.googleapis.com/token";
 
 const GCP_METADATA_IDENTITY_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity";
+
+/// The body of a signed `sts:GetCallerIdentity` request.
+pub const GET_CALLER_IDENTITY: &str = "Action=GetCallerIdentity&Version=2011-06-15";
+
+/// How long STS takes a signed request after it is signed.
+const STS_VALIDITY: Duration = Duration::from_secs(15 * 60);
+
+/// How long a signed request is used: until [`STS_VALIDITY`] has this much left.
+const AWS_SIGNED_MIN_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// A bearer token, sent as `Authorization: Bearer <token>`.
 #[derive(Clone, PartialEq, Eq)]
@@ -219,6 +231,42 @@ impl fmt::Debug for GcpServiceAccount {
             Self::File(path) => f.debug_tuple("File").field(path).finish(),
             Self::Key(_) => f.debug_tuple("Key").field(&"***").finish(),
         }
+    }
+}
+
+/// An AWS identity as a bearer token, for an API that has no token of AWS to check.
+///
+/// Each token is an `sts:GetCallerIdentity` request, signed with SigV4 but not sent: the
+/// API sends it to STS, which names the caller. The credentials never leave the client.
+/// The token is `prefix` followed by the request as unpadded base64url JSON:
+/// `{"method": "POST", "url", "headers", "body"}`, with lowercase header names and without
+/// `host`, which the API's HTTP client sets itself.
+#[derive(Clone)]
+pub struct AwsSignedIdentity {
+    /// The credentials that sign, e.g. [`AmazonConfig::credentials`].
+    ///
+    /// [`AmazonConfig::credentials`]: crate::aws::AmazonConfig::credentials
+    pub credentials: AwsCredentialProvider,
+    /// The STS endpoint, e.g. `https://sts.us-east-1.amazonaws.com/`.
+    pub endpoint: String,
+    /// The region that signs: the region of `endpoint`, `us-east-1` for the global one.
+    pub region: String,
+    /// More headers to sign, such as one that names the API, so that another API that
+    /// receives the token cannot use it. Names are lowercased.
+    pub headers: Vec<(String, String)>,
+    /// What goes before the encoded request, so that the API can tell the token apart.
+    pub prefix: String,
+}
+
+impl fmt::Debug for AwsSignedIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AwsSignedIdentity")
+            .field("credentials", &self.credentials)
+            .field("endpoint", &self.endpoint)
+            .field("region", &self.region)
+            .field("headers", &self.headers)
+            .field("prefix", &self.prefix)
+            .finish()
     }
 }
 
@@ -393,6 +441,31 @@ impl BearerAuth {
         self.fetching(provider, false)
     }
 
+    /// An ID token for `audience` from the sign-in of the Google Cloud CLI
+    /// (`gcloud auth print-identity-token`).
+    ///
+    /// A person's sign-in cannot ask for an audience: when the CLI refuses one, the token
+    /// is asked for without it.
+    pub fn gcloud_id_token(&self, audience: impl Into<String>) -> BearerCredentialProvider {
+        Arc::new(GcloudIdTokenProvider::new(GCLOUD, audience.into()))
+    }
+
+    /// The AWS identity of `config.credentials` as signed `sts:GetCallerIdentity` requests
+    /// ([`AwsSignedIdentity`]). A request is signed again when its 15 minutes at STS have
+    /// 10 left.
+    pub fn aws_signed_identity(
+        &self,
+        config: AwsSignedIdentity,
+    ) -> Result<BearerCredentialProvider> {
+        let endpoint = url::Url::parse(&config.endpoint)
+            .map_err(|e| generic(format!("invalid STS endpoint `{}`: {e}", config.endpoint)))?;
+        Ok(Arc::new(AwsSignedIdentityProvider {
+            config,
+            endpoint,
+            cache: TokenCache::default().with_min_ttl(AWS_SIGNED_MIN_TTL),
+        }))
+    }
+
     /// Exchange the subject token for another token (RFC 8693), e.g. an
     /// identity-provider ID token for an API's own access token.
     pub fn token_exchange(&self, config: TokenExchange) -> Result<BearerCredentialProvider> {
@@ -440,9 +513,12 @@ impl BearerAuth {
     }
 }
 
-/// Signs requests with a bearer token from a [`BearerCredentialProvider`].
+/// Signs requests with a bearer token from a [`BearerCredentialProvider`], for
+/// [`CloudClient::new_with_request_signer`] and signers that wrap it.
+///
+/// [`CloudClient::new_with_request_signer`]: crate::CloudClient::new_with_request_signer
 #[derive(Debug)]
-pub(crate) struct BearerProviderSigner(pub(crate) BearerCredentialProvider);
+pub struct BearerProviderSigner(pub BearerCredentialProvider);
 
 impl crate::RequestSigner for BearerProviderSigner {
     fn sign<'a>(
@@ -687,6 +763,142 @@ impl TokenProvider for GcpServiceAccountIdTokenProvider {
     }
 }
 
+/// The Google Cloud CLI. On Windows it is a batch file, which `Command` finds only by its
+/// full name.
+const GCLOUD: &str = if cfg!(windows) {
+    "gcloud.cmd"
+} else {
+    "gcloud"
+};
+
+/// The ID tokens of `gcloud auth print-identity-token`.
+#[derive(Debug)]
+struct GcloudIdTokenProvider {
+    program: String,
+    audience: String,
+    cache: TokenCache<Arc<BearerCredential>>,
+}
+
+impl GcloudIdTokenProvider {
+    fn new(program: impl Into<String>, audience: String) -> Self {
+        Self {
+            program: program.into(),
+            audience,
+            cache: Default::default(),
+        }
+    }
+
+    /// Run the CLI, with the audience when `audience`.
+    async fn print_identity_token(&self, audience: bool) -> Result<String> {
+        let mut command = std::process::Command::new(&self.program);
+        command.args(["auth", "print-identity-token"]);
+        if audience {
+            command.arg("--audiences").arg(&self.audience);
+        }
+        let output = tokio::task::spawn_blocking(move || command.output())
+            .await
+            .map_err(|e| generic(format!("cannot run gcloud: {e}")))?
+            .map_err(|e| generic(format!("cannot run gcloud: {e}")))?;
+        if !output.status.success() {
+            let reason = String::from_utf8_lossy(&output.stderr);
+            return Err(generic(format!(
+                "gcloud auth print-identity-token: {}",
+                reason.trim()
+            )));
+        }
+        let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        match token.is_empty() {
+            true => Err(generic("gcloud printed no token")),
+            false => Ok(token),
+        }
+    }
+
+    async fn fetch(&self) -> Result<TemporaryToken<Arc<BearerCredential>>> {
+        let token = match self.print_identity_token(true).await {
+            Ok(token) => token,
+            Err(with_audience) => self
+                .print_identity_token(false)
+                .await
+                .map_err(|_| with_audience)?,
+        };
+        let expiry = jwt_expiry(&token).unwrap_or_else(|| Instant::now() + UNKNOWN_EXPIRY);
+        Ok(TemporaryToken {
+            token: Arc::new(BearerCredential { token }),
+            expiry: Some(expiry),
+        })
+    }
+}
+
+#[async_trait]
+impl CredentialProvider for GcloudIdTokenProvider {
+    type Credential = BearerCredential;
+
+    async fn get_credential(&self) -> Result<Arc<BearerCredential>> {
+        self.cache.get_or_insert_with(|| self.fetch()).await
+    }
+}
+
+/// The signed `sts:GetCallerIdentity` requests of an [`AwsSignedIdentity`].
+#[derive(Debug)]
+struct AwsSignedIdentityProvider {
+    config: AwsSignedIdentity,
+    endpoint: url::Url,
+    cache: TokenCache<Arc<BearerCredential>>,
+}
+
+impl AwsSignedIdentityProvider {
+    async fn sign(&self) -> Result<TemporaryToken<Arc<BearerCredential>>> {
+        use base64::Engine;
+
+        let credential = self.config.credentials.get_credential().await?;
+        let mut request = Request::new(Method::POST, self.endpoint.clone());
+        let headers = request.headers_mut();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded; charset=utf-8"),
+        );
+        for (name, value) in &self.config.headers {
+            let name = HeaderName::from_bytes(name.to_ascii_lowercase().as_bytes())
+                .map_err(|e| generic(format!("invalid header name `{name}`: {e}")))?;
+            headers.insert(name, HeaderValue::from_str(value)?);
+        }
+        *request.body_mut() = Some(GET_CALLER_IDENTITY.into());
+        AwsAuthorizer::new(&credential, "sts", &self.config.region)
+            .authorize(&mut request, None)?;
+        let signed: std::collections::BTreeMap<&str, String> = (request.headers().iter())
+            .filter(|(name, _)| *name != HOST)
+            .map(|(name, value)| {
+                (
+                    name.as_str(),
+                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                )
+            })
+            .collect();
+        let json = serde_json::json!({
+            "method": "POST",
+            "url": self.endpoint.as_str(),
+            "headers": signed,
+            "body": GET_CALLER_IDENTITY,
+        });
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.to_string());
+        Ok(TemporaryToken {
+            token: Arc::new(BearerCredential {
+                token: format!("{}{encoded}", self.config.prefix),
+            }),
+            expiry: Some(Instant::now() + STS_VALIDITY),
+        })
+    }
+}
+
+#[async_trait]
+impl CredentialProvider for AwsSignedIdentityProvider {
+    type Credential = BearerCredential;
+
+    async fn get_credential(&self) -> Result<Arc<BearerCredential>> {
+        self.cache.get_or_insert_with(|| self.sign()).await
+    }
+}
+
 #[derive(Debug)]
 enum TokenLocation {
     Env(String),
@@ -697,7 +909,7 @@ enum TokenLocation {
 #[derive(Debug)]
 struct LocalTokenProvider {
     location: TokenLocation,
-    cache: crate::TokenCache<Arc<BearerCredential>>,
+    cache: TokenCache<Arc<BearerCredential>>,
 }
 
 impl LocalTokenProvider {
@@ -800,6 +1012,156 @@ mod tests {
             .status();
         assert_eq!(status, 200);
         api.assert_async().await;
+    }
+
+    /// Signs with a bearer token only once it is switched on.
+    #[derive(Debug)]
+    struct Switched {
+        on: std::sync::atomic::AtomicBool,
+        inner: BearerProviderSigner,
+    }
+
+    impl crate::RequestSigner for Switched {
+        fn sign<'a>(
+            &'a self,
+            req: reqwest::RequestBuilder,
+        ) -> futures::future::BoxFuture<'a, Result<reqwest::RequestBuilder>> {
+            match self.on.load(std::sync::atomic::Ordering::SeqCst) {
+                true => self.inner.sign(req),
+                false => Box::pin(async move { Ok(req) }),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn any_request_signer_signs() {
+        let mut server = mockito::Server::new_async().await;
+        let without = server
+            .mock("GET", "/api")
+            .match_header("authorization", Matcher::Missing)
+            .expect(1)
+            .create_async()
+            .await;
+        let signer = Arc::new(Switched {
+            on: false.into(),
+            inner: BearerProviderSigner(BearerAuth::static_token("late-token")),
+        });
+        let options = ClientOptions::new().with_allow_http(true);
+        let client = CloudClient::new_with_request_signer(
+            signer.clone(),
+            &options,
+            RetryConfig::default(),
+            None,
+        )
+        .unwrap();
+        let url = format!("{}/api", server.url());
+        assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
+        without.assert_async().await;
+
+        signer.on.store(true, std::sync::atomic::Ordering::SeqCst);
+        let with = server
+            .mock("GET", "/api")
+            .match_header("authorization", "Bearer late-token")
+            .expect(1)
+            .create_async()
+            .await;
+        assert_eq!(client.get(&url).send().await.unwrap().status(), 200);
+        with.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn aws_signed_identity_signs_get_caller_identity() {
+        use crate::aws::AwsCredential;
+
+        let credentials: AwsCredentialProvider =
+            Arc::new(StaticCredentialProvider::new(AwsCredential {
+                key_id: "AKIDEXAMPLE".into(),
+                secret_key: "secret".into(),
+                token: Some("session".into()),
+            }));
+        let provider = auth()
+            .aws_signed_identity(AwsSignedIdentity {
+                credentials,
+                endpoint: "https://sts.eu-west-1.amazonaws.com/".into(),
+                region: "eu-west-1".into(),
+                headers: vec![("X-Api-Id".into(), "https://api.example.com".into())],
+                prefix: "api-aws-v1.".into(),
+            })
+            .unwrap();
+        let token = provider.get_credential().await.unwrap().token.clone();
+        let encoded = token.strip_prefix("api-aws-v1.").unwrap();
+        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .unwrap();
+        let signed: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(signed["method"], "POST");
+        assert_eq!(signed["url"], "https://sts.eu-west-1.amazonaws.com/");
+        assert_eq!(signed["body"], GET_CALLER_IDENTITY);
+        let headers = &signed["headers"];
+        assert_eq!(headers["x-api-id"], "https://api.example.com");
+        assert_eq!(headers["x-amz-security-token"], "session");
+        assert!(headers.get("host").is_none(), "{headers}");
+        let authorization = headers["authorization"].as_str().unwrap();
+        assert!(
+            authorization.starts_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
+                && authorization.contains("/eu-west-1/sts/aws4_request")
+                && authorization.contains("x-api-id"),
+            "{authorization}"
+        );
+        // Kept: the next call gives the same signed request.
+        assert_eq!(provider.get_credential().await.unwrap().token, token);
+
+        let invalid = auth().aws_signed_identity(AwsSignedIdentity {
+            credentials: Arc::new(StaticCredentialProvider::new(AwsCredential {
+                key_id: "k".into(),
+                secret_key: "s".into(),
+                token: None,
+            })),
+            endpoint: "not a url".into(),
+            region: "us-east-1".into(),
+            headers: vec![],
+            prefix: String::new(),
+        });
+        assert!(invalid.is_err());
+    }
+
+    /// A stand-in for gcloud: prints `token` when asked with an audience, else
+    /// `fallback`; fails when the one it prints is empty.
+    #[cfg(unix)]
+    fn fake_gcloud(dir: &std::path::Path, token: &str, fallback: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("gcloud");
+        let script = format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *--audiences*) t='{token}' ;;\n  *) t='{fallback}' ;;\nesac\n\
+             [ -n \"$t\" ] || {{ echo 'no audience for you' >&2; exit 1; }}\necho \"$t\"\n"
+        );
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn gcloud_id_token_asks_without_the_audience_when_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let with = jwt(unix_now() + 3600);
+        let program = fake_gcloud(dir.path(), &with, "plain");
+        let provider = GcloudIdTokenProvider::new(&program, "aud".into());
+        assert_eq!(provider.get_credential().await.unwrap().token, with);
+
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_gcloud(dir.path(), "", "personal");
+        let provider = GcloudIdTokenProvider::new(&program, "aud".into());
+        assert_eq!(provider.get_credential().await.unwrap().token, "personal");
+
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_gcloud(dir.path(), "", "");
+        let provider = GcloudIdTokenProvider::new(&program, "aud".into());
+        let err = provider.get_credential().await.unwrap_err();
+        assert!(err.to_string().contains("no audience for you"), "{err}");
+
+        let missing = GcloudIdTokenProvider::new("/nonexistent/gcloud", "aud".into());
+        assert!(missing.get_credential().await.is_err());
     }
 
     #[tokio::test]

@@ -94,6 +94,7 @@ fn stubs() {
     for expected in [
         "\"\"\"\nThe extension module `demo._core`.\n\"\"\"",
         "from . import demo as demo",
+        "extra as extra",
         "__version__: Final[str]",
         "class DemoClient:",
         "def list_widgets(self, /, *, max_results: SupportsIndex | None = None, \
@@ -110,6 +111,26 @@ fn stubs() {
     ] {
         assert!(root.contains(expected), "missing `{expected}` in:\n{root}");
     }
+    // With `CloudClient`, the root client takes a `token_provider`.
+    if cfg!(feature = "cloud") {
+        for expected in [
+            "def __new__(cls, /, base_url: str, token: str | None = None, \
+             token_provider: Any | None = None) -> DemoClient:",
+            "class TokenProvider:",
+        ] {
+            assert!(root.contains(expected), "missing `{expected}` in:\n{root}");
+        }
+    } else {
+        assert!(!root.contains("token_provider"), "{root}");
+    }
+    // The hand-written submodule, with its stub.
+    let extra = &files[Path::new("extra.pyi")];
+    assert!(extra.contains("def answer() -> int:"), "{extra}");
+    assert_eq!(
+        extra.contains("def counting_provider() -> TokenProvider:"),
+        cfg!(feature = "cloud"),
+        "{extra}"
+    );
     // Not handed the module, the init leaves the stubs complete.
     assert!(!root.contains("__getattr__"), "{root}");
     for expected in [

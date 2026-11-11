@@ -186,8 +186,14 @@ pub fn client_method(
         (None, false, _) => quote! {},
     };
 
+    // `CloudClient::send` fails on a non-success status, so its error answers would be lost:
+    // `send_unchecked` returns the response for any status, as the other transports' `send`.
+    let send_fn = match method.config.uses_cloud_client() {
+        true => format_ident!("send_unchecked"),
+        false => format_ident!("send"),
+    };
     let send = if method.plan.request_headers.is_empty() {
-        quote! { let response = self.client.#http_method(url)#body_handling.send().await?; }
+        quote! { let response = self.client.#http_method(url)#body_handling.#send_fn().await?; }
     } else {
         let headers = method.plan.request_headers.iter().map(|(field, header)| {
             let field_ident = crate::utils::field_ident(field);
@@ -205,7 +211,7 @@ pub fn client_method(
         quote! {
             let mut builder = self.client.#http_method(url)#body_handling;
             #(#headers)*
-            let response = builder.send().await?;
+            let response = builder.#send_fn().await?;
         }
     };
     let read_response = match method.output_type() {

@@ -33,7 +33,7 @@ impl QueryClient {
         }
         url.query_pairs_mut()
             .append_pair("max_results", &request.max_results.to_string());
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }
@@ -49,7 +49,7 @@ impl QueryClient {
         let mut url = self.base_url.join("catalogs/by-type")?;
         url.query_pairs_mut()
             .append_pair("catalog_type", &request.catalog_type.to_string());
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url).send_unchecked().await?;
         if !response.status().is_success() {
             return Err(crate::codegen::error::parse_error_response(response).await);
         }

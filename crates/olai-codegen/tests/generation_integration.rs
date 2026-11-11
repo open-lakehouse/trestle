@@ -833,6 +833,8 @@ fn rest_client_and_python_options_generate_valid_code() {
                 "crate::extras::PyHelper".into(),
                 "crate::extras::helper_fn".into(),
             ],
+            default_signer: None,
+            submodules: vec!["crate::extra".into()],
         }),
     });
     generate_code(&metadata(), &config).expect("generation succeeds");
@@ -899,6 +901,14 @@ fn rest_client_and_python_options_generate_valid_code() {
         "Python User-Agent missing"
     );
     assert!(bindings.contains("pub fn rt()"), "runtime missing");
+    assert!(
+        bindings.contains("use crate::extra;") && bindings.contains("\"extra\""),
+        "hand-written submodule missing"
+    );
+    assert!(
+        !bindings.contains("token_provider"),
+        "token providers need `CloudClient`"
+    );
 
     let enums = std::fs::read_to_string(package.join("_enums.py")).unwrap();
     assert!(enums.contains("(enum.StrEnum):"), "{enums}");
@@ -919,6 +929,111 @@ fn rest_client_and_python_options_generate_valid_code() {
             && bindings.contains("use crate::codegen::error::{\n        ExampleError,"),
         "PyO3 exception classes missing"
     );
+}
+
+/// The Python options of a client on `CloudClient` (here dual-transport): the root client
+/// takes a token, a `token_provider` or the default signer, and the aggregate client has the
+/// constructors that take olai-http's signers and bearer providers.
+fn cloud_python_config(tmp: &Path) -> CodeGenConfig {
+    let mut config = full_client_config(tmp);
+    config.dual_transport = true;
+    config.output.python = Some(tmp.join("python"));
+    config.rest_client.user_agent = Some("example-client".into());
+    config.bindings.as_mut().unwrap().python = Some(olai_codegen::PythonOptions {
+        package: olai_codegen::PyPackageConfig {
+            dir: tmp.join("pkg"),
+            name: "example".into(),
+        },
+        error_base_class: "ExampleError".into(),
+        module: "example._core".into(),
+        async_methods: true,
+        keyword_only: false,
+        public_modules: false,
+        user_agent: Some("example-python".into()),
+        exports: vec![],
+        default_signer: Some("example_client::default_signer".into()),
+        submodules: vec![],
+    });
+    config
+}
+
+#[test]
+fn cloud_client_takes_signers_and_token_providers() {
+    let tmp = TempDir::new().unwrap();
+    let config = cloud_python_config(tmp.path());
+    generate_code(&metadata(), &config).expect("generation succeeds");
+    for dir in ["client", "python"] {
+        assert_client_files_parse(&tmp.path().join(dir));
+    }
+
+    let client = std::fs::read_to_string(tmp.path().join("client/client.rs")).unwrap();
+    for part in [
+        "pub fn client_options() -> ::olai_http::ClientOptions",
+        "pub fn new_with_bearer(",
+        "pub fn new_with_signer(",
+        "Transport::new_with_request_signer(",
+        "concat!(\"example-client/\", env!(\"CARGO_PKG_VERSION\"))",
+        "new_unauthenticated_with_options(",
+    ] {
+        assert!(client.contains(part), "{part} missing:\n{client}");
+    }
+    // Native only: the browser's `WasmClient` takes none of them.
+    let before = |name: &str| {
+        let at = client.find(name).unwrap();
+        client[..at]
+            .rfind("#[cfg(")
+            .map(|cfg| &client[cfg..at])
+            .unwrap_or_default()
+            .to_string()
+    };
+    for name in [
+        "pub fn client_options",
+        "pub fn new_with_bearer",
+        "pub fn new_with_signer",
+    ] {
+        assert!(
+            before(name).contains("not(target_arch = \"wasm32\")"),
+            "{name} is not native-only:\n{client}"
+        );
+    }
+
+    let bindings = read_all(&tmp.path().join("python"));
+    for part in [
+        "token_provider = None",
+        "pub struct RustTokenProvider",
+        "#[pyclass(name = \"TokenProvider\"",
+        "use super::RustTokenProvider;",
+        "impl ::olai_http::RequestSigner for PyTokenProvider",
+        "example_client::default_signer(&base_url)",
+        "concat!(\"example-python/\", env!(\"CARGO_PKG_VERSION\"))",
+    ] {
+        assert!(bindings.contains(part), "{part} missing");
+    }
+}
+
+#[test]
+fn a_default_signer_needs_cloud_client() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = cloud_python_config(tmp.path());
+    config.dual_transport = false;
+    config.transport_type_path = olai_codegen::REQWEST_TRANSPORT_TYPE_PATH.into();
+    let err = generate_code(&metadata(), &config).expect_err("no signer without CloudClient");
+    assert!(
+        err.to_string().contains("PythonOptions::default_signer"),
+        "{err}"
+    );
+
+    let mut config = cloud_python_config(tmp.path());
+    config
+        .bindings
+        .as_mut()
+        .unwrap()
+        .python
+        .as_mut()
+        .unwrap()
+        .default_signer = Some("not a path".into());
+    let err = generate_code(&metadata(), &config).expect_err("an invalid path passed");
+    assert!(err.to_string().contains("not a path"), "{err}");
 }
 
 // ── Without the common (extractor) output ────────────────────────────────────
@@ -1019,6 +1134,8 @@ fn python_bindings_without_error_module_leave_api_error_answer_to_the_crate() {
         public_modules: false,
         user_agent: None,
         exports: vec![],
+        default_signer: None,
+        submodules: vec![],
     });
     generate_code(&metadata(), &config).expect("generation succeeds");
 

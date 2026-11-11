@@ -39,6 +39,11 @@ fn compile_descriptors(out: &Path) -> PathBuf {
     descriptors
 }
 
+/// Whether the crate builds with the `cloud` feature, whose client is on `CloudClient`.
+fn cloud() -> bool {
+    std::env::var_os("CARGO_FEATURE_CLOUD").is_some()
+}
+
 /// The generation config, with every option on. Everything goes under `out`.
 fn demo_config(out: &Path) -> CodeGenConfig {
     let models_dir = out.join("models");
@@ -60,8 +65,13 @@ fn demo_config(out: &Path) -> CodeGenConfig {
         models_path_crate_template: "crate::models::{service}::{version}".into(),
         resource_store_crate_name: "olai_store".into(),
         runtime: Runtime::Buffa,
-        transport_type_path: REQWEST_TRANSPORT_TYPE_PATH.into(),
-        dual_transport: false,
+        // The `cloud` feature: `CloudClient` (dual-transport), else the generated `reqwest`
+        // transport.
+        transport_type_path: match cloud() {
+            true => olai_codegen::DEFAULT_TRANSPORT_TYPE_PATH.into(),
+            false => REQWEST_TRANSPORT_TYPE_PATH.into(),
+        },
+        dual_transport: cloud(),
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
         rest_client: RestClientOptions {
@@ -118,6 +128,8 @@ fn demo_config(out: &Path) -> CodeGenConfig {
                 public_modules: false,
                 user_agent: Some("demo-python".into()),
                 exports: vec![],
+                default_signer: cloud().then(|| "rest_client_e2e::default_signer".into()),
+                submodules: vec!["crate::extra".into()],
             }),
         }),
     }

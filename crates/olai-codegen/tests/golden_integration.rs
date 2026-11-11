@@ -136,6 +136,8 @@ fn full_config(tmp: &Path, runtime: Runtime) -> CodeGenConfig {
                 public_modules: false,
                 user_agent: None,
                 exports: vec![],
+                default_signer: None,
+                submodules: vec![],
             }),
         }),
     }
