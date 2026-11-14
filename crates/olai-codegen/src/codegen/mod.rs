@@ -203,6 +203,11 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
     if let Some(ref server_dir) = config.output.server {
         let server_code = generate_server_code(&plan, metadata, config)?;
         output::write_generated_code(&server_code, server_dir)?;
+        output::remove_stale_generated(
+            &server_code,
+            server_dir,
+            &["authz.rs", authz::CEDAR_ACTIONS_FILE],
+        )?;
     }
 
     if let Some(ref client_dir) = config.output.client {
