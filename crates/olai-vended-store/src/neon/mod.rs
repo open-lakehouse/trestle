@@ -5,7 +5,8 @@
 //! credential is long-lived, never expires, and reaches every bucket of the branch
 //! (and its descendants). This module is operator tooling for the branch's owner, not
 //! a vending protocol: a vending server must never hand these keys to clients, and
-//! presigns with them instead.
+//! presigns with them instead. (Expiring keys for clients are
+//! `olai-credential-vending`'s opt-in trusted Neon minter.)
 //!
 //! The control plane (`https://console.neon.tech/api/v2`, authenticated with a Neon API
 //! key) supplies the branch's endpoint, region and addressing style, and the

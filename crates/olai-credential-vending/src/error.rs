@@ -39,6 +39,29 @@ pub enum Error {
         reason: String,
     },
 
+    /// Minting for this kind of registered credential is not compiled in: the crate
+    /// feature that provides its minter is disabled.
+    #[error(
+        "`{kind}` credentials need the `{feature}` feature of olai-credential-vending, \
+         which this build does not enable"
+    )]
+    NotCompiledIn {
+        /// The registered credential's kind, such as `neon_storage`.
+        kind: &'static str,
+        /// The feature that provides its minter.
+        feature: &'static str,
+    },
+
+    /// The registered credential's minter needs configuration only the host has, such
+    /// as an API key, so it cannot be built from the credential alone.
+    #[error("`{kind}` minters need host configuration: {reason}")]
+    NeedsHostConfig {
+        /// The registered credential's kind, such as `neon_storage`.
+        kind: &'static str,
+        /// What to configure.
+        reason: String,
+    },
+
     /// The cloud call that mints the credential failed.
     #[error("minting failed: {source}")]
     Mint {

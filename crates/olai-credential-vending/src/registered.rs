@@ -12,9 +12,10 @@ const REDACTED: &str = "<redacted>";
 /// Not to be confused with a *vended* credential, the short-lived secret a client
 /// receives. The JSON shape is Unity Catalog's `Credential` without its metadata: an
 /// object with exactly one of `aws_iam_role`, `azure_service_principal`,
-/// `azure_managed_identity`, `azure_storage_key` or `gcp_service_account` (also read as
-/// Databricks' `databricks_gcp_service_account`). Other keys are ignored, so a full
-/// `Credential` document, or one persisted by mangrove's `StorageCredential`, loads.
+/// `azure_managed_identity`, `azure_storage_key`, `gcp_service_account` (also read as
+/// Databricks' `databricks_gcp_service_account`) or `neon_storage`. Other keys are
+/// ignored, so a full `Credential` document, or one persisted by mangrove's
+/// `StorageCredential`, loads.
 ///
 /// `Debug` redacts every secret.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -31,6 +32,12 @@ pub enum RegisteredCredential {
     AzureStorageKey(AzureStorageKey),
     /// A GCP service account.
     GcpServiceAccount(GcpServiceAccount),
+    /// The object storage of a Neon branch, minted for by the control plane.
+    ///
+    /// Always part of the model, so hosts can store and display it; minting needs the
+    /// `neon-trusted-vending` feature and a host-supplied Neon API key (see
+    /// [`minter_for`](crate::minter_for)).
+    NeonStorage(NeonStorage),
 }
 
 /// An AWS IAM role to assume.
@@ -126,6 +133,19 @@ pub enum GcpServiceAccountKey {
     ServiceAccountKeyFile(String),
 }
 
+/// A Neon branch whose object storage a trusted minter vends for.
+///
+/// Holds no secret: the Neon API key that mints comes from the host's configuration,
+/// never from the registered credential.
+#[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NeonStorage {
+    /// The Neon project.
+    pub project_id: String,
+    /// The branch whose storage is vended. Minted keys also work on its descendants.
+    pub branch_id: String,
+}
+
 impl RegisteredCredential {
     /// The kind, for errors and logs: `aws_iam_role`, `azure_service_principal`, ...
     pub fn kind(&self) -> &'static str {
@@ -135,6 +155,7 @@ impl RegisteredCredential {
             Self::AzureManagedIdentity(_) => "azure_managed_identity",
             Self::AzureStorageKey(_) => "azure_storage_key",
             Self::GcpServiceAccount(_) => "gcp_service_account",
+            Self::NeonStorage(_) => "neon_storage",
         }
     }
 }
@@ -151,6 +172,7 @@ impl fmt::Debug for RegisteredCredential {
             }
             Self::AzureStorageKey(c) => f.debug_tuple("AzureStorageKey").field(c).finish(),
             Self::GcpServiceAccount(c) => f.debug_tuple("GcpServiceAccount").field(c).finish(),
+            Self::NeonStorage(c) => f.debug_tuple("NeonStorage").field(c).finish(),
         }
     }
 }
@@ -226,6 +248,15 @@ impl fmt::Debug for GcpServiceAccount {
     }
 }
 
+impl fmt::Debug for NeonStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NeonStorage")
+            .field("project_id", &self.project_id)
+            .field("branch_id", &self.branch_id)
+            .finish()
+    }
+}
+
 impl fmt::Debug for GcpServiceAccountKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -257,6 +288,8 @@ struct Repr {
         skip_serializing_if = "Option::is_none"
     )]
     gcp_service_account: Option<GcpServiceAccount>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    neon_storage: Option<NeonStorage>,
 }
 
 impl TryFrom<Repr> for RegisteredCredential {
@@ -270,6 +303,7 @@ impl TryFrom<Repr> for RegisteredCredential {
             repr.azure_managed_identity.map(Self::AzureManagedIdentity),
             repr.azure_storage_key.map(Self::AzureStorageKey),
             repr.gcp_service_account.map(Self::GcpServiceAccount),
+            repr.neon_storage.map(Self::NeonStorage),
         ]
         .into_iter()
         .flatten();
@@ -292,6 +326,7 @@ impl From<RegisteredCredential> for Repr {
             RegisteredCredential::AzureManagedIdentity(c) => repr.azure_managed_identity = Some(c),
             RegisteredCredential::AzureStorageKey(c) => repr.azure_storage_key = Some(c),
             RegisteredCredential::GcpServiceAccount(c) => repr.gcp_service_account = Some(c),
+            RegisteredCredential::NeonStorage(c) => repr.neon_storage = Some(c),
         }
         repr
     }
@@ -405,6 +440,32 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<RegisteredCredential>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn loads_neon_storage() {
+        let document = json!({
+            "name": "branch-storage",
+            "neon_storage": { "project_id": "proj", "branch_id": "br-1" },
+        });
+        let credential: RegisteredCredential = serde_json::from_value(document).unwrap();
+        let neon = RegisteredCredential::NeonStorage(NeonStorage {
+            project_id: "proj".into(),
+            branch_id: "br-1".into(),
+        });
+        assert_eq!(credential, neon);
+        assert_eq!(neon.kind(), "neon_storage");
+        assert_eq!(
+            serde_json::to_value(&neon).unwrap(),
+            json!({ "neon_storage": { "project_id": "proj", "branch_id": "br-1" } })
+        );
+        assert!(
+            serde_json::from_value::<RegisteredCredential>(json!({
+                "neon_storage": { "project_id": "proj", "branch_id": "br-1" },
+                "aws_iam_role": { "role_arn": "a" },
+            }))
+            .is_err()
+        );
     }
 
     #[test]

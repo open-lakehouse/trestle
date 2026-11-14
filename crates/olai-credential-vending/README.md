@@ -14,6 +14,11 @@ to clients.
   scope at the requested access: `AwsStsMinter` (STS session policies), the Azure SAS
   minters, `GcsDownscopedMinter` (Credential Access Boundaries), and `LocalMinter` for
   `file://` and `memory://`.
+- **`neon::NeonTrustedMinter`** (feature `neon-trusted-vending`, off by default): an
+  explicit exception for Neon object storage, which cannot downscope. It vends
+  expiring keys that reach the whole branch at the granted access level, so a host
+  must authorize callers for that before vending. See
+  [the design record](../../docs/credential-vending.md).
 
 The credential model and downscoping policies live in
 [`olai-storage-credentials`](../olai-storage-credentials); the client side is
