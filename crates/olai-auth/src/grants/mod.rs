@@ -265,6 +265,59 @@ pub trait GrantStore: Send + Sync + 'static {
     }
 }
 
+/// A shared store is a store, so one can back both a grants API and an entity loader.
+#[async_trait]
+impl<T: GrantStore + ?Sized> GrantStore for std::sync::Arc<T> {
+    async fn list(&self, object: &ObjectRef) -> Result<Vec<Grant>, GrantError> {
+        (**self).list(object).await
+    }
+
+    async fn apply(
+        &self,
+        object: &ObjectRef,
+        changes: &[GrantChange],
+    ) -> Result<Vec<Grant>, GrantError> {
+        (**self).apply(object, changes).await
+    }
+
+    async fn delete_object(
+        &self,
+        object: &ObjectRef,
+        descendant_types: &[&str],
+    ) -> Result<u64, GrantError> {
+        (**self).delete_object(object, descendant_types).await
+    }
+
+    async fn rename(
+        &self,
+        object: &ObjectRef,
+        new_id: &str,
+        descendant_types: &[&str],
+    ) -> Result<u64, GrantError> {
+        (**self).rename(object, new_id, descendant_types).await
+    }
+
+    async fn groups(&self, subject: &Subject) -> Result<Vec<GroupMembership>, GrantError> {
+        (**self).groups(subject).await
+    }
+
+    async fn effective(
+        &self,
+        subject: &Subject,
+        objects: &[ObjectRef],
+    ) -> Result<Vec<Grant>, GrantError> {
+        (**self).effective(subject, objects).await
+    }
+
+    async fn facts(
+        &self,
+        subject: &Subject,
+        objects: &[ObjectRef],
+    ) -> Result<SubjectFacts, GrantError> {
+        (**self).facts(subject, objects).await
+    }
+}
+
 /// Whether `id` is a descendant id of `ancestor`: it starts with `ancestor` and `separator`.
 fn is_descendant(id: &str, ancestor: &str, separator: &str) -> bool {
     id.strip_prefix(ancestor)
@@ -524,6 +577,22 @@ impl GrantStore for MemoryGrantStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_shared_store_is_one_store() {
+        let shared = std::sync::Arc::new(MemoryGrantStore::new());
+        let writer: std::sync::Arc<dyn GrantStore> = shared.clone();
+        let doc = ObjectRef::new("Ns::Doc", "d");
+        let change = GrantChange {
+            subject: Subject::user("u1"),
+            add: vec!["READ".into()],
+            remove: Vec::new(),
+        };
+        writer.apply(&doc, &[change]).await.unwrap();
+        let grants = GrantStore::list(&shared, &doc).await.unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].privilege, "READ");
+    }
 
     #[test]
     fn validates_privileges_and_objects() {
