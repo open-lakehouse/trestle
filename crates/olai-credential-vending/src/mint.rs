@@ -82,6 +82,12 @@ pub trait CredentialMinter: Debug + Send + Sync + 'static {
 ///
 /// Build the minters directly to set endpoints, client options or audit fields.
 ///
+/// A [`NeonStorage`](crate::registered::NeonStorage) credential gets no default minter:
+/// its minter mints with a Neon API key from the host's configuration, which the
+/// registered credential never holds. Without the `neon-trusted-vending` feature this
+/// returns [`Error::NotCompiledIn`]; with it, [`Error::NeedsHostConfig`], and the host
+/// builds `NeonTrustedMinter` itself (in [`Vendor::with_minters`](crate::Vendor::with_minters)).
+///
 /// [`AwsStsMinter`]: crate::AwsStsMinter
 /// [`AzureUserDelegationSasMinter`]: crate::AzureUserDelegationSasMinter
 /// [`AzureAccountKeySasMinter`]: crate::AzureAccountKeySasMinter
@@ -103,6 +109,22 @@ pub fn minter_for(credential: &RegisteredCredential) -> Result<Arc<dyn Credentia
         ),
         R::AzureStorageKey(key) => Arc::new(AzureAccountKeySasMinter::new(key)),
         R::GcpServiceAccount(account) => Arc::new(GcsDownscopedMinter::new(account)?),
+        #[cfg(not(feature = "neon-trusted-vending"))]
+        R::NeonStorage(_) => {
+            return Err(Error::NotCompiledIn {
+                kind: credential.kind(),
+                feature: "neon-trusted-vending",
+            });
+        }
+        #[cfg(feature = "neon-trusted-vending")]
+        R::NeonStorage(_) => {
+            return Err(Error::NeedsHostConfig {
+                kind: credential.kind(),
+                reason: "build a `NeonTrustedMinter` with the host's Neon API key and \
+                         return it from `Vendor::with_minters`"
+                    .to_owned(),
+            });
+        }
     })
 }
 
@@ -184,6 +206,43 @@ mod tests {
         for (credential, minter) in cases {
             let debug = format!("{:?}", minter_for(&credential).unwrap());
             assert!(debug.starts_with(minter), "{}: {debug}", credential.kind());
+        }
+    }
+
+    #[test]
+    fn neon_storage_gets_no_default_minter() {
+        let neon = RegisteredCredential::NeonStorage(crate::registered::NeonStorage {
+            project_id: "proj".into(),
+            branch_id: "br-1".into(),
+        });
+        let err = minter_for(&neon).unwrap_err();
+        #[cfg(not(feature = "neon-trusted-vending"))]
+        {
+            assert!(
+                matches!(
+                    err,
+                    Error::NotCompiledIn {
+                        kind: "neon_storage",
+                        feature: "neon-trusted-vending"
+                    }
+                ),
+                "{err}"
+            );
+            assert!(err.to_string().contains("does not enable"), "{err}");
+        }
+        #[cfg(feature = "neon-trusted-vending")]
+        {
+            assert!(
+                matches!(
+                    err,
+                    Error::NeedsHostConfig {
+                        kind: "neon_storage",
+                        ..
+                    }
+                ),
+                "{err}"
+            );
+            assert!(err.to_string().contains("NeonTrustedMinter"), "{err}");
         }
     }
 

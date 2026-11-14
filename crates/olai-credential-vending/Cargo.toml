@@ -19,6 +19,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # Each account's user delegation key is refreshed under its own async lock.
 tokio = { workspace = true, features = ["sync"] }
+# `neon-trusted-vending` only: garbage-collection failures are logged, not returned.
+tracing = { workspace = true, optional = true }
+# `neon-trusted-vending` only: the Neon API URL.
+url = { workspace = true, optional = true }
 
 # in-repo dependencies
 olai-http = { path = "../olai-http", version = "0.0.11" }
@@ -38,6 +42,13 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 url = { workspace = true }
 
 [features]
+default = []
+# Trusted vending for Neon object storage (`neon::NeonTrustedMinter`). Neon has no STS
+# and no prefix scoping, so a minted key reaches every bucket on the branch (and its
+# descendants) at the granted access level until it expires: hosts must authorize
+# callers for that before vending. An explicit opt-in, never in a default; see
+# docs/credential-vending.md.
+neon-trusted-vending = ["olai-http/neon", "dep:tracing", "dep:url"]
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
 emulator-it = []
@@ -45,5 +56,9 @@ emulator-it = []
 # enforces. Needs credentials and env vars; see `tests/gcs_minter_live.rs`.
 gcp-live = []
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

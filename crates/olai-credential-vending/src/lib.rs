@@ -18,6 +18,10 @@
 //!   [`minter_for`] picks the minter for a registered credential.
 //! - [`CachingMinter`]: a bounded cache of minted credentials, keyed by the whole
 //!   request. [`Vendor`] resolves, mints and caches per registered credential.
+//! - `neon::NeonTrustedMinter` (feature `neon-trusted-vending`, off by default): a
+//!   *trusted* minter for Neon object storage, which cannot downscope. Its keys reach
+//!   the whole branch until they expire, so hosts must authorize callers for that. See
+//!   the module's documentation for the threat model.
 //!
 //! The vocabulary (credentials, locations, scopes, downscoping policies) is
 //! [`olai_storage_credentials`]; the cloud calls are `olai-http`'s. Native only.
@@ -27,12 +31,17 @@
 //!
 //! [credential vending design record]: https://github.com/open-lakehouse/trestle/blob/main/docs/credential-vending.md
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 pub mod aws;
 pub mod azure;
 pub mod cache;
 pub mod error;
 pub mod gcp;
 pub mod mint;
+#[cfg(feature = "neon-trusted-vending")]
+#[cfg_attr(docsrs, doc(cfg(feature = "neon-trusted-vending")))]
+pub mod neon;
 pub mod registered;
 pub mod resolve;
 
@@ -42,6 +51,8 @@ pub use cache::{CachingMinter, Vendor};
 pub use error::{Error, Result};
 pub use gcp::GcsDownscopedMinter;
 pub use mint::{CredentialMinter, LocalMinter, MintRequest, minter_for};
+#[cfg(feature = "neon-trusted-vending")]
+pub use neon::NeonTrustedMinter;
 pub use olai_storage_credentials::{
     AccessLevel, StorageCredentials, StorageLocation, StorageScope, VendedCredential,
 };

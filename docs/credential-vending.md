@@ -335,11 +335,13 @@ The modules add two things to the core:
   denial from an outage the same way for every protocol.
 
 Neon differs from the other protocols: its issuer is a control plane, not a catalog,
-and it cannot downscope. It is operator tooling for the owner of the branch, not a
-vending protocol in the sense above: a vending *server* must never hand these keys to
-clients (see (3)). Keys are long-lived and branch-scoped, with no STS. The
-`neon` source therefore returns `StorageCredentials::Aws` with no expiry, plus
-`StoreHints` (endpoint, region, path-style).
+and it cannot downscope. The `neon` module is operator tooling for the owner of the
+branch, not a vending protocol in the sense above. The keys it reveals or creates are
+long-lived and branch-scoped, with no STS, so a vending *server* must never hand them
+to clients. The one exception is (3)'s opt-in trusted minter, which hands out
+*expiring* keys. The `neon` source returns `StorageCredentials::Aws` with no expiry,
+plus `StoreHints` (endpoint, region, path-style). Its control-plane client is
+`olai-http::neon` (feature `neon`), which (3) shares.
 
 ### (3) `olai-credential-vending`: server side
 
@@ -373,6 +375,7 @@ pub trait CredentialResolver: Send + Sync {
 | `AzureAccountKeySasMinter` | storage account key | service SAS | **done** |
 | `GcsDownscopedMinter` | service account, impersonated by the host identity (ADC, metadata server, workload identity) or from a key | STS token exchange with a Credential Access Boundary | **done** |
 | `LocalMinter` | — | `StorageCredentials::None` for `file://` and `memory://` | **done** (called directly: no registered credential governs local storage, so `minter_for` and `Vendor` never return it) |
+| `NeonTrustedMinter` | Neon branch (`neon_storage`) + a host-configured Neon API key | control-plane `POST …/credentials` with scopes and `expires_at`; **not downscoped** (see below) | **done**, feature `neon-trusted-vending`, off by default |
 
 `minter_for(&RegisteredCredential)` picks the minter for each registered kind. On
 flat-namespace accounts (`with_flat_namespace`, implied for Azurite) the Azure minters
@@ -411,8 +414,41 @@ emulator, the opt-in has no effect, so real storage never widens.
   `temporary-*-credentials` endpoint once the caller is authorized.
 - Server-side presigning (Open Sharing `presigned` access) is minting followed by
   (2)'s `presign`.
-- Stores without downscoping, Neon object storage for example, get no minter. A
-  server backed by one presigns with its own key and never hands the key to clients.
+- Stores without downscoping get no minter by default. A server backed by one
+  presigns with its own key and never hands the key to clients.
+- **Trusted Neon vending is the one explicit, opt-in exception** (feature
+  `neon-trusted-vending`, never in a default; design and threat model in
+  open-lakehouse/luminescent-lakehouse#124). Neon object storage has no STS and no
+  bucket- or prefix-scoped keys, but its control plane mints keys that expire for
+  real. `NeonTrustedMinter` vends those:
+  - **Threat model.** A vended key reaches *every bucket on the branch and on its
+    descendant branches*, at the granted access level (`storage:read`, or that plus
+    `storage:write`), until it expires. The request's scope only labels the
+    credential. The host must authorize each caller for that reach *before* calling
+    `vend`: mangrove requires an EXTERNAL USE grant on top of read/write, refuses to
+    start with anonymous auth or an allow-all policy, and audits every vend. Without
+    that authorization, do not enable the feature.
+  - **Expiry is the control, not revocation.** Neon enforces `expires_at` to the
+    second. A revoked key, though, was still accepted by S3 for about 20 seconds in
+    the #366 spike. Lifetimes are clamped to 15 minutes – 12 hours (1 hour by
+    default).
+  - **One key per access level, not per scope.** The key is not scope-limited, so a
+    per-scope cache would only multiply live keys. The minter keeps one key per
+    access level and reuses it until half its lifetime has passed, which leaves about
+    two live keys per level per lifetime. Concurrent misses create one key.
+  - **Housekeeping.** Keys are named `olai-vend-<access>-<unix seconds>`. Neon keeps
+    expired keys listed (with their ancestors' keys) until they are revoked, so after
+    a mint, at most every 10 minutes, the minter revokes the branch's own expired,
+    unrevoked `olai-vend-*` keys. This is best effort and never fails a mint.
+  - **The API key is the host's.** `RegisteredCredential::NeonStorage { project_id,
+    branch_id }` (JSON `neon_storage`) is always in the model and holds no secret.
+    The API key goes to `NeonTrustedMinter::new` from host configuration, so
+    `minter_for` cannot build this minter. It returns `Error::NotCompiledIn` without
+    the feature and `Error::NeedsHostConfig` with it, and hosts install the minter
+    through `Vendor::with_minters`. The spike found no rate limit and no live-key cap
+    at 50 keys per branch, with creates taking about 0.5 s.
+  - When Neon ships STS, a downscoping minter replaces this one, and the
+    authorization path stays.
 - The low-level cloud calls (the STS query, SAS string-to-sign and delegation key)
   stay in `olai-http::{aws,azure,gcp}`, and the minters compose them:
   `aws::assume_role_with_options` (every `AssumeRole` parameter, and the wall-clock
@@ -527,7 +563,8 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
   into profiles while serving credentials under `/api/1.0/opensharing`. Until its
   profiles name the Open Sharing endpoint, clients set `sharing_endpoint`.
 - R2 minting through the Cloudflare temporary-credentials API, and S3-compatible
-  stores that lack STS (handled like Neon: presign, don't mint).
+  stores that lack STS (presign, don't mint; a trusted minter like Neon's only
+  where the store's keys expire and the host authorizes for their reach).
 - Hosting the vending server as a Neon Function, which needs no extra crate surface
   beyond (3).
 - A `wasm32` build of `olai-http`. Protocol modules are native only today. On
@@ -549,6 +586,7 @@ default `cargo test` needs no Docker, and run in a dedicated CI job.
 | P2e | `neon` protocol module (**done**, #222) | #191 |
 | P3 | `olai-credential-vending`: minters, caching, resolver (**done**, #207 #208 #210 #211 #212 #213) | #181 |
 | P4 | GCS downscoped minter (**done**, #228 #229 #230) | #182 |
+| P4n | Trusted Neon vending: shared `olai-http::neon` client, `NeonTrustedMinter`, Delta API endpoint hints | #366 (#367 #368 #369) |
 | P5 | `VendingRouter` + DataFusion registry adapter | #183 |
 | P6 | mangrove migration (external; status not tracked here) | open-lakehouse/mangrove#247 |
 | P7 | delta-rs adopts `olai-vended-store` + `unity` (external; status not tracked here) | tracked in #185 (fork has no issues) |
