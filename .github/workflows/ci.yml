@@ -264,8 +264,9 @@ jobs:
           # combined with other target selectors, so it is a separate invocation.
           cargo test --locked --lib -p olai-store --features postgres
           cargo test --locked --doc -p olai-store --features postgres
-      # `PgApiKeyStore` against its tables, in a schema the test creates and drops.
-      - name: Run Postgres API key test (olai-auth)
+      # The `authz` migrations, `PgApiKeyStore` and `PgGrantStore`, each test in a
+      # schema it migrates and drops.
+      - name: Run Postgres authz tests (olai-auth)
         env:
           PGUSER: postgres
           PGPASSWORD: postgres

@@ -54,8 +54,11 @@ without the handler knowing where the Cedar policies run:
   request and response types are in `olai_auth::wire`, so the PDP can share them.
 - `CedarAuthorizer` (feature `cedar`) evaluates the policies in-process. The policies
   are validated against the schema in strict mode at construction. The host's
-  `EntityLoader` supplies the entities (users, groups, grants) per request, and a
-  caller can pass the resource itself as `resource_entity`.
+  `EntityLoader` supplies the entities (users, groups, grants) per request. The caller
+  can pass the entities it owns the data of (the resource and its ancestors) in
+  `entities`; they are merged with the loaded ones. The caller may not supply the
+  principal, nor set the attributes the loader owns (`privileges` and
+  `inherited_privileges` by default), so it can't forge grants.
 - `CachedAuthorizer` reuses decisions for a few seconds (5 s by default).
 
 All of them fail closed: a timeout (2 s by default for the PDP), an unreachable PDP,
@@ -76,6 +79,41 @@ if !authz.authorize(&request).await.is_allowed() {
 }
 ```
 
+## Grants
+
+A `Grant` is a `(subject, privilege, object)` tuple: a user, service account or group
+holds a privilege (`READ`, `OWNER`, …, names the Cedar policies give meaning to) on a
+Cedar entity. Groups contain users, service accounts and other groups. A `GrantStore`
+lists, applies (add and remove, atomically), deletes and renames them (with the
+descendants of a hierarchical id, `a` → `a.b`), and resolves a subject's groups and
+effective grants. `MemoryGrantStore` keeps them in memory; `PgGrantStore` (feature
+`postgres`) in the tables the `authz` migrations create.
+
+`GrantsEntityLoader` (feature `cedar`) is an `EntityLoader` over a `GrantStore`. For a
+request it loads the principal with its groups as parents, every group it is in, and,
+on the resource and every caller-supplied entity, the grants the principal holds there:
+`privileges` (on that entity itself) and `inherited_privileges` (on it or any ancestor
+the caller supplied). So a policy can tell a privilege on a container from one on the
+resource:
+
+```cedar
+permit (principal, action == Ns::Action::"GetDoc", resource is Ns::Doc)
+when {
+  resource.inherited_privileges.contains("READ") &&
+  resource.folder.privileges.contains("USE_FOLDER")
+};
+```
+
+A host adds its own facts about the principal (a role, a ban) with `PrincipalAttrs`. A
+batch asks the store once per principal.
+
+## Migrations
+
+`migrate(&pool, "authz")` (feature `postgres`) applies the `authz` migrations
+(`MIGRATOR`): `service_accounts`, `api_keys`, `groups`, `memberships` and `grants`, and
+an `authz_reader` role with `SELECT` on them. They and their ledger live in the given
+schema, apart from the host's own migrations.
+
 ## Responses
 
 | Response | When |
@@ -90,9 +128,9 @@ if !authz.authorize(&request).await.is_allowed() {
 | Feature | Adds |
 |---|---|
 | `http` | `HttpKeySource`, using `reqwest` with rustls |
-| `postgres` | `PgApiKeyStore`, using `sqlx` with only its `postgres` feature (the host's sqlx brings the runtime and TLS) |
+| `postgres` | `PgApiKeyStore`, `PgGrantStore` and the `authz` migrations (`migrate`, `MIGRATOR`), using `sqlx` with its `postgres`, `migrate` and `macros` features (the host's sqlx brings the runtime and TLS) |
 | `pdp-client` | `HttpAuthorizer`, using `reqwest` with rustls (shared with `http`) |
-| `cedar` | `CedarAuthorizer`, using `cedar-policy` with the `datetime`, `decimal` and `ipaddr` extensions. Needs Rust 1.89; the rest of the crate builds on 1.88. Adds about 4.8 MB to a release binary (1.9 MB zipped). |
+| `cedar` | `CedarAuthorizer` and `GrantsEntityLoader`, using `cedar-policy` with the `datetime`, `decimal` and `ipaddr` extensions. Needs Rust 1.89; the rest of the crate builds on 1.88. Adds about 4.8 MB to a release binary (1.9 MB zipped). |
 
 ## License
 

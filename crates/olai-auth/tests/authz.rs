@@ -58,7 +58,8 @@ struct Case {
     resource: (String, String),
     #[serde(default)]
     context: Map<String, Value>,
-    resource_entity: Option<Value>,
+    #[serde(default)]
+    entities: Vec<Value>,
     decision: Decision,
     policies: Vec<String>,
 }
@@ -71,16 +72,13 @@ impl Case {
             .unwrap()
             .clone();
         context.extend(self.context.clone());
-        let mut request = AuthorizeRequest::new(
+        AuthorizeRequest::new(
             entity(&self.principal),
             EntityRef::new("Docs::Action", &self.action),
             entity(&self.resource),
         )
-        .with_context(context);
-        if let Some(entity) = &self.resource_entity {
-            request = request.with_resource_entity(entity.clone());
-        }
-        request
+        .with_context(context)
+        .with_entities(self.entities.clone())
     }
 }
 
@@ -277,16 +275,36 @@ async fn cedar_fails_closed() {
     let failing = CedarAuthorizer::new(SCHEMA, POLICIES, Failing).unwrap();
     assert_denied(&failing.authorize(&request).await, "database unreachable");
 
-    // A resource entity for another resource could smuggle in other entities' data.
+    // The caller may not make the principal an admin.
     let mut smuggled = request.clone();
-    smuggled.resource_entity = Some(json!({
-        "uid": { "type": "Docs::User", "id": "dave" },
+    smuggled.entities = vec![json!({
+        "uid": { "type": "Docs::User", "id": "alice" },
         "attrs": { "banned": false, "email_verified": true },
         "parents": [{ "type": "Docs::Role", "id": "admin" }],
-    }));
+    })];
     assert_denied(
         &cedar().authorize(&smuggled).await,
-        "not the request's resource",
+        "may not supply the principal",
+    );
+
+    // Nor grant the principal anything.
+    let mut forged = request.clone();
+    forged.entities = vec![json!({
+        "uid": { "type": "Docs::Doc", "id": "plan" },
+        "attrs": { "privileges": ["write"] },
+        "parents": [],
+    })];
+    assert_denied(
+        &cedar().authorize(&forged).await,
+        "only the entity loader may set",
+    );
+
+    // A resource nobody knows.
+    let mut unknown = request.clone();
+    unknown.resource = EntityRef::new("Docs::Doc", "nowhere");
+    assert_denied(
+        &cedar().authorize(&unknown).await,
+        "neither loaded nor supplied",
     );
 
     let mut no_context = request.clone();
@@ -309,11 +327,11 @@ async fn cedar_fails_closed() {
 
     // An entity that doesn't match the schema.
     let mut bad_entity = request;
-    bad_entity.resource_entity = Some(json!({
+    bad_entity.entities = vec![json!({
         "uid": { "type": "Docs::Doc", "id": "plan" },
         "attrs": { "public": "yes" },
         "parents": [],
-    }));
+    })];
     assert_denied(&cedar().authorize(&bad_entity).await, "invalid entities");
 }
 

@@ -83,23 +83,23 @@
     "decision": "deny", "policies": []
   },
   {
-    "name": "a caller-supplied resource entity is evaluated",
+    "name": "a caller-supplied entity is evaluated",
     "principal": ["User", "dave"], "action": "write", "resource": ["Doc", "draft"],
-    "resource_entity": {
+    "entities": [{
       "uid": { "type": "Docs::Doc", "id": "draft" },
       "attrs": { "owner": { "__entity": { "type": "Docs::User", "id": "dave" } }, "public": false },
       "parents": [{ "type": "Docs::Folder", "id": "inbox" }]
-    },
+    }],
     "decision": "allow", "policies": ["owner-edit"]
   },
   {
-    "name": "a caller-supplied resource entity replaces the loaded one",
+    "name": "a caller-supplied entity's attributes win over the loaded ones",
     "principal": ["User", "bob"], "action": "read", "resource": ["Doc", "plan"],
-    "resource_entity": {
+    "entities": [{
       "uid": { "type": "Docs::Doc", "id": "plan" },
       "attrs": { "owner": { "__entity": { "type": "Docs::User", "id": "dave" } }, "public": true },
       "parents": [{ "type": "Docs::Folder", "id": "shared" }]
-    },
+    }],
     "decision": "allow", "policies": ["public-read"]
   }
 ]
