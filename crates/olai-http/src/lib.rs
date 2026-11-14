@@ -46,7 +46,10 @@
 //! ```
 //!
 //! Enable the `recording` feature to capture HTTP interactions to JSON (with
-//! sensitive headers redacted) for test replay.
+//! sensitive headers redacted) for test replay, and the `neon` feature for a client of
+//! the Neon control plane's branch storage and credentials API ([`neon`]).
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(feature = "recording")]
 use std::collections::HashMap;
@@ -78,6 +81,9 @@ mod credential;
 pub mod databricks;
 mod error;
 pub mod gcp;
+#[cfg(feature = "neon")]
+#[cfg_attr(docsrs, doc(cfg(feature = "neon")))]
+pub mod neon;
 pub mod service;
 
 mod retry;

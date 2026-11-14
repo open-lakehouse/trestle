@@ -77,9 +77,19 @@ recording = []
 # ConnectRPC clients can authenticate against cloud-fronted servers. Pulls in
 # `connectrpc` (raising the effective MSRV to 1.88) only when enabled.
 connectrpc = ["dep:connectrpc", "dep:http-body-util"]
+# A client for the Neon control plane's branch storage and branch credentials API
+# (`neon`): discovery, and creating, revealing, listing and revoking credentials.
+neon = []
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
 emulator-it = []
 
 [package.metadata.cargo-machete]
 ignored = ["rust-ini"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
