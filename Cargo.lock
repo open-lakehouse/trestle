@@ -2926,7 +2926,7 @@ dependencies = [
 
 [[package]]
 name = "olai-auth"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "async-trait",
  "axum",
@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "convert_case",
  "glob",
@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.31"
+version = "0.0.32"
 dependencies = [
  "assert_cmd",
  "async-trait",
