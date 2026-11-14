@@ -6,7 +6,11 @@
 //!   "storage-credentials": [{
 //!     "prefix": "s3://bucket/warehouse/tab/",
 //!     "operation": "READ_WRITE",
-//!     "config": { "s3.access-key-id": "…", "s3.secret-access-key": "…", "s3.session-token": "…" },
+//!     "config": {
+//!       "s3.access-key-id": "…", "s3.secret-access-key": "…", "s3.session-token": "…",
+//!       "s3.endpoint": "https://storage.example", "s3.region": "eu-central-1",
+//!       "s3.path-style-access": "true"
+//!     },
 //!     "expiration-time-ms": 1700000000000
 //!   }]
 //! }
@@ -16,6 +20,14 @@
 //! `gcs.oauth-token`. `expiration-time-ms` is `null` for credentials that do not
 //! expire, such as those for local paths. Unlike the other protocols, each credential
 //! states the access level it grants.
+//!
+//! For S3-compatible stores (Neon, MinIO, R2, …) the S3 config also carries the
+//! [`StoreHints`] a client needs to reach the store: `s3.endpoint`, `s3.region` and
+//! `s3.path-style-access`, with the Iceberg REST names. They are written only when
+//! set, so a response for AWS itself is unchanged. UC REST's `AwsTempCredentials`
+//! (`wire::unity`) has no endpoint field, so clients of UC REST's
+//! `temporary-*-credentials` set the endpoint themselves (`AWS_ENDPOINT_URL_S3`, or
+//! the store option).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -25,7 +37,9 @@ use serde::{Deserialize, Serialize};
 use super::{RedactedConfig, VendContext, convert_related, prefix_string, resolve_expiry};
 use crate::error::{Error, Result};
 use crate::location::{StorageProvider, StorageScope};
-use crate::model::{AccessLevel, StorageCredentials, VendedCredential, expiry_from_epoch_millis};
+use crate::model::{
+    AccessLevel, StorageCredentials, StoreHints, VendedCredential, expiry_from_epoch_millis,
+};
 use crate::sas;
 
 /// S3 access key id.
@@ -38,6 +52,12 @@ pub const S3_SESSION_TOKEN: &str = "s3.session-token";
 pub const AZURE_SAS_TOKEN: &str = "azure.sas-token";
 /// GCS OAuth token.
 pub const GCS_OAUTH_TOKEN: &str = "gcs.oauth-token";
+/// S3 endpoint, for S3-compatible stores.
+pub const S3_ENDPOINT: &str = "s3.endpoint";
+/// S3 region.
+pub const S3_REGION: &str = "s3.region";
+/// S3 path-style addressing, `true` or `false`.
+pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 
 /// The access level of a Delta API credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,12 +124,18 @@ impl StorageCredential {
         let require = |key: &str| {
             get(key).ok_or_else(|| Error::invalid_credential(format!("config has no `{key}`")))
         };
+        let mut hints = StoreHints::default();
         let credentials = match scope.location().provider() {
-            StorageProvider::Aws | StorageProvider::R2 => StorageCredentials::aws(
-                require(S3_ACCESS_KEY_ID)?,
-                require(S3_SECRET_ACCESS_KEY)?,
-                get(S3_SESSION_TOKEN).cloned(),
-            ),
+            StorageProvider::Aws | StorageProvider::R2 => {
+                hints.endpoint = get(S3_ENDPOINT).cloned();
+                hints.region = get(S3_REGION).cloned();
+                hints.path_style = get(S3_PATH_STYLE_ACCESS).and_then(|v| parse_bool(v));
+                StorageCredentials::aws(
+                    require(S3_ACCESS_KEY_ID)?,
+                    require(S3_SECRET_ACCESS_KEY)?,
+                    get(S3_SESSION_TOKEN).cloned(),
+                )
+            }
             StorageProvider::Azure => StorageCredentials::azure_sas(require(AZURE_SAS_TOKEN)?)?,
             StorageProvider::Gcp => {
                 StorageCredentials::GcpBearer(require(GCS_OAUTH_TOKEN)?.clone())
@@ -121,7 +147,9 @@ impl StorageCredential {
             &credentials,
         );
         Ok(Some(
-            VendedCredential::new(credentials, scope, self.operation.into()).with_expiry(expiry),
+            VendedCredential::new(credentials, scope, self.operation.into())
+                .with_expiry(expiry)
+                .with_hints(hints),
         ))
     }
 }
@@ -143,6 +171,16 @@ impl TryFrom<&VendedCredential> for StorageCredential {
                 if let Some(token) = token {
                     config.insert(S3_SESSION_TOKEN.to_owned(), token.clone());
                 }
+                let hints = &vended.hints;
+                if let Some(endpoint) = &hints.endpoint {
+                    config.insert(S3_ENDPOINT.to_owned(), endpoint.clone());
+                }
+                if let Some(region) = &hints.region {
+                    config.insert(S3_REGION.to_owned(), region.clone());
+                }
+                if let Some(path_style) = hints.path_style {
+                    config.insert(S3_PATH_STYLE_ACCESS.to_owned(), path_style.to_string());
+                }
             }
             StorageCredentials::AzureSas(pairs) => {
                 config.insert(AZURE_SAS_TOKEN.to_owned(), sas::encode_sas(pairs));
@@ -163,6 +201,17 @@ impl TryFrom<&VendedCredential> for StorageCredential {
             config,
             expiration_time_ms: vended.expires_at.map(|t| t.timestamp_millis()),
         })
+    }
+}
+
+/// `true` or `false`, in any case; `None` for anything else.
+fn parse_bool(value: &str) -> Option<bool> {
+    if value.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if value.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
     }
 }
 

@@ -13,6 +13,12 @@
 //! `expiration_time` is in epoch milliseconds and may be a string (proto JSON), `null`
 //! or non-positive, which all mean "does not expire". The response does not say which
 //! access level was granted, so it is taken from the request.
+//!
+//! `AwsTempCredentials` has no endpoint, region or addressing field, so a credential
+//! for an S3-compatible store (Neon, MinIO, …) loses those
+//! [`StoreHints`](crate::StoreHints) here: clients of these endpoints configure the
+//! endpoint themselves (`AWS_ENDPOINT_URL_S3`, or the store option). The UC Delta API
+//! (`wire::delta_api`) and Iceberg REST carry them.
 
 use std::fmt;
 
