@@ -4,7 +4,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use cedar_policy::{
     Context, Entities, EntityId, EntityTypeName, EntityUid, PolicyId, PolicySet, Request, Schema,
-    ValidationMode, Validator,
+    SchemaFragment, ValidationMode, Validator,
 };
 use serde_json::{Map, Value};
 
@@ -66,6 +66,75 @@ pub enum CedarConfigError {
     Validation(String),
 }
 
+/// One schema (Cedar schema syntax) of several `fragments`, each parsed on its own and
+/// then merged namespace by namespace.
+///
+/// A single schema text may declare a namespace only once, but a schema assembled from
+/// several sources (say, a service's entity types, its generated actions and a host's
+/// principals) often needs one namespace in several fragments. Declaring the same
+/// entity type, action or common type twice is an error.
+///
+/// # Errors
+///
+/// [`CedarConfigError::Schema`] when a fragment doesn't parse or a declaration is
+/// duplicated.
+pub fn compose_schema(fragments: &[&str]) -> Result<String, CedarConfigError> {
+    let error = |message: String| CedarConfigError::Schema(message);
+    let mut merged: Map<String, Value> = Map::new();
+    for (index, text) in fragments.iter().enumerate() {
+        let (fragment, warnings) = SchemaFragment::from_cedarschema_str(text)
+            .map_err(|e| error(format!("fragment {index}: {e}")))?;
+        for warning in warnings {
+            tracing::debug!(%warning, fragment = index, "Cedar schema warning");
+        }
+        let Value::Object(namespaces) = fragment
+            .to_json_value()
+            .map_err(|e| error(format!("fragment {index}: {e}")))?
+        else {
+            return Err(error(format!("fragment {index}: not a schema")));
+        };
+        for (namespace, body) in namespaces {
+            let Value::Object(body) = body else {
+                return Err(error(format!(
+                    "fragment {index}: namespace {namespace:?} is not an object"
+                )));
+            };
+            let target = merged
+                .entry(namespace.clone())
+                .or_insert_with(|| Value::Object(Map::new()));
+            let Value::Object(target) = target else {
+                unreachable!("namespaces are inserted as objects");
+            };
+            for (section, items) in body {
+                match (target.get_mut(&section), items) {
+                    (Some(Value::Object(existing)), Value::Object(items)) => {
+                        for (key, item) in items {
+                            if existing.insert(key.clone(), item).is_some() {
+                                return Err(error(format!(
+                                    "fragment {index}: {namespace:?} declares {key:?} \
+                                     ({section}) again"
+                                )));
+                            }
+                        }
+                    }
+                    (None, items) => {
+                        target.insert(section, items);
+                    }
+                    (Some(_), _) => {
+                        return Err(error(format!(
+                            "fragment {index}: {namespace:?} {section} can't be merged"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    SchemaFragment::from_json_value(Value::Object(merged))
+        .map_err(|e| error(e.to_string()))?
+        .to_cedarschema()
+        .map_err(|e| error(e.to_string()))
+}
+
 /// An [`Authorizer`] that evaluates Cedar policies in-process.
 ///
 /// For standalone deployments, and as a fallback where a round trip to a remote policy
@@ -102,6 +171,28 @@ impl CedarAuthorizer {
     /// When the schema or the policies don't parse, contain templates or duplicate
     /// `@id`s, or the policies don't validate against the schema.
     pub fn new(
+        schema: &str,
+        policies: &str,
+        loader: impl EntityLoader,
+    ) -> Result<Self, CedarConfigError> {
+        Self::build(schema, policies, loader)
+    }
+
+    /// Like [`new`](Self::new), over a schema in several fragments (Cedar schema syntax),
+    /// composed with [`compose_schema`]: several may declare the same namespace.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new), and when the fragments don't compose.
+    pub fn from_fragments(
+        fragments: &[&str],
+        policies: &str,
+        loader: impl EntityLoader,
+    ) -> Result<Self, CedarConfigError> {
+        Self::build(&compose_schema(fragments)?, policies, loader)
+    }
+
+    fn build(
         schema: &str,
         policies: &str,
         loader: impl EntityLoader,
@@ -337,6 +428,26 @@ mod tests {
 
     fn attrs() -> Vec<String> {
         DEFAULT_LOADER_ATTRS.iter().map(|&a| a.to_owned()).collect()
+    }
+
+    #[test]
+    fn composes_a_namespace_declared_in_several_fragments() {
+        let entities = "namespace Ns { entity User; entity Doc; }";
+        let actions =
+            "namespace Ns { action read appliesTo { principal: [User], resource: [Doc] }; }";
+        // One text may not declare the namespace twice; fragments may.
+        assert!(Schema::from_cedarschema_str(&format!("{entities}\n{actions}")).is_err());
+        let composed = compose_schema(&[entities, actions]).unwrap();
+        let (schema, _) = Schema::from_cedarschema_str(&composed).unwrap();
+        assert_eq!(schema.actions().count(), 1);
+        assert_eq!(schema.entity_types().count(), 2);
+    }
+
+    #[test]
+    fn a_declaration_in_two_fragments_is_an_error() {
+        let doc = "namespace Ns { entity Doc; }";
+        let err = compose_schema(&[doc, doc]).unwrap_err().to_string();
+        assert!(err.contains("\"Doc\""), "{err}");
     }
 
     #[test]

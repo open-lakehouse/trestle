@@ -108,7 +108,9 @@ pub use async_trait::async_trait;
 pub use authenticator::{Authenticator, AuthenticatorBuilder, ConfigError};
 #[cfg(feature = "cedar")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cedar")))]
-pub use authz::cedar::{CedarAuthorizer, CedarConfigError, DEFAULT_LOADER_ATTRS, EntityLoader};
+pub use authz::cedar::{
+    CedarAuthorizer, CedarConfigError, DEFAULT_LOADER_ATTRS, EntityLoader, compose_schema,
+};
 #[cfg(feature = "pdp-client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "pdp-client")))]
 pub use authz::http::HttpAuthorizer;
