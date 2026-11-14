@@ -395,7 +395,67 @@ pub struct CodeGenConfig {
 
     /// Wire-format and error options of the REST client. See [`RestClientOptions`].
     pub rest_client: RestClientOptions,
+
+    /// Emit the authorization vocabulary into the server output: an `Operation` per RPC, an
+    /// `Authorizable` impl per request, and the Cedar actions. See [`AuthzConfig`]. `None` (the
+    /// default for existing configs) emits none of it.
+    pub authz: Option<AuthzConfig>,
 }
+
+/// The authorization vocabulary emitted with the server code.
+///
+/// With it, the server output gets:
+///
+/// - `authz.rs`: an `Operation` enum with one variant per RPC (named after it, unique across
+///   the API), the `Securable` a request acts on (a resource kind, the generated `ObjectLabel`,
+///   and its name parts), and the `Authorizable` trait;
+/// - `<service>/authz.rs`: `impl Authorizable` for each request of the service;
+/// - `authz.cedarschema`: a Cedar schema fragment declaring one action per operation, on the
+///   entity type of its securable.
+///
+/// It needs `output.server`, and the `ObjectLabel` enum (`generate_resource_enum`). How the
+/// securable of each request is found is described in [`crate::analysis::plan_authz`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthzConfig {
+    /// The module path the root `authz.rs` is mounted at, which the per-service impls import
+    /// from. Default `crate::codegen::authz`; a crate that mounts the generated modules
+    /// elsewhere sets it.
+    pub module_path: String,
+    /// The path of the generated `ObjectLabel` enum. `None` for `<models root>::ObjectLabel`,
+    /// from [`CodeGenConfig::models_path_template`].
+    pub label_type_path: Option<String>,
+    /// The Cedar namespace the actions are declared in, which also holds the entity types of
+    /// the securables (named after the `ObjectLabel` variants).
+    pub cedar_namespace: String,
+    /// The Cedar principal types each action applies to (e.g. `Accounts::User`).
+    pub principal_types: Vec<String>,
+    /// The Cedar context type of every action, if any (e.g. `RequestContext`).
+    pub context_type: Option<String>,
+    /// The Cedar entity type of the service root, the securable of an operation on no resource
+    /// (such as a list of top-level resources), e.g. `Service`.
+    pub root_entity: String,
+    /// The cargo feature the generated `authz` modules are mounted behind, if any. Lets a
+    /// crate whose `ObjectLabel` needs extra features (e.g. every resource) keep building
+    /// without them.
+    pub feature: Option<String>,
+}
+
+impl Default for AuthzConfig {
+    fn default() -> Self {
+        Self {
+            module_path: DEFAULT_AUTHZ_MODULE_PATH.to_string(),
+            label_type_path: None,
+            cedar_namespace: String::new(),
+            principal_types: Vec::new(),
+            context_type: None,
+            root_entity: String::new(),
+            feature: None,
+        }
+    }
+}
+
+/// The default [`AuthzConfig::module_path`].
+pub const DEFAULT_AUTHZ_MODULE_PATH: &str = "crate::codegen::authz";
 
 /// Wire-format and error options of the generated REST client. Every option is off by default.
 #[derive(Debug, Clone, Default)]
@@ -607,8 +667,90 @@ impl CodeGenConfig {
         self.bindings.as_ref()?.python.as_ref()
     }
 
+    /// The path of the `ObjectLabel` enum the authz code uses, if [`authz`](Self::authz) is set
+    /// and the path is known.
+    pub(crate) fn authz_label_path(&self) -> Option<String> {
+        let authz = self.authz.as_ref()?;
+        match &authz.label_type_path {
+            Some(path) => Some(path.clone()),
+            None => {
+                let models_path = ModelsPath::from_template(&self.models_path_template);
+                Some(format!("{}::ObjectLabel", models_path.root()?))
+            }
+        }
+    }
+
+    /// Check the [`authz`](Self::authz) options.
+    fn validate_authz(&self) -> Result<()> {
+        let Some(authz) = &self.authz else {
+            return Ok(());
+        };
+        let needs = |what: &str, requirement: &str| {
+            Err(Error::Build(format!("`{what}` needs {requirement}")))
+        };
+        if self.output.server.is_none() {
+            return needs("CodeGenConfig::authz", "`CodeGenOutput::server`");
+        }
+        if !self.generate_resource_enum {
+            return needs(
+                "CodeGenConfig::authz",
+                "`generate_resource_enum` (the `ObjectLabel` enum)",
+            );
+        }
+        let Some(label_path) = self.authz_label_path() else {
+            return needs(
+                "CodeGenConfig::authz",
+                "`AuthzConfig::label_type_path`, or a `models_path_template` of the form \
+                 `<models root>::{service}::...`",
+            );
+        };
+        for (field, path) in [
+            ("authz.module_path", &authz.module_path),
+            ("authz.label_type_path", &label_path),
+        ] {
+            syn::parse_str::<syn::Path>(path).map_err(|source| Error::InvalidConfigPath {
+                field,
+                path: path.clone(),
+                source,
+            })?;
+        }
+        let cedar_name = regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$")
+            .expect("valid regex");
+        let names = [
+            ("cedar_namespace", Some(&authz.cedar_namespace)),
+            ("root_entity", Some(&authz.root_entity)),
+            ("context_type", authz.context_type.as_ref()),
+        ];
+        for (field, name) in names {
+            if let Some(name) = name
+                && !cedar_name.is_match(name)
+            {
+                return Err(Error::Build(format!(
+                    "`AuthzConfig::{field}` `{name}` is not a Cedar name"
+                )));
+            }
+        }
+        if authz.principal_types.is_empty() {
+            return needs(
+                "CodeGenConfig::authz",
+                "at least one `principal_types` entry",
+            );
+        }
+        if let Some(bad) = authz
+            .principal_types
+            .iter()
+            .find(|p| !cedar_name.is_match(p))
+        {
+            return Err(Error::Build(format!(
+                "`AuthzConfig::principal_types` entry `{bad}` is not a Cedar type"
+            )));
+        }
+        Ok(())
+    }
+
     /// Check the options that need other options.
     pub(crate) fn validate_options(&self) -> Result<()> {
+        self.validate_authz()?;
         let needs = |what: &str, requirement: &str| {
             Err(Error::Build(format!("`{what}` needs {requirement}")))
         };

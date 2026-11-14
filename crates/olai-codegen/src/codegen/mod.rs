@@ -40,6 +40,7 @@ use crate::utils::last_segment;
 use crate::utils::strings::operation_to_method_name;
 
 mod aggregate;
+mod authz;
 mod bindings;
 mod builder;
 mod client;
@@ -59,9 +60,9 @@ mod transport;
 mod wasm;
 
 pub use config::{
-    BindingsConfig, ClientHandlerImpls, ClientProtocol, ClientProtocols, CodeGenConfig,
-    CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, ErrorModuleConfig, ModelsPath, PyPackageConfig,
-    PythonOptions, RestClientOptions, Runtime,
+    AuthzConfig, BindingsConfig, ClientHandlerImpls, ClientProtocol, ClientProtocols,
+    CodeGenConfig, CodeGenOutput, DEFAULT_AUTHZ_MODULE_PATH, DEFAULT_TRANSPORT_TYPE_PATH,
+    ErrorModuleConfig, ModelsPath, PyPackageConfig, PythonOptions, RestClientOptions, Runtime,
 };
 pub(crate) use tokens::{doc_tokens, format_tokens, format_tokens_static};
 pub use transport::REQWEST_TRANSPORT_TYPE_PATH;
@@ -202,6 +203,11 @@ pub fn generate_code(metadata: &CodeGenMetadata, config: &CodeGenConfig) -> Resu
     if let Some(ref server_dir) = config.output.server {
         let server_code = generate_server_code(&plan, metadata, config)?;
         output::write_generated_code(&server_code, server_dir)?;
+        output::remove_stale_generated(
+            &server_code,
+            server_dir,
+            &["authz.rs", authz::CEDAR_ACTIONS_FILE],
+        )?;
     }
 
     if let Some(ref client_dir) = config.output.client {
@@ -363,17 +369,36 @@ fn generate_server_code(
 ) -> Result<GeneratedCode> {
     let mut files = HashMap::new();
 
+    // The authorization vocabulary, when asked for: the root `authz.rs`, the per-service impls
+    // and the Cedar actions.
+    let mut authz_services = Vec::new();
+    if let Some(authz) = &config.authz {
+        let (authz_files, services) = authz::generate(plan, metadata, config, authz)?;
+        files.extend(authz_files);
+        authz_services = services;
+    }
+
     for handler in ServiceHandler::for_plan(plan, metadata, config) {
         let service = handler.plan;
         let trait_code = handler::generate(&handler)?;
         files.insert(format!("{}/handler.rs", service.base_path), trait_code);
         let server_code = server::generate_server(&handler)?;
         files.insert(format!("{}/server.rs", service.base_path), server_code);
-        let module_code = generate_server_module(service);
+        let authz_feature = config.authz.as_ref().and_then(|a| a.feature.as_deref());
+        let module_code = generate_server_module(
+            service,
+            authz_services.contains(&service.base_path),
+            authz_feature,
+        );
         files.insert(format!("{}/mod.rs", service.base_path), module_code);
     }
 
-    let module_code = main_module(&plan.services);
+    let mut module_code = main_module(&plan.services);
+    if let Some(authz) = &config.authz {
+        let authz_mod = format_ident!("{}", authz::AUTHZ_MODULE);
+        let cfg = feature_cfg(authz.feature.as_deref());
+        module_code.push_str(&format_tokens_static(quote! { #cfg pub mod #authz_mod; }));
+    }
     files.insert("mod.rs".to_string(), module_code);
 
     Ok(GeneratedCode { files })
@@ -605,11 +630,33 @@ fn generate_extractors_module(services: &[ServicePlan]) -> String {
     format_tokens_static(quote! { #(#decls)* })
 }
 
-fn generate_server_module(service: &ServicePlan) -> String {
+/// `#[cfg(feature = "<feature>")]`, or nothing without a feature.
+fn feature_cfg(feature: Option<&str>) -> TokenStream {
+    match feature {
+        Some(feature) => quote! { #[cfg(feature = #feature)] },
+        None => quote! {},
+    }
+}
+
+/// The `<service>/mod.rs` of the server output. `authz` mounts the service's `authz.rs` (its
+/// `Authorizable` impls), when it has one, behind `authz_feature` when set.
+fn generate_server_module(
+    service: &ServicePlan,
+    authz: bool,
+    authz_feature: Option<&str>,
+) -> String {
     let handler_ident = format_ident!("{}", service.handler_name);
+    let authz_mod = if authz {
+        let authz_mod = format_ident!("{}", authz::AUTHZ_MODULE);
+        let cfg = feature_cfg(authz_feature);
+        quote! { #cfg mod #authz_mod; }
+    } else {
+        quote! {}
+    };
     let tokens = quote! {
         pub use handler::#handler_ident;
 
+        #authz_mod
         mod handler;
         #[cfg(feature = "axum")]
         pub mod server;

@@ -56,16 +56,17 @@ pub mod postprocess;
 pub mod utils;
 
 pub use codegen::{
-    BindingsConfig, ClientHandlerImpls, ClientProtocol, ClientProtocols, CodeGenConfig,
-    CodeGenOutput, DEFAULT_TRANSPORT_TYPE_PATH, ErrorModuleConfig, GeneratedCode, PyPackageConfig,
-    PythonOptions, REQWEST_TRANSPORT_TYPE_PATH, RestClientOptions, Runtime, generate_code,
-    generate_models_mod,
+    AuthzConfig, BindingsConfig, ClientHandlerImpls, ClientProtocol, ClientProtocols,
+    CodeGenConfig, CodeGenOutput, DEFAULT_AUTHZ_MODULE_PATH, DEFAULT_TRANSPORT_TYPE_PATH,
+    ErrorModuleConfig, GeneratedCode, PyPackageConfig, PythonOptions, REQWEST_TRANSPORT_TYPE_PATH,
+    RestClientOptions, Runtime, generate_code, generate_models_mod,
 };
 
 pub use analysis::{
-    BodyField, GenerationPlan, ManagedResource, MethodPlan, PathParam, QueryParam, RequestParam,
-    RequestType, ResourceHierarchy, ServicePlan, analyze_metadata, extract_managed_resources,
-    split_body_fields,
+    AuthzOperation, BodyField, GenerationPlan, ManagedResource, MethodPlan, NameField,
+    NameFieldKind, PathParam, QueryParam, RequestParam, RequestType, ResourceHierarchy,
+    SecurableKind, SecurablePlan, ServicePlan, analyze_metadata, extract_managed_resources,
+    plan_authz, split_body_fields,
 };
 // Note: MethodPlanner is pub(crate) — it is an internal helper, not part of the public API.
 pub use openapi_enrich::run as enrich_openapi;

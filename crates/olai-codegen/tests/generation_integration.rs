@@ -65,6 +65,7 @@ fn rust_config(tmp: &Path) -> CodeGenConfig {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        authz: None,
         rest_client: Default::default(),
         output: CodeGenOutput {
             common: Some(common),
@@ -184,6 +185,7 @@ fn wasm_bindings_and_dts_are_emitted() {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        authz: None,
         rest_client: Default::default(),
         output: CodeGenOutput {
             common: Some(common),
@@ -748,6 +750,7 @@ fn node_ts_bindings_generated() {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        authz: None,
         rest_client: Default::default(),
         output: CodeGenOutput {
             common: Some(common),

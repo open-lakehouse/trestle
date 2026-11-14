@@ -1,0 +1,104 @@
+// @generated — do not edit by hand.
+// The actions of the API: one per operation (RPC), on the entity type of the resource
+// its request acts on. The entity types are named after the resource kinds and are
+// declared alongside, in this namespace.
+namespace Example {
+  // Lists the catalogs.
+  action "ListCatalogs" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Service],
+    context: RequestContext,
+  };
+
+  // Creates a catalog.
+  action "CreateCatalog" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Catalog],
+    context: RequestContext,
+  };
+
+  // Gets a catalog.
+  action "GetCatalog" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Catalog],
+    context: RequestContext,
+  };
+
+  action "CreateDraft" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Draft],
+    context: RequestContext,
+  };
+
+  action "GetDraft" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Draft],
+    context: RequestContext,
+  };
+
+  action "GetPermissions" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Service, Catalog, Draft, Schema, Table],
+    context: RequestContext,
+  };
+
+  action "GetTablePermissions" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Table],
+    context: RequestContext,
+  };
+
+  action "CheckTable" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Table],
+    context: RequestContext,
+  };
+
+  action "ListSchemas" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Catalog],
+    context: RequestContext,
+  };
+
+  action "CreateSchema" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Schema],
+    context: RequestContext,
+  };
+
+  action "GetSchema" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Schema],
+    context: RequestContext,
+  };
+
+  action "ListTables" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Schema],
+    context: RequestContext,
+  };
+
+  action "ListTableSummaries" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Catalog],
+    context: RequestContext,
+  };
+
+  action "CreateTable" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Table],
+    context: RequestContext,
+  };
+
+  action "GetTable" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Table],
+    context: RequestContext,
+  };
+
+  action "GetTableVersion" appliesTo {
+    principal: [Accounts::User, Accounts::Robot],
+    resource: [Table],
+    context: RequestContext,
+  };
+}

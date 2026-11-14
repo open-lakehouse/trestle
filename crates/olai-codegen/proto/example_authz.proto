@@ -1,0 +1,269 @@
+// Fixture for the authz codegen: every way a request's securable is found. Compiled into
+// `example_authz.bin` (see `tests/authz_integration.rs` for the command).
+syntax = "proto3";
+
+package example.authz.v1;
+
+import "google/api/annotations.proto";
+import "google/api/resource.proto";
+import "olai/trestle/v1/annotations.proto";
+
+message Catalog {
+  option (google.api.resource) = {
+    type: "example.io/Catalog"
+    pattern: "catalogs/{catalog}"
+    plural: "catalogs"
+    singular: "catalog"
+  };
+  string name = 1;
+}
+
+message Schema {
+  option (google.api.resource) = {
+    type: "example.io/Schema"
+    pattern: "catalogs/{catalog}/schemas/{schema}"
+    plural: "schemas"
+    singular: "schema"
+  };
+  string name = 1;
+  string catalog_name = 2;
+  string full_name = 3;
+}
+
+message Table {
+  option (google.api.resource) = {
+    type: "example.io/Table"
+    pattern: "catalogs/{catalog}/schemas/{schema}/tables/{table}"
+    plural: "tables"
+    singular: "table"
+  };
+  string name = 1;
+  string catalog_name = 2;
+  string schema_name = 3;
+  string full_name = 4;
+}
+
+// The table a create request carries in a nested message.
+message TableInfo {
+  string catalog_name = 1;
+  string schema_name = 2;
+  string name = 3;
+}
+
+message ListCatalogsRequest {
+  optional int32 max_results = 1;
+}
+
+message ListCatalogsResponse {
+  repeated Catalog catalogs = 1;
+}
+
+message CreateCatalogRequest {
+  string name = 1;
+}
+
+message GetCatalogRequest {
+  string name = 1;
+}
+
+// A root list, a flat create and a get by path parameter.
+service CatalogService {
+  // Lists the catalogs.
+  rpc ListCatalogs(ListCatalogsRequest) returns (ListCatalogsResponse) {
+    option (google.api.http) = {get: "/catalogs"};
+  }
+
+  // Creates a catalog.
+  rpc CreateCatalog(CreateCatalogRequest) returns (Catalog) {
+    option (google.api.http) = {
+      post: "/catalogs"
+      body: "*"
+    };
+  }
+
+  // Gets a catalog.
+  rpc GetCatalog(GetCatalogRequest) returns (Catalog) {
+    option (google.api.http) = {get: "/catalogs/{name}"};
+  }
+}
+
+message ListSchemasRequest {
+  string catalog_name = 1 [(google.api.resource_reference) = {child_type: "example.io/Schema"}];
+}
+
+message ListSchemasResponse {
+  repeated Schema schemas = 1;
+}
+
+message CreateSchemaRequest {
+  string catalog_name = 1;
+  string name = 2;
+}
+
+message GetSchemaRequest {
+  string full_name = 1;
+}
+
+// A list in a container and a nested create.
+service SchemaService {
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse) {
+    option (google.api.http) = {get: "/schemas"};
+  }
+
+  rpc CreateSchema(CreateSchemaRequest) returns (Schema) {
+    option (google.api.http) = {
+      post: "/schemas"
+      body: "*"
+    };
+  }
+
+  rpc GetSchema(GetSchemaRequest) returns (Schema) {
+    option (google.api.http) = {get: "/schemas/{full_name}"};
+  }
+}
+
+message ListTablesRequest {
+  string catalog_name = 1 [(google.api.resource_reference) = {child_type: "example.io/Table"}];
+  string schema_name = 2 [(google.api.resource_reference) = {child_type: "example.io/Table"}];
+  optional int32 max_results = 3;
+}
+
+message ListTablesResponse {
+  repeated Table tables = 1;
+}
+
+message ListTableSummariesRequest {
+  string catalog_name = 1;
+}
+
+message ListTableSummariesResponse {
+  repeated Table tables = 1;
+}
+
+message CreateTableRequest {
+  TableInfo table_info = 1;
+}
+
+message GetTableRequest {
+  string full_name = 1 [(google.api.resource_reference) = {type: "example.io/Table"}];
+}
+
+message GetTableVersionRequest {
+  string full_name = 1;
+  int64 version = 2;
+}
+
+// A collection-style custom method, a create from a nested message, and a name with an integer
+// part.
+service TableService {
+  rpc ListTables(ListTablesRequest) returns (ListTablesResponse) {
+    option (google.api.http) = {get: "/tables"};
+  }
+
+  rpc ListTableSummaries(ListTableSummariesRequest) returns (ListTableSummariesResponse) {
+    option (google.api.http) = {get: "/table-summaries"};
+  }
+
+  rpc CreateTable(CreateTableRequest) returns (Table) {
+    option (google.api.http) = {
+      post: "/tables"
+      body: "*"
+    };
+    option (olai.trestle.v1.authz) = {
+      securable_type: "example.io/Table"
+      securable_fields: ["table_info.catalog_name", "table_info.schema_name", "table_info.name"]
+    };
+  }
+
+  rpc GetTable(GetTableRequest) returns (Table) {
+    option (google.api.http) = {get: "/tables/{full_name}"};
+  }
+
+  rpc GetTableVersion(GetTableVersionRequest) returns (Table) {
+    option (google.api.http) = {get: "/tables/{full_name}/versions/{version}"};
+  }
+}
+
+message Draft {
+  option (google.api.resource) = {
+    type: "example.io/Draft"
+    pattern: "drafts/{draft}"
+    plural: "drafts"
+    singular: "draft"
+  };
+  string name = 1;
+}
+
+message CreateDraftRequest {
+  string name = 1;
+  // The draft's parent. Drafts have no list, so codegen doesn't know their parents: inferred,
+  // the name would leave this field out, which codegen refuses.
+  string catalog_name = 2 [(google.api.resource_reference) = {child_type: "example.io/Draft"}];
+}
+
+message GetDraftRequest {
+  string name = 1;
+}
+
+// A resource whose parent codegen can't infer.
+service DraftService {
+  rpc CreateDraft(CreateDraftRequest) returns (Draft) {
+    option (google.api.http) = {
+      post: "/drafts"
+      body: "*"
+    };
+    option (olai.trestle.v1.authz) = {
+      securable_type: "example.io/Draft"
+      securable_fields: ["catalog_name", "name"]
+    };
+  }
+
+  rpc GetDraft(GetDraftRequest) returns (Draft) {
+    option (google.api.http) = {get: "/drafts/{name}"};
+  }
+}
+
+message GetPermissionsRequest {
+  string securable_type = 1;
+  string full_name = 2;
+}
+
+message GetPermissionsResponse {
+  repeated string privileges = 1;
+}
+
+message GetTablePermissionsRequest {
+  string table_name = 1 [(google.api.resource_reference) = {type: "example.io/Table"}];
+}
+
+message CheckTableRequest {
+  optional string table_name = 1;
+}
+
+message CheckTableResponse {
+  bool allowed = 1;
+}
+
+// A service without a resource: a request naming its resource type at run time, one with a
+// resource reference, and an override.
+service PermissionsService {
+  rpc GetPermissions(GetPermissionsRequest) returns (GetPermissionsResponse) {
+    option (google.api.http) = {get: "/permissions/{securable_type}/{full_name}"};
+    option (olai.trestle.v1.authz) = {skip: true};
+  }
+
+  rpc GetTablePermissions(GetTablePermissionsRequest) returns (GetPermissionsResponse) {
+    option (google.api.http) = {get: "/table-permissions/{table_name}"};
+  }
+
+  rpc CheckTable(CheckTableRequest) returns (CheckTableResponse) {
+    option (google.api.http) = {
+      post: "/check-table"
+      body: "*"
+    };
+    option (olai.trestle.v1.authz) = {
+      securable_type: "example.io/Table"
+      securable_fields: ["table_name"]
+    };
+  }
+}

@@ -69,6 +69,7 @@ fn connect_metadata() -> CodeGenMetadata {
         input_type: "GetThingRequest".to_string(),
         output_type: "Thing".to_string(),
         server_streaming: false,
+        authz: None,
         operation: None,
         http_rule: Default::default(),
         http_pattern: HttpPattern::default(),
@@ -106,6 +107,7 @@ fn connect_config(client_dir: &Path) -> CodeGenConfig {
             connect: true,
         },
         connect_client_path: Some("myproto::connect_gen::example::read::v1".into()),
+        authz: None,
         rest_client: Default::default(),
         output: CodeGenOutput {
             common: Some(client_dir.join("common")),
