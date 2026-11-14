@@ -342,6 +342,26 @@ fn without_authz_nothing_is_emitted() {
     assert!(!module.contains("authz"), "{module}");
 }
 
+#[test]
+fn a_feature_gates_the_authz_modules() {
+    let tmp = TempDir::new().unwrap();
+    let authz = AuthzConfig {
+        feature: Some("authz".into()),
+        ..authz()
+    };
+    generate_code(
+        &metadata(),
+        &config(tmp.path(), Runtime::Buffa, Some(authz)),
+    )
+    .unwrap();
+    let server = tmp.path().join("server");
+    let gated = "#[cfg(feature = \"authz\")]";
+    let root = std::fs::read_to_string(server.join("mod.rs")).unwrap();
+    assert!(root.contains(&format!("{gated}\npub mod authz;")), "{root}");
+    let module = std::fs::read_to_string(server.join("table/mod.rs")).unwrap();
+    assert!(module.contains(&format!("{gated}\nmod authz;")), "{module}");
+}
+
 #[rstest]
 #[case::no_resource_enum(
     |c: &mut CodeGenConfig| c.generate_resource_enum = false,

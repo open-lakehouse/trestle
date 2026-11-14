@@ -96,6 +96,7 @@ generate:
     resource_enum: true          # the ObjectLabel enum the securables use
     authz:
       module_path: crate::authz  # where authz.rs is mounted; default crate::codegen::authz
+      feature: authz             # optional: mount the authz modules behind this cargo feature
       cedar:
         namespace: Example       # also holds the entity types, named after the labels
         principals: [Accounts::User]

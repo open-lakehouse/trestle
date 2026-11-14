@@ -143,6 +143,7 @@ impl GenerateConfig {
                     principal_types: a.cedar.principals.clone(),
                     context_type: a.cedar.context.clone(),
                     root_entity: a.cedar.root.clone(),
+                    feature: a.feature.clone(),
                 }),
         })
     }

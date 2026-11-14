@@ -379,15 +379,20 @@ fn generate_server_code(
         files.insert(format!("{}/handler.rs", service.base_path), trait_code);
         let server_code = server::generate_server(&handler)?;
         files.insert(format!("{}/server.rs", service.base_path), server_code);
-        let module_code =
-            generate_server_module(service, authz_services.contains(&service.base_path));
+        let authz_feature = config.authz.as_ref().and_then(|a| a.feature.as_deref());
+        let module_code = generate_server_module(
+            service,
+            authz_services.contains(&service.base_path),
+            authz_feature,
+        );
         files.insert(format!("{}/mod.rs", service.base_path), module_code);
     }
 
     let mut module_code = main_module(&plan.services);
-    if config.authz.is_some() {
+    if let Some(authz) = &config.authz {
         let authz_mod = format_ident!("{}", authz::AUTHZ_MODULE);
-        module_code.push_str(&format_tokens_static(quote! { pub mod #authz_mod; }));
+        let cfg = feature_cfg(authz.feature.as_deref());
+        module_code.push_str(&format_tokens_static(quote! { #cfg pub mod #authz_mod; }));
     }
     files.insert("mod.rs".to_string(), module_code);
 
@@ -620,13 +625,26 @@ fn generate_extractors_module(services: &[ServicePlan]) -> String {
     format_tokens_static(quote! { #(#decls)* })
 }
 
+/// `#[cfg(feature = "<feature>")]`, or nothing without a feature.
+fn feature_cfg(feature: Option<&str>) -> TokenStream {
+    match feature {
+        Some(feature) => quote! { #[cfg(feature = #feature)] },
+        None => quote! {},
+    }
+}
+
 /// The `<service>/mod.rs` of the server output. `authz` mounts the service's `authz.rs` (its
-/// `Authorizable` impls), when it has one.
-fn generate_server_module(service: &ServicePlan, authz: bool) -> String {
+/// `Authorizable` impls), when it has one, behind `authz_feature` when set.
+fn generate_server_module(
+    service: &ServicePlan,
+    authz: bool,
+    authz_feature: Option<&str>,
+) -> String {
     let handler_ident = format_ident!("{}", service.handler_name);
     let authz_mod = if authz {
         let authz_mod = format_ident!("{}", authz::AUTHZ_MODULE);
-        quote! { mod #authz_mod; }
+        let cfg = feature_cfg(authz_feature);
+        quote! { #cfg mod #authz_mod; }
     } else {
         quote! {}
     };

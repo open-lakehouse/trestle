@@ -583,6 +583,9 @@ pub struct ServerAuthz {
     /// Path of the `ObjectLabel` enum. Defaults to `<models root>::ObjectLabel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_type: Option<String>,
+    /// The cargo feature the generated `authz` modules are mounted behind, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<String>,
     /// The Cedar actions.
     pub cedar: CedarActions,
 }
@@ -708,7 +711,7 @@ mod tests {
     fn server_authz_parses_and_lowers() {
         let yaml = format!(
             "{}  server:\n    resource_enum: true\n    authz:\n      module_path: crate::authz\n      \
-             cedar:\n        namespace: Demo\n        principals: [Accounts::User]\n        \
+             feature: authz\n      cedar:\n        namespace: Demo\n        principals: [Accounts::User]\n        \
              root: Service\n",
             minimal_yaml()
         );
@@ -724,6 +727,7 @@ mod tests {
                 principal_types: vec!["Accounts::User".into()],
                 context_type: None,
                 root_entity: "Service".into(),
+                feature: Some("authz".into()),
             }
         );
 

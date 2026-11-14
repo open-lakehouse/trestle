@@ -434,6 +434,10 @@ pub struct AuthzConfig {
     /// The Cedar entity type of the service root, the securable of an operation on no resource
     /// (such as a list of top-level resources), e.g. `Service`.
     pub root_entity: String,
+    /// The cargo feature the generated `authz` modules are mounted behind, if any. Lets a
+    /// crate whose `ObjectLabel` needs extra features (e.g. every resource) keep building
+    /// without them.
+    pub feature: Option<String>,
 }
 
 impl Default for AuthzConfig {
@@ -445,6 +449,7 @@ impl Default for AuthzConfig {
             principal_types: Vec::new(),
             context_type: None,
             root_entity: String::new(),
+            feature: None,
         }
     }
 }
