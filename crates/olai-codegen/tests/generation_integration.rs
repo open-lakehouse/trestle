@@ -1276,6 +1276,8 @@ fn keyword_named_params_generate_raw_identifiers() {
             public_modules: false,
             user_agent: None,
             exports: vec![],
+            default_signer: None,
+            submodules: vec![],
         });
         generate_code(&edge_case_metadata(), &config)
             .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
