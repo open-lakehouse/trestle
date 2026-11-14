@@ -100,7 +100,14 @@ fn root_module(
         .iter()
         .map(|op| {
             let ident = format_ident!("{}", op.name);
-            let doc = doc_tokens(docs.get(op.name.as_str()).copied().flatten());
+            // The RPC's summary, its first line: the rest (lists, notes on the wire) belongs
+            // to the handler method, and a list cut off from its indentation would not lint.
+            let summary = docs
+                .get(op.name.as_str())
+                .copied()
+                .flatten()
+                .and_then(|doc| doc.lines().map(str::trim).find(|l| !l.is_empty()));
+            let doc = doc_tokens(summary);
             quote! { #doc #ident, }
         })
         .collect();
