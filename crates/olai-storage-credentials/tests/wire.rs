@@ -362,6 +362,95 @@ mod delta {
         assert_eq!(wire.operation, delta_api::Operation::Read);
         assert!(!format!("{wire:?}").contains("sk-test"));
     }
+
+    #[test]
+    fn s3_compatible_endpoints_round_trip() {
+        use olai_storage_credentials::StoreHints;
+
+        let ctx = ctx("s3://bucket/tab", AccessLevel::ReadWrite);
+        let hints = StoreHints {
+            endpoint: Some("https://br-1.storage.c-7.eu-central-1.aws.neon.tech".into()),
+            region: Some("eu-central-1".into()),
+            path_style: Some(true),
+            ..StoreHints::default()
+        };
+        let v = VendedCredential::new(aws("ak-test", None), ctx.scope.clone(), ctx.access)
+            .with_expiry(expiry())
+            .with_hints(hints.clone());
+        let wire = delta_api::StorageCredential::try_from(&v).unwrap();
+        assert_eq!(
+            wire.config.get(delta_api::S3_ENDPOINT).map(String::as_str),
+            Some("https://br-1.storage.c-7.eu-central-1.aws.neon.tech")
+        );
+        assert_eq!(
+            wire.config.get(delta_api::S3_REGION).map(String::as_str),
+            Some("eu-central-1")
+        );
+        assert_eq!(
+            wire.config
+                .get(delta_api::S3_PATH_STYLE_ACCESS)
+                .map(String::as_str),
+            Some("true")
+        );
+        round_trip(
+            &v,
+            &ctx,
+            |v| delta_api::StorageCredential::try_from(v).unwrap(),
+            |w, c| w.to_vended(c).unwrap().unwrap(),
+        );
+        assert_eq!(wire.to_vended(&ctx).unwrap().unwrap().hints, hints);
+    }
+
+    #[test]
+    fn path_style_reads_case_insensitively_and_ignores_junk() {
+        let ctx = ctx("s3://bucket/tab", AccessLevel::Read);
+        for (value, expected) in [("TRUE", Some(true)), ("False", Some(false)), ("yes", None)] {
+            let wire: delta_api::StorageCredential = serde_json::from_value(serde_json::json!({
+                "prefix": "s3://bucket/tab/",
+                "operation": "READ",
+                "config": {
+                    "s3.access-key-id": "ak-test",
+                    "s3.secret-access-key": "sk-test",
+                    "s3.path-style-access": value,
+                },
+            }))
+            .unwrap();
+            let v = wire.to_vended(&ctx).unwrap().unwrap();
+            assert_eq!(v.hints.path_style, expected, "{value}");
+            assert_eq!(v.hints.endpoint, None);
+        }
+    }
+
+    #[test]
+    fn credentials_without_hints_are_unchanged() {
+        let v = VendedCredential::new(
+            aws("ak-test", Some("st-test")),
+            scope("s3://bucket/tab"),
+            AccessLevel::Read,
+        )
+        .with_expiry(expiry());
+        let wire = delta_api::StorageCredential::try_from(&v).unwrap();
+        assert_eq!(
+            serde_json::to_value(&wire).unwrap(),
+            serde_json::json!({
+                "prefix": "s3://bucket/tab/",
+                "operation": "READ",
+                "config": {
+                    "s3.access-key-id": "ak-test",
+                    "s3.secret-access-key": "sk-test",
+                    "s3.session-token": "st-test",
+                },
+                "expiration-time-ms": EXPIRY_MS,
+            })
+        );
+        assert!(
+            wire.to_vended(&ctx("s3://bucket/tab", AccessLevel::Read))
+                .unwrap()
+                .unwrap()
+                .hints
+                .is_empty()
+        );
+    }
 }
 
 #[cfg(feature = "iceberg")]
