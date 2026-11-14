@@ -3,7 +3,7 @@ use protobuf::Message;
 use protobuf::descriptor::{MethodDescriptorProto, ServiceDescriptorProto, SourceCodeInfo};
 use tracing::{debug, warn};
 
-use super::{CodeGenMetadata, MethodMetadata, ServiceInfo, extract_documentation};
+use super::{AuthzRule, CodeGenMetadata, MethodMetadata, ServiceInfo, extract_documentation};
 use crate::gnostic::openapi::v3::Operation;
 use crate::google::api::HttpRule;
 use crate::parsing::http::{HttpPattern, extract_http_rule_pattern};
@@ -68,7 +68,7 @@ fn process_method(
     let method_documentation = extract_documentation(source_code_info, &method_path);
 
     // Extract gnostic method-level annotations first to get required http_rule
-    let (operation, http_rule) = extract_method_annotations(method, service_name)?;
+    let (operation, http_rule, authz) = extract_method_annotations(method, service_name)?;
 
     // Pre-parse the HTTP URL pattern so analysis can use it directly.
     let http_pattern =
@@ -84,6 +84,7 @@ fn process_method(
         http_pattern,
         documentation: method_documentation,
         server_streaming: method.server_streaming(),
+        authz,
     };
 
     // Add to the service's methods
@@ -102,7 +103,7 @@ fn process_method(
 fn extract_method_annotations(
     method: &MethodDescriptorProto,
     service_name: &str,
-) -> Result<(Option<Operation>, HttpRule)> {
+) -> Result<(Option<Operation>, HttpRule, Option<AuthzRule>)> {
     let missing_http_rule = || Error::MissingAnnotation {
         object: method.name().to_string(),
         message: "missing required google.api.http annotation".to_string(),
@@ -114,6 +115,7 @@ fn extract_method_annotations(
 
     let mut operation = None;
     let mut http_rule = None;
+    let mut authz = None;
 
     // Process each extension field
     for (field_number, field_value) in unknown_fields.iter() {
@@ -140,6 +142,16 @@ fn extract_method_annotations(
                 Ok(op) => operation = Some(op),
                 Err(e) => warn!("Failed to parse gnostic operation: {}", e),
             },
+            super::TRESTLE_AUTHZ_EXTENSION => {
+                let rule = AuthzRule::decode(data).map_err(|e| Error::InvalidAnnotation {
+                    object: method.name().to_string(),
+                    message: format!(
+                        "Failed to parse (olai.trestle.v1.authz) for {service_name}.{}: {e}",
+                        method.name()
+                    ),
+                })?;
+                authz = Some(rule);
+            }
             _ => {
                 debug!(
                     "Unknown extension field {} in {}.{}",
@@ -153,7 +165,7 @@ fn extract_method_annotations(
 
     let http_rule = http_rule.ok_or_else(missing_http_rule)?;
 
-    Ok((operation, http_rule))
+    Ok((operation, http_rule, authz))
 }
 
 #[cfg(test)]

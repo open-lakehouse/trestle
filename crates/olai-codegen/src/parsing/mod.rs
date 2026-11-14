@@ -9,9 +9,10 @@
 //! `google.api.resource_reference`), `gnostic.openapi.v3.operation`, and four
 //! trestle field options from `proto/olai/trestle/v1/annotations.proto`
 //! (`olai.trestle.v1.response_header`, `emit_unpopulated`, `raw_body`,
-//! `request_header`). Their field numbers are the `*_EXTENSION` module constants
-//! below. The core `debug_redact` option (`google.protobuf.FieldOptions` field 16)
-//! is handled in the `message` submodule. [`parse_file_descriptor_set`] is the
+//! `request_header`), plus its `olai.trestle.v1.authz` method option. Their field
+//! numbers are the `*_EXTENSION` module constants below. The core `debug_redact`
+//! option (`google.protobuf.FieldOptions` field 16) is handled in the `message`
+//! submodule. [`parse_file_descriptor_set`] is the
 //! entry point.
 
 use std::collections::HashMap;
@@ -61,6 +62,8 @@ const TRESTLE_RESPONSE_HEADER_EXTENSION: u32 = 51001;
 const TRESTLE_EMIT_UNPOPULATED_EXTENSION: u32 = 51002;
 const TRESTLE_RAW_BODY_EXTENSION: u32 = 51003;
 const TRESTLE_REQUEST_HEADER_EXTENSION: u32 = 51004;
+/// `olai.trestle.v1.authz`, a `google.protobuf.MethodOptions` extension.
+const TRESTLE_AUTHZ_EXTENSION: u32 = 51101;
 const GOOGLE_API_RESOURCE_REFERENCE_EXTENSION: u32 = 1055; // google.api.resource_reference
 
 /// Parse a compiled protobuf [`FileDescriptorSet`] into [`CodeGenMetadata`].

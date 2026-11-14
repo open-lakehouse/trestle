@@ -39,6 +39,7 @@ The generator reads the standard [Google API extensions](https://github.com/goog
 | `debug_redact` | Marks a secret field: a `Sensitive` field role in the resource registry, sealed by `olai-store`'s envelope encryptor and left out of the Python `repr()` |
 | `gnostic.openapi.v3.operation` | Optional OpenAPI operation metadata (operation id) for an RPC |
 | `olai.trestle.v1` field options | `response_header`, `request_header`, `emit_unpopulated` and `raw_body`: carry a field in an HTTP header instead of JSON, send it even when unpopulated, or send or read a `bytes` field as the raw HTTP body. Copy [`proto/olai/trestle/v1/annotations.proto`](https://github.com/open-lakehouse/trestle/blob/main/crates/olai-codegen/proto/olai/trestle/v1/annotations.proto) next to your protos. |
+| `olai.trestle.v1.authz` method option | Names the resource a request acts on when codegen can't infer it (see [Authorization vocabulary](#authorization-vocabulary)). Same file. |
 
 ```proto
 message Catalog {
@@ -75,6 +76,59 @@ The generator collects those edges across services and reconstructs the
 depth-ordered chain, driving `parent_label`/`path_names` in the resource registry
 and resource-scoped client navigation. See `docs/codegen-design.md` for the
 binding-mode details.
+
+## Authorization vocabulary
+
+With `generate.server.authz` set, the server output also gets what a policy
+decision needs from each request:
+
+- `codegen/authz.rs`: an `Operation` enum with one variant per RPC, named after
+  it (`Operation::GetTable`, `as_str()` = `"GetTable"`), the `Securable` a
+  request acts on (an `ObjectLabel`, or none for the service root, plus its name
+  parts), and the `Authorizable` trait;
+- `codegen/<service>/authz.rs`: `impl Authorizable` for each request;
+- `codegen/authz.cedarschema`: a Cedar schema fragment with one action per
+  operation, on the entity type of its securable.
+
+```yaml
+generate:
+  server:
+    resource_enum: true          # the ObjectLabel enum the securables use
+    authz:
+      module_path: crate::authz  # where authz.rs is mounted; default crate::codegen::authz
+      cedar:
+        namespace: Example       # also holds the entity types, named after the labels
+        principals: [Accounts::User]
+        context: RequestContext  # optional
+        root: Service            # the entity type of the service root
+```
+
+Operation names must be unique across the API, and codegen fails when two RPCs
+share one. The securable of a request is found from the service's resource: a
+`List` (or a collection-style custom method) names the container from the
+parent fields on the request (the root without any), a `Create` names the new
+resource from its parent fields and its `name`, and other methods name the
+resource from their path parameters. Otherwise the one field annotated
+`google.api.resource_reference { type }` names it. Codegen fails on a request it
+can't place, and on one whose name would leave out a field annotated as a parent
+(`child_type`), so no request goes without a securable by accident. Set the
+method option then:
+
+```proto
+rpc CreateTable(CreateTableRequest) returns (Table) {
+  option (olai.trestle.v1.authz) = {
+    securable_type: "example.io/Table"
+    securable_fields: ["table_info.catalog_name", "table_info.schema_name", "table_info.name"]
+  };
+}
+// The server authorizes it by hand: no impl. Without a securable_type, the
+// Cedar action applies to every resource type.
+rpc GetPermissions(GetPermissionsRequest) returns (GetPermissionsResponse) {
+  option (olai.trestle.v1.authz) = {skip: true};
+}
+```
+
+Each name field is split on `.`, so a full-name field gives every part.
 
 ## Usage
 

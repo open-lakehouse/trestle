@@ -446,6 +446,7 @@ mod tests {
                 input_type: "ListThingsRequest".to_string(),
                 output_type: "ListThingsResponse".to_string(),
                 server_streaming: false,
+                authz: None,
                 operation: None,
                 http_rule: HttpRule {
                     selector: "".to_string(),

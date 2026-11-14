@@ -154,6 +154,26 @@ pub struct MethodMetadata {
     pub documentation: Option<String>,
     /// A server-streaming RPC (`returns (stream T)`): NDJSON over REST.
     pub server_streaming: bool,
+    /// The `(olai.trestle.v1.authz)` override of the method's securable, if any.
+    pub authz: Option<AuthzRule>,
+}
+
+/// The `(olai.trestle.v1.authz)` method option: how to find the securable a request acts on
+/// when codegen can't infer it from the request's resource fields.
+#[derive(Clone, PartialEq, Eq, ::prost::Message)]
+pub struct AuthzRule {
+    /// The `google.api.resource` type of the securable (e.g. `example.io/Table`); empty for the
+    /// service root.
+    #[prost(string, tag = "1")]
+    pub securable_type: String,
+    /// The request fields whose values, in order, make up the securable's name. Each is split
+    /// on `.`, so a full-name field gives every part.
+    #[prost(string, repeated, tag = "2")]
+    pub securable_fields: Vec<String>,
+    /// Emit no `Authorizable` impl: the server authorizes this operation by hand. The operation
+    /// and its Cedar action (on `securable_type`) are still emitted.
+    #[prost(bool, tag = "3")]
+    pub skip: bool,
 }
 
 impl MethodMetadata {
@@ -205,6 +225,7 @@ mod tests {
             input_type: ".test.TestRequest".to_string(),
             output_type: ".test.TestResponse".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_pattern: crate::parsing::http::HttpPattern::parse("/test"),
             http_rule,

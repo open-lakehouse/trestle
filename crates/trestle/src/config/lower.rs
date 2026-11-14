@@ -129,6 +129,21 @@ impl GenerateConfig {
                 .as_ref()
                 .and_then(|r| r.connect_client_path.clone()),
             rest_client: self.rest_client_options(),
+            authz: self
+                .server
+                .authz
+                .as_ref()
+                .map(|a| olai_codegen::AuthzConfig {
+                    module_path: a
+                        .module_path
+                        .clone()
+                        .unwrap_or_else(|| olai_codegen::DEFAULT_AUTHZ_MODULE_PATH.to_string()),
+                    label_type_path: a.label_type.clone(),
+                    cedar_namespace: a.cedar.namespace.clone(),
+                    principal_types: a.cedar.principals.clone(),
+                    context_type: a.cedar.context.clone(),
+                    root_entity: a.cedar.root.clone(),
+                }),
         })
     }
 

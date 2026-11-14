@@ -144,6 +144,7 @@ mod tests {
             dual_transport: false,
             client_protocols: Default::default(),
             connect_client_path: None,
+            authz: None,
             rest_client: RestClientOptions {
                 error_module: error_module.then(Default::default),
                 handler_impls: Some(ClientHandlerImpls {

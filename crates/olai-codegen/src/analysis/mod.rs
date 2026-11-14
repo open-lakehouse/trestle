@@ -46,6 +46,10 @@ use crate::parsing::types::BaseType;
 use crate::parsing::{CodeGenMetadata, HttpPattern, MessageField, MethodMetadata, ServiceInfo};
 use crate::utils::strings;
 
+pub use authz::{
+    AuthzOperation, NameField, NameFieldKind, SecurableKind, SecurablePlan, object_labels,
+    plan_authz,
+};
 pub(crate) use types::MethodPlanner;
 pub use types::{
     BodyField, ChildLink, EmitShape, GenerationPlan, ManagedResource, MethodPlan, MethodShape,
@@ -54,6 +58,7 @@ pub use types::{
 };
 pub(crate) use types::{emit_shape, is_collection_method};
 
+mod authz;
 mod types;
 
 /// Analyze collected metadata and create a generation plan.
@@ -791,6 +796,7 @@ mod tests {
             input_type: "GetCatalogRequest".to_string(),
             output_type: "Catalog".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_rule: HttpRule {
                 selector: "".to_string(),
@@ -840,6 +846,7 @@ mod tests {
             input_type: "UpdateCatalogRequest".to_string(),
             output_type: "Catalog".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_rule: HttpRule {
                 selector: "".to_string(),
@@ -872,6 +879,7 @@ mod tests {
             input_type: "".to_string(),
             output_type: "".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_rule: HttpRule {
                 selector: "".to_string(),
@@ -921,6 +929,7 @@ mod tests {
             input_type: "DoThingRequest".to_string(),
             output_type: "DoThingResponse".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_rule: HttpRule {
                 selector: "".to_string(),
@@ -981,6 +990,7 @@ mod tests {
             input_type: "MakeReq".to_string(),
             output_type: "MakeResp".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_rule: HttpRule::default(),
             http_pattern: HttpPattern::default(),
@@ -1046,6 +1056,7 @@ mod tests {
             input_type: "".to_string(),
             output_type: "".to_string(),
             server_streaming: false,
+            authz: None,
             operation: None,
             http_rule: HttpRule {
                 selector: "".to_string(),
@@ -1312,6 +1323,7 @@ mod tests {
                     input_type: "ListCatalogsRequest".to_string(),
                     output_type: "ListCatalogsResponse".to_string(),
                     server_streaming: false,
+                    authz: None,
                     operation: None,
                     http_rule: HttpRule {
                         selector: "".to_string(),
@@ -1329,6 +1341,7 @@ mod tests {
                     input_type: "GetCatalogRequest".to_string(),
                     output_type: "Catalog".to_string(),
                     server_streaming: false,
+                    authz: None,
                     operation: None,
                     http_rule: HttpRule {
                         selector: "".to_string(),
@@ -1354,6 +1367,7 @@ mod tests {
                     input_type: "ListSchemasRequest".to_string(),
                     output_type: "ListSchemasResponse".to_string(),
                     server_streaming: false,
+                    authz: None,
                     operation: None,
                     http_rule: HttpRule {
                         selector: "".to_string(),
@@ -1371,6 +1385,7 @@ mod tests {
                     input_type: "GetSchemaRequest".to_string(),
                     output_type: "Schema".to_string(),
                     server_streaming: false,
+                    authz: None,
                     operation: None,
                     http_rule: HttpRule {
                         selector: "".to_string(),
@@ -1396,6 +1411,7 @@ mod tests {
                     input_type: "ListTablesRequest".to_string(),
                     output_type: "ListTablesResponse".to_string(),
                     server_streaming: false,
+                    authz: None,
                     operation: None,
                     http_rule: HttpRule {
                         selector: "".to_string(),
@@ -1413,6 +1429,7 @@ mod tests {
                     input_type: "GetTableRequest".to_string(),
                     output_type: "Table".to_string(),
                     server_streaming: false,
+                    authz: None,
                     operation: None,
                     http_rule: HttpRule {
                         selector: "".to_string(),

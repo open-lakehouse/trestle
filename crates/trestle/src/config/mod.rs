@@ -567,6 +567,39 @@ pub struct Server {
     /// Resource store crate name. Defaults to `olai_store`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_store_crate_name: Option<String>,
+    /// Emit the authorization vocabulary: an `Operation` per RPC, `Authorizable` per request,
+    /// and the Cedar actions (`codegen/authz.cedarschema`). Needs `resource_enum`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authz: Option<ServerAuthz>,
+}
+
+/// The authorization vocabulary (`generate.server.authz`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerAuthz {
+    /// Where the generated `codegen/authz.rs` is mounted. Defaults to `crate::codegen::authz`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_path: Option<String>,
+    /// Path of the `ObjectLabel` enum. Defaults to `<models root>::ObjectLabel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_type: Option<String>,
+    /// The Cedar actions.
+    pub cedar: CedarActions,
+}
+
+/// The Cedar actions of [`ServerAuthz`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CedarActions {
+    /// The namespace of the actions and of the resource entity types.
+    pub namespace: String,
+    /// The principal types every action applies to (e.g. `Accounts::User`).
+    pub principals: Vec<String>,
+    /// The context type of every action, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// The entity type of the service root (the resource of e.g. a top-level list).
+    pub root: String,
 }
 
 impl TrestleConfig {
@@ -669,6 +702,44 @@ mod tests {
         .unwrap();
         let rust = cfg.generate.clients.rust.unwrap();
         assert!(!rust.resource_features && rust.handler_impls.is_none());
+    }
+
+    #[test]
+    fn server_authz_parses_and_lowers() {
+        let yaml = format!(
+            "{}  server:\n    resource_enum: true\n    authz:\n      module_path: crate::authz\n      \
+             cedar:\n        namespace: Demo\n        principals: [Accounts::User]\n        \
+             root: Service\n",
+            minimal_yaml()
+        );
+        let mut cfg: TrestleConfig = serde_yaml::from_str(&yaml).unwrap();
+        cfg.derive_defaults();
+        let authz = cfg.to_codegen_config().unwrap().authz.unwrap();
+        assert_eq!(
+            authz,
+            olai_codegen::AuthzConfig {
+                module_path: "crate::authz".into(),
+                label_type_path: None,
+                cedar_namespace: "Demo".into(),
+                principal_types: vec!["Accounts::User".into()],
+                context_type: None,
+                root_entity: "Service".into(),
+            }
+        );
+
+        // The module path defaults; no `authz` emits none.
+        let yaml = format!(
+            "{}  server:\n    authz:\n      cedar:\n        namespace: Demo\n        \
+             principals: [Accounts::User]\n        root: Service\n",
+            minimal_yaml()
+        );
+        let mut cfg: TrestleConfig = serde_yaml::from_str(&yaml).unwrap();
+        cfg.derive_defaults();
+        let authz = cfg.to_codegen_config().unwrap().authz.unwrap();
+        assert_eq!(authz.module_path, olai_codegen::DEFAULT_AUTHZ_MODULE_PATH);
+        let mut cfg: TrestleConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        cfg.derive_defaults();
+        assert!(cfg.to_codegen_config().unwrap().authz.is_none());
     }
 
     #[test]

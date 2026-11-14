@@ -31,6 +31,7 @@ fn make_test_config(
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        authz: None,
         // The Python exception classes raise the errors of the client error module.
         rest_client: RestClientOptions {
             error_module: Some(Default::default()),
