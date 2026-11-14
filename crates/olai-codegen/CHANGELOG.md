@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.17](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.16...olai-codegen-v0.0.17) - 2026-11-14
+
+### Added
+
+- emit authz operations and Cedar actions (#378)
+
 ## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.14...olai-codegen-v0.0.15) - 2026-11-11
 
 ### Added
