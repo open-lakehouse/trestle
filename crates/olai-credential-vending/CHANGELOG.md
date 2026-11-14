@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-credential-vending-v0.0.5...olai-credential-vending-v0.0.6) - 2026-11-14
+
+### Added
+
+- NeonTrustedMinter behind neon-trusted-vending (#371)
+
 ## [0.0.2](https://github.com/open-lakehouse/trestle/compare/olai-credential-vending-v0.0.1...olai-credential-vending-v0.0.2) - 2026-10-30
 
 ### Fixed

@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.15"
+version = "0.0.16"
 dependencies = [
  "convert_case",
  "glob",
@@ -2973,7 +2973,7 @@ dependencies = [
 
 [[package]]
 name = "olai-credential-vending"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2993,7 +2993,7 @@ dependencies = [
 
 [[package]]
 name = "olai-http"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "olai-storage-credentials"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "chrono",
  "futures",
@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.30"
+version = "0.0.31"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -3181,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "olai-vended-store"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "bytes",
