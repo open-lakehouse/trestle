@@ -29,13 +29,13 @@
 //! # Ok(()) }
 //! ```
 
-mod client;
 mod config;
 
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use olai_http::neon::{SCOPE_STORAGE_READ, SCOPE_STORAGE_WRITE};
 use olai_storage_credentials::{
     AccessLevel, StorageCredentials, StorageLocation, StorageProvider, StorageScope, StoreHints,
     VendedCredential,
@@ -43,7 +43,8 @@ use olai_storage_credentials::{
 use tokio::sync::OnceCell;
 use url::Url;
 
-pub use self::client::{BranchStorage, CredentialSecret, DEFAULT_API_URL, NeonClient};
+pub use olai_http::neon::{BranchStorage, CredentialSecret, DEFAULT_API_URL, NeonClient};
+
 pub use self::config::NeonBuilder;
 use crate::api::ApiError;
 use crate::error::{Error, Result};
@@ -229,6 +230,7 @@ impl NeonStorage {
                 .client()?
                 .branch_storage(&inner.project, &inner.branch)
                 .await
+                .map_err(from_neon)
                 .map_err(|err| match ApiError::find(&err) {
                     Some(api) if api.status == Some(404) => unsupported(
                         self.branch_name(),
@@ -260,6 +262,7 @@ impl NeonStorage {
                 .client()?
                 .reveal_credential(&inner.project, &inner.branch, token_id)
                 .await
+                .map_err(from_neon)
                 .map_err(|err| match ApiError::find(&err) {
                     Some(api) if api.status == Some(409) => unsupported(
                         self.branch_name(),
@@ -273,12 +276,13 @@ impl NeonStorage {
                 })?,
             NeonCredentials::Create { name } => {
                 let scopes: &[&str] = match inner.access {
-                    AccessLevel::Read => &["storage:read"],
-                    AccessLevel::ReadWrite => &["storage:read", "storage:write"],
+                    AccessLevel::Read => &[SCOPE_STORAGE_READ],
+                    AccessLevel::ReadWrite => &[SCOPE_STORAGE_READ, SCOPE_STORAGE_WRITE],
                 };
                 self.client()?
                     .create_credential(&inner.project, &inner.branch, scopes, name.as_deref())
-                    .await?
+                    .await
+                    .map_err(from_neon)?
             }
         };
         Ok(StorageCredentials::aws(
@@ -303,6 +307,21 @@ impl NeonStorage {
             "neon branch `{}` of project `{}`",
             self.inner.branch, self.inner.project
         )
+    }
+}
+
+/// This crate's error for a control-plane failure: Neon's answers become [`ApiError`]s,
+/// so callers handle them like every protocol's.
+fn from_neon(err: olai_http::neon::Error) -> Error {
+    match err {
+        olai_http::neon::Error::Api(api) => Error::Api(ApiError {
+            service: "Neon",
+            status: api.status,
+            code: api.code,
+            message: api.message,
+        }),
+        olai_http::neon::Error::InvalidReference(reason) => Error::InvalidReference(reason),
+        other => Error::vend(other),
     }
 }
 

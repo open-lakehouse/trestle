@@ -1,5 +1,12 @@
 //! What every protocol client shares: JSON requests below an API base URL, and the
 //! errors vending servers answer with.
+//!
+//! Neon has its own client (`olai_http::neon`) and uses only [`ApiError`] from here, so
+//! a build with no other protocol leaves the JSON client unused.
+#![cfg_attr(
+    not(any(feature = "unity", feature = "iceberg", feature = "sharing")),
+    allow(dead_code)
+)]
 
 use std::error::Error as StdError;
 use std::fmt;

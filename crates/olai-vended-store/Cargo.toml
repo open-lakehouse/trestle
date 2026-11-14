@@ -95,8 +95,9 @@ delta-api = ["unity", "olai-storage-credentials/delta-api"]
 iceberg = ["protocol", "olai-storage-credentials/iceberg"]
 # Delta / Open Sharing volumes and agent skills.
 sharing = ["protocol", "olai-storage-credentials/sharing"]
-# Neon branch object storage, through the Neon control plane.
-neon = ["protocol"]
+# Neon branch object storage, through the Neon control plane (olai-http's `neon`
+# client).
+neon = ["protocol", "olai-http/neon"]
 
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.

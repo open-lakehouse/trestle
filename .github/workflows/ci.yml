@@ -50,7 +50,7 @@ jobs:
       # clippy. Lint the SQLite and native-Postgres backends (both together, so the
       # `--features sqlite,postgres` combination is covered too).
       - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
-      - run: cargo clippy --locked --all-targets --features olai-http/recording -- -D warnings
+      - run: cargo clippy --locked --all-targets --features olai-http/recording,olai-http/neon -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
       # Every olai-auth feature, `cedar` (Rust 1.89) included: this job runs on stable.
@@ -154,8 +154,8 @@ jobs:
         run: cargo test --locked --lib --tests
       - name: Run tests (olai-store sqlx feature)
         run: cargo test --locked --lib --tests -p olai-store --features sqlx
-      - name: Run tests (olai-http recording feature)
-        run: cargo test --locked --lib --tests -p olai-http --features recording
+      - name: Run tests (olai-http recording and neon features)
+        run: cargo test --locked --lib --tests -p olai-http --features recording,neon
       - name: Run tests (olai-storage-credentials wire adapters)
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-auth HTTP key source and PDP client)
@@ -165,7 +165,7 @@ jobs:
       - name: Run tests (trestle CLI on the fake engine)
         run: cargo test --locked --lib --tests -p olai-trestle --features test-engine
       - name: Run tests (olai-vended-store protocol modules)
-        run: cargo test --locked --lib --tests -p olai-vended-store --features delta-api,databricks
+        run: cargo test --locked --lib --tests -p olai-vended-store --features delta-api,databricks,neon
 
   auth-cedar:
     name: olai-auth with Cedar
