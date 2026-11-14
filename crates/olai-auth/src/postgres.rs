@@ -4,13 +4,19 @@ use sqlx::PgPool;
 use crate::api_key::{ApiKeyRecord, ApiKeyStore};
 use crate::error::BoxError;
 
-/// The schema [`PgApiKeyStore`] reads unless configured otherwise.
-const DEFAULT_SCHEMA: &str = "authz";
+/// The schema the Postgres stores use unless configured otherwise.
+pub(crate) const DEFAULT_SCHEMA: &str = "authz";
+
+/// `name` quoted as a Postgres identifier.
+pub(crate) fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
 
 /// An [`ApiKeyStore`] that reads keys from Postgres.
 ///
 /// It expects two tables in one schema (`authz` by default, see
-/// [`with_schema`](Self::with_schema)):
+/// [`with_schema`](Self::with_schema)), as the `authz` migrations
+/// ([`migrate`](crate::migrate)) create them:
 ///
 /// ```sql
 /// CREATE TABLE authz.service_accounts (
@@ -58,7 +64,7 @@ impl PgApiKeyStore {
 
 /// The lookup query against `schema`, quoted as an identifier.
 fn lookup_query(schema: &str) -> String {
-    let schema = format!("\"{}\"", schema.replace('"', "\"\""));
+    let schema = quote_ident(schema);
     format!(
         "SELECT k.sha256, a.id::text, a.name, k.scopes \
          FROM {schema}.api_keys k JOIN {schema}.service_accounts a ON a.id = k.account_id \

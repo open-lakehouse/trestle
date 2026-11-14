@@ -1,0 +1,30 @@
+// A small catalog: the schema `GrantsEntityLoader` is tested against (tests/grants.rs).
+// The server supplies the securables with their hierarchy and typed parent attributes
+// (`catalog`, `schema`); the loader adds `privileges` and `inherited_privileges`.
+namespace Cat {
+  entity Group in [Group];
+  entity User in [Group];
+  entity ServiceAccount in [Group];
+
+  entity Catalog {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+  };
+  entity Schema in [Catalog] {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    catalog: Catalog,
+  };
+  entity Table in [Schema, Catalog] {
+    privileges: Set<String>,
+    inherited_privileges: Set<String>,
+    catalog: Catalog,
+    schema: Schema,
+  };
+
+  action GetTable appliesTo {
+    principal: [User, ServiceAccount],
+    resource: [Table],
+    context: {},
+  };
+}

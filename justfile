@@ -64,7 +64,7 @@ test-pg PG_PORT="5433":
   export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
   SQLX_OFFLINE=true cargo test --locked --lib -p olai-store --features postgres
 
-# Run the olai-auth Postgres API key test against a throwaway Postgres container.
+# Run the olai-auth Postgres tests (authz migrations, API keys, grants) against a throwaway Postgres container.
 test-auth-pg PG_PORT="5434":
   #!/usr/bin/env bash
   set -euo pipefail

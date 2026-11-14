@@ -212,8 +212,8 @@ const MAX_DECISIONS: usize = 10_000;
 
 /// An [`Authorizer`] wrapper that remembers decisions for a few seconds.
 ///
-/// A decision is reused for the same principal, action, resource, resource entity and
-/// context, except that `request_time` is left out of the comparison (it changes on
+/// A decision is reused for the same principal, action, resource, caller-supplied
+/// entities and context, except that `request_time` is left out of the comparison (it changes on
 /// every request). So a grant or revocation takes effect within the TTL, and a policy
 /// conditioned on `request_time` can be off by up to the TTL. Answers that carry
 /// errors, including every fail-closed deny, are not cached.
@@ -273,7 +273,7 @@ fn cache_key(request: &AuthorizeRequest) -> String {
         request.action,
         request.resource,
         context,
-        request.resource_entity,
+        request.entities,
     ])
     .to_string()
 }

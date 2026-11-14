@@ -20,6 +20,13 @@ pub struct EntityRef {
     pub id: String,
 }
 
+impl std::fmt::Display for EntityRef {
+    /// Cedar's syntax, `Ns::User::"alice"`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{:?}", self.entity_type, self.id)
+    }
+}
+
 impl EntityRef {
     /// The entity `id` of type `entity_type`.
     pub fn new(entity_type: impl Into<String>, id: impl Into<String>) -> Self {
@@ -42,22 +49,25 @@ pub struct AuthorizeRequest {
     /// The Cedar request context, e.g. from [`AuthContext`](crate::AuthContext).
     #[serde(default)]
     pub context: Map<String, Value>,
-    /// The resource itself as a Cedar JSON entity (`uid`, `attrs`, `parents`), when the
-    /// caller owns its data. The PDP then needs no access to the caller's tables. Its
-    /// `uid` must be `resource`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_entity: Option<Value>,
+    /// The entities the caller owns the data of, as Cedar JSON entities (`uid`, `attrs`,
+    /// `parents`): typically the resource and its ancestors, so the PDP needs no access
+    /// to the caller's tables. The PDP merges them with what its `EntityLoader` loads:
+    /// their attributes win over loaded ones, and their parents are added to the loaded
+    /// parents. They must not include the principal, nor carry an attribute the loader
+    /// owns (see `CedarAuthorizer::with_loader_attrs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entities: Vec<Value>,
 }
 
 impl AuthorizeRequest {
-    /// A request with an empty context and no resource entity.
+    /// A request with an empty context and no entities.
     pub fn new(principal: EntityRef, action: EntityRef, resource: EntityRef) -> Self {
         Self {
             principal,
             action,
             resource,
             context: Map::new(),
-            resource_entity: None,
+            entities: Vec::new(),
         }
     }
 
@@ -67,11 +77,54 @@ impl AuthorizeRequest {
         self
     }
 
-    /// Supplies the resource as a Cedar JSON entity.
-    pub fn with_resource_entity(mut self, entity: Value) -> Self {
-        self.resource_entity = Some(entity);
+    /// Adds a Cedar JSON entity the caller supplies, such as the resource.
+    pub fn with_entity(mut self, entity: Value) -> Self {
+        self.entities.push(entity);
         self
     }
+
+    /// Adds the Cedar JSON entities the caller supplies.
+    pub fn with_entities(mut self, entities: impl IntoIterator<Item = Value>) -> Self {
+        self.entities.extend(entities);
+        self
+    }
+
+    /// The uids of the caller-supplied entities and of the parents they name, the
+    /// resource first, then in order of appearance, without duplicates. What a loader
+    /// resolves grants on.
+    pub fn entity_uids(&self) -> Vec<EntityRef> {
+        let mut uids = vec![self.resource.clone()];
+        let mut push = |value: &Value| {
+            if let Some(uid) = entity_ref(value)
+                && !uids.contains(&uid)
+            {
+                uids.push(uid);
+            }
+        };
+        for entity in &self.entities {
+            if let Some(uid) = entity.get("uid") {
+                push(uid);
+            }
+            for parent in entity
+                .get("parents")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                push(parent);
+            }
+        }
+        uids
+    }
+}
+
+/// The uid in Cedar JSON, `{"type", "id"}` or the escaped `{"__entity": {"type", "id"}}`.
+pub(crate) fn entity_ref(value: &Value) -> Option<EntityRef> {
+    let value = value.get("__entity").unwrap_or(value);
+    Some(EntityRef::new(
+        value.get("type")?.as_str()?,
+        value.get("id")?.as_str()?,
+    ))
 }
 
 /// Whether a request is allowed.
@@ -142,7 +195,7 @@ mod tests {
             EntityRef::new("Ns::Doc", "d1"),
         )
         .with_context(json!({ "auth_method": "jwt" }).as_object().unwrap().clone())
-        .with_resource_entity(json!({
+        .with_entity(json!({
             "uid": { "type": "Ns::Doc", "id": "d1" }, "attrs": {}, "parents": [],
         }));
         let wire = json!({
@@ -150,9 +203,9 @@ mod tests {
             "action": { "type": "Ns::Action", "id": "read" },
             "resource": { "type": "Ns::Doc", "id": "d1" },
             "context": { "auth_method": "jwt" },
-            "resource_entity": {
+            "entities": [{
                 "uid": { "type": "Ns::Doc", "id": "d1" }, "attrs": {}, "parents": [],
-            },
+            }],
         });
         assert_eq!(serde_json::to_value(&request).unwrap(), wire);
         assert_eq!(
@@ -170,9 +223,35 @@ mod tests {
         }))
         .unwrap();
         assert!(request.context.is_empty());
-        assert_eq!(request.resource_entity, None);
+        assert!(request.entities.is_empty());
         let back = serde_json::to_value(&request).unwrap();
-        assert!(back.get("resource_entity").is_none());
+        assert!(back.get("entities").is_none());
+    }
+
+    #[test]
+    fn lists_the_uids_of_the_entities_and_their_parents() {
+        let doc = EntityRef::new("Ns::Doc", "d1");
+        let folder = json!({ "type": "Ns::Folder", "id": "f1" });
+        let request = AuthorizeRequest::new(
+            EntityRef::new("Ns::User", "u1"),
+            EntityRef::new("Ns::Action", "read"),
+            doc.clone(),
+        )
+        .with_entities([
+            json!({ "uid": doc, "attrs": {}, "parents": [folder] }),
+            // Escaped uids count too, and a uid seen before is not repeated.
+            json!({ "uid": { "__entity": folder }, "attrs": {}, "parents": [
+                { "__entity": { "type": "Ns::Root", "id": "r" } }
+            ] }),
+        ]);
+        assert_eq!(
+            request.entity_uids(),
+            [
+                doc,
+                EntityRef::new("Ns::Folder", "f1"),
+                EntityRef::new("Ns::Root", "r")
+            ]
+        );
     }
 
     #[test]

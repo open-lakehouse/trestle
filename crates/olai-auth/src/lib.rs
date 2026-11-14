@@ -18,6 +18,12 @@
 //!   asks a remote policy decision point, `CedarAuthorizer` (feature `cedar`) evaluates
 //!   them in-process. Both fail closed. [`CachedAuthorizer`] reuses decisions for a few
 //!   seconds, and [`AuthContext`] builds the standard request context.
+//! - [`grants`]: `(subject, privilege, object)` tuples and the groups subjects are in,
+//!   behind a [`GrantStore`] ([`MemoryGrantStore`]; `PgGrantStore` with feature
+//!   `postgres`, over the tables `migrate` creates).
+//!   `GrantsEntityLoader` (feature `cedar`) loads them as the entities a
+//!   `CedarAuthorizer` decides on: the principal with its groups, and the privileges it
+//!   holds on each entity of the request.
 //! - [`auth_layer`] runs an [`Authenticator`] in front of a router. Rejected requests get
 //!   a 401 with an RFC 6750 `WWW-Authenticate` challenge whose `resource_metadata`
 //!   parameter (RFC 9728) points clients at the authorization server.
@@ -78,6 +84,7 @@ mod api_key;
 mod authenticator;
 mod authz;
 mod error;
+pub mod grants;
 mod jwk;
 mod jwt;
 mod key_source;
@@ -86,6 +93,8 @@ mod metadata;
 mod principal;
 mod user_status;
 
+#[cfg(feature = "postgres")]
+mod migrate;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(test)]
@@ -99,7 +108,9 @@ pub use async_trait::async_trait;
 pub use authenticator::{Authenticator, AuthenticatorBuilder, ConfigError};
 #[cfg(feature = "cedar")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cedar")))]
-pub use authz::cedar::{CedarAuthorizer, CedarConfigError, EntityLoader};
+pub use authz::cedar::{
+    CedarAuthorizer, CedarConfigError, DEFAULT_LOADER_ATTRS, EntityLoader, compose_schema,
+};
 #[cfg(feature = "pdp-client")]
 #[cfg_attr(docsrs, doc(cfg(feature = "pdp-client")))]
 pub use authz::http::HttpAuthorizer;
@@ -107,6 +118,16 @@ pub use authz::wire;
 pub use authz::wire::{AuthorizeRequest, AuthorizeResponse, Decision, EntityRef};
 pub use authz::{AuthContext, Authorizer, CachedAuthorizer, EntityTypes};
 pub use error::{AuthError, BoxError, InvalidToken};
+#[cfg(feature = "cedar")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cedar")))]
+pub use grants::loader::{GrantsEntityLoader, PrincipalAttrs, PrincipalFacts, SubjectTypes};
+#[cfg(feature = "postgres")]
+#[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
+pub use grants::postgres::PgGrantStore;
+pub use grants::{
+    Grant, GrantChange, GrantError, GrantStore, GroupMembership, MemoryGrantStore, ObjectRef,
+    Subject, SubjectFacts, SubjectKind,
+};
 pub use jwk::{JwkError, JwkSet};
 pub use jwt::{JwtClaims, JwtVerifier};
 #[cfg(feature = "http")]
@@ -115,6 +136,9 @@ pub use key_source::HttpKeySource;
 pub use key_source::{KeySource, PushKeySource};
 pub use layer::auth_layer;
 pub use metadata::{ProtectedResourceMetadata, WELL_KNOWN_PATH};
+#[cfg(feature = "postgres")]
+#[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
+pub use migrate::{MIGRATOR, migrate};
 #[cfg(feature = "postgres")]
 #[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
 pub use postgres::PgApiKeyStore;

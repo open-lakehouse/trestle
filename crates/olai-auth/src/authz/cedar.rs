@@ -1,14 +1,15 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use async_trait::async_trait;
 use cedar_policy::{
     Context, Entities, EntityId, EntityTypeName, EntityUid, PolicyId, PolicySet, Request, Schema,
-    ValidationMode, Validator,
+    SchemaFragment, ValidationMode, Validator,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::Authorizer;
-use super::wire::{AuthorizeRequest, AuthorizeResponse, Decision, EntityRef};
+use super::wire::{AuthorizeRequest, AuthorizeResponse, Decision, EntityRef, entity_ref};
 use crate::error::BoxError;
 
 /// Supplies the Cedar entities a [`CedarAuthorizer`] evaluates a request against,
@@ -16,14 +17,33 @@ use crate::error::BoxError;
 #[async_trait]
 pub trait EntityLoader: Send + Sync + 'static {
     /// The entities `request` needs, as a Cedar JSON entities array: at least the
-    /// principal with its attributes and its ancestors (groups, roles), and the
-    /// resource's ancestors. A caller-supplied
-    /// [`resource_entity`](AuthorizeRequest::resource_entity) is added afterwards and
-    /// replaces a loaded entity with the same uid.
+    /// principal with its attributes and its ancestors (groups, roles), and whatever the
+    /// caller doesn't supply in [`entities`](AuthorizeRequest::entities).
+    ///
+    /// The caller-supplied entities are merged in afterwards: an entity both loaded and
+    /// supplied gets the attributes of both (the supplied value wins for an attribute in
+    /// both) and the parents of both. So a loader may return just the attributes it owns
+    /// for a supplied entity, such as the grants the principal holds on it, with no
+    /// parents.
     ///
     /// An error is a deny.
     async fn load(&self, request: &AuthorizeRequest) -> Result<Value, BoxError>;
+
+    /// The entities of several requests, one result per request in the same order. By
+    /// default one at a time; override it to share lookups across a batch.
+    async fn load_batch(&self, requests: &[AuthorizeRequest]) -> Vec<Result<Value, BoxError>> {
+        let mut loaded = Vec::with_capacity(requests.len());
+        for request in requests {
+            loaded.push(self.load(request).await);
+        }
+        loaded
+    }
 }
+
+/// The attributes only a [`CedarAuthorizer`]'s [`EntityLoader`] may set unless configured
+/// otherwise: the grants a principal holds on an entity, as
+/// [`GrantsEntityLoader`](crate::GrantsEntityLoader) loads them.
+pub const DEFAULT_LOADER_ATTRS: &[&str] = &["privileges", "inherited_privileges"];
 
 /// Policies or a schema [`CedarAuthorizer::new`] refuses.
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +66,75 @@ pub enum CedarConfigError {
     Validation(String),
 }
 
+/// One schema (Cedar schema syntax) of several `fragments`, each parsed on its own and
+/// then merged namespace by namespace.
+///
+/// A single schema text may declare a namespace only once, but a schema assembled from
+/// several sources (say, a service's entity types, its generated actions and a host's
+/// principals) often needs one namespace in several fragments. Declaring the same
+/// entity type, action or common type twice is an error.
+///
+/// # Errors
+///
+/// [`CedarConfigError::Schema`] when a fragment doesn't parse or a declaration is
+/// duplicated.
+pub fn compose_schema(fragments: &[&str]) -> Result<String, CedarConfigError> {
+    let error = |message: String| CedarConfigError::Schema(message);
+    let mut merged: Map<String, Value> = Map::new();
+    for (index, text) in fragments.iter().enumerate() {
+        let (fragment, warnings) = SchemaFragment::from_cedarschema_str(text)
+            .map_err(|e| error(format!("fragment {index}: {e}")))?;
+        for warning in warnings {
+            tracing::debug!(%warning, fragment = index, "Cedar schema warning");
+        }
+        let Value::Object(namespaces) = fragment
+            .to_json_value()
+            .map_err(|e| error(format!("fragment {index}: {e}")))?
+        else {
+            return Err(error(format!("fragment {index}: not a schema")));
+        };
+        for (namespace, body) in namespaces {
+            let Value::Object(body) = body else {
+                return Err(error(format!(
+                    "fragment {index}: namespace {namespace:?} is not an object"
+                )));
+            };
+            let target = merged
+                .entry(namespace.clone())
+                .or_insert_with(|| Value::Object(Map::new()));
+            let Value::Object(target) = target else {
+                unreachable!("namespaces are inserted as objects");
+            };
+            for (section, items) in body {
+                match (target.get_mut(&section), items) {
+                    (Some(Value::Object(existing)), Value::Object(items)) => {
+                        for (key, item) in items {
+                            if existing.insert(key.clone(), item).is_some() {
+                                return Err(error(format!(
+                                    "fragment {index}: {namespace:?} declares {key:?} \
+                                     ({section}) again"
+                                )));
+                            }
+                        }
+                    }
+                    (None, items) => {
+                        target.insert(section, items);
+                    }
+                    (Some(_), _) => {
+                        return Err(error(format!(
+                            "fragment {index}: {namespace:?} {section} can't be merged"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    SchemaFragment::from_json_value(Value::Object(merged))
+        .map_err(|e| error(e.to_string()))?
+        .to_cedarschema()
+        .map_err(|e| error(e.to_string()))
+}
+
 /// An [`Authorizer`] that evaluates Cedar policies in-process.
 ///
 /// For standalone deployments, and as a fallback where a round trip to a remote policy
@@ -56,13 +145,20 @@ pub enum CedarConfigError {
 /// A policy's id is its `@id("…")` annotation, else Cedar's positional `policyN`, so
 /// [`policies`](AuthorizeResponse::policies) names the determining policies stably.
 ///
-/// It fails closed: if the entities can't be loaded, or the request, context or
+/// The entities a request is evaluated against are the loaded ones merged with the
+/// caller-supplied [`entities`](AuthorizeRequest::entities) (see [`EntityLoader::load`]).
+/// The caller may not supply the principal, nor set an attribute the loader owns
+/// ([`with_loader_attrs`](Self::with_loader_attrs)), so it can't forge grants.
+///
+/// It fails closed: if the entities can't be loaded, the caller-supplied ones break the
+/// rules above, the resource is neither loaded nor supplied, or the request, context or
 /// entities don't match the schema, the answer is a deny with the reason in
 /// [`errors`](AuthorizeResponse::errors).
 pub struct CedarAuthorizer {
     policies: PolicySet,
     schema: Schema,
     loader: Box<dyn EntityLoader>,
+    loader_attrs: Vec<String>,
     engine: cedar_policy::Authorizer,
 }
 
@@ -75,6 +171,28 @@ impl CedarAuthorizer {
     /// When the schema or the policies don't parse, contain templates or duplicate
     /// `@id`s, or the policies don't validate against the schema.
     pub fn new(
+        schema: &str,
+        policies: &str,
+        loader: impl EntityLoader,
+    ) -> Result<Self, CedarConfigError> {
+        Self::build(schema, policies, loader)
+    }
+
+    /// Like [`new`](Self::new), over a schema in several fragments (Cedar schema syntax),
+    /// composed with [`compose_schema`]: several may declare the same namespace.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new), and when the fragments don't compose.
+    pub fn from_fragments(
+        fragments: &[&str],
+        policies: &str,
+        loader: impl EntityLoader,
+    ) -> Result<Self, CedarConfigError> {
+        Self::build(&compose_schema(fragments)?, policies, loader)
+    }
+
+    fn build(
         schema: &str,
         policies: &str,
         loader: impl EntityLoader,
@@ -110,29 +228,37 @@ impl CedarAuthorizer {
             policies,
             schema,
             loader: Box::new(loader),
+            loader_attrs: DEFAULT_LOADER_ATTRS.iter().map(|&a| a.to_owned()).collect(),
             engine: cedar_policy::Authorizer::new(),
         })
     }
 
-    async fn decide(&self, request: &AuthorizeRequest) -> Result<AuthorizeResponse, String> {
+    /// The attributes only the loader may set, instead of [`DEFAULT_LOADER_ATTRS`]. A
+    /// request whose caller-supplied entities set one is denied.
+    pub fn with_loader_attrs<I, S>(mut self, attrs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.loader_attrs = attrs.into_iter().map(Into::into).collect();
+        self
+    }
+
+    async fn decide(
+        &self,
+        request: &AuthorizeRequest,
+        loaded: Result<Value, BoxError>,
+    ) -> Result<AuthorizeResponse, String> {
         let principal = uid(&request.principal)?;
         let action = uid(&request.action)?;
         let resource = uid(&request.resource)?;
 
-        let mut entities = match self.loader.load(request).await {
+        let loaded = match loaded {
             Ok(Value::Array(entities)) => entities,
             Ok(_) => return Err("the entity loader did not return an array".into()),
             Err(e) => return Err(format!("loading entities: {e}")),
         };
-        if let Some(entity) = &request.resource_entity {
-            let resource_uid = serde_json::to_value(&request.resource)
-                .map_err(|e| format!("encoding the resource: {e}"))?;
-            if entity.get("uid") != Some(&resource_uid) {
-                return Err("resource_entity is not the request's resource".into());
-            }
-            entities.retain(|loaded| loaded.get("uid") != Some(&resource_uid));
-            entities.push(entity.clone());
-        }
+        let entities = merge(loaded, request, &self.loader_attrs)?;
         let entities = Entities::from_json_value(Value::Array(entities), Some(&self.schema))
             .map_err(|e| format!("invalid entities: {e}"))?;
         let context = Context::from_json_value(
@@ -176,12 +302,213 @@ fn uid(entity: &EntityRef) -> Result<EntityUid, String> {
     ))
 }
 
+/// The loaded entities with the caller-supplied ones merged in (see
+/// [`EntityLoader::load`]), checking the rules [`CedarAuthorizer`] enforces on them.
+fn merge(
+    loaded: Vec<Value>,
+    request: &AuthorizeRequest,
+    loader_attrs: &[String],
+) -> Result<Vec<Value>, String> {
+    let mut entities = Vec::with_capacity(loaded.len() + request.entities.len());
+    let mut index: HashMap<EntityRef, usize> = HashMap::new();
+    for entity in loaded {
+        let uid = entity
+            .get("uid")
+            .and_then(entity_ref)
+            .ok_or("the entity loader returned an entity without a uid")?;
+        match index.get(&uid) {
+            Some(&at) => absorb(&mut entities[at], &entity),
+            None => {
+                index.insert(uid, entities.len());
+                entities.push(entity);
+            }
+        }
+    }
+    for entity in &request.entities {
+        let uid = entity
+            .get("uid")
+            .and_then(entity_ref)
+            .ok_or("a supplied entity has no uid")?;
+        if uid == request.principal {
+            return Err(format!("the caller may not supply the principal {uid}"));
+        }
+        if let Some(attrs) = entity.get("attrs").and_then(Value::as_object)
+            && let Some(attr) = loader_attrs.iter().find(|a| attrs.contains_key(a.as_str()))
+        {
+            return Err(format!(
+                "the supplied entity {uid} sets {attr:?}, which only the entity loader may set"
+            ));
+        }
+        match index.get(&uid) {
+            Some(&at) => absorb(&mut entities[at], entity),
+            None => {
+                index.insert(uid, entities.len());
+                entities.push(entity.clone());
+            }
+        }
+    }
+    if !index.contains_key(&request.resource) {
+        return Err(format!(
+            "the resource {} is neither loaded nor supplied",
+            request.resource
+        ));
+    }
+    Ok(entities)
+}
+
+/// Merges `other` into `entity`: its attributes win, and its parents are added.
+fn absorb(entity: &mut Value, other: &Value) {
+    let Some(entity) = entity.as_object_mut() else {
+        return;
+    };
+    if let Some(attrs) = other.get("attrs").and_then(Value::as_object) {
+        let target = entity
+            .entry("attrs")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(target) = target.as_object_mut() {
+            target.extend(attrs.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
+    if let Some(parents) = other.get("parents").and_then(Value::as_array) {
+        let target = entity
+            .entry("parents")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(target) = target.as_array_mut() {
+            for parent in parents {
+                let known = entity_ref(parent);
+                if !target.iter().any(|p| entity_ref(p) == known) {
+                    target.push(parent.clone());
+                }
+            }
+        }
+    }
+}
+
+fn fail_closed(result: Result<AuthorizeResponse, String>) -> AuthorizeResponse {
+    result.unwrap_or_else(|error| {
+        tracing::warn!(%error, "authorization failed closed");
+        AuthorizeResponse::deny(error)
+    })
+}
+
 #[async_trait]
 impl Authorizer for CedarAuthorizer {
     async fn authorize(&self, request: &AuthorizeRequest) -> AuthorizeResponse {
-        self.decide(request).await.unwrap_or_else(|error| {
-            tracing::warn!(%error, "authorization failed closed");
-            AuthorizeResponse::deny(error)
-        })
+        let loaded = self.loader.load(request).await;
+        fail_closed(self.decide(request, loaded).await)
+    }
+
+    /// Loads the entities of the whole batch at once ([`EntityLoader::load_batch`]).
+    async fn authorize_batch(&self, requests: &[AuthorizeRequest]) -> Vec<AuthorizeResponse> {
+        let mut loaded = self.loader.load_batch(requests).await.into_iter();
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            let entities = loaded
+                .next()
+                .unwrap_or_else(|| Err("the entity loader answered fewer requests".into()));
+            responses.push(fail_closed(self.decide(request, entities).await));
+        }
+        responses
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn request() -> AuthorizeRequest {
+        AuthorizeRequest::new(
+            EntityRef::new("Ns::User", "u1"),
+            EntityRef::new("Ns::Action", "read"),
+            EntityRef::new("Ns::Doc", "d1"),
+        )
+    }
+
+    fn attrs() -> Vec<String> {
+        DEFAULT_LOADER_ATTRS.iter().map(|&a| a.to_owned()).collect()
+    }
+
+    #[test]
+    fn composes_a_namespace_declared_in_several_fragments() {
+        let entities = "namespace Ns { entity User; entity Doc; }";
+        let actions =
+            "namespace Ns { action read appliesTo { principal: [User], resource: [Doc] }; }";
+        // One text may not declare the namespace twice; fragments may.
+        assert!(Schema::from_cedarschema_str(&format!("{entities}\n{actions}")).is_err());
+        let composed = compose_schema(&[entities, actions]).unwrap();
+        let (schema, _) = Schema::from_cedarschema_str(&composed).unwrap();
+        assert_eq!(schema.actions().count(), 1);
+        assert_eq!(schema.entity_types().count(), 2);
+    }
+
+    #[test]
+    fn a_declaration_in_two_fragments_is_an_error() {
+        let doc = "namespace Ns { entity Doc; }";
+        let err = compose_schema(&[doc, doc]).unwrap_err().to_string();
+        assert!(err.contains("\"Doc\""), "{err}");
+    }
+
+    #[test]
+    fn merges_supplied_entities_into_loaded_ones() {
+        let loaded = vec![
+            json!({ "uid": { "type": "Ns::User", "id": "u1" }, "attrs": {}, "parents": [] }),
+            json!({
+                "uid": { "type": "Ns::Doc", "id": "d1" },
+                "attrs": { "privileges": ["READ"], "title": "loaded" },
+                "parents": [],
+            }),
+        ];
+        let request = request().with_entities([
+            json!({
+                "uid": { "__entity": { "type": "Ns::Doc", "id": "d1" } },
+                "attrs": { "title": "supplied" },
+                "parents": [{ "type": "Ns::Folder", "id": "f1" }],
+            }),
+            json!({ "uid": { "type": "Ns::Folder", "id": "f1" }, "attrs": {}, "parents": [] }),
+        ]);
+        let merged = merge(loaded, &request, &attrs()).unwrap();
+        assert_eq!(merged.len(), 3);
+        assert_eq!(
+            merged[1],
+            json!({
+                "uid": { "type": "Ns::Doc", "id": "d1" },
+                "attrs": { "privileges": ["READ"], "title": "supplied" },
+                "parents": [{ "type": "Ns::Folder", "id": "f1" }],
+            })
+        );
+    }
+
+    #[test]
+    fn supplied_entities_may_not_forge_grants_or_the_principal() {
+        let forged = request().with_entity(json!({
+            "uid": { "type": "Ns::Doc", "id": "d1" },
+            "attrs": { "inherited_privileges": ["ALL"] },
+            "parents": [],
+        }));
+        let error = merge(vec![], &forged, &attrs()).unwrap_err();
+        assert!(error.contains("only the entity loader may set"), "{error}");
+
+        let principal = request().with_entity(json!({
+            "uid": { "type": "Ns::User", "id": "u1" }, "attrs": { "admin": true }, "parents": [],
+        }));
+        let error = merge(vec![], &principal, &attrs()).unwrap_err();
+        assert!(error.contains("may not supply the principal"), "{error}");
+
+        // Other attribute names are the caller's to set when so configured.
+        let custom = vec!["owner".to_string()];
+        let ok = request().with_entity(json!({
+            "uid": { "type": "Ns::Doc", "id": "d1" }, "attrs": { "privileges": [] }, "parents": [],
+        }));
+        assert!(merge(vec![], &ok, &custom).is_ok());
+    }
+
+    #[test]
+    fn the_resource_must_be_loaded_or_supplied() {
+        let error = merge(vec![], &request(), &attrs()).unwrap_err();
+        assert!(error.contains("neither loaded nor supplied"), "{error}");
+        let error = merge(vec![json!({ "attrs": {} })], &request(), &attrs()).unwrap_err();
+        assert!(error.contains("without a uid"), "{error}");
     }
 }

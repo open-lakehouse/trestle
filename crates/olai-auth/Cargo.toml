@@ -36,9 +36,10 @@ ed25519-dalek = { version = "2.1", default-features = false, features = ["std", 
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 # API key digests and their constant-time comparison.
 sha2 = { version = "0.10", default-features = false }
-# Only the `postgres` feature's `PgApiKeyStore`. Runtime queries (no macros, no offline
-# cache), and no runtime or TLS features: the host's own sqlx brings those.
-sqlx = { version = "0.8", default-features = false, features = ["postgres"], optional = true }
+# Only the `postgres` feature's `PgApiKeyStore`, `PgGrantStore` and `authz` migrations.
+# Runtime queries (no offline cache; `macros` only for the embedded `migrate!`), and no
+# runtime or TLS features: the host's own sqlx brings those.
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "migrate", "macros"], optional = true }
 subtle = { version = "2.6", default-features = false }
 # Without the workspace's `log` bridge.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
@@ -55,7 +56,8 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 # `HttpKeySource`: fetch a JWKS document over HTTPS. Hosts that receive the keys some other
 # way (see `PushKeySource`) leave it off and link no HTTP client.
 http = ["dep:reqwest"]
-# `PgApiKeyStore`: API keys from Postgres tables, through the host's `sqlx::PgPool`.
+# `PgApiKeyStore` and `PgGrantStore`: API keys and grants from Postgres tables, through the
+# host's `sqlx::PgPool`, and the `authz` migrations that create them (`migrate`).
 postgres = ["dep:sqlx"]
 # `HttpAuthorizer`: ask a remote policy decision point over HTTPS.
 pdp-client = ["dep:reqwest"]
@@ -69,6 +71,10 @@ required-features = ["postgres"]
 [[test]]
 name = "authz"
 required-features = ["cedar", "pdp-client"]
+
+[[test]]
+name = "grants"
+required-features = ["cedar"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
