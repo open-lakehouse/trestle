@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::HeaderValue;
-use axum::http::header::WWW_AUTHENTICATE;
+use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
+use axum::http::{Extensions, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 
+use crate::actor::{Actor, ActorVerifier, TrustedCompute};
 use crate::api_key::{API_KEY_ISSUER, API_KEY_PREFIX, ApiKeyStore, CachedApiKeys, parse_api_key};
 use crate::error::{AuthError, InvalidToken};
 use crate::jwt::{JwtVerifier, peek_issuer};
@@ -30,6 +31,8 @@ struct Inner {
     jwt: HashMap<String, JwtVerifier>,
     user_status: CachedUserStatus,
     api_keys: Option<CachedApiKeys>,
+    actor_verifiers: Vec<Box<dyn ActorVerifier>>,
+    trusted_compute: TrustedCompute,
     /// The `WWW-Authenticate` value for a request without a token.
     challenge: HeaderValue,
     /// The `WWW-Authenticate` parameter pointing at the resource metadata, if configured.
@@ -55,6 +58,8 @@ pub struct AuthenticatorBuilder {
     user_status_ttl: Duration,
     api_keys: Option<Box<dyn ApiKeyStore>>,
     api_key_ttl: Duration,
+    actor_verifiers: Vec<Box<dyn ActorVerifier>>,
+    trusted_compute: TrustedCompute,
     resource_metadata_url: Option<String>,
 }
 
@@ -70,8 +75,54 @@ impl Authenticator {
             user_status_ttl: DEFAULT_USER_STATUS_TTL,
             api_keys: None,
             api_key_ttl: DEFAULT_API_KEY_TTL,
+            actor_verifiers: Vec::new(),
+            trusted_compute: TrustedCompute::new(),
             resource_metadata_url: None,
         }
+    }
+
+    /// Authenticates a request: its subject from the `Authorization` header, then its
+    /// actor, if it carries an actor credential (see [`actor_verifier`]).
+    ///
+    /// The actor is resolved against the [`trusted_compute`] rules and set as the
+    /// principal's [`actor`](Principal::actor). A request whose actor credentials name
+    /// different actors is rejected.
+    ///
+    /// # Errors
+    ///
+    /// As [`authenticate`](Self::authenticate) for the subject. [`AuthError::InvalidActor`]
+    /// when an actor credential is invalid, and [`AuthError::Unavailable`] when it can't
+    /// be checked.
+    ///
+    /// [`actor_verifier`]: AuthenticatorBuilder::actor_verifier
+    /// [`trusted_compute`]: AuthenticatorBuilder::trusted_compute
+    pub async fn authenticate_request(
+        &self,
+        headers: &HeaderMap,
+        extensions: &Extensions,
+    ) -> Result<Principal, AuthError> {
+        let mut principal = self.authenticate(headers.get(AUTHORIZATION)).await?;
+        principal.actor = self.actor(headers, extensions).await?;
+        Ok(principal)
+    }
+
+    async fn actor(
+        &self,
+        headers: &HeaderMap,
+        extensions: &Extensions,
+    ) -> Result<Option<Actor>, AuthError> {
+        let mut found = None;
+        for verifier in &self.inner.actor_verifiers {
+            let Some(identity) = verifier.verify(headers, extensions).await? else {
+                continue;
+            };
+            match &found {
+                None => found = Some(identity),
+                Some(first) if *first == identity => {}
+                Some(_) => return Err(AuthError::InvalidActor(InvalidToken::ActorConflict)),
+            }
+        }
+        Ok(found.map(|identity| self.inner.trusted_compute.resolve(identity)))
     }
 
     /// Authenticates a request from its `Authorization` header.
@@ -136,6 +187,7 @@ impl Authenticator {
             auth_method: AuthMethod::Jwt,
             admin: status.admin,
             issued_at: claims.issued_at,
+            actor: None,
         })
     }
 
@@ -151,19 +203,27 @@ impl Authenticator {
             AuthError::Missing => {
                 (status, [(WWW_AUTHENTICATE, self.inner.challenge.clone())]).into_response()
             }
-            AuthError::InvalidToken(reason) => {
-                let mut challenge =
-                    format!(r#"Bearer error="invalid_token", error_description="{reason}""#);
-                if let Some(metadata) = &self.inner.resource_metadata {
-                    challenge.push_str(", ");
-                    challenge.push_str(metadata);
-                }
-                let challenge = HeaderValue::try_from(challenge)
-                    .expect("built from validated parts and static descriptions");
-                (status, [(WWW_AUTHENTICATE, challenge)]).into_response()
+            AuthError::InvalidToken(reason) => self.invalid(status, &reason.to_string()),
+            AuthError::InvalidActor(reason) => {
+                self.invalid(status, &format!("invalid actor credential: {reason}"))
             }
             _ => status.into_response(),
         }
+    }
+}
+
+impl Authenticator {
+    /// A 401 with an `invalid_token` challenge described by `description`, a static text.
+    fn invalid(&self, status: axum::http::StatusCode, description: &str) -> Response {
+        let mut challenge =
+            format!(r#"Bearer error="invalid_token", error_description="{description}""#);
+        if let Some(metadata) = &self.inner.resource_metadata {
+            challenge.push_str(", ");
+            challenge.push_str(metadata);
+        }
+        let challenge = HeaderValue::try_from(challenge)
+            .expect("built from validated parts and static descriptions");
+        (status, [(WWW_AUTHENTICATE, challenge)]).into_response()
     }
 }
 
@@ -186,6 +246,21 @@ impl AuthenticatorBuilder {
     /// disables the cache.
     pub fn api_key_cache_ttl(mut self, ttl: Duration) -> Self {
         self.api_key_ttl = ttl;
+        self
+    }
+
+    /// Also accepts the actor credentials `verifier` finds, such as a
+    /// [`JwtActorVerifier`](crate::JwtActorVerifier)'s workload tokens. Only
+    /// [`authenticate_request`](Authenticator::authenticate_request), which
+    /// [`auth_layer`](crate::auth_layer) calls, looks for actors.
+    pub fn actor_verifier(mut self, verifier: impl ActorVerifier) -> Self {
+        self.actor_verifiers.push(Box::new(verifier));
+        self
+    }
+
+    /// The rules for which actors are trusted compute. Without them, no actor is.
+    pub fn trusted_compute(mut self, trusted_compute: TrustedCompute) -> Self {
+        self.trusted_compute = trusted_compute;
         self
     }
 
@@ -236,6 +311,8 @@ impl AuthenticatorBuilder {
                 api_keys: self
                     .api_keys
                     .map(|store| CachedApiKeys::new(store, self.api_key_ttl)),
+                actor_verifiers: self.actor_verifiers,
+                trusted_compute: self.trusted_compute,
                 challenge: HeaderValue::try_from(challenge).expect("validated above"),
                 resource_metadata,
             }),
@@ -262,6 +339,7 @@ async fn authenticate_api_key(api_keys: &CachedApiKeys, key: &str) -> Result<Pri
         auth_method: AuthMethod::ApiKey,
         admin: false,
         issued_at: None,
+        actor: None,
     })
 }
 
@@ -537,6 +615,178 @@ mod tests {
             auth.authenticate_token(KEY).await,
             Err(AuthError::Unavailable(_))
         ));
+    }
+
+    mod actors {
+        use axum::http::{Extensions, HeaderMap, StatusCode};
+
+        use super::*;
+        use crate::actor::{
+            ACTOR_TOKEN_HEADER, ActorIdentity, ActorMatch, ActorMethod, ActorVerifier, ComputeRule,
+            JwtActorVerifier, TrustedCompute,
+        };
+
+        const WORKLOAD_ISSUER: &str = "https://oidc.eks.example.com/id/ABC";
+        const SPARK: &str = "spiffe://prod.example/ns/etl/sa/spark";
+
+        fn workload_token(sub: &str) -> String {
+            sign(
+                &json!({ "alg": "EdDSA", "kid": "w1" }),
+                &json!({
+                    "iss": WORKLOAD_ISSUER,
+                    "aud": AUDIENCE,
+                    "sub": sub,
+                    "iat": NOW - 60,
+                    "exp": NOW + 240,
+                }),
+                &signing_key(9),
+            )
+        }
+
+        fn authenticator() -> Authenticator {
+            let workload = verifier(WORKLOAD_ISSUER, ("w1", 9));
+            Authenticator::builder(Fixed::new(Some(UserStatus::default())))
+                .issuer(verifier(ISSUER, ("k1", 1)))
+                .actor_verifier(JwtActorVerifier::new([workload]).unwrap())
+                .trusted_compute(TrustedCompute::new().with(ComputeRule::new(
+                    "spark-prod",
+                    ActorMatch::Prefix("spiffe://prod.example/ns/etl".into()),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        fn request(subject: &str, actor: Option<&str>) -> HeaderMap {
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, header(&format!("Bearer {subject}")));
+            if let Some(actor) = actor {
+                headers.insert(ACTOR_TOKEN_HEADER, header(actor));
+            }
+            headers
+        }
+
+        async fn authenticate(headers: &HeaderMap) -> Result<Principal, AuthError> {
+            authenticator()
+                .authenticate_request(headers, &Extensions::new())
+                .await
+        }
+
+        #[tokio::test]
+        async fn trusted_compute_acts_for_the_subject() {
+            let user = token(&claims());
+            let principal = authenticate(&request(&user, Some(&workload_token(SPARK))))
+                .await
+                .unwrap();
+            // Still the user: the actor adds who the request is made from, not who for.
+            assert_eq!(principal.subject(), "8c1d0f5e-3b7a-4c55-9f40-2d6f1e9b7a10");
+            let actor = principal.actor.as_ref().unwrap();
+            assert_eq!(actor.id, SPARK);
+            assert_eq!(actor.issuer, WORKLOAD_ISSUER);
+            assert_eq!(actor.compute.as_deref(), Some("spark-prod"));
+            assert!(principal.is_trusted_compute());
+        }
+
+        #[tokio::test]
+        async fn other_actors_are_untrusted() {
+            let user = token(&claims());
+            let laptop = workload_token("laptop");
+            let principal = authenticate(&request(&user, Some(&laptop))).await.unwrap();
+            let actor = principal.actor.as_ref().unwrap();
+            assert_eq!(actor.id, format!("{WORKLOAD_ISSUER}#laptop"));
+            assert!(!principal.is_trusted_compute());
+
+            let principal = authenticate(&request(&user, None)).await.unwrap();
+            assert_eq!(principal.actor, None);
+            assert!(!principal.is_trusted_compute());
+        }
+
+        #[tokio::test]
+        async fn the_subject_token_cannot_claim_an_actor() {
+            let mut claims = claims();
+            claims["act"] = json!({ "sub": SPARK });
+            claims["trusted"] = json!(true);
+            let principal = authenticate(&request(&token(&claims), None)).await.unwrap();
+            assert_eq!(principal.actor, None);
+            // Nor is the user's own token accepted as an actor token.
+            let user = token(&self::claims());
+            assert!(matches!(
+                authenticate(&request(&user, Some(&user))).await,
+                Err(AuthError::InvalidActor(InvalidToken::Issuer))
+            ));
+        }
+
+        #[tokio::test]
+        async fn invalid_actor_credentials_are_rejected() {
+            let auth = authenticator();
+            let user = token(&claims());
+            let error = auth
+                .authenticate_request(&request(&user, Some("garbage")), &Extensions::new())
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                AuthError::InvalidActor(InvalidToken::Malformed)
+            ));
+            let response = auth.reject(&error);
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let challenge = response.headers()[WWW_AUTHENTICATE].to_str().unwrap();
+            assert!(
+                challenge.contains("invalid actor credential: malformed token"),
+                "{challenge}"
+            );
+        }
+
+        #[tokio::test]
+        async fn the_subject_is_still_required() {
+            let mut headers = HeaderMap::new();
+            headers.insert(ACTOR_TOKEN_HEADER, header(&workload_token(SPARK)));
+            assert!(matches!(
+                authenticate(&headers).await,
+                Err(AuthError::Missing)
+            ));
+        }
+
+        /// Finds the same evidence every time, as a stand-in for a second method.
+        struct Evidence(&'static str);
+
+        #[async_trait::async_trait]
+        impl ActorVerifier for Evidence {
+            async fn verify(
+                &self,
+                _: &HeaderMap,
+                _: &Extensions,
+            ) -> Result<Option<ActorIdentity>, AuthError> {
+                Ok(Some(ActorIdentity::new(
+                    self.0,
+                    WORKLOAD_ISSUER,
+                    ActorMethod::Mtls,
+                )))
+            }
+        }
+
+        #[tokio::test]
+        async fn actor_credentials_must_agree() {
+            let with = |id| {
+                Authenticator::builder(Fixed::new(Some(UserStatus::default())))
+                    .issuer(verifier(ISSUER, ("k1", 1)))
+                    .actor_verifier(Evidence(SPARK))
+                    .actor_verifier(Evidence(id))
+                    .build()
+                    .unwrap()
+            };
+            let headers = request(&token(&claims()), None);
+            let principal = with(SPARK)
+                .authenticate_request(&headers, &Extensions::new())
+                .await
+                .unwrap();
+            assert_eq!(principal.actor.unwrap().method, ActorMethod::Mtls);
+            assert!(matches!(
+                with("spiffe://prod.example/other")
+                    .authenticate_request(&headers, &Extensions::new())
+                    .await,
+                Err(AuthError::InvalidActor(InvalidToken::ActorConflict))
+            ));
+        }
     }
 
     #[test]

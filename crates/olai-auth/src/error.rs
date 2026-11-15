@@ -21,6 +21,11 @@ pub enum AuthError {
     /// A bearer token was presented but is not acceptable.
     #[error("invalid token: {0}")]
     InvalidToken(InvalidToken),
+    /// The request carries an actor credential (see [`ActorVerifier`](crate::ActorVerifier))
+    /// that is not acceptable. The request is rejected rather than treated as having no
+    /// actor.
+    #[error("invalid actor credential: {0}")]
+    InvalidActor(InvalidToken),
     /// The token is valid, but the user is banned.
     #[error("user is banned")]
     Banned,
@@ -35,7 +40,9 @@ impl AuthError {
     /// or invalid token, 403 for a banned user, 503 when a backend is unavailable.
     pub fn status(&self) -> axum::http::StatusCode {
         match self {
-            Self::Missing | Self::InvalidToken(_) => axum::http::StatusCode::UNAUTHORIZED,
+            Self::Missing | Self::InvalidToken(_) | Self::InvalidActor(_) => {
+                axum::http::StatusCode::UNAUTHORIZED
+            }
             Self::Banned => axum::http::StatusCode::FORBIDDEN,
             Self::Unavailable(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
         }
@@ -81,6 +88,10 @@ pub enum InvalidToken {
     UnknownUser,
     /// An API key that is unknown, no longer live, or whose secret does not match.
     ApiKey,
+    /// An actor token without an `iat`, or valid for longer than the verifier allows.
+    Lifetime,
+    /// Two actor credentials of the request name different actors.
+    ActorConflict,
 }
 
 impl InvalidToken {
@@ -99,6 +110,8 @@ impl InvalidToken {
             Self::NotYetValid => "token not yet valid",
             Self::UnknownUser => "unknown user",
             Self::ApiKey => "invalid API key",
+            Self::Lifetime => "token lifetime too long",
+            Self::ActorConflict => "conflicting actor credentials",
         }
     }
 }

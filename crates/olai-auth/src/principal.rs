@@ -3,6 +3,8 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 
+use crate::actor::Actor;
+
 /// The authenticated caller of a request.
 ///
 /// [`auth_layer`](crate::auth_layer) puts one into the request extensions. Handlers take
@@ -34,6 +36,10 @@ pub struct Principal {
     pub admin: bool,
     /// When the token was issued (`iat`, seconds since the epoch), if it says.
     pub issued_at: Option<i64>,
+    /// The compute the request is made from, when it proved its identity with an actor
+    /// credential (see [`ActorVerifier`](crate::ActorVerifier)). Never taken from the
+    /// bearer token's claims.
+    pub actor: Option<Actor>,
 }
 
 /// The kind of caller behind a [`Principal`].
@@ -90,6 +96,11 @@ impl Principal {
     /// Whether the caller is an administrator.
     pub fn is_admin(&self) -> bool {
         self.admin
+    }
+
+    /// Whether the request is made from trusted compute.
+    pub fn is_trusted_compute(&self) -> bool {
+        self.actor.as_ref().is_some_and(Actor::is_trusted)
     }
 
     /// Whether the credential grants `scope`.

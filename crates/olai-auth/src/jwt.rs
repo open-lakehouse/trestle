@@ -61,6 +61,8 @@ pub struct JwtClaims {
     pub client_id: Option<String>,
     /// `iat`.
     pub issued_at: Option<i64>,
+    /// `exp`. Always present on a verified token.
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +81,8 @@ struct RawClaims {
     azp: Option<String>,
     #[serde(default, deserialize_with = "numeric_date")]
     iat: Option<i64>,
+    #[serde(default, deserialize_with = "numeric_date")]
+    exp: Option<i64>,
 }
 
 impl From<RawClaims> for JwtClaims {
@@ -94,6 +98,7 @@ impl From<RawClaims> for JwtClaims {
             scopes: raw.scope.or(raw.scp).unwrap_or_default(),
             client_id: raw.client_id.or(raw.azp),
             issued_at: raw.iat,
+            expires_at: raw.exp,
         }
     }
 }

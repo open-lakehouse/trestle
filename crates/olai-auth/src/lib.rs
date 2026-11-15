@@ -24,6 +24,9 @@
 //!   `GrantsEntityLoader` (feature `cedar`) loads them as the entities a
 //!   `CedarAuthorizer` decides on: the principal with its groups, and the privileges it
 //!   holds on each entity of the request.
+//! - A request may also carry an [`Actor`]: the compute it is made from, proved with a
+//!   credential of its own (a workload token for [`JwtActorVerifier`]) and matched against
+//!   the operator's [`TrustedCompute`] rules. See [`actor`].
 //! - [`auth_layer`] runs an [`Authenticator`] in front of a router. Rejected requests get
 //!   a 401 with an RFC 6750 `WWW-Authenticate` challenge whose `resource_metadata`
 //!   parameter (RFC 9728) points clients at the authorization server.
@@ -80,6 +83,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+pub mod actor;
 mod api_key;
 mod authenticator;
 mod authz;
@@ -100,6 +104,10 @@ mod postgres;
 #[cfg(test)]
 mod test_support;
 
+pub use actor::{
+    ACTOR_TOKEN_HEADER, Actor, ActorIdentity, ActorMatch, ActorMethod, ActorVerifier, ComputeRule,
+    JwtActorVerifier, TrustedCompute,
+};
 pub use api_key::{
     API_KEY_ISSUER, API_KEY_PREFIX, ApiKeyRecord, ApiKeyStore, api_key_digest, parse_api_key,
 };

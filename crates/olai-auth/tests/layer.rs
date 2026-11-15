@@ -12,9 +12,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use olai_auth::{
-    ApiKeyRecord, ApiKeyStore, Authenticator, BoxError, JwtVerifier, Principal,
-    ProtectedResourceMetadata, PushKeySource, UserStatus, UserStatusStore, WELL_KNOWN_PATH,
-    api_key_digest, auth_layer,
+    ACTOR_TOKEN_HEADER, ActorMatch, ApiKeyRecord, ApiKeyStore, Authenticator, BoxError,
+    ComputeRule, JwtActorVerifier, JwtVerifier, Principal, ProtectedResourceMetadata,
+    PushKeySource, TrustedCompute, UserStatus, UserStatusStore, WELL_KNOWN_PATH, api_key_digest,
+    auth_layer,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt as _;
@@ -22,6 +23,8 @@ use tower::ServiceExt as _;
 const ISSUER: &str = "https://auth.example.com";
 const RESOURCE: &str = "https://api.example.com";
 const METADATA_URL: &str = "https://api.example.com/.well-known/oauth-protected-resource";
+/// The issuer of the workloads' tokens, such as a cluster's OIDC issuer.
+const WORKLOAD_ISSUER: &str = "https://oidc.cluster.example.com";
 
 /// `banned@` users are banned, `admin@` users are admins, `ghost@` users don't exist.
 struct Users;
@@ -67,31 +70,70 @@ fn now() -> u64 {
         .as_secs()
 }
 
-fn token(sub: &str, exp: u64) -> String {
+fn workload_key() -> SigningKey {
+    SigningKey::from_bytes(&[5; 32])
+}
+
+fn signed(claims: &Value, key: &SigningKey) -> String {
     let header = URL_SAFE_NO_PAD.encode(json!({ "alg": "EdDSA", "kid": "k" }).to_string());
-    let claims = json!({ "iss": ISSUER, "aud": RESOURCE, "sub": sub, "exp": exp });
     let input = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
-    let signature = URL_SAFE_NO_PAD.encode(key().sign(input.as_bytes()).to_bytes());
+    let signature = URL_SAFE_NO_PAD.encode(key.sign(input.as_bytes()).to_bytes());
     format!("{input}.{signature}")
 }
 
-async fn whoami(principal: Principal) -> String {
-    format!("{} admin={}", principal.subject(), principal.is_admin())
+fn token(sub: &str, exp: u64) -> String {
+    signed(
+        &json!({ "iss": ISSUER, "aud": RESOURCE, "sub": sub, "exp": exp }),
+        &key(),
+    )
 }
 
-fn app() -> Router {
+/// A five-minute workload token for `sub`.
+fn workload_token(sub: &str) -> String {
+    let iat = now();
+    signed(
+        &json!({ "iss": WORKLOAD_ISSUER, "aud": RESOURCE, "sub": sub, "iat": iat, "exp": iat + 300 }),
+        &workload_key(),
+    )
+}
+
+fn jwks(key: &SigningKey) -> PushKeySource {
     let keys = PushKeySource::new();
     let jwks = json!({ "keys": [{
         "kty": "OKP", "crv": "Ed25519", "kid": "k",
-        "x": URL_SAFE_NO_PAD.encode(key().verifying_key().as_bytes()),
+        "x": URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes()),
     }]});
     keys.set_jwks(jwks.to_string().as_bytes()).unwrap();
-    let verifier = JwtVerifier::new(ISSUER, keys)
+    keys
+}
+
+async fn whoami(principal: Principal) -> String {
+    let mut answer = format!("{} admin={}", principal.subject(), principal.is_admin());
+    if let Some(actor) = &principal.actor {
+        answer.push_str(&format!(
+            " actor={} trusted={}",
+            actor.id,
+            principal.is_trusted_compute()
+        ));
+    }
+    answer
+}
+
+fn app() -> Router {
+    let verifier = JwtVerifier::new(ISSUER, jwks(&key()))
+        .with_audience(RESOURCE)
+        .with_min_refresh_interval(Duration::ZERO);
+    let workloads = JwtVerifier::new(WORKLOAD_ISSUER, jwks(&workload_key()))
         .with_audience(RESOURCE)
         .with_min_refresh_interval(Duration::ZERO);
     let authenticator = Authenticator::builder(Users)
         .issuer(verifier)
         .api_keys(Keys)
+        .actor_verifier(JwtActorVerifier::new([workloads]).unwrap())
+        .trusted_compute(TrustedCompute::new().with(ComputeRule::new(
+            "etl",
+            ActorMatch::Prefix(format!("{WORKLOAD_ISSUER}#system:serviceaccount:etl:")),
+        )))
         .resource_metadata_url(METADATA_URL)
         .build()
         .unwrap();
@@ -105,9 +147,16 @@ fn app() -> Router {
 }
 
 async fn call(path: &str, authorization: Option<&str>) -> Response {
+    call_as(path, authorization, None).await
+}
+
+async fn call_as(path: &str, authorization: Option<&str>, actor: Option<&str>) -> Response {
     let mut request = Request::get(path);
     if let Some(value) = authorization {
         request = request.header(AUTHORIZATION, value);
+    }
+    if let Some(value) = actor {
+        request = request.header(ACTOR_TOKEN_HEADER, value);
     }
     app()
         .oneshot(request.body(Body::empty()).unwrap())
@@ -231,4 +280,39 @@ async fn extractor_outside_the_layer_fails_closed() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn actor_tokens_name_the_compute() {
+    let user = format!("Bearer {}", token("alice", now() + 900));
+    let spark = workload_token("system:serviceaccount:etl:spark");
+    let response = call_as("/whoami", Some(&user), Some(&spark)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body(response).await,
+        format!(
+            "alice admin=false actor={WORKLOAD_ISSUER}#system:serviceaccount:etl:spark trusted=true"
+        )
+    );
+
+    let notebook = workload_token("system:serviceaccount:sandbox:notebook");
+    let response = call_as("/whoami", Some(&user), Some(&notebook)).await;
+    assert!(body(response).await.ends_with("trusted=false"));
+}
+
+#[tokio::test]
+async fn invalid_actor_tokens_are_rejected() {
+    let user = format!("Bearer {}", token("alice", now() + 900));
+    // The user's own token is not a workload token.
+    let response = call_as("/whoami", Some(&user), Some(&token("alice", now() + 900))).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        challenge(&response)
+            .contains(r#"error_description="invalid actor credential: untrusted issuer""#)
+    );
+
+    // An actor token alone authenticates no one.
+    let spark = workload_token("system:serviceaccount:etl:spark");
+    let response = call_as("/whoami", None, Some(&spark)).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

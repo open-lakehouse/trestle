@@ -19,6 +19,8 @@ handlers a `Principal`, and an `Authorizer` decides what that principal may do.
 - **User status**: a required, cached lookup of whether a user is banned or an admin,
   implemented by the host against its identity provider's user records. Token claims
   are never used for either.
+- **Actors and trusted compute**: a request may also say which compute makes it, with
+  a credential of its own (see [Actors](#actors)).
 - **`auth_layer`**: puts the `Principal` into the request extensions. A rejected
   request gets a 401 with an RFC 6750 `WWW-Authenticate` challenge, carrying
   `resource_metadata` (RFC 9728) so OAuth clients can discover the authorization
@@ -44,6 +46,39 @@ let app = Router::new()
     .merge(auth_layer(Router::new().route("/items", get(list_items)), authenticator));
 ```
 
+## Actors
+
+A request's bearer token authenticates its subject: who the data is accessed for. A
+workload (an engine, a job, a function) acting for that subject can say who it is with
+a credential of its own. It becomes the principal's `actor`, as in RFC 8693's `act`.
+
+- An `ActorVerifier` finds and checks the evidence. `JwtActorVerifier` reads a workload
+  JWT from the `X-Olai-Actor-Token` header: a Kubernetes service account token, a
+  SPIFFE JWT-SVID or a CI OIDC token, from the issuers it is given. It checks the
+  signature, the audience, the expiry and a maximum lifetime (`exp - iat`, one hour by
+  default). Verifiers for other evidence, such as X.509-SVIDs over mTLS, read it from
+  the request extensions instead.
+- Actor ids are URIs whatever the method: a SPIFFE ID as it is, any other subject as
+  `<iss>#<sub>`.
+- `TrustedCompute` is the operator's list of `ComputeRule`s: an id, an exact or a
+  segment-wise prefix match on the actor id, and optionally the issuer. An actor a rule
+  covers is trusted compute, and any other actor is just an actor.
+- An actor credential that is present but invalid is rejected with a 401. The request
+  is not treated as having no actor. An actor never authenticates a request by itself.
+
+An actor adds no privileges: authorization still asks what the subject may do. Policies
+see the actor in the context's `actor` record, so they can require something of
+other clients that trusted compute, which enforces governance itself, doesn't need:
+
+```cedar
+permit (principal, action == Ns::Action::"VendCredential", resource)
+when {
+  resource.inherited_privileges.contains("READ") &&
+  (resource.inherited_privileges.contains("EXTERNAL_USE") ||
+    (context has actor && context.actor.trusted))
+};
+```
+
 ## Authorization
 
 An `Authorizer` answers "may this principal perform this action on this resource?"
@@ -65,7 +100,7 @@ All of them fail closed: a timeout (2 s by default for the PDP), an unreachable 
 a loader error or a request that doesn't match the schema is a deny, with the reason
 in `errors`. `EntityTypes` maps principals and actions to the service's Cedar entity
 types, and `AuthContext` builds the standard context: `auth_method`, `client_id`,
-`scopes`, `token_issued_at`, `source_ip`, `request_time` and `branch`.
+`scopes`, `token_issued_at`, `actor`, `source_ip`, `request_time` and `branch`.
 
 ```rust,ignore
 let types = EntityTypes::new("Docs::User", "Docs::ServiceAccount", "Docs::Action");
@@ -120,6 +155,7 @@ schema, apart from the host's own migrations.
 |---|---|
 | 401, `WWW-Authenticate: Bearer resource_metadata="…"` | no bearer token |
 | 401, `WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="…"` | the token or API key was rejected, or its user is unknown |
+| 401, the same with `error_description="invalid actor credential: …"` | the actor credential was rejected |
 | 403 | the user is banned |
 | 503 | the key source, the user status store or the API key store failed |
 

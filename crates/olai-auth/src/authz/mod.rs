@@ -113,12 +113,16 @@ impl EntityTypes {
 /// | `client_id` | `String`, when known | [`for_principal`](Self::for_principal) |
 /// | `scopes` | `Set<String>` | [`for_principal`](Self::for_principal) |
 /// | `token_issued_at` | `Long` (seconds), when known | [`for_principal`](Self::for_principal) |
+/// | `actor` | a record, when the request has an [`Actor`](crate::Actor) | [`for_principal`](Self::for_principal) |
 /// | `source_ip` | `ipaddr` | [`source_ip`](Self::source_ip) |
 /// | `request_time` | `datetime` | [`request_time`](Self::request_time) |
 /// | `branch` | `String` | [`branch`](Self::branch) |
 ///
 /// Declare optional keys as optional attributes (`client_id?: String`) in the schema's
-/// context type.
+/// context type. The `actor` record is
+/// `{ id: String, issuer: String, method: String, trusted: Bool, compute?: String }`:
+/// the actor's id, who vouched for it, how it proved itself (`jwt`, `mtls`), whether it
+/// is trusted compute and, if so, which.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AuthContext {
     map: Map<String, Value>,
@@ -140,6 +144,18 @@ impl AuthContext {
         }
         if let Some(iat) = principal.issued_at {
             context = context.with("token_issued_at", iat);
+        }
+        if let Some(actor) = &principal.actor {
+            let mut record = json!({
+                "id": actor.id,
+                "issuer": actor.issuer,
+                "method": actor.method.as_str(),
+                "trusted": actor.is_trusted(),
+            });
+            if let Some(compute) = &actor.compute {
+                record["compute"] = json!(compute);
+            }
+            context = context.with("actor", record);
         }
         context
     }
@@ -337,6 +353,7 @@ pub(crate) mod tests {
             auth_method: AuthMethod::Jwt,
             admin: false,
             issued_at: Some(1_800_000_000),
+            actor: None,
         }
     }
 
@@ -412,6 +429,46 @@ pub(crate) mod tests {
         assert_eq!(context["auth_method"], "api_key");
         assert!(!context.contains_key("client_id"));
         assert!(!context.contains_key("token_issued_at"));
+        assert!(!context.contains_key("actor"));
+    }
+
+    #[test]
+    fn describes_the_actor() {
+        use crate::actor::{ActorIdentity, ActorMatch, ActorMethod, ComputeRule, TrustedCompute};
+        let trusted = TrustedCompute::new().with(ComputeRule::new(
+            "spark-prod",
+            ActorMatch::Exact("spiffe://prod.example/spark".into()),
+        ));
+        let mut principal = user();
+        for (id, expected) in [
+            (
+                "spiffe://prod.example/spark",
+                json!({
+                    "id": "spiffe://prod.example/spark",
+                    "issuer": "https://oidc.example.com",
+                    "method": "jwt",
+                    "trusted": true,
+                    "compute": "spark-prod",
+                }),
+            ),
+            (
+                "spiffe://prod.example/laptop",
+                json!({
+                    "id": "spiffe://prod.example/laptop",
+                    "issuer": "https://oidc.example.com",
+                    "method": "jwt",
+                    "trusted": false,
+                }),
+            ),
+        ] {
+            principal.actor = Some(trusted.resolve(ActorIdentity::new(
+                id,
+                "https://oidc.example.com",
+                ActorMethod::Jwt,
+            )));
+            let context = AuthContext::for_principal(&principal).into_map();
+            assert_eq!(context["actor"], expected);
+        }
     }
 
     #[test]

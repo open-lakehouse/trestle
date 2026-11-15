@@ -1,6 +1,5 @@
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::header::AUTHORIZATION;
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
 
@@ -9,6 +8,9 @@ use crate::error::AuthError;
 
 /// Requires every route of `router` to be called with a valid bearer token.
 ///
+/// The subject comes from the bearer token and, when the authenticator has
+/// [actor verifiers](crate::AuthenticatorBuilder::actor_verifier), the actor from the
+/// request's actor credential (see [`Authenticator::authenticate_request`]).
 /// An authenticated request gets its [`Principal`](crate::Principal) inserted into the
 /// request extensions, where handlers read it with the `Principal` extractor. Any other
 /// request is answered by [`Authenticator::reject`] without reaching a handler.
@@ -31,7 +33,7 @@ async fn authenticate(
     next: Next,
 ) -> Response {
     match authenticator
-        .authenticate(request.headers().get(AUTHORIZATION))
+        .authenticate_request(request.headers(), request.extensions())
         .await
     {
         Ok(principal) => {
