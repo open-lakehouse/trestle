@@ -29,10 +29,10 @@ export interface FakeHostOptions {
   services?: Record<ServiceKey, FakeService>;
   /** The starting environment; defaults to `{ id: "dev", name: "dev" }`. */
   environment?: EnvironmentRef | null;
-  /** Extra capabilities (secrets, notebooks, files, shell). */
+  /** Extra capabilities (secrets, notebooks, files, shell, identity). */
   capabilities?: Pick<
     LakehouseHost,
-    "secrets" | "notebooks" | "files" | "shell"
+    "secrets" | "notebooks" | "files" | "shell" | "identity"
   >;
 }
 

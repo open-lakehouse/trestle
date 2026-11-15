@@ -80,3 +80,14 @@ describe("createFakeHost", () => {
     expect(host.environment.key).toStartWith("none");
   });
 });
+
+test("a fake host carries an identity capability", async () => {
+  const host = createFakeHost({
+    capabilities: {
+      identity: { search: async (q) => [{ kind: "user", name: q }] },
+    },
+  });
+  expect(await host.identity?.search("a@example.com")).toEqual([
+    { kind: "user", name: "a@example.com" },
+  ]);
+});

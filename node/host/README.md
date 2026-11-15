@@ -52,6 +52,7 @@ interface LakehouseHost {
   notebooks?: NotebookHost;       // open files as live notebooks
   files?: FilePickerHost;         // a native file picker
   shell?: EnvironmentManager;     // list / switch environments
+  identity?: IdentityHost;        // search principals, who is signed in
 }
 
 interface ServiceBinding {
@@ -64,6 +65,12 @@ interface ServiceBinding {
 
 The host resolves origins and credentials inside `fetch` and `transport`, so a
 UI never sees base URLs or tokens.
+
+`identity` is the environment's principal directory: `search(query)` for users,
+groups and service accounts (by the name services know them by, e.g. a user's
+email), and optionally `current()`. Users live in the environment's IdP (Neon
+Auth, Authelia, ...), so the host implements it over whatever backs them; a UI
+that grants privileges falls back to a typed name without it.
 
 ## Adopting it in a service client
 
