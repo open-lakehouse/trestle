@@ -134,8 +134,24 @@ fn the_server_serves_the_gateway_path_against_the_in_network_catalog() {
         svc["depends_on"]["unitycatalog"]["condition"].as_str(),
         Some("service_healthy")
     );
-    // The image's own healthcheck probes the catalog server's port, so it is turned off.
-    assert_eq!(svc["healthcheck"]["disable"].as_bool(), Some(true));
+    // Its own `/health`, on its port: the image's inherited check probes the catalog's 8080.
+    let test: Vec<&str> = svc["healthcheck"]["test"]
+        .as_sequence()
+        .expect("a healthcheck test")
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        test,
+        [
+            "CMD",
+            "/usr/local/bin/uc-server",
+            "healthcheck",
+            "--url",
+            "http://127.0.0.1:8090/health"
+        ]
+    );
+    assert!(svc["healthcheck"]["disable"].is_null());
 }
 
 #[test]

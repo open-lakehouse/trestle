@@ -116,9 +116,8 @@ fn every_rendered_container_is_a_service_or_a_declared_helper() {
 }
 
 /// Long-running services (`restart: unless-stopped`) with nothing to probe: a worker with no
-/// listener of its own, and `uc-mcp`, whose image has no probe that accepts its `/health` body
-/// (`uc-server healthcheck` wants `OK`, `uc mcp serve` answers `ok`).
-const UNPROBED: &[&str] = &["omnigent-host", "uc-mcp"];
+/// listener of its own.
+const UNPROBED: &[&str] = &["omnigent-host"];
 
 #[test]
 fn every_long_running_service_has_a_health_check() {

@@ -30,7 +30,7 @@ pub const MLFLOW: &str = "ghcr.io/mlflow/mlflow:v3.18.0-full";
 /// Unity Catalog server.
 pub const UNITY_CATALOG: &str = "unitycatalog/unitycatalog:v0.7.0";
 /// mangrove's Rust Unity Catalog server (migrate + serve + healthcheck), and its `uc` CLI (MCP server).
-pub const UNITY_CATALOG_RS: &str = "ghcr.io/open-lakehouse/mangrove:0.0.21";
+pub const UNITY_CATALOG_RS: &str = "ghcr.io/open-lakehouse/mangrove:0.0.22";
 /// The Python runtime for Unity Catalog's storage registration helper (stdlib only).
 pub const UNITY_CATALOG_STORAGE: &str = "python:3.15-alpine";
 /// Jaeger all-in-one tracing backend.

@@ -41,9 +41,10 @@ services:
       - "{{ p.host }}:{{ p.container }}"
 {%- endfor %}
 {%- endif %}
-    # No healthcheck yet, and the image's own (the catalog server's, on :8080) is turned off. The
-    # image has no shell or curl, and the probe it ships (`uc-server healthcheck`) expects the
-    # body `OK`, while `uc mcp serve` answers `GET /health` with `ok`. Nothing waits on this
-    # service's health.
+    # Replaces the image's own check, which probes the catalog server's port (8080).
     healthcheck:
-      disable: true
+      test: ["CMD", "/usr/local/bin/uc-server", "healthcheck", "--url", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5

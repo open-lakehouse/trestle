@@ -624,7 +624,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/open-lakehouse/mangrove:0.0.21",
+          default: "ghcr.io/open-lakehouse/mangrove:0.0.22",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           advanced: true,
@@ -804,7 +804,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/open-lakehouse/mangrove:0.0.21",
+          default: "ghcr.io/open-lakehouse/mangrove:0.0.22",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           advanced: true,
