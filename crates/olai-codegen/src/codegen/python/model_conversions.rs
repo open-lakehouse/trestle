@@ -915,7 +915,7 @@ impl FieldAccessor {
         is_boxed: bool,
         hidden_zero: bool,
     ) -> Self {
-        let ident = crate::utils::field_ident(&super::sanitize_python_field_name(&field.name));
+        let ident = super::py_ident(&field.name);
         // A map is in the project when its values are.
         let element = match &field.unified_type.base_type {
             BaseType::Map(_, value) => &value.base_type,
@@ -1518,8 +1518,7 @@ impl OneofAccessor {
         runtime: Runtime,
         packages: &BTreeSet<String>,
     ) -> Self {
-        let field_ident =
-            crate::utils::field_ident(&super::sanitize_python_field_name(&field.name));
+        let field_ident = super::py_ident(&field.name);
 
         // The oneof enum's name in the IR is already `<msg_snake>::<OneofPascal>`
         // (built in `parsing/message.rs`); it lives in the message's parent module.
@@ -1621,8 +1620,7 @@ impl OneofAccessor {
 
 impl OneofVariantAccessor {
     fn new(variant: &OneofVariant, packages: &BTreeSet<String>) -> Self {
-        let param_ident =
-            crate::utils::field_ident(&super::sanitize_python_field_name(&variant.field_name));
+        let param_ident = super::py_ident(&variant.field_name);
         let variant_ident = format_ident!("{}", variant.variant_name);
 
         let (is_message, is_enum) = match &variant.field_type.base_type {

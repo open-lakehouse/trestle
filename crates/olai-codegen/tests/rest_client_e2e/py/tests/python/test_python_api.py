@@ -172,6 +172,11 @@ assert [w.name for w in client.search_widgets("w", ["a"], {"t": [1, 2]}).widgets
 assert [w.name for w in client.stream_widgets()] == ["w1", "w2"]
 version = client.widget_version("w")
 assert (version.name, version.version, version.etag) == ("w", 7, "abc"), version
+# Keyword-named params: `from` is a Python keyword (passed as `from_`), `self` a Rust one.
+signature = DemoClient.widget_version.__text_signature__
+assert "from_=None" in signature and "self_=None" in signature, signature
+version = client.widget_version("w", from_="here", self_="me")
+assert version.name == "w", version
 
 # Raw bodies as `bytes`.
 assert client.put_blob("x/y", b"\x00\x01\xff") is None

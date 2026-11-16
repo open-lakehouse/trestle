@@ -25,6 +25,8 @@ pub(super) fn format_method_docstring_with_params(method: &MethodHandler<'_>) ->
         docstring_parts.push("Args:".to_string());
         for (param_name, param_doc) in param_docs {
             let cleaned_param_doc = clean_and_format_description(&param_doc);
+            // Document the keyword arg as callers pass it (`from_`, not `from`).
+            let param_name = super::sanitize_python_field_name(&param_name);
             let wrapped_param = format_parameter_description(&param_name, &cleaned_param_doc);
             docstring_parts.push(wrapped_param);
         }

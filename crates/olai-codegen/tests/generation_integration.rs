@@ -1309,12 +1309,28 @@ fn keyword_named_params_generate_raw_identifiers() {
             // A `get` with `body: "*"` reads its body too.
             "impl<S: Send + Sync> axum::extract::FromRequest<S> for FindEventsRequest",
             "let r#match = body.r#match;",
+            // Path keywords take a `_` suffix; the query key keeps the proto name.
+            "let axum::extract::Path(super_) = parts",
+            "#[serde(rename = \"self\")]",
         ] {
             assert!(
                 common.contains(binding),
                 "{runtime:?}: extractors bind `{binding}`:\n{common}"
             );
         }
+        // Python keyword args are suffixed (`from_`, `in_`), never a raw ident that PyO3 would
+        // expose as the unusable `from` / `in`.
+        let python = read_all(&tmp.path().join("python"));
+        for param in ["from_: ", "in_: "] {
+            assert!(
+                python.contains(param),
+                "{runtime:?}: Python binding takes `{param}`:\n{python}"
+            );
+        }
+        assert!(
+            !python.contains("r#in") && !python.contains(" from:"),
+            "{runtime:?}: Python binding exposes a keyword arg:\n{python}"
+        );
         let models = read_all(&tmp.path().join("models"));
         assert!(
             models.contains("self.r#type"),

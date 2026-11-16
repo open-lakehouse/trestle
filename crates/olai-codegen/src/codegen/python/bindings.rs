@@ -601,7 +601,7 @@ impl BindingBackend for PyBackend<'_> {
                 if driver::is_seeded_page_token(method, param) {
                     return quote! { ::std::string::String::new() };
                 }
-                let param_name = param.field_ident();
+                let param_name = super::py_ident(param.name());
                 // Required message/enum params arrive as their `Py` wrapper and must
                 // be converted back to the bare model the Rust client takes.
                 convert_param_value(param.field_type(), quote! { #param_name })
@@ -792,6 +792,10 @@ impl SetterRender for PyBackend<'_> {
         true
     }
 
+    fn param_ident(&self, name: &str) -> Ident {
+        super::py_ident(name)
+    }
+
     fn render_setter(
         &self,
         setter: &OptionalSetter<'_>,
@@ -859,7 +863,7 @@ fn python_param_defs(method: &MethodHandler<'_>, mode: BindingMode) -> Vec<Token
         .param_plan(mode)
         .into_iter()
         .map(|p| {
-            let param_name = p.field_ident();
+            let param_name = super::py_ident(p.name());
             if json_param(p.field_type()).is_some() {
                 return if p.is_optional() {
                     quote! { #param_name: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>> }
@@ -1021,7 +1025,7 @@ fn pyo3_signature(
     let mut signature_parts = Vec::new();
     let mut star = keyword_only;
     for p in method.param_plan(mode).iter() {
-        let ident = p.field_ident();
+        let ident = super::py_ident(p.name());
         if p.is_optional() {
             if std::mem::take(&mut star) {
                 signature_parts.push(quote! { * });

@@ -102,6 +102,12 @@ fn is_list_method(method: &MethodHandler<'_>) -> bool {
     matches!(method.plan.request_type, RequestType::List)
 }
 
+/// The Rust ident of a Python-facing name (a keyword arg or attribute): a Python keyword gets a
+/// `_` suffix (`from` → `from_`) so callers can pass it, then Rust keywords are escaped.
+pub(crate) fn py_ident(field_name: &str) -> proc_macro2::Ident {
+    crate::utils::field_ident(&sanitize_python_field_name(field_name))
+}
+
 fn sanitize_python_field_name(field_name: &str) -> String {
     match field_name {
         "not" | "and" | "or" | "is" | "in" | "def" | "class" | "if" | "else" | "for" | "while"

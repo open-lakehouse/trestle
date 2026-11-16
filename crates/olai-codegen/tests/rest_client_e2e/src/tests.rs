@@ -578,6 +578,42 @@ async fn keyword_body_field_round_trips_through_the_extractor() {
     assert_eq!(extracted.all(), [r#"w blue Some("color")"#]);
 }
 
+/// A query param named after a path keyword (`self`) is the `self_` field in Rust and the `self`
+/// key on the wire, through the client and the generated extractor.
+#[cfg(feature = "axum")]
+#[tokio::test]
+async fn path_keyword_query_param_round_trips_through_the_extractor() {
+    use crate::models::demo::v1::WidgetVersionRequest;
+
+    let seen = Seen::default();
+    let app = Router::new()
+        .route(
+            "/api/v1/widgets/{name}/version",
+            get(
+                |State(seen): State<Seen>, uri: OriginalUri, request: WidgetVersionRequest| async move {
+                    seen.push(format!(
+                        "{} {} {:?}",
+                        uri.query().unwrap_or_default(),
+                        request.name,
+                        request.self_
+                    ));
+                    axum::Json(json!({"name": request.name}))
+                },
+            ),
+        )
+        .with_state(seen.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = DemoClient::new_unauthenticated(format!("http://{addr}/").parse().unwrap());
+    client
+        .widget_version("w")
+        .with_self("me".to_string())
+        .await
+        .unwrap();
+    assert_eq!(seen.all(), [r#"self=me w Some("me")"#]);
+}
+
 #[tokio::test]
 async fn ndjson_answers_and_header_fields() {
     let (base, _seen) = serve().await;

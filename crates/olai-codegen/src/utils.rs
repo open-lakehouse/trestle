@@ -114,9 +114,12 @@ pub mod strings {
     }
 }
 
-/// The Rust identifier of a proto field: raw (`r#type`) for a keyword, as buffa and prost name
-/// such fields.
+/// The Rust identifier of a proto field, as buffa and prost name it: raw (`r#type`) for a keyword,
+/// and suffixed with `_` (`self_`) for the path keywords that can't be raw identifiers.
 pub(crate) fn field_ident(name: &str) -> proc_macro2::Ident {
+    if matches!(name, "self" | "Self" | "super" | "crate") {
+        return proc_macro2::Ident::new(&format!("{name}_"), proc_macro2::Span::call_site());
+    }
     const KEYWORDS: &[&str] = &[
         "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do",
         "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl", "in",

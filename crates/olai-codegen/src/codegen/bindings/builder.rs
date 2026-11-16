@@ -27,6 +27,13 @@ pub(crate) trait SetterRender {
     /// unsupported types; PyO3 accepts everything).
     fn supports(&self, setter: &OptionalSetter<'_>) -> bool;
 
+    /// The ident of the binding parameter that carries `name` (a proto field name). Defaults to
+    /// the Rust field ident; a backend whose callers name parameters (Python keyword args)
+    /// escapes that language's keywords too.
+    fn param_ident(&self, name: &str) -> Ident {
+        crate::utils::field_ident(name)
+    }
+
     /// Render the single chained `.with_<name>(<value>)` call, applying any language-specific
     /// value wrapping (e.g. NAPI enum `try_into`, or the empty collection for a map or repeated
     /// field that was left out).
@@ -81,7 +88,7 @@ fn is_optional_query(param: &QueryParam, is_list: bool) -> bool {
 }
 
 fn render_one<R: SetterRender>(setter: &OptionalSetter<'_>, render: &R) -> TokenStream {
-    let param_ident = crate::utils::field_ident(&strings::operation_to_method_name(setter.name));
+    let param_ident = render.param_ident(&strings::operation_to_method_name(setter.name));
     let with_method = format_ident!("with_{}", setter.name);
     render.render_setter(setter, &param_ident, &with_method)
 }

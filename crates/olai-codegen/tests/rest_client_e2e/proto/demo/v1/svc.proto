@@ -206,6 +206,10 @@ message WidgetLine {
 message WidgetVersionRequest {
   // The name of the widget.
   string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // Who asks. A path keyword as a query param: the field is `self_`, the key `self`.
+  optional string self = 2 [(google.api.field_behavior) = OPTIONAL];
+  // Where the request comes from. A Python keyword: Python callers pass `from_=`.
+  optional string from = 3 [(google.api.field_behavior) = OPTIONAL];
 }
 
 // The version of a widget, partly from the response headers.
