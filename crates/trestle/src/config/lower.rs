@@ -35,13 +35,7 @@ impl TrestleConfig {
 
 impl GenerateConfig {
     fn lower(&self) -> Result<CodeGenConfig> {
-        // Models + Axum extractors are co-located in `<models.dir>/_gen`. The
-        // generator's `common` (extractor) output and the models `_gen` subdir are
-        // the same directory, so `mod.rs` includes the buf-written model files as
-        // plain siblings (`./<pkg>.rs`).
-        let models_root = resolve_dir(&self.models.dir)?;
-        let common = Some(resolve_dir_joined(&self.models.dir, MODELS_GEN_SUBDIR)?);
-        let models = Some(models_root);
+        let models = Some(resolve_dir(&self.models.dir)?);
 
         let server = self
             .servers
@@ -49,6 +43,15 @@ impl GenerateConfig {
             .then_some(self.server.output.as_deref())
             .flatten()
             .map(|src| resolve_dir_joined(src, CODEGEN_SUBDIR))
+            .transpose()?;
+        // Models + Axum extractors are co-located in `<models.dir>/_gen`. The
+        // generator's `common` (extractor) output and the models `_gen` subdir are
+        // the same directory, so `mod.rs` includes the buf-written model files as
+        // plain siblings (`./<pkg>.rs`). Only a server mounts the extractors, so a
+        // client-only config doesn't generate them.
+        let common = server
+            .is_some()
+            .then(|| resolve_dir_joined(&self.models.dir, MODELS_GEN_SUBDIR))
             .transpose()?;
         let client = self
             .clients

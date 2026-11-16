@@ -668,6 +668,40 @@ mod tests {
         assert!(!cfg.generate.servers.rest);
     }
 
+    /// Only a config with a REST server generates the Axum extractors (`common`); a client-only
+    /// config gets the models and the client, not server-side code (#390).
+    #[test]
+    fn extractors_follow_the_server_output() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().display();
+        let client_only = format!(
+            "version: 1\nproject:\n  name: demo\n\
+             generate:\n  models:\n    dir: {root}/common/src/models\n  \
+             clients:\n    rust:\n      output: {root}/client/src\n"
+        );
+        let mut cfg: TrestleConfig = serde_yaml::from_str(&client_only).unwrap();
+        cfg.derive_defaults();
+        let output = cfg.to_codegen_config().unwrap().output;
+        assert!(output.server.is_none() && output.client.is_some());
+        assert_eq!(output.common, None);
+
+        let with_server = format!(
+            "{client_only}  servers:\n    rest: true\n  server:\n    output: {root}/server/src\n"
+        );
+        let mut cfg: TrestleConfig = serde_yaml::from_str(&with_server).unwrap();
+        cfg.derive_defaults();
+        let output = cfg.to_codegen_config().unwrap().output;
+        assert!(output.server.is_some());
+        assert!(
+            output
+                .common
+                .as_deref()
+                .is_some_and(|p| p.ends_with("common/src/models/_gen")),
+            "{:?}",
+            output.common
+        );
+    }
+
     #[test]
     fn rust_client_features_and_handler_impls_parse() {
         let yaml = format!(
