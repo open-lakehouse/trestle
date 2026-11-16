@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.4...stack-wasm-v0.0.5) - 2026-11-16
+
+### Added
+
+- uc-mcp module (#386)
+
 ## [0.0.4](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.3...stack-wasm-v0.0.4) - 2026-11-10
 
 ### Fixed
