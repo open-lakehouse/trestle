@@ -2948,7 +2948,7 @@ dependencies = [
 
 [[package]]
 name = "olai-codegen"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "convert_case",
  "glob",
@@ -3141,7 +3141,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.34"
+version = "0.0.35"
 dependencies = [
  "assert_cmd",
  "async-trait",

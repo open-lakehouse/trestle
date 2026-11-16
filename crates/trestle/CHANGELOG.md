@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.35](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.34...olai-trestle-v0.0.35) - 2026-11-16
+
+### Fixed
+
+- escape keyword-named body fields in extractors (#392)
+
 ## [0.0.32](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.31...olai-trestle-v0.0.32) - 2026-11-14
 
 ### Added
