@@ -3,7 +3,7 @@ services:
   # One-shot: apply the database migrations, then exit. `serve` never migrates and refuses a
   # schema that is behind, so it waits for this job. The database gate is planner-injected.
   unitycatalog-migrate:
-    image: ghcr.io/open-lakehouse/mangrove:0.0.12
+    image: ghcr.io/open-lakehouse/mangrove:0.0.21
     restart: "no"
     command: ["migrate", "--config", "/etc/uc-server/config.yaml"]
     depends_on:
@@ -19,7 +19,7 @@ services:
         target: /etc/uc-server/config.yaml
 
   unitycatalog:
-    image: ghcr.io/open-lakehouse/mangrove:0.0.12
+    image: ghcr.io/open-lakehouse/mangrove:0.0.21
     restart: unless-stopped
     command: ["serve", "--config", "/etc/uc-server/config.yaml"]
     depends_on:

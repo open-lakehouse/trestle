@@ -72,6 +72,8 @@ impl Role {
     pub const GRAPH: &'static str = "graph";
     /// `orchestration` — a pipeline orchestrator: schedules and runs data assets / jobs.
     pub const ORCHESTRATION: &'static str = "orchestration";
+    /// `mcp_server` — a Model Context Protocol server exposing tools to agents.
+    pub const MCP_SERVER: &'static str = "mcp_server";
 
     /// The roles the planner fills from the environment itself rather than the module
     /// selection: the always-on [`GATEWAY`](Self::GATEWAY) and the
@@ -127,6 +129,10 @@ impl Role {
     /// The `orchestration` role.
     pub fn orchestration() -> Role {
         Role::new(Self::ORCHESTRATION)
+    }
+    /// The `mcp_server` role.
+    pub fn mcp_server() -> Role {
+        Role::new(Self::MCP_SERVER)
     }
     /// The `app_runtime` role.
     pub fn app_runtime() -> Role {

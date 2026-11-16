@@ -179,6 +179,7 @@ the stack serves:
 | `jaeger` | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` |
 | `rustfs` | `AWS_ENDPOINT_URL_S3`, `AWS_REGION` |
 | `omnigent` | `OMNIGENT_URL` |
+| `uc-mcp` | `UC_MCP_URL` |
 | `puppygraph` | `PUPPYGRAPH_URL`, `PUPPYGRAPH_BOLT_ADDRESS`, `PUPPYGRAPH_GREMLIN_ADDRESS` (`host:port`) |
 | `rivers` | `RIVERS_URL` |
 
@@ -270,6 +271,23 @@ stack. With gateway sign-in on, Omnigent trusts the identity the gateway asserts
 its users are the Authelia users, and with policy on the policy applies (chatting needs `writers` or
 `admins`). An agent host can't present that identity, so the in-stack host is not rendered
 while the gateway authenticates.
+
+### Unity Catalog tools over MCP (`uc-mcp`)
+
+The `uc-mcp` module runs mangrove's `uc mcp serve` (from the `unity-catalog-rs` image) over
+Streamable HTTP, so agents get Unity Catalog tools. It requires `unity-catalog-rs`, since
+principal search uses mangrove's SCIM API, and calls that server directly on the compose network.
+
+- **Addresses.** At the gateway it is `<gateway>/uc-mcp/mcp` (`UC_MCP_URL`; the route has no
+  request timeout, for the event streams). In-network it is `http://uc-mcp:8090/uc-mcp/mcp`,
+  which an agent bundle running on the in-stack host can name directly.
+- **Tools.** Tools that only an MCP App's UI should call are offered only to clients that declare
+  the `io.modelcontextprotocol/ui` extension when they initialize.
+- **Auth.** The server does no inbound authentication; the gateway is its only boundary (its
+  sign-in gates the route when on). It calls the catalog with no token, because the local server
+  is anonymous. It accepts only these `Host` values: `localhost`, `127.0.0.1`, `uc-mcp`, and the
+  gateway's host-side and in-network names (`envoy`, or `<env>.localhost` and `<env>.internal`
+  under sign-in).
 
 ## Graph queries (PuppyGraph)
 

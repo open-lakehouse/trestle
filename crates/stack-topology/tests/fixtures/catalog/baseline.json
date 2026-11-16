@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:436cd625900e27b6bdc5a09feed2474005605c03f59ef626cee46662240b3e98"
+    "digest": "sha256:f7328725cdf969e20de2867e01997d134893ca8e9ef1ae0d8b9049fb31c210e8"
   },
   "modules": [
     {
@@ -672,7 +672,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/mangrove:0.0.12",
+          "default": "ghcr.io/open-lakehouse/mangrove:0.0.21",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "advanced": true
@@ -842,6 +842,47 @@
           "aliases": [
             "OMNIGENT_HOST_IMAGE"
           ],
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
+    },
+    {
+      "id": "uc-mcp",
+      "model": "ucMcp",
+      "display_name": "Unity Catalog MCP",
+      "summary": "Unity Catalog tools for agents, served over MCP (mangrove's `uc`).",
+      "category": "agents",
+      "provider_of": null,
+      "requires": [
+        "envoy",
+        "unity-catalog-rs"
+      ],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Unity Catalog MCP image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/open-lakehouse/mangrove:0.0.21",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "advanced": true
+        },
+        {
+          "key": "uc_url",
+          "title": "Unity Catalog URL",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "http://unitycatalog:8080",
+          "required": false,
+          "help": "Where the MCP server reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
           "advanced": true
         }
       ],

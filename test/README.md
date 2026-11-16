@@ -17,6 +17,7 @@ Each scenario is a source `env.toml` under `scenarios/` (plus a placeholder
 | **authenticated** | lakehouse + `[selection.gateway] auth = true` | Authelia pulled in automatically; forward-auth on API/UI routes |
 | **authorized** | lakehouse + headwaters, `[selection.gateway] auth = true, policy = true` | Authelia plus OPA policy checks at the gateway (`policies/authz.rego`) |
 | **agents** | lakehouse + jaeger, omnigent | The agent runtime on MLflow's AI gateway, with tracing |
+| **agents-rs** | lakehouse-rs + omnigent, uc-mcp | Unity Catalog tools for agents over MCP (`uc mcp serve`), at the gateway and in-network |
 | **full-azure** | lakehouse modules on Azurite + jaeger, headwaters | Provider substitution (`object_store=azurite`), tracing, lineage UI |
 | **hybrid** | lakehouse on the hosted `hosted-postgres` and `aws-s3` providers (AWS RDS + S3) | Hosted resources: nothing rendered for them, consumers bind the hosted connection, `${VAR}` secrets resolved from `secrets.env` (placeholders) |
 | **neon-hybrid** | mlflow, omnigent on a Neon branch (`hosted-postgres` vendor `neon`, `neon-storage`); unity-catalog, headwaters as Neon Functions | Hosted modules running as `neon-function`s; `secrets.env` stands in for what binding the branch supplies (`trestle up --neon-branch`) |

@@ -159,11 +159,12 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
         jaeger(),
         headwaters(),
         omnigent(),
+        uc_mcp(),
         marimo(),
         puppygraph(),
         rivers(),
         opa(),
-    ] as [Arc<dyn Module>; 19])
+    ] as [Arc<dyn Module>; 20])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     .with_default_provider(Role::RELATIONAL_DB, "postgres")
     // Selecting the `data_catalog` capability picks the OSS server.
@@ -2397,6 +2398,86 @@ fn omnigent() -> Arc<dyn Module> {
     Arc::new(Omnigent::new())
 }
 
+/// The compose service (and module id) of [`uc_mcp`].
+const UC_MCP_SERVICE: &str = "uc-mcp";
+/// The port `uc mcp serve` listens on in its container.
+const UC_MCP_PORT: u16 = 8090;
+/// Where the MCP endpoint is served, in-network and at the gateway alike. The server answers
+/// `/health` beside it, unrouted.
+const UC_MCP_PATH: &str = "/uc-mcp/mcp";
+
+/// `uc-mcp` — the Unity Catalog tools for agents: mangrove's `uc mcp serve` over Streamable
+/// HTTP, fronted at the gateway at `/uc-mcp/mcp` (`UC_MCP_URL`) and reached in-network at
+/// `http://uc-mcp:8090/uc-mcp/mcp`.
+///
+/// It runs from the same image as [`unity_catalog_rs`] and calls that server directly on the
+/// compose network, with the credentials it was started with: none, since the local server is
+/// anonymous. It needs mangrove's server rather than the OSS one, because some of its tools
+/// (principal search) use mangrove's SCIM API. Tools that only an MCP App's UI should call are
+/// offered only to clients that declare the `io.modelcontextprotocol/ui` extension.
+///
+/// The server does no inbound authentication: the gateway is its only boundary (its sign-in
+/// gates the route when forward-auth is on). It checks the `Host` header against an allowlist:
+/// the gateway's host-side and in-network names (which Envoy forwards unchanged), its own
+/// service name, and loopback.
+///
+/// It is its own module and service rather than part of the catalog's, so a host can bind it
+/// independently of the catalog.
+fn uc_mcp() -> Arc<dyn Module> {
+    let mut provides = Provides::default();
+    provides.client_env.insert(
+        "UC_MCP_URL".into(),
+        ClientValue::endpoint(UC_MCP_SERVICE, "mcp", UrlPart::Full),
+    );
+    let uc_url = format!("http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}");
+    Arc::new(DataModule {
+        id: ModuleId::from(UC_MCP_SERVICE),
+        model: Some("ucMcp".into()),
+        display_name: Some("Unity Catalog MCP".into()),
+        summary: Some("Unity Catalog tools for agents, served over MCP (mangrove's `uc`).".into()),
+        category: Some("agents".into()),
+        provider_of: None,
+        requires: vec![ModuleId::from("envoy"), ModuleId::from("unity-catalog-rs")],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: UC_MCP_SERVICE.into(),
+            role: Role::mcp_server(),
+            placement: container(UC_MCP_SERVICE),
+            base_path: String::new(),
+            // Streamable HTTP holds a long-lived GET event stream open and answers POSTs as
+            // event streams, so the route carries no timeout. The server serves at the same
+            // path the gateway mounts, so it is forwarded unchanged.
+            endpoints: vec![
+                Endpoint::api("mcp", UC_MCP_PORT, UC_MCP_PATH, Rewrite::Passthrough).streaming(),
+            ],
+            depends_on: vec![UNITY_CATALOG_SERVICE.into()],
+        }],
+        provides,
+        knobs: vec![
+            string_knob(
+                "image",
+                "Unity Catalog MCP image",
+                Some(images::UNITY_CATALOG_RS),
+                IMAGE_HELP,
+                None,
+            ),
+            string_knob(
+                "uc_url",
+                "Unity Catalog URL",
+                Some(&uc_url),
+                "Where the MCP server reaches Unity Catalog's REST API, directly on the compose \
+                 network (not through the gateway).",
+                None,
+            ),
+        ],
+        renders: template(include_str!(
+            "../../templates/modules/uc-mcp/compose.yaml.jinja"
+        ))
+        .for_compose(),
+    })
+}
+
 /// Where marimo serves its editor (pages, API, kernel WebSockets) at the gateway.
 const MARIMO_BASE_PATH: &str = "/marimo";
 /// The port the marimo editor listens on in its container.
@@ -2853,6 +2934,7 @@ mod tests {
             ("jaeger", "jaeger"),
             ("headwaters", "headwaters"),
             ("omnigent", "omnigent"),
+            ("uc-mcp", "ucMcp"),
             ("marimo", "marimo"),
             ("puppygraph", "puppygraph"),
             ("rivers", "rivers"),

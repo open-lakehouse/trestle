@@ -1,0 +1,49 @@
+# Unity Catalog MCP: mangrove's `uc mcp serve` over Streamable HTTP
+{#- The `Host` values the server accepts (`host` allows any port): loopback, its own service
+    name for in-network clients that call it directly, and the gateway's host-side and
+    in-network names, which Envoy forwards unchanged. A list replaces the server's loopback
+    default, so loopback is listed too. #}
+{%- set allowed_hosts = ["localhost", "127.0.0.1", "uc-mcp"] %}
+{%- if env.GATEWAY_HOST and env.GATEWAY_HOST not in allowed_hosts %}
+{%- set allowed_hosts = allowed_hosts + [env.GATEWAY_HOST] %}
+{%- endif %}
+{%- if env.GATEWAY_INTERNAL_HOST and env.GATEWAY_INTERNAL_HOST not in allowed_hosts %}
+{%- set allowed_hosts = allowed_hosts + [env.GATEWAY_INTERNAL_HOST] %}
+{%- endif %}
+services:
+  uc-mcp:
+    image: {{ knobs.image }}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/uc"]
+    # No token: the local Unity Catalog server is anonymous. The server does no inbound
+    # authentication; the gateway is its only boundary.
+    command:
+      - --server
+      - "{{ knobs.uc_url }}"
+      - mcp
+      - serve
+      - --http
+      - 0.0.0.0:8090
+      - --path
+      - /uc-mcp/mcp
+{%- for host in allowed_hosts %}
+      - --allowed-host
+      - "{{ host }}"
+{%- endfor %}
+    depends_on:
+      unitycatalog:
+        condition: service_healthy
+    expose:
+      - "8090"
+{%- if published_ports %}
+    ports:
+{%- for p in published_ports %}
+      - "{{ p.host }}:{{ p.container }}"
+{%- endfor %}
+{%- endif %}
+    # No healthcheck yet, and the image's own (the catalog server's, on :8080) is turned off. The
+    # image has no shell or curl, and the probe it ships (`uc-server healthcheck`) expects the
+    # body `OK`, while `uc mcp serve` answers `GET /health` with `ok`. Nothing waits on this
+    # service's health.
+    healthcheck:
+      disable: true
