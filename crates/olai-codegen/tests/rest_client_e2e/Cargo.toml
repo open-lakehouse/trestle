@@ -10,12 +10,18 @@ edition = "2024"
 publish = false
 
 [features]
+default = ["axum"]
+# The generated Axum request extractors (`models::_gen::extractors`), gated on `axum` in the
+# models `mod.rs`.
+axum = ["dep:axum", "dep:axum-extra"]
 # The PyO3 wrappers of the models, used by the `py` crate.
 python = ["dep:pyo3"]
 # The client on `olai_http::CloudClient` (dual-transport), not the generated `reqwest` transport.
 cloud = ["dep:olai-http"]
 
 [dependencies]
+axum = { version = "0.8", optional = true }
+axum-extra = { version = "0.12", features = ["query"], optional = true }
 buffa = { version = "0.7", features = ["json"] }
 buffa-types = { version = "0.7", features = ["json"] }
 futures = "0.3"
@@ -38,4 +44,4 @@ protobuf = "3"
 
 [package.metadata.cargo-machete]
 # Used only by the generated code.
-ignored = ["pyo3", "reqwest", "serde"]
+ignored = ["axum-extra", "pyo3", "reqwest", "serde"]

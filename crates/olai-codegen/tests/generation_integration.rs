@@ -1301,10 +1301,101 @@ fn keyword_named_params_generate_raw_identifiers() {
                 "{runtime:?}: extractors bind `{ident}`:\n{common}"
             );
         }
+        // Path fields next to keyword-named body fields (#390): one body field binds plainly,
+        // several destructure a tuple. Both read the body field as `body.r#type`.
+        for binding in [
+            "let r#type = body.r#type;",
+            "let (r#type, data) = (body.r#type, body.data);",
+            // A `get` with `body: "*"` reads its body too.
+            "impl<S: Send + Sync> axum::extract::FromRequest<S> for FindEventsRequest",
+            "let r#match = body.r#match;",
+        ] {
+            assert!(
+                common.contains(binding),
+                "{runtime:?}: extractors bind `{binding}`:\n{common}"
+            );
+        }
         let models = read_all(&tmp.path().join("models"));
         assert!(
             models.contains("self.r#type"),
             "{runtime:?}: resource name accessors read `self.r#type`:\n{models}"
+        );
+        // The raw-ident prefix never leaks into a non-Rust output (TS, Python stubs).
+        for path in walk(tmp.path())
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e != "rs"))
+        {
+            let src = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                !src.contains("r#"),
+                "{runtime:?}: {} carries a raw-ident prefix",
+                path.display()
+            );
+        }
+    }
+}
+
+/// A client-only config (models + Rust client, no server), the shape that hit #390, generates
+/// parseable code for keyword-named body fields next to path fields.
+#[test]
+fn client_only_config_with_keyword_body_fields_parses() {
+    for runtime in [olai_codegen::Runtime::Prost, olai_codegen::Runtime::Buffa] {
+        let tmp = TempDir::new().unwrap();
+        let mut config = full_client_config(tmp.path());
+        config.runtime = runtime;
+        config.output.server = None;
+        generate_code(&edge_case_metadata(), &config)
+            .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
+        for path in walk(tmp.path())
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        {
+            let src = std::fs::read_to_string(&path).unwrap();
+            syn::parse_file(&src)
+                .unwrap_or_else(|e| panic!("{runtime:?}: {} does not parse: {e}", path.display()));
+        }
+        let client = read_all(&tmp.path().join("client"));
+        assert!(
+            client.contains("post_event"),
+            "{runtime:?}: client has post_event:\n{client}"
+        );
+    }
+}
+
+/// `proto/example_keyword_oneof.bin`, compiled from `proto/example_keyword_oneof.proto`.
+/// Regenerate it from the crate root with:
+///
+/// ```sh
+/// protoc -I proto -I tests/rest_client_e2e/proto --include_imports \
+///   -o proto/example_keyword_oneof.bin proto/example_keyword_oneof.proto
+/// ```
+fn keyword_oneof_metadata() -> CodeGenMetadata {
+    let bytes = include_bytes!("../proto/example_keyword_oneof.bin");
+    let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
+    parse_file_descriptor_set(&fds).expect("parse succeeds")
+}
+
+/// A request oneof variant named after a keyword gets a builder setter with a raw-ident parameter.
+#[test]
+fn keyword_named_oneof_variant_setter_uses_raw_identifier() {
+    for runtime in [olai_codegen::Runtime::Prost, olai_codegen::Runtime::Buffa] {
+        let tmp = TempDir::new().unwrap();
+        let mut config = full_client_config(tmp.path());
+        config.runtime = runtime;
+        generate_code(&keyword_oneof_metadata(), &config)
+            .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
+        for path in walk(tmp.path())
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        {
+            let src = std::fs::read_to_string(&path).unwrap();
+            syn::parse_file(&src)
+                .unwrap_or_else(|e| panic!("{runtime:?}: {} does not parse: {e}", path.display()));
+        }
+        let client = read_all(&tmp.path().join("client"));
+        assert!(
+            client.contains("pub fn with_ref(mut self, r#ref: "),
+            "{runtime:?}: oneof setter takes `r#ref`:\n{client}"
         );
     }
 }

@@ -460,7 +460,10 @@ pub(crate) fn analyze_method(
     // A method whose HTTP rule names a body has one, whatever the verb.
     let has_request_body =
         types::request_has_body(&request_type) || !method.http_rule.body.is_empty();
-    let needs_request_parts = types::request_needs_request_parts(&request_type);
+    // A read verb that names a body (e.g. `get` with `body: "*"`) reads the body too, so it
+    // needs the `FromRequest` extractor, not `FromRequestParts`.
+    let needs_request_parts =
+        types::request_needs_request_parts(&request_type) && method.http_rule.body.is_empty();
     let scoped_verb = types::scoped_verb(&request_type);
     let (raw_request_body, raw_response_body) = raw_bodies(metadata, method, &input_fields)?;
     let request_headers = request_headers(method, &input_fields)?;

@@ -438,7 +438,7 @@ fn generate_oneof_variant_methods(
         .iter()
         .map(|variant| {
             let method_name = format_ident!("with_{}", variant.field_name);
-            let param_ident = format_ident!("{}", variant.field_name.replace("_", ""));
+            let param_ident = crate::utils::field_ident(&variant.field_name.replace('_', ""));
             let variant_name = format_ident!("{}", variant.variant_name);
 
             // Derive the Rust parameter type from the UnifiedType abstraction. Hard-fail with

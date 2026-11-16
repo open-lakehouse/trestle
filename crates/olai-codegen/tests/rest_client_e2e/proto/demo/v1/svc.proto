@@ -179,6 +179,8 @@ message TagWidgetRequest {
   string name = 1 [(google.api.field_behavior) = REQUIRED];
   // The tag to add.
   string tag = 2 [(google.api.field_behavior) = REQUIRED];
+  // The kind of tag. A keyword-named body field next to a path field.
+  optional string type = 3 [(google.api.field_behavior) = OPTIONAL];
 }
 
 message RenameWidgetRequest {

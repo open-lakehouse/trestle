@@ -74,6 +74,7 @@ fn demo_config(out: &Path) -> CodeGenConfig {
         dual_transport: cloud(),
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        authz: None,
         rest_client: RestClientOptions {
             json_int64_as_number: true,
             ignore_unknown_enum_values: true,

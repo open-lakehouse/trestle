@@ -5,6 +5,7 @@ import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "google/api/resource.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 
 // Edge cases the main `example.bin` fixture doesn't reach. Compiled into the committed
 // `example_edge_cases.bin` (see `tests/generation_integration.rs` for the protoc command).
@@ -109,4 +110,44 @@ message Route {
     int64 source_id = 4;
   }
   string note = 5;
+}
+
+// Path fields next to `body: "*"` fields named after a Rust keyword: the hybrid extractor binds and
+// reads them as `r#type`, for one body field and for several.
+service EventService {
+  rpc PostTag(PostTagRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/sessions/{session_id}/tags"
+      body: "*"
+    };
+  }
+  rpc PostEvent(PostEventRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/sessions/{session_id}/events"
+      body: "*"
+    };
+  }
+  // A read verb with a body: the extractor reads the body (`FromRequest`), not just the parts.
+  rpc FindEvents(FindEventsRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      get: "/sessions/{session_id}/events"
+      body: "*"
+    };
+  }
+}
+
+message PostTagRequest {
+  string session_id = 1;
+  string type = 2;
+}
+
+message PostEventRequest {
+  string session_id = 1;
+  string type = 2;
+  google.protobuf.Struct data = 3;
+}
+
+message FindEventsRequest {
+  string session_id = 1;
+  string match = 2;
 }

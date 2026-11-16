@@ -529,6 +529,55 @@ async fn path_values_stay_out_of_the_body() {
     );
 }
 
+/// A keyword-named body field next to a path field (#390) goes on the wire as `"type"`, and the
+/// generated Axum extractor reads it back into `r#type` alongside the path value.
+#[cfg(feature = "axum")]
+#[tokio::test]
+async fn keyword_body_field_round_trips_through_the_extractor() {
+    use crate::models::demo::v1::TagWidgetRequest;
+
+    let (base, seen) = serve().await;
+    let client = DemoClient::new_unauthenticated(base);
+    client
+        .tag_widget("w", "blue")
+        .with_type("color".to_string())
+        .await
+        .unwrap();
+    assert!(
+        seen.all()
+            .contains(&r#"tag w body {"tag":"blue","type":"color"}"#.to_string()),
+        "{:?}",
+        seen.all()
+    );
+
+    // The same request, through a server that uses the generated extractor.
+    let extracted = Seen::default();
+    let app = Router::new()
+        .route(
+            "/api/v1/widgets/{name}/tags",
+            post(
+                |State(seen): State<Seen>, request: TagWidgetRequest| async move {
+                    seen.push(format!(
+                        "{} {} {:?}",
+                        request.name, request.tag, request.r#type
+                    ));
+                    StatusCode::OK
+                },
+            ),
+        )
+        .with_state(extracted.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = DemoClient::new_unauthenticated(format!("http://{addr}/").parse().unwrap());
+    client
+        .tag_widget("w", "blue")
+        .with_type("color".to_string())
+        .await
+        .unwrap();
+    assert_eq!(extracted.all(), [r#"w blue Some("color")"#]);
+}
+
 #[tokio::test]
 async fn ndjson_answers_and_header_fields() {
     let (base, _seen) = serve().await;

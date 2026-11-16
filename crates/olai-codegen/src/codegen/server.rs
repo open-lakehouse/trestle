@@ -285,7 +285,7 @@ fn generate_body_extractions_tokens(method: &MethodPlan, response_type: &Ident) 
     } else {
         let field_names: Vec<_> = body_fields
             .iter()
-            .map(|f| format_ident!("{}", f.name))
+            .map(|f| crate::utils::field_ident(&f.name))
             .collect();
         // A single body field is a plain binding, not a 1-tuple destructure — `(x) = (y)`
         // trips `unused_parens`.
