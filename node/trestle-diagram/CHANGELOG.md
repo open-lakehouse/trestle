@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.11.4...trestle-diagram-v0.11.5) - 2026-11-16
+
+### Fixed
+
+- probe uc-mcp's health (#388)
+
 ## [0.11.4](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.11.3...trestle-diagram-v0.11.4) - 2026-11-16
 
 ### Added
