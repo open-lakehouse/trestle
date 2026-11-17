@@ -34,8 +34,29 @@ impl SecretProvider for Vault {
     }
 }
 
+/// A stand-in for this process's environment, as the provider called `env`.
+struct Env(BTreeMap<&'static str, &'static str>);
+
+impl SecretProvider for Env {
+    fn name(&self) -> &str {
+        olai_stack_runtime::ENV_PROVIDER
+    }
+
+    fn get(&self, key: &str) -> Result<SecretValue, SecretError> {
+        self.0
+            .get(key)
+            .map(|v| SecretValue::new(*v))
+            .ok_or_else(|| SecretError::Missing {
+                provider: "env".into(),
+                key: key.into(),
+            })
+    }
+}
+
 const PG_SENTINEL: &str = "pgSENTINELvalue0123456789";
 const S3_SENTINEL: &str = "s3SENTINELvalue0123456789";
+/// MLflow's key passphrase, a secret its module declares, set only in the process env.
+const KEK_SENTINEL: &str = "kekSENTINELvalue0123456789";
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -46,11 +67,16 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with_env([("MLFLOW_CRYPTO_KEK_PASSPHRASE", KEK_SENTINEL)].into())
+}
+
+/// A fixture whose process environment holds `env`.
+fn fixture_with_env(env: BTreeMap<&'static str, &'static str>) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().to_owned();
     let store = Arc::new(Store::open(&state.join("state.db")).unwrap());
     let engine = FakeEngine::new();
-    let instances = instances(&store, &engine, &state);
+    let instances = instances(&store, &engine, &state, env);
     Fixture {
         _dir: dir,
         store,
@@ -60,10 +86,17 @@ fn fixture() -> Fixture {
     }
 }
 
-fn instances(store: &Arc<Store>, engine: &FakeEngine, state: &Path) -> Instances<FakeEngine> {
+fn instances(
+    store: &Arc<Store>,
+    engine: &FakeEngine,
+    state: &Path,
+    env: BTreeMap<&'static str, &'static str>,
+) -> Instances<FakeEngine> {
     Instances::new(Arc::clone(store), engine.clone(), state)
         .with_providers(
-            SecretProviders::new().with(Vault([("pg", PG_SENTINEL), ("s3", S3_SENTINEL)].into())),
+            SecretProviders::new()
+                .with(Vault([("pg", PG_SENTINEL), ("s3", S3_SENTINEL)].into()))
+                .with(Env(env)),
         )
         .with_source(UserVars::new(
             [("FROM_USER".to_owned(), "yes".to_owned())].into(),
@@ -191,7 +224,7 @@ async fn a_sentinel_secret_never_reaches_the_tree() {
     walk(&started.dir, &mut files);
     assert!(!files.is_empty());
     for (path, text) in &files {
-        for sentinel in [PG_SENTINEL, S3_SENTINEL] {
+        for sentinel in [PG_SENTINEL, S3_SENTINEL, KEK_SENTINEL] {
             assert!(!text.contains(sentinel), "{sentinel} in {path}");
         }
     }
@@ -211,6 +244,11 @@ async fn a_sentinel_secret_never_reaches_the_tree() {
             "{sentinel} not passed"
         );
     }
+    // A secret a module declares reaches it by name from the process environment.
+    assert_eq!(
+        env.get("MLFLOW_CRYPTO_KEK_PASSPHRASE").map(String::as_str),
+        Some(KEK_SENTINEL)
+    );
     // And the effective environment masks them.
     let effective = f.instances.effective_env(&r2).await.unwrap();
     let masked = effective.masked();
@@ -331,7 +369,12 @@ async fn a_killed_runtime_reconciles_on_restart() {
         .unwrap();
 
     // A fresh runtime on the same store and Docker.
-    let restarted = instances(&f.store, &f.engine, &f.state);
+    let restarted = instances(
+        &f.store,
+        &f.engine,
+        &f.state,
+        [("MLFLOW_CRYPTO_KEK_PASSPHRASE", KEK_SENTINEL)].into(),
+    );
     let report = restarted
         .reconcile(ReconcileOptions {
             remove_orphans: true,
@@ -378,7 +421,13 @@ impl olai_stack_runtime::Source for Echo {
 #[tokio::test]
 async fn a_source_sees_its_binding_config_over_the_workspaces() {
     let f = fixture();
-    let instances = instances(&f.store, &f.engine, &f.state).with_source(Echo);
+    let instances = instances(
+        &f.store,
+        &f.engine,
+        &f.state,
+        [("MLFLOW_CRYPTO_KEK_PASSPHRASE", KEK_SENTINEL)].into(),
+    )
+    .with_source(Echo);
     let (r1, _) = two_revisions(&f);
     let ws = f.store.workspace("demo").unwrap().unwrap();
     f.store
@@ -409,4 +458,38 @@ async fn a_source_sees_its_binding_config_over_the_workspaces() {
         env.get("CONFIG").unwrap().expose(),
         r#"{"branch":"main","project":"p"}"#
     );
+}
+
+#[tokio::test]
+async fn a_missing_required_secret_fails_the_start_before_compose() {
+    let f = fixture_with_env(BTreeMap::new());
+    let (r1, r2) = two_revisions(&f);
+    // Revision 1 (no mlflow) declares none.
+    f.instances.start(&r1).await.unwrap();
+    let err = f.instances.start(&r2).await.unwrap_err();
+    assert!(
+        matches!(&err, InstanceError::MissingSecrets(names)
+            if names == &["MLFLOW_CRYPTO_KEK_PASSPHRASE".to_owned()]),
+        "{err}"
+    );
+    assert!(err.to_string().contains("MLFLOW_CRYPTO_KEK_PASSPHRASE"));
+    assert_eq!(f.engine.projects(), ["demo_dev_r1".to_owned()].into());
+    // Materializing (what `stop` does) still works, and says what is missing.
+    let m = f.instances.materialize(&r2).await.unwrap();
+    assert_eq!(
+        m.missing_secrets(),
+        ["MLFLOW_CRYPTO_KEK_PASSPHRASE".to_owned()]
+    );
+
+    // Set as one of the instance's variables, it is no longer missing.
+    let mut overrides = VarSet::new();
+    overrides.set(
+        "MLFLOW_CRYPTO_KEK_PASSPHRASE",
+        VarValue::Secret(SecretRef {
+            provider: "vault".into(),
+            key: "pg".into(),
+        }),
+    );
+    f.store.set_overrides(&r2, &overrides).unwrap();
+    f.instances.start(&r2).await.unwrap();
 }

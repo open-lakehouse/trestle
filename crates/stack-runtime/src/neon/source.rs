@@ -16,6 +16,10 @@ pub const NEON_SOURCE: &str = "neon";
 
 /// What the storage variables the planner reads start with (`NEON_S3_ENDPOINT`, …).
 pub(super) const S3_VAR_PREFIX: &str = "NEON_S3_";
+/// The variable holding the branch's AI Gateway host.
+pub const AI_GATEWAY_BASE_URL_VAR: &str = "NEON_AI_GATEWAY_BASE_URL";
+/// The variable holding a token that may call the branch's AI Gateway.
+pub const AI_GATEWAY_TOKEN_VAR: &str = olai_stack_topology::NEON_AI_GATEWAY_TOKEN_VAR;
 
 /// An instance's binding to a Neon branch: its [`SourceBinding`] config for
 /// [`NEON_SOURCE`], written by [`bind`](super::bind). It holds no secret, only where the
@@ -37,17 +41,25 @@ pub struct NeonBinding {
     /// The storage credential minted for the instance, when the plan uses object storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_credential: Option<StorageCredentialRef>,
+    /// The credential minted for the instance to call the branch's AI Gateway, when the plan
+    /// does (see [`bind_ai_gateway`](super::bind_ai_gateway)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_gateway_credential: Option<CredentialRef>,
 }
 
-/// A storage credential as a binding refers to it: its id (the S3 access key id) and where its
-/// secret lives.
+/// A credential as a binding refers to it: its id (for a storage credential, the S3 access key
+/// id) and where its secret lives.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StorageCredentialRef {
+pub struct CredentialRef {
     /// The token id.
     pub token_id: String,
-    /// The secret access key's reference.
+    /// The secret's reference: a storage credential's secret access key, an AI Gateway
+    /// credential's token.
     pub secret: SecretRef,
 }
+
+/// A storage credential as a binding refers to it (see [`CredentialRef`]).
+pub type StorageCredentialRef = CredentialRef;
 
 /// The overlay of the Neon branch an instance is bound to (its source config is a
 /// [`NeonBinding`]):
@@ -58,7 +70,10 @@ pub struct StorageCredentialRef {
 /// - object storage, when the binding has a credential: `NEON_S3_ENDPOINT`,
 ///   `NEON_S3_REGION`, `NEON_S3_ACCESS_KEY_ID` and `NEON_S3_SECRET_ACCESS_KEY`;
 /// - every bound function's URL, in its variable (`UNITYCATALOG_FUNCTION_URL`). A function
-///   gone from the branch since binding is an error.
+///   gone from the branch since binding is an error;
+/// - the branch's AI Gateway, when the binding has a credential for it:
+///   `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN`. A gateway disabled since binding is
+///   an error.
 ///
 /// Neon's credentials don't expire, so the overlay never needs a refresh.
 pub struct NeonBranchSource {
@@ -115,6 +130,27 @@ impl NeonBranchSource {
                 ),
                 (format!("{S3_VAR_PREFIX}SECRET_ACCESS_KEY"), secret),
             ]);
+        }
+
+        if let Some(credential) = &binding.ai_gateway_credential {
+            let gateway = self.neon.ai_gateway(project, branch).await?;
+            if !gateway.enabled {
+                return Err(NeonError::NoAiGateway(binding.branch_name.clone()));
+            }
+            overlay.endpoints.insert(
+                AI_GATEWAY_BASE_URL_VAR.to_owned(),
+                gateway.base_url.trim_end_matches('/').to_owned(),
+            );
+            let token =
+                self.secrets
+                    .resolve(&credential.secret)
+                    .map_err(|e| NeonError::Failed {
+                        command: "credentials (stored AI Gateway token)".into(),
+                        stderr: e.to_string(),
+                    })?;
+            overlay
+                .credentials
+                .insert(AI_GATEWAY_TOKEN_VAR.to_owned(), token);
         }
 
         if !binding.functions.is_empty() {

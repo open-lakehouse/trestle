@@ -11,15 +11,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use olai_stack_runtime::neon::{
-    FakeNeon, NEON_SOURCE, NeonBinding, NeonBranchSource, NeonCall, NeonCli, NeonControl,
-    NeonError, StorageCredentialRef, bind, create_owned_branch, delete_owned_branch, expires_in,
+    AI_GATEWAY_BASE_URL_VAR, AI_GATEWAY_TOKEN_VAR, CredentialRef, FakeNeon, NEON_SOURCE,
+    NeonBinding, NeonBranchSource, NeonCall, NeonCli, NeonControl, NeonError, StorageCredentialRef,
+    bind, bind_ai_gateway, create_owned_branch, delete_owned_branch, expires_in,
     reset_owned_branch, unbind,
 };
 use olai_stack_runtime::{
     FakeCall, FakeEngine, Instances, Layer, SecretError, SecretProvider, SecretProviders,
     SecretValue, Source, SourceCtx,
 };
-use olai_stack_state::{Draft, InstanceId, SecretRef, SourceBinding, Store, read_env_dir};
+use olai_stack_state::{
+    Draft, InstanceId, SecretRef, SourceBinding, Store, VarSet, VarValue, read_env_dir,
+};
 use olai_stack_topology::{FunctionRequirement, ModuleId, NeonRequirements};
 
 fn fixtures() -> PathBuf {
@@ -38,6 +41,7 @@ fn stub_neon(dir: &Path, fail_auth: bool) -> (NeonCli, PathBuf) {
             r#"case "$*" in
   "me "*) cat "{fx}/me.json" ;;
   api\ */storage*) cat "{fx}/api-storage.json" ;;
+  api\ */ai_gateway*) cat "{fx}/api-ai-gateway.json" ;;
   "api "*) cat "{fx}/api-branches.json" ;;
   "branches create"*) cat "{fx}/branches-create.json" ;;
   "branches delete"*) cat "{fx}/branches-delete.json" ;;
@@ -47,6 +51,7 @@ fn stub_neon(dir: &Path, fail_auth: bool) -> (NeonCli, PathBuf) {
   "functions list"*) cat "{fx}/functions-list.json" ;;
   "buckets list"*) cat "{fx}/buckets-list.json" ;;
   "buckets create"*) cat "{fx}/buckets-create.json" ;;
+  "credentials create"*ai_gateway:invoke*) cat "{fx}/credentials-create-ai-gateway.json" ;;
   "credentials create"*) cat "{fx}/credentials-create.json" ;;
   "credentials revoke"*) ;;
   "databases list"*) cat "{fx}/databases-list.json" ;;
@@ -123,6 +128,20 @@ async fn the_cli_output_parses_for_every_verb() {
     neon.revoke_credential(p, "main", &credential.token_id)
         .await
         .unwrap();
+    // The branch's AI Gateway, and a credential that may call it (its bearer is `api_token`).
+    let gateway = neon.ai_gateway(p, "main").await.unwrap();
+    assert!(gateway.enabled);
+    assert_eq!(
+        gateway.base_url,
+        "https://br-muddy-hill-baw66qsf-api.ai.c-8.eu-central-1.aws.neon.tech"
+    );
+    let ai = neon
+        .create_ai_gateway_credential(p, "main", "c-ai-gateway")
+        .await
+        .unwrap();
+    assert_eq!(ai.token_id, "nak_live_00000000000000000000000000000002");
+    assert_eq!(ai.token.expose(), "<api-token-2>");
+    assert!(!format!("{ai:?}").contains("<api-token"));
     assert_eq!(
         neon.databases(p, "main").await.unwrap(),
         ["neondb", "unitycatalog"]
@@ -142,6 +161,13 @@ async fn the_cli_output_parses_for_every_verb() {
         assert!(line.contains(arg), "{arg} in {line}");
     };
     named("connection-string", "--database-name neondb");
+    let scopes = |line: &str| line.matches("--scope").count();
+    let creates: Vec<&str> = calls
+        .lines()
+        .filter(|l| l.starts_with("credentials create"))
+        .collect();
+    assert!(creates[0].contains("--scope storage:read --scope storage:write"));
+    assert!(creates[1].contains("--scope ai_gateway:invoke") && scopes(creates[1]) == 1);
     named("databases create", "--owner-name neondb_owner");
     for arg in [
         "--no-secrets",
@@ -427,6 +453,14 @@ async fn a_hybrid_instance_runs_on_its_branch() {
     let scenario = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/scenarios/neon-hybrid");
     let mut draft: Draft = read_env_dir(&scenario).unwrap();
     draft.manifest.context = Default::default();
+    // MLflow's AI Gateway calls the branch's.
+    draft
+        .manifest
+        .selection
+        .knob_overrides
+        .entry(ModuleId::from("mlflow"))
+        .or_default()
+        .insert("upstream".into(), "neon".into());
     let env = store.create_environment(&ws.id, "dev", draft).unwrap();
     store.commit_draft(&env.id).unwrap();
     let instance = store.create_instance(&env.id, 1).unwrap().id;
@@ -434,8 +468,39 @@ async fn a_hybrid_instance_runs_on_its_branch() {
     let neon = FakeNeon::new("proj");
     neon.deploy_function("main", "unitycatalog");
     neon.deploy_function("main", "headwaters");
+    neon.set_ai_gateway("main", true);
     let keychain = Keychain::default();
-    let binding = bind_to(&neon, "main", &keychain).await;
+    let mut binding = bind_to(&neon, "main", &keychain).await;
+    let ai = bind_ai_gateway(&neon, &binding, "trestle-inst-ai-gateway")
+        .await
+        .unwrap();
+    keychain
+        .0
+        .lock()
+        .unwrap()
+        .insert("neon/ai".into(), ai.token.expose().into());
+    binding.ai_gateway_credential = Some(CredentialRef {
+        token_id: ai.token_id,
+        secret: SecretRef {
+            provider: "keychain".into(),
+            key: "neon/ai".into(),
+        },
+    });
+    // The passphrase MLflow requires, as one of the instance's variables.
+    keychain
+        .0
+        .lock()
+        .unwrap()
+        .insert("kek".into(), "kek-from-keychain".into());
+    let mut overrides = VarSet::new();
+    overrides.set(
+        "MLFLOW_CRYPTO_KEK_PASSPHRASE",
+        VarValue::Secret(SecretRef {
+            provider: "keychain".into(),
+            key: "kek".into(),
+        }),
+    );
+    store.set_overrides(&instance, &overrides).unwrap();
     store
         .set_sources(
             &instance,
@@ -461,21 +526,36 @@ async fn a_hybrid_instance_runs_on_its_branch() {
         "https://br-main-unitycatalog.compute.fake.neon.tech/api/2.1/unity-catalog"
     );
     assert!(vars["NEON_S3_SECRET_ACCESS_KEY"].value.is_secret());
+    assert!(vars[AI_GATEWAY_TOKEN_VAR].value.is_secret());
+    assert_eq!(
+        vars[AI_GATEWAY_BASE_URL_VAR].value.expose(),
+        "https://br-main-api.ai.c-8.eu-central-1.aws.neon.tech"
+    );
 
     let started = instances.start(&instance).await.unwrap();
     // Nothing of the functions runs locally, and no credential lands in the tree.
     let compose = std::fs::read_to_string(started.dir.join("compose.yaml")).unwrap();
     assert!(!compose.contains("unity-catalog-rs") && !compose.contains("headwaters"));
-    let secret = keychain.0.lock().unwrap().values().next().unwrap().clone();
+    let stored = keychain.0.lock().unwrap().clone();
+    let secret = stored
+        .iter()
+        .find(|(k, _)| k.starts_with("neon/nak"))
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let token = stored["neon/ai"].clone();
     for entry in walkdir(&started.dir) {
         let text = std::fs::read_to_string(&entry).unwrap_or_default();
-        assert!(!text.contains(&secret), "{}", entry.display());
+        for value in [&secret, &token, &stored["kek"]] {
+            assert!(!text.contains(value.as_str()), "{}", entry.display());
+        }
         assert!(!text.contains("fake-password"), "{}", entry.display());
     }
     let Some(FakeCall::Up { env, .. }) = engine.calls().into_iter().next() else {
         panic!("no up");
     };
     assert_eq!(env["NEON_S3_SECRET_ACCESS_KEY"], secret);
+    assert_eq!(env[AI_GATEWAY_TOKEN_VAR], token);
+    assert_eq!(env["MLFLOW_CRYPTO_KEK_PASSPHRASE"], "kek-from-keychain");
 
     // Neon down (signed out): the instance still stops.
     neon.set_signed_in(false);
@@ -494,4 +574,68 @@ fn walkdir(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[tokio::test]
+async fn the_ai_gateway_binds_only_where_enabled_and_is_revoked_with_the_rest() {
+    let neon = FakeNeon::new("proj");
+    neon.deploy_function("main", "unitycatalog");
+    neon.deploy_function("main", "headwaters");
+    let keychain = Keychain::default();
+    let mut binding = bind_to(&neon, "main", &keychain).await;
+    // Trestle never enables it (it needs a paid plan): a disabled gateway is an error.
+    let err = bind_ai_gateway(&neon, &binding, "c-ai").await.unwrap_err();
+    assert!(
+        matches!(err, NeonError::NoAiGateway(ref b) if b == "main"),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("paid Neon plan"));
+
+    neon.set_ai_gateway("main", true);
+    let ai = bind_ai_gateway(&neon, &binding, "c-ai").await.unwrap();
+    assert!(ai.token.expose().starts_with("nt_fake_"));
+    assert!(!format!("{ai:?}").contains(ai.token.expose()));
+    keychain
+        .0
+        .lock()
+        .unwrap()
+        .insert("neon/ai".into(), ai.token.expose().into());
+    binding.ai_gateway_credential = Some(CredentialRef {
+        token_id: ai.token_id.clone(),
+        secret: SecretRef {
+            provider: "keychain".into(),
+            key: "neon/ai".into(),
+        },
+    });
+    // The binding round-trips through its stored JSON.
+    let json = serde_json::to_value(&binding).unwrap();
+    assert_eq!(
+        serde_json::from_value::<NeonBinding>(json).unwrap(),
+        binding
+    );
+
+    let source = NeonBranchSource::new(
+        Arc::new(neon.clone()),
+        SecretProviders::new().with(keychain.clone()),
+    );
+    let overlay = source.overlay(&ctx(&binding)).await.unwrap();
+    assert_eq!(
+        overlay.endpoints[AI_GATEWAY_BASE_URL_VAR],
+        "https://br-main-api.ai.c-8.eu-central-1.aws.neon.tech"
+    );
+    assert_eq!(
+        overlay.credentials[AI_GATEWAY_TOKEN_VAR].expose(),
+        ai.token.expose()
+    );
+    assert!(!format!("{overlay:?}").contains(ai.token.expose()));
+
+    // Disabled since binding: the overlay says so.
+    neon.set_ai_gateway("main", false);
+    let err = source.overlay(&ctx(&binding)).await.unwrap_err();
+    assert!(err.reason.contains("AI Gateway"), "{err}");
+
+    // Unbinding revokes both credentials.
+    assert_eq!(neon.credentials("main").len(), 2);
+    unbind(&neon, &binding).await.unwrap();
+    assert!(neon.credentials("main").is_empty());
 }

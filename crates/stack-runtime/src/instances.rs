@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
-use olai_stack_state::{Desired, Instance, InstanceId, Revision, Store};
+use olai_stack_state::{Desired, Instance, InstanceId, Revision, SecretRef, Store};
 use olai_stack_topology::{
     Catalog, LOCAL_CREDENTIALS, LaunchEnvError, LocalCredentials, LocalSecrets, MaterializedOutput,
     Plan, PlanError, RenderError, RuntimePlacement, Secrets, Vantage, baseline_catalog_with,
@@ -17,7 +17,7 @@ use crate::effective::{EffectiveEnv, EnvLayers, Layer};
 use crate::engine::{ComposeEngine, DownOptions, EngineStream, Progress, UpOptions};
 use crate::events::{EngineEvent, EventAction, EventFilter};
 use crate::ports::{BusyPort, probe_host_ports};
-use crate::secrets::{SecretError, SecretProviders};
+use crate::secrets::{ENV_PROVIDER, SecretError, SecretProviders};
 use crate::source::{Source, SourceCtx, SourceError};
 use crate::status::Health;
 
@@ -70,6 +70,10 @@ pub enum InstanceError {
     /// Host ports the instance would bind are taken.
     #[error("host ports are already in use: {}", ports(.0))]
     PortsBusy(Vec<BusyPort>),
+    /// Secrets the plan's modules require are set nowhere: not in the instance's variables,
+    /// and not in this process's environment.
+    #[error("required secrets are not set: {}", .0.join(", "))]
+    MissingSecrets(Vec<String>),
     /// Another instance of the same revision is running (they would share a compose project).
     #[error("instance {running} already runs revision {revision} of this environment")]
     RevisionRunning {
@@ -141,12 +145,21 @@ pub struct Materialized {
     /// Everything Compose needs in its process environment: the effective environment plus
     /// the credentials moved out of the tree. Holds secrets; never print it.
     launch: BTreeMap<String, String>,
+    /// The required secrets the plan declares that nothing set (see
+    /// [`InstanceError::MissingSecrets`]).
+    missing_secrets: Vec<String>,
 }
 
 impl Materialized {
     /// The variable names the instance launches with (values withheld: they hold secrets).
     pub fn launch_var_names(&self) -> impl Iterator<Item = &str> {
         self.launch.keys().map(String::as_str)
+    }
+
+    /// The required secrets the plan's modules declare that nothing set, by name. Starting
+    /// the instance fails with them.
+    pub fn missing_secrets(&self) -> &[String] {
+        &self.missing_secrets
     }
 }
 
@@ -408,12 +421,43 @@ impl<E: ComposeEngine> Instances<E> {
         write_tree(&dir, &output)?;
         let mut launch = env.launch_vars();
         launch.extend(launch_env.into_vars());
+        let missing_secrets = self.declared_secrets(&plan, &mut launch);
         Ok(Materialized {
             dir,
             plan,
             env,
             launch,
+            missing_secrets,
         })
+    }
+
+    /// Add the secrets the plan's modules declare (names only, see [`Plan::declared_secrets`])
+    /// to `launch` by name: one the instance's variables don't set comes from this process's
+    /// environment (the `env` provider, when registered). Returns the required ones set
+    /// nowhere.
+    fn declared_secrets(&self, plan: &Plan, launch: &mut BTreeMap<String, String>) -> Vec<String> {
+        let mut missing = Vec::new();
+        for secret in plan.declared_secrets() {
+            if launch.get(&secret.name).is_some_and(|v| !v.is_empty()) {
+                continue;
+            }
+            let from_env = self
+                .providers
+                .resolve(&SecretRef {
+                    provider: ENV_PROVIDER.into(),
+                    key: secret.name.clone(),
+                })
+                .ok()
+                .filter(|v| !v.expose().is_empty());
+            match from_env {
+                Some(value) => {
+                    launch.insert(secret.name, value.expose().to_owned());
+                }
+                None if secret.required => missing.push(secret.name),
+                None => {}
+            }
+        }
+        missing
     }
 
     /// Start the instance: lease it a slot (if it has none), check its host ports, render it
@@ -435,6 +479,11 @@ impl<E: ComposeEngine> Instances<E> {
             }
         }
         let materialized = self.materialize(id).await?;
+        if !materialized.missing_secrets.is_empty() {
+            return Err(InstanceError::MissingSecrets(
+                materialized.missing_secrets.clone(),
+            ));
+        }
         if self.probe_ports {
             let running = self
                 .engine

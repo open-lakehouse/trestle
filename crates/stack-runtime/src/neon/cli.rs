@@ -10,7 +10,8 @@ use serde::de::DeserializeOwned;
 use tokio::process::Command;
 
 use super::{
-    Branch, Connection, CreateBranch, Function, NeonControl, NeonError, Storage, StorageCredential,
+    AiGateway, AiGatewayCredential, Branch, Connection, CreateBranch, Function, NeonControl,
+    NeonError, Storage, StorageCredential,
 };
 use crate::secrets::SecretValue;
 
@@ -219,6 +220,11 @@ impl From<Extended> for Connection {
 #[derive(Deserialize)]
 pub(super) struct CreatedCredential {
     pub token_id: String,
+    /// The credential's bearer token, for the AI Gateway and Functions.
+    #[serde(default)]
+    pub api_token: String,
+    /// The S3 secret access key, for object storage.
+    #[serde(default)]
     pub s3_secret_access_key: String,
 }
 
@@ -466,6 +472,43 @@ impl NeonControl for NeonCli {
         Ok(StorageCredential {
             token_id: created.token_id,
             secret_access_key: SecretValue::new(created.s3_secret_access_key),
+        })
+    }
+
+    async fn ai_gateway(&self, project: &str, branch: &str) -> Result<AiGateway, NeonError> {
+        let path = format!("/projects/{project}/branches/{branch}/ai_gateway");
+        self.json(&["api", &path]).await
+    }
+
+    async fn create_ai_gateway_credential(
+        &self,
+        project: &str,
+        branch: &str,
+        name: &str,
+    ) -> Result<AiGatewayCredential, NeonError> {
+        let created: CreatedCredential = self
+            .json(&[
+                "credentials",
+                "create",
+                "--project-id",
+                project,
+                "--branch",
+                branch,
+                "--name",
+                name,
+                "--scope",
+                "ai_gateway:invoke",
+            ])
+            .await?;
+        if created.api_token.is_empty() {
+            return Err(NeonError::Parse {
+                command: "credentials create".into(),
+                reason: "no `api_token` in the created credential".into(),
+            });
+        }
+        Ok(AiGatewayCredential {
+            token_id: created.token_id,
+            token: SecretValue::new(created.api_token),
         })
     }
 

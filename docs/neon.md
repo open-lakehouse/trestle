@@ -102,12 +102,24 @@ The planner (#281) reads every Neon coordinate from a variable:
 | `NEON_S3_ENDPOINT`, `NEON_S3_REGION` | `neon api /projects/<p>/branches/<b>/storage` |
 | `NEON_S3_ACCESS_KEY_ID`, `NEON_S3_SECRET_ACCESS_KEY` | a credential minted on the branch (`token_id`, `s3_secret_access_key`) |
 | `<SLUG>_FUNCTION_URL` | `functions list` on the branch (`invocation_url` of the function with that slug) |
+| `NEON_AI_GATEWAY_BASE_URL` | `neon api /projects/<p>/branches/<b>/ai_gateway` (`base_url`, when `enabled`) |
+| `NEON_AI_GATEWAY_TOKEN` | a credential minted on the branch with scope `ai_gateway:invoke` (its `api_token`, `nt_live_…`, which doesn't expire) |
 
 `Plan::neon_requirements()` lists the databases, buckets and functions (by
 slug) one plan needs, plus these variables, so binding a branch can check it
 before anything starts. `unity-catalog-rs` deploys as `unitycatalog`, `headwaters`
 as `headwaters`. A function's entry also carries the environment it is deployed
 with and the names of the secrets its deployment must set.
+`ai_gateway` is set when a module requires `NEON_AI_GATEWAY_TOKEN` (MLflow's
+`neon` upstream).
+
+The AI Gateway variables come from the branch, not from `neon env pull`, which
+pulls them only for a `neon.ts` that declares `aiGateway`. Enabling the gateway is
+a branch setting that needs a paid plan and prepaid AI Gateway credits, and
+trestle never changes it. Checked 2026-11-17 on an enabled branch: its Anthropic
+route (`/anthropic/v1/messages`) accepts the token as `x-api-key` (what MLflow's
+anthropic provider sends) or as a bearer; it serves Responses at `/openai/v1` and
+chat completions only at `/v1`.
 
 ## Running `neon` from the desktop app
 

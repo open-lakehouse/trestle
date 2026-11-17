@@ -250,6 +250,12 @@ A `SecretRef { provider, key }` resolves through a `SecretProvider`:
 A reference to a provider that isn't configured is an error. Nothing falls back
 to another provider.
 
+Modules declare the secrets their containers read (`Plan::declared_secrets`,
+names only). At materialize, one the instance's layers don't set comes from the
+`env` provider by name, when it is registered. A required one set nowhere is
+`InstanceError::MissingSecrets`: `start` fails before Compose runs, while `stop`
+still works (`Materialized::missing_secrets` lists them).
+
 A `Source` overlays an instance with variables, endpoints and credentials from
 outside the store, such as a Neon branch (#274). Its credentials may expire
 (`Overlay::expires_at`), and an expired overlay is refreshed before use.
@@ -277,13 +283,16 @@ Feature `neon` adds a Neon branch as a source, all through the Neon CLI (see
   is an error at bind time, not at start. It creates the databases and buckets
   the branch lacks and mints a storage credential on it for the instance; the
   caller keeps the secret. The result, a `NeonBinding`, is the instance's
-  `neon` source config. `unbind` revokes the credential. A child branch inherits
-  its parent's credentials, so every binding mints its own rather than reuse one.
+  `neon` source config. For a plan that calls the branch's AI Gateway,
+  `bind_ai_gateway` checks it is enabled and mints an `ai_gateway:invoke`
+  credential; the caller keeps its token too. `unbind` revokes the credentials. A
+  child branch inherits its parent's credentials, so every binding mints its own
+  rather than reuse one.
 - `NeonBranchSource` overlays the instance with `PGHOST`, `PGUSER`,
   `PGDATABASE`, `PGPASSWORD`, `DATABASE_URL` (pooled), `DATABASE_URL_UNPOOLED`,
-  the `NEON_S3_*` storage coordinates and each function's
-  `<SLUG>_FUNCTION_URL`. The credentials are masked wherever the environment is
-  shown.
+  the `NEON_S3_*` storage coordinates, each function's `<SLUG>_FUNCTION_URL`, and
+  `NEON_AI_GATEWAY_BASE_URL` and `NEON_AI_GATEWAY_TOKEN` when bound to the
+  gateway. The credentials are masked wherever the environment is shown.
 - Branches trestle creates carry the `trestle.owner` annotation and an expiry,
   and only those are reset or deleted.
 - `stop` falls back to the tree rendered at the last start when a source fails,

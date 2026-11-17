@@ -70,13 +70,16 @@ pub trait SecretProvider: Send + Sync {
     fn get(&self, key: &str) -> Result<SecretValue, SecretError>;
 }
 
+/// The name [`EnvProvider`] registers under.
+pub const ENV_PROVIDER: &str = "env";
+
 /// Secrets from this process's environment: the key is a variable name. Named `env`.
 #[derive(Clone, Debug, Default)]
 pub struct EnvProvider;
 
 impl SecretProvider for EnvProvider {
     fn name(&self) -> &str {
-        "env"
+        ENV_PROVIDER
     }
 
     fn get(&self, key: &str) -> Result<SecretValue, SecretError> {

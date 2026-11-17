@@ -8,7 +8,8 @@ use async_trait::async_trait;
 
 use super::cli::{ApiBranches, first_json};
 use super::{
-    Branch, Connection, CreateBranch, Function, NeonControl, NeonError, Storage, StorageCredential,
+    AiGateway, AiGatewayCredential, Branch, Connection, CreateBranch, Function, NeonControl,
+    NeonError, Storage, StorageCredential,
 };
 use crate::secrets::SecretValue;
 
@@ -39,6 +40,8 @@ struct FakeBranch {
     buckets: Vec<String>,
     /// Token id → secret.
     credentials: BTreeMap<String, String>,
+    /// Whether its AI Gateway is enabled (never copied to a child: it is a branch setting).
+    ai_gateway: bool,
 }
 
 #[derive(Default)]
@@ -150,6 +153,18 @@ impl FakeNeon {
         self.lock().calls.clone()
     }
 
+    /// Enable (or disable) the AI Gateway of the branch `name_or_id`.
+    pub fn set_ai_gateway(&self, name_or_id: &str, enabled: bool) {
+        if let Some(b) = self
+            .lock()
+            .branches
+            .iter_mut()
+            .find(|b| b.branch.is(name_or_id))
+        {
+            b.ai_gateway = enabled;
+        }
+    }
+
     /// The credentials on the branch `name_or_id`, by token id.
     pub fn credentials(&self, name_or_id: &str) -> Vec<String> {
         self.lock()
@@ -247,6 +262,7 @@ impl NeonControl for FakeNeon {
             databases: parent.databases.clone(),
             buckets: parent.buckets.clone(),
             credentials: parent.credentials.clone(),
+            ai_gateway: false,
         };
         let branch = child.branch.clone();
         inner.branches.push(child);
@@ -375,6 +391,46 @@ impl NeonControl for FakeNeon {
             StorageCredential {
                 token_id,
                 secret_access_key: SecretValue::new(secret),
+            }
+        })
+    }
+
+    async fn ai_gateway(&self, project: &str, branch: &str) -> Result<AiGateway, NeonError> {
+        self.with_branch(project, branch, |b, _| AiGateway {
+            enabled: b.ai_gateway,
+            base_url: if b.ai_gateway {
+                format!(
+                    "https://{}-api.ai.c-8.eu-central-1.aws.neon.tech",
+                    b.branch.id
+                )
+            } else {
+                String::new()
+            },
+        })
+    }
+
+    async fn create_ai_gateway_credential(
+        &self,
+        project: &str,
+        branch: &str,
+        name: &str,
+    ) -> Result<AiGatewayCredential, NeonError> {
+        let n = {
+            let mut inner = self.lock();
+            inner.next += 1;
+            inner.next
+        };
+        self.with_branch(project, branch, |b, calls| {
+            let token_id = format!("nak_fake_{n:032}");
+            let token = format!("nt_fake_{name}_{n}");
+            b.credentials.insert(token_id.clone(), token.clone());
+            calls.push(NeonCall::CreateCredential(
+                b.branch.id.clone(),
+                token_id.clone(),
+            ));
+            AiGatewayCredential {
+                token_id,
+                token: SecretValue::new(token),
             }
         })
     }
