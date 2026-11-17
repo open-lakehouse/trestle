@@ -1,7 +1,7 @@
 # RustFS (S3 + STS) + one-shot bucket init + STS policy shim
 services:
   rustfs:
-    image: rustfs/rustfs:1.0.4
+    image: rustfs/rustfs:1.0.6
     restart: unless-stopped
     env_file:
       - path: ./modules/rustfs/.env/rustfs.env

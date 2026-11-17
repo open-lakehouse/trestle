@@ -160,7 +160,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "rustfs/rustfs:1.0.4",
+          default: "rustfs/rustfs:1.0.6",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["RUSTFS_IMAGE"],
@@ -250,7 +250,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "mcr.microsoft.com/azure-cli:2.92.0",
+          default: "mcr.microsoft.com/azure-cli:2.93.0",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["AZURITE_INIT_IMAGE"],
@@ -624,7 +624,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/open-lakehouse/mangrove:0.0.22",
+          default: "ghcr.io/open-lakehouse/mangrove:0.0.23",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           advanced: true,
@@ -698,7 +698,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/open-lakehouse/headwaters:0.0.10",
+          default: "ghcr.io/open-lakehouse/headwaters:0.0.12",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["HEADWATERS_IMAGE"],
@@ -763,7 +763,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/omnigent-ai/omnigent-server:v0.21.0",
+          default: "ghcr.io/omnigent-ai/omnigent-server:v0.22.0",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["OMNIGENT_IMAGE"],
@@ -775,7 +775,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/omnigent-ai/omnigent-host:v0.21.0",
+          default: "ghcr.io/omnigent-ai/omnigent-host:v0.22.0",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["OMNIGENT_HOST_IMAGE"],
@@ -804,7 +804,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/open-lakehouse/mangrove:0.0.22",
+          default: "ghcr.io/open-lakehouse/mangrove:0.0.23",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           advanced: true,
@@ -842,7 +842,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim",
+          default: "ghcr.io/astral-sh/uv:0.13.8-python3.14-trixie-slim",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["MARIMO_IMAGE"],
@@ -912,7 +912,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "puppygraph/puppygraph:1.18.1",
+          default: "puppygraph/puppygraph:1.19.1",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["PUPPYGRAPH_IMAGE"],
@@ -956,7 +956,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim",
+          default: "ghcr.io/astral-sh/uv:0.13.8-python3.14-trixie-slim",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["RIVERS_IMAGE"],
@@ -984,7 +984,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "openpolicyagent/opa:1.22.0-envoy-static",
+          default: "openpolicyagent/opa:1.22.4-envoy-static",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["OPA_IMAGE"],

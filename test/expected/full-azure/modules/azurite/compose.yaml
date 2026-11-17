@@ -19,7 +19,7 @@ services:
       start_period: 3s
 
   azurite-init:
-    image: mcr.microsoft.com/azure-cli:2.92.0
+    image: mcr.microsoft.com/azure-cli:2.93.0
     restart: "no"
     depends_on:
       azurite:
