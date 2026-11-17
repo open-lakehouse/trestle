@@ -48,7 +48,9 @@ const problems: string[] = [];
 for await (const rel of new Glob("**/*.{js,d.ts}").scan({ cwd: dist })) {
   const code = readFileSync(join(dist, rel), "utf8");
   for (const [, spec] of code.matchAll(
-    /(?:from|import)\s*\(?\s*["']([^"'.][^"']*)["']/g,
+    // A specifier holds no whitespace, so prose like `"… from", kind: "…"` in a bundled
+    // fixture isn't one.
+    /\b(?:from|import)\s*\(?\s*["']([^"'.\s][^"'\s]*)["']/g,
   )) {
     if (!builtin(spec) && !declared.has(packageOf(spec))) {
       problems.push(`${rel} imports undeclared "${spec}"`);

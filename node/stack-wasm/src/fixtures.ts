@@ -728,10 +728,10 @@ export const FIXTURE_CATALOG: CatalogDto = {
       model: "omnigent",
       display_name: "Omnigent",
       summary:
-        "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway.",
+        "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway or an upstream.",
       category: "agents",
       provider_of: "agent_platform",
-      requires: ["envoy", "mlflow"],
+      requires: ["envoy"],
       conflicts_with: [],
       resource_kinds: [],
       resource_nouns: [],
@@ -747,6 +747,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
           help: "Run agents in a host container on the stack's network, with the lakehouse's client env and models from MLflow's AI Gateway. Off: attach your own host with `omnigent host $OMNIGENT_URL`. Always off while the gateway authenticates.",
         },
         {
+          key: "upstream",
+          title: "Models from",
+          kind: {
+            kind: "enum",
+            options: ["auto", "mlflow", "neon", "databricks", "keys"],
+          },
+          default: "auto",
+          required: false,
+          help: "Where the host's harnesses call models. `mlflow`: the stack's MLflow AI Gateway, which holds the credentials and traces every call. Without MLflow, the upstream directly: `neon`, the Neon AI Gateway of the environment's branch (NEON_AI_GATEWAY_BASE_URL, NEON_AI_GATEWAY_TOKEN); `databricks`, a workspace's serving endpoints (DATABRICKS_HOST, with tokens from DATABRICKS_METADATA_SERVICE_URL or DATABRICKS_TOKEN); `keys`, the providers (ANTHROPIC_API_KEY, OPENAI_API_KEY). `auto`: `mlflow`, which the stack must then have.",
+        },
+        {
           key: "model",
           title: "Agent model",
           kind: {
@@ -754,7 +765,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           },
           default: "claude-opus-5-5",
           required: false,
-          help: "The model agents use by default: an AI Gateway endpoint name (see mlflow.ai_gateway_models).",
+          help: "The model agents use by default: an AI Gateway endpoint name (see mlflow.ai_gateway_models), or the upstream's model id. Under the `databricks` upstream it names the serving endpoint `databricks-<model>`.",
         },
         {
           key: "fast_model",
@@ -764,7 +775,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           },
           default: "claude-haiku-5-5",
           required: false,
-          help: "The model harnesses use for quick background calls: an AI Gateway endpoint name.",
+          help: "The model harnesses use for quick background calls, named like `model`.",
         },
         {
           key: "image",

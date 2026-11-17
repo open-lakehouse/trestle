@@ -13,23 +13,23 @@ flowchart LR
     n2["<b>Postgres</b><br/>relational db"]:::component
     n3["<b>Unity Catalog (Rust)</b><br/>data catalog"]:::component
     n4["<b>Unity Catalog MCP</b><br/>mcp server"]:::component
-    n5["<b>RustFS</b><br/>object store"]:::component
-    n6["<b>MLflow</b><br/>experiment tracking"]:::component
-    n7["<b>Omnigent</b><br/>agent platform"]:::component
+    n5["<b>Omnigent</b><br/>agent platform"]:::component
+    n6["<b>RustFS</b><br/>object store"]:::component
+    n7["<b>MLflow</b><br/>experiment tracking"]:::component
     n0 -->|":9080"| n1
     n0 -->|":9100"| n1
     n1 -->|"/api/2.1/unity-catalog"| n3
     n1 -->|"/uc-mcp/mcp"| n4
-    n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n6
-    n1 -->|"/omnigent"| n7
-    n1 -->|"S3 + STS"| n5
+    n1 -->|"/omnigent"| n5
+    n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n7
+    n1 -->|"S3 + STS"| n6
     n3 -->|"PostgreSQL: unitycatalog"| n2
-    n6 -->|"PostgreSQL: mlflow"| n2
-    n6 -->|"S3: mlflow"| n5
-    n7 -->|"PostgreSQL: omnigent"| n2
+    n5 -->|"PostgreSQL: omnigent"| n2
+    n7 -->|"PostgreSQL: mlflow"| n2
+    n7 -->|"S3: mlflow"| n6
     n4 -->|"HTTP"| n3
-    n6 -->|"HTTP"| n3
-    n7 -->|"HTTP"| n6
+    n5 -->|"HTTP"| n7
+    n7 -->|"HTTP"| n3
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb

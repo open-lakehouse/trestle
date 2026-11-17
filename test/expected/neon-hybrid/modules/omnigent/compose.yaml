@@ -28,8 +28,8 @@ services:
       start_period: 60s
 
   # Runs the agents, on the stack's network: it loads the stack's in-network client env (every
-  # module's address) and forwards it to each agent, and points the harnesses at MLflow's AI
-  # Gateway, which holds the provider keys.
+  # module's address) and forwards it to each agent, and points the harnesses at the models'
+  # upstream (mlflow).
   omnigent-host:
     image: ghcr.io/omnigent-ai/omnigent-host:v0.22.0
     restart: unless-stopped
@@ -55,6 +55,7 @@ services:
       - >-
         export ANTHROPIC_BASE_URL="$$MLFLOW_AI_GATEWAY_URL/anthropic"
         OPENAI_BASE_URL="$$MLFLOW_AI_GATEWAY_URL/openai/v1"
+        && { head -n1 /root/.omnigent/config.yaml 2>/dev/null | grep -q '^# Written by trestle' && rm /root/.omnigent/config.yaml; true; }
         && exec omnigent host --server http://omnigent:8000 --non-interactive --no-open
     working_dir: /workspace
     volumes:

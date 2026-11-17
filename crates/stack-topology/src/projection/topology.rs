@@ -1112,11 +1112,10 @@ mod tests {
 
     #[test]
     fn a_hard_requirement_draws_a_uses_edge() {
-        // Omnigent requires MLflow (its agents' models come from MLflow's AI Gateway), not by a
-        // resource demand: the graph still shows the dependency, labelled with what MLflow
-        // provides. Its requirement on the gateway is not drawn twice.
-        let g = graph_dto(&plan(&Selection::modules(["envoy", "omnigent"])));
-        assert_eq!(node(&g, "omnigent").role.as_deref(), Some("agent_platform"));
+        // PuppyGraph requires Unity Catalog (its metastore), not by a resource demand: the graph
+        // still shows the dependency, labelled with what Unity Catalog provides. Its
+        // requirement on the gateway is not drawn twice.
+        let g = graph_dto(&plan(&Selection::modules(["envoy", "puppygraph"])));
         let uses = |from: &str, to: &str| {
             g.edges
                 .iter()
@@ -1125,17 +1124,35 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert!(matches!(
-            uses("omnigent", "mlflow").as_slice(),
-            [TopologyEdgeDto::Uses { role, protocol, resources, .. }]
-                if role == "experiment_tracking" && protocol == "HTTP" && resources.is_empty()
-        ));
-        assert!(uses("omnigent", "envoy").is_empty());
-        // The demanded relational store keeps its demand edge.
-        assert!(matches!(
-            uses("omnigent", "postgres").as_slice(),
-            [TopologyEdgeDto::Uses { role, .. }] if role == "relational_db"
-        ));
+        assert!(
+            matches!(
+                uses("puppygraph", "unity-catalog-oss").as_slice(),
+                [TopologyEdgeDto::Uses { role, protocol, resources, .. }]
+                    if role == "data_catalog" && protocol == "HTTP" && resources.is_empty()
+            ),
+            "{:?}",
+            uses("puppygraph", "unity-catalog-oss")
+        );
+        assert!(uses("puppygraph", "envoy").is_empty());
+    }
+
+    #[test]
+    fn omnigent_uses_mlflow_only_for_its_ai_gateway() {
+        // Omnigent no longer requires MLflow: it integrates with it when its host calls MLflow's
+        // AI Gateway, and keeps its relational store's demand edge either way.
+        let g = graph_dto(&plan(&Selection::modules(["envoy", "mlflow", "omnigent"])));
+        let uses = |from: &str, to: &str| {
+            g.edges
+                .iter()
+                .filter(|e| {
+                    matches!(e, TopologyEdgeDto::Uses { from: f, to: t, .. } if f == from && t == to)
+                })
+                .count()
+        };
+        assert_eq!(node(&g, "omnigent").role.as_deref(), Some("agent_platform"));
+        assert_eq!(uses("omnigent", "mlflow"), 1);
+        assert_eq!(uses("omnigent", "envoy"), 0);
+        assert_eq!(uses("omnigent", "postgres"), 1);
     }
 
     #[test]

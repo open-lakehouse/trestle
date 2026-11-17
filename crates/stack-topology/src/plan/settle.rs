@@ -197,6 +197,15 @@ pub(super) fn settle(
             .filter_map(|m| Some((m.provides().api.clone()?, m.id().clone())))
             .collect(),
     };
+    for module in &graph.nodes {
+        module
+            .check_stack(&knobs[module.id()], &stack_facts)
+            .map_err(|rejection| PlanError::RejectedKnob {
+                module: module.id().clone(),
+                key: rejection.key,
+                reason: rejection.reason,
+            })?;
+    }
     let mut services = BTreeMap::new();
     for module in &graph.nodes {
         let mut module_services = module.services_in(&knobs[module.id()], &stack_facts);

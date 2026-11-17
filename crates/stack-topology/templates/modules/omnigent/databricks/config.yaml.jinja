@@ -1,0 +1,15 @@
+{%- set prefix = "" if knobs.model[:11] == "databricks-" else "databricks-" -%}
+{%- set fast_prefix = "" if knobs.fast_model[:11] == "databricks-" else "databricks-" -%}
+# Written by trestle (the omnigent module's `databricks` upstream); the host installs it into
+# ~/.omnigent on every start, with $DATABRICKS_HOST replaced by the workspace URL. It holds no
+# credential: the token helper fetches a token whenever the harness needs one.
+providers:
+  trestle-databricks:
+    kind: gateway
+    default: true
+    anthropic:
+      base_url: $DATABRICKS_HOST/serving-endpoints/anthropic
+      auth_command: python3 /etc/trestle/omnigent/databricks_token.py
+      models:
+        default: {{ prefix }}{{ knobs.model }}
+        haiku: {{ fast_prefix }}{{ knobs.fast_model }}

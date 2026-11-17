@@ -150,6 +150,9 @@ impl Module for FunctionHosted {
     fn complete_knobs(&self, knobs: &mut ResolvedKnobs) {
         self.inner.complete_knobs(knobs);
     }
+    fn check_stack(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Result<(), KnobRejection> {
+        self.inner.check_stack(knobs, stack)
+    }
     // The secrets its containers would read are the function deployment's business
     // (`function_secrets`): the stack launches nothing that reads them.
     fn provides(&self) -> &Provides {

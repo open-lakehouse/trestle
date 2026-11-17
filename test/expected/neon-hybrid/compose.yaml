@@ -13,11 +13,15 @@ configs:
     file: ./modules/mlflow/uc-registry/METADATA
   mlflow_uc_registry_module:
     file: ./modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py
+  omnigent_databricks_config:
+    file: ./modules/omnigent/databricks/config.yaml
+  omnigent_databricks_token:
+    file: ./modules/omnigent/databricks/databricks_token.py
 
 include:
   - path: ./modules/envoy/compose.yaml
     project_directory: .
-  - path: ./modules/mlflow/compose.yaml
-    project_directory: .
   - path: ./modules/omnigent/compose.yaml
+    project_directory: .
+  - path: ./modules/mlflow/compose.yaml
     project_directory: .

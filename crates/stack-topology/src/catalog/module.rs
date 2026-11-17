@@ -1115,11 +1115,18 @@ pub trait Module: Send + Sync {
     fn complete_knobs(&self, knobs: &mut ResolvedKnobs) {
         let _ = knobs;
     }
-    /// The secret variables this module reads at launch with the resolved `knobs`. Defaults to
-    /// [`Provides::secrets`]; a module overrides it when a knob changes which secrets it needs,
-    /// or whether one is required.
-    fn secrets_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [DeclaredSecret]> {
-        let _ = knobs;
+    /// Checks the resolved `knobs` against the rest of the stack (a mode that needs a partner
+    /// module, say). The planner runs it once the stack's [`StackFacts`] are settled.
+    fn check_stack(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Result<(), KnobRejection> {
+        let _ = (knobs, stack);
+        Ok(())
+    }
+    /// The secret variables this module reads at launch with the resolved `knobs`, in a stack
+    /// with the given [`StackFacts`]. Defaults to [`Provides::secrets`]; a module overrides it
+    /// when a knob or a partner module changes which secrets it needs, or whether one is
+    /// required.
+    fn secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
+        let _ = (knobs, stack);
         Cow::Borrowed(&self.provides().secrets)
     }
     /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
