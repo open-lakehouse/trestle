@@ -92,6 +92,8 @@ esac
             .env("TRESTLE_FAKE_ENGINE", self.path("engine.json"))
             .env("TRESTLE_FAKE_KEYCHAIN", self.path("keychain.json"))
             .env("NEON_CLI", self.path("neon"))
+            // MLflow's key passphrase, which its module requires.
+            .env("MLFLOW_CRYPTO_KEK_PASSPHRASE", "state-cli-passphrase")
             .env_remove("TRESTLE_LOG");
         cmd
     }

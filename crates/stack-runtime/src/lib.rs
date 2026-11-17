@@ -78,6 +78,8 @@ pub use reconcile::{ProjectMatch, managed_projects, remove_mesh_if_idle};
 #[cfg(feature = "keychain")]
 #[cfg_attr(docsrs, doc(cfg(feature = "keychain")))]
 pub use secrets::KeychainProvider;
-pub use secrets::{EnvProvider, SecretError, SecretProvider, SecretProviders, SecretValue};
+pub use secrets::{
+    ENV_PROVIDER, EnvProvider, SecretError, SecretProvider, SecretProviders, SecretValue,
+};
 pub use source::{Overlay, Source, SourceCtx, SourceError, UserVars};
 pub use status::{Health, ProjectStatus, Published, ServiceStatus, State, parse_ls, parse_ps};

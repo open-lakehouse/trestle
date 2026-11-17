@@ -38,7 +38,10 @@ use crate::secrets::SecretValue;
 pub use cli::{NeonCli, locate_neon};
 #[cfg(feature = "testing")]
 pub use fake::{FakeNeon, NeonCall};
-pub use source::{NEON_SOURCE, NeonBinding, NeonBranchSource, StorageCredentialRef};
+pub use source::{
+    AI_GATEWAY_BASE_URL_VAR, AI_GATEWAY_TOKEN_VAR, CredentialRef, NEON_SOURCE, NeonBinding,
+    NeonBranchSource, StorageCredentialRef,
+};
 
 /// The annotation key that marks a branch as created by trestle.
 pub const OWNER_ANNOTATION: &str = "trestle.owner";
@@ -102,6 +105,12 @@ pub enum NeonError {
     /// The branch has no object storage, but the plan uses it.
     #[error("branch `{0}` has no object storage enabled")]
     NoStorage(String),
+    /// The plan calls the branch's AI Gateway, which isn't enabled on it.
+    #[error(
+        "branch `{0}` has no AI Gateway enabled; enable it on the branch (it needs a paid Neon \
+         plan), or choose another upstream for the environment's models"
+    )]
+    NoAiGateway(String),
 }
 
 /// A branch of a Neon project.
@@ -223,6 +232,34 @@ impl fmt::Debug for StorageCredential {
     }
 }
 
+/// A branch's AI Gateway (`GET /projects/{project}/branches/{branch}/ai_gateway`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiGateway {
+    /// Whether the branch has one.
+    pub enabled: bool,
+    /// Its bare host (`https://<branch>-api.ai.<region>.aws.neon.tech`), when enabled.
+    #[serde(default)]
+    pub base_url: String,
+}
+
+/// A credential minted to call a branch's AI Gateway (scope `ai_gateway:invoke`).
+#[derive(Clone, PartialEq, Eq)]
+pub struct AiGatewayCredential {
+    /// The token id (`nak_live_…`), for revoking it.
+    pub token_id: String,
+    /// The bearer token (`nt_live_…`). It doesn't expire.
+    pub token: SecretValue,
+}
+
+impl fmt::Debug for AiGatewayCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AiGatewayCredential")
+            .field("token_id", &self.token_id)
+            .field("token", &"<redacted>")
+            .finish()
+    }
+}
+
 /// What trestle asks of Neon, per project. [`NeonCli`] runs the Neon CLI; `FakeNeon` (feature
 /// `testing`) is an in-memory stand-in.
 #[async_trait]
@@ -283,6 +320,17 @@ pub trait NeonControl: Send + Sync {
         branch: &str,
         name: &str,
     ) -> Result<StorageCredential, NeonError>;
+
+    /// The branch's AI Gateway.
+    async fn ai_gateway(&self, project: &str, branch: &str) -> Result<AiGateway, NeonError>;
+
+    /// Mint a credential called `name` on the branch that may call its AI Gateway.
+    async fn create_ai_gateway_credential(
+        &self,
+        project: &str,
+        branch: &str,
+        name: &str,
+    ) -> Result<AiGatewayCredential, NeonError>;
 
     /// Revoke the credential `token_id` on the branch.
     async fn revoke_credential(
@@ -440,13 +488,33 @@ pub async fn bind(
             .filter_map(|f| Some((f.slug.clone(), f.url_var.clone()?)))
             .collect(),
         storage_credential: None,
+        ai_gateway_credential: None,
     };
     Ok((binding, credential))
 }
 
-/// Undo [`bind`]: revoke the binding's storage credential, if it has one.
+/// For a plan that calls the branch's AI Gateway ([`NeonRequirements::ai_gateway`]): check the
+/// gateway of `binding`'s branch is enabled ([`NeonError::NoAiGateway`] otherwise; trestle
+/// never enables it, which needs a paid plan) and mint a credential called `name` that may call
+/// it. The caller stores its token and records it as the binding's
+/// [`ai_gateway_credential`](NeonBinding::ai_gateway_credential).
+pub async fn bind_ai_gateway(
+    neon: &dyn NeonControl,
+    binding: &NeonBinding,
+    name: &str,
+) -> Result<AiGatewayCredential, NeonError> {
+    let (project, branch) = (&binding.project_id, &binding.branch);
+    if !neon.ai_gateway(project, branch).await?.enabled {
+        return Err(NeonError::NoAiGateway(binding.branch_name.clone()));
+    }
+    neon.create_ai_gateway_credential(project, branch, name)
+        .await
+}
+
+/// Undo [`bind`] and [`bind_ai_gateway`]: revoke the binding's credentials.
 pub async fn unbind(neon: &dyn NeonControl, binding: &NeonBinding) -> Result<(), NeonError> {
-    if let Some(credential) = &binding.storage_credential {
+    let credentials = [&binding.storage_credential, &binding.ai_gateway_credential];
+    for credential in credentials.into_iter().flatten() {
         neon.revoke_credential(&binding.project_id, &binding.branch, &credential.token_id)
             .await?;
     }
