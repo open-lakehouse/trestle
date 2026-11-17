@@ -3,6 +3,11 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.18.0-full
     restart: unless-stopped
+    entrypoint:
+      - "sh"
+      - "-c"
+      - 'if [ -z "$$MLFLOW_CRYPTO_KEK_PASSPHRASE" ]; then echo "mlflow: MLFLOW_CRYPTO_KEK_PASSPHRASE is not set; set it before starting the stack (see README.md)" >&2; exit 64; fi; exec "$$@"'
+      - "mlflow"
     command:
       - "mlflow"
       - "server"
@@ -26,6 +31,10 @@ services:
       # instance's, or the gateway's name under auth), in-network callers through the
       # gateway, and the gateway-init job calling it directly. A `.localhost` name only ever
       # resolves to the loopback address (RFC 6761), so it can't be rebound to another host.
+      # Seals the provider keys the AI Gateway stores. Passed through from the process that
+      # starts the stack, never written here; see the README's key passphrase step. Unset,
+      # the entrypoint refuses to start (MLflow would fall back to a public default).
+      MLFLOW_CRYPTO_KEK_PASSPHRASE:
       MLFLOW_SERVER_ALLOWED_HOSTS: "localhost,localhost:*,*.localhost,*.localhost:*,127.0.0.1,127.0.0.1:*,envoy:10000,mlflow:5000"
       # Makes the mounted package visible: its entry point registers MLflow's OSS Unity Catalog
       # store for the `uc:` scheme, which the server otherwise doesn't accept.
@@ -51,8 +60,9 @@ services:
       retries: 10
       start_period: 10s
 
-  # Seeds the AI Gateway with one endpoint per configured model, storing the provider keys
-  # exported in your shell. Idempotent: re-runs on every `up` and leaves existing endpoints alone.
+  # Seeds the AI Gateway with one endpoint per configured model, routed to the upstream with the
+  # credentials passed in here. Idempotent: re-runs on every `up`, re-points only the endpoints
+  # it made when the upstream changes, and leaves the rest alone.
   mlflow-gateway-init:
     image: ghcr.io/mlflow/mlflow:v3.18.0-full
     init: true
@@ -61,11 +71,14 @@ services:
     environment:
       MLFLOW_URL: http://mlflow:5000/mlflow
       MLFLOW_GATEWAY_MODELS: "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5"
-      # Provider keys, passed through from the shell running `docker compose up` (a bare name
-      # takes the caller's value, or stays unset): never written into the rendered stack.
+      MLFLOW_UPSTREAM: keys
+      # Credentials, passed through from the process that starts the stack (a bare name takes
+      # the caller's value, or stays unset): never written into the rendered stack.
       ANTHROPIC_API_KEY:
       OPENAI_API_KEY:
       GEMINI_API_KEY:
+      DATABRICKS_HOST:
+      DATABRICKS_TOKEN:
     configs:
       - source: mlflow_seed_gateway
         target: /seed_gateway.py

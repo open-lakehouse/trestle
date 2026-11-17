@@ -57,9 +57,9 @@ use super::credentials::{self, LocalCredentials};
 use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
 use crate::catalog::images;
 use crate::catalog::module::{
-    ClientNotebook, ClientValue, ConnectionBinding, DataModule, HelperService, ImpersonatedHost,
-    Knob, KnobKind, KnobRejection, Module, ModuleId, Provides, PythonClient, Readiness, ReadyGate,
-    RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
+    ClientNotebook, ClientValue, ConnectionBinding, DataModule, DeclaredSecret, HelperService,
+    ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId, Provides, PythonClient,
+    Readiness, ReadyGate, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -1125,11 +1125,81 @@ fn azurite() -> Arc<dyn Module> {
     })
 }
 
-/// The default models [`mlflow`]'s AI Gateway is seeded with: `provider:model` pairs, each
-/// becoming an endpoint named the model id (so clients asking for the model by its usual id
-/// reach it unchanged).
+/// The default models [`mlflow`]'s AI Gateway is seeded with under the `keys` upstream:
+/// `provider:model` pairs, each becoming an endpoint named the model id (so clients asking for
+/// the model by its usual id reach it unchanged).
 pub const MLFLOW_AI_GATEWAY_MODELS_DEFAULT: &str =
     "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5";
+
+/// The models [`mlflow`]'s AI Gateway is seeded with under the `databricks` upstream: the
+/// workspace's Claude serving endpoints, each served as the model id without the `databricks-`
+/// prefix (`claude-opus-5-5`), so clients don't change with the upstream. Unity Catalog names
+/// (`system.ai.*`) don't work for Anthropic Messages in MLflow 3.18.
+pub const MLFLOW_AI_GATEWAY_MODELS_DATABRICKS: &str = "databricks:databricks-claude-opus-5-5,\
+     databricks:databricks-claude-sonnet-5-5,databricks:databricks-claude-haiku-5-5";
+
+/// The models [`mlflow`]'s AI Gateway is seeded with under the `neon` upstream: the Neon AI
+/// Gateway serves the same model ids as the providers.
+pub const MLFLOW_AI_GATEWAY_MODELS_NEON: &str = MLFLOW_AI_GATEWAY_MODELS_DEFAULT;
+
+/// The [`mlflow`] knob choosing where its AI Gateway calls models: `keys`, `databricks` or `neon`.
+const MLFLOW_UPSTREAM_KNOB: &str = "upstream";
+/// The [`mlflow`] knob listing the models its AI Gateway serves.
+const MLFLOW_MODELS_KNOB: &str = "ai_gateway_models";
+/// Seals the provider keys MLflow's AI Gateway stores.
+pub const MLFLOW_KEK_PASSPHRASE: &str = "MLFLOW_CRYPTO_KEK_PASSPHRASE";
+
+/// The secrets an `mlflow` with the given upstream reads (see [`Provides::secrets`]).
+fn mlflow_secrets(upstream: &str) -> Vec<DeclaredSecret> {
+    let databricks = upstream == "databricks";
+    let neon = upstream == "neon";
+    let either = |required: bool, name: &str, help: &str| {
+        if required {
+            DeclaredSecret::required(name, help)
+        } else {
+            DeclaredSecret::optional(name, help)
+        }
+    };
+    vec![
+        DeclaredSecret::required(
+            MLFLOW_KEK_PASSPHRASE,
+            "Seals the provider keys MLflow's AI Gateway stores, in its database. Any random \
+             string, generated once and kept: keys sealed under one can't be read with another.",
+        )
+        .minted(),
+        DeclaredSecret::optional(
+            "ANTHROPIC_API_KEY",
+            "Anthropic API key, for `anthropic:` models.",
+        ),
+        DeclaredSecret::optional("OPENAI_API_KEY", "OpenAI API key, for `openai:` models."),
+        DeclaredSecret::optional("GEMINI_API_KEY", "Gemini API key, for `gemini:` models."),
+        either(
+            databricks,
+            "DATABRICKS_HOST",
+            "The Databricks workspace URL that serves `databricks:` models.",
+        ),
+        DeclaredSecret::optional(
+            "DATABRICKS_METADATA_SERVICE_URL",
+            "A Databricks SDK metadata-service token endpoint the MLflow server fetches and \
+             refreshes workspace tokens from (the desktop serves one per Databricks profile).",
+        ),
+        DeclaredSecret::optional(
+            "DATABRICKS_TOKEN",
+            "A static workspace token (e.g. from `databricks auth token`), used instead of the \
+             token endpoint; it stops working when it expires.",
+        ),
+        either(
+            neon,
+            "NEON_AI_GATEWAY_BASE_URL",
+            "The Neon AI Gateway of the environment's branch (its bare host).",
+        ),
+        either(
+            neon,
+            "NEON_AI_GATEWAY_TOKEN",
+            "A Neon credential with the `ai_gateway:invoke` scope on the environment's branch.",
+        ),
+    ]
+}
 
 /// `mlflow` — experiment tracking and its built-in AI Gateway.
 ///
@@ -1141,6 +1211,14 @@ pub const MLFLOW_AI_GATEWAY_MODELS_DEFAULT: &str =
 fn mlflow() -> Arc<dyn Module> {
     let mut provides = Provides {
         helpers: vec![HelperService::init("mlflow-gateway-init")],
+        // Under the default upstream; `Mlflow::secrets_in` follows the `upstream` knob.
+        secrets: mlflow_secrets("keys"),
+        deploy: vec![DeployStepSpec::new(
+            "kek",
+            DeployPhase::Configure,
+            "Set the AI Gateway's key passphrase",
+            include_str!("../../templates/modules/mlflow/kek.deploy.md.jinja"),
+        )],
         ..Provides::default()
     };
     // `MLFLOW_S3_ENDPOINT_URL` and the AWS_* credentials are no longer declared here — they
@@ -1254,15 +1332,39 @@ fn mlflow() -> Arc<dyn Module> {
                 Some("MLFLOW_IMAGE"),
             ),
             Knob {
-                key: "ai_gateway_models".into(),
+                key: MLFLOW_UPSTREAM_KNOB.into(),
+                title: Some("AI Gateway upstream".into()),
+                kind: KnobKind::Enum {
+                    options: vec!["keys".into(), "databricks".into(), "neon".into()],
+                },
+                default: Some("keys".into()),
+                required: false,
+                help: Some(
+                    "Where the AI Gateway calls models. `keys`: the providers, with your keys \
+                     (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). `databricks`: a \
+                     workspace's serving endpoints at DATABRICKS_HOST, authenticated from \
+                     DATABRICKS_METADATA_SERVICE_URL or DATABRICKS_TOKEN. `neon`: the Neon AI \
+                     Gateway of the environment's branch (NEON_AI_GATEWAY_BASE_URL and \
+                     NEON_AI_GATEWAY_TOKEN). It also picks the default models."
+                        .into(),
+                ),
+                aliases: vec![],
+                advanced: false,
+            },
+            Knob {
+                key: MLFLOW_MODELS_KNOB.into(),
                 title: Some("AI Gateway models".into()),
                 kind: KnobKind::String,
-                default: Some(MLFLOW_AI_GATEWAY_MODELS_DEFAULT.into()),
+                // The upstream's preset (see `Mlflow::complete_knobs`).
+                default: None,
                 required: false,
                 help: Some(
                     "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each \
-                     named the model id. A pair is seeded only when its provider key (e.g. \
-                     ANTHROPIC_API_KEY) is exported before `docker compose up`."
+                     named the model id. A `databricks:` pair names a serving endpoint and drops \
+                     its `databricks-` prefix (`databricks:databricks-claude-opus-5-5` serves \
+                     `claude-opus-5-5`). Unset, the upstream's preset: the Claude Opus, Sonnet \
+                     and Haiku models. A pair is seeded only when its credential is set before \
+                     `docker compose up`."
                         .into(),
                 ),
                 aliases: vec![],
@@ -1365,6 +1467,21 @@ impl Module for Mlflow {
     }
     fn knobs(&self) -> &[Knob] {
         self.0.knobs()
+    }
+    fn complete_knobs(&self, knobs: &mut ResolvedKnobs) {
+        if knobs.get(MLFLOW_MODELS_KNOB).is_none() {
+            let preset = match knobs.get(MLFLOW_UPSTREAM_KNOB) {
+                Some("databricks") => MLFLOW_AI_GATEWAY_MODELS_DATABRICKS,
+                Some("neon") => MLFLOW_AI_GATEWAY_MODELS_NEON,
+                _ => MLFLOW_AI_GATEWAY_MODELS_DEFAULT,
+            };
+            knobs.set(MLFLOW_MODELS_KNOB, preset);
+        }
+    }
+    fn secrets_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [DeclaredSecret]> {
+        Cow::Owned(mlflow_secrets(
+            knobs.get(MLFLOW_UPSTREAM_KNOB).unwrap_or("keys"),
+        ))
     }
     fn provides(&self) -> &Provides {
         self.0.provides()
@@ -1890,6 +2007,14 @@ fn unity_catalog_rs() -> Arc<dyn Module> {
         )]
         .into(),
         function_secrets: vec![UNITY_CATALOG_RS_KEK.into()],
+        secrets: vec![
+            DeclaredSecret::required(
+                UNITY_CATALOG_RS_KEK,
+                "Seals the credentials Unity Catalog stores: 32 random bytes, base64. Generate \
+                 it once and keep it: credentials sealed under one can't be read with another.",
+            )
+            .minted(),
+        ],
         api: Some(UNITY_CATALOG_API.into()),
         // As a function, the function's own step says where the key goes instead.
         deploy: vec![DeployStepSpec::new(

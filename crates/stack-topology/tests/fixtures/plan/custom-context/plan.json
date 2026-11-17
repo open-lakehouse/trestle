@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:30b241f9012e5b41f73a51bba0589a43c467ec8764c0ef93159d442014305793"
+    "digest": "sha256:2a4b6f8f020db194d4bf443f20fa961707c0aad6ddae0950f67dfb8b3f24a74c"
   },
   "recipe": {
     "digest": "sha256:74c71d87d6b56e20a56592c100affb36c7e9ff74527e61c06501d59ed0649a92"
@@ -678,6 +678,46 @@
       "UNITY_CATALOG_URL": "http://envoy:10000/api/2.1/unity-catalog"
     }
   },
+  "secrets": [
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "help": "Anthropic API key, for `anthropic:` models."
+    },
+    {
+      "name": "DATABRICKS_HOST",
+      "help": "The Databricks workspace URL that serves `databricks:` models."
+    },
+    {
+      "name": "DATABRICKS_METADATA_SERVICE_URL",
+      "help": "A Databricks SDK metadata-service token endpoint the MLflow server fetches and refreshes workspace tokens from (the desktop serves one per Databricks profile)."
+    },
+    {
+      "name": "DATABRICKS_TOKEN",
+      "help": "A static workspace token (e.g. from `databricks auth token`), used instead of the token endpoint; it stops working when it expires."
+    },
+    {
+      "name": "GEMINI_API_KEY",
+      "help": "Gemini API key, for `gemini:` models."
+    },
+    {
+      "name": "MLFLOW_CRYPTO_KEK_PASSPHRASE",
+      "required": true,
+      "minted": true,
+      "help": "Seals the provider keys MLflow's AI Gateway stores, in its database. Any random string, generated once and kept: keys sealed under one can't be read with another."
+    },
+    {
+      "name": "NEON_AI_GATEWAY_BASE_URL",
+      "help": "The Neon AI Gateway of the environment's branch (its bare host)."
+    },
+    {
+      "name": "NEON_AI_GATEWAY_TOKEN",
+      "help": "A Neon credential with the `ai_gateway:invoke` scope on the environment's branch."
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "help": "OpenAI API key, for `openai:` models."
+    }
+  ],
   "files": [
     {
       "path": "compose.yaml",
@@ -788,12 +828,20 @@
     {
       "order": 1,
       "phase": "configure",
+      "module": "mlflow",
+      "id": "kek",
+      "title": "Set the AI Gateway's key passphrase",
+      "instructions": "MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from\n`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose\npasses it through to the server; it is never written into this directory, and without it the\nstack doesn't start. Generate one once and keep it: keys sealed under it can't be read with\nanother.\n\n```sh\nexport MLFLOW_CRYPTO_KEK_PASSPHRASE=\"$(openssl rand -base64 32)\"\n```\n\nWith trestle's state store, keep it in the keychain instead (`<target>` is the workspace or\nenvironment, as for any `trestle var set`):\n`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.\n\nAn environment made before the passphrase was required sealed its keys under\n`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow\nUI and let the next start store them again."
+    },
+    {
+      "order": 2,
+      "phase": "configure",
       "id": "local-credentials",
       "title": "Set the services' own credentials",
       "instructions": "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service."
     },
     {
-      "order": 2,
+      "order": 3,
       "phase": "start",
       "id": "up",
       "title": "Start the stack",

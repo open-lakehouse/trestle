@@ -988,7 +988,15 @@ pub struct NeonRequirements {
     /// Every `${VAR}` the Neon-hosted connections read, sorted: what binding the branch must
     /// set.
     pub vars: Vec<String>,
+    /// Whether a module calls the branch's AI Gateway: it declares
+    /// [`NEON_AI_GATEWAY_TOKEN`](NEON_AI_GATEWAY_TOKEN_VAR) a required secret, which binding
+    /// the branch supplies along with `NEON_AI_GATEWAY_BASE_URL`.
+    pub ai_gateway: bool,
 }
+
+/// The secret a module requires to call its Neon branch's AI Gateway (see
+/// [`NeonRequirements::ai_gateway`]).
+pub const NEON_AI_GATEWAY_TOKEN_VAR: &str = "NEON_AI_GATEWAY_TOKEN";
 
 impl NeonRequirements {
     /// Whether the environment needs no Neon branch.
@@ -997,6 +1005,7 @@ impl NeonRequirements {
             && self.buckets.is_empty()
             && self.functions.is_empty()
             && self.vars.is_empty()
+            && !self.ai_gateway
     }
 }
 

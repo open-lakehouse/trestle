@@ -109,7 +109,27 @@ Set `UC_SERVER_KEK` on the deployment yourself (`neon functions deploy --env`): 
 
 ## Configure
 
-### 6. Supply the hosted resources' secrets
+### 6. Set the AI Gateway's key passphrase (`mlflow`)
+
+MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from
+`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose
+passes it through to the server; it is never written into this directory, and without it the
+stack doesn't start. Generate one once and keep it: keys sealed under it can't be read with
+another.
+
+```sh
+export MLFLOW_CRYPTO_KEK_PASSPHRASE="$(openssl rand -base64 32)"
+```
+
+With trestle's state store, keep it in the keychain instead (`<target>` is the workspace or
+environment, as for any `trestle var set`):
+`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.
+
+An environment made before the passphrase was required sealed its keys under
+`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow
+UI and let the next start store them again.
+
+### 7. Supply the hosted resources' secrets
 
 The hosted resources read `HEADWATERS_FUNCTION_URL`, `NEON_S3_ACCESS_KEY_ID`, `NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_SECRET_ACCESS_KEY`, `PGHOST`, `PGPASSWORD`, `PGUSER`, `UNITYCATALOG_FUNCTION_URL`. Set them in `secrets.env` beside `env.toml` (git-ignored; the scripts above save what they create there) or export them, then render again so the stack picks them up:
 
@@ -119,7 +139,7 @@ trestle env render .
 
 ## Start
 
-### 7. Start the stack
+### 8. Start the stack
 
 Start every service and wait until each one is healthy:
 

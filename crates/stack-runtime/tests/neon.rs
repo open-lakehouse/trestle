@@ -213,6 +213,7 @@ fn requirements() -> NeonRequirements {
             function("unity-catalog-rs", "unitycatalog"),
         ],
         vars: vec!["NEON_S3_ENDPOINT".into(), "PGHOST".into()],
+        ai_gateway: false,
     }
 }
 

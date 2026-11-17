@@ -26,7 +26,10 @@ use super::{
     services_by_module,
 };
 use crate::render::output::MaterializedOutput;
-use crate::{Catalog, EnvManifest, HelperKind, InjectedEnv, Placement, Plan, PlanCtx, ServiceSpec};
+use crate::{
+    Catalog, DeclaredSecret, EnvManifest, HelperKind, InjectedEnv, Placement, Plan, PlanCtx,
+    ServiceSpec,
+};
 
 /// The `format` every `plan.json` carries.
 pub const PLAN_EXPORT_FORMAT: &str = "trestle-plan";
@@ -70,6 +73,10 @@ pub struct PlanExport {
     pub gateway: GatewayDto,
     /// The variables a client loads to reach the stack, per vantage.
     pub client: ClientEnvDto,
+    /// The secret variables the stack reads at launch, by name only (see
+    /// [`Plan::declared_secrets`]). Absent when it reads none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<DeclaredSecret>,
     /// Every file the plan materializes, without contents.
     pub files: Vec<FileEntryDto>,
     /// The deployment steps, in order; their scripts are among [`files`](Self::files).
@@ -249,6 +256,7 @@ pub fn plan_export(
             host: plan.client_env_host.clone(),
             container: plan.client_env_container.clone(),
         },
+        secrets: plan.declared_secrets(),
         files: materialized
             .files
             .iter()
