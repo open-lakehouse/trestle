@@ -128,6 +128,27 @@
         "container": { "$ref": "#/$defs/env" }
       }
     },
+    "secrets": {
+      "description": "The secret variables the stack reads at launch, by name only: never their values.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "required": {
+            "description": "The stack fails to start without it.",
+            "type": "boolean"
+          },
+          "minted": {
+            "description": "Any random value, generated once and kept, will do.",
+            "type": "boolean"
+          },
+          "help": { "type": "string" }
+        }
+      }
+    },
     "files": {
       "description": "Every materialized file, without contents.",
       "type": "array",

@@ -99,6 +99,8 @@ fn steps_run_in_phase_then_dependency_order_with_the_targets_last() {
             "aws-s3/buckets",
             "hosted-postgres/server",
             "hosted-postgres/databases",
+            // The AI Gateway's key passphrase, a module's own Configure step.
+            "mlflow/kek",
             "compose/secrets",
             "compose/up",
         ],
@@ -107,7 +109,7 @@ fn steps_run_in_phase_then_dependency_order_with_the_targets_last() {
     assert!(order.windows(2).all(|w| w[0].0 <= w[1].0));
     assert_eq!(
         out.deploy.iter().map(|s| s.order).collect::<Vec<_>>(),
-        [1, 2, 3, 4, 5]
+        [1, 2, 3, 4, 5, 6]
     );
 
     let readme = file(&out, "README.md");
@@ -121,7 +123,8 @@ fn steps_run_in_phase_then_dependency_order_with_the_targets_last() {
         at("### 2. Create the Neon project (`hosted-postgres`)")
             < at("### 3. Create the databases")
     );
-    assert!(at("## Configure") < at("### 4. Supply the hosted resources' secrets"));
+    assert!(at("## Configure") < at("### 4. Set the AI Gateway's key passphrase (`mlflow`)"));
+    assert!(at("### 4. Set the AI Gateway") < at("### 5. Supply the hosted resources' secrets"));
     assert!(at("## Start") < at("docker compose up -d --wait"));
     assert!(
         readme.contains("bash deploy/hosted-postgres-server.sh"),
@@ -353,6 +356,7 @@ fn a_stack_without_hosted_resources_still_says_how_to_start() {
     assert_eq!(
         ids,
         BTreeMap::from([
+            ("kek", DeployPhase::Configure),
             ("local-credentials", DeployPhase::Configure),
             ("up", DeployPhase::Start),
         ])

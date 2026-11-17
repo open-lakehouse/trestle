@@ -223,18 +223,42 @@ The `mlflow` module also serves MLflow's built-in AI Gateway, fronted at `/ai-ga
 
 The `model` a client sends is the name of a gateway endpoint. On every `docker compose up`, a
 one-shot `mlflow-gateway-init` creates one endpoint per entry in the `mlflow.ai_gateway_models`
-knob (`provider:model` pairs, default the current Claude models), each named after the model id
-and with usage tracking on. It stores the provider key from the shell that runs `up`:
+knob (`provider:model` pairs), each named after the model id and with usage tracking on. Clients
+send no key of their own: the gateway route drops caller credentials, so MLflow always uses the
+credential it stores, encrypted in its database and never written into the rendered stack.
+
+The `mlflow.upstream` knob picks where the gateway calls models, and the default models with it
+(the Claude Opus, Sonnet and Haiku models, under the same endpoint names whatever the upstream):
+
+| `upstream` | Calls | Credentials, from the process that runs `up` |
+| --- | --- | --- |
+| `keys` (default) | the providers | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` |
+| `databricks` | a workspace's serving endpoints (`databricks:databricks-claude-opus-5-5` serves `claude-opus-5-5`) | `DATABRICKS_HOST`, and `DATABRICKS_METADATA_SERVICE_URL` or `DATABRICKS_TOKEN` |
+| `neon` | the Neon AI Gateway of the environment's branch | `NEON_AI_GATEWAY_BASE_URL`, `NEON_AI_GATEWAY_TOKEN` |
+
+- **Databricks.** With `DATABRICKS_METADATA_SERVICE_URL` (a Databricks SDK metadata-service
+  token endpoint, which the desktop serves for a CLI profile), the stored secret holds no token:
+  the MLflow server's Databricks SDK fetches tokens from the endpoint and refreshes them before
+  they expire. From the CLI, `export DATABRICKS_TOKEN="$(databricks auth token -p <profile> |
+  jq -r .access_token)"` works until the token expires; re-run `up` with a fresh one.
+- **Neon.** A Neon instance whose branch has the AI Gateway enabled gets both variables from
+  its Neon source. Its models are the gateway's (`GET $NEON_AI_GATEWAY_BASE_URL/v1/models`).
+
+Every module declares the secrets it reads (`Provides::secrets`, in `plan.json` as `secrets`), so
+a launcher resolves them from its secret providers by name. One is required:
+`MLFLOW_CRYPTO_KEK_PASSPHRASE` seals the stored credentials. Generate it once and keep it (the
+README's key passphrase step):
 
 ```bash
-export ANTHROPIC_API_KEY=...   # OPENAI_API_KEY / GEMINI_API_KEY for those providers
+export MLFLOW_CRYPTO_KEK_PASSPHRASE="$(openssl rand -base64 32)"
+export ANTHROPIC_API_KEY=...
 docker compose up -d
 ```
 
-Keys are encrypted in MLflow's database and never written into the rendered stack. Clients send
-no key of their own. The gateway route drops caller credentials, so MLflow always uses the key
-it stores. Endpoints already present are left alone, so changes made in the MLflow UI
-(`/mlflow/#/gateway`) survive re-runs.
+A stack rendered before it was required sealed its keys under `lakehouse-dev-kek`: set that to
+keep them. A pair whose credential is missing is skipped with a log line. Endpoints the job
+made follow the upstream when it changes; endpoints made in the MLflow UI (`/mlflow/#/gateway`)
+are left alone.
 
 Upgrading a stack created with an older MLflow image: MLflow refuses an out-of-date schema. Back up
 `.data/`, then run `docker compose run --rm mlflow sh -c 'mlflow db upgrade "$MLFLOW_BACKEND_STORE_URI"'`
@@ -254,10 +278,11 @@ relational and object stores they need.
   endpoint, and the rest of the selected modules' addresses. Its harnesses (Claude Code, Codex,
   …) call MLflow's AI Gateway (`ANTHROPIC_BASE_URL=$MLFLOW_AI_GATEWAY_URL/anthropic`), so
   the host holds no provider key. `omnigent.model` / `omnigent.fast_model` pick the gateway
-  endpoints the harness uses. Export the provider key before `up` so the gateway is seeded:
+  endpoints the harness uses. Export the passphrase and a provider key before `up` so the
+  gateway is seeded:
 
   ```bash
-  export ANTHROPIC_API_KEY=...
+  export MLFLOW_CRYPTO_KEK_PASSPHRASE="$(openssl rand -base64 32)" ANTHROPIC_API_KEY=...
   docker compose up -d
   open http://localhost:9080/omnigent/
   ```

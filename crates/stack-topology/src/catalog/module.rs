@@ -172,6 +172,13 @@ pub struct Provides {
     /// values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_secrets: Vec<String>,
+    /// The secret variables this module's containers read from the process that starts the
+    /// stack (a provider key, a key-encryption passphrase). Only their names are known here:
+    /// the fragment passes each through by name, so no value is ever rendered, and whoever
+    /// launches the stack (the runtime's secret providers, or the user's shell) supplies them.
+    /// [`Module::secrets_in`] narrows the list by knobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<DeclaredSecret>,
     /// For a module hosted as a function: the resource kinds it demands as a container
     /// (`relational_db`, …), which the function finds where it is deployed (its branch's
     /// Postgres) rather than in the stack. The planner sets it on the
@@ -201,6 +208,52 @@ pub struct Provides {
     /// [`catalog::deploy`]: crate::catalog::deploy
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deploy: Vec<DeployStepSpec>,
+}
+
+/// A secret variable a module's containers read at launch (see [`Provides::secrets`]): its
+/// name and how to come by it, never its value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclaredSecret {
+    /// The variable's name, e.g. `"EXAMPLE_API_KEY"`.
+    pub name: String,
+    /// Whether the stack fails to start without it. An optional secret enables a feature (a
+    /// provider's models, say) and is skipped when unset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    /// Whether its value is any random string the launcher may generate once and keep (a
+    /// key-encryption passphrase), rather than one only the user has (an API key). Changing a
+    /// minted value later can make data sealed under the old one unreadable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub minted: bool,
+    /// What it is and where to get it, for a UI or an error message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+}
+
+impl DeclaredSecret {
+    /// An optional secret named `name`.
+    pub fn optional(name: impl Into<String>, help: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            required: false,
+            minted: false,
+            help: Some(help.into()),
+        }
+    }
+
+    /// A required secret named `name`.
+    pub fn required(name: impl Into<String>, help: impl Into<String>) -> Self {
+        Self {
+            required: true,
+            ..Self::optional(name, help)
+        }
+    }
+
+    /// This secret, marked minted (see [`minted`](Self::minted)).
+    pub fn minted(mut self) -> Self {
+        self.minted = true;
+        self
+    }
 }
 
 /// A container a module's fragment runs to support its services (see [`Provides::helpers`]).
@@ -1054,6 +1107,20 @@ pub trait Module: Send + Sync {
     fn check_knobs(&self, knobs: &ResolvedKnobs) -> Result<(), KnobRejection> {
         let _ = knobs;
         Ok(())
+    }
+    /// Fills in knobs whose default follows another knob (a preset chosen by a mode knob, say):
+    /// such a knob declares no [`default`](Knob::default), and this sets it when the selection
+    /// left it unset. The planner runs it once knobs resolve, before
+    /// [`check_knobs`](Module::check_knobs).
+    fn complete_knobs(&self, knobs: &mut ResolvedKnobs) {
+        let _ = knobs;
+    }
+    /// The secret variables this module reads at launch with the resolved `knobs`. Defaults to
+    /// [`Provides::secrets`]; a module overrides it when a knob changes which secrets it needs,
+    /// or whether one is required.
+    fn secrets_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [DeclaredSecret]> {
+        let _ = knobs;
+        Cow::Borrowed(&self.provides().secrets)
     }
     /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
     /// extras).

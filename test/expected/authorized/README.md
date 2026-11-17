@@ -67,7 +67,27 @@ default policy lets any signed-in user read and lets the `writers` or `admins` g
 `trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive
 re-renders. To start over from the demo account, delete the file and render again.
 
-### 2. Set the services' own credentials
+### 2. Set the AI Gateway's key passphrase (`mlflow`)
+
+MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from
+`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose
+passes it through to the server; it is never written into this directory, and without it the
+stack doesn't start. Generate one once and keep it: keys sealed under it can't be read with
+another.
+
+```sh
+export MLFLOW_CRYPTO_KEK_PASSPHRASE="$(openssl rand -base64 32)"
+```
+
+With trestle's state store, keep it in the keychain instead (`<target>` is the workspace or
+environment, as for any `trestle var set`):
+`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.
+
+An environment made before the passphrase was required sealed its keys under
+`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow
+UI and let the next start store them again.
+
+### 3. Set the services' own credentials
 
 The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.
 
@@ -98,7 +118,7 @@ Do this before the first start. Services keep the credentials they first started
 
 ## Start
 
-### 3. Start the stack
+### 4. Start the stack
 
 Start every service and wait until each one is healthy:
 
@@ -110,7 +130,7 @@ The gateway then serves the stack at <https://authorized.localhost:9080>. [LAYOU
 
 ## Verify
 
-### 4. Trust the gateway's local certificate authority
+### 5. Trust the gateway's local certificate authority
 
 The gateway serves HTTPS with a certificate from a CA minted for this environment. Copy it out, then add it to your browser or pass it to `curl --cacert`:
 

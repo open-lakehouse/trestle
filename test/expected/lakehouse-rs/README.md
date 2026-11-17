@@ -43,7 +43,27 @@ can't be read with another.
 export UC_SERVER_KEK="$(openssl rand -base64 32)"
 ```
 
-### 2. Set the services' own credentials
+### 2. Set the AI Gateway's key passphrase (`mlflow`)
+
+MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from
+`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose
+passes it through to the server; it is never written into this directory, and without it the
+stack doesn't start. Generate one once and keep it: keys sealed under it can't be read with
+another.
+
+```sh
+export MLFLOW_CRYPTO_KEK_PASSPHRASE="$(openssl rand -base64 32)"
+```
+
+With trestle's state store, keep it in the keychain instead (`<target>` is the workspace or
+environment, as for any `trestle var set`):
+`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.
+
+An environment made before the passphrase was required sealed its keys under
+`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow
+UI and let the next start store them again.
+
+### 3. Set the services' own credentials
 
 The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.
 
@@ -68,7 +88,7 @@ Do this before the first start. Services keep the credentials they first started
 
 ## Start
 
-### 3. Start the stack
+### 4. Start the stack
 
 Start every service and wait until each one is healthy:
 

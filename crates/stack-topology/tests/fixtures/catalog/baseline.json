@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:30b241f9012e5b41f73a51bba0589a43c467ec8764c0ef93159d442014305793"
+    "digest": "sha256:2a4b6f8f020db194d4bf443f20fa961707c0aad6ddae0950f67dfb8b3f24a74c"
   },
   "modules": [
     {
@@ -471,14 +471,28 @@
           "advanced": true
         },
         {
+          "key": "upstream",
+          "title": "AI Gateway upstream",
+          "kind": {
+            "kind": "enum",
+            "options": [
+              "keys",
+              "databricks",
+              "neon"
+            ]
+          },
+          "default": "keys",
+          "required": false,
+          "help": "Where the AI Gateway calls models. `keys`: the providers, with your keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). `databricks`: a workspace's serving endpoints at DATABRICKS_HOST, authenticated from DATABRICKS_METADATA_SERVICE_URL or DATABRICKS_TOKEN. `neon`: the Neon AI Gateway of the environment's branch (NEON_AI_GATEWAY_BASE_URL and NEON_AI_GATEWAY_TOKEN). It also picks the default models."
+        },
+        {
           "key": "ai_gateway_models",
           "title": "AI Gateway models",
           "kind": {
             "kind": "string"
           },
-          "default": "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5",
           "required": false,
-          "help": "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A pair is seeded only when its provider key (e.g. ANTHROPIC_API_KEY) is exported before `docker compose up`."
+          "help": "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A `databricks:` pair names a serving endpoint and drops its `databricks-` prefix (`databricks:databricks-claude-opus-5-5` serves `claude-opus-5-5`). Unset, the upstream's preset: the Claude Opus, Sonnet and Haiku models. A pair is seeded only when its credential is set before `docker compose up`."
         },
         {
           "key": "uc_url",

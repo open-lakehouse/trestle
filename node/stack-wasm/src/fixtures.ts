@@ -431,15 +431,24 @@ export const FIXTURE_CATALOG: CatalogDto = {
           advanced: true,
         },
         {
+          key: "upstream",
+          title: "AI Gateway upstream",
+          kind: {
+            kind: "enum",
+            options: ["keys", "databricks", "neon"],
+          },
+          default: "keys",
+          required: false,
+          help: "Where the AI Gateway calls models. `keys`: the providers, with your keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). `databricks`: a workspace's serving endpoints at DATABRICKS_HOST, authenticated from DATABRICKS_METADATA_SERVICE_URL or DATABRICKS_TOKEN. `neon`: the Neon AI Gateway of the environment's branch (NEON_AI_GATEWAY_BASE_URL and NEON_AI_GATEWAY_TOKEN). It also picks the default models.",
+        },
+        {
           key: "ai_gateway_models",
           title: "AI Gateway models",
           kind: {
             kind: "string",
           },
-          default:
-            "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5",
           required: false,
-          help: "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A pair is seeded only when its provider key (e.g. ANTHROPIC_API_KEY) is exported before `docker compose up`.",
+          help: "Comma-separated provider:model pairs to seed as AI Gateway endpoints, each named the model id. A `databricks:` pair names a serving endpoint and drops its `databricks-` prefix (`databricks:databricks-claude-opus-5-5` serves `claude-opus-5-5`). Unset, the upstream's preset: the Claude Opus, Sonnet and Haiku models. A pair is seeded only when its credential is set before `docker compose up`.",
         },
         {
           key: "uc_url",
@@ -1895,13 +1904,22 @@ export const FIXTURE_PLAN: PlanResult = {
     {
       order: 2,
       phase: "configure",
+      module: "mlflow",
+      id: "kek",
+      title: "Set the AI Gateway's key passphrase",
+      instructions:
+        "MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from\n`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose\npasses it through to the server; it is never written into this directory, and without it the\nstack doesn't start. Generate one once and keep it: keys sealed under it can't be read with\nanother.\n\n```sh\nexport MLFLOW_CRYPTO_KEK_PASSPHRASE=\"$(openssl rand -base64 32)\"\n```\n\nWith trestle's state store, keep it in the keychain instead (`<target>` is the workspace or\nenvironment, as for any `trestle var set`):\n`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.\n\nAn environment made before the passphrase was required sealed its keys under\n`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow\nUI and let the next start store them again.",
+    },
+    {
+      order: 3,
+      phase: "configure",
       id: "local-credentials",
       title: "Set the services' own credentials",
       instructions:
         "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n| RustFS root access key | `LOCAL_RUSTFS_ACCESS_KEY` |\n| RustFS root secret key | `LOCAL_RUSTFS_SECRET_KEY` |\n| Authelia session secret | `LOCAL_AUTHELIA_SESSION_SECRET` |\n| Authelia storage encryption key | `LOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY` |\n| Authelia identity-verification JWT secret | `LOCAL_AUTHELIA_JWT_SECRET` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nLOCAL_RUSTFS_ACCESS_KEY=$(openssl rand -hex 10)\nLOCAL_RUSTFS_SECRET_KEY=$(openssl rand -hex 20)\nLOCAL_AUTHELIA_SESSION_SECRET=$(openssl rand -hex 32)\nLOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY=$(openssl rand -hex 32)\nLOCAL_AUTHELIA_JWT_SECRET=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service.",
     },
     {
-      order: 3,
+      order: 4,
       phase: "start",
       id: "up",
       title: "Start the stack",
@@ -1909,7 +1927,7 @@ export const FIXTURE_PLAN: PlanResult = {
         "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <https://lakehouse.localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address.",
     },
     {
-      order: 4,
+      order: 5,
       phase: "verify",
       id: "trust",
       title: "Trust the gateway's local certificate authority",

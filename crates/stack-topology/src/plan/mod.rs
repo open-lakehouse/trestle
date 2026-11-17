@@ -65,7 +65,7 @@ mod settle;
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::DATA_ROOT_DEFAULT;
-use crate::catalog::module::{ExtraResource, ModuleId, StackFacts};
+use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, StackFacts};
 use crate::model::connection::Connection;
 use crate::model::endpoint::{RouteIntent, Scheme};
 use crate::model::placement::{Placement, Vantage};
@@ -85,7 +85,7 @@ pub use gateway::{
 use hosted::SecretValues;
 pub use hosted::{
     FunctionRequirement, HostedConnection, HostedKind, HostedResource, HostedStepView,
-    HostedVendor, NeonRequirements, Secrets, function_url_var,
+    HostedVendor, NEON_AI_GATEWAY_TOKEN_VAR, NeonRequirements, Secrets, function_url_var,
 };
 pub use names::{is_valid_resource_name, resource_name_rule};
 use python_client::resolve_python_client;
@@ -899,6 +899,10 @@ pub struct Plan {
     /// The Python client workspace to generate, when the selection asks for one (see
     /// [`Selection::client`]): the merged dependencies and example notebooks of every module.
     pub python_client: Option<PythonWorkspace>,
+    /// The secret variables each module's containers read at launch, by name only (see
+    /// [`Provides::secrets`](crate::Provides::secrets)): modules that declare none are absent.
+    /// [`Plan::declared_secrets`] merges them.
+    pub secrets: BTreeMap<ModuleId, Vec<DeclaredSecret>>,
     /// The stack-wide facts every module's services, client env and render were settled
     /// against.
     pub stack_facts: StackFacts,
@@ -909,6 +913,22 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Every secret variable the stack reads at launch, once per name, in name order: required
+    /// (or minted) when any module that declares it says so, with the first declaration's help.
+    pub fn declared_secrets(&self) -> Vec<DeclaredSecret> {
+        let mut merged: BTreeMap<&str, DeclaredSecret> = BTreeMap::new();
+        for secret in self.secrets.values().flatten() {
+            merged
+                .entry(&secret.name)
+                .and_modify(|seen| {
+                    seen.required |= secret.required;
+                    seen.minted |= secret.minted;
+                })
+                .or_insert_with(|| secret.clone());
+        }
+        merged.into_values().collect()
+    }
+
     /// Render this plan on its own deploy [`target`](Self::target) and flatten the result —
     /// the stack artifacts plus every module's rendered files — into one write-ready
     /// [`MaterializedOutput`](crate::MaterializedOutput) in that target's on-disk layout. Pure
@@ -985,11 +1005,17 @@ impl Plan {
     /// the functions its function-hosted modules run as, and the variables binding the branch
     /// must set.
     pub fn neon_requirements(&self) -> NeonRequirements {
-        hosted::neon_requirements(
+        let mut req = hosted::neon_requirements(
             &self.hosted,
             |m| self.provisioned_by(m),
             |m| self.stack_facts.functions.get(m.as_str()),
-        )
+        );
+        req.ai_gateway = self
+            .secrets
+            .values()
+            .flatten()
+            .any(|s| s.required && s.name == hosted::NEON_AI_GATEWAY_TOKEN_VAR);
+        req
     }
 
     /// Every resource name provisioned for the resource role `role` (e.g.
@@ -1145,6 +1171,15 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         augmented.policy_provider.as_ref(),
     )?;
 
+    let secrets = settled
+        .graph
+        .nodes
+        .iter()
+        .filter_map(|m| {
+            let declared = m.secrets_in(&settled.knobs[m.id()]);
+            (!declared.is_empty()).then(|| (m.id().clone(), declared.into_owned()))
+        })
+        .collect();
     let mut plan = Plan {
         env_name: ctx.env_name.clone(),
         project_name: ctx.compose_project().to_owned(),
@@ -1172,6 +1207,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         client_env_host: InjectedEnv::new(),
         client_env_container: InjectedEnv::new(),
         python_client: None,
+        secrets,
     };
     // Resolved last: client addresses read the settled routes through the plan's own
     // addressing API.

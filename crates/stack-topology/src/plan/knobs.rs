@@ -99,7 +99,9 @@ pub(super) fn resolve_module_knobs(
         .collect()
 }
 
-/// Resolve one module's knobs against the selection's overrides (see [`resolve_knob`]).
+/// Resolve one module's knobs against the selection's overrides (see [`resolve_knob`]), then
+/// let the module fill in the ones whose default follows another knob
+/// ([`Module::complete_knobs`]).
 pub(super) fn resolve_knobs_of(
     module: &dyn Module,
     selection: &Selection,
@@ -111,5 +113,6 @@ pub(super) fn resolve_knobs_of(
             knobs.set(&knob.key, value);
         }
     }
+    module.complete_knobs(&mut knobs);
     Ok(knobs)
 }
