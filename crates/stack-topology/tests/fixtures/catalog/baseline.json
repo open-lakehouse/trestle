@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:b388c324c838b759fd0dd53e2c5e2c00c339aeb6ea11eda489efab201789ad4a"
+    "digest": "sha256:30b241f9012e5b41f73a51bba0589a43c467ec8764c0ef93159d442014305793"
   },
   "modules": [
     {
@@ -181,7 +181,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "rustfs/rustfs:1.0.4",
+          "default": "rustfs/rustfs:1.0.6",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -281,7 +281,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "mcr.microsoft.com/azure-cli:2.92.0",
+          "default": "mcr.microsoft.com/azure-cli:2.93.0",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -672,7 +672,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/mangrove:0.0.22",
+          "default": "ghcr.io/open-lakehouse/mangrove:0.0.23",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "advanced": true
@@ -753,7 +753,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/headwaters:0.0.10",
+          "default": "ghcr.io/open-lakehouse/headwaters:0.0.12",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -822,7 +822,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/omnigent-ai/omnigent-server:v0.21.0",
+          "default": "ghcr.io/omnigent-ai/omnigent-server:v0.22.0",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -836,7 +836,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/omnigent-ai/omnigent-host:v0.21.0",
+          "default": "ghcr.io/omnigent-ai/omnigent-host:v0.22.0",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -869,7 +869,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/mangrove:0.0.22",
+          "default": "ghcr.io/open-lakehouse/mangrove:0.0.23",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "advanced": true
@@ -909,7 +909,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim",
+          "default": "ghcr.io/astral-sh/uv:0.13.8-python3.14-trixie-slim",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -984,7 +984,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "puppygraph/puppygraph:1.18.1",
+          "default": "puppygraph/puppygraph:1.19.1",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -1032,7 +1032,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/astral-sh/uv:0.13.7-python3.14-trixie-slim",
+          "default": "ghcr.io/astral-sh/uv:0.13.8-python3.14-trixie-slim",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -1062,7 +1062,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "openpolicyagent/opa:1.22.0-envoy-static",
+          "default": "openpolicyagent/opa:1.22.4-envoy-static",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
