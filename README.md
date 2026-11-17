@@ -75,7 +75,7 @@ olai-codegen = "0.0"
 
 ## Prerequisites
 
-- Rust 1.88 or later (edition 2024)
+- Rust 1.89 or later (edition 2024)
 - [buf](https://buf.build/), to compile `.proto` files into a descriptor (codegen only)
 - Docker and Docker Compose (optional), for the local platform stack that
   `trestle env` renders

@@ -26,7 +26,6 @@ tokio = { workspace = true, features = ["sync"] }
 axum = { version = "0.8", default-features = false }
 # Only the `cedar` feature's embedded `CedarAuthorizer`. The extensions policies use for
 # request context: `ipaddr` (`source_ip`), `datetime` (`request_time`) and `decimal`.
-# Needs Rust 1.89, newer than the rest of the crate.
 cedar-policy = { version = "4.14", default-features = false, features = ["datetime", "decimal", "ipaddr"], optional = true }
 # Verification only. The default `fast` and `zeroize` features are kept; `rand_core` is not
 # needed because this crate never generates keys.
@@ -61,7 +60,7 @@ http = ["dep:reqwest"]
 postgres = ["dep:sqlx"]
 # `HttpAuthorizer`: ask a remote policy decision point over HTTPS.
 pdp-client = ["dep:reqwest"]
-# `CedarAuthorizer`: evaluate Cedar policies in-process. Needs Rust 1.89.
+# `CedarAuthorizer`: evaluate Cedar policies in-process.
 cedar = ["dep:cedar-policy"]
 
 [[test]]

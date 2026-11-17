@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
           components: rustfmt
       - run: cargo fmt --all --check
 
@@ -53,7 +53,6 @@ jobs:
       - run: cargo clippy --locked --all-targets --features olai-http/recording,olai-http/neon -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
-      # Every olai-auth feature, `cedar` (Rust 1.89) included: this job runs on stable.
       - run: cargo clippy --locked --all-targets -p olai-auth --all-features -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-trestle --features test-engine -- -D warnings
@@ -108,7 +107,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         id: stable-toolchain
         with:
@@ -128,10 +127,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/olai-vended-store/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-credential-vending)
         run: cargo msrv verify --manifest-path crates/olai-credential-vending/Cargo.toml -- cargo check --locked
-      # Every feature but `cedar`: cedar-policy needs Rust 1.89, newer than the crate's
-      # MSRV, and is tested in the `auth-cedar` job.
       - name: Verify MSRV (olai-auth)
-        run: cargo msrv verify --manifest-path crates/olai-auth/Cargo.toml -- cargo check --locked --features http,postgres,pdp-client
+        run: cargo msrv verify --manifest-path crates/olai-auth/Cargo.toml -- cargo check --locked --all-features
       - name: Verify MSRV (olai-stack-runtime)
         run: cargo msrv verify --manifest-path crates/stack-runtime/Cargo.toml -- cargo check --locked --all-features
       - name: Verify MSRV (olai-stack-state)
@@ -150,7 +147,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Run tests (default features)
         run: cargo test --locked --lib --tests
@@ -173,9 +170,8 @@ jobs:
 
   auth-cedar:
     name: olai-auth with Cedar
-    # cedar-policy needs Rust 1.89, newer than the 1.88 the test job runs, so the
-    # `cedar` feature (and the shared authorizer fixtures in tests/authz.rs, which run
-    # both Authorizer implementations) is tested on stable here.
+    # The `cedar` feature, and the shared authorizer fixtures in tests/authz.rs, which
+    # run both Authorizer implementations.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -200,7 +196,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - name: Pull emulator images
         run: |
@@ -243,7 +239,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       # `DATABASE_URL_PG` (not `DATABASE_URL`) drives the conformance test; the
       # migrator applies `migrations/postgres/` to the fresh database first. The
@@ -311,7 +307,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
           components: llvm-tools-preview
       # Coverage recompiles with -C instrument-coverage, so it cannot reuse the
       # sccache-backed "ci" caches used by the other jobs — give it its own key.
@@ -418,7 +414,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.88"
+          toolchain: "1.89"
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - run: cargo build --locked --release --all-targets
 

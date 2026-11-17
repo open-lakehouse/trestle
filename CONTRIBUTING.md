@@ -15,7 +15,7 @@ cargo clippy             # Lint
 cargo fmt                # Format
 ```
 
-- Rust edition 2024, MSRV 1.88 (see `rust-version` in the workspace `Cargo.toml`).
+- Rust edition 2024, MSRV 1.89 (see `rust-version` in the workspace `Cargo.toml`).
 - `olai-codegen` has doctests disabled, because prost-generated proto doc comments
   contain proto-syntax examples that are not valid Rust.
 - Run `cargo fmt` and `cargo clippy` before opening a PR. CI enforces both.

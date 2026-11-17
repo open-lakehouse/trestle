@@ -26,7 +26,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 # crates.io dependencies (in alphabetical order)
-object_store = { version = "0.13", default-features = false }
+object_store = { version = "0.14", default-features = false }
 
 # in-repo dependencies
 olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.4" }
@@ -66,10 +66,14 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 default = ["aws", "azure", "gcp", "fs"]
-# Store backends, forwarded to object_store.
-aws = ["object_store/aws", "dep:olai-http"]
-azure = ["object_store/azure"]
-gcp = ["object_store/gcp", "dep:ring"]
+# Store backends, forwarded to object_store. Each takes the `-base` feature and adds
+# ring, not object_store's default aws-lc-rs, which does not build for wasm32; on
+# native, reqwest brings TLS.
+aws = ["object_store/aws-base", "cloud", "dep:olai-http"]
+azure = ["object_store/azure-base", "cloud"]
+gcp = ["object_store/gcp-base", "cloud", "dep:ring"]
+# What every store backend shares. Not useful on its own.
+cloud = ["object_store/reqwest", "object_store/ring", "dep:reqwest"]
 # `file://` locations (native only).
 fs = ["object_store/fs"]
 # Vending protocols (native only). Each brings its wire adapter from

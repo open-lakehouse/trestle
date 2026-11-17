@@ -75,7 +75,7 @@ default = []
 recording = []
 # A `connectrpc::client::ClientTransport` backed by `CloudClient`, so generated
 # ConnectRPC clients can authenticate against cloud-fronted servers. Pulls in
-# `connectrpc` (raising the effective MSRV to 1.88) only when enabled.
+# `connectrpc` only when enabled.
 connectrpc = ["dep:connectrpc", "dep:http-body-util"]
 # A client for the Neon control plane's branch storage and branch credentials API
 # (`neon`): discovery, and creating, revealing, listing and revoking credentials.

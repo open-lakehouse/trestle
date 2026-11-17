@@ -166,7 +166,7 @@ schema, apart from the host's own migrations.
 | `http` | `HttpKeySource`, using `reqwest` with rustls |
 | `postgres` | `PgApiKeyStore`, `PgGrantStore` and the `authz` migrations (`migrate`, `MIGRATOR`), using `sqlx` with its `postgres`, `migrate` and `macros` features (the host's sqlx brings the runtime and TLS) |
 | `pdp-client` | `HttpAuthorizer`, using `reqwest` with rustls (shared with `http`) |
-| `cedar` | `CedarAuthorizer` and `GrantsEntityLoader`, using `cedar-policy` with the `datetime`, `decimal` and `ipaddr` extensions. Needs Rust 1.89; the rest of the crate builds on 1.88. Adds about 4.8 MB to a release binary (1.9 MB zipped). |
+| `cedar` | `CedarAuthorizer` and `GrantsEntityLoader`, using `cedar-policy` with the `datetime`, `decimal` and `ipaddr` extensions. Adds about 4.8 MB to a release binary (1.9 MB zipped). |
 
 ## License
 
