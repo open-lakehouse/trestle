@@ -26,7 +26,7 @@ save_secret() {
 : "${NEON_PROJECT_ID:?set NEON_PROJECT_ID, or run the project step first}"
 existing="$(neonctl databases list --project-id "$NEON_PROJECT_ID" --output json \
   | jq -r '(.databases // .)[] | .name')"
-for db in 'mlflow' 'omnigent' ; do
+for db in 'omnigent' 'mlflow' ; do
   if printf '%s\n' "$existing" | grep -qx "$db"; then
     echo "database $db exists"
   else

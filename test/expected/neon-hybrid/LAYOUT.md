@@ -36,6 +36,6 @@ and setting the secrets before the stack starts.
 | Module | Vendor | Cloud | Reached at | Must exist | Secrets |
 | --- | --- | --- | --- | --- | --- |
 | `headwaters` | Neon Function | neon | `https://br-example-123456-headwaters.compute.eu-central-1.aws.neon.tech` | — | `HEADWATERS_FUNCTION_URL` |
-| `hosted-postgres` | Neon | neon | `tcp://ep-example-123456-pooler.eu-central-1.aws.neon.tech:5432` | `mlflow`, `omnigent` | `PGHOST`, `PGPASSWORD`, `PGUSER` |
+| `hosted-postgres` | Neon | neon | `tcp://ep-example-123456-pooler.eu-central-1.aws.neon.tech:5432` | `omnigent`, `mlflow` | `PGHOST`, `PGPASSWORD`, `PGUSER` |
 | `neon-storage` | Neon | neon | `https://br-example-123456.storage.eu-central-1.aws.neon.tech` | `mlflow` | `NEON_S3_ACCESS_KEY_ID`, `NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_SECRET_ACCESS_KEY` |
 | `unity-catalog-rs` | Neon Function | neon | `https://br-example-123456-unitycatalog.compute.eu-central-1.aws.neon.tech` | — | `UNITYCATALOG_FUNCTION_URL` |

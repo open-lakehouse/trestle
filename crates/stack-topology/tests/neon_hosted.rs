@@ -201,7 +201,8 @@ fn plan_with_partial_branch() -> Result<Plan, PlanError> {
 #[test]
 fn the_plan_lists_what_the_branch_must_supply() {
     let req = plan(&hybrid(), None).unwrap().neon_requirements();
-    assert_eq!(req.databases, ["mlflow", "omnigent"]);
+    // In dependency order: Omnigent no longer requires MLflow.
+    assert_eq!(req.databases, ["omnigent", "mlflow"]);
     assert_eq!(req.buckets, ["mlflow"]);
     assert_eq!(
         req.functions,
@@ -366,7 +367,7 @@ fn the_graph_shows_what_a_function_uses_on_its_branch() {
         );
     }
     // Drawn, not provisioned: the branch's function brings its own database.
-    assert_eq!(plan.neon_requirements().databases, ["mlflow", "omnigent"]);
+    assert_eq!(plan.neon_requirements().databases, ["omnigent", "mlflow"]);
 
     // With the stack's Postgres local, the function's isn't drawn there: it isn't that one.
     let mut local_db = Selection::modules(["mlflow", "unity-catalog-rs"]);

@@ -1176,7 +1176,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         .nodes
         .iter()
         .filter_map(|m| {
-            let declared = m.secrets_in(&settled.knobs[m.id()]);
+            let declared = m.secrets_in(&settled.knobs[m.id()], &settled.stack_facts);
             (!declared.is_empty()).then(|| (m.id().clone(), declared.into_owned()))
         })
         .collect();

@@ -10,24 +10,24 @@ runs from anywhere and is safe to re-run. The services, their routes and address
 flowchart LR
     n0(["<b>Clients</b>"]):::clients
     n1{{"<b>Envoy</b><br/>gateway"}}:::gateway
-    n5["<b>MLflow</b><br/>experiment tracking"]:::component
-    n6["<b>Omnigent</b><br/>agent platform"]:::component
+    n4["<b>Omnigent</b><br/>agent platform"]:::component
+    n6["<b>MLflow</b><br/>experiment tracking"]:::component
     subgraph cloud0["neon"]
         n2["<b>Headwaters</b><br/>lineage"]:::external
         n3["<b>Hosted Postgres</b><br/>relational db"]:::external
-        n4["<b>Neon Object Storage</b><br/>object store"]:::external
+        n5["<b>Neon Object Storage</b><br/>object store"]:::external
         n7["<b>Unity Catalog (Rust)</b><br/>data catalog"]:::external
     end
     n0 -->|":9080"| n1
     n1 -->|"/lineage, /api/v1/lineage"| n2
-    n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n5
-    n1 -->|"/omnigent"| n6
+    n1 -->|"/omnigent"| n4
+    n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n6
     n1 -->|"/api/2.1/unity-catalog"| n7
-    n5 -->|"PostgreSQL: mlflow"| n3
-    n5 -->|"S3: mlflow"| n4
-    n6 -->|"PostgreSQL: omnigent"| n3
-    n5 -->|"HTTP"| n7
-    n6 -->|"HTTP"| n5
+    n4 -->|"PostgreSQL: omnigent"| n3
+    n6 -->|"PostgreSQL: mlflow"| n3
+    n6 -->|"S3: mlflow"| n5
+    n4 -->|"HTTP"| n6
+    n6 -->|"HTTP"| n7
     n2 -->|"PostgreSQL"| n3
     n7 -->|"PostgreSQL"| n3
     classDef clients fill:#f1f5f9,stroke:#64748b
@@ -61,7 +61,7 @@ bash deploy/hosted-postgres-server.sh
 
 ### 3. Create the databases (`hosted-postgres`)
 
-Create the databases the stack uses: `mlflow`, `omnigent`. The script adds each one missing to the Neon project
+Create the databases the stack uses: `omnigent`, `mlflow`. The script adds each one missing to the Neon project
 `NEON_PROJECT_ID` with `neonctl`.
 
 ```bash

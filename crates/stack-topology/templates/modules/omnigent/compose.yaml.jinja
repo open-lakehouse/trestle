@@ -47,10 +47,13 @@ services:
       # First boot runs the schema migrations.
       start_period: 60s
 {%- if knobs.host == "true" and env.GATEWAY_AUTH != "true" %}
+{#- `auto` is MLflow's AI Gateway: the planner rejects it in a stack without MLflow. #}
+{%- set upstream = "mlflow" if knobs.upstream == "auto" else knobs.upstream %}
+{%- set trestle_config = "# Written by trestle" %}
 
   # Runs the agents, on the stack's network: it loads the stack's in-network client env (every
-  # module's address) and forwards it to each agent, and points the harnesses at MLflow's AI
-  # Gateway, which holds the provider keys.
+  # module's address) and forwards it to each agent, and points the harnesses at the models'
+  # upstream ({{ upstream }}).
   omnigent-host:
     image: {{ knobs.host_image }}
     restart: unless-stopped
@@ -61,22 +64,74 @@ services:
       - path: ./client/container.env
         format: raw
     environment:
+{%- if upstream == "mlflow" %}
       # Placeholders: the CLIs want a key, and the gateway drops it on the AI Gateway route so
       # MLflow authenticates with the key it stores.
       ANTHROPIC_API_KEY: via-mlflow-ai-gateway
       OPENAI_API_KEY: via-mlflow-ai-gateway
       # AI Gateway endpoint names, so requests use models the gateway serves.
+{%- elif upstream == "neon" %}
+      # The branch's AI Gateway and its token, passed through from the process that starts the
+      # stack (never written here); the command points both harness families at it.
+      NEON_AI_GATEWAY_BASE_URL:
+      NEON_AI_GATEWAY_TOKEN:
+{%- elif upstream == "databricks" %}
+      # The workspace, and where the token helper gets tokens: passed through, never written
+      # here. The provider config the command installs reads them at run time.
+      DATABRICKS_HOST:
+      DATABRICKS_METADATA_SERVICE_URL:
+      DATABRICKS_TOKEN:
+{%- else %}
+      # The providers' own keys, passed through from the process that starts the stack.
+      ANTHROPIC_API_KEY:
+      OPENAI_API_KEY:
+{%- endif %}
+{%- if upstream == "databricks" %}
+      ANTHROPIC_MODEL: "{{ "" if knobs.model[:11] == "databricks-" else "databricks-" }}{{ knobs.model }}"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{ "" if knobs.fast_model[:11] == "databricks-" else "databricks-" }}{{ knobs.fast_model }}"
+{%- else %}
       ANTHROPIC_MODEL: "{{ knobs.model }}"
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{ knobs.fast_model }}"
+{%- endif %}
       # The host forwards only its own allowlist to agents; add the stack's client contract.
       OMNIGENT_RUNNER_ENV_PASSTHROUGH: "{{ env.CLIENT_ENV_KEYS }},ANTHROPIC_DEFAULT_HAIKU_MODEL"
+{%- if upstream == "databricks" %}
+    configs:
+      - source: omnigent_databricks_config
+        target: /etc/trestle/omnigent/config.yaml
+      - source: omnigent_databricks_token
+        target: /etc/trestle/omnigent/databricks_token.py
+{%- endif %}
     command:
       - sh
       - -c
+{%- if upstream == "mlflow" %}
       - >-
         export ANTHROPIC_BASE_URL="$$MLFLOW_AI_GATEWAY_URL/anthropic"
         OPENAI_BASE_URL="$$MLFLOW_AI_GATEWAY_URL/openai/v1"
+        && {{ "{" }} head -n1 /root/.omnigent/config.yaml 2>/dev/null | grep -q '^{{ trestle_config }}' && rm /root/.omnigent/config.yaml; true; {{ "}" }}
         && exec omnigent host --server http://omnigent:8000 --non-interactive --no-open
+{%- elif upstream == "neon" %}
+      - >-
+        export ANTHROPIC_BASE_URL="$$NEON_AI_GATEWAY_BASE_URL/anthropic"
+        ANTHROPIC_API_KEY="$$NEON_AI_GATEWAY_TOKEN"
+        OPENAI_BASE_URL="$$NEON_AI_GATEWAY_BASE_URL/openai/v1"
+        OPENAI_API_KEY="$$NEON_AI_GATEWAY_TOKEN"
+        && {{ "{" }} head -n1 /root/.omnigent/config.yaml 2>/dev/null | grep -q '^{{ trestle_config }}' && rm /root/.omnigent/config.yaml; true; {{ "}" }}
+        && exec omnigent host --server http://omnigent:8000 --non-interactive --no-open
+{%- elif upstream == "databricks" %}
+      # Installs the provider config: Claude routes through the workspace, and its key helper
+      # fetches a token whenever the harness needs one. The workspace URL is written in, since
+      # the runners that read the config don't get the host's environment.
+      - >-
+        mkdir -p /root/.omnigent
+        && sed "s#\$$DATABRICKS_HOST#$${DATABRICKS_HOST%/}#g" /etc/trestle/omnigent/config.yaml > /root/.omnigent/config.yaml
+        && exec omnigent host --server http://omnigent:8000 --non-interactive --no-open
+{%- else %}
+      - >-
+        {{ "{" }} head -n1 /root/.omnigent/config.yaml 2>/dev/null | grep -q '^{{ trestle_config }}' && rm /root/.omnigent/config.yaml; true; {{ "}" }}
+        && exec omnigent host --server http://omnigent:8000 --non-interactive --no-open
+{%- endif %}
     working_dir: /workspace
     volumes:
       - {{ env.DATA_ROOT }}/omnigent/host:/root/.omnigent

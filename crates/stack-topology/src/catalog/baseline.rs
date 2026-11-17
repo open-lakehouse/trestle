@@ -1478,7 +1478,7 @@ impl Module for Mlflow {
             knobs.set(MLFLOW_MODELS_KNOB, preset);
         }
     }
-    fn secrets_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [DeclaredSecret]> {
+    fn secrets_in(&self, knobs: &ResolvedKnobs, _stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
         Cow::Owned(mlflow_secrets(
             knobs.get(MLFLOW_UPSTREAM_KNOB).unwrap_or("keys"),
         ))
@@ -2339,6 +2339,61 @@ fn headwaters() -> Arc<dyn Module> {
 
 /// The [`omnigent`] knob for running an agent host inside the stack.
 const OMNIGENT_HOST_KNOB: &str = "host";
+/// The [`omnigent`] knob choosing where its host's harnesses call models.
+const OMNIGENT_UPSTREAM_KNOB: &str = "upstream";
+
+/// Where an `omnigent` host's harnesses call models with the given knobs, in `stack`: its
+/// `upstream` knob, with `auto` standing for MLflow's AI Gateway. An error says why the
+/// choice doesn't fit the stack.
+fn omnigent_upstream<'a>(knobs: &'a ResolvedKnobs, stack: &StackFacts) -> Result<&'a str, String> {
+    match knobs.get(OMNIGENT_UPSTREAM_KNOB).unwrap_or("auto") {
+        "auto" | "mlflow" if !stack.has("mlflow") => Err(
+            "needs the `mlflow` module for its AI Gateway; add it, or choose the `neon`, \
+             `databricks` or `keys` upstream"
+                .into(),
+        ),
+        "auto" => Ok("mlflow"),
+        other => Ok(other),
+    }
+}
+
+/// The secrets an `omnigent` host reads with the given upstream (see [`Provides::secrets`]).
+fn omnigent_secrets(upstream: &str) -> Vec<DeclaredSecret> {
+    match upstream {
+        "neon" => vec![
+            DeclaredSecret::required(
+                "NEON_AI_GATEWAY_BASE_URL",
+                "The Neon AI Gateway of the environment's branch (its bare host).",
+            ),
+            DeclaredSecret::required(
+                "NEON_AI_GATEWAY_TOKEN",
+                "A Neon credential with the `ai_gateway:invoke` scope on the environment's \
+                 branch.",
+            ),
+        ],
+        "databricks" => vec![
+            DeclaredSecret::required(
+                "DATABRICKS_HOST",
+                "The Databricks workspace URL whose serving endpoints the agents call.",
+            ),
+            DeclaredSecret::optional(
+                "DATABRICKS_METADATA_SERVICE_URL",
+                "A Databricks SDK metadata-service token endpoint the agents fetch workspace \
+                 tokens from (the desktop serves one per Databricks profile).",
+            ),
+            DeclaredSecret::optional(
+                "DATABRICKS_TOKEN",
+                "A static workspace token, used without the token endpoint; it stops working \
+                 when it expires.",
+            ),
+        ],
+        "keys" => vec![
+            DeclaredSecret::optional("ANTHROPIC_API_KEY", "Anthropic API key, for Claude."),
+            DeclaredSecret::optional("OPENAI_API_KEY", "OpenAI API key, for Codex."),
+        ],
+        _ => vec![],
+    }
+}
 /// Where Omnigent serves its whole surface (web UI, `/v1` API, WebSockets, SSE) at the gateway.
 const OMNIGENT_BASE_PATH: &str = "/omnigent";
 /// The port Omnigent's server image listens on.
@@ -2368,9 +2423,9 @@ impl Omnigent {
     fn new() -> Self {
         Omnigent {
             id: ModuleId::from("omnigent"),
-            // The gateway fronts the server; MLflow's AI Gateway serves the agents' models (and
-            // brings its own relational store and object store through its demands).
-            requires: vec![ModuleId::from("envoy"), ModuleId::from("mlflow")],
+            // The gateway fronts the server. The agents' models come from MLflow's AI Gateway
+            // when the stack has one, else straight from the upstream (`upstream` knob).
+            requires: vec![ModuleId::from("envoy")],
             // The server's state (sessions, agents, hosts) lives in the stack's relational store;
             // the fragment reads the DSN straight from the resolved connection.
             needs: vec![ResourceDemand {
@@ -2397,13 +2452,43 @@ impl Omnigent {
                     advanced: false,
                 },
                 Knob {
+                    key: OMNIGENT_UPSTREAM_KNOB.into(),
+                    title: Some("Models from".into()),
+                    kind: KnobKind::Enum {
+                        options: vec![
+                            "auto".into(),
+                            "mlflow".into(),
+                            "neon".into(),
+                            "databricks".into(),
+                            "keys".into(),
+                        ],
+                    },
+                    default: Some("auto".into()),
+                    required: false,
+                    help: Some(
+                        "Where the host's harnesses call models. `mlflow`: the stack's MLflow \
+                         AI Gateway, which holds the credentials and traces every call. \
+                         Without MLflow, the upstream directly: `neon`, the Neon AI Gateway of \
+                         the environment's branch (NEON_AI_GATEWAY_BASE_URL, \
+                         NEON_AI_GATEWAY_TOKEN); `databricks`, a workspace's serving endpoints \
+                         (DATABRICKS_HOST, with tokens from DATABRICKS_METADATA_SERVICE_URL or \
+                         DATABRICKS_TOKEN); `keys`, the providers (ANTHROPIC_API_KEY, \
+                         OPENAI_API_KEY). `auto`: `mlflow`, which the stack must then have."
+                            .into(),
+                    ),
+                    aliases: vec![],
+                    advanced: false,
+                },
+                Knob {
                     advanced: false,
                     ..string_knob(
                         "model",
                         "Agent model",
                         Some("claude-opus-5-5"),
                         "The model agents use by default: an AI Gateway endpoint name (see \
-                     mlflow.ai_gateway_models).",
+                     mlflow.ai_gateway_models), or the upstream's model id. Under the \
+                     `databricks` upstream it names the serving endpoint \
+                     `databricks-<model>`.",
                         None,
                     )
                 },
@@ -2413,8 +2498,8 @@ impl Omnigent {
                         "fast_model",
                         "Background model",
                         Some("claude-haiku-5-5"),
-                        "The model harnesses use for quick background calls: an AI Gateway \
-                     endpoint name.",
+                        "The model harnesses use for quick background calls, named like \
+                     `model`.",
                         None,
                     )
                 },
@@ -2445,10 +2530,28 @@ impl Omnigent {
             },
             render: template_with_files(
                 include_str!("../../templates/modules/omnigent/compose.yaml.jinja"),
-                vec![sensitive_file(
-                    ".env/omnigent.env",
-                    include_str!("../../templates/modules/omnigent/omnigent.env.jinja"),
-                )],
+                vec![
+                    sensitive_file(
+                        ".env/omnigent.env",
+                        include_str!("../../templates/modules/omnigent/omnigent.env.jinja"),
+                    ),
+                    // The `databricks` upstream's provider config and token helper: the
+                    // workspace and token endpoint stay `$VAR`s, read at run time.
+                    config_file(
+                        "databricks/config.yaml",
+                        "omnigent_databricks_config",
+                        include_str!(
+                            "../../templates/modules/omnigent/databricks/config.yaml.jinja"
+                        ),
+                    ),
+                    config_file(
+                        "databricks/databricks_token.py",
+                        "omnigent_databricks_token",
+                        include_str!(
+                            "../../templates/modules/omnigent/databricks/databricks_token.py"
+                        ),
+                    ),
+                ],
             ),
         }
     }
@@ -2465,7 +2568,9 @@ impl Module for Omnigent {
         Some("Omnigent")
     }
     fn summary(&self) -> Option<&str> {
-        Some("AI-agent platform; agents run in the stack, models via MLflow's AI Gateway.")
+        Some(
+            "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway or an upstream.",
+        )
     }
     fn category(&self) -> Option<&str> {
         Some("agents")
@@ -2481,6 +2586,26 @@ impl Module for Omnigent {
     }
     fn knobs(&self) -> &[Knob] {
         &self.knobs
+    }
+    fn check_stack(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Result<(), KnobRejection> {
+        omnigent_upstream(knobs, stack)
+            .map(drop)
+            .map_err(|reason| KnobRejection::new(OMNIGENT_UPSTREAM_KNOB, reason))
+    }
+    fn secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
+        // Only the host reads them.
+        if !knobs.bool(OMNIGENT_HOST_KNOB, true) || stack.gateway_auth {
+            return Cow::Borrowed(&[]);
+        }
+        Cow::Owned(omnigent_secrets(
+            omnigent_upstream(knobs, stack).unwrap_or_default(),
+        ))
+    }
+    fn integrates_with_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
+        match omnigent_upstream(knobs, stack) {
+            Ok("mlflow") => vec![ModuleId::from("mlflow")],
+            _ => vec![],
+        }
     }
     fn provides(&self) -> &Provides {
         &self.provides

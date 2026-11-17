@@ -267,8 +267,20 @@ once (or start from an empty `.data/`).
 ## Agents (Omnigent)
 
 The `omnigent` module runs the [Omnigent](https://github.com/omnigent-ai/omnigent) agent
-platform as part of the stack. Selecting it pulls in `mlflow` for the AI Gateway, plus the
-relational and object stores they need.
+platform as part of the stack, with the relational store it needs. Its agents' models come
+from the upstream the `omnigent.upstream` knob picks:
+
+| `upstream` | The host's harnesses call | Credentials, from the process that runs `up` |
+| --- | --- | --- |
+| `auto` (default), `mlflow` | MLflow's AI Gateway (add `mlflow`; it traces every call) | none in the host: MLflow holds them |
+| `neon` | the Neon AI Gateway of the environment's branch | `NEON_AI_GATEWAY_BASE_URL`, `NEON_AI_GATEWAY_TOKEN` |
+| `databricks` | a workspace's serving endpoints (`databricks-<model>`) | `DATABRICKS_HOST`, and `DATABRICKS_METADATA_SERVICE_URL` or `DATABRICKS_TOKEN` |
+| `keys` | the providers | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` |
+
+Without `mlflow` in the stack, `auto` is a plan error: pick an upstream. Under `databricks`, the
+host installs an Omnigent provider config (`modules/omnigent/databricks/config.yaml`, no
+credential in it) whose key helper fetches a token from the metadata-service endpoint whenever
+Claude needs one, so tokens refresh on their own.
 
 - **Server.** The web UI and API are fronted at `/omnigent` (`OMNIGENT_URL`), with no request
   timeout so session streams stay open. Its state lives in the stack's Postgres.
@@ -276,9 +288,10 @@ relational and object stores they need.
   that runs the agents. It loads `client/container.env` and forwards every key to the agents,
   so they see `UNITY_CATALOG_URL`, `MLFLOW_TRACKING_URI`, `AWS_ENDPOINT_URL_S3`, the OTLP
   endpoint, and the rest of the selected modules' addresses. Its harnesses (Claude Code, Codex,
-  …) call MLflow's AI Gateway (`ANTHROPIC_BASE_URL=$MLFLOW_AI_GATEWAY_URL/anthropic`), so
-  the host holds no provider key. `omnigent.model` / `omnigent.fast_model` pick the gateway
-  endpoints the harness uses. Export the passphrase and a provider key before `up` so the
+  …) call the upstream. Through MLflow's AI Gateway
+  (`ANTHROPIC_BASE_URL=$MLFLOW_AI_GATEWAY_URL/anthropic`) the host holds no provider key.
+  `omnigent.model` / `omnigent.fast_model` pick the models the harness uses (the gateway's
+  endpoint names). With MLflow, export the passphrase and a provider key before `up` so the
   gateway is seeded:
 
   ```bash
