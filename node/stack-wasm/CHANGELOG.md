@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.6...stack-wasm-v0.0.7) - 2026-11-17
+
+### Added
+
+- [**breaking**] Omnigent without MLflow (#403)
+- [**breaking**] MLflow AI Gateway upstreams (#400)
+- refresh the default images (#399)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.5...stack-wasm-v0.0.6) - 2026-11-16
 
 ### Fixed
