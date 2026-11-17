@@ -784,3 +784,54 @@ fn trestle_made_branches_carry_ownership_and_an_expiry() {
             .contains("no Neon project")
     );
 }
+
+#[test]
+fn a_missing_required_secret_says_how_to_set_it() {
+    let home = Home::new();
+    let scenario = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/scenarios/agents");
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&[
+        "env",
+        "create",
+        "demo/dev",
+        "--from",
+        scenario.to_str().unwrap(),
+    ]);
+    home.ok(&["env", "commit", "demo/dev"]);
+    let out = home
+        .cmd(&["up", "demo/dev"])
+        .env_remove("MLFLOW_CRYPTO_KEK_PASSPHRASE")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        err.contains("required secrets are not set: MLFLOW_CRYPTO_KEK_PASSPHRASE")
+            && err.contains("trestle var set demo/dev --secret MLFLOW_CRYPTO_KEK_PASSPHRASE"),
+        "{err}"
+    );
+    // Nothing started.
+    assert!(home.projects().is_empty());
+    // Kept in the keychain as the hint says, it reaches the stack without the shell's env.
+    home.ok_with_stdin(
+        &[
+            "var",
+            "set",
+            "demo/dev",
+            "--secret",
+            "MLFLOW_CRYPTO_KEK_PASSPHRASE",
+        ],
+        "from-the-keychain",
+    );
+    let out = home
+        .cmd(&["up", "demo/dev"])
+        .env_remove("MLFLOW_CRYPTO_KEK_PASSPHRASE")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(home.projects().len(), 1);
+}

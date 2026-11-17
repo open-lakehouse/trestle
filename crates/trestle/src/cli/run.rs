@@ -176,7 +176,20 @@ pub fn run_up(args: UpArgs) -> Result<()> {
         None => {}
     }
     let runtime = ctx.instances();
-    let materialized = ctx.block_on(async { Ok(runtime.start(&id).await?) })?;
+    let materialized = ctx
+        .block_on(async { Ok(runtime.start(&id).await?) })
+        .map_err(|e: Error| match &e {
+            Error::Instance(olai_stack_runtime::InstanceError::MissingSecrets(names)) => {
+                let hint = format!(
+                    "export {0} before `trestle up`, or keep it in the keychain: \
+                     `printf %s \"$VALUE\" | trestle var set {1}/{2} --secret {0}` (a key \
+                     passphrase can be any random value: `openssl rand -base64 32`)",
+                    names[0], ws.name, env.name
+                );
+                e.with_hint(hint)
+            }
+            _ => e,
+        })?;
     let placement = runtime.placement(&id)?;
     println!(
         "{}/{} r{} is up as {} (slot {})",
@@ -204,6 +217,9 @@ fn describe(req: &olai_stack_topology::NeonRequirements) -> String {
     }
     if !req.buckets.is_empty() {
         parts.push(format!("buckets {}", req.buckets.join(", ")));
+    }
+    if req.ai_gateway {
+        parts.push("its AI Gateway".to_owned());
     }
     if parts.is_empty() {
         parts.push(req.vars.join(", "));

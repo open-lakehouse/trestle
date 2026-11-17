@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use clap::{Args, Subcommand};
 use olai_stack_runtime::neon::{
-    NEON_SOURCE, NeonBinding, NeonControl, StorageCredentialRef, bind, create_owned_branch,
-    delete_owned_branch, expires_in, reset_owned_branch, unbind,
+    CredentialRef, NEON_SOURCE, NeonBinding, NeonControl, StorageCredentialRef, bind,
+    bind_ai_gateway, create_owned_branch, delete_owned_branch, expires_in, reset_owned_branch,
+    unbind,
 };
 use olai_stack_state::{Environment, Instance, Revision, SecretRef, SourceBinding, Workspace};
 use olai_stack_topology::NeonRequirements;
@@ -282,16 +283,39 @@ pub(super) async fn bind_instance(
     let (mut binding, credential) = bind(&neon, &project, &branch, req, &credential_name)
         .await
         .map_err(neon_err)?;
-    if let Some(credential) = credential {
-        let key = format!(
-            "neon/{}/{}/r{}/{}",
+    let key_of = |token_id: &str| {
+        format!(
+            "neon/{}/{}/r{}/{token_id}",
             ws.name,
             env.name,
             revision.number(),
-            credential.token_id
-        );
+        )
+    };
+    if let Some(credential) = credential {
+        let key = key_of(&credential.token_id);
         ctx.secrets().set(&key, &credential.secret_access_key)?;
         binding.storage_credential = Some(StorageCredentialRef {
+            token_id: credential.token_id,
+            secret: SecretRef {
+                provider: KEYCHAIN.into(),
+                key,
+            },
+        });
+    }
+    if req.ai_gateway {
+        let minted =
+            bind_ai_gateway(&neon, &binding, &format!("{credential_name}-ai-gateway")).await;
+        let credential = match minted {
+            Ok(credential) => credential,
+            Err(e) => {
+                // Don't leave the storage credential behind.
+                release(ctx, &neon, &binding).await?;
+                return Err(neon_err(e));
+            }
+        };
+        let key = key_of(&credential.token_id);
+        ctx.secrets().set(&key, &credential.token)?;
+        binding.ai_gateway_credential = Some(CredentialRef {
             token_id: credential.token_id,
             secret: SecretRef {
                 provider: KEYCHAIN.into(),
@@ -332,14 +356,15 @@ pub(super) async fn unbind_instance(
     Ok(())
 }
 
-/// Revoke the binding's storage credential and forget its secret.
+/// Revoke the binding's credentials and forget their secrets.
 pub(super) async fn release(
     ctx: &Ctx,
     neon: &dyn NeonControl,
     binding: &NeonBinding,
 ) -> Result<()> {
     unbind(neon, binding).await.map_err(neon_err)?;
-    if let Some(credential) = &binding.storage_credential {
+    let credentials = [&binding.storage_credential, &binding.ai_gateway_credential];
+    for credential in credentials.into_iter().flatten() {
         ctx.secrets().delete(&credential.secret.key)?;
     }
     Ok(())
