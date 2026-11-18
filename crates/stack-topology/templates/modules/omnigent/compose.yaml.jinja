@@ -28,6 +28,12 @@ services:
       # The gateway is open, like the rest of the stack: single-user, every request is the
       # `local` user. The server is reachable only through the gateway and the compose network.
       OMNIGENT_AUTH_ENABLED: "0"
+{%- if env.GATEWAY_URL %}
+      # The desktop serves the UI on `<label>.localhost`, which local mode's loopback-only
+      # Origin check rejects (multipart posts, WebSockets): trust every `*.localhost` name
+      # on the gateway's port.
+      OMNIGENT_WS_ALLOWED_ORIGINS: "{{ env.GATEWAY_URL | replace('://localhost', '://*.localhost') }}"
+{%- endif %}
 {%- endif %}
     volumes:
       - {{ env.DATA_ROOT }}/omnigent/server:/data

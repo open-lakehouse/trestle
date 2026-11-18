@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use olai_stack_topology::{
-    MaterializedOutput, ModuleId, Plan, PlanCtx, PlanError, Selection, baseline_catalog,
+    GatewaySettings, MaterializedOutput, ModuleId, Plan, PlanCtx, PlanError, RuntimePlacement,
+    Selection, baseline_catalog,
 };
 
 fn selection(modules: &[&str], knobs: &[(&str, &str, &str)]) -> Selection {
@@ -104,6 +105,11 @@ fn the_host_runs_agents_with_the_stacks_client_env_and_gateway_models() {
     // Single-user while the gateway is open.
     assert!(f.contains(r#"OMNIGENT_AUTH_ENABLED: "0""#), "{f}");
     assert!(f.contains(r#"OMNIGENT_WEB_BASE_PATH: "/omnigent""#), "{f}");
+    // The desktop's `<label>.localhost` origins pass local mode's Origin check.
+    assert!(
+        f.contains(r#"OMNIGENT_WS_ALLOWED_ORIGINS: "http://*.localhost:9080""#),
+        "{f}"
+    );
     // The host loads the stack's in-network client env, forwards it to agents, and points the
     // harnesses at the AI Gateway rather than carrying a provider key.
     assert!(f.contains("path: ./client/container.env"), "{f}");
@@ -144,6 +150,45 @@ fn under_gateway_auth_the_server_trusts_the_asserted_identity_and_runs_no_host()
     assert!(f.contains("OMNIGENT_AUTH_PROVIDER: header"), "{f}");
     assert!(f.contains("OMNIGENT_AUTH_HEADER: Remote-Email"), "{f}");
     assert!(!f.contains("OMNIGENT_AUTH_ENABLED"), "{f}");
+    // Non-local mode admits any Origin; an allowlist would make it deny-by-default.
+    assert!(!f.contains("OMNIGENT_WS_ALLOWED_ORIGINS"), "{f}");
+}
+
+#[test]
+fn the_trusted_origins_follow_the_slots_gateway_port() {
+    let mut ctx = PlanCtx::default();
+    RuntimePlacement {
+        slot: 1,
+        ..RuntimePlacement::standalone("dev")
+    }
+    .apply(&mut ctx);
+    let p = baseline_catalog()
+        .plan(
+            &selection(&["envoy", "unity-catalog-oss", "mlflow", "omnigent"], &[]),
+            &ctx,
+        )
+        .expect("plan should succeed");
+    assert_eq!(p.gateway_host_port(), Some(10080));
+    let f = fragment(&p, "omnigent");
+    assert!(
+        f.contains(r#"OMNIGENT_WS_ALLOWED_ORIGINS: "http://*.localhost:10080""#),
+        "{f}"
+    );
+}
+
+#[test]
+fn without_a_gateway_no_origins_are_trusted() {
+    let mut selection = selection(&["unity-catalog-oss", "mlflow", "omnigent"], &[]);
+    selection.gateway = GatewaySettings {
+        enabled: false,
+        ..GatewaySettings::default()
+    };
+    let p = baseline_catalog()
+        .plan(&selection, &PlanCtx::default())
+        .expect("plan should succeed");
+    let f = fragment(&p, "omnigent");
+    assert!(f.contains(r#"OMNIGENT_AUTH_ENABLED: "0""#), "{f}");
+    assert!(!f.contains("OMNIGENT_WS_ALLOWED_ORIGINS"), "{f}");
 }
 
 #[test]
