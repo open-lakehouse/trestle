@@ -12,8 +12,6 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE: "ci"
 
@@ -42,7 +40,9 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-store/sqlx -- -D warnings
       # The sqlite + postgres backends are dialect-bound `sqlx::query!` code checked
@@ -73,7 +73,9 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The credential model is shared with browser clients, so it must keep building
       # without the native-only parts of its dependencies (tokio, reqwest, ring).
       - run: cargo check --locked -p olai-storage-credentials --target wasm32-unknown-unknown --all-features
@@ -112,7 +114,9 @@ jobs:
         id: stable-toolchain
         with:
           toolchain: stable
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-msrv
         run: cargo +stable install cargo-msrv --locked
       - name: Verify MSRV (olai-store)
@@ -148,7 +152,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: "1.89"
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tests (default features)
         run: cargo test --locked --lib --tests
       - name: Run tests (olai-store sqlx feature)
@@ -180,7 +186,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: stable
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tests (olai-auth, all features)
         run: cargo test --locked -p olai-auth --all-features
 
@@ -197,7 +205,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: "1.89"
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Pull emulator images
         run: |
           docker pull rustfs/rustfs:1.0.6
@@ -240,7 +250,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: "1.89"
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # `DATABASE_URL_PG` (not `DATABASE_URL`) drives the conformance test; the
       # migrator applies `migrations/postgres/` to the fresh database first. The
       # test skips (does not fail) if the variable is unset, so it is set here.
@@ -277,13 +289,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    # The workflow-level env sets RUSTC_WRAPPER=sccache, but this job uses
-    # Swatinem/rust-cache instead of installing sccache (instrument-coverage
-    # builds don't cache usefully through sccache). Unset the wrapper so cargo
-    # doesn't fail trying to exec a binary that isn't on PATH.
-    env:
-      RUSTC_WRAPPER: ""
-      SCCACHE_GHA_ENABLED: ""
     # A live Postgres so the `postgres`-feature coverage run below exercises the
     # `PgStore` conformance battery (its code is `#[cfg(feature = "postgres")]`,
     # so without this run `backend/postgres.rs` would report 0% coverage).
@@ -309,8 +314,8 @@ jobs:
         with:
           toolchain: "1.89"
           components: llvm-tools-preview
-      # Coverage recompiles with -C instrument-coverage, so it cannot reuse the
-      # sccache-backed "ci" caches used by the other jobs — give it its own key.
+      # Coverage recompiles with -C instrument-coverage, so its artifacts can't
+      # be shared with the other jobs' caches.
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           shared-key: coverage
@@ -415,7 +420,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: "1.89"
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --locked --release --all-targets
 
   example:
@@ -429,7 +436,13 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          # The example is its own workspace, with its own target dir.
+          workspaces: |
+            . -> target
+            examples/golden-path-app -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
           # Resolving the buf release is a GitHub API call; unauthenticated, it
