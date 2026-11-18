@@ -2405,7 +2405,8 @@ const OMNIGENT_PORT: u16 = 8000;
 /// The host is what makes agents part of the environment. It loads the stack's
 /// container-vantage client env (every selected module's address, through the gateway) and
 /// forwards it to each agent. It gets its models from [`mlflow`]'s AI Gateway, which holds
-/// the provider keys, so the host carries none.
+/// the provider keys, so the host carries none. Agents reach [`uc_mcp`]'s tools the same way,
+/// so the graph draws Omnigent using it when the stack has it.
 ///
 /// The host runs only while the gateway is open. Under forward-auth the server trusts the
 /// gateway-asserted `Remote-Email`, and a host can't present that identity, so it is dropped;
@@ -2602,10 +2603,15 @@ impl Module for Omnigent {
         ))
     }
     fn integrates_with_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
-        match omnigent_upstream(knobs, stack) {
+        let mut with = match omnigent_upstream(knobs, stack) {
             Ok("mlflow") => vec![ModuleId::from("mlflow")],
             _ => vec![],
+        };
+        // Agents get every MCP server's address in their client env, wherever their host runs.
+        if stack.has(UC_MCP_SERVICE) {
+            with.push(ModuleId::from(UC_MCP_SERVICE));
         }
+        with
     }
     fn provides(&self) -> &Provides {
         &self.provides
@@ -2811,7 +2817,8 @@ const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
 
 /// `puppygraph` — [PuppyGraph](https://docs.puppygraph.com), a graph query engine (openCypher
 /// over Bolt, Gremlin) that reads the lakehouse's Delta tables in place, with Unity Catalog as
-/// its metastore.
+/// its metastore. Any [`UNITY_CATALOG_API`] server will do: the stack's own when it runs one,
+/// else the default (`unity-catalog-oss`).
 ///
 /// The graph's shape (which tables are nodes and edges) is operator-owned: `graphs/puppygraph/
 /// schema.json` is written beside `compose.yaml` once and never overwritten. The connection
@@ -2825,7 +2832,9 @@ const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
 /// answers through the gateway's local CA (see `rustfs`). The `object_store` demand (named like
 /// UC's) carries that CA's [`TlsTrust`](crate::TlsTrust) and the store's startup gate; its keys
 /// are not used. UC vends no credentials for an Azure store, so on Azurite the graph can't read
-/// table data.
+/// table data. Vended reads rely on the OSS server's storage registration; on
+/// `unity-catalog-rs`, which registers no storage, the graph maps tables but reads them only if
+/// the server vends credentials for them, and the demand provisions the bucket itself.
 ///
 /// The web UI only serves at `/`, so it gets a dedicated gateway listener; Bolt and Gremlin are
 /// published on their standard ports, shifted by [`PlanCtx::port_offset`](crate::PlanCtx::port_offset). All three use PuppyGraph's own login (the `password`
@@ -2833,6 +2842,8 @@ const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
 fn puppygraph() -> Arc<dyn Module> {
     let mut provides = Provides {
         helpers: vec![HelperService::init("puppygraph-schema")],
+        // Whichever Unity Catalog server the stack runs, else the default one.
+        requires_apis: vec![UNITY_CATALOG_API.into()],
         ..Provides::default()
     };
     for (key, endpoint, part) in [
@@ -2863,9 +2874,9 @@ fn puppygraph() -> Arc<dyn Module> {
         summary: Some("Graph queries (Cypher, Gremlin) over Unity Catalog tables.".into()),
         category: Some("graph".into()),
         provider_of: Some(Role::GRAPH.into()),
-        // It maps UC tables and reads them with the credentials the OSS server's storage
-        // registration vends.
-        requires: vec![ModuleId::from("envoy"), ModuleId::from("unity-catalog-oss")],
+        // Unity Catalog arrives through `requires_apis`: any implementation serves as the
+        // metastore.
+        requires: vec![ModuleId::from("envoy")],
         conflicts_with: vec![],
         // Named like UC's demand, so it resolves to the store UC vends credentials for. Nothing
         // is bound into env: the fragment reads the connection's CA trust directly.

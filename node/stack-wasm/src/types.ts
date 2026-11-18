@@ -57,6 +57,9 @@ export interface ModuleDto {
    *  `unity-catalog`): modules with the same `api` are alternatives for one
    *  component. */
   api?: string;
+  /** The APIs it needs some implementation of (e.g. `unity-catalog`): the
+   *  stack's server of each, else one the planner pulls in. */
+  requires_apis?: string[];
 }
 
 /** A container a module runs to support its services (mirrors

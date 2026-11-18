@@ -125,6 +125,26 @@ pub(super) fn resolve_with_demands(
                 }
             }
             effective.insert(module.id().clone(), demands);
+            // Each required API is served by the implementation already in the graph, else by
+            // the one the catalog picks; either way it starts before this module.
+            for api in &module.provides().requires_apis {
+                let provider = match graph
+                    .nodes
+                    .iter()
+                    .find(|m| m.provides().api.as_deref() == Some(api.as_str()))
+                {
+                    Some(server) => server.id().clone(),
+                    None => choose_api_provider(ctx, catalog, api, module.id())?,
+                };
+                let edges = demand_edges.entry(module.id().clone()).or_default();
+                if !edges.contains(&provider) {
+                    edges.push(provider.clone());
+                }
+                if !selected.contains(&provider) {
+                    selected.push(provider);
+                    added = true;
+                }
+            }
         }
         // Environment-level extra resources have no consuming module, so they add their
         // provider to the selection (becoming a graph node) but contribute no dependency
@@ -245,6 +265,70 @@ pub(super) fn choose_provider(
     providers.sort();
     Err(PlanError::AmbiguousProvider {
         resource: role.to_string(),
+        providers,
+    })
+}
+
+/// Choose the module that serves `api` for `consumer` when none is in the environment yet
+/// (see [`Provides::requires_apis`](crate::Provides::requires_apis)), in priority order:
+/// 1. the first [`PlanCtx::provider_preference`] entry for an implementation's role;
+/// 2. the sole implementation, if there is one;
+/// 3. the catalog's default provider for an implementation's role.
+///
+/// Errors with [`PlanError::UnservedApi`] if no catalog module serves `api`, or
+/// [`PlanError::AmbiguousApiProvider`] if several do and none of the above picks one.
+pub(super) fn choose_api_provider(
+    ctx: &PlanCtx,
+    catalog: &Catalog,
+    api: &str,
+    consumer: &ModuleId,
+) -> Result<ModuleId, PlanError> {
+    let servers: Vec<&std::sync::Arc<dyn crate::Module>> = catalog
+        .modules()
+        .iter()
+        .filter(|m| m.provides().api.as_deref() == Some(api))
+        .collect();
+    let serves = |id: &ModuleId| servers.iter().any(|m| m.id() == id);
+    // The roles the implementations provide, deduplicated in catalog order.
+    let mut roles: Vec<&str> = Vec::new();
+    for role in servers.iter().filter_map(|m| m.provider_of()) {
+        if !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
+    // 1. Environment preference.
+    for role in &roles {
+        if let Some(pref) = ctx
+            .provider_preference
+            .get(*role)
+            .and_then(|order| order.iter().find(|id| serves(id)))
+        {
+            return Ok(pref.clone());
+        }
+    }
+    match servers.as_slice() {
+        [] => {
+            return Err(PlanError::UnservedApi {
+                module: consumer.clone(),
+                api: api.to_string(),
+            });
+        }
+        // 2. Unique implementation.
+        [only] => return Ok(only.id().clone()),
+        _ => {}
+    }
+    // 3. Catalog default.
+    if let Some(def) = roles
+        .iter()
+        .find_map(|role| catalog.default_provider_for(role).filter(|id| serves(id)))
+    {
+        return Ok(def.clone());
+    }
+    let mut providers: Vec<ModuleId> = servers.iter().map(|m| m.id().clone()).collect();
+    providers.sort();
+    Err(PlanError::AmbiguousApiProvider {
+        module: consumer.clone(),
+        api: api.to_string(),
         providers,
     })
 }

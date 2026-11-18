@@ -497,3 +497,29 @@ fn the_token_helper_fetches_from_the_endpoint_or_falls_back_to_a_static_token() 
     assert!(!ok && out.is_empty());
     assert!(err.contains("DATABRICKS_METADATA_SERVICE_URL"), "{err}");
 }
+
+#[test]
+fn agents_use_the_stacks_uc_mcp_server() {
+    use olai_stack_topology::projection::{TopologyEdgeDto, graph_dto};
+    let uses_mcp = |modules: &[&str]| {
+        let p = baseline_catalog()
+            .plan(
+                &selection(modules, &[("omnigent", "upstream", "neon")]),
+                &PlanCtx::default(),
+            )
+            .expect("plan should succeed");
+        graph_dto(&p).edges.into_iter().find_map(|e| match e {
+            TopologyEdgeDto::Uses { from, to, role, .. }
+                if from == "omnigent" && to == "uc-mcp" =>
+            {
+                Some(role)
+            }
+            _ => None,
+        })
+    };
+    assert_eq!(
+        uses_mcp(&["envoy", "uc-mcp", "omnigent"]).as_deref(),
+        Some("mcp_server")
+    );
+    assert_eq!(uses_mcp(&["envoy", "unity-catalog-oss", "omnigent"]), None);
+}

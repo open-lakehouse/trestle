@@ -1,6 +1,7 @@
 //! The `puppygraph` graph module: what it pulls into a stack, how its UI and query ports are
 //! reached, and how its catalog connection to Unity Catalog and the object store is rendered.
 
+use olai_stack_topology::projection::{TopologyEdgeDto, graph_dto};
 use olai_stack_topology::{
     ClientSelection, ModuleId, Plan, PlanCtx, RenderOutput, Selection, Vantage, baseline_catalog,
 };
@@ -220,5 +221,64 @@ fn the_client_workspace_gets_the_graph_drivers_and_quickstart() {
             .notebooks
             .iter()
             .any(|(_, n)| n.file == "puppygraph_quickstart.py")
+    );
+}
+
+/// The Unity Catalog server `p`'s graph draws PuppyGraph using, with the capability labelled.
+fn catalog_used(p: &Plan) -> Option<(String, String)> {
+    graph_dto(p).edges.into_iter().find_map(|e| match e {
+        TopologyEdgeDto::Uses { from, to, role, .. }
+            if from == "puppygraph" && role == "data_catalog" =>
+        {
+            Some((to, role))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn it_uses_mangroves_catalog_when_the_stack_runs_it() {
+    // Selected directly, or pulled in by uc-mcp (which needs mangrove's server): either way no
+    // second Unity Catalog server joins it.
+    for modules in [
+        &["unity-catalog-rs", "puppygraph"][..],
+        &["envoy", "uc-mcp", "puppygraph"][..],
+    ] {
+        let p = plan(modules);
+        assert!(
+            !p.services
+                .contains_key(&ModuleId::from("unity-catalog-oss")),
+            "{modules:?} planned the OSS server too"
+        );
+        assert_eq!(
+            catalog_used(&p),
+            Some(("unity-catalog-rs".into(), "data_catalog".into())),
+            "{modules:?}"
+        );
+        // The catalog starts before PuppyGraph.
+        let order: Vec<&str> = p.graph.nodes.iter().map(|m| m.id().as_str()).collect();
+        let at = |id: &str| order.iter().position(|m| *m == id).unwrap();
+        assert!(at("unity-catalog-rs") < at("puppygraph"), "{order:?}");
+    }
+}
+
+#[test]
+fn without_a_catalog_it_brings_the_default_or_the_preferred_one() {
+    assert_eq!(
+        catalog_used(&plan(&["puppygraph"])),
+        Some(("unity-catalog-oss".into(), "data_catalog".into()))
+    );
+    let ctx = PlanCtx {
+        provider_preference: [("data_catalog".to_string(), vec!["unity-catalog-rs".into()])].into(),
+        ..PlanCtx::default()
+    };
+    let p = plan_in(&["puppygraph"], ctx);
+    assert!(
+        !p.services
+            .contains_key(&ModuleId::from("unity-catalog-oss"))
+    );
+    assert_eq!(
+        catalog_used(&p).map(|(to, _)| to).as_deref(),
+        Some("unity-catalog-rs")
     );
 }

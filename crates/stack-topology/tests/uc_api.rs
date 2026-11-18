@@ -157,3 +157,59 @@ fn mlflow_renders_its_registry_against_whichever_module_serves_the_api() {
     );
     assert!(svc["environment"].get("PYTHONPATH").is_some(), "{svc:?}");
 }
+
+/// The baseline catalog with no default providers, less the modules in `omit`.
+fn catalog_without(omit: &[&str]) -> Catalog {
+    let mut catalog = Catalog::from_modules(
+        baseline_catalog()
+            .modules()
+            .iter()
+            .filter(|m| !omit.contains(&m.id().as_str()))
+            .cloned(),
+    );
+    // Keep the other roles' defaults, so only the API is ambiguous.
+    catalog = catalog
+        .with_default_provider("object_store", "rustfs")
+        .with_default_provider("relational_db", "postgres");
+    catalog
+}
+
+#[test]
+fn a_required_api_with_no_server_is_unserved() {
+    let err = catalog_without(&["unity-catalog-oss", "unity-catalog-rs"])
+        .plan(&Selection::modules(["puppygraph"]), &PlanCtx::default())
+        .unwrap_err();
+    assert_eq!(
+        err,
+        PlanError::UnservedApi {
+            module: ModuleId::from("puppygraph"),
+            api: "unity-catalog".into(),
+        }
+    );
+}
+
+#[test]
+fn a_required_api_with_several_servers_and_no_default_is_ambiguous() {
+    let err = catalog_without(&[])
+        .plan(&Selection::modules(["puppygraph"]), &PlanCtx::default())
+        .unwrap_err();
+    assert_eq!(
+        err,
+        PlanError::AmbiguousApiProvider {
+            module: ModuleId::from("puppygraph"),
+            api: "unity-catalog".into(),
+            providers: vec![
+                ModuleId::from("unity-catalog-oss"),
+                ModuleId::from("unity-catalog-rs")
+            ],
+        }
+    );
+}
+
+#[test]
+fn a_required_api_is_served_by_the_sole_implementation() {
+    let p = catalog_without(&["unity-catalog-oss"])
+        .plan(&Selection::modules(["puppygraph"]), &PlanCtx::default())
+        .expect("plans");
+    assert!(p.services.contains_key(&ModuleId::from("unity-catalog-rs")));
+}

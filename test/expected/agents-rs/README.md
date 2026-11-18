@@ -29,6 +29,7 @@ flowchart LR
     n7 -->|"S3: mlflow"| n6
     n4 -->|"HTTP"| n3
     n5 -->|"HTTP"| n7
+    n5 -->|"HTTP"| n4
     n7 -->|"HTTP"| n3
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed

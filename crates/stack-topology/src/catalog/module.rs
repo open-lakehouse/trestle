@@ -195,6 +195,13 @@ pub struct Provides {
     /// consumer's addresses don't depend on which one runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
+    /// The [APIs](Provides::api) this module needs some implementation of, whichever one
+    /// (e.g. `unity-catalog` for a consumer that only speaks Unity Catalog's REST API). The
+    /// planner uses the implementation already in the environment, else pulls one in (the
+    /// preferred or default provider of its role), and starts it before this module, as a
+    /// [`requires`](Module::requires) would. The environment graph draws each as a uses edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_apis: Vec<String>,
     /// The helper containers this module's fragment may run beside its services (an init job,
     /// a sidecar). They get no routes and fold into the module's node, so only this list lets
     /// an export name every container the stack runs. Whether one runs can depend on knobs or

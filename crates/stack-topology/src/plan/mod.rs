@@ -629,6 +629,27 @@ pub enum PlanError {
         /// The candidate provider module ids (sorted).
         providers: Vec<ModuleId>,
     },
+    /// A module [requires an API](crate::Provides::requires_apis) no catalog module serves.
+    #[error("no module serves the `{api}` API required by `{module}`")]
+    UnservedApi {
+        /// The requiring module.
+        module: ModuleId,
+        /// The unserved API.
+        api: String,
+    },
+    /// A module [requires an API](crate::Provides::requires_apis) several catalog modules
+    /// serve, none is in the environment, and no preference or default picks one.
+    #[error(
+        "the `{api}` API required by `{module}` is served by {providers:?}; select one of them"
+    )]
+    AmbiguousApiProvider {
+        /// The requiring module.
+        module: ModuleId,
+        /// The required API.
+        api: String,
+        /// The modules that serve it (sorted).
+        providers: Vec<ModuleId>,
+    },
     /// A demand binds a [`ConnectionField`](crate::ConnectionField) the chosen provider's
     /// connection variant does not carry (e.g. binding `url` against an object store, or an
     /// S3 credential field against an Azure-backed store).
