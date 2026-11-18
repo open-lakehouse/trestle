@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.12.0...trestle-diagram-v0.13.0) - 2026-11-18
+
+### Fixed
+
+- [**breaking**] draw Omnigent's MCP edge and let PuppyGraph use any Unity Catalog (#406)
+
 ## [0.12.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.11.5...trestle-diagram-v0.12.0) - 2026-11-17
 
 ### Added
