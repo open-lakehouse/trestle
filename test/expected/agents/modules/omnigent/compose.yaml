@@ -18,6 +18,10 @@ services:
       # The gateway is open, like the rest of the stack: single-user, every request is the
       # `local` user. The server is reachable only through the gateway and the compose network.
       OMNIGENT_AUTH_ENABLED: "0"
+      # The desktop serves the UI on `<label>.localhost`, which local mode's loopback-only
+      # Origin check rejects (multipart posts, WebSockets): trust every `*.localhost` name
+      # on the gateway's port.
+      OMNIGENT_WS_ALLOWED_ORIGINS: "http://*.localhost:9080"
     volumes:
       - ./.data/omnigent/server:/data
     expose:
