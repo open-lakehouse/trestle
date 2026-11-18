@@ -81,6 +81,11 @@
           "$ref": "#/$defs/nullableString"
         },
         "requires": { "type": "array", "items": { "type": "string" } },
+        "requires_apis": {
+          "description": "APIs the module needs some implementation of; the stack's server of each, else one the planner pulls in.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "conflicts_with": { "type": "array", "items": { "type": "string" } },
         "resource_kinds": { "type": "array", "items": { "type": "string" } },
         "knobs": { "type": "array", "items": { "$ref": "#/$defs/knob" } },

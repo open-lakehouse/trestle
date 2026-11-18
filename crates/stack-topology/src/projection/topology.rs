@@ -539,12 +539,20 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
     let infrastructure = [&gateway_module, &auth_module, &policy_module];
     for module in &plan.graph.nodes {
         let from = module.id().as_str();
-        let integrations = plan
+        let mut integrations = plan
             .bindings
             .get(module.id())
             .map_or_else(Vec::new, |binding| {
                 module.integrates_with_in(&binding.knobs, &plan.stack_facts)
             });
+        // The server of each API it requires, whichever implementation the planner chose.
+        integrations.extend(
+            module
+                .provides()
+                .requires_apis
+                .iter()
+                .filter_map(|api| plan.stack_facts.serves(api).cloned()),
+        );
         for required in module.requires().iter().chain(&integrations) {
             let to = required.as_str();
             if infrastructure.iter().any(|m| m.as_deref() == Some(to))

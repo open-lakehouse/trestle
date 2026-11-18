@@ -110,6 +110,10 @@ pub struct ModuleDto {
     /// `unity-catalog`): modules with the same `api` are alternatives for one component.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
+    /// The APIs it needs some implementation of (e.g. `unity-catalog`): the stack's server of
+    /// each, else one the planner pulls in.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub requires_apis: Vec<String>,
 }
 
 /// A hosted provider module's kind and default configuration (see [`ModuleDto::hosted`]).
@@ -339,6 +343,7 @@ pub fn catalog_dto_of(catalog: &Catalog) -> CatalogDto {
             }),
             function: m.provides().function.clone(),
             api: m.provides().api.clone(),
+            requires_apis: m.provides().requires_apis.clone(),
         })
         .collect();
     CatalogDto {
