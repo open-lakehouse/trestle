@@ -2685,7 +2685,6 @@ fn uc_mcp() -> Arc<dyn Module> {
         "UC_MCP_URL".into(),
         ClientValue::endpoint(UC_MCP_SERVICE, "mcp", UrlPart::Full),
     );
-    let uc_url = format!("http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}");
     Arc::new(DataModule {
         id: ModuleId::from(UC_MCP_SERVICE),
         model: Some("ucMcp".into()),
@@ -2721,9 +2720,11 @@ fn uc_mcp() -> Arc<dyn Module> {
             string_knob(
                 "uc_url",
                 "Unity Catalog URL",
-                Some(&uc_url),
-                "Where the MCP server reaches Unity Catalog's REST API, directly on the compose \
-                 network (not through the gateway).",
+                None,
+                "Where the MCP server reaches Unity Catalog's REST API. Unset, the stack's own: \
+                 `http://unitycatalog:8080` directly on the compose network (not through the \
+                 gateway), or the function's URL when Unity Catalog runs as a function. Set, \
+                 used as is wherever Unity Catalog runs.",
                 None,
             ),
         ],
@@ -2827,7 +2828,8 @@ const PUPPYGRAPH_BOLT_PORT: u16 = 7687;
 /// maps no nodes yet (so a schema built in the web UI isn't replaced by an empty one).
 ///
 /// UC is called directly on the compose network, not through the gateway: with forward-auth on,
-/// an in-network metastore call through the gateway would be rejected. PuppyGraph reads the
+/// an in-network metastore call through the gateway would be rejected. A UC hosted as a
+/// function is called at the function's URL, and the schema upload doesn't wait for it. PuppyGraph reads the
 /// Delta files with credentials UC vends, at the real AWS S3 hostnames, which the object store
 /// answers through the gateway's local CA (see `rustfs`). The `object_store` demand (named like
 /// UC's) carries that CA's [`TlsTrust`](crate::TlsTrust) and the store's startup gate; its keys
@@ -2866,7 +2868,6 @@ fn puppygraph() -> Arc<dyn Module> {
         }],
         ..PythonClient::default()
     };
-    let uc_url = format!("http://{UNITY_CATALOG_SERVICE}:{UNITY_CATALOG_PORT}");
     Arc::new(DataModule {
         id: ModuleId::from("puppygraph"),
         model: Some("puppygraph".into()),
@@ -2924,9 +2925,11 @@ fn puppygraph() -> Arc<dyn Module> {
             string_knob(
                 "uc_url",
                 "Unity Catalog URL",
-                Some(&uc_url),
-                "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose \
-                 network (not through the gateway).",
+                None,
+                "Where PuppyGraph reaches Unity Catalog's REST API. Unset, the stack's own: \
+                 `http://unitycatalog:8080` directly on the compose network (not through the \
+                 gateway), or the function's URL when Unity Catalog runs as a function. Set, \
+                 used as is wherever Unity Catalog runs.",
                 None,
             ),
             string_knob(

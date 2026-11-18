@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:dc8f8e40fc671f2bc5382aa043bf63d69a45e2300da72bbf14789e10d75085de"
+    "digest": "sha256:a1b933fd4a884b9134e03cbc828faab31624ced31a40a7d91cb6544787ef7157"
   },
   "recipe": {
     "digest": "sha256:1d8a933f85656bbb1f62cf940ed5d2189154c21257c364f6d8b44c507511855a"
