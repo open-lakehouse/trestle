@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.23](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.22...olai-stack-topology-v0.0.23) - 2026-11-18
+
+### Fixed
+
+- point PuppyGraph and uc-mcp at a UC function (#410)
+- trust *.localhost origins in Omnigent's local mode (#409)
+- [**breaking**] draw Omnigent's MCP edge and let PuppyGraph use any Unity Catalog (#406)
+
 ## [0.0.22](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.21...olai-stack-topology-v0.0.22) - 2026-11-17
 
 ### Added
