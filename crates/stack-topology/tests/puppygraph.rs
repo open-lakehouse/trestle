@@ -3,7 +3,8 @@
 
 use olai_stack_topology::projection::{TopologyEdgeDto, graph_dto};
 use olai_stack_topology::{
-    ClientSelection, ModuleId, Plan, PlanCtx, RenderOutput, Selection, Vantage, baseline_catalog,
+    ClientSelection, HostedConnection, HostedResource, HostedVendor, ModuleId, Plan, PlanCtx,
+    RenderOutput, Secrets, Selection, Vantage, baseline_catalog,
 };
 
 fn plan_in(modules: &[&str], ctx: PlanCtx) -> Plan {
@@ -281,4 +282,111 @@ fn without_a_catalog_it_brings_the_default_or_the_preferred_one() {
         catalog_used(&p).map(|(to, _)| to).as_deref(),
         Some("unity-catalog-rs")
     );
+}
+
+/// Unity Catalog's Neon Function URL, as a branch binds it (with a trailing `/`).
+const UC_FUNCTION_URL: &str = "https://br-x-unitycatalog.compute.example.neon.tech/";
+
+/// PuppyGraph on mangrove's Unity Catalog hosted as a Neon Function, with the branch's object
+/// storage as the store; `uc_url` overrides PuppyGraph's knob when set.
+fn plan_on_uc_function(uc_url: Option<&str>) -> Plan {
+    let mut selection =
+        Selection::modules(["envoy", "unity-catalog-rs", "neon-storage", "puppygraph"]);
+    selection.hosted.insert(
+        ModuleId::from("unity-catalog-rs"),
+        HostedResource {
+            cloud: None,
+            vendor: Some(HostedVendor::NeonFunction),
+            connection: HostedConnection::Function { url: None },
+        },
+    );
+    if let Some(url) = uc_url {
+        selection
+            .knob_overrides
+            .entry(ModuleId::from("puppygraph"))
+            .or_default()
+            .insert("uc_url".into(), url.into());
+    }
+    let secrets: Secrets = [
+        ("NEON_S3_ENDPOINT", "https://br-x.storage.example.neon.tech"),
+        ("NEON_S3_REGION", "eu-central-1"),
+        ("NEON_S3_ACCESS_KEY_ID", "key-id"),
+        ("NEON_S3_SECRET_ACCESS_KEY", "s3-secret"),
+        ("UNITYCATALOG_FUNCTION_URL", UC_FUNCTION_URL),
+    ]
+    .into_iter()
+    .collect();
+    let ctx = PlanCtx {
+        env_name: "neon".into(),
+        secrets: Some(secrets),
+        ..PlanCtx::default()
+    };
+    baseline_catalog()
+        .plan(&selection, &ctx)
+        .expect("plan should succeed")
+}
+
+/// The `puppygraph-schema` one-shot's `depends_on` keys.
+fn schema_upload_waits_for(p: &Plan) -> Vec<String> {
+    let fragment: serde_yaml::Value = serde_yaml::from_str(&render(p).fragment).unwrap();
+    fragment["services"]["puppygraph-schema"]["depends_on"]
+        .as_mapping()
+        .expect("a depends_on map")
+        .keys()
+        .map(|k| k.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_catalog_run_as_a_function_is_reached_at_its_url() {
+    let p = plan_on_uc_function(None);
+    assert!(!p.stack_facts.runs("unity-catalog-rs"));
+    // No `unitycatalog` service renders, so nothing waits for one.
+    let out = p.materialize().unwrap();
+    assert!(
+        out.files
+            .iter()
+            .all(|f| !f.path.starts_with("modules/unity-catalog-rs/")),
+        "the function renders nothing"
+    );
+    assert_eq!(schema_upload_waits_for(&p), ["puppygraph"]);
+    // The function's URL, without the trailing slash the metastore client would double. Still
+    // no token: mangrove's server is anonymous as a function too.
+    let metastore = &catalog(&p)[0]["metastore"];
+    assert_eq!(
+        metastore["host"].as_str(),
+        Some("https://br-x-unitycatalog.compute.example.neon.tech")
+    );
+    assert_eq!(metastore["token"].as_str(), Some("local"));
+}
+
+#[test]
+fn an_in_stack_catalog_is_waited_for_on_the_compose_network() {
+    let p = plan(&["unity-catalog-rs", "puppygraph"]);
+    assert_eq!(
+        catalog(&p)[0]["metastore"]["host"].as_str(),
+        Some("http://unitycatalog:8080")
+    );
+    assert_eq!(schema_upload_waits_for(&p), ["puppygraph", "unitycatalog"]);
+}
+
+#[test]
+fn a_set_uc_url_wins_wherever_the_catalog_runs() {
+    let custom = "https://uc.example.com";
+    // Hosted as a function: the knob replaces the function's URL; nothing in-stack to wait for.
+    let p = plan_on_uc_function(Some(custom));
+    assert_eq!(catalog(&p)[0]["metastore"]["host"].as_str(), Some(custom));
+    assert_eq!(schema_upload_waits_for(&p), ["puppygraph"]);
+    // In the stack: the knob replaces the service address, and the upload still waits for it.
+    let mut selection = Selection::modules(["unity-catalog-rs", "puppygraph"]);
+    selection
+        .knob_overrides
+        .entry(ModuleId::from("puppygraph"))
+        .or_default()
+        .insert("uc_url".into(), custom.into());
+    let p = baseline_catalog()
+        .plan(&selection, &PlanCtx::default())
+        .unwrap();
+    assert_eq!(catalog(&p)[0]["metastore"]["host"].as_str(), Some(custom));
+    assert_eq!(schema_upload_waits_for(&p), ["puppygraph", "unitycatalog"]);
 }

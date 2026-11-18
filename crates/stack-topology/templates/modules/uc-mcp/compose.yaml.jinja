@@ -10,16 +10,21 @@
 {%- if env.GATEWAY_INTERNAL_HOST and env.GATEWAY_INTERNAL_HOST not in allowed_hosts %}
 {%- set allowed_hosts = allowed_hosts + [env.GATEWAY_INTERNAL_HOST] %}
 {%- endif %}
+{#- The stack's Unity Catalog server, whichever implementation serves the API: in the stack,
+    or hosted as a function and called at its URL. A set `uc_url` knob wins either way. #}
+{%- set uc = stack.apis["unity-catalog"] %}
+{%- set uc_runs = uc not in stack.functions %}
+{%- set uc_url = knobs.uc_url or ("http://unitycatalog:8080" if uc_runs else stack.functions[uc].url | trim("/")) %}
 services:
   uc-mcp:
     image: {{ knobs.image }}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/uc"]
-    # No token: the local Unity Catalog server is anonymous. The server does no inbound
-    # authentication; the gateway is its only boundary.
+    # No token: the stack's Unity Catalog server is anonymous, in a container or as a function.
+    # The MCP server does no inbound authentication; the gateway is its only boundary.
     command:
       - --server
-      - "{{ knobs.uc_url }}"
+      - "{{ uc_url }}"
       - mcp
       - serve
       - --http
@@ -30,9 +35,11 @@ services:
       - --allowed-host
       - "{{ host }}"
 {%- endfor %}
+{%- if uc_runs %}
     depends_on:
       unitycatalog:
         condition: service_healthy
+{%- endif %}
     expose:
       - "8090"
 {%- if published_ports %}

@@ -1,4 +1,5 @@
 # PuppyGraph: graph queries (openCypher over Bolt, Gremlin) over Unity Catalog's tables
+{%- set uc_runs = stack.apis["unity-catalog"] not in stack.functions %}
 services:
   puppygraph:
     image: {{ knobs.image }}
@@ -76,6 +77,8 @@ services:
     depends_on:
       puppygraph:
         condition: service_healthy
+{%- if uc_runs %}
       # The upload resolves the mapped tables through the metastore.
       unitycatalog:
         condition: service_healthy
+{%- endif %}

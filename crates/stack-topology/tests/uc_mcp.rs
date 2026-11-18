@@ -2,7 +2,8 @@
 //! stack, how it is routed, where clients find it, and which `Host` values it accepts.
 
 use olai_stack_topology::{
-    GatewaySettings, ModuleId, Plan, PlanCtx, PlanError, Selection, Vantage, baseline_catalog,
+    GatewaySettings, HostedConnection, HostedResource, HostedVendor, ModuleId, Plan, PlanCtx,
+    PlanError, Secrets, Selection, Vantage, baseline_catalog,
 };
 
 fn selection() -> Selection {
@@ -200,5 +201,81 @@ fn without_a_gateway_only_direct_names_are_allowed() {
     assert!(
         url.starts_with("http://localhost:") && url.ends_with("/uc-mcp/mcp"),
         "{url}"
+    );
+}
+
+/// `uc-mcp` beside mangrove's Unity Catalog hosted as a Neon Function, the URL bound by the
+/// branch; `uc_url` overrides the MCP server's knob when set.
+fn on_uc_function(uc_url: Option<&str>) -> Plan {
+    let mut selection = selection();
+    selection.hosted.insert(
+        ModuleId::from("unity-catalog-rs"),
+        HostedResource {
+            cloud: None,
+            vendor: Some(HostedVendor::NeonFunction),
+            connection: HostedConnection::Function { url: None },
+        },
+    );
+    with_uc_url(&mut selection, uc_url);
+    let secrets: Secrets = [(
+        "UNITYCATALOG_FUNCTION_URL",
+        "https://br-x-unitycatalog.compute.example.neon.tech/",
+    )]
+    .into_iter()
+    .collect();
+    plan(
+        selection,
+        PlanCtx {
+            secrets: Some(secrets),
+            ..PlanCtx::default()
+        },
+    )
+}
+
+fn with_uc_url(selection: &mut Selection, uc_url: Option<&str>) {
+    if let Some(url) = uc_url {
+        selection
+            .knob_overrides
+            .entry(ModuleId::from("uc-mcp"))
+            .or_default()
+            .insert("uc_url".into(), url.into());
+    }
+}
+
+/// The value of the `--server` flag.
+fn server(p: &Plan) -> String {
+    let cmd = command(p);
+    let i = cmd.iter().position(|a| a == "--server").expect("--server");
+    cmd[i + 1].clone()
+}
+
+#[test]
+fn a_catalog_run_as_a_function_is_served_from_its_url() {
+    let p = on_uc_function(None);
+    assert!(!p.stack_facts.runs("unity-catalog-rs"));
+    assert_eq!(
+        server(&p),
+        "https://br-x-unitycatalog.compute.example.neon.tech"
+    );
+    // No `unitycatalog` service renders, so the MCP server waits for none.
+    let f = fragment(&p);
+    assert!(f["services"]["uc-mcp"]["depends_on"].is_null(), "{f:?}");
+    assert!(!command(&p).iter().any(|a| a == "--token"));
+}
+
+#[test]
+fn a_set_uc_url_wins_wherever_the_catalog_runs() {
+    let custom = "https://uc.example.com";
+    let p = on_uc_function(Some(custom));
+    assert_eq!(server(&p), custom);
+    assert!(fragment(&p)["services"]["uc-mcp"]["depends_on"].is_null());
+
+    let mut selection = selection();
+    with_uc_url(&mut selection, Some(custom));
+    let p = plan(selection, PlanCtx::default());
+    assert_eq!(server(&p), custom);
+    assert_eq!(
+        fragment(&p)["services"]["uc-mcp"]["depends_on"]["unitycatalog"]["condition"].as_str(),
+        Some("service_healthy")
     );
 }

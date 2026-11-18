@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:dc8f8e40fc671f2bc5382aa043bf63d69a45e2300da72bbf14789e10d75085de"
+    "digest": "sha256:a1b933fd4a884b9134e03cbc828faab31624ced31a40a7d91cb6544787ef7157"
   },
   "modules": [
     {
@@ -910,9 +910,8 @@
           "kind": {
             "kind": "string"
           },
-          "default": "http://unitycatalog:8080",
           "required": false,
-          "help": "Where the MCP server reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
+          "help": "Where the MCP server reaches Unity Catalog's REST API. Unset, the stack's own: `http://unitycatalog:8080` directly on the compose network (not through the gateway), or the function's URL when Unity Catalog runs as a function. Set, used as is wherever Unity Catalog runs.",
           "advanced": true
         }
       ],
@@ -991,9 +990,8 @@
           "kind": {
             "kind": "string"
           },
-          "default": "http://unitycatalog:8080",
           "required": false,
-          "help": "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
+          "help": "Where PuppyGraph reaches Unity Catalog's REST API. Unset, the stack's own: `http://unitycatalog:8080` directly on the compose network (not through the gateway), or the function's URL when Unity Catalog runs as a function. Set, used as is wherever Unity Catalog runs.",
           "advanced": true
         },
         {

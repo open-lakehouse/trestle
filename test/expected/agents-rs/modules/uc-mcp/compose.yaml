@@ -4,8 +4,8 @@ services:
     image: ghcr.io/open-lakehouse/mangrove:0.0.23
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/uc"]
-    # No token: the local Unity Catalog server is anonymous. The server does no inbound
-    # authentication; the gateway is its only boundary.
+    # No token: the stack's Unity Catalog server is anonymous, in a container or as a function.
+    # The MCP server does no inbound authentication; the gateway is its only boundary.
     command:
       - --server
       - "http://unitycatalog:8080"
