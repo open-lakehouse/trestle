@@ -294,6 +294,8 @@ jobs:
         run: |
           export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
           cargo test --locked -p olai-stack-state --features postgres
+          # Two machines on one team's state, through the CLI.
+          cargo test --locked -p olai-trestle --features test-engine --test team_state_cli
 
   coverage:
     name: Coverage

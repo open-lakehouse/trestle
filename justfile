@@ -83,6 +83,7 @@ test-state-pg PG_PORT="5435":
   done
   export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
   cargo test --locked -p olai-stack-state --features postgres
+  cargo test --locked -p olai-trestle --features test-engine --test team_state_cli
 
 # Run the olai-auth Postgres tests (authz migrations, API keys, grants) against a throwaway Postgres container.
 test-auth-pg PG_PORT="5434":

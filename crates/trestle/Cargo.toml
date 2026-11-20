@@ -70,6 +70,8 @@ ignore = "0.4"
 minijinja = { version = "2.19", features = ["loader", "json", "preserve_order"] }
 protobuf = "3.0"
 regex = "1"
+# To make the team's database schema in `team_state_cli`.
+sqlx = { workspace = true, default-features = false, features = ["postgres", "runtime-tokio"] }
 rust-embed = { version = "8.11", features = ["debug-embed", "include-exclude"] }
 serde_yaml = "0.9"
 sha2 = "0.10"
@@ -98,4 +100,8 @@ regex = "1"
 
 [[test]]
 name = "state_cli"
+required-features = ["test-engine"]
+
+[[test]]
+name = "team_state_cli"
 required-features = ["test-engine"]

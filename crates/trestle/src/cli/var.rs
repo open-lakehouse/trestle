@@ -5,6 +5,11 @@
 //! the next revision by `env commit`). `var list <ws>/<env>@<n>` reads a revision's.
 //!
 //! A `--secret` value goes to the OS keychain; the store keeps only a reference to it.
+//!
+//! `<ws>/<env> --local` is this machine's own set for the environment: it overrides what the
+//! environment shares and stays in the local store, even when the environment is a team's
+//! (`--state`). On a team's state a `--secret` goes there by default, since a colleague's
+//! keychain doesn't hold this machine's entry; `--shared` puts it in the shared vars anyway.
 
 use std::fmt;
 use std::io::{IsTerminal, Read};
@@ -47,6 +52,17 @@ pub struct SetArgs {
     /// Set it on the draft, so the next revision carries it, rather than on the environment.
     #[clap(long)]
     pub draft: bool,
+
+    /// Set it on this machine only (`<ws>/<env>`): it overrides what the environment shares,
+    /// and a team never sees it. A `--secret` on a team's state (`--state`) goes here unless
+    /// `--shared`.
+    #[clap(long, conflicts_with_all = ["draft", "shared"])]
+    pub local: bool,
+
+    /// On a team's state, put a `--secret` in the shared vars anyway: every colleague then
+    /// needs a keychain entry under the same key.
+    #[clap(long)]
+    pub shared: bool,
 }
 
 #[derive(Args, Clone)]
@@ -61,6 +77,10 @@ pub struct UnsetArgs {
     /// Remove it from the draft rather than from the environment.
     #[clap(long)]
     pub draft: bool,
+
+    /// Remove it from this machine's own vars for the environment.
+    #[clap(long, conflicts_with = "draft")]
+    pub local: bool,
 }
 
 #[derive(Args, Clone)]
@@ -87,10 +107,11 @@ pub fn run(cmd: VarCommand) -> Result<()> {
 /// The prefix is built from ids, not names: a workspace or environment can be renamed, and a
 /// new one may then take the old name. Name-based keys would let its secrets overwrite the
 /// keychain entries the renamed one still refers to.
-fn scope(ctx: &Ctx, target: &Target, draft: bool) -> Result<(VarScope, String)> {
+fn scope(ctx: &Ctx, target: &Target, draft: bool, local: bool) -> Result<(VarScope, String)> {
     target.no_rev()?;
     match &target.env {
         None if draft => Err(Error::other("--draft needs an environment (<ws>/<env>)")),
+        None if local => Err(Error::other("--local needs an environment (<ws>/<env>)")),
         None => {
             let ws = target.workspace(&ctx.store)?;
             let prefix = ws.id.0.clone();
@@ -98,7 +119,11 @@ fn scope(ctx: &Ctx, target: &Target, draft: bool) -> Result<(VarScope, String)> 
         }
         Some(_) => {
             let (_, env) = target.environment(&ctx.store)?;
-            if draft {
+            if local {
+                // Apart from the environment's own keys, which a colleague may share.
+                let prefix = format!("{}@local", env.id);
+                Ok((VarScope::Local(env.id), prefix))
+            } else if draft {
                 // Each revision's secrets get keys of their own, so a later edit of the draft
                 // never changes what a committed revision resolves to.
                 let next = env.head.unwrap_or(0) + 1;
@@ -125,8 +150,32 @@ fn check_key(key: &str) -> Result<()> {
     }
 }
 
+/// Whether `args` set this machine's own vars: asked for, or a secret on a team's
+/// environment. A secret a team's workspace or draft would carry is refused unless
+/// `--shared`: no colleague could resolve it.
+fn sets_local(ctx: &Ctx, args: &SetArgs) -> Result<bool> {
+    if args.local {
+        return Ok(true);
+    }
+    if !args.secret || !ctx.is_shared() || args.shared {
+        return Ok(false);
+    }
+    if args.target.env.is_none() || args.draft {
+        return Err(Error::other(format!(
+            "a secret on {} would be shared with the team, whose keychains don't hold it",
+            describe(&args.target, args.draft)
+        ))
+        .with_hint(
+            "set it on an environment (`<ws>/<env>`, kept on this machine), or pass `--shared` \
+             if every colleague sets the same keychain key",
+        ));
+    }
+    Ok(true)
+}
+
 fn run_set(ctx: &Ctx, args: SetArgs) -> Result<()> {
-    let (scope, prefix) = scope(ctx, &args.target, args.draft)?;
+    let local = sets_local(ctx, &args)?;
+    let (scope, prefix) = scope(ctx, &args.target, args.draft, local)?;
     let mut changes = Vec::new();
     for var in &args.vars {
         if args.secret {
@@ -172,15 +221,16 @@ fn run_set(ctx: &Ctx, args: SetArgs) -> Result<()> {
     // A literal that replaced a secret leaves its keychain entry unused.
     forget_unused(ctx, &args.target, replaced)?;
     println!(
-        "set {} on {}",
+        "set {} on {}{}",
         args.vars.len(),
-        describe(&args.target, args.draft)
+        describe(&args.target, args.draft),
+        if local { " (this machine only)" } else { "" }
     );
     Ok(())
 }
 
 fn run_unset(ctx: &Ctx, args: UnsetArgs) -> Result<()> {
-    let (scope, _) = scope(ctx, &args.target, args.draft)?;
+    let (scope, _) = scope(ctx, &args.target, args.draft, args.local)?;
     let mut removed = Vec::new();
     let mut missing = Vec::new();
     ctx.store.modify_vars(&scope, |vars| {
@@ -259,7 +309,7 @@ fn read_secret(key: &str) -> Result<SecretValue> {
 #[derive(Serialize)]
 pub(super) struct VarRow {
     pub name: String,
-    /// `workspace`, `environment`, `draft` or `revision`.
+    /// `workspace`, `environment`, `local` (this machine's own), `draft` or `revision`.
     pub scope: &'static str,
     /// The literal value; `None` for a secret.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -306,6 +356,7 @@ fn run_list(ctx: &Ctx, args: ListArgs) -> Result<()> {
             match args.target.rev {
                 None => {
                     let mut rows = var_rows(&env.vars, "environment");
+                    rows.extend(var_rows(&ctx.store.local_vars(&env.id)?, "local"));
                     rows.extend(var_rows(&env.draft.vars, "draft"));
                     rows
                 }

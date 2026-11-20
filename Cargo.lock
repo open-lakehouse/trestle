@@ -3243,6 +3243,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "similar",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
