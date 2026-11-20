@@ -55,6 +55,8 @@ jobs:
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --all-features -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-stack-runtime --features testing,keychain,neon -- -D warnings
+      # Shared stores on Postgres are opt-in: lint them explicitly.
+      - run: cargo clippy --locked --all-targets -p olai-stack-state --features postgres -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-trestle --features test-engine -- -D warnings
       # The store backends are optional: lint the crate with none of them too.
       - run: cargo clippy --locked --all-targets -p olai-vended-store --no-default-features -- -D warnings
@@ -282,6 +284,16 @@ jobs:
         run: |
           export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
           cargo test --locked -p olai-auth --features postgres --test postgres
+      # The store's whole suite with its shared tables on Postgres too, each test in a
+      # schema it creates and drops.
+      - name: Run Postgres shared-state tests (olai-stack-state)
+        env:
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: olai_store
+        run: |
+          export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
+          cargo test --locked -p olai-stack-state --features postgres
 
   coverage:
     name: Coverage

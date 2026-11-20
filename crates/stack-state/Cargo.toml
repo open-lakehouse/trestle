@@ -1,6 +1,6 @@
 [package]
 name = "olai-stack-state"
-description = "The shared trestle state store: workspaces, environments, immutable revisions, instances and slot leases in SQLite"
+description = "The shared trestle state store: workspaces, environments, immutable revisions, instances and slot leases in SQLite, optionally shared with a team over Postgres"
 version = "0.0.13"
 edition.workspace = true
 rust-version.workspace = true
@@ -32,6 +32,15 @@ hex = "0.4"
 # libsqlite3-sys versions can't share a build (`links = "sqlite3"`).
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
+sqlx = { workspace = true, optional = true, default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls-ring-native-roots",
+] }
+
+[features]
+# Shared stores on Postgres: `Store::open_attached`, `Store::init_remote`.
+postgres = ["dep:sqlx", "tokio/rt"]
 
 [dev-dependencies]
 tempfile = "3"

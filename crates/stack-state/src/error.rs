@@ -6,6 +6,42 @@ pub enum Error {
     /// SQLite failed.
     #[error("state store: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// An attached store's database failed, or couldn't be reached.
+    #[error("shared state store: {0}")]
+    Remote(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// A stored column didn't hold what the store wrote there.
+    #[error("state store: {0}")]
+    Column(String),
+    /// A shared database has no trestle state yet.
+    #[error("the database holds no trestle state yet: initialize it first (`trestle state init`)")]
+    Uninitialized,
+    /// A shared database's schema is older than this version writes. Opening one never
+    /// migrates it, so that one colleague's upgrade doesn't lock out everyone else's older
+    /// version unasked.
+    #[error(
+        "the shared state store's schema version {found} is older than this version's \
+         ({current}): migrate it (`trestle state init`) once everyone can upgrade"
+    )]
+    Outdated {
+        /// The database's schema version.
+        found: u32,
+        /// The version this crate writes.
+        current: u32,
+    },
+    /// The environment's draft was edited since the caller read it, so its edit would
+    /// overwrite someone else's (see [`Store::update_draft_if`](crate::Store::update_draft_if)).
+    #[error(
+        "the draft of environment `{name}` changed since it was read (version {expected}, now \
+         {current}): reload it and edit again"
+    )]
+    Conflict {
+        /// The environment's name.
+        name: String,
+        /// The draft version the caller edited.
+        expected: u64,
+        /// Its version now.
+        current: u64,
+    },
     /// The store was written by a newer version than this one understands.
     #[error(
         "state store schema version {found} is newer than this version supports ({supported}); \
@@ -41,6 +77,9 @@ pub enum Error {
     /// A workspace or environment can't be renamed (or its mesh changed) while it has
     /// instances: their compose projects, volumes, hostnames and mesh network are named after
     /// it, so the change would strand what Docker already holds under the old name.
+    ///
+    /// For an attached store, only this machine's instances are counted: a colleague's are
+    /// out of sight.
     #[error(
         "{kind} `{name}` has {instances} instance{}: remove {} first",
         if *instances == 1 { "" } else { "s" },

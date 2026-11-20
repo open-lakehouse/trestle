@@ -41,6 +41,66 @@ id!(
     /// An [`Instance`]'s id.
     InstanceId
 );
+id!(
+    /// An [`Attachment`]'s id.
+    AttachmentId
+);
+
+/// Where a shared store's database is. It names the database, never a credential: whoever
+/// opens it resolves a connection string with their own login
+/// ([`Store::open_attached`](crate::Store::open_attached)).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteLocation {
+    /// A database on a Neon project's branch, reached with the user's Neon CLI login.
+    Neon {
+        /// The organization, when the user belongs to more than one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        org: Option<String>,
+        /// The project id.
+        project: String,
+        /// The branch (its name or id); the project's default branch when `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        /// The database name.
+        database: String,
+    },
+}
+
+impl fmt::Display for RemoteLocation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RemoteLocation::Neon {
+                org,
+                project,
+                branch,
+                database,
+            } => {
+                write!(f, "neon:")?;
+                if let Some(org) = org {
+                    write!(f, "{org}/")?;
+                }
+                write!(f, "{project}")?;
+                if let Some(branch) = branch {
+                    write!(f, "@{branch}")?;
+                }
+                write!(f, "/{database}")
+            }
+        }
+    }
+}
+
+/// A shared store attached on this machine: a team database whose workspaces and
+/// environments this machine runs instances of. The record lives in the local `state.db`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    /// Its id, which this machine's instances of the store's revisions record.
+    pub id: AttachmentId,
+    /// What the user calls it on this machine (unique here).
+    pub name: String,
+    /// Where the database is.
+    pub location: RemoteLocation,
+}
 
 /// Where a secret's value lives. The store keeps only this reference; the value stays with
 /// the provider (the OS keychain, the process environment).
@@ -114,6 +174,10 @@ pub enum VarScope {
     Environment(EnvironmentId),
     /// The vars the environment's next revision carries.
     Draft(EnvironmentId),
+    /// This machine's own vars for the environment, on top of every shared layer and never
+    /// shared: the minted keys sealing its instances' data, the user's own API keys. Kept in
+    /// the local `state.db` even when the environment is held in an attached store.
+    Local(EnvironmentId),
 }
 
 /// An overlay source an instance takes: its name, and what the source needs to know about the
@@ -202,6 +266,10 @@ pub struct Environment {
     pub vars: VarSet,
     /// The number of its latest revision, if it has one.
     pub head: Option<u32>,
+    /// How many times its draft was edited: what
+    /// [`update_draft_if`](crate::Store::update_draft_if) checks to refuse overwriting an edit
+    /// made since the draft was read.
+    pub draft_version: u64,
 }
 
 /// A numbered, immutable snapshot of an environment: the placement-free manifest, the module
@@ -323,6 +391,8 @@ impl Desired {
 pub struct Instance {
     /// Its id.
     pub id: InstanceId,
+    /// The attached store holding its environment, or `None` for the local one.
+    pub store: Option<AttachmentId>,
     /// The environment.
     pub environment: EnvironmentId,
     /// The revision it runs.

@@ -1,30 +1,17 @@
 //! The store's records, revisions, leases and schema guard.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
+mod common;
+
+use common::{Harness, draft};
 use olai_stack_state::{
-    Desired, Draft, Error, SCHEMA_VERSION, SecretRef, SourceBinding, Store, VarScope, VarSet,
-    VarValue,
+    Desired, Error, SCHEMA_VERSION, SecretRef, SourceBinding, Store, VarScope, VarSet, VarValue,
 };
 use olai_stack_topology::{EnvManifest, MAX_SLOT, PlanCtx, Selection};
 
-fn store() -> (tempfile::TempDir, Store) {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(&dir.path().join("state.db")).unwrap();
-    (dir, store)
-}
-
-fn draft(modules: &[&str]) -> Draft {
-    Draft::new(EnvManifest::new(
-        Selection::modules(modules.iter().copied()),
-        PlanCtx::default(),
-    ))
-}
-
-#[test]
-fn drafts_commit_to_numbered_revisions() {
-    let (_dir, store) = store();
+fn drafts_commit_to_numbered_revisions(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", true).unwrap();
     let env = store
         .create_environment(&ws.id, "dev", draft(&["unity-catalog-oss"]))
@@ -54,23 +41,20 @@ fn drafts_commit_to_numbered_revisions() {
     assert_eq!(store.commit_draft(&env.id).unwrap().digest(), r2.digest());
 }
 
-#[test]
-fn a_revision_cant_be_updated_even_bypassing_the_api() {
-    let (dir, store) = store();
+fn a_revision_cant_be_updated_even_bypassing_the_api(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     store.commit_draft(&env.id).unwrap();
 
-    let raw = rusqlite::Connection::open(dir.path().join("state.db")).unwrap();
-    let err = raw
-        .execute("UPDATE revision SET manifest = 'tampered'", [])
+    let err = h
+        .raw("UPDATE revision SET manifest = 'tampered'")
         .unwrap_err();
-    assert!(err.to_string().contains("revisions are immutable"), "{err}");
+    assert!(err.contains("revisions are immutable"), "{err}");
 }
 
-#[test]
-fn names_are_validated_and_unique() {
-    let (_dir, store) = store();
+fn names_are_validated_and_unique(h: &Harness) {
+    let store = h.store();
     assert!(matches!(
         store.create_workspace("Demo", false),
         Err(Error::InvalidName(_))
@@ -98,9 +82,8 @@ fn names_are_validated_and_unique() {
         .unwrap();
 }
 
-#[test]
-fn vars_hold_literals_and_secret_references() {
-    let (_dir, store) = store();
+fn vars_hold_literals_and_secret_references(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let mut vars = VarSet::new();
     vars.set("REGION", VarValue::Literal("eu-west-1".into()));
@@ -118,9 +101,8 @@ fn vars_hold_literals_and_secret_references() {
     assert!(!debug.contains("eu-west-1"), "{debug}");
 }
 
-#[test]
-fn instances_lease_host_wide_slots() {
-    let (_dir, store) = store();
+fn instances_lease_host_wide_slots(h: &Harness) {
+    let store = h.store();
     let mut instances = Vec::new();
     for ws_name in ["alpha", "beta"] {
         let ws = store.create_workspace(ws_name, false).unwrap();
@@ -151,9 +133,8 @@ fn instances_lease_host_wide_slots() {
     assert_eq!(store.instance(&third.id).unwrap().desired, Desired::Running);
 }
 
-#[test]
-fn an_instance_needs_an_existing_revision() {
-    let (_dir, store) = store();
+fn an_instance_needs_an_existing_revision(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     assert!(matches!(
@@ -165,9 +146,8 @@ fn an_instance_needs_an_existing_revision() {
     ));
 }
 
-#[test]
-fn concurrent_leases_never_share_a_slot_and_run_out_cleanly() {
-    let (dir, store) = store();
+fn concurrent_leases_never_share_a_slot_and_run_out_cleanly(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     store.commit_draft(&env.id).unwrap();
@@ -175,27 +155,27 @@ fn concurrent_leases_never_share_a_slot_and_run_out_cleanly() {
     let ids: Vec<_> = (0..total)
         .map(|_| store.create_instance(&env.id, 1).unwrap().id)
         .collect();
-    let path = Arc::new(dir.path().join("state.db"));
 
     // Eight threads, each on its own connection, race for slots.
     let chunks: Vec<Vec<_>> = ids.chunks(total.div_ceil(8)).map(<[_]>::to_vec).collect();
-    let handles: Vec<_> = chunks
-        .into_iter()
-        .map(|chunk| {
-            let path = Arc::clone(&path);
-            std::thread::spawn(move || {
-                let store = Store::open(&path).unwrap();
-                chunk
-                    .iter()
-                    .map(|id| store.lease_slot(id))
-                    .collect::<Vec<_>>()
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = chunks
+            .into_iter()
+            .map(|chunk| {
+                scope.spawn(move || {
+                    let store = h.store();
+                    chunk
+                        .iter()
+                        .map(|id| store.lease_slot(id))
+                        .collect::<Vec<_>>()
+                })
             })
-        })
-        .collect();
-    let results: Vec<_> = handles
-        .into_iter()
-        .flat_map(|h| h.join().unwrap())
-        .collect();
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|t| t.join().unwrap())
+            .collect()
+    });
     let slots: Vec<u16> = results
         .iter()
         .filter_map(|r| r.as_ref().ok().map(|l| l.slot))
@@ -212,9 +192,9 @@ fn concurrent_leases_never_share_a_slot_and_run_out_cleanly() {
 
 #[test]
 fn a_newer_schema_is_refused() {
-    let (dir, store) = store();
-    drop(store);
+    let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.db");
+    drop(Store::open(&path).unwrap());
     let raw = rusqlite::Connection::open(&path).unwrap();
     raw.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
         .unwrap();
@@ -226,13 +206,11 @@ fn a_newer_schema_is_refused() {
     ));
 }
 
-#[test]
-fn reopening_keeps_the_data() {
-    let (dir, store) = store();
+fn reopening_keeps_the_data(h: &Harness) {
+    let store = h.store();
     store.create_workspace("demo", false).unwrap();
     drop(store);
-    let store = Store::open(&dir.path().join("state.db")).unwrap();
-    assert_eq!(store.workspaces().unwrap().len(), 1);
+    assert_eq!(h.store().workspaces().unwrap().len(), 1);
 }
 
 #[test]
@@ -247,9 +225,8 @@ fn trestle_home_overrides_the_data_dir() {
     unsafe { std::env::remove_var("TRESTLE_HOME") };
 }
 
-#[test]
-fn source_bindings_and_workspace_source_config_round_trip() {
-    let (_dir, store) = store();
+fn source_bindings_and_workspace_source_config_round_trip(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     assert!(ws.sources.is_empty());
     let config = serde_json::json!({"project_id": "p-1"});
@@ -280,15 +257,15 @@ fn source_bindings_and_workspace_source_config_round_trip() {
     ));
 }
 
-#[test]
-fn vars_change_in_place_per_scope() {
-    let (_dir, store) = store();
+fn vars_change_in_place_per_scope(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     for (scope, key) in [
         (VarScope::Workspace(ws.id.clone()), "WS"),
         (VarScope::Environment(env.id.clone()), "ENV"),
         (VarScope::Draft(env.id.clone()), "DRAFT"),
+        (VarScope::Local(env.id.clone()), "LOCAL"),
     ] {
         store
             .modify_vars(&scope, |vars| {
@@ -317,9 +294,28 @@ fn vars_change_in_place_per_scope() {
     let env = store.environment(&env.id).unwrap();
     assert!(env.vars.get("ENV").is_some());
     assert!(env.draft.vars.get("DRAFT").is_some());
+    // This machine's own vars are kept apart from every shared set.
+    assert_eq!(
+        store
+            .local_vars(&env.id)
+            .unwrap()
+            .0
+            .keys()
+            .collect::<Vec<_>>(),
+        ["LOCAL"]
+    );
+    assert!(env.vars.get("LOCAL").is_none() && env.draft.vars.get("LOCAL").is_none());
     // The draft's vars go into the next revision; the environment's don't.
     let r1 = store.commit_draft(&env.id).unwrap();
     assert!(r1.vars().get("DRAFT").is_some() && r1.vars().get("ENV").is_none());
+    assert!(r1.vars().get("LOCAL").is_none());
+
+    // Local vars need the environment, and go with it.
+    let missing = VarScope::Local(olai_stack_state::EnvironmentId("nope".into()));
+    assert!(matches!(
+        store.modify_vars(&missing, |_| Ok::<_, Error>(())),
+        Err(Error::NotFound { .. })
+    ));
 
     // A failing change writes nothing.
     let scope = VarScope::Workspace(ws.id.clone());
@@ -337,11 +333,12 @@ fn vars_change_in_place_per_scope() {
             .get("WS")
             .is_some()
     );
+    store.delete_environment(&env.id).unwrap();
+    assert!(store.local_vars(&env.id).unwrap().is_empty());
 }
 
-#[test]
-fn modify_draft_keeps_the_name_and_concurrent_edits() {
-    let (dir, store) = store();
+fn modify_draft_keeps_the_name_and_concurrent_edits(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     let written = store
@@ -355,13 +352,11 @@ fn modify_draft_keeps_the_name_and_concurrent_edits() {
     assert_eq!(store.environment(&env.id).unwrap().draft, written);
 
     // Two writers each adding vars never lose the other's.
-    let path = dir.path().join("state.db");
-    let threads: Vec<_> = ["a", "b"]
-        .into_iter()
-        .map(|who| {
-            let (path, id) = (path.clone(), env.id.clone());
-            std::thread::spawn(move || {
-                let store = Store::open(&path).unwrap();
+    std::thread::scope(|scope| {
+        for who in ["a", "b"] {
+            let id = env.id.clone();
+            scope.spawn(move || {
+                let store = h.store();
                 for n in 0..25 {
                     store
                         .modify_draft(&id, |d| {
@@ -371,18 +366,17 @@ fn modify_draft_keeps_the_name_and_concurrent_edits() {
                         })
                         .unwrap();
                 }
-            })
-        })
-        .collect();
-    for t in threads {
-        t.join().unwrap();
-    }
-    assert_eq!(store.environment(&env.id).unwrap().draft.vars.0.len(), 50);
+            });
+        }
+    });
+    let env = store.environment(&env.id).unwrap();
+    assert_eq!(env.draft.vars.0.len(), 50);
+    // Every edit counted.
+    assert_eq!(env.draft_version, 51);
 }
 
-#[test]
-fn deleting_an_environment_removes_its_revisions_instances_and_leases() {
-    let (_dir, store) = store();
+fn deleting_an_environment_removes_its_revisions_instances_and_leases(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let dev = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     let prod = store
@@ -409,9 +403,8 @@ fn deleting_an_environment_removes_its_revisions_instances_and_leases() {
     ));
 }
 
-#[test]
-fn renaming_an_environment_keeps_its_id_revisions_and_vars() {
-    let (_dir, store) = store();
+fn renaming_an_environment_keeps_its_id_revisions_and_vars(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store
         .create_environment(&ws.id, "dev", draft(&["unity-catalog-oss"]))
@@ -459,9 +452,8 @@ fn renaming_an_environment_keeps_its_id_revisions_and_vars() {
     ));
 }
 
-#[test]
-fn renaming_a_workspace_keeps_its_id_and_environments() {
-    let (_dir, store) = store();
+fn renaming_a_workspace_keeps_its_id_and_environments(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", true).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     store.commit_draft(&env.id).unwrap();
@@ -489,9 +481,8 @@ fn renaming_a_workspace_keeps_its_id_and_environments() {
     store.rename_workspace(&ws.id, "lab").unwrap();
 }
 
-#[test]
-fn the_mesh_can_be_switched() {
-    let (_dir, store) = store();
+fn the_mesh_can_be_switched(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     store.set_mesh(&ws.id, true).unwrap();
     assert!(store.workspace_by_id(&ws.id).unwrap().mesh);
@@ -508,9 +499,8 @@ fn the_mesh_can_be_switched() {
     ));
 }
 
-#[test]
-fn renames_and_mesh_changes_wait_until_no_instance_is_left() {
-    let (_dir, store) = store();
+fn renames_and_mesh_changes_wait_until_no_instance_is_left(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let dev = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     let prod = store
@@ -548,9 +538,8 @@ fn renames_and_mesh_changes_wait_until_no_instance_is_left() {
     store.set_mesh(&ws.id, true).unwrap();
 }
 
-#[test]
-fn a_commit_records_its_message_and_time() {
-    let (_dir, store) = store();
+fn a_commit_records_its_message_and_time(h: &Harness) {
+    let store = h.store();
     let ws = store.create_workspace("demo", false).unwrap();
     let env = store.create_environment(&ws.id, "dev", draft(&[])).unwrap();
     let before = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
@@ -595,12 +584,31 @@ fn a_version_1_store_migrates_and_keeps_its_revisions() {
          INSERT INTO environment (id, workspace_id, name, draft, created_at, head)
              VALUES ('e', 'w', 'dev', '{manifest}', 0, 1);
          INSERT INTO revision (environment_id, number, manifest, modules, vars, digest, created_at)
-             VALUES ('e', 1, '{manifest}', '{{}}', '{{}}', 'd', 1700000000);"
+             VALUES ('e', 1, '{manifest}', '{{}}', '{{}}', 'd', 1700000000);
+         INSERT INTO instance (id, environment_id, revision, desired, created_at)
+             VALUES ('i', 'e', 1, 'running', 0);
+         INSERT INTO slot_lease (slot, instance_id, leased_at) VALUES (3, 'i', 0);"
     ))
     .unwrap();
     drop(raw);
 
     let store = Store::open(&path).unwrap();
+    // Rebuilding the instance table kept the instance and its lease.
+    let instance = store
+        .instance(&olai_stack_state::InstanceId("i".into()))
+        .unwrap();
+    assert_eq!(
+        (instance.slot, instance.desired, instance.store),
+        (Some(3), Desired::Running, None)
+    );
+    assert_eq!(store.leases().unwrap().len(), 1);
+    assert_eq!(
+        store
+            .environment(&instance.environment)
+            .unwrap()
+            .draft_version,
+        0
+    );
     let env = store.workspace("demo").unwrap().unwrap();
     let env = &store.environments(&env.id).unwrap()[0];
     let r1 = store.revision(&env.id, 1).unwrap();
@@ -617,3 +625,23 @@ fn a_version_1_store_migrates_and_keeps_its_revisions() {
         Some("after the upgrade")
     );
 }
+
+on_both!(
+    drafts_commit_to_numbered_revisions,
+    names_are_validated_and_unique,
+    vars_hold_literals_and_secret_references,
+    instances_lease_host_wide_slots,
+    an_instance_needs_an_existing_revision,
+    source_bindings_and_workspace_source_config_round_trip,
+    vars_change_in_place_per_scope,
+    deleting_an_environment_removes_its_revisions_instances_and_leases,
+    renaming_an_environment_keeps_its_id_revisions_and_vars,
+    renaming_a_workspace_keeps_its_id_and_environments,
+    the_mesh_can_be_switched,
+    renames_and_mesh_changes_wait_until_no_instance_is_left,
+    a_commit_records_its_message_and_time,
+    a_revision_cant_be_updated_even_bypassing_the_api,
+    concurrent_leases_never_share_a_slot_and_run_out_cleanly,
+    reopening_keeps_the_data,
+    modify_draft_keeps_the_name_and_concurrent_edits,
+);

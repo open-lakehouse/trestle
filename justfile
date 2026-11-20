@@ -64,6 +64,26 @@ test-pg PG_PORT="5433":
   export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
   SQLX_OFFLINE=true cargo test --locked --lib -p olai-store --features postgres
 
+# Run the olai-stack-state tests with the shared tables on a throwaway Postgres too (each
+# test in a schema of its own). Mirrors the `postgres` CI job's stack-state step.
+test-state-pg PG_PORT="5435":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  name=olai-stack-state-pg-test
+  user=postgres pass=postgres db=trestle_state
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker run -d --name "$name" \
+    -e POSTGRES_USER="$user" -e POSTGRES_PASSWORD="$pass" -e POSTGRES_DB="$db" \
+    -p {{ PG_PORT }}:5432 postgres:16 >/dev/null
+  trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+  echo ">> waiting for postgres..."
+  for _ in $(seq 1 30); do
+    docker exec "$name" pg_isready -U "$user" -d "$db" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
+  cargo test --locked -p olai-stack-state --features postgres
+
 # Run the olai-auth Postgres tests (authz migrations, API keys, grants) against a throwaway Postgres container.
 test-auth-pg PG_PORT="5434":
   #!/usr/bin/env bash
