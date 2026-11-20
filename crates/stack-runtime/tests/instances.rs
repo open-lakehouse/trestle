@@ -12,7 +12,9 @@ use olai_stack_runtime::{
     ReconcileOptions, SecretError, SecretProvider, SecretProviders, SecretValue, UserVars,
     instance_project,
 };
-use olai_stack_state::{Draft, InstanceId, SecretRef, SourceBinding, Store, VarSet, VarValue};
+use olai_stack_state::{
+    Draft, InstanceId, RemoteLocation, SecretRef, SourceBinding, Store, VarScope, VarSet, VarValue,
+};
 use olai_stack_topology::{EnvManifest, PlanCtx, Selection, port_conflicts};
 
 /// Secrets from a map, as a provider called `vault`.
@@ -492,4 +494,105 @@ async fn a_missing_required_secret_fails_the_start_before_compose() {
     );
     f.store.set_overrides(&r2, &overrides).unwrap();
     f.instances.start(&r2).await.unwrap();
+}
+
+#[tokio::test]
+async fn this_machines_vars_override_what_the_team_shares() {
+    let f = fixture();
+    let (r1, _) = two_revisions(&f);
+    let env = f.store.instance(&r1).unwrap().environment;
+    let set = |scope: VarScope, value: VarValue| {
+        f.store
+            .modify_vars(&scope, |vars| {
+                vars.set("TEAM_SETTING", value);
+                Ok::<_, olai_stack_state::Error>(())
+            })
+            .unwrap();
+    };
+    set(
+        VarScope::Environment(env.clone()),
+        VarValue::Literal("shared".into()),
+    );
+    // A key minted on this machine, held in its own provider.
+    set(
+        VarScope::Local(env.clone()),
+        VarValue::Secret(SecretRef {
+            provider: "vault".into(),
+            key: "pg".into(),
+        }),
+    );
+    let effective = f.instances.effective_env(&r1).await.unwrap();
+    let masked = effective.masked();
+    let var = &masked["TEAM_SETTING"];
+    assert_eq!(var.provenance, Layer::LocalVars);
+    assert_eq!(var.shadowed, [Layer::EnvironmentVars]);
+    assert!(var.secret);
+
+    // The instance's overrides still win.
+    let mut overrides = VarSet::new();
+    overrides.set("TEAM_SETTING", VarValue::Literal("mine".into()));
+    f.store.set_overrides(&r1, &overrides).unwrap();
+    let effective = f.instances.effective_env(&r1).await.unwrap();
+    assert_eq!(
+        effective.masked()["TEAM_SETTING"].provenance,
+        Layer::InstanceOverrides
+    );
+}
+
+#[tokio::test]
+async fn an_instance_of_a_store_that_isnt_open_is_left_alone() {
+    let f = fixture();
+    let (r1, r2) = two_revisions(&f);
+    f.instances.start(&r1).await.unwrap();
+    // File r2 under an attachment, as if it ran a team store's revision; that store isn't
+    // open in this runtime.
+    let team = f
+        .store
+        .attach(
+            "team",
+            RemoteLocation::Neon {
+                org: None,
+                project: "p-1".into(),
+                branch: None,
+                database: "trestle_state".into(),
+            },
+        )
+        .unwrap();
+    rusqlite::Connection::open(f.state.join("state.db"))
+        .unwrap()
+        .execute(
+            "UPDATE instance SET store = ?1, desired = 'running' WHERE id = ?2",
+            [&team.id.0, &r2.0],
+        )
+        .unwrap();
+    assert!(matches!(
+        f.instances.effective_env(&r2).await,
+        Err(InstanceError::StoreNotOpen(id)) if id == team.id
+    ));
+    // The local instance still resolves.
+    f.instances.effective_env(&r1).await.unwrap();
+
+    // Its project can't be named, so an unknown project may be its own: reported, kept.
+    let ghost = tempfile::tempdir().unwrap();
+    std::fs::write(ghost.path().join("compose.yaml"), "name: team_dev_r2\n").unwrap();
+    f.engine
+        .up(ghost.path(), &olai_stack_runtime::UpOptions::default())
+        .await
+        .unwrap();
+    let report = f
+        .instances
+        .reconcile(ReconcileOptions {
+            remove_orphans: true,
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.unresolved, std::slice::from_ref(&r2));
+    assert_eq!(report.orphans, ["team_dev_r2"]);
+    assert!(report.removed.is_empty());
+    assert!(report.stale.is_empty());
+    assert_eq!(
+        f.store.instance(&r2).unwrap().desired,
+        olai_stack_state::Desired::Running
+    );
+    assert!(f.engine.projects().contains("team_dev_r2"));
 }

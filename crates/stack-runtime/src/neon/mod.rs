@@ -19,12 +19,17 @@
 //!   expiry. Only owned branches are reset or deleted ([`reset_owned_branch`],
 //!   [`delete_owned_branch`]).
 //!
+//! - A team's shared workspaces and environments live in a [`STATE_DATABASE`] on its
+//!   project: [`init_state`] sets it up, [`attach`] and [`open_attached`] reach it with the
+//!   user's own login.
+//!
 //! See `docs/neon.md` for what the CLI prints.
 
 mod cli;
 #[cfg(feature = "testing")]
 mod fake;
 mod source;
+mod state;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -41,6 +46,10 @@ pub use fake::{FakeNeon, NeonCall};
 pub use source::{
     AI_GATEWAY_BASE_URL_VAR, AI_GATEWAY_TOKEN_VAR, CredentialRef, NEON_SOURCE, NeonBinding,
     NeonBranchSource, StorageCredentialRef,
+};
+pub use state::{
+    STATE_DATABASE, StateError, attach, init_state, open_attached, prepare_state_database,
+    state_location, state_url,
 };
 
 /// The annotation key that marks a branch as created by trestle.

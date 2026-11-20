@@ -38,6 +38,8 @@ keyring = { version = "3.6", default-features = false, features = [
 ], optional = true }
 
 [dev-dependencies]
+# To file an instance under an attachment in tests without a Postgres to attach.
+rusqlite = "0.32"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
@@ -45,8 +47,9 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 # `KeychainProvider`: secrets in the OS credential store.
 keychain = ["dep:keyring"]
 # `NeonControl`, `NeonCli` and `NeonBranchSource`: Neon branches as an environment source,
-# through the Neon CLI (with `testing`, also `FakeNeon`).
-neon = ["dep:chrono"]
+# through the Neon CLI (with `testing`, also `FakeNeon`); a team's shared state on its Neon
+# project (`neon::init_state`, `neon::open_attached`).
+neon = ["dep:chrono", "olai-stack-state/postgres"]
 # `FakeEngine`: an in-memory `ComposeEngine` for tests of code that drives one.
 testing = []
 

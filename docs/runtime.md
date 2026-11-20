@@ -211,6 +211,20 @@ startup, adopts running instance projects, marks instances whose project is
 gone as stopped, and reports, or takes down, instance-shaped projects that the
 store doesn't know.
 
+### Instances of a team's store
+
+An instance names the store that holds its environment: the local one, or a team
+store attached on this machine (`olai-stack-state`, feature `postgres`).
+`Instances::with_attached` adds attached stores to the one it was made with. An
+instance whose store isn't open fails with `InstanceError::StoreNotOpen`. While
+any exists, `reconcile` lists them as `unresolved` and doesn't take orphans down,
+since one may be theirs.
+
+With feature `neon`, a team's store lives in the `trestle_state` database on its
+Neon project. `neon::init_state` creates and migrates it, `neon::attach` records it
+on a machine, and `neon::open_attached` opens it with the user's own Neon CLI
+login. No credential is stored.
+
 ### The layered environment
 
 `EffectiveEnv` resolves an instance's variables from these layers, lowest
@@ -224,8 +238,10 @@ precedence first:
 5. workspace vars
 6. environment vars
 7. revision vars
-8. source overlays, in the order the instance binds them
-9. instance overrides
+8. local vars: this machine's own (`VarScope::Local`), never shared with a team,
+   such as minted keys and the user's own API keys
+9. source overlays, in the order the instance binds them
+10. instance overrides
 
 Secret references resolve last, once every layer has had its say. Each variable
 keeps its provenance and the layers it overrode, and `masked()` is the view for

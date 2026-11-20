@@ -2,11 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
-use olai_stack_state::{Desired, Instance, InstanceId, Revision, SecretRef, Store};
+use olai_stack_state::{AttachmentId, Desired, Instance, InstanceId, Revision, SecretRef, Store};
 use olai_stack_topology::{
     Catalog, LOCAL_CREDENTIALS, LaunchEnvError, LocalCredentials, LocalSecrets, MaterializedOutput,
     Plan, PlanError, RenderError, RuntimePlacement, Secrets, Vantage, baseline_catalog_with,
@@ -38,6 +38,10 @@ pub enum InstanceError {
     /// The store failed.
     #[error(transparent)]
     Store(#[from] olai_stack_state::Error),
+    /// The instance runs a revision of an attached store that isn't open here (see
+    /// [`Instances::with_attached`]).
+    #[error("the instance runs a revision of attached store `{0}`, which isn't open")]
+    StoreNotOpen(AttachmentId),
     /// The engine failed.
     #[error(transparent)]
     Engine(#[from] crate::Error),
@@ -124,6 +128,9 @@ pub struct Reconciled {
     pub orphans: Vec<String>,
     /// Orphans that were taken down (with [`ReconcileOptions::remove_orphans`]).
     pub removed: Vec<String>,
+    /// Instances of attached stores that aren't open, so their projects can't be named. While
+    /// there are any, orphans are reported but never taken down: one may be theirs.
+    pub unresolved: Vec<InstanceId>,
 }
 
 /// How [`Instances::reconcile`] treats what it finds.
@@ -178,6 +185,10 @@ impl Materialized {
 /// process environment only (see [`MaterializedOutput::into_launch_env`]).
 pub struct Instances<E> {
     store: Arc<Store>,
+    /// The attached stores whose instances this runs too, by attachment.
+    attached: BTreeMap<AttachmentId, Arc<Store>>,
+    /// The local store, opened on first need when `store` is an attached one.
+    local: Mutex<Option<Arc<Store>>>,
     engine: E,
     root: PathBuf,
     providers: SecretProviders,
@@ -210,12 +221,47 @@ impl<E: ComposeEngine> Instances<E> {
     pub fn new(store: Arc<Store>, engine: E, state_dir: impl Into<PathBuf>) -> Self {
         Instances {
             store,
+            attached: BTreeMap::new(),
+            local: Mutex::new(None),
             engine,
             root: state_dir.into().join(INSTANCES_DIR),
             providers: SecretProviders::new().with(crate::secrets::EnvProvider),
             sources: BTreeMap::new(),
             probe_ports: true,
             wait_timeout: None,
+        }
+    }
+
+    /// Run the instances of `store`, an attached store, too. Instances name the store their
+    /// revision is in; one whose store isn't open fails with [`InstanceError::StoreNotOpen`].
+    /// A store that isn't attached is the local one, which needs no adding.
+    pub fn with_attached(mut self, store: Arc<Store>) -> Self {
+        if let Some(id) = store.attachment_id().cloned() {
+            self.attached.insert(id, store);
+        }
+        self
+    }
+
+    /// The store holding the instance's environment.
+    pub fn store_of(&self, instance: &Instance) -> Result<Arc<Store>> {
+        if instance.store.as_ref() == self.store.attachment_id() {
+            return Ok(Arc::clone(&self.store));
+        }
+        match &instance.store {
+            Some(id) => self
+                .attached
+                .get(id)
+                .cloned()
+                .ok_or_else(|| InstanceError::StoreNotOpen(id.clone())),
+            None => {
+                let mut local = self.local.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(store) = &*local {
+                    return Ok(Arc::clone(store));
+                }
+                let store = Arc::new(Store::open(self.store.path())?);
+                *local = Some(Arc::clone(&store));
+                Ok(store)
+            }
         }
     }
 
@@ -286,8 +332,9 @@ impl<E: ComposeEngine> Instances<E> {
         olai_stack_state::Environment,
     )> {
         let instance = self.store.instance(id)?;
-        let env = self.store.environment(&instance.environment)?;
-        let workspace = self.store.workspace_by_id(&env.workspace)?;
+        let store = self.store_of(&instance)?;
+        let env = store.environment(&instance.environment)?;
+        let workspace = store.workspace_by_id(&env.workspace)?;
         Ok((instance, workspace, env))
     }
 
@@ -297,9 +344,11 @@ impl<E: ComposeEngine> Instances<E> {
         id: &InstanceId,
     ) -> Result<(EnvLayers, Revision, RuntimePlacement)> {
         let (instance, workspace, env) = self.describe(id)?;
-        let revision = self
-            .store
-            .revision(&instance.environment, instance.revision)?;
+        let store = self.store_of(&instance)?;
+        let revision = store.revision(&instance.environment, instance.revision)?;
+        // This machine's own vars: kept in the local file whichever store holds the
+        // environment.
+        let local_vars = store.local_vars(&env.id)?;
         let placement = self.placement(id)?;
         let defaults: BTreeMap<String, String> = LOCAL_CREDENTIALS
             .iter()
@@ -320,6 +369,7 @@ impl<E: ComposeEngine> Instances<E> {
             .with_vars(Layer::WorkspaceVars, &workspace.vars)
             .with_vars(Layer::EnvironmentVars, &env.vars)
             .with_vars(Layer::RevisionVars, revision.vars())
+            .with_vars(Layer::LocalVars, &local_vars)
             .with_vars(Layer::InstanceOverrides, &instance.overrides);
         for binding in &instance.sources {
             let name = &binding.name;
@@ -380,7 +430,7 @@ impl<E: ComposeEngine> Instances<E> {
 
     async fn resolve(&self, id: &InstanceId) -> Result<(EffectiveEnv, Plan)> {
         let (layers, revision, placement) = self.base_layers(id).await?;
-        let env_name = self.store.environment(revision.environment())?.name;
+        let env_name = self.describe(id)?.2.name;
         // The plan's own variables are layers too, but planning needs the credentials the
         // other layers resolve to: plan with those, then add the plan's layers and resolve
         // again.
@@ -588,15 +638,23 @@ impl<E: ComposeEngine> Instances<E> {
         let projects = self.engine.ls().await?;
         let mut by_project: BTreeMap<String, InstanceId> = BTreeMap::new();
         let instances = self.store.instances()?;
+        let mut out = Reconciled::default();
         for instance in &instances {
-            let env = self.store.environment(&instance.environment)?;
-            let ws = self.store.workspace_by_id(&env.workspace)?;
+            let store = match self.store_of(instance) {
+                Ok(store) => store,
+                Err(InstanceError::StoreNotOpen(_)) => {
+                    out.unresolved.push(instance.id.clone());
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let env = store.environment(&instance.environment)?;
+            let ws = store.workspace_by_id(&env.workspace)?;
             by_project.insert(
                 instance_project(&ws.name, &env.name, instance.revision),
                 instance.id.clone(),
             );
         }
-        let mut out = Reconciled::default();
         let mut present = BTreeSet::new();
         for project in &projects {
             if parse_instance_project(&project.name).is_none() {
@@ -613,14 +671,17 @@ impl<E: ComposeEngine> Instances<E> {
                 Some(_) => {}
                 None => {
                     out.orphans.push(project.name.clone());
-                    if opts.remove_orphans && self.remove_orphan(&project.config_files).await? {
+                    if opts.remove_orphans
+                        && out.unresolved.is_empty()
+                        && self.remove_orphan(&project.config_files).await?
+                    {
                         out.removed.push(project.name.clone());
                     }
                 }
             }
         }
         for instance in instances {
-            if instance.desired != Desired::Running {
+            if instance.desired != Desired::Running || out.unresolved.contains(&instance.id) {
                 continue;
             }
             let project = by_project

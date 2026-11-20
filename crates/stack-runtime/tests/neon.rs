@@ -639,3 +639,63 @@ async fn the_ai_gateway_binds_only_where_enabled_and_is_revoked_with_the_rest() 
     unbind(&neon, &binding).await.unwrap();
     assert!(neon.credentials("main").is_empty());
 }
+
+#[tokio::test]
+async fn the_team_state_database_is_created_once_on_the_default_branch() {
+    use olai_stack_runtime::neon::{
+        STATE_DATABASE, prepare_state_database, state_location, state_url,
+    };
+    use olai_stack_state::RemoteLocation;
+
+    let neon = FakeNeon::new("p-1");
+    let (location, url) = prepare_state_database(&neon, "p-1", None).await.unwrap();
+    assert_eq!(location, state_location("p-1", None));
+    assert_eq!(
+        location,
+        RemoteLocation::Neon {
+            org: None,
+            project: "p-1".into(),
+            branch: None,
+            database: STATE_DATABASE.into(),
+        }
+    );
+    assert!(
+        url.expose().contains("/trestle_state?") && url.expose().contains("ep-main"),
+        "a direct connection to the default branch's state database"
+    );
+    assert!(!url.expose().contains("-pooler"));
+    assert_eq!(
+        neon.calls(),
+        [NeonCall::CreateDatabase(
+            "br-main".into(),
+            STATE_DATABASE.into()
+        )]
+    );
+
+    // Again: nothing to create; the location resolves to the same database.
+    prepare_state_database(&neon, "p-1", Some("main"))
+        .await
+        .unwrap();
+    assert_eq!(neon.calls().len(), 1);
+    assert_eq!(
+        state_url(&neon, &state_location("p-1", Some("br-main")))
+            .await
+            .unwrap(),
+        url
+    );
+
+    // An unknown branch, and no login.
+    assert!(matches!(
+        prepare_state_database(&neon, "p-1", Some("nope")).await,
+        Err(olai_stack_runtime::neon::StateError::Neon(
+            NeonError::NoSuchBranch(_)
+        ))
+    ));
+    neon.set_signed_in(false);
+    assert!(matches!(
+        state_url(&neon, &location).await,
+        Err(olai_stack_runtime::neon::StateError::Neon(
+            NeonError::NotAuthenticated(_)
+        ))
+    ));
+}
