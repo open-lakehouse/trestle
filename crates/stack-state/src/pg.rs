@@ -143,6 +143,11 @@ impl PgSession {
     /// [`end`](Self::end).
     pub(crate) fn begin(&self) -> Result<()> {
         self.call(|runtime, worker| {
+            // A transaction left open (its caller panicked before ending it) never goes back
+            // to the pool, where its state would leak into the next statement.
+            if let Some(stale) = worker.tx.take() {
+                drop(stale.detach());
+            }
             runtime.block_on(async {
                 let mut conn = worker.pool.acquire().await?;
                 sqlx::raw_sql("BEGIN").execute(&mut *conn).await?;
