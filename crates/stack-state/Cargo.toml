@@ -32,7 +32,9 @@ hex = "0.4"
 # libsqlite3-sys versions can't share a build (`links = "sqlite3"`).
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
-sqlx = { workspace = true, optional = true, default-features = false, features = [
+# Not `workspace = true`: the workspace entry keeps sqlx's default features, which a member
+# can't turn off (the MSRV toolchain's Cargo refuses `default-features = false` there).
+sqlx = { version = "0.8", optional = true, default-features = false, features = [
     "postgres",
     "runtime-tokio",
     "tls-rustls-ring-native-roots",
