@@ -3113,7 +3113,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3131,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "dirs",
  "futures",
@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.37"
+version = "0.0.38"
 dependencies = [
  "assert_cmd",
  "async-trait",
