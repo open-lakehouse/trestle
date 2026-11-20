@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-stack-runtime-v0.0.14...olai-stack-runtime-v0.0.15) - 2026-11-20
+
+### Added
+
+- [**breaking**] run instances of a team's shared store (#415)
+
 ## [0.0.13](https://github.com/open-lakehouse/trestle/compare/olai-stack-runtime-v0.0.12...olai-stack-runtime-v0.0.13) - 2026-11-17
 
 ### Added
