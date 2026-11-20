@@ -3121,6 +3121,7 @@ dependencies = [
  "keyring",
  "olai-stack-state",
  "olai-stack-topology",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

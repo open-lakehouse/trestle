@@ -605,6 +605,7 @@ fn layer_name(layer: &olai_stack_runtime::Layer) -> String {
         Layer::WorkspaceVars => "workspace vars".into(),
         Layer::EnvironmentVars => "environment vars".into(),
         Layer::RevisionVars => "revision vars".into(),
+        Layer::LocalVars => "local vars".into(),
         Layer::Source(name) => format!("source:{name}"),
         Layer::InstanceOverrides => "instance overrides".into(),
     }

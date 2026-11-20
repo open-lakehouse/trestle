@@ -91,8 +91,8 @@ Instance = a revision to run ─── SlotLease (host-wide)
 
 An instance's environment is layered, lowest precedence first: catalog defaults,
 the revision's manifest, the placement (reserved keys nothing overrides), the
-plan's client env, workspace vars, environment vars, revision vars, source
-overlays, then instance overrides. `trestle env show <ws>/<env>@<n> --effective`
+plan's client env, workspace vars, environment vars, revision vars, this
+machine's local vars, source overlays, then instance overrides. `trestle env show <ws>/<env>@<n> --effective`
 prints every variable with the layer it comes from, secrets masked. See
 [`runtime.md`](runtime.md).
 

@@ -23,8 +23,9 @@ stops and watches it. The `trestle` CLI and the desktop app share it.
     reconciles with Docker after a restart.
   - The rendered tree is a cache under the state directory and holds no credential.
 - **`EffectiveEnv`**: an instance's variables from every layer (catalog defaults,
-  revision, placement, client env, workspace/environment/revision vars, source
-  overlays, instance overrides), with provenance and a masked view.
+  revision, placement, client env, workspace/environment/revision vars, this
+  machine's local vars, source overlays, instance overrides), with provenance and a
+  masked view.
 - **`SecretProvider`**: `EnvProvider`, plus `KeychainProvider` behind feature
   `keychain`. A reference to a provider that isn't configured is an error, never a
   fallback.

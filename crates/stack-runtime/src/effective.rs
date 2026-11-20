@@ -28,6 +28,10 @@ pub enum Layer {
     EnvironmentVars,
     /// The revision's vars.
     RevisionVars,
+    /// This machine's own vars for the environment
+    /// ([`VarScope::Local`](olai_stack_state::VarScope::Local)): never shared, so they
+    /// override what the team shares.
+    LocalVars,
     /// A source's overlay, by source name.
     Source(String),
     /// The instance's overrides.
@@ -168,13 +172,13 @@ impl EnvLayers {
     fn ordered(&self) -> Vec<(&Layer, &BTreeMap<String, LayerValue>)> {
         let rank = |layer: &Layer| match layer {
             Layer::Source(name) => (
-                7,
+                8,
                 self.source_order
                     .iter()
                     .position(|s| s == name)
                     .unwrap_or(usize::MAX),
             ),
-            Layer::InstanceOverrides => (8, 0),
+            Layer::InstanceOverrides => (9, 0),
             other => (
                 [
                     Layer::CatalogDefaults,
@@ -184,6 +188,7 @@ impl EnvLayers {
                     Layer::WorkspaceVars,
                     Layer::EnvironmentVars,
                     Layer::RevisionVars,
+                    Layer::LocalVars,
                 ]
                 .iter()
                 .position(|l| l == other)
