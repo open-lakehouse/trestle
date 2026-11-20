@@ -381,6 +381,30 @@ Every read command takes `--json` and prints `{"version": 1, "kind": …, "data"
 …}`: `ws list`, `ws show`, `env show`, `env revisions`, `var list`, `ps` and
 `health`. `env new`, `env render` and `env diagram` keep working on directories.
 
+### Sharing with a team
+
+A team can keep its workspaces and environments (drafts, revisions, vars) in a
+`trestle_state` database on its Neon project, so colleagues see each other's
+edits. Every connection uses the user's own Neon CLI login: project membership is
+the access control, and no credential is ever stored.
+
+```bash
+trestle state init --neon <project> [--branch <b>] [--name team]  # once per team; again to migrate
+trestle state attach --neon <project> --name team                 # on each colleague's machine
+trestle --state team ws list                                       # or TRESTLE_STATE=team
+trestle --state team env create demo/dev --select unity-catalog-oss
+printf %s "$KEY" | trestle --state team var set demo/dev --secret API_KEY  # this machine only
+trestle --state team up demo/dev
+trestle state list | detach team
+```
+
+What a machine runs stays on it: instances, slots, and its own vars
+(`var set <ws>/<env> --local`), which override the environment's and are never
+shared. On a team's state, `--secret` goes there by default, since a colleague's
+keychain doesn't hold this machine's entry. A secret on a team's workspace or
+draft is refused unless `--shared`. Opening a team's state never migrates it: an
+older schema asks for `trestle state init`, a newer one for an upgrade.
+
 ## Editor
 
 The environment editor becomes a workspace editor, laid out like an IDE

@@ -4,7 +4,7 @@
 #[cfg(feature = "test-engine")]
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use olai_stack_runtime::neon::{NeonBranchSource, NeonCli, NeonError};
@@ -35,6 +35,30 @@ const FAKE_ENGINE_VAR: &str = "TRESTLE_FAKE_ENGINE";
 #[cfg(feature = "test-engine")]
 const FAKE_KEYCHAIN_VAR: &str = "TRESTLE_FAKE_KEYCHAIN";
 
+/// The attached shared state `--state` (or `TRESTLE_STATE`) names, set once per run.
+static SELECTED_STATE: OnceLock<Option<String>> = OnceLock::new();
+
+/// Have the store-backed commands work on the shared state attached as `name` rather than
+/// this machine's own.
+pub(super) fn select_state(name: Option<String>) {
+    let _ = SELECTED_STATE.set(name.filter(|n| !n.is_empty()));
+}
+
+/// The trestle home, created if needed.
+fn home() -> Result<PathBuf> {
+    let home = trestle_home().ok_or_else(|| {
+        Error::other("no data directory for the trestle state")
+            .with_hint(format!("set {TRESTLE_HOME_VAR}"))
+    })?;
+    std::fs::create_dir_all(&home).map_err(|e| Error::io_at(&home, e))?;
+    Ok(home)
+}
+
+/// This machine's own store, whatever `--state` says.
+pub(super) fn local_store() -> Result<Store> {
+    Ok(Store::open(&home()?.join(DB_FILE))?)
+}
+
 /// The state the store-backed commands work on.
 pub(super) struct Ctx {
     pub store: Arc<Store>,
@@ -45,13 +69,26 @@ pub(super) struct Ctx {
 
 impl Ctx {
     /// Open the store in the trestle home, with the Docker engine and the OS keychain.
+    ///
+    /// With `--state <name>`, the store is the team's shared state attached as `name`, reached
+    /// with the user's Neon CLI login; instances and this machine's own vars stay in the
+    /// local file either way.
     pub fn open() -> Result<Self> {
-        let home = trestle_home().ok_or_else(|| {
-            Error::other("no data directory for the trestle state")
-                .with_hint(format!("set {TRESTLE_HOME_VAR}"))
-        })?;
-        std::fs::create_dir_all(&home).map_err(|e| Error::io_at(&home, e))?;
-        let store = Arc::new(Store::open(&home.join(DB_FILE))?);
+        let home = home()?;
+        let path = home.join(DB_FILE);
+        let store = match SELECTED_STATE.get().cloned().flatten() {
+            None => Store::open(&path)?,
+            Some(name) => {
+                let attachment = super::team::find(&Store::open(&path)?, &name)?;
+                let neon = NeonCli::new().map_err(neon_err)?;
+                block_on(async {
+                    olai_stack_runtime::neon::open_attached(&neon, &path, &attachment.id)
+                        .await
+                        .map_err(super::team::state_err)
+                })?
+            }
+        };
+        let store = Arc::new(store);
         Ok(Ctx {
             store,
             home,
@@ -84,6 +121,11 @@ impl Ctx {
         } else {
             instances
         }
+    }
+
+    /// Whether the store is a team's shared state rather than this machine's own.
+    pub fn is_shared(&self) -> bool {
+        self.store.attachment_id().is_some()
     }
 
     /// The Neon CLI, or an error saying how to get it.
@@ -326,12 +368,15 @@ pub(super) fn workspace_keychain_refs(store: &Store, ws: &Workspace) -> Result<V
     Ok(refs)
 }
 
-/// Every keychain reference the environment (its vars, draft and revisions) holds.
+/// Every keychain reference the environment (its vars, this machine's own, its draft and
+/// revisions) holds.
 pub(super) fn environment_keychain_refs(
     store: &Store,
     env: &Environment,
 ) -> Result<Vec<SecretRef>> {
+    let local = store.local_vars(&env.id)?;
     let mut refs: Vec<SecretRef> = keychain_refs(&env.vars)
+        .chain(keychain_refs(&local))
         .chain(keychain_refs(&env.draft.vars))
         .cloned()
         .collect();

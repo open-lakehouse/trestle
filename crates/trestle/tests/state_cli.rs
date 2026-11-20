@@ -835,3 +835,91 @@ fn a_missing_required_secret_says_how_to_set_it() {
     );
     assert_eq!(home.projects().len(), 1);
 }
+
+#[test]
+fn local_vars_stay_on_this_machine_and_override_the_environments() {
+    let home = Home::new();
+    demo(&home);
+    home.ok(&["var", "set", "demo/dev", "LOG=info"]);
+    let out = home.ok(&["var", "set", "demo/dev", "--local", "LOG=debug"]);
+    assert!(out.contains("this machine only"), "{out}");
+    home.ok_with_stdin(
+        &["var", "set", "demo/dev", "--local", "--secret", "API_KEY"],
+        "k",
+    );
+    // Its keys are apart from the environment's own.
+    let key = home.keychain_key(&format!("^{ID}@local/API_KEY$"));
+
+    let rows = home.json(&["var", "list", "demo/dev", "--json"], "vars");
+    let scopes: Vec<(&str, &str)> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["name"].as_str().unwrap(), r["scope"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            ("LOG", "environment"),
+            ("API_KEY", "local"),
+            ("LOG", "local")
+        ]
+    );
+    // This machine's value wins over the environment's.
+    home.ok(&["up", "demo/dev"]);
+    let effective = home.ok(&["env", "show", "demo/dev@1", "--effective"]);
+    let log = effective
+        .lines()
+        .find(|l| l.contains("LOG"))
+        .unwrap_or_default();
+    assert!(
+        log.contains("debug") && log.contains("local vars"),
+        "{effective}"
+    );
+
+    // Not on a workspace or a draft, nor with `--shared`.
+    assert!(
+        home.fails(&["var", "set", "demo", "--local", "X=1"])
+            .contains("environment")
+    );
+    home.fails(&["var", "set", "demo/dev", "--local", "--draft", "X=1"]);
+
+    // Unset, and the keychain entry goes with it; on the local store, `--shared` changes
+    // nothing.
+    home.ok(&["var", "unset", "demo/dev", "--local", "API_KEY"]);
+    assert!(!home.keychain().contains_key(&key));
+    home.ok_with_stdin(
+        &["var", "set", "demo/dev", "--secret", "--shared", "TOKEN"],
+        "t",
+    );
+    home.keychain_key(&format!("^{ID}/TOKEN$"));
+}
+
+#[test]
+fn shared_state_commands_say_what_is_attached() {
+    let home = Home::new();
+    assert!(
+        home.ok(&["state", "list"])
+            .contains("no shared state attached")
+    );
+    assert_eq!(
+        home.json(&["state", "list", "--json"], "states"),
+        serde_json::json!([])
+    );
+    let err = home.fails(&["--state", "team", "ws", "list"]);
+    assert!(
+        err.contains("no shared state `team` is attached") && err.contains("state attach"),
+        "{err}"
+    );
+    // TRESTLE_STATE says the same.
+    let out = home
+        .cmd(&["ws", "list"])
+        .env("TRESTLE_STATE", "team")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        home.fails(&["state", "detach", "team"])
+            .contains("no shared state")
+    );
+}

@@ -12,6 +12,7 @@ mod output;
 pub mod run;
 mod state;
 pub mod target;
+pub mod team;
 pub mod var;
 pub mod workspace;
 pub mod ws;
@@ -42,6 +43,11 @@ static VERSION: LazyLock<String> = LazyLock::new(|| {
     about = "Proto-driven codegen and project scaffolding for open lakehouse architectures"
 )]
 pub struct Cli {
+    /// Work on the team's shared state attached here as NAME (see `trestle state`) rather
+    /// than this machine's own. Instances and `--local` vars stay on this machine.
+    #[arg(long, global = true, env = "TRESTLE_STATE", value_name = "NAME")]
+    pub state: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -67,6 +73,10 @@ pub enum Commands {
     /// Workspaces in the trestle state: sets of environments sharing a host.
     #[command(subcommand)]
     Ws(ws::WsCommand),
+    /// A team's shared workspaces and environments on its Neon project: set up, attach,
+    /// detach, list.
+    #[command(subcommand)]
+    State(team::StateCommand),
     /// Variables of a workspace, an environment or a draft; `--secret` ones live in the OS
     /// keychain.
     #[command(subcommand)]
@@ -96,6 +106,7 @@ pub enum Commands {
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    state::select_state(cli.state);
     match cli.command {
         Commands::New(args) => new::run(*args),
         Commands::Init(args) | Commands::Config(args) => config::run(*args),
@@ -103,6 +114,7 @@ pub fn run() -> Result<()> {
         Commands::EnrichOpenapi(args) => enrich_openapi::run(args),
         Commands::Env(cmd) => env::run(cmd),
         Commands::Ws(cmd) => ws::run(cmd),
+        Commands::State(cmd) => team::run(cmd),
         Commands::Var(cmd) => var::run(cmd),
         Commands::Up(args) => run::run_up(args),
         Commands::Down(args) => run::run_down(args),
