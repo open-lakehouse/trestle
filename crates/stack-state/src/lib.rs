@@ -1,7 +1,8 @@
 //! The shared trestle state store.
 //!
 //! One SQLite database under the [trestle home](trestle_home) (`$TRESTLE_HOME`, else the
-//! platform data directory), shared by the `trestle` CLI and the desktop app. It holds:
+//! platform data directory), shared by the `trestle` CLI and the desktop app, and optionally
+//! team databases attached to it (see [Sharing with a team](#sharing-with-a-team)). It holds:
 //!
 //! - [`Workspace`]s: sets of environments sharing a host, with their [`VarSet`]s.
 //! - [`Environment`]s: an editable [`Draft`] (the placement-free `env.toml`, the
@@ -25,6 +26,21 @@
 //! Several processes use the store at once: writes are serialized (a writer waits for
 //! another's), and a [`Watcher`] notices commits made elsewhere. A store with a newer schema
 //! than this crate knows is refused ([`Error::UnsupportedVersion`]).
+//!
+//! # Sharing with a team
+//!
+//! With the `postgres` feature, a team keeps its workspaces, environments, drafts and
+//! revisions in a Postgres database (on a Neon project, say), and each machine attaches it
+//! ([`Store::attach`], [`Store::open_attached`]). What each machine runs stays in its own
+//! `state.db`: instances, slot leases, and its own vars ([`VarScope::Local`]), such as
+//! the minted keys sealing its instances' data and the user's own API keys. The attachment
+//! records where the database is ([`RemoteLocation`]), never a credential: each user
+//! connects with their own login.
+//!
+//! Colleagues editing one draft don't lose each other's edits: [`Store::update_draft_if`]
+//! refuses with [`Error::Conflict`] when the draft changed since it was read, and a
+//! [`Watcher`] on an attached store notices their commits. Opening an attached store never
+//! migrates its database ([`Store::init_remote`] does).
 //!
 //! `trestle-workspace.toml` and environment directories stay as an exchange format:
 //! [`Store::import_workspace`] drops placement (the store leases slots itself), and
@@ -50,15 +66,21 @@
 
 mod error;
 mod model;
+#[cfg(feature = "postgres")]
+mod pg;
+mod sql;
 mod store;
 mod transfer;
 mod watch;
 
 pub use error::{Error, Result};
 pub use model::{
-    Desired, Draft, Environment, EnvironmentId, Instance, InstanceId, Revision, SecretRef,
-    SlotLease, SourceBinding, VarScope, VarSet, VarValue, Workspace, WorkspaceId,
+    Attachment, AttachmentId, Desired, Draft, Environment, EnvironmentId, Instance, InstanceId,
+    RemoteLocation, Revision, SecretRef, SlotLease, SourceBinding, VarScope, VarSet, VarValue,
+    Workspace, WorkspaceId,
 };
+#[cfg(feature = "postgres")]
+pub use pg::REMOTE_SCHEMA_VERSION;
 pub use store::{DB_FILE, SCHEMA_VERSION, Store, TRESTLE_HOME_VAR, trestle_home};
 pub use transfer::{ENV_FILE, read_env_dir};
 pub use watch::Watcher;

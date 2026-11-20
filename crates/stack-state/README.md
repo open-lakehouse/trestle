@@ -18,6 +18,22 @@ Several processes can use the store at once. Writes are serialized, and a `Watch
 notices commits made elsewhere. `trestle-workspace.toml` and environment directories
 can be imported, and exported again with the instances' slots.
 
+## Sharing with a team
+
+With the `postgres` feature, a team can keep its workspaces, environments, drafts and
+revisions in one Postgres database, for example on a Neon project. Each machine attaches
+it (`Store::attach`, `Store::open_attached`). The attachment records where the database
+is, never a credential: everyone connects with their own login.
+
+What a machine runs stays in its own `state.db`: instances, slot leases, and its own vars
+(`VarScope::Local`), such as the minted keys that seal its instances' data and the user's
+own API keys.
+
+`Store::update_draft_if` refuses with `Error::Conflict` when a colleague edited the draft
+since it was read, and a `Watcher` on an attached store notices their commits. Opening an
+attached store only checks its schema version; `Store::init_remote` creates or migrates
+it.
+
 ```rust,no_run
 use olai_stack_state::{Draft, Store};
 use olai_stack_topology::{EnvManifest, PlanCtx, Selection};
