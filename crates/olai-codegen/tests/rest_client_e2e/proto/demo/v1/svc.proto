@@ -174,6 +174,26 @@ message SearchWidgetsRequest {
   map<string, google.protobuf.ListValue> filters = 3 [(google.api.field_behavior) = REQUIRED];
 }
 
+message PointWidgetRequest {
+  // The name of the widget.
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  // What the widget points at.
+  oneof target {
+    // Another widget, by name. A variant named after a Rust keyword.
+    string ref = 2;
+    // A sequence number.
+    int64 seq = 3;
+    // A label. A message variant, which buffa boxes.
+    Label label = 4;
+  }
+}
+
+// The request body the server received.
+message PointWidgetResponse {
+  // The JSON body.
+  string body = 1;
+}
+
 message TagWidgetRequest {
   // The name of the widget.
   string name = 1 [(google.api.field_behavior) = REQUIRED];
@@ -271,6 +291,14 @@ service ProbeService {
   rpc TagWidget(TagWidgetRequest) returns (Empty) {
     option (google.api.http) = {
       post: "/api/v1/widgets/{name}/tags"
+      body: "*"
+    };
+  }
+
+  // Point a widget at a target: a request oneof, one keyword argument per variant.
+  rpc PointWidget(PointWidgetRequest) returns (PointWidgetResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/widgets/{name}/pointer"
       body: "*"
     };
   }

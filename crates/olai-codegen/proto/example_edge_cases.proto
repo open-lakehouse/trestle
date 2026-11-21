@@ -156,6 +156,14 @@ message PostEventRequest {
   string session_id = 1;
   string type = 2;
   google.protobuf.Struct data = 3;
+  // A oneof on a request (#395): Python takes one keyword argument per variant, and a message
+  // variant is boxed by buffa.
+  oneof payload {
+    // A variant named after a Rust keyword.
+    string ref = 4;
+    int64 seq = 5;
+    Route route = 6;
+  }
 }
 
 message GetScopeRequest {
@@ -228,4 +236,22 @@ message ListTypesResponse {
 
 message DeleteTypeRequest {
   string full_name = 1;
+}
+
+// A request oneof whose variant is a Rust keyword: the client builder's setter takes `r#ref`.
+service PointerService {
+  rpc SetPointer(SetPointerRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/pointers/{name}"
+      body: "*"
+    };
+  }
+}
+
+message SetPointerRequest {
+  string name = 1;
+  oneof target {
+    string ref = 2;
+    int64 seq = 3;
+  }
 }

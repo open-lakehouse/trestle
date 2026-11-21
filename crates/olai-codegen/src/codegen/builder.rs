@@ -459,10 +459,19 @@ fn generate_oneof_variant_methods(
 
             let doc_attr = field_doc_attr(variant.documentation.as_deref(), &variant.field_name);
 
+            // buffa boxes every message variant; prost stores it inline (as the model
+            // constructors' `write_variant` does).
+            let payload = match (&variant.field_type.base_type, method.config.runtime) {
+                (BaseType::Message(_), Runtime::Buffa) => {
+                    quote! { ::std::boxed::Box::new(#param_ident) }
+                }
+                _ => quote! { #param_ident },
+            };
+
             Ok(quote! {
                 #doc_attr
                 pub fn #method_name(mut self, #param_ident: #param_type) -> Self {
-                    self.request.#oneof_field_ident = Some(#enum_type_tokens::#variant_name(#param_ident));
+                    self.request.#oneof_field_ident = Some(#enum_type_tokens::#variant_name(#payload));
                     self
                 }
             })

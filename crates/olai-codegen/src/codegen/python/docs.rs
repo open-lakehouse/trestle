@@ -133,6 +133,18 @@ fn collect_parameter_documentation(method: &MethodHandler<'_>) -> Vec<(String, S
     }
 
     for param in method.optional_parameters() {
+        // A oneof is one keyword argument per variant.
+        if let Some(variants) = param.oneof_variants() {
+            for variant in variants {
+                if let Some(doc) = variant.documentation.as_deref() {
+                    let cleaned_doc = clean_and_format_description(doc);
+                    if !cleaned_doc.is_empty() {
+                        param_docs.push((variant.field_name.clone(), cleaned_doc));
+                    }
+                }
+            }
+            continue;
+        }
         if !(is_list_method(method) && param.name() == "page_token")
             && let Some(doc) = param.documentation()
         {

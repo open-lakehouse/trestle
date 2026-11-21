@@ -1307,7 +1307,7 @@ fn keyword_named_params_generate_raw_identifiers() {
         // several destructure a tuple. Both read the body field as `body.r#type`.
         for binding in [
             "let r#type = body.r#type;",
-            "let (r#type, data) = (body.r#type, body.data);",
+            "let (r#type, data, payload) = (body.r#type, body.data, body.payload);",
             // A `get` with `body: "*"` reads its body too.
             "impl<S: Send + Sync> axum::extract::FromRequest<S> for FindEventsRequest",
             "let r#match = body.r#match;",
@@ -1332,6 +1332,32 @@ fn keyword_named_params_generate_raw_identifiers() {
         assert!(
             !python.contains("r#in") && !python.contains(" from:"),
             "{runtime:?}: Python binding exposes a keyword arg:\n{python}"
+        );
+        // A request oneof (#395) is one optional keyword argument per variant, at most one set,
+        // each handed to the client builder's variant setter.
+        for part in [
+            "r#ref: Option<String>,",
+            "seq: Option<i64>,",
+            "route: ::core::option::Option<PyRoute>,",
+            "\"at most one of `ref`, `seq`, `route` may be set\"",
+            "::core::option::Option::Some(value) => request.with_route(value.into()),",
+        ] {
+            assert!(
+                python.contains(part),
+                "{runtime:?}: Python binding has `{part}`:\n{python}"
+            );
+        }
+        // buffa boxes a message variant; prost stores it inline.
+        let client_src = read_all(&tmp.path().join("client"));
+        let route_variant = match runtime {
+            olai_codegen::Runtime::Buffa => {
+                "post_event_request::Payload::Route(::std::boxed::Box::new(route))"
+            }
+            olai_codegen::Runtime::Prost => "post_event_request::Payload::Route(route)",
+        };
+        assert!(
+            client_src.contains(route_variant),
+            "{runtime:?}: oneof setter stores `{route_variant}`:\n{client_src}"
         );
         let models = read_all(&tmp.path().join("models"));
         assert!(
@@ -1421,19 +1447,6 @@ fn client_only_config_with_keyword_body_fields_parses() {
     }
 }
 
-/// `proto/example_keyword_oneof.bin`, compiled from `proto/example_keyword_oneof.proto`.
-/// Regenerate it from the crate root with:
-///
-/// ```sh
-/// protoc -I proto -I tests/rest_client_e2e/proto --include_imports \
-///   -o proto/example_keyword_oneof.bin proto/example_keyword_oneof.proto
-/// ```
-fn keyword_oneof_metadata() -> CodeGenMetadata {
-    let bytes = include_bytes!("../proto/example_keyword_oneof.bin");
-    let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
-    parse_file_descriptor_set(&fds).expect("parse succeeds")
-}
-
 /// A request oneof variant named after a keyword gets a builder setter with a raw-ident parameter.
 #[test]
 fn keyword_named_oneof_variant_setter_uses_raw_identifier() {
@@ -1441,7 +1454,7 @@ fn keyword_named_oneof_variant_setter_uses_raw_identifier() {
         let tmp = TempDir::new().unwrap();
         let mut config = full_client_config(tmp.path());
         config.runtime = runtime;
-        generate_code(&keyword_oneof_metadata(), &config)
+        generate_code(&edge_case_metadata(), &config)
             .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
         for path in walk(tmp.path())
             .into_iter()
