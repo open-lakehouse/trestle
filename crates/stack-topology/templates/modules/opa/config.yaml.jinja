@@ -11,3 +11,11 @@ plugins:
 # One JSON line per decision on the container's stdout (`docker compose logs opa`).
 decision_logs:
   console: true
+{%- if integrations.observability %}
+# A span per decision, exported to the tracing backend (the observability integration).
+distributed_tracing:
+  type: grpc
+  address: {{ integrations.observability.endpoint | replace("http://", "") }}
+  service_name: opa
+  sample_percentage: 100
+{%- endif %}

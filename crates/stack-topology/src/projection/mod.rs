@@ -15,10 +15,10 @@ use std::collections::BTreeMap;
 
 use crate::{
     Catalog, ClusterConfig, DeployPhase, DeployStep, EnvManifest, GatewayConfig, GatewayRoute,
-    HelperService, HostedKind, HostedResource, Knob, LOCAL_CREDENTIALS, ListenerConfig,
-    LocalCredentialError, LocalCredentials, ManifestError, Plan, PlanCtx, PlanError, RenderError,
-    Role, SECRETS_ENV_PATH, Selection, ServiceSpec, TargetId, baseline_catalog,
-    baseline_catalog_with, baseline_selection, builtin_targets,
+    HelperService, HostedKind, HostedResource, Integration, IntegrationSpec, Knob,
+    LOCAL_CREDENTIALS, ListenerConfig, LocalCredentialError, LocalCredentials, ManifestError, Plan,
+    PlanCtx, PlanError, ProtocolOffer, RenderError, Role, SECRETS_ENV_PATH, Selection, ServiceSpec,
+    TargetId, baseline_catalog, baseline_catalog_with, baseline_selection, builtin_targets,
 };
 use serde::Serialize;
 
@@ -114,6 +114,12 @@ pub struct ModuleDto {
     /// each, else one the planner pulls in.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub requires_apis: Vec<String>,
+    /// For a platform-feature provider: the protocols it serves its integrators.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<ProtocolOffer>,
+    /// The platform features it can integrate with, and over which protocols.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub integrations: Vec<IntegrationSpec>,
 }
 
 /// A hosted provider module's kind and default configuration (see [`ModuleDto::hosted`]).
@@ -146,6 +152,9 @@ pub struct PlanResultDto {
     /// Every host port the environment binds (see [`Plan::host_ports`]), sorted by port, for a
     /// consumer checking that environments sharing a host don't collide.
     pub host_ports: Vec<HostPortDto>,
+    /// Every module's integration with each selected platform feature, on or off and why (see
+    /// [`Plan::integrations`]).
+    pub integrations: Vec<Integration>,
 }
 
 /// One host port a plan binds, with what binds it (see [`Plan::host_ports`]).
@@ -227,6 +236,16 @@ pub struct GatewayDto {
     pub tls: Option<TlsDto>,
     /// The authorization policy check, present only when a policy engine is selected.
     pub policy: Option<PolicyDto>,
+    /// The gateway's trace export, present only when its observability integration is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracing: Option<TracingDto>,
+}
+
+/// The gateway's trace export, projected from [`TracingConfig`](crate::TracingConfig).
+#[derive(Debug, Clone, Serialize)]
+pub struct TracingDto {
+    /// The tracing backend's OTLP/gRPC cluster.
+    pub cluster: String,
 }
 
 /// The gateway's forward-auth wiring, projected from [`AuthConfig`](crate::AuthConfig).
@@ -344,6 +363,8 @@ pub fn catalog_dto_of(catalog: &Catalog) -> CatalogDto {
             function: m.provides().function.clone(),
             api: m.provides().api.clone(),
             requires_apis: m.provides().requires_apis.clone(),
+            protocols: m.provides().protocols.clone(),
+            integrations: m.provides().integrations.clone(),
         })
         .collect();
     CatalogDto {
@@ -415,6 +436,9 @@ fn gateway_dto(gateway: &GatewayConfig) -> GatewayDto {
         }),
         policy: gateway.policy.as_ref().map(|p| PolicyDto {
             cluster: p.cluster.clone(),
+        }),
+        tracing: gateway.tracing.as_ref().map(|t| TracingDto {
+            cluster: t.cluster.clone(),
         }),
     }
 }
@@ -604,6 +628,7 @@ fn project_result(plan: &Plan) -> Result<PlanResultDto, PlanResultError> {
             .into_iter()
             .map(|(port, owner)| HostPortDto { port, owner })
             .collect(),
+        integrations: plan.integrations.clone(),
     })
 }
 
@@ -750,16 +775,10 @@ mod tests {
 
     /// The selection the `node/stack-wasm` fixtures are captured from.
     fn fixture_selection() -> Selection {
-        Selection {
-            gateway: crate::GatewaySettings::POLICY,
-            ..Selection::modules([
-                "postgres",
-                "rustfs",
-                "unity-catalog-oss",
-                "mlflow",
-                "jaeger",
-            ])
-        }
+        Selection::modules(["postgres", "rustfs", "unity-catalog-oss", "mlflow"])
+            .with_feature(crate::PlatformFeature::Identity)
+            .with_feature(crate::PlatformFeature::Policy)
+            .with_feature(crate::PlatformFeature::Observability)
     }
 
     #[test]

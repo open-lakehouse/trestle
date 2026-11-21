@@ -73,6 +73,10 @@ pub struct PlanExport {
     pub gateway: GatewayDto,
     /// The variables a client loads to reach the stack, per vantage.
     pub client: ClientEnvDto,
+    /// Every module's integration with each selected platform feature, on or off and why.
+    /// Absent when the selection turns no feature on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub integrations: Vec<crate::Integration>,
     /// The secret variables the stack reads at launch, by name only (see
     /// [`Plan::declared_secrets`]). Absent when it reads none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -256,6 +260,7 @@ pub fn plan_export(
             host: plan.client_env_host.clone(),
             container: plan.client_env_container.clone(),
         },
+        integrations: plan.integrations.clone(),
         secrets: plan.declared_secrets(),
         files: materialized
             .files

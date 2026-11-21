@@ -37,6 +37,19 @@ static_resources:
                 codec_type: AUTO
                 stat_prefix: ingress_http
                 use_remote_address: true
+{%- if tracing %}
+                # A span per request, exported over OTLP/gRPC to the tracing backend (the
+                # gateway's observability integration).
+                tracing:
+                  provider:
+                    name: envoy.tracers.opentelemetry
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                      grpc_service:
+                        envoy_grpc: { cluster_name: {{ tracing.cluster }} }
+                        timeout: 1s
+                      service_name: {{ tracing.service_name }}
+{%- endif %}
 {%- if loop.first %}
                 # One line per request, `<host> <method> <path> -> <cluster> <status>`: the
                 # quickest way to see where a request went. Anchored here (Envoy rejects

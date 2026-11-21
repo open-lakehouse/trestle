@@ -202,6 +202,19 @@ pub struct Provides {
     /// [`requires`](Module::requires) would. The environment graph draws each as a uses edge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_apis: Vec<String>,
+    /// For a [platform-feature](crate::PlatformFeature) provider (the `auth`, `policy` or
+    /// `tracing` role): the protocols it serves its integrators, and on which endpoint. A module
+    /// integrates with it over the first protocol both speak (see [`integrations`](Self::integrations)).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<crate::ProtocolOffer>,
+    /// The [platform features](crate::PlatformFeature) this module can integrate with, and
+    /// over which protocols. Each is on by default whenever the selection turns its feature on
+    /// and the provider serves one of the protocols; the selection may opt the module out (see
+    /// [`Selection::integrations`](crate::Selection::integrations)). The module's templates read
+    /// the active ones as `integrations.<feature>` (see [`RenderCtx::integrations`]).
+    /// [`Module::integrations_in`] narrows the list by knobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub integrations: Vec<crate::IntegrationSpec>,
     /// The helper containers this module's fragment may run beside its services (an init job,
     /// a sidecar). They get no routes and fold into the module's node, so only this list lets
     /// an export name every container the stack runs. Whether one runs can depend on knobs or
@@ -823,6 +836,11 @@ pub struct RenderCtx<'a> {
     /// `envoy.yaml` names them, so the fragment refuses to start until a render resolves them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved_upstreams: Vec<String>,
+    /// The module's active [platform-feature](crate::PlatformFeature) integrations, by
+    /// feature: a fragment exports traces with
+    /// `{% if integrations.observability %}{{ integrations.observability.endpoint }}{% endif %}`.
+    #[serde(default)]
+    pub integrations: BTreeMap<crate::PlatformFeature, crate::ActiveIntegration>,
     /// The stack-wide facts (see [`StackFacts`]), as the `stack` global: a fragment branches on
     /// an optional partner with `{% if "unity-catalog-oss" in stack.modules %}`.
     pub stack: StackFacts,
@@ -879,6 +897,7 @@ impl<'a> RenderCtx<'a> {
             tls: None,
             mesh: None,
             unresolved_upstreams: Vec::new(),
+            integrations: BTreeMap::new(),
             stack: StackFacts::default(),
         }
     }
@@ -929,6 +948,9 @@ pub struct StackFacts {
     /// The module serving each API in the stack, by API (see [`Provides::api`]). A template
     /// reads it as `stack.apis["unity-catalog-oss"]`.
     pub apis: BTreeMap<String, ModuleId>,
+    /// The provider of each [platform feature](crate::PlatformFeature) the selection turns on.
+    /// A template reads it as `stack.platform.observability`.
+    pub platform: BTreeMap<crate::PlatformFeature, ModuleId>,
 }
 
 /// A module hosted as a function (see [`StackFacts::functions`]).
@@ -1180,6 +1202,12 @@ pub trait Module: Send + Sync {
         let _ = (knobs, stack);
         Vec::new()
     }
+    /// The [platform features](crate::PlatformFeature) this module can integrate with under
+    /// the resolved `knobs`. Defaults to [`Provides::integrations`].
+    fn integrations_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [crate::IntegrationSpec]> {
+        let _ = knobs;
+        Cow::Borrowed(&self.provides().integrations)
+    }
     /// The helper containers this module renders with the resolved `knobs`. Defaults to
     /// [`Provides::helpers`]; a module overrides it when a knob turns a helper off.
     fn helpers_in(&self, knobs: &ResolvedKnobs) -> Cow<'_, [HelperService]> {
@@ -1387,6 +1415,7 @@ mod tests {
                 tls: None,
                 mesh: None,
                 unresolved_upstreams: Vec::new(),
+                integrations: BTreeMap::new(),
                 stack: StackFacts::default(),
             })
             .expect("template renders");
@@ -1436,6 +1465,7 @@ mod tests {
             tls: None,
             mesh: None,
             unresolved_upstreams: Vec::new(),
+            integrations: BTreeMap::new(),
             stack: StackFacts::default(),
         };
         let out = spec.render(&ctx).expect("template renders");

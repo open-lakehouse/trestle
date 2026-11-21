@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:a1b933fd4a884b9134e03cbc828faab31624ced31a40a7d91cb6544787ef7157"
+    "digest": "sha256:fb97bd00678694f067c0f246ce4ec45d946e4dd5b14b4c0c1e7eacd157f237cb"
   },
   "modules": [
     {
@@ -70,7 +70,30 @@
           "kind": "init"
         }
       ],
-      "hosted": null
+      "hosted": null,
+      "integrations": [
+        {
+          "feature": "identity",
+          "protocols": [
+            "forward-auth"
+          ]
+        },
+        {
+          "feature": "policy",
+          "protocols": [
+            "envoy-ext-authz-grpc"
+          ],
+          "requires": [
+            "identity"
+          ]
+        },
+        {
+          "feature": "observability",
+          "protocols": [
+            "otlp-grpc"
+          ]
+        }
+      ]
     },
     {
       "id": "authelia",
@@ -100,7 +123,13 @@
         }
       ],
       "helpers": [],
-      "hosted": null
+      "hosted": null,
+      "protocols": [
+        {
+          "protocol": "forward-auth",
+          "endpoint": "http"
+        }
+      ]
     },
     {
       "id": "postgres",
@@ -700,7 +729,16 @@
       ],
       "hosted": null,
       "function": "unitycatalog",
-      "api": "unity-catalog"
+      "api": "unity-catalog",
+      "integrations": [
+        {
+          "feature": "policy",
+          "protocols": [
+            "olai-authorize"
+          ],
+          "note": "its authorizer also needs callers to present olai-auth tokens, which the gateway's sign-in doesn't issue"
+        }
+      ]
     },
     {
       "id": "jaeger",
@@ -709,9 +747,7 @@
       "summary": "All-in-one OTLP tracing backend with the Jaeger UI.",
       "category": "observability",
       "provider_of": "tracing",
-      "requires": [
-        "envoy"
-      ],
+      "requires": [],
       "conflicts_with": [],
       "resource_kinds": [],
       "resource_nouns": [],
@@ -732,7 +768,18 @@
         }
       ],
       "helpers": [],
-      "hosted": null
+      "hosted": null,
+      "protocols": [
+        {
+          "protocol": "otlp-grpc",
+          "endpoint": "otlp_grpc"
+        },
+        {
+          "protocol": "otlp-http",
+          "endpoint": "otlp_http",
+          "path": "/v1/traces"
+        }
+      ]
     },
     {
       "id": "headwaters",
@@ -876,7 +923,13 @@
         }
       ],
       "helpers": [],
-      "hosted": null
+      "hosted": null,
+      "integrations": [
+        {
+          "feature": "identity",
+          "via_gateway": true
+        }
+      ]
     },
     {
       "id": "uc-mcp",
@@ -1072,7 +1125,13 @@
         }
       ],
       "helpers": [],
-      "hosted": null
+      "hosted": null,
+      "integrations": [
+        {
+          "feature": "identity",
+          "via_gateway": true
+        }
+      ]
     },
     {
       "id": "opa",
@@ -1129,7 +1188,21 @@
         }
       ],
       "helpers": [],
-      "hosted": null
+      "hosted": null,
+      "protocols": [
+        {
+          "protocol": "envoy-ext-authz-grpc",
+          "endpoint": "grpc"
+        }
+      ],
+      "integrations": [
+        {
+          "feature": "observability",
+          "protocols": [
+            "otlp-grpc"
+          ]
+        }
+      ]
     }
   ],
   "default_selection": {
@@ -1140,11 +1213,7 @@
     ],
     "capabilities": [],
     "knob_overrides": {},
-    "extra_resources": [],
-    "gateway": {
-      "auth": false,
-      "policy": false
-    }
+    "extra_resources": []
   },
   "targets": [
     {

@@ -14,7 +14,7 @@ use super::demands::{bind_connection, provider_ready_gate};
 use super::route::Routed;
 use super::routing::Listener;
 use super::settle::Settled;
-use super::{GatewayConfig, PlanCtx, PlanError};
+use super::{GatewayConfig, GatewayWiring, PlanCtx, PlanError};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::{
     CLIENT_ENV_KEYS_VAR, DATA_ROOT_VAR, GATEWAY_AUTH_VAR, GATEWAY_HOST_VAR,
@@ -27,6 +27,7 @@ use crate::catalog::module::{
 use crate::model::connection::Connection;
 use crate::model::endpoint::RouteIntent;
 use crate::model::placement::Vantage;
+use crate::model::platform::{ActiveIntegration, PlatformFeature};
 use crate::model::role::Role;
 use crate::render::InjectedEnv;
 
@@ -60,6 +61,10 @@ pub struct ModuleBinding {
     /// every one is resolved.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unresolved_upstreams: Vec<String>,
+    /// The module's active platform-feature integrations, by feature (the `integrations`
+    /// render global).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub integrations: BTreeMap<PlatformFeature, ActiveIntegration>,
     /// The stack-wide facts, identical for every module (the `stack` render global).
     pub stack: StackFacts,
 }
@@ -79,6 +84,7 @@ impl ModuleBinding {
             tls: self.tls.clone(),
             mesh: self.mesh.clone(),
             unresolved_upstreams: self.unresolved_upstreams.clone(),
+            integrations: self.integrations.clone(),
             stack: self.stack.clone(),
         }
     }
@@ -100,8 +106,7 @@ pub(super) fn bind(
     routed: &Routed,
     catalog: &Catalog,
     ctx: &PlanCtx,
-    auth_provider: Option<&ModuleId>,
-    policy_provider: Option<&ModuleId>,
+    wired: &GatewayWiring,
 ) -> Result<Bound, PlanError> {
     let Settled {
         graph,
@@ -111,7 +116,10 @@ pub(super) fn bind(
         services: services_of,
         provisioned,
         hosted,
+        integrations,
     } = settled;
+    let (auth_provider, policy_provider) = (wired.auth.as_ref(), wired.policy.as_ref());
+    let mut integrations_of = super::integrations::active_by_module(integrations);
     let gateway = &routed.gateway;
 
     // What a host-side browser reaches the shared listener at (see `GATEWAY_URL_VAR`), and
@@ -339,6 +347,7 @@ pub(super) fn bind(
                 tls,
                 mesh,
                 unresolved_upstreams,
+                integrations: integrations_of.remove(module.id()).unwrap_or_default(),
                 stack: stack_facts.clone(),
             },
         );

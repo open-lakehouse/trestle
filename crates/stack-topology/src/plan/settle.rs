@@ -14,6 +14,7 @@ use super::demands::{
 use super::hosted::{
     HostedConnection, HostedProvider, HostedProviders, ResolveHostedError, resolve_hosted,
 };
+use super::integrations::{Integration, resolve_endpoints, resolve_integrations};
 use super::knobs::resolve_module_knobs;
 use super::resolve::ResolvedGraph;
 use super::{LocalSecrets, PlanCtx, PlanError, Selection, names};
@@ -21,6 +22,7 @@ use crate::catalog::Catalog;
 use crate::catalog::module::{HostedFunction, ModuleId, ResolvedKnobs, StackFacts};
 use crate::model::endpoint::RouteIntent;
 use crate::model::placement::Placement;
+use crate::model::platform::PlatformFeature;
 use crate::model::role::{Role, ServiceSpec};
 
 /// The settled environment: the graph plus every fact resolved over it.
@@ -39,15 +41,33 @@ pub(super) struct Settled {
     pub provisioned: BTreeMap<ModuleId, Vec<String>>,
     /// The hosted providers, resolved.
     pub hosted: HostedProviders,
+    /// Every module's platform-feature integrations, on or off.
+    pub integrations: Vec<Integration>,
 }
 
-/// Run the settle phase (see the [module docs](self)). `gateway_auth` is whether forward-auth
-/// is wired (an auth provider was resolved by the augment phase).
+impl Settled {
+    /// The provider `gateway` integrates with for `feature`, if that integration is on.
+    pub(super) fn gateway_integration(
+        &self,
+        gateway: Option<&ModuleId>,
+        feature: PlatformFeature,
+    ) -> Option<&ModuleId> {
+        let gateway = gateway?;
+        self.integrations
+            .iter()
+            .find(|i| &i.module == gateway && i.feature == feature && i.is_active())
+            .map(|i| &i.provider)
+    }
+}
+
+/// Run the settle phase (see the [module docs](self)) for the environment's `gateway` and its
+/// `platform` feature providers.
 pub(super) fn settle(
     selection: &Selection,
     catalog: &Catalog,
     ctx: &PlanCtx,
-    gateway_auth: bool,
+    gateway: Option<&ModuleId>,
+    platform: &BTreeMap<PlatformFeature, ModuleId>,
 ) -> Result<Settled, PlanError> {
     // Resolve the selection, auto-provisioning a provider for every resource demand
     // (a demanded relational store, object store, …) before anything else runs.
@@ -157,8 +177,16 @@ pub(super) fn settle(
                 reason: rejection.reason,
             })?;
     }
+    // Which module integrates with which platform feature, before the stack facts: whether the
+    // gateway authenticates is its identity integration.
+    let mut integrations =
+        resolve_integrations(&graph, &knobs, platform, &selection.integrations, gateway)?;
+    let gateway_auth = gateway.is_some_and(|g| {
+        super::integrations::is_active(&integrations, g, PlatformFeature::Identity)
+    });
     let stack_facts = StackFacts {
         gateway_auth,
+        platform: platform.clone(),
         modules: graph.nodes.iter().map(|m| m.id().clone()).collect(),
         hosted_roles: graph
             .nodes
@@ -231,6 +259,7 @@ pub(super) fn settle(
         services.insert(module.id().clone(), module_services);
     }
 
+    resolve_endpoints(&mut integrations, &graph, &services)?;
     let provisioned = provisioned_by_provider(&graph, &chosen, selection, catalog, ctx)?;
 
     Ok(Settled {
@@ -241,6 +270,7 @@ pub(super) fn settle(
         services,
         provisioned,
         hosted,
+        integrations,
     })
 }
 

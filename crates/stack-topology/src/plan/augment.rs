@@ -2,48 +2,134 @@
 //! before the graph is resolved.
 //!
 //! Unless the selection turns it off, every environment has a gateway, so the `gateway`-role
-//! provider joins the selection here whether or not it was picked. Sign-in and policy are [gateway settings](super::GatewaySettings),
-//! not separately-selected modules, so when they resolve on their providers join too, as does
-//! every hosted provider the selection [configures](super::Selection::hosted) (adding a module
-//! changes the graph, so this must run before resolution). A provider the user picked directly also becomes the preferred provider
-//! of its role, so it satisfies that role's demands ahead of the catalog default.
+//! provider joins the selection here whether or not it was picked. The providers of the
+//! selected [platform features](super::Selection::platform) join too, as does every hosted
+//! provider the selection [configures](super::Selection::hosted) (adding a module changes the
+//! graph, so this must run before resolution). A provider the user picked directly also becomes
+//! the preferred provider of its role, so it satisfies that role's demands ahead of the catalog
+//! default.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
-use super::gateway::{
-    gateway_auth_enabled, gateway_provider, policy_provider, selected_auth_provider,
-};
+use super::gateway::gateway_provider;
 use super::{PlanCtx, PlanError, Selection, demands::with_selected_providers};
 use crate::catalog::Catalog;
 use crate::catalog::module::ModuleId;
+use crate::manifest::migrate_platform;
+use crate::model::platform::{FeatureChoice, PlatformFeature};
 use crate::model::role::Role;
 
-/// The selection and context the rest of the planner runs against, plus the auth / policy
-/// providers to wire into the gateway.
+/// The selection and context the rest of the planner runs against, plus the providers the
+/// gateway and the integrations are wired to.
 pub(super) struct Augmented<'a> {
-    /// The selection, with the gateway, the auth and policy providers (when on) and the
-    /// configured hosted providers added.
+    /// The selection, with the gateway, the platform-feature providers and the configured
+    /// hosted providers added.
     pub selection: Cow<'a, Selection>,
     /// The context, with directly-selected providers preferred for their roles.
     pub ctx: Cow<'a, PlanCtx>,
-    /// The single auth-role provider to wire, resolved once by role and reused for both the
-    /// selection augmentation and the gateway's `AuthConfig` — so the two never diverge (an
-    /// `ext_authz` filter pointed at a provider that isn't in the graph). `None` when the knob
-    /// is off or the catalog has no `auth`-role provider; in the latter case auth stays off
-    /// entirely rather than gating the gateway behind a phantom upstream.
-    pub auth_provider: Option<ModuleId>,
-    /// The selected policy engine, if any. It authorizes the identity forward-auth asserts,
-    /// so it requires `auth_provider`.
-    pub policy_provider: Option<ModuleId>,
+    /// The gateway module, when the environment has one.
+    pub gateway: Option<ModuleId>,
+    /// The provider of each selected platform feature.
+    pub platform: BTreeMap<PlatformFeature, ModuleId>,
 }
 
-/// Run the augment phase (see the [module docs](self)).
-///
-/// The forward-auth knob lives on whichever module fills the `gateway` role, and the provider
-/// is whichever fills the `auth` role — both looked up by role, so a differently-named gateway
-/// or provider still works. An explicitly selected provider wins over the catalog's first
-/// `auth`-role provider. Errors with [`PlanError::PolicyRequiresAuth`] when a policy engine is
-/// selected without forward-auth.
+/// The selection in its current form: its legacy gateway settings moved to platform features
+/// (see [`migrate_platform`]), and any platform-feature provider it selects as a module or
+/// capability made that feature's provider instead. The planner adds the providers itself, so
+/// listing one is the same as turning its feature on.
+pub(super) fn normalize_platform<'a>(
+    selection: &'a Selection,
+    catalog: &Catalog,
+) -> Cow<'a, Selection> {
+    let listed = |s: &Selection| {
+        s.modules.iter().any(|m| {
+            catalog
+                .get(m)
+                .and_then(|m| m.provider_of())
+                .and_then(PlatformFeature::of_role)
+                .is_some()
+        }) || s
+            .capabilities
+            .iter()
+            .any(|c| PlatformFeature::of_role(c).is_some())
+    };
+    let mut normalized = selection.clone();
+    let migrated = migrate_platform(&mut normalized);
+    if !migrated && !listed(&normalized) {
+        return Cow::Borrowed(selection);
+    }
+    let modules = std::mem::take(&mut normalized.modules);
+    for module in modules {
+        let feature = catalog
+            .get(&module)
+            .and_then(|m| m.provider_of())
+            .and_then(PlatformFeature::of_role);
+        match feature {
+            Some(feature) => {
+                if normalized.platform.get(feature).is_none() {
+                    normalized
+                        .platform
+                        .set(feature, Some(FeatureChoice::Provider(module)));
+                }
+            }
+            None => normalized.modules.push(module),
+        }
+    }
+    let capabilities = std::mem::take(&mut normalized.capabilities);
+    for capability in capabilities {
+        match PlatformFeature::of_role(&capability) {
+            Some(feature) => {
+                if normalized.platform.get(feature).is_none() {
+                    normalized
+                        .platform
+                        .set(feature, Some(FeatureChoice::Default));
+                }
+            }
+            None => normalized.capabilities.push(capability),
+        }
+    }
+    Cow::Owned(normalized)
+}
+
+/// The provider of each platform feature `selection` turns on. Errors with
+/// [`PlanError::UnknownPlatformProvider`] for a feature naming a module that doesn't provide
+/// it, or one the catalog has no provider for.
+pub(super) fn platform_providers(
+    selection: &Selection,
+    catalog: &Catalog,
+) -> Result<BTreeMap<PlatformFeature, ModuleId>, PlanError> {
+    let mut providers = BTreeMap::new();
+    for feature in PlatformFeature::ALL {
+        let Some(choice) = selection.platform.get(feature) else {
+            continue;
+        };
+        let candidates = catalog.providers_of(feature.role());
+        let provider = match choice {
+            FeatureChoice::Default => {
+                candidates.first().map(|p| (*p).clone()).ok_or_else(|| {
+                    PlanError::UnknownPlatformProvider {
+                        feature,
+                        reason: format!("the catalog has no `{}` provider", feature.role()),
+                    }
+                })?
+            }
+            FeatureChoice::Provider(id) if candidates.contains(&id) => id.clone(),
+            FeatureChoice::Provider(id) => {
+                return Err(PlanError::UnknownPlatformProvider {
+                    feature,
+                    reason: format!("`{id}` is not a `{}` provider", feature.role()),
+                });
+            }
+        };
+        providers.insert(feature, provider);
+    }
+    Ok(providers)
+}
+
+/// Run the augment phase (see the [module docs](self)) on a
+/// [normalized](normalize_platform) selection. Errors with [`PlanError::PolicyRequiresIdentity`]
+/// when policy is on without identity.
 ///
 /// With the gateway off, `emulating` still adds it: some module in the graph emulates public
 /// hostnames, which only the gateway's in-network TLS listener answers (see
@@ -54,27 +140,20 @@ pub(super) fn augment<'a>(
     ctx: &'a PlanCtx,
     emulating: bool,
 ) -> Result<Augmented<'a>, PlanError> {
-    if !selection.gateway.enabled {
-        require_no_gateway_features(selection, catalog, ctx)?;
-    }
-    let auth_provider: Option<ModuleId> = if gateway_auth_enabled(selection, catalog)? {
-        selected_auth_provider(selection, catalog).or_else(|| {
-            catalog
-                .providers_of(Role::AUTH)
-                .first()
-                .map(|p| (*p).clone())
-        })
-    } else {
-        None
-    };
-    let policy_provider = policy_provider(selection, catalog);
-    if let (Some(module), None) = (&policy_provider, &auth_provider) {
-        return Err(PlanError::PolicyRequiresAuth {
+    let platform = platform_providers(selection, catalog)?;
+    if let (Some(module), None) = (
+        platform.get(&PlatformFeature::Policy),
+        platform.get(&PlatformFeature::Identity),
+    ) {
+        return Err(PlanError::PolicyRequiresIdentity {
             module: module.clone(),
         });
     }
+    if !selection.gateway.enabled {
+        require_no_gateway_features(selection, &platform, catalog, ctx)?;
+    }
 
-    // The gateway, the auth and policy providers, and every configured hosted provider join the
+    // The gateway, the platform-feature providers, and every configured hosted provider join the
     // selection like any directly selected module (a hosted provider satisfies its role's
     // demands and appears in the topology; it is just not deployed).
     let gateway = (selection.gateway.enabled || emulating)
@@ -82,8 +161,7 @@ pub(super) fn augment<'a>(
         .flatten();
     let implied: Vec<&ModuleId> = gateway
         .iter()
-        .chain(&auth_provider)
-        .chain(&policy_provider)
+        .chain(platform.values())
         .chain(selection.hosted.keys())
         .filter(|m| !selection.modules.contains(m))
         .collect();
@@ -106,17 +184,18 @@ pub(super) fn augment<'a>(
     Ok(Augmented {
         selection,
         ctx,
-        auth_provider,
-        policy_provider,
+        gateway,
+        platform,
     })
 }
 
-/// Reject a gateway-less selection that asks for something only the gateway provides: sign-in
-/// or policy (in any of their legacy forms too), an app upstream (the gateway's catch-all), or
-/// a `gateway`-role module selected explicitly. Emulated public hostnames are only known once
-/// the graph is resolved, so the route phase checks those.
+/// Reject a gateway-less selection that asks for something only the gateway provides: identity
+/// or policy, an app upstream (the gateway's catch-all), or a `gateway`-role module selected
+/// explicitly. Emulated public hostnames are only known once the graph is resolved, so the route
+/// phase checks those.
 fn require_no_gateway_features(
     selection: &Selection,
+    platform: &BTreeMap<PlatformFeature, ModuleId>,
     catalog: &Catalog,
     ctx: &PlanCtx,
 ) -> Result<(), PlanError> {
@@ -128,11 +207,10 @@ fn require_no_gateway_features(
     {
         return required(format!("selecting the gateway module `{module}`"));
     }
-    if gateway_auth_enabled(selection, catalog)? {
-        return required("sign-in".into());
-    }
-    if policy_provider(selection, catalog).is_some() {
-        return required("policy".into());
+    for feature in [PlatformFeature::Identity, PlatformFeature::Policy] {
+        if platform.contains_key(&feature) {
+            return required(feature.to_string());
+        }
     }
     if ctx.app.is_some() {
         return required("an app upstream".into());

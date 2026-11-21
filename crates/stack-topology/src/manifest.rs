@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use crate::catalog::Catalog;
 use crate::catalog::module::{ExtraResource, ModuleId};
 use crate::model::connection::ObjectStoreCredential;
+use crate::model::platform::{FeatureChoice, PlatformFeature};
 use crate::plan::{HostedConnection, HostedResource, Plan, PlanCtx, PlanError, Selection};
 
 /// What can go wrong (de)serializing an [`EnvManifest`].
@@ -124,9 +125,8 @@ impl CatalogSource {
 
 impl EnvManifest {
     /// The current manifest schema version. Version 2 added
-    /// [`Selection::gateway`](crate::Selection::gateway); a version-1 file still reads (the
-    /// planner honours its legacy gateway forms, see
-    /// [`normalize_gateway`](Self::normalize_gateway)). Version 3 replaced
+    /// [`Selection::gateway`](crate::Selection::gateway); a version-1 file still reads (its
+    /// legacy gateway forms are migrated, see [`migrate_platform`]). Version 3 replaced
     /// `[selection.external.<module>]` (an in-stack provider marked external) with hosted
     /// provider modules ([`Selection::hosted`](crate::Selection::hosted)); an older file's
     /// entries are migrated on read (see [`from_toml`](Self::from_toml)). Version 4 added
@@ -136,9 +136,11 @@ impl EnvManifest {
     /// placement is dropped on read and its slot-shifted ports moved back to slot 0. Version 6
     /// split `unity-catalog` into its two implementations, `unity-catalog-oss` and
     /// `unity-catalog-rs`; an older file's selection is migrated on read (see
-    /// [`migrate_selection`]).
+    /// [`migrate_selection`]). Version 7 made sign-in, policy and tracing
+    /// [platform features](crate::Selection::platform); an older file's gateway settings and
+    /// listed providers are migrated on read (see [`migrate_platform`]).
     pub fn current_version() -> u32 {
-        6
+        7
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -173,6 +175,9 @@ impl EnvManifest {
     /// shifted are moved back by it (see [`PlanCtx::without_placement`]); the workspace supplies
     /// the placement at plan time.
     ///
+    /// A pre-version-7 file's sign-in, policy and tracing settings become platform features
+    /// (see [`migrate_platform`]).
+    ///
     /// A pre-version-6 file's `unity-catalog` (in the selection and the provider preferences)
     /// becomes the implementation it ran (see [`migrate_selection`]); a version-6 file's is
     /// left alone, so a custom module can use that id.
@@ -181,10 +186,9 @@ impl EnvManifest {
         // Only a file older than version 6 (or one that doesn't say) means the Unity Catalog
         // of before the split by `unity-catalog`: from then on the id is free, for a custom
         // module that reuses it.
-        let pre_uc_split = table
-            .get("version")
-            .and_then(toml::Value::as_integer)
-            .is_none_or(|v| v < 6);
+        let version = table.get("version").and_then(toml::Value::as_integer);
+        let pre_uc_split = version.is_none_or(|v| v < 6);
+        let pre_platform = version.is_none_or(|v| v < 7);
         let mut migrated = migrate_external(&mut table)?;
         let mut manifest: Self = toml::Value::Table(table).try_into()?;
         if manifest.version > Self::current_version() {
@@ -207,6 +211,9 @@ impl EnvManifest {
                 dedup_in_order(providers);
             }
         }
+        if pre_platform && migrate_platform(&mut manifest.selection) {
+            migrated = true;
+        }
         let placement_free = manifest.context.without_placement();
         if placement_free != manifest.context {
             manifest.context = placement_free;
@@ -216,15 +223,6 @@ impl EnvManifest {
             manifest.version = Self::current_version();
         }
         Ok(manifest)
-    }
-
-    /// Rewrite the selection's legacy gateway forms into
-    /// [`Selection::gateway`](crate::Selection::gateway) and stamp the current version; see
-    /// [`Selection::normalize_gateway`]. Plans the same before and after.
-    pub fn normalize_gateway(&mut self, catalog: &Catalog) -> Result<(), PlanError> {
-        self.selection.normalize_gateway(catalog, &self.context)?;
-        self.version = Self::current_version();
-        Ok(())
     }
 
     /// Resolve this manifest into a [`Plan`] — the single "manifest → environment" entry point.
@@ -444,6 +442,112 @@ pub fn migrate_selection(selection: &mut Selection) -> bool {
         }
     }
     true
+}
+
+/// The baseline gateway, whose `auth` knob override turned on sign-in before version 7.
+const LEGACY_GATEWAY: &str = "envoy";
+
+/// The baseline providers of the platform features, which a selection before version 7 listed
+/// as modules to turn them on.
+const LEGACY_PLATFORM_PROVIDERS: [(&str, PlatformFeature); 3] = [
+    ("authelia", PlatformFeature::Identity),
+    ("opa", PlatformFeature::Policy),
+    ("jaeger", PlatformFeature::Observability),
+];
+
+/// Move a selection's pre-version-7 sign-in, policy and tracing settings to
+/// [platform features](Selection::platform). Returns whether anything changed. Idempotent, and
+/// a no-op for a current selection, so a consumer that stores bare selections can run it on
+/// every load; the planner runs it too.
+///
+/// - `[selection.gateway] auth` / `policy` turn on identity / policy (policy implied sign-in).
+/// - The baseline providers listed as modules (`authelia`, `opa`, `jaeger`), or the `auth`,
+///   `policy` and `tracing` capabilities, turn on their features; selecting a policy engine
+///   implied sign-in too.
+/// - The baseline gateway's `auth` knob override (or its `ENVOY_AUTH` alias) turns identity on,
+///   or with `false` keeps it off even though a provider is listed (that provider is dropped,
+///   as the gateway never consulted it). A policy engine with sign-in off stays selected, so
+///   the plan fails as it did before.
+///
+/// A feature already set keeps its provider.
+pub fn migrate_platform(selection: &mut Selection) -> bool {
+    use crate::plan::{ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY};
+    let mut changed = false;
+    let mut on: std::collections::BTreeMap<PlatformFeature, FeatureChoice> = Default::default();
+    fn turn_on(
+        on: &mut std::collections::BTreeMap<PlatformFeature, FeatureChoice>,
+        feature: PlatformFeature,
+        choice: FeatureChoice,
+    ) {
+        on.entry(feature).or_insert(choice);
+    }
+
+    if std::mem::take(&mut selection.gateway.auth) {
+        turn_on(&mut on, PlatformFeature::Identity, FeatureChoice::Default);
+        changed = true;
+    }
+    if std::mem::take(&mut selection.gateway.policy) {
+        turn_on(&mut on, PlatformFeature::Policy, FeatureChoice::Default);
+        turn_on(&mut on, PlatformFeature::Identity, FeatureChoice::Default);
+        changed = true;
+    }
+    let modules = std::mem::take(&mut selection.modules);
+    for module in modules {
+        match LEGACY_PLATFORM_PROVIDERS
+            .iter()
+            .find(|(id, _)| module.as_str() == *id)
+        {
+            Some((_, feature)) => {
+                turn_on(&mut on, *feature, FeatureChoice::Provider(module.clone()));
+                if *feature == PlatformFeature::Policy {
+                    turn_on(&mut on, PlatformFeature::Identity, FeatureChoice::Default);
+                }
+                changed = true;
+            }
+            None => selection.modules.push(module),
+        }
+    }
+    let capabilities = std::mem::take(&mut selection.capabilities);
+    for capability in capabilities {
+        match PlatformFeature::of_role(&capability) {
+            Some(feature) => {
+                turn_on(&mut on, feature, FeatureChoice::Default);
+                if feature == PlatformFeature::Policy {
+                    turn_on(&mut on, PlatformFeature::Identity, FeatureChoice::Default);
+                }
+                changed = true;
+            }
+            None => selection.capabilities.push(capability),
+        }
+    }
+    let gateway = ModuleId::from(LEGACY_GATEWAY);
+    if let Some(overrides) = selection.knob_overrides.get_mut(&gateway) {
+        let knob = overrides
+            .remove(ENVOY_AUTH_KNOB)
+            .or(overrides.remove(ENVOY_AUTH_KNOB_LEGACY));
+        if overrides.is_empty() {
+            selection.knob_overrides.remove(&gateway);
+        }
+        if let Some(raw) = knob {
+            changed = true;
+            match raw.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => {
+                    turn_on(&mut on, PlatformFeature::Identity, FeatureChoice::Default);
+                }
+                // Explicitly off: sign-in stays off even with a provider listed.
+                "false" | "0" | "no" | "off" => {
+                    on.remove(&PlatformFeature::Identity);
+                }
+                _ => {}
+            }
+        }
+    }
+    for (feature, choice) in on {
+        if selection.platform.get(feature).is_none() {
+            selection.platform.set(feature, Some(choice));
+        }
+    }
+    changed
 }
 
 /// Drop every repeat of an id in `ids`, keeping the first, in order.
@@ -845,23 +949,18 @@ mod tests {
             PlanCtx::default(),
         );
         assert!(!open.to_toml().unwrap().contains("enabled"));
-        // Normalizing keeps it off.
-        let mut normalized = manifest.clone();
-        normalized.normalize_gateway(&baseline_catalog()).unwrap();
-        assert_eq!(normalized.selection.gateway, crate::GatewaySettings::DIRECT);
     }
 
     #[test]
-    fn normalizing_a_v1_manifest_moves_auth_into_gateway_settings() {
-        let mut m = EnvManifest::from_toml(
+    fn a_v1_manifest_moves_its_auth_knob_to_the_identity_feature() {
+        let m = EnvManifest::from_toml(
             "version = 1\n[selection]\nmodules = [\"envoy\", \"mlflow\"]\n\
              [selection.knob_overrides.envoy]\nauth = \"true\"\nimage = \"envoy:pinned\"\n",
         )
         .unwrap();
-        m.normalize_gateway(&baseline_catalog()).unwrap();
         assert_eq!(m.version, EnvManifest::current_version());
-        assert_eq!(m.selection.gateway, crate::GatewaySettings::SIGN_IN);
-        assert_eq!(m.selection.modules, vec![ModuleId::from("mlflow")]);
+        assert_eq!(m.selection.platform.identity, Some(FeatureChoice::Default));
+        assert_eq!(m.selection.platform.policy, None);
         // Only the legacy key moves; the gateway's other knobs stay.
         let envoy = &m.selection.knob_overrides[&ModuleId::from("envoy")];
         assert_eq!(envoy.len(), 1);
@@ -869,8 +968,57 @@ mod tests {
         assert!(
             m.to_toml()
                 .unwrap()
-                .contains("[selection.gateway]\nauth = true\npolicy = false")
+                .contains("[selection.platform]\nidentity = true\n"),
+            "{}",
+            m.to_toml().unwrap()
         );
+    }
+
+    #[test]
+    fn a_v6_manifest_moves_its_gateway_settings_and_providers_to_platform_features() {
+        let m = EnvManifest::from_toml(
+            "version = 6\n[selection]\nmodules = [\"mlflow\", \"jaeger\"]\n\
+             [selection.gateway]\npolicy = true\n",
+        )
+        .unwrap();
+        assert_eq!(m.version, EnvManifest::current_version());
+        let platform = &m.selection.platform;
+        assert_eq!(platform.identity, Some(FeatureChoice::Default));
+        assert_eq!(platform.policy, Some(FeatureChoice::Default));
+        assert_eq!(
+            platform.observability,
+            Some(FeatureChoice::Provider(ModuleId::from("jaeger")))
+        );
+        assert_eq!(m.selection.modules, vec![ModuleId::from("mlflow")]);
+        let text = m.to_toml().unwrap();
+        assert!(!text.contains("[selection.gateway]"), "{text}");
+        // Reading the migrated file again changes nothing.
+        assert_eq!(EnvManifest::from_toml(&text).unwrap(), m);
+    }
+
+    #[test]
+    fn a_v7_manifest_keeps_a_listed_provider() {
+        // From version 7 on the planner reads a listed provider as its feature, but the file is
+        // left as written.
+        let text = "version = 7\n[selection]\nmodules = [\"jaeger\"]\n";
+        let m = EnvManifest::from_toml(text).unwrap();
+        assert_eq!(m.selection.modules, vec![ModuleId::from("jaeger")]);
+        assert!(m.selection.platform.is_empty());
+    }
+
+    #[test]
+    fn migrating_an_explicit_sign_in_off_drops_the_listed_provider() {
+        let mut selection = Selection::modules(["envoy", "authelia", "mlflow"]);
+        selection
+            .knob_overrides
+            .entry(ModuleId::from("envoy"))
+            .or_default()
+            .insert(crate::plan::ENVOY_AUTH_KNOB.into(), "false".into());
+        assert!(migrate_platform(&mut selection));
+        assert_eq!(selection.platform, crate::PlatformSelection::default());
+        assert_eq!(selection.modules, ["envoy", "mlflow"].map(ModuleId::from));
+        assert!(selection.knob_overrides.is_empty());
+        assert!(!migrate_platform(&mut selection), "idempotent");
     }
 
     #[test]

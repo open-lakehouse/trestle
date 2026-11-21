@@ -84,6 +84,10 @@ pub use model::connection::{
 };
 pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, RouteOptions, Scheme};
 pub use model::placement::{Placement, Vantage};
+pub use model::platform::{
+    ActiveIntegration, FeatureChoice, IntegrationSpec, PlatformFeature, PlatformSelection,
+    ProtocolOffer, protocol,
+};
 pub use model::role::{Role, ServiceSpec};
 
 pub use catalog::credentials::{
@@ -108,10 +112,10 @@ pub use plan::{
     AppUpstream, AuthConfig, ClientSelection, ClusterConfig, ENVOY_AUTH_KNOB,
     ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA, FunctionRequirement, GatewayConfig, GatewayRoute,
     GatewaySettings, HostedConnection, HostedKind, HostedResource, HostedStepView, HostedVendor,
-    ListenerConfig, LocalSecrets, ModuleBinding, NEON_AI_GATEWAY_TOKEN_VAR, NeonRequirements,
-    PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx, PlanError, PolicyConfig, PythonWorkspace,
-    Secrets, SecureOrigin, Selection, TlsListenerConfig, TlsVirtualHost, function_url_var,
-    is_valid_resource_name, resource_name_rule,
+    Integration, IntegrationState, ListenerConfig, LocalSecrets, ModuleBinding,
+    NEON_AI_GATEWAY_TOKEN_VAR, NeonRequirements, PYTHON_CLIENT_BASE_DEPENDENCIES, Plan, PlanCtx,
+    PlanError, PolicyConfig, PythonWorkspace, Secrets, SecureOrigin, Selection, TlsListenerConfig,
+    TlsVirtualHost, TracingConfig, function_url_var, is_valid_resource_name, resource_name_rule,
 };
 
 pub use render::compose::{
@@ -135,7 +139,8 @@ pub use target::{Compose, DeployTarget, TargetId, builtin_targets};
 pub use address::{AddressError, ServiceRef};
 
 pub use manifest::{
-    CatalogSource, EnvManifest, ManifestError, migrate_selection, pin_dedicated_ports,
+    CatalogSource, EnvManifest, ManifestError, migrate_platform, migrate_selection,
+    pin_dedicated_ports,
 };
 
 pub use workspace::{

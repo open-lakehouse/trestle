@@ -76,11 +76,12 @@ impl Role {
     pub const MCP_SERVER: &'static str = "mcp_server";
 
     /// The roles the planner fills from the environment itself rather than the module
-    /// selection: the always-on [`GATEWAY`](Self::GATEWAY) and the
-    /// [`AUTH`](Self::AUTH) / [`POLICY`](Self::POLICY) providers that
-    /// [`GatewaySettings`](crate::GatewaySettings) turn on. UIs should not offer their
-    /// providers as modules to pick.
-    pub const GATEWAY_MANAGED: [&'static str; 3] = [Self::GATEWAY, Self::AUTH, Self::POLICY];
+    /// selection: the always-on [`GATEWAY`](Self::GATEWAY), and the [`AUTH`](Self::AUTH),
+    /// [`POLICY`](Self::POLICY) and [`TRACING`](Self::TRACING) providers of the
+    /// [platform features](crate::PlatformSelection). UIs should not offer their providers as
+    /// modules to pick.
+    pub const PLATFORM: [&'static str; 4] =
+        [Self::GATEWAY, Self::AUTH, Self::POLICY, Self::TRACING];
 
     /// The `object_store` role.
     pub fn object_store() -> Role {

@@ -5,10 +5,10 @@
 //! kept deliberately separate from `trestle new`'s project scaffolding and
 //! `trestle generate`'s codegen. Its three subcommands mirror the engine's phases:
 //!
-//! - [`EnvCommand::New`] — pick modules and how the gateway guards access, optionally
-//!   tune knobs, then plan + render into a target directory. Interactive (a
-//!   [`cliclack`] wizard) or fully scripted (`--select` / `--auth` / `--policy` /
-//!   `--set` / `--prefer`). Every environment gets the gateway (unless
+//! - [`EnvCommand::New`] — pick modules and the platform features (identity, policy,
+//!   observability), optionally tune knobs, then plan + render into a target directory.
+//!   Interactive (a [`cliclack`] wizard) or fully scripted (`--select` / `--identity` /
+//!   `--policy` / `--observability` / `--set` / `--prefer`). Every environment gets the gateway (unless
 //!   `--no-gateway`); it is not a module to pick.
 //! - [`EnvCommand::Render`] — re-render an existing environment from its persisted
 //!   `env.toml` ([`EnvManifest`]); ports and routes stay stable by construction.
@@ -30,11 +30,11 @@ use olai_stack_topology::projection::export::{
 };
 use olai_stack_topology::projection::graph_dto;
 use olai_stack_topology::{
-    Catalog, DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployPhase, EnvManifest, GatewaySettings,
-    Knob, KnobKind, LocalCredentials, ManifestError, MaterializedOutput, ModuleId, PlanCtx,
-    PlanError, RenderError, SECRETS_ENV_PATH, Secrets, Selection, TargetId, WORKSPACE_FILE,
-    WorkspaceEnv, WorkspaceManifest, baseline_catalog, baseline_catalog_with, baseline_selection,
-    builtin_targets, graph_mermaid, layout_report,
+    Catalog, DEPLOY_README_PATH, DEPLOY_SCRIPTS_DIR, DeployPhase, EnvManifest, FeatureChoice,
+    GatewaySettings, Knob, KnobKind, LocalCredentials, ManifestError, MaterializedOutput, ModuleId,
+    PlanCtx, PlanError, PlatformFeature, RenderError, SECRETS_ENV_PATH, Secrets, Selection,
+    TargetId, WORKSPACE_FILE, WorkspaceEnv, WorkspaceManifest, baseline_catalog,
+    baseline_catalog_with, baseline_selection, builtin_targets, graph_mermaid, layout_report,
 };
 
 use crate::error::{Error, Result};
@@ -91,18 +91,46 @@ pub struct EnvNewArgs {
     #[clap(long = "select", value_name = "MODULE[,MODULE]", value_delimiter = ',')]
     pub select: Vec<String>,
 
-    /// Require sign-in on the gateway's API and UI routes (bundled Authelia).
-    #[clap(long)]
-    pub auth: bool,
+    /// Turn on the identity platform feature: the gateway requires sign-in on its API and UI
+    /// routes, and services that can take the signed-in user do. Optionally names the
+    /// provider (`--identity=authelia`); the catalog's default otherwise.
+    #[clap(
+        long,
+        alias = "auth",
+        value_name = "PROVIDER",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = DEFAULT_PROVIDER,
+    )]
+    pub identity: Option<String>,
 
-    /// Authorize every signed-in request with a Rego policy (bundled OPA).
-    /// Implies `--auth`.
-    #[clap(long)]
-    pub policy: bool,
+    /// Turn on the policy platform feature: the gateway authorizes every signed-in request
+    /// with it (bundled OPA: a Rego policy). Implies `--identity`. Optionally names the
+    /// provider (`--policy=opa`).
+    #[clap(
+        long,
+        value_name = "PROVIDER",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = DEFAULT_PROVIDER,
+    )]
+    pub policy: Option<String>,
+
+    /// Turn on the observability platform feature: the gateway and every service that can
+    /// export traces send them to the tracing backend (bundled Jaeger). Optionally names the
+    /// provider (`--observability=jaeger`).
+    #[clap(
+        long,
+        value_name = "PROVIDER",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = DEFAULT_PROVIDER,
+    )]
+    pub observability: Option<String>,
 
     /// Run without a gateway: publish each service on its own host port (e.g. Unity
     /// Catalog at `localhost:8080`). For bare deployments of a service and its backends.
-    #[clap(long, conflicts_with_all = ["auth", "policy"])]
+    #[clap(long, conflicts_with_all = ["identity", "policy"])]
     pub no_gateway: bool,
 
     /// Knob override, `module.key=value` (e.g. `--set postgres.image=postgres:17`).
@@ -238,6 +266,17 @@ pub fn run(cmd: EnvCommand) -> Result<()> {
     }
 }
 
+/// What a platform-feature flag given without a value stands for: the catalog's provider.
+const DEFAULT_PROVIDER: &str = "default";
+
+/// A platform-feature flag's value as the feature's provider choice.
+fn feature_choice(flag: &str) -> FeatureChoice {
+    match flag {
+        DEFAULT_PROVIDER | "true" => FeatureChoice::Default,
+        provider => FeatureChoice::Provider(ModuleId::from(provider)),
+    }
+}
+
 fn run_new(args: EnvNewArgs) -> Result<()> {
     let out_dir = args
         .out_dir
@@ -289,13 +328,25 @@ pub(super) fn new_env(
     selection.gateway = if args.no_gateway {
         GatewaySettings::DIRECT
     } else {
-        GatewaySettings {
-            auth: args.auth,
-            policy: args.policy,
-            ..GatewaySettings::OPEN
-        }
+        GatewaySettings::OPEN
     };
-    let access_preset = args.auth || args.policy || args.no_gateway;
+    for (feature, flag) in [
+        (PlatformFeature::Identity, &args.identity),
+        (PlatformFeature::Policy, &args.policy),
+        (PlatformFeature::Observability, &args.observability),
+    ] {
+        if let Some(flag) = flag {
+            selection.platform.set(feature, Some(feature_choice(flag)));
+        }
+    }
+    // A policy decides on the identity sign-in asserts.
+    if selection.platform.policy.is_some() && selection.platform.identity.is_none() {
+        selection.platform.identity = Some(FeatureChoice::Default);
+    }
+    let access_preset = args.identity.is_some()
+        || args.policy.is_some()
+        || args.observability.is_some()
+        || args.no_gateway;
     for ((module, knob), value) in &args.knobs {
         selection
             .knob_overrides
@@ -515,11 +566,23 @@ fn config_summary(plan: &olai_stack_topology::Plan, selection: &Selection, dir: 
         .map(|m| m.id().to_string())
         .collect();
     let access = match (&plan.gateway.auth, &plan.gateway.policy) {
+        _ if !plan.has_gateway() => "none (each service on its own host port)".to_string(),
         (None, _) => "open (no sign-in)".to_string(),
         (Some(auth), None) => format!("sign-in ({})", auth.cluster),
         (Some(auth), Some(policy)) => {
             format!("sign-in + policy ({}, {})", auth.cluster, policy.cluster)
         }
+    };
+    let platform: Vec<String> = plan
+        .stack_facts
+        .platform
+        .iter()
+        .map(|(feature, provider)| format!("{feature} ({provider})"))
+        .collect();
+    let platform = if platform.is_empty() {
+        "none".to_string()
+    } else {
+        platform.join(", ")
     };
     let overrides = non_default_knobs(selection);
     let settings = if overrides.is_empty() {
@@ -528,7 +591,7 @@ fn config_summary(plan: &olai_stack_topology::Plan, selection: &Selection, dir: 
         format!("\n  {}", overrides.join("\n  "))
     };
     format!(
-        "Modules:  {}\nGateway:  {access}\nSettings: {settings}\nCustomize later: edit {}/env.toml, then `trestle env render {}`",
+        "Modules:  {}\nGateway:  {access}\nPlatform: {platform}\nSettings: {settings}\nCustomize later: edit {}/env.toml, then `trestle env render {}`",
         modules.join(", "),
         dir.display(),
         dir.display(),
@@ -886,8 +949,11 @@ fn run_list_modules(args: EnvListModulesArgs) -> Result<()> {
         let category = match module.provider_of() {
             _ if module.hosted().is_some() => format!("{category} (hosted: not run)"),
             Some(olai_stack_topology::Role::GATEWAY) => format!("{category} (always included)"),
-            Some(olai_stack_topology::Role::AUTH) => format!("{category} (enabled by --auth)"),
+            Some(olai_stack_topology::Role::AUTH) => format!("{category} (enabled by --identity)"),
             Some(olai_stack_topology::Role::POLICY) => format!("{category} (enabled by --policy)"),
+            Some(olai_stack_topology::Role::TRACING) => {
+                format!("{category} (enabled by --observability)")
+            }
             _ => category,
         };
         match module.summary() {
@@ -1004,8 +1070,8 @@ fn map_manifest_err(e: ManifestError) -> Error {
 
 mod wizard {
     use super::{
-        Catalog, Error, GatewaySettings, Knob, KnobKind, ModuleId, PlanCtx, Result, Selection,
-        map_plan_err,
+        Catalog, Error, FeatureChoice, GatewaySettings, Knob, KnobKind, ModuleId, PlanCtx,
+        PlatformFeature, Result, Selection, map_plan_err,
     };
     use olai_stack_topology::{Module, Role};
     use std::collections::BTreeMap;
@@ -1038,7 +1104,7 @@ mod wizard {
 
         selection.modules = ask_modules(catalog, &selection.modules)?;
         if !access_preset {
-            selection.gateway = ask_access(selection.gateway)?;
+            ask_platform(catalog, selection)?;
         }
         let mode = match mode {
             Some(mode) => mode,
@@ -1094,11 +1160,11 @@ mod wizard {
         Ok(())
     }
 
-    /// Whether `module` is one the planner adds on its own (see [`Role::GATEWAY_MANAGED`]).
+    /// Whether `module` is one the planner adds on its own (see [`Role::PLATFORM`]).
     fn gateway_managed(module: &dyn Module) -> bool {
         module
             .provider_of()
-            .is_some_and(|role| Role::GATEWAY_MANAGED.contains(&role))
+            .is_some_and(|role| Role::PLATFORM.contains(&role))
     }
 
     /// Multi-select the module set, pre-checking `preselected`. The gateway and its
@@ -1134,29 +1200,83 @@ mod wizard {
             .collect())
     }
 
-    /// How the gateway guards access: open, sign-in, or sign-in plus policy — or no
-    /// gateway at all.
-    fn ask_access(current: GatewaySettings) -> Result<GatewaySettings> {
-        cliclack::select("Gateway access?")
-            .item(GatewaySettings::OPEN, "Open", "no sign-in")
+    /// Whether the environment has a gateway, and which platform features it turns on
+    /// (identity and policy only with a gateway). Each feature is off, or one of the catalog's
+    /// providers of its role.
+    fn ask_platform(catalog: &Catalog, selection: &mut Selection) -> Result<()> {
+        let gateway = cliclack::select("Gateway?")
             .item(
-                GatewaySettings::SIGN_IN,
-                "Sign-in",
-                "single-sign-on for APIs and UIs (Authelia)",
+                true,
+                "Gateway",
+                "one port, path-routed, with optional sign-in",
             )
             .item(
-                GatewaySettings::POLICY,
-                "Sign-in + policy",
-                "also authorize each request with Rego (OPA)",
-            )
-            .item(
-                GatewaySettings::DIRECT,
+                false,
                 "No gateway",
                 "publish each service on its own host port",
             )
-            .initial_value(current)
+            .initial_value(selection.gateway.enabled)
             .interact()
-            .map_err(Error::prompt)
+            .map_err(Error::prompt)?;
+        selection.gateway = if gateway {
+            GatewaySettings::OPEN
+        } else {
+            GatewaySettings::DIRECT
+        };
+        for feature in PlatformFeature::ALL {
+            let needs_gateway = feature != PlatformFeature::Observability;
+            let needs_identity = feature == PlatformFeature::Policy;
+            if (needs_gateway && !gateway)
+                || (needs_identity && selection.platform.identity.is_none())
+            {
+                selection.platform.set(feature, None);
+                continue;
+            }
+            let (prompt, hint) = match feature {
+                PlatformFeature::Identity => ("Sign-in?", "the gateway requires single-sign-on"),
+                PlatformFeature::Policy => ("Policy?", "authorize each signed-in request"),
+                PlatformFeature::Observability => {
+                    ("Tracing?", "the gateway and capable services export traces")
+                }
+            };
+            let current = selection
+                .platform
+                .get(feature)
+                .map(|choice| match choice {
+                    FeatureChoice::Default => catalog
+                        .providers_of(feature.role())
+                        .first()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default(),
+                    FeatureChoice::Provider(id) => id.to_string(),
+                })
+                .unwrap_or_default();
+            let mut select = cliclack::select(prompt).item(String::new(), "Off", "");
+            for provider in catalog.providers_of(feature.role()) {
+                let label = catalog
+                    .get(provider)
+                    .and_then(|m| m.display_name().map(str::to_string))
+                    .unwrap_or_else(|| provider.to_string());
+                select = select.item(provider.to_string(), label, hint);
+            }
+            let picked: String = select
+                .initial_value(current)
+                .interact()
+                .map_err(Error::prompt)?;
+            let default = catalog
+                .providers_of(feature.role())
+                .first()
+                .map(|p| p.as_str());
+            selection.platform.set(
+                feature,
+                match picked.as_str() {
+                    "" => None,
+                    id if Some(id) == default => Some(FeatureChoice::Default),
+                    id => Some(FeatureChoice::Provider(ModuleId::from(id))),
+                },
+            );
+        }
+        Ok(())
     }
 
     /// Offer the recommended defaults first; customizing is opt-in.
@@ -1356,7 +1476,7 @@ mod wizard {
 #[cfg(test)]
 mod tests {
     use olai_stack_topology::{
-        EnvManifest, GatewaySettings, KnobKind, ModuleId, PlanCtx, Selection, baseline_catalog,
+        EnvManifest, KnobKind, ModuleId, PlanCtx, PlatformFeature, Selection, baseline_catalog,
     };
 
     use super::{
@@ -1429,10 +1549,9 @@ mod tests {
 
         let guarded = baseline_catalog()
             .plan(
-                &Selection {
-                    gateway: GatewaySettings::POLICY,
-                    ..Selection::modules(["postgres", "mlflow"])
-                },
+                &Selection::modules(["postgres", "mlflow"])
+                    .with_feature(PlatformFeature::Identity)
+                    .with_feature(PlatformFeature::Policy),
                 &PlanCtx::default(),
             )
             .unwrap();
@@ -1526,7 +1645,9 @@ mod tests {
             .entry(ModuleId::from("postgres"))
             .or_default()
             .insert("image".into(), "postgres:17".into());
-        tuned.gateway = GatewaySettings::POLICY;
+        let tuned = tuned
+            .with_feature(PlatformFeature::Identity)
+            .with_feature(PlatformFeature::Policy);
         let text = config_summary(&plan(&tuned), &tuned, dir);
         assert!(text.contains("postgres.image = postgres:17"), "{text}");
         assert!(!text.contains("all defaults"), "{text}");
@@ -1534,12 +1655,15 @@ mod tests {
             text.contains("Gateway:  sign-in + policy (authelia, opa)"),
             "{text}"
         );
+        assert!(
+            text.contains("Platform: identity (authelia), policy (opa)\n"),
+            "{text}"
+        );
     }
 
     #[test]
     fn knob_reference_comments_out_defaults_and_stays_valid_toml() {
-        let mut selection = lakehouse();
-        selection.gateway = GatewaySettings::SIGN_IN;
+        let mut selection = lakehouse().with_feature(PlatformFeature::Identity);
         selection
             .knob_overrides
             .entry(ModuleId::from("envoy"))

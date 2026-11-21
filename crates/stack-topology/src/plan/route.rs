@@ -12,14 +12,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::demands::ChosenProviders;
 use super::gateway::{
     allocate_dedicated_ports, api_rewrite, claim, ensure_cluster, join_path, require_prefix,
-    wire_app_upstream, wire_auth, wire_policy,
+    wire_app_upstream, wire_auth, wire_policy, wire_tracing,
 };
 use super::impersonation::{plan_impersonation, rewrite_gatewayed_object_store_endpoints};
 use super::resolve::ResolvedGraph;
 use super::routing::{AssignedRoute, Listener, RoutePlan};
 use super::settle::Settled;
 use super::{
-    GatewayConfig, GatewayFacts, GatewayRoute, ListenerConfig, PlanCtx, PlanError, SecureOrigin,
+    GatewayConfig, GatewayFacts, GatewayRoute, GatewayWiring, ListenerConfig, PlanCtx, PlanError,
+    SecureOrigin,
 };
 use crate::catalog::Catalog;
 use crate::catalog::module::{ModuleId, PortMapping};
@@ -70,8 +71,7 @@ pub(super) fn route(
     catalog: &Catalog,
     ctx: &PlanCtx,
     gateway_enabled: bool,
-    auth_provider: Option<&ModuleId>,
-    policy_provider: Option<&ModuleId>,
+    wired: &GatewayWiring,
 ) -> Result<Routed, PlanError> {
     if !gateway_enabled {
         return route_direct(settled, ctx);
@@ -258,13 +258,23 @@ pub(super) fn route(
     // `Internal` endpoint — not from hardcoded constants — so a differently-named or -ported
     // provider is wired correctly. The routing loop above skips it because the auth endpoint
     // is `Internal` (no route).
-    if let Some(provider) = auth_provider {
+    if let Some(provider) = &wired.auth {
         wire_auth(provider, services_of, catalog, &mut gateway)?;
     }
-    // Authorization: a selected policy engine checks every request on the shared listener after
-    // forward-auth (validated by the augment phase to be on).
-    if let Some(provider) = policy_provider {
+    // Authorization: the policy engine checks every request on the shared listener after
+    // forward-auth (the gateway's policy integration requires its identity one).
+    if let Some(provider) = &wired.policy {
         wire_policy(provider, services_of, &mut gateway)?;
+    }
+    // Tracing: the gateway exports a span for every request it forwards.
+    if let Some(tracing) = &wired.tracing {
+        wire_tracing(
+            &tracing.provider,
+            services_of,
+            catalog,
+            &ctx.gateway_service,
+            &mut gateway,
+        )?;
     }
 
     gateway.clusters.sort_by(|a, b| a.name.cmp(&b.name));
