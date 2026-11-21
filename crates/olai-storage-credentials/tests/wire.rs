@@ -351,16 +351,139 @@ mod delta {
     }
 
     #[test]
-    fn server_prefixes_end_in_a_slash() {
+    fn server_prefixes_are_the_location() {
         let v = VendedCredential::new(
             aws("ak-test", None),
             scope("s3://bucket/tab"),
             AccessLevel::Read,
         );
         let wire = delta_api::StorageCredential::try_from(&v).unwrap();
-        assert_eq!(wire.prefix, "s3://bucket/tab/");
+        // As in the spec's examples: the location, no trailing `/`.
+        assert_eq!(wire.prefix, "s3://bucket/tab");
         assert_eq!(wire.operation, delta_api::Operation::Read);
         assert!(!format!("{wire:?}").contains("sk-test"));
+
+        let root = VendedCredential::new(
+            aws("ak-test", None),
+            scope("s3://bucket"),
+            AccessLevel::Read,
+        );
+        assert_eq!(
+            delta_api::StorageCredential::try_from(&root)
+                .unwrap()
+                .prefix,
+            "s3://bucket/"
+        );
+    }
+
+    /// Prefixes without a trailing `/`, as the spec and the reference server write
+    /// them, match on whole segments: `…/tab` is not a prefix of `…/table2`.
+    #[test]
+    fn spec_prefixes_match_whole_segments() {
+        use olai_storage_credentials::wire::select_covering;
+
+        let wire: delta_api::CredentialsResponse = fixture("delta_api/spec_table.json");
+        let pick = |request: &str| {
+            let ctx = ctx(request, AccessLevel::Read);
+            let vended = wire.to_vended(&ctx).unwrap();
+            select_covering(vended.iter().map(|v| (&v.scope, v.access, v)), &ctx)
+                .map(|v| v.credentials.clone())
+        };
+        let tab = Some(aws("ak-tab", None));
+        assert_eq!(pick("s3://bucket/__unitystorage/tables/tab"), tab);
+        assert_eq!(pick("s3://bucket/__unitystorage/tables/tab/part-0"), tab);
+        assert_eq!(
+            pick("s3://bucket/__unitystorage/tables/table2"),
+            Some(aws("ak-table2", None))
+        );
+
+        // A response for `tab` alone does not serve its sibling `table2`.
+        let only_tab = delta_api::CredentialsResponse {
+            storage_credentials: wire.storage_credentials[..1].to_vec(),
+        };
+        let err = only_tab
+            .to_vended(&ctx(
+                "s3://bucket/__unitystorage/tables/table2",
+                AccessLevel::Read,
+            ))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no credential covers"), "{err}");
+    }
+
+    #[test]
+    fn for_location_keeps_the_catalog_spelling() {
+        let v = VendedCredential::new(
+            aws("ak-test", None),
+            scope("s3://bucket/tab"),
+            AccessLevel::ReadWrite,
+        )
+        .with_expiry(expiry());
+        let ctx = ctx("s3://bucket/tab", AccessLevel::ReadWrite);
+        for location in ["s3://bucket/tab", "s3a://bucket/tab", "s3://bucket/tab/"] {
+            let wire = delta_api::StorageCredential::for_location(location, &v).unwrap();
+            assert_eq!(wire.prefix, location);
+            let json = serde_json::to_string(&wire).unwrap();
+            let back: delta_api::StorageCredential = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.to_vended(&ctx).unwrap().as_ref(), Some(&v), "{json}");
+        }
+
+        // Storage within the scope is fine: the prefix claims less than was vended.
+        let wire = delta_api::StorageCredential::for_location("s3://bucket/tab/part", &v).unwrap();
+        assert_eq!(wire.prefix, "s3://bucket/tab/part");
+
+        // An emulator's endpoint URL survives, and reads back as the canonical scope.
+        let azurite = VendedCredential::new(
+            StorageCredentials::azure_sas("sig=x").unwrap(),
+            scope("abfss://ctr@devstoreaccount1.dfs.core.windows.net/tab"),
+            AccessLevel::Read,
+        );
+        let location = "http://127.0.0.1:10000/devstoreaccount1/ctr/tab";
+        let wire = delta_api::StorageCredential::for_location(location, &azurite).unwrap();
+        assert_eq!(wire.prefix, location);
+        let back = wire
+            .to_vended(&super::ctx(
+                "abfss://ctr@devstoreaccount1.dfs.core.windows.net/tab",
+                AccessLevel::Read,
+            ))
+            .unwrap()
+            .unwrap();
+        assert_eq!(back.scope, azurite.scope);
+    }
+
+    #[test]
+    fn for_location_rejects_prefixes_beyond_the_scope() {
+        let v = VendedCredential::new(
+            aws("ak-test", None),
+            scope("s3://bucket/tab"),
+            AccessLevel::Read,
+        );
+        for (location, expect) in [
+            ("s3://bucket", "not within"),
+            ("s3://bucket/table2", "not within"),
+            ("s3://other/tab", "not within"),
+            ("not a location", "invalid"),
+        ] {
+            let err = delta_api::StorageCredential::for_location(location, &v)
+                .unwrap_err()
+                .to_string()
+                .to_lowercase();
+            assert!(err.contains(expect), "{location}: {err}");
+            assert!(!err.contains("sk-test"), "{err}");
+        }
+
+        let aad = VendedCredential::new(
+            StorageCredentials::AzureBearer("t".into()),
+            scope("abfss://ctr@acct.dfs.core.windows.net/tab"),
+            AccessLevel::Read,
+        );
+        assert!(
+            delta_api::StorageCredential::for_location(
+                "abfss://ctr@acct.dfs.core.windows.net/tab",
+                &aad
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -433,7 +556,7 @@ mod delta {
         assert_eq!(
             serde_json::to_value(&wire).unwrap(),
             serde_json::json!({
-                "prefix": "s3://bucket/tab/",
+                "prefix": "s3://bucket/tab",
                 "operation": "READ",
                 "config": {
                     "s3.access-key-id": "ak-test",

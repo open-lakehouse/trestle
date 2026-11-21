@@ -97,12 +97,14 @@ pub fn select_covering<'a, T>(
     )
 }
 
-/// `scope` as a prefix string for the server direction, always ending in `/`.
+/// `scope` as an Iceberg prefix string for the server direction, always ending in `/`.
 ///
-/// Clients of the config-map protocols (Iceberg, Delta API) commonly match prefixes as
-/// plain strings; without the trailing `/`, `s3://b/tab` would also match
-/// `s3://b/table2`.
-#[cfg(any(feature = "delta-api", feature = "iceberg"))]
+/// The Iceberg REST spec only says clients pick the longest matching prefix, and
+/// Iceberg Java (`S3FileIO`) matches it with a plain `startsWith`. Without the trailing
+/// `/`, `s3://b/tab` would also match `s3://b/table2`. Iceberg clients only look up
+/// files below the table root, so the `/` never hides a match. The Delta API writes
+/// the location without it, as its spec does.
+#[cfg(feature = "iceberg")]
 pub(crate) fn prefix_string(scope: &StorageScope) -> String {
     let mut prefix = scope.to_string();
     if !prefix.ends_with('/') {

@@ -167,9 +167,10 @@ pub struct VendedCredential {
   API) skip it, and fail when nothing relates. Of a list, `wire::select_covering`
   picks the most specific credential covering the request. The server direction is
   `From<&VendedCredential>`, or `TryFrom` where the shape cannot carry every credential
-  kind (only UC REST carries Azure AD tokens). It writes config-map prefixes with a
-  trailing `/`, because clients of those protocols often match prefixes as plain
-  strings.
+  kind (only UC REST carries Azure AD tokens). Iceberg prefixes end in `/`, because
+  Iceberg Java matches them as plain strings. Delta API prefixes are the location
+  without a trailing `/`, as its spec and the reference server write them;
+  `delta_api::StorageCredential::for_location` keeps the catalog's spelling of it.
 - Expiry precedence, for every adapter: an explicit wire expiry wins; else the SAS `se=`
   parameter; else `None`. There is no silent default lifetime.
 
