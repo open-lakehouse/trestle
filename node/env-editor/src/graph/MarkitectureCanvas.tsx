@@ -166,8 +166,10 @@ const EDGE_STYLE: Record<
 /** The edge kinds, in the order the legend lists them. */
 const EDGE_KINDS = Object.keys(EDGE_STYLE) as TopologyEdgeKind[];
 
-/** A short label for an edge. The cards already detail the rest: the gateway
- *  rows list routes, and a provider lists what it offers. */
+/** A short label for an edge at the gateway. The cards already detail the
+ *  rest: the gateway rows list routes, and a provider lists what it offers.
+ *  Internal "uses" edges carry no label, so the graph stays legible; their
+ *  detail is in the edge's accessible title. */
 function edgeLabel(e: TopologyEdgeDto): string | undefined {
   switch (e.kind) {
     case "access":
@@ -179,10 +181,7 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
     case "authorizes":
       return "policy";
     case "uses":
-      // A hard requirement names no resources: label it with the capability used.
-      return e.resources.length > 0
-        ? e.resources.join(", ")
-        : roleStyle(e.role).label;
+      return undefined;
   }
 }
 

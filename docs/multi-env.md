@@ -408,9 +408,9 @@ older schema asks for `trestle state init`, a newer one for an upgrade.
 ## Editor
 
 The environment editor becomes a workspace editor, laid out like an IDE
-(Zed, VS Code):
+(Zed, VS Code, Cursor):
 
-- an activity bar
+- a sidebar with its views as tabs on top: the explorer, history and settings
 - an explorer listing the workspace's environments
 - editor tabs, one per open environment or file
 - a bottom panel with Problems (plan errors, cross-env conflicts) and Output

@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { TooltipProvider } from "@open-lakehouse/ui-kit";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActivityBar, sideViewItems } from "./ActivityBar.js";
+import {
+  ActivityBar,
+  activityItems,
+  sidebarTabItems,
+  sideViewItems,
+} from "./ActivityBar.js";
 import {
   activePanelTab,
   BottomPanelProvider,
@@ -25,6 +30,7 @@ import {
   EnvSubTabs,
 } from "./envHeader.js";
 import type { WorkspaceDoc } from "./model.js";
+import { SidebarTabs } from "./SidebarTabs.js";
 import { shellCommands } from "./shellCommands.js";
 import { createMemoryWorkspaceStore } from "./store.js";
 import { WorkspaceProvider } from "./useWorkspace.js";
@@ -48,32 +54,61 @@ describe("side views", () => {
     ] as never).map((i) => i.id);
     expect(ids).toEqual(["explorer", "settings", "settings-app", "doctor"]);
     const out = html(
-      <ActivityBar
+      <SidebarTabs
+        items={sidebarTabItems(true, [
+          { id: "app", label: "App settings", icon: null, align: "end" },
+          { id: "doctor", label: "Doctor", icon: null },
+        ] as never)}
         view="doctor"
         onView={() => {}}
-        problemCount={0}
-        history
-        extra={[
-          { id: "doctor", label: "Doctor", icon: null, render: () => null },
-          {
-            id: "app",
-            label: "App settings",
-            icon: null,
-            align: "end",
-            render: () => null,
-          },
-        ]}
+        onHide={() => {}}
+        panelId="panel"
       />,
     );
-    expect(out).toContain('aria-label="History"');
-    expect(out).toContain('aria-label="Doctor" aria-pressed="true"');
-    // The end-aligned view sits in the bottom group, after the others.
-    expect(out.indexOf("mt-auto")).toBeLessThan(
+    // The sidebar's views are tabs on top of it, the open one selected.
+    expect(out).toContain('role="tablist" aria-label="Sidebar views"');
+    expect(out).toContain('aria-label="History" aria-selected="false"');
+    expect(out).toContain(
+      'aria-label="Doctor" aria-selected="true" aria-controls="panel" tabindex="0"',
+    );
+    expect(out).toContain('aria-label="Environments" aria-selected="false"');
+    // The end-aligned view sits after the others, then the hide button.
+    expect(out.indexOf('aria-label="Doctor"')).toBeLessThan(
       out.indexOf('aria-label="App settings"'),
     );
-    expect(out.indexOf('aria-label="Doctor"')).toBeLessThan(
-      out.indexOf("mt-auto"),
+    expect(out.indexOf('aria-label="App settings"')).toBeLessThan(
+      out.indexOf('aria-label="Hide sidebar'),
     );
+  });
+
+  test("the editor's views have shortcuts", () => {
+    expect(
+      sidebarTabItems(true).map((i) => [i.id, i.shortcut ?? null]),
+    ).toEqual([
+      ["explorer", "mod+shift+e"],
+      ["history", "mod+shift+h"],
+      ["settings", null],
+    ]);
+  });
+
+  test("the explorer tab carries the problem dot", () => {
+    const tabs = (problemCount: number) =>
+      html(
+        <SidebarTabs
+          items={sidebarTabItems(false)}
+          view="settings"
+          onView={() => {}}
+          onHide={() => {}}
+          problemCount={problemCount}
+        />,
+      );
+    expect(tabs(0)).not.toContain("bg-destructive");
+    expect(tabs(2)).toContain("bg-destructive");
+  });
+
+  test("without workbench views or actions there is no activity bar", () => {
+    expect(activityItems()).toEqual([]);
+    expect(html(<ActivityBar view="editor" onView={() => {}} />)).toBe("");
   });
 
   test("without contributions only the editor's views are listed", () => {
@@ -107,12 +142,16 @@ describe("side views", () => {
     ]);
     items.at(-1)?.run?.();
     expect(ran).toBe(1);
+    expect(
+      activityItems([
+        { id: "gear", label: "Settings", icon: null, run: () => {} },
+      ]).map((i) => i.id),
+    ).toEqual(["editor", "gear"]);
     const out = html(
       <ActivityBar
-        view="explorer"
+        view="editor"
         onView={() => {}}
-        problemCount={0}
-        history={false}
+        problems
         actions={[
           {
             id: "gear",
@@ -130,6 +169,9 @@ describe("side views", () => {
     expect(out.indexOf("mt-auto")).toBeLessThan(
       out.indexOf('aria-label="Settings"'),
     );
+    // The editor's button is the open experience, and carries the problems.
+    expect(out).toContain('aria-label="Editor" aria-pressed="true"');
+    expect(out).toContain("bg-destructive");
   });
 });
 
@@ -447,16 +489,18 @@ describe("workbench views", () => {
       ["apps", true],
       ["gear", false],
     ]);
+    expect(activityItems([], [apps]).map((i) => i.id)).toEqual([
+      "editor",
+      "apps",
+    ]);
     const out = html(
-      <ActivityBar
-        view="apps"
-        onView={() => {}}
-        problemCount={0}
-        history={false}
-        workbench={[apps]}
-      />,
+      <ActivityBar view="apps" onView={() => {}} workbench={[apps]} />,
     );
+    // The rail moves between the editor and the host's views; the editor's
+    // own side views are in the sidebar's tabs, not here.
     expect(out).toContain('aria-label="Apps" aria-pressed="true"');
+    expect(out).toContain('aria-label="Editor" aria-pressed="false"');
+    expect(out).not.toContain('aria-label="Environments"');
   });
 
   test("open() switches, from a host's code and from a command", () => {

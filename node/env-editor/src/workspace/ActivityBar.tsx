@@ -1,8 +1,11 @@
-// The shell's activity bar: one button per side view, the editor's own first,
-// then a host's (see `SideViewContribution`), then a host's workbench views
-// (see `WorkbenchViewContribution`), which take over the main area, then a
-// host's actions (see `ActivityActionContribution`), which run instead of
-// opening a sidebar; those aligned to the end sit at the bottom.
+// The shell's navigation, in two places. The sidebar's own views (the
+// editor's, then a host's, see `SideViewContribution`) are tabs at the top of
+// the sidebar (`SidebarTabs`). The activity bar, the rail left of it, moves
+// between experiences: the editor, a host's workbench views (see
+// `WorkbenchViewContribution`), which take over the main area, and a host's
+// actions (see `ActivityActionContribution`), which run instead; those aligned
+// to the end sit at the bottom. Without workbench views or actions there is
+// nothing to move between, and the rail isn't drawn.
 
 import {
   cn,
@@ -10,13 +13,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@open-lakehouse/ui-kit";
-import { Files, History, Settings } from "lucide-react";
+import { Files, History, Settings, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
+import { formatShortcut } from "../commands/registry.js";
 import type {
   ActivityActionContribution,
   SideViewContribution,
   WorkbenchViewContribution,
 } from "./contributions.js";
+import { EDITOR_VIEW } from "./workbench.js";
 
 /** A side view's id: the editor's, or a host's `SideViewContribution.id`. */
 export type SideView = string;
@@ -24,7 +29,7 @@ export type SideView = string;
 /** The editor's own side views. */
 export const BUILTIN_SIDE_VIEWS = ["explorer", "history", "settings"] as const;
 
-/** A button in the activity bar: a side view, or (with `run`) a host's action. */
+/** A sidebar tab, an activity bar button or (with `run`) a host's action. */
 export interface ActivityItem {
   id: SideView;
   label: string;
@@ -34,10 +39,13 @@ export interface ActivityItem {
   run?: () => void;
   /** A workbench view: takes over the main area instead of the sidebar. */
   workbench?: boolean;
+  /** The key that shows it (a `Command.shortcut`). */
+  shortcut?: string;
 }
 
-/** What the activity bar lists: the editor's side views (history only with
- *  revisions), then the host's, its workbench views, then its actions. */
+/** Everything the shell navigates to, for its commands: the editor's side
+ *  views (history only with revisions), then the host's, its workbench views,
+ *  then its actions. */
 export function sideViewItems(
   history: boolean,
   extra: readonly SideViewContribution[] = [],
@@ -45,12 +53,7 @@ export function sideViewItems(
   workbench: readonly WorkbenchViewContribution[] = [],
 ): ActivityItem[] {
   return [
-    { id: "explorer", label: "Environments", icon: <Files /> },
-    ...(history
-      ? [{ id: "history", label: "History", icon: <History /> }]
-      : []),
-    { id: "settings", label: "Workspace settings", icon: <Settings /> },
-    ...extra.map(({ id, label, icon, align }) => ({ id, label, icon, align })),
+    ...sidebarTabItems(history, extra),
     ...workbench.map(({ id, label, icon, align }) => ({
       id,
       label,
@@ -68,30 +71,76 @@ export function sideViewItems(
   ];
 }
 
+/** The sidebar's tabs: the editor's views (history only with revisions),
+ *  then the host's. */
+export function sidebarTabItems(
+  history: boolean,
+  extra: readonly SideViewContribution[] = [],
+): ActivityItem[] {
+  return [
+    {
+      id: "explorer",
+      label: "Environments",
+      icon: <Files />,
+      shortcut: "mod+shift+e",
+    },
+    ...(history
+      ? [
+          {
+            id: "history",
+            label: "History",
+            icon: <History />,
+            shortcut: "mod+shift+h",
+          },
+        ]
+      : []),
+    { id: "settings", label: "Workspace settings", icon: <Settings /> },
+    ...extra.map(({ id, label, icon, align }) => ({ id, label, icon, align })),
+  ];
+}
+
+/** The activity bar's buttons: the editor, then the host's workbench views and
+ *  actions. None when the host gives neither. */
+export function activityItems(
+  actions: readonly ActivityActionContribution[] = [],
+  workbench: readonly WorkbenchViewContribution[] = [],
+): ActivityItem[] {
+  if (actions.length === 0 && workbench.length === 0) return [];
+  return [
+    { id: EDITOR_VIEW, label: "Editor", icon: <Workflow /> },
+    ...sideViewItems(false, [], actions, workbench).filter(
+      (i) => i.workbench || i.run,
+    ),
+  ];
+}
+
+/** An item's tooltip: its label, and its shortcut where it has one. */
+export function itemTitle(item: Pick<ActivityItem, "label" | "shortcut">) {
+  return item.shortcut
+    ? `${item.label} (${formatShortcut(item.shortcut)})`
+    : item.label;
+}
+
 export function ActivityBar({
   view,
   onView,
-  problemCount,
-  history,
-  extra,
+  problems = false,
   actions,
   workbench,
 }: {
-  /** The highlighted item: the open side view, or the active workbench
-   *  view. */
-  view: SideView | undefined;
-  onView: (view: SideView) => void;
-  problemCount: number;
-  /** Whether to offer the revision history (the store keeps revisions). */
-  history: boolean;
-  /** A host's side views. */
-  extra?: readonly SideViewContribution[];
+  /** The highlighted item: the active workbench view, or `EDITOR_VIEW`. */
+  view: string | undefined;
+  onView: (view: string) => void;
+  /** Mark the editor's button: there are problems the sidebar doesn't show
+   *  right now. */
+  problems?: boolean;
   /** A host's actions. */
   actions?: readonly ActivityActionContribution[];
   /** A host's workbench views. */
   workbench?: readonly WorkbenchViewContribution[];
 }) {
-  const items = sideViewItems(history, extra, actions, workbench);
+  const items = activityItems(actions, workbench);
+  if (items.length === 0) return null;
   const button = (item: ActivityItem) => (
     <Tooltip key={item.id}>
       <TooltipTrigger asChild>
@@ -107,12 +156,12 @@ export function ActivityBar({
           )}
         >
           {item.icon}
-          {item.id === "explorer" && problemCount > 0 && (
+          {item.id === EDITOR_VIEW && problems && (
             <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-destructive" />
           )}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="right">{item.label}</TooltipContent>
+      <TooltipContent side="right">{itemTitle(item)}</TooltipContent>
     </Tooltip>
   );
   const end = items.filter((i) => i.align === "end");

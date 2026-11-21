@@ -1,5 +1,7 @@
-// The workspace editor, laid out like an IDE (Zed, VS Code): an activity bar,
-// a sidebar (the workspace's environments, revision history, settings), editor
+// The workspace editor, laid out like an IDE (Zed, VS Code, Cursor): an
+// activity bar when the host gives other experiences to move to, a sidebar
+// with its views as tabs on top (the workspace's environments, revision
+// history, settings), editor
 // tabs (an environment, or one of its revisions or comparisons), a bottom
 // panel (problems across the workspace, how to run the active environment)
 // and a status bar. An environment tab has a header, then the environment
@@ -38,6 +40,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -58,6 +61,7 @@ import {
   ActivityBar,
   BUILTIN_SIDE_VIEWS,
   type SideView,
+  sidebarTabItems,
   sideViewItems,
 } from "./ActivityBar.js";
 import {
@@ -112,6 +116,7 @@ import {
   RevisionEditor,
   RevisionsView,
 } from "./revisions.js";
+import { SidebarTabs } from "./SidebarTabs.js";
 import { shellCommands } from "./shellCommands.js";
 import {
   gatewayUrl,
@@ -194,6 +199,7 @@ function ShellBody({
 
   const plans = useMemberPlans(workspace, catalog);
   const [view, setView] = useState<SideView>("explorer");
+  const sidebarPanelId = useId();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const {
     view: panelView,
@@ -431,22 +437,21 @@ function ShellBody({
       <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
         <div className="flex min-h-0 flex-1">
           <ActivityBar
-            view={workbenchView?.id ?? (sidebarOpen ? view : undefined)}
+            view={workbenchView?.id ?? EDITOR_VIEW}
             onView={(v) => {
-              if (workbenchViews?.some((w) => w.id === v)) {
+              if (v === EDITOR_VIEW) {
+                // Back to the editor; on it already, show or hide its sidebar.
+                if (workbenchView) showEditor(EDITOR_VIEW);
+                else setSidebarOpen((o) => !o);
+              } else {
                 // A workbench view toggles with the editor tabs.
                 showEditor(v === workbench.active ? EDITOR_VIEW : v);
-              } else if (workbenchView) {
-                showView(v);
-              } else if (sidebarOpen && v === view) setSidebarOpen(false);
-              else {
-                setView(v);
-                setSidebarOpen(true);
               }
             }}
-            problemCount={problemCount}
-            history={hasRevisions}
-            extra={hostViews}
+            problems={
+              problemCount > 0 &&
+              (!!workbenchView || !sidebarOpen || view !== "explorer")
+            }
             actions={hostActions}
             workbench={workbenchViews}
           />
@@ -472,35 +477,50 @@ function ShellBody({
             : sidebarOpen && (
                 <>
                   <aside
+                    aria-label="Sidebar"
                     className="flex shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
                     style={{ width: sidebarWidth }}
                   >
-                    {view === "explorer" && (
-                      <EnvTree
-                        workspace={workspace}
-                        plans={plans}
-                        conflicts={conflicts}
-                        active={activeTab}
-                        onOpen={openEditor}
-                        onDownload={
-                          planner.bundle ? downloadWorkspace : undefined
-                        }
-                        downloading={downloading}
-                      />
-                    )}
-                    {view === "history" && (
-                      <RevisionsView
-                        workspace={workspace}
-                        env={activeEnv}
-                        catalog={catalog}
-                        onOpen={openEditor}
-                        focusCommit={focusCommit}
-                      />
-                    )}
-                    {view === "settings" && (
-                      <SettingsView workspace={workspace} />
-                    )}
-                    {hostView?.render()}
+                    <SidebarTabs
+                      items={sidebarTabItems(hasRevisions, hostViews)}
+                      view={view}
+                      onView={setView}
+                      onHide={() => setSidebarOpen(false)}
+                      problemCount={problemCount}
+                      panelId={sidebarPanelId}
+                    />
+                    <div
+                      id={sidebarPanelId}
+                      role="tabpanel"
+                      className="flex min-h-0 flex-1 flex-col"
+                    >
+                      {view === "explorer" && (
+                        <EnvTree
+                          workspace={workspace}
+                          plans={plans}
+                          conflicts={conflicts}
+                          active={activeTab}
+                          onOpen={openEditor}
+                          onDownload={
+                            planner.bundle ? downloadWorkspace : undefined
+                          }
+                          downloading={downloading}
+                        />
+                      )}
+                      {view === "history" && (
+                        <RevisionsView
+                          workspace={workspace}
+                          env={activeEnv}
+                          catalog={catalog}
+                          onOpen={openEditor}
+                          focusCommit={focusCommit}
+                        />
+                      )}
+                      {view === "settings" && (
+                        <SettingsView workspace={workspace} />
+                      )}
+                      {hostView?.render()}
+                    </div>
                   </aside>
                   <ResizeHandle
                     orientation="vertical"

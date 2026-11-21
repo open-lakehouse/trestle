@@ -6,7 +6,13 @@
 // list what the selection changed, then each rendered file that differs,
 // through the host's diff viewer where it gives one.
 
-import { Badge, Button, Input } from "@open-lakehouse/ui-kit";
+import {
+  Badge,
+  Button,
+  CommitHistory,
+  type CommitHistoryEntry,
+  Input,
+} from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
 import { GitCommitHorizontal, GitCompare, Loader2, Undo2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -200,24 +206,39 @@ export function RevisionsView({
           {list && "error" in list && (
             <span className="text-xs text-destructive">{list.error}</span>
           )}
-          {list && "value" in list && items.length === 0 && (
-            <span className="text-xs text-muted-foreground">
-              No revisions yet.
-            </span>
+          {list && "value" in list && (
+            <CommitHistory
+              compact
+              aria-label={`Revisions of ${env.name}`}
+              entries={items.map(revisionEntry)}
+              emptyState="No revisions yet."
+              onSelect={(entry) =>
+                onOpen({ env: env.id, revision: Number(entry.id) })
+              }
+              renderActions={(entry) => {
+                const i = items.findIndex((r) => String(r.number) === entry.id);
+                const previous = items[i + 1];
+                if (!previous) return null;
+                const to = items[i].number;
+                return (
+                  <button
+                    type="button"
+                    aria-label={`Compare #${previous.number} with #${to}`}
+                    title={`Compare with #${previous.number}`}
+                    className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                    onClick={() =>
+                      onOpen({
+                        env: env.id,
+                        compare: { from: previous.number, to },
+                      })
+                    }
+                  >
+                    <GitCompare className="h-3.5 w-3.5" />
+                  </button>
+                );
+              }}
+            />
           )}
-          <ol aria-label={`Revisions of ${env.name}`} className="space-y-1">
-            {items.map((r, i) => (
-              <RevisionRow
-                key={r.number}
-                revision={r}
-                previous={items[i + 1]}
-                onOpen={() => onOpen({ env: env.id, revision: r.number })}
-                onCompare={(from) =>
-                  onOpen({ env: env.id, compare: { from, to: r.number } })
-                }
-              />
-            ))}
-          </ol>
           <p className="mt-3 text-[11px] text-muted-foreground">
             Workspace <code>{workspace.name}</code>; revisions are immutable.
           </p>
@@ -227,51 +248,24 @@ export function RevisionsView({
   );
 }
 
-function RevisionRow({
-  revision,
-  previous,
-  onOpen,
-  onCompare,
-}: {
-  revision: RevisionSummary;
-  previous: RevisionSummary | undefined;
-  onOpen: () => void;
-  onCompare: (from: number) => void;
-}) {
-  return (
-    <li className="group flex items-start justify-between gap-2 rounded px-1 py-1 hover:bg-sidebar-accent">
-      <button
-        type="button"
-        className="min-w-0 flex-1 text-left"
-        onClick={onOpen}
-        title={revision.digest}
-      >
-        <span className="font-medium">#{revision.number}</span>{" "}
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {short(revision.digest)}
-        </span>
-        {revision.message && (
-          <span className="block truncate text-xs">{revision.message}</span>
-        )}
-        {revision.createdAt && (
-          <span className="block text-[11px] text-muted-foreground">
-            {new Date(revision.createdAt).toLocaleString()}
-          </span>
-        )}
-      </button>
-      {previous && (
-        <button
-          type="button"
-          aria-label={`Compare #${previous.number} with #${revision.number}`}
-          title={`Compare with #${previous.number}`}
-          className="invisible rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:visible"
-          onClick={() => onCompare(previous.number)}
-        >
-          <GitCompare className="h-3.5 w-3.5" />
-        </button>
-      )}
-    </li>
-  );
+/** A revision as a history entry; the newest is the environment's HEAD. */
+function revisionEntry(
+  revision: RevisionSummary,
+  index: number,
+): CommitHistoryEntry {
+  return {
+    id: String(revision.number),
+    title: revision.message || `Revision #${revision.number}`,
+    ref: short(revision.digest),
+    refTitle: revision.digest,
+    timestamp: revision.createdAt,
+    badges: (
+      <>
+        <Badge variant="outline">#{revision.number}</Badge>
+        {index === 0 && <Badge variant="primary">HEAD</Badge>}
+      </>
+    ),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -55,7 +55,7 @@ export interface CanvasToolbarProps {
   canRedo: boolean;
   /** A replan is pending or running. */
   planning: boolean;
-  /** Components in the current plan. */
+  /** Components in the current plan; none disables the bundle download. */
   componentCount: number;
   /** The latest plan failed. */
   hasError: boolean;
@@ -193,16 +193,19 @@ export function CanvasToolbar({
         bundleLabel={bundleLabel}
         compact={bar}
       />
-      <div className="mx-1 h-5 w-px bg-border" />
       {onToggleGateway && (
         <>
-          <GatewayToggle enabled={gatewayEnabled} onToggle={onToggleGateway} />
           <div className="mx-1 h-5 w-px bg-border" />
+          <GatewayToggle enabled={gatewayEnabled} onToggle={onToggleGateway} />
         </>
       )}
+      {/* The planner's status, only when there is something to say. The live
+          region stays mounted so screen readers announce it appearing. */}
+      {(planning || hasError) && <div className="mx-1 h-5 w-px bg-border" />}
       <span
         className={cn(
-          "inline-flex items-center gap-1.5 px-2 text-xs",
+          "inline-flex items-center gap-1.5 text-xs",
+          (planning || hasError) && "px-2",
           hasError && !planning ? "text-destructive" : "text-muted-foreground",
         )}
         aria-live="polite"
@@ -217,9 +220,7 @@ export function CanvasToolbar({
             <AlertTriangle className="h-3.5 w-3.5" />
             Plan failed
           </>
-        ) : (
-          `${componentCount} component${componentCount === 1 ? "" : "s"}`
-        )}
+        ) : null}
       </span>
     </div>
   );
