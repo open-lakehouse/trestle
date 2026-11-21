@@ -10,6 +10,7 @@
 //!   host fetched itself; [`HttpKeySource`] (feature `http`) fetches a JWKS URL.
 //! - A [`UserStatusStore`] supplies whether a user is banned or an admin. The lookup is
 //!   required and cached for a short TTL. Token claims are never used for either.
+//!   `PgNeonUserStatus` (feature `postgres`) reads Neon Auth's users from Postgres.
 //! - API keys (`olk_<id>_<secret>`) authenticate service accounts. An [`ApiKeyStore`]
 //!   looks a key up by id, and the SHA-256 of the key is compared in constant time.
 //!   `PgApiKeyStore` (feature `postgres`) reads them from Postgres.
@@ -149,6 +150,6 @@ pub use metadata::{ProtectedResourceMetadata, WELL_KNOWN_PATH};
 pub use migrate::{MIGRATOR, migrate};
 #[cfg(feature = "postgres")]
 #[cfg_attr(docsrs, doc(cfg(feature = "postgres")))]
-pub use postgres::PgApiKeyStore;
+pub use postgres::{PgApiKeyStore, PgNeonUserStatus};
 pub use principal::{AuthMethod, MissingPrincipal, Principal, PrincipalKind};
 pub use user_status::{UserStatus, UserStatusStore};

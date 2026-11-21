@@ -18,7 +18,8 @@ handlers a `Principal`, and an `Authorizer` decides what that principal may do.
   reads them from Postgres.
 - **User status**: a required, cached lookup of whether a user is banned or an admin,
   implemented by the host against its identity provider's user records. Token claims
-  are never used for either.
+  are never used for either. `PgNeonUserStatus` (feature `postgres`) reads Neon
+  Auth's `neon_auth."user"` table (the schema is configurable).
 - **Actors and trusted compute**: a request may also say which compute makes it, with
   a credential of its own (see [Actors](#actors)).
 - **`auth_layer`**: puts the `Principal` into the request extensions. A rejected
@@ -164,7 +165,7 @@ schema, apart from the host's own migrations.
 | Feature | Adds |
 |---|---|
 | `http` | `HttpKeySource`, using `reqwest` with rustls |
-| `postgres` | `PgApiKeyStore`, `PgGrantStore` and the `authz` migrations (`migrate`, `MIGRATOR`), using `sqlx` with its `postgres`, `migrate` and `macros` features (the host's sqlx brings the runtime and TLS) |
+| `postgres` | `PgApiKeyStore`, `PgGrantStore`, `PgNeonUserStatus` and the `authz` migrations (`migrate`, `MIGRATOR`), using `sqlx` with its `postgres`, `migrate` and `macros` features (the host's sqlx brings the runtime and TLS) |
 | `pdp-client` | `HttpAuthorizer`, using `reqwest` with rustls (shared with `http`) |
 | `cedar` | `CedarAuthorizer` and `GrantsEntityLoader`, using `cedar-policy` with the `datetime`, `decimal` and `ipaddr` extensions. Adds about 4.8 MB to a release binary (1.9 MB zipped). |
 

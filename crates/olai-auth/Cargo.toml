@@ -35,7 +35,8 @@ ed25519-dalek = { version = "2.1", default-features = false, features = ["std", 
 reqwest = { version = "0.13", default-features = false, features = ["rustls"], optional = true }
 # API key digests and their constant-time comparison.
 sha2 = { version = "0.10", default-features = false }
-# Only the `postgres` feature's `PgApiKeyStore`, `PgGrantStore` and `authz` migrations.
+# Only the `postgres` feature's `PgApiKeyStore`, `PgGrantStore`, `PgNeonUserStatus` and
+# `authz` migrations.
 # Runtime queries (no offline cache; `macros` only for the embedded `migrate!`), and no
 # runtime or TLS features: the host's own sqlx brings those.
 sqlx = { version = "0.8", default-features = false, features = ["postgres", "migrate", "macros"], optional = true }
@@ -57,6 +58,7 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 http = ["dep:reqwest"]
 # `PgApiKeyStore` and `PgGrantStore`: API keys and grants from Postgres tables, through the
 # host's `sqlx::PgPool`, and the `authz` migrations that create them (`migrate`).
+# `PgNeonUserStatus`: user status from Neon Auth's `neon_auth."user"` table.
 postgres = ["dep:sqlx"]
 # `HttpAuthorizer`: ask a remote policy decision point over HTTPS.
 pdp-client = ["dep:reqwest"]
@@ -65,6 +67,10 @@ cedar = ["dep:cedar-policy"]
 
 [[test]]
 name = "postgres"
+required-features = ["postgres"]
+
+[[test]]
+name = "neon_user_status"
 required-features = ["postgres"]
 
 [[test]]

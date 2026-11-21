@@ -274,7 +274,7 @@ jobs:
           # combined with other target selectors, so it is a separate invocation.
           cargo test --locked --lib -p olai-store --features postgres
           cargo test --locked --doc -p olai-store --features postgres
-      # The `authz` migrations, `PgApiKeyStore` and `PgGrantStore`, each test in a
+      # The `authz` migrations, `PgApiKeyStore`, `PgGrantStore` and `PgNeonUserStatus`, each test in a
       # schema it migrates and drops.
       - name: Run Postgres authz tests (olai-auth)
         env:
@@ -283,7 +283,7 @@ jobs:
           PGDATABASE: olai_store
         run: |
           export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
-          cargo test --locked -p olai-auth --features postgres --test postgres
+          cargo test --locked -p olai-auth --features postgres --test postgres --test neon_user_status
       # The store's whole suite with its shared tables on Postgres too, each test in a
       # schema it creates and drops.
       - name: Run Postgres shared-state tests (olai-stack-state)
