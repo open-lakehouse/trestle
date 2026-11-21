@@ -109,8 +109,9 @@ export interface GatewaySection {
   rows: GatewayRow[];
 }
 
-/** A request check the gateway delegates, in the order it runs. */
-export type AccessCheckKind = "authenticates" | "authorizes";
+/** A request check the gateway delegates, in the order it runs, then where it
+ *  sends each request's trace. */
+export type AccessCheckKind = "authenticates" | "authorizes" | "traces";
 
 /** One access-control row: the check and the component that performs it. */
 export interface AccessCheck {
@@ -266,19 +267,27 @@ function gatewaySections(gateway: GraphNodeDto): GatewaySection[] {
   });
 }
 
-const CHECK_ORDER: AccessCheckKind[] = ["authenticates", "authorizes"];
+const CHECK_ORDER: AccessCheckKind[] = [
+  "authenticates",
+  "authorizes",
+  "traces",
+];
+
+/** The kind of gateway row `e` leaves from, if it is one of the gateway's
+ *  checks: sign-in, policy, or its trace export. */
+function checkKind(e: TopologyEdgeDto): AccessCheckKind | undefined {
+  if (e.kind === "authenticates" || e.kind === "authorizes") return e.kind;
+  if (e.kind === "integrates" && e.feature === "observability") return "traces";
+  return undefined;
+}
 
 /** The checks gateway `id` delegates (its outgoing authenticates/authorizes
- *  edges), sign-in first. */
+ *  edges, and its trace export), sign-in first. */
 function gatewayChecks(id: string, edges: TopologyEdgeDto[]): AccessCheck[] {
   const checks: AccessCheck[] = [];
   for (const e of edges) {
-    if (
-      (e.kind === "authenticates" || e.kind === "authorizes") &&
-      e.from === id
-    ) {
-      checks.push({ kind: e.kind, module: e.to });
-    }
+    const kind = checkKind(e);
+    if (kind && e.from === id) checks.push({ kind, module: e.to });
   }
   return checks.sort(
     (a, b) => CHECK_ORDER.indexOf(a.kind) - CHECK_ORDER.indexOf(b.kind),
@@ -343,10 +352,9 @@ function edgeHandles(
 ): { source?: string; target?: string } {
   const handles: { source?: string; target?: string } = {};
   if (gateways.has(e.from)) {
+    const check = checkKind(e);
     if (e.kind === "route") handles.source = routeHandle(e.host_port, e.to);
-    else if (e.kind === "authenticates" || e.kind === "authorizes") {
-      handles.source = checkHandle(e.kind);
-    }
+    else if (check) handles.source = checkHandle(check);
   } else if (components.has(e.from)) {
     handles.source = COMPONENT_OUT;
   }

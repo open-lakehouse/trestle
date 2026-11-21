@@ -78,3 +78,66 @@ describe("migrateSelection", () => {
     });
   });
 });
+
+describe("migratePlatform (mirrors the Rust migrate_platform)", () => {
+  test("moves legacy gateway settings to platform features", () => {
+    const migrated = migrateSelection(
+      selection({
+        modules: ["mlflow"],
+        gateway: { auth: false, policy: true },
+      }),
+    );
+    expect(migrated.platform).toEqual({ identity: true, policy: true });
+    expect(migrated.gateway).toBeUndefined();
+  });
+
+  test("turns listed providers and capabilities into their features", () => {
+    const migrated = migrateSelection(
+      selection({
+        modules: ["mlflow", "jaeger", "opa"],
+        capabilities: ["auth"],
+      }),
+    );
+    expect(migrated.modules).toEqual(["mlflow"]);
+    expect(migrated.capabilities).toEqual([]);
+    expect(migrated.platform).toEqual({
+      observability: "jaeger",
+      policy: "opa",
+      identity: true,
+    });
+  });
+
+  test("an explicit sign-in off drops the listed provider", () => {
+    const migrated = migrateSelection(
+      selection({
+        modules: ["envoy", "authelia"],
+        knob_overrides: { envoy: { auth: "false", image: "envoy:pinned" } },
+      }),
+    );
+    expect(migrated.modules).toEqual(["envoy"]);
+    expect(migrated.platform).toEqual({});
+    expect(migrated.knob_overrides).toEqual({
+      envoy: { image: "envoy:pinned" },
+    });
+  });
+
+  test("keeps a gateway that is off, and an already chosen provider", () => {
+    const migrated = migrateSelection(
+      selection({
+        modules: ["jaeger"],
+        gateway: { enabled: false, auth: false, policy: false },
+        platform: { observability: "other-tracer" },
+      }),
+    );
+    expect(migrated.gateway).toEqual({ enabled: false });
+    expect(migrated.platform).toEqual({ observability: "other-tracer" });
+  });
+
+  test("leaves a current selection alone", () => {
+    const current = selection({
+      modules: ["mlflow"],
+      platform: { identity: true },
+    });
+    expect(migrateSelection(current)).toBe(current);
+  });
+});

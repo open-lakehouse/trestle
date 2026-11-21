@@ -4,7 +4,13 @@
 // wherever a stored selection comes in. Mirrors the Rust function; keep the two
 // in step.
 
-import type { HostedResource, Selection } from "../types.js";
+import type {
+  FeatureChoice,
+  HostedResource,
+  PlatformFeature,
+  PlatformSelection,
+  Selection,
+} from "../types.js";
 
 /** Unity Catalog's id before it was split by implementation (manifest v6). */
 const LEGACY_UNITY_CATALOG = "unity-catalog";
@@ -24,6 +30,10 @@ const UNITY_CATALOG_RS = "unity-catalog-rs";
  * ones, which only fill what it leaves unset.
  */
 export function migrateSelection(selection: Selection): Selection {
+  return migratePlatform(migrateUnityCatalog(selection));
+}
+
+function migrateUnityCatalog(selection: Selection): Selection {
   const legacy = LEGACY_UNITY_CATALOG;
   const selected = selection.modules.includes(legacy);
   const hosted = selection.hosted?.[legacy];
@@ -49,5 +59,109 @@ export function migrateSelection(selection: Selection): Selection {
 
   const next: Selection = { ...selection, modules, knob_overrides };
   if (selection.hosted) next.hosted = nextHosted;
+  return next;
+}
+
+/** The baseline gateway, whose `auth` knob turned on sign-in before manifest
+ *  v7. */
+const LEGACY_GATEWAY = "envoy";
+/** The gateway knob keys that turned on sign-in before manifest v7. */
+const LEGACY_AUTH_KNOBS = ["auth", "ENVOY_AUTH"];
+/** The baseline providers a selection listed as modules to turn their feature
+ *  on, before manifest v7. */
+const LEGACY_PROVIDERS: Record<string, PlatformFeature> = {
+  authelia: "identity",
+  opa: "policy",
+  jaeger: "observability",
+};
+/** The capabilities that turned a feature on, before manifest v7. */
+const LEGACY_CAPABILITIES: Record<string, PlatformFeature> = {
+  auth: "identity",
+  policy: "policy",
+  tracing: "observability",
+};
+
+/**
+ * `selection` with its pre-v7 sign-in, policy and tracing settings moved to
+ * platform features, or `selection` itself when there are none. Mirrors
+ * `migrate_platform` in crates/stack-topology/src/manifest.rs.
+ *
+ * `gateway.auth` / `gateway.policy`, the listed baseline providers (`authelia`,
+ * `opa`, `jaeger`) and the `auth` / `policy` / `tracing` capabilities turn
+ * their features on (a policy engine implied sign-in). The gateway's `auth`
+ * knob turns identity on, or with `false` keeps it off (dropping a listed
+ * provider). A feature already set keeps its provider.
+ */
+export function migratePlatform(selection: Selection): Selection {
+  const on = new Map<PlatformFeature, FeatureChoice>();
+  const turnOn = (feature: PlatformFeature, choice: FeatureChoice) => {
+    if (!on.has(feature)) on.set(feature, choice);
+  };
+  let changed = false;
+  const gateway = selection.gateway ? { ...selection.gateway } : undefined;
+  if (gateway?.auth) {
+    turnOn("identity", true);
+    changed = true;
+  }
+  if (gateway?.policy) {
+    turnOn("policy", true);
+    turnOn("identity", true);
+    changed = true;
+  }
+  if (gateway) {
+    delete gateway.auth;
+    delete gateway.policy;
+  }
+  const modules = selection.modules.filter((m) => {
+    const feature = LEGACY_PROVIDERS[m];
+    if (!feature) return true;
+    turnOn(feature, m);
+    if (feature === "policy") turnOn("identity", true);
+    changed = true;
+    return false;
+  });
+  const capabilities = selection.capabilities.filter((c) => {
+    const feature = LEGACY_CAPABILITIES[c];
+    if (!feature) return true;
+    turnOn(feature, true);
+    if (feature === "policy") turnOn("identity", true);
+    changed = true;
+    return false;
+  });
+  let knob_overrides = selection.knob_overrides;
+  const gatewayKnobs = knob_overrides[LEGACY_GATEWAY];
+  const knobKey = LEGACY_AUTH_KNOBS.find(
+    (k) => gatewayKnobs?.[k] !== undefined,
+  );
+  if (gatewayKnobs && knobKey) {
+    const raw = gatewayKnobs[knobKey].trim().toLowerCase();
+    const rest = Object.fromEntries(
+      Object.entries(gatewayKnobs).filter(
+        ([k]) => !LEGACY_AUTH_KNOBS.includes(k),
+      ),
+    );
+    const { [LEGACY_GATEWAY]: _gateway, ...others } = knob_overrides;
+    knob_overrides = Object.keys(rest).length
+      ? { ...others, [LEGACY_GATEWAY]: rest }
+      : others;
+    if (["true", "1", "yes", "on"].includes(raw)) turnOn("identity", true);
+    if (["false", "0", "no", "off"].includes(raw)) on.delete("identity");
+    changed = true;
+  }
+  if (!changed) return selection;
+
+  const platform: PlatformSelection = { ...selection.platform };
+  for (const [feature, choice] of on) platform[feature] ??= choice;
+  const next: Selection = {
+    ...selection,
+    modules,
+    capabilities,
+    knob_overrides,
+    platform,
+  };
+  if (gateway) {
+    if (gateway.enabled === false) next.gateway = gateway;
+    else delete next.gateway;
+  }
   return next;
 }

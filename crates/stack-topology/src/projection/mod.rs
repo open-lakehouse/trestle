@@ -805,6 +805,7 @@ mod tests {
             services: &'a BTreeMap<String, Vec<ServiceSpec>>,
             gateway: &'a GatewayDto,
             deploy: &'a [DeployStepDto],
+            integrations: &'a [Integration],
         }
         let result = plan_result(&fixture_selection(), None).expect("plan should succeed");
         let dump = Dump {
@@ -814,6 +815,7 @@ mod tests {
             services: &result.services,
             gateway: &result.gateway,
             deploy: &result.deploy,
+            integrations: &result.integrations,
         };
         eprintln!(
             "{}",

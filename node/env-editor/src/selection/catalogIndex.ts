@@ -109,24 +109,25 @@ export function slotHolders(
 }
 
 /**
- * The roles the planner fills on its own (mirrors the Rust
- * `Role::GATEWAY_MANAGED`): the always-on gateway, and the sign-in and policy
- * providers the gateway's access settings turn on. Pickers don't offer them.
+ * The roles the planner fills on its own (mirrors the Rust `Role::PLATFORM`):
+ * the always-on gateway, and the providers of the platform features (identity,
+ * policy, observability). Pickers don't offer them.
  */
-export const GATEWAY_MANAGED_ROLES: readonly string[] = [
+export const PLATFORM_ROLES: readonly string[] = [
   "gateway",
   "auth",
   "policy",
+  "tracing",
 ];
 
-/** Whether the planner adds `module` itself (see `GATEWAY_MANAGED_ROLES`). */
-export function isGatewayManaged(module: Pick<ModuleDto, "provider_of">) {
-  return GATEWAY_MANAGED_ROLES.includes(module.provider_of ?? "");
+/** Whether the planner adds `module` itself (see `PLATFORM_ROLES`). */
+export function isPlatformManaged(module: Pick<ModuleDto, "provider_of">) {
+  return PLATFORM_ROLES.includes(module.provider_of ?? "");
 }
 
-/** The modules a user picks: the catalog without the gateway-managed ones. */
+/** The modules a user picks: the catalog without the platform-managed ones. */
 export function pickableModules(catalog: CatalogDto): ModuleDto[] {
-  return catalog.modules.filter((m) => !isGatewayManaged(m));
+  return catalog.modules.filter((m) => !isPlatformManaged(m));
 }
 
 /** The pickable capability → providing modules index, sorted by capability.

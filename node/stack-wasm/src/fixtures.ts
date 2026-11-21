@@ -60,6 +60,21 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
       hosted: null,
+      integrations: [
+        {
+          feature: "identity",
+          protocols: ["forward-auth"],
+        },
+        {
+          feature: "policy",
+          protocols: ["envoy-ext-authz-grpc"],
+          requires: ["identity"],
+        },
+        {
+          feature: "observability",
+          protocols: ["otlp-grpc"],
+        },
+      ],
     },
     {
       id: "authelia",
@@ -88,6 +103,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
       helpers: [],
       hosted: null,
+      protocols: [
+        {
+          protocol: "forward-auth",
+          endpoint: "http",
+        },
+      ],
     },
     {
       id: "postgres",
@@ -648,6 +669,13 @@ export const FIXTURE_CATALOG: CatalogDto = {
       hosted: null,
       function: "unitycatalog",
       api: "unity-catalog",
+      integrations: [
+        {
+          feature: "policy",
+          protocols: ["olai-authorize"],
+          note: "its authorizer also needs callers to present olai-auth tokens, which the gateway's sign-in doesn't issue",
+        },
+      ],
     },
     {
       id: "jaeger",
@@ -656,7 +684,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       summary: "All-in-one OTLP tracing backend with the Jaeger UI.",
       category: "observability",
       provider_of: "tracing",
-      requires: ["envoy"],
+      requires: [],
       conflicts_with: [],
       resource_kinds: [],
       resource_nouns: [],
@@ -676,6 +704,17 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
       helpers: [],
       hosted: null,
+      protocols: [
+        {
+          protocol: "otlp-grpc",
+          endpoint: "otlp_grpc",
+        },
+        {
+          protocol: "otlp-http",
+          endpoint: "otlp_http",
+          path: "/v1/traces",
+        },
+      ],
     },
     {
       id: "headwaters",
@@ -804,6 +843,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
       helpers: [],
       hosted: null,
+      integrations: [
+        {
+          feature: "identity",
+          via_gateway: true,
+        },
+      ],
     },
     {
       id: "uc-mcp",
@@ -984,6 +1029,12 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
       helpers: [],
       hosted: null,
+      integrations: [
+        {
+          feature: "identity",
+          via_gateway: true,
+        },
+      ],
     },
     {
       id: "opa",
@@ -1034,6 +1085,18 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
       helpers: [],
       hosted: null,
+      protocols: [
+        {
+          protocol: "envoy-ext-authz-grpc",
+          endpoint: "grpc",
+        },
+      ],
+      integrations: [
+        {
+          feature: "observability",
+          protocols: ["otlp-grpc"],
+        },
+      ],
     },
   ],
   default_selection: {
@@ -1041,10 +1104,6 @@ export const FIXTURE_CATALOG: CatalogDto = {
     capabilities: [],
     knob_overrides: {},
     extra_resources: [],
-    gateway: {
-      auth: false,
-      policy: false,
-    },
   },
   targets: [
     {
@@ -1475,10 +1534,26 @@ export const FIXTURE_PLAN: PlanResult = {
         protocol: "HTTP",
         resources: [],
       },
+      {
+        kind: "integrates",
+        key: "integrates:envoy→jaeger:observability",
+        from: "envoy",
+        to: "jaeger",
+        feature: "observability",
+        protocol: "otlp-grpc",
+      },
+      {
+        kind: "integrates",
+        key: "integrates:opa→jaeger:observability",
+        from: "opa",
+        to: "jaeger",
+        feature: "observability",
+        protocol: "otlp-grpc",
+      },
     ],
   },
   mermaid:
-    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    n8 -->|"HTTP"| n7\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
+    'flowchart LR\n    n0(["<b>Clients</b>"]):::clients\n    n1["<b>Authelia</b><br/>auth"]:::component\n    n2{{"<b>Envoy</b><br/>gateway"}}:::gateway\n    n3["<b>Jaeger</b><br/>tracing"]:::component\n    n4["<b>Open Policy Agent</b><br/>policy"]:::component\n    n5["<b>Postgres</b><br/>relational db"]:::component\n    n6["<b>RustFS</b><br/>object store"]:::component\n    n7["<b>Unity Catalog (OSS)</b><br/>data catalog"]:::component\n    n8["<b>MLflow</b><br/>experiment tracking"]:::component\n    n0 -->|":9080"| n2\n    n0 -->|":9100"| n2\n    n2 -->|"/jaeger, /v1/traces 🔒"| n3\n    n2 -->|"/api/2.1/unity-catalog, /unity-catalog 🔒"| n7\n    n2 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow 🔒"| n8\n    n2 -->|"S3 + STS"| n6\n    n2 -.->|"authn"| n1\n    n2 -.->|"authz"| n4\n    n7 -->|"PostgreSQL: unitycatalog"| n5\n    n7 -->|"S3: unity"| n6\n    n8 -->|"PostgreSQL: mlflow"| n5\n    n8 -->|"S3: mlflow"| n6\n    n8 -->|"HTTP"| n7\n    n2 -.->|"observability"| n3\n    n4 -.->|"observability"| n3\n    classDef clients fill:#f1f5f9,stroke:#64748b\n    classDef gateway fill:#ede9fe,stroke:#7c3aed\n    classDef component fill:#eff6ff,stroke:#2563eb\n    classDef external fill:#fafafa,stroke:#737373,stroke-dasharray: 4 3\n',
   services: {
     authelia: [
       {
@@ -1831,6 +1906,11 @@ export const FIXTURE_PLAN: PlanResult = {
         port: 16686,
       },
       {
+        name: "jaeger_otlp_grpc",
+        host: "jaeger",
+        port: 4317,
+      },
+      {
         name: "jaeger_otlp_http",
         host: "jaeger",
         port: 4318,
@@ -1899,6 +1979,9 @@ export const FIXTURE_PLAN: PlanResult = {
     policy: {
       cluster: "opa",
     },
+    tracing: {
+      cluster: "jaeger_otlp_grpc",
+    },
   },
   files: FIXTURE_FILES,
   deploy: [
@@ -1952,6 +2035,40 @@ export const FIXTURE_PLAN: PlanResult = {
       title: "Trust the gateway's local certificate authority",
       instructions:
         "The gateway serves HTTPS with a certificate from a CA minted for this environment. Copy it out, then add it to your browser or pass it to `curl --cacert`:\n\n```bash\ndocker compose cp gateway-certs:/certs/ca.pem .\n```",
+    },
+  ],
+  integrations: [
+    {
+      module: "envoy",
+      feature: "identity",
+      provider: "authelia",
+      state: "active",
+      protocol: "forward-auth",
+      endpoint: "http://authelia:9091",
+    },
+    {
+      module: "envoy",
+      feature: "policy",
+      provider: "opa",
+      state: "active",
+      protocol: "envoy-ext-authz-grpc",
+      endpoint: "http://opa:9191",
+    },
+    {
+      module: "envoy",
+      feature: "observability",
+      provider: "jaeger",
+      state: "active",
+      protocol: "otlp-grpc",
+      endpoint: "http://jaeger:4317",
+    },
+    {
+      module: "opa",
+      feature: "observability",
+      provider: "jaeger",
+      state: "active",
+      protocol: "otlp-grpc",
+      endpoint: "http://jaeger:4317",
     },
   ],
 };

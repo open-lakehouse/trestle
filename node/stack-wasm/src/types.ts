@@ -60,6 +60,10 @@ export interface ModuleDto {
   /** The APIs it needs some implementation of (e.g. `unity-catalog`): the
    *  stack's server of each, else one the planner pulls in. */
   requires_apis?: string[];
+  /** For a platform-feature provider: the protocols it serves. */
+  protocols?: ProtocolOffer[];
+  /** The platform features it can integrate with. */
+  integrations?: IntegrationSpec[];
 }
 
 /** A container a module runs to support its services (mirrors
@@ -96,10 +100,61 @@ export interface Selection {
   /** Whether to generate the Python client workspace (`client/`), and with
    *  which example notebooks (mirrors `ClientSelection`). Off when omitted. */
   client?: ClientSelection;
-  /** Whether the gateway runs and how it guards access (mirrors
-   *  `GatewaySettings`). Omitted means a gateway that is open. */
+  /** Whether the gateway runs (mirrors `GatewaySettings`). Omitted means it
+   *  does. */
   gateway?: GatewaySettings;
+  /** The platform features the environment turns on, each with its provider
+   *  (mirrors `PlatformSelection`). Omitted means none. */
+  platform?: PlatformSelection;
+  /** Per-module opt-outs of platform-feature integrations: module id ->
+   *  (feature -> on). Every capable module integrates unless its entry says
+   *  `false`. */
+  integrations?: Record<string, Partial<Record<PlatformFeature, boolean>>>;
 }
+
+/** An environment-wide capability services integrate with (mirrors
+ *  `PlatformFeature`). */
+export type PlatformFeature = "identity" | "policy" | "observability";
+
+/** Which provider fills a feature: `true` for the catalog's default, or a
+ *  module id (mirrors `FeatureChoice`). */
+export type FeatureChoice = true | string;
+
+/** The platform features a selection turns on (mirrors `PlatformSelection`).
+ *  An omitted feature is off. Identity and policy need the gateway; policy
+ *  needs identity. */
+export type PlatformSelection = Partial<Record<PlatformFeature, FeatureChoice>>;
+
+/** A protocol a platform-feature provider serves (mirrors `ProtocolOffer`). */
+export interface ProtocolOffer {
+  protocol: string;
+  /** The provider endpoint serving it. */
+  endpoint: string;
+  path?: string;
+}
+
+/** A platform feature a module can integrate with (mirrors `IntegrationSpec`). */
+export interface IntegrationSpec {
+  feature: PlatformFeature;
+  /** The protocols it speaks, most preferred first. */
+  protocols?: string[];
+  /** The features this one only works together with. */
+  requires?: PlatformFeature[];
+  /** It takes the feature from the gateway in front of it. */
+  via_gateway?: boolean;
+  note?: string;
+}
+
+/** One module's integration with one selected feature (mirrors `Integration`). */
+export type Integration = {
+  module: string;
+  feature: PlatformFeature;
+  provider: string;
+} & (
+  | { state: "active"; protocol: string; endpoint?: string }
+  | { state: "disabled" }
+  | { state: "incompatible"; reason: string }
+);
 
 /** Python client workspace options (mirrors the Rust `ClientSelection`). */
 export interface ClientSelection {
@@ -109,16 +164,16 @@ export interface ClientSelection {
   examples?: boolean;
 }
 
-/** Gateway access (mirrors the Rust `GatewaySettings`). Each setting pulls in
- *  its provider by role; `policy` implies `auth`. */
+/** Whether the gateway runs (mirrors the Rust `GatewaySettings`). */
 export interface GatewaySettings {
   /** Run the gateway; omitted means on. Off publishes each service on its own
-   *  host port, and rules out `auth` and `policy`. */
+   *  host port, and rules out identity and policy. */
   enabled?: boolean;
-  /** Require sign-in (the `auth`-role provider, Authelia). */
-  auth: boolean;
-  /** Authorize each signed-in request (the `policy`-role provider, OPA). */
-  policy: boolean;
+  /** Legacy (selections before platform features): require sign-in.
+   *  `migrateSelection` moves it to `platform.identity`. */
+  auth?: boolean;
+  /** Legacy: enforce policy. `migrateSelection` moves it to `platform.policy`. */
+  policy?: boolean;
 }
 
 /** Who runs a hosted resource (mirrors `HostedVendor`): it decides the
@@ -321,6 +376,13 @@ export type TopologyEdgeDto = { key: string } & (
     }
   | { kind: "authorizes"; from: string; to: string; host_port: number }
   | {
+      kind: "integrates";
+      from: string;
+      to: string;
+      feature: PlatformFeature;
+      protocol: string;
+    }
+  | {
       kind: "uses";
       from: string;
       to: string;
@@ -392,6 +454,8 @@ export interface GatewayDto {
   auth?: AuthDto | null;
   tls?: TlsDto | null;
   policy?: PolicyDto | null;
+  /** The gateway's trace export, when its observability integration is on. */
+  tracing?: { cluster: string };
 }
 
 /** One materialized file from a plan (mirrors `OutputFileDto`). */
@@ -506,6 +570,9 @@ export interface PlanResult {
   /** Every host port the environment binds, sorted by port. Absent from
    *  planners that predate it. */
   host_ports?: HostPortDto[];
+  /** Every module's integration with each selected platform feature, on or
+   *  off and why. Absent from planners that predate platform features. */
+  integrations?: Integration[];
 }
 
 /**

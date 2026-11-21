@@ -55,6 +55,10 @@ const CHECK_LABEL: Record<AccessCheckKind, { step: string; hint: string }> = {
     step: "Authorization · policy check",
     hint: "Each signed-in request is then checked against the policy engine's rules.",
   },
+  traces: {
+    step: "Tracing · OTLP export",
+    hint: "The gateway exports a trace span for every request it forwards.",
+  },
 };
 
 /** A surface's headline: the platform's own API, or the protocol a service
@@ -193,9 +197,9 @@ export function GatewayNode({ data, selected }: NodeProps) {
         <div>
           <SectionHeader
             className="bg-muted text-muted-foreground"
-            title="The checks a gated request passes, in order, before it reaches a backend."
+            title="The checks a gated request passes, in order, before it reaches a backend, and where its trace goes."
           >
-            <span className="truncate">Access control</span>
+            <span className="truncate">Platform</span>
             <Lock className="h-3 w-3 shrink-0" />
           </SectionHeader>
           {checks.map((check) => {

@@ -30,20 +30,24 @@ import { ModuleIcon } from "../graph/projectIcons.js";
 import { roleStyle } from "../graph/roleTheme.js";
 import { KnobField } from "../knobs/KnobField.js";
 import { implementationsOf } from "../selection/catalogIndex.js";
+import { integrationsOf } from "../selection/platform.js";
 import { describeOrigin, type Origin } from "../state/origin.js";
 import type {
   CatalogDto,
-  GatewaySettings,
+  FeatureChoice,
   HostedResource,
   ModuleDto,
   PlanResult,
+  PlatformFeature,
   ProvisionedDto,
   ResourceNounDto,
+  Selection,
   TopologyEdgeDto,
 } from "../types.js";
-import { AccessSection } from "./AccessSection.js";
 import { HostedSection } from "./HostedSection.js";
 import { ImplementationSection } from "./ImplementationSection.js";
+import { IntegrationsSection } from "./IntegrationsSection.js";
+import { PlatformSection } from "./PlatformSection.js";
 import { RunsAsSection, runsAsFunction } from "./RunsAsSection.js";
 
 export interface InspectorPanelProps {
@@ -70,9 +74,20 @@ export interface InspectorPanelProps {
    *  run this module as a function (a local container: `undefined`). */
   onSetHosted: (moduleId: string, hosted: HostedResource | undefined) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
-  /** How the gateway guards access; shown when the gateway is inspected. */
-  gateway: GatewaySettings | undefined;
-  onSetGateway: (gateway: GatewaySettings) => void;
+  /** The working selection: its gateway and platform features are shown when
+   *  the gateway is inspected. */
+  selection: Selection;
+  onSetGateway: (on: boolean) => void;
+  onSetFeature: (
+    feature: PlatformFeature,
+    choice: FeatureChoice | undefined,
+  ) => void;
+  /** Opt the component out of (or back into) a platform feature. */
+  onSetIntegration: (
+    moduleId: string,
+    feature: PlatformFeature,
+    on: boolean,
+  ) => void;
   onRemove: (moduleId: string) => void;
   onSwap: (fromId: string, toId: string) => void;
   /** Navigate to a connected component. */
@@ -102,8 +117,10 @@ export function InspectorPanel({
   hosted,
   onSetHosted,
   onSetKnob,
-  gateway,
+  selection,
   onSetGateway,
+  onSetFeature,
+  onSetIntegration,
   onRemove,
   onSwap,
   onSelect,
@@ -205,8 +222,26 @@ export function InspectorPanel({
         )}
 
         {role === "gateway" && (
-          <Section title="Access">
-            <AccessSection gateway={gateway} onChange={onSetGateway} />
+          <Section title="Platform">
+            <PlatformSection
+              catalog={catalog}
+              selection={selection}
+              onSetGateway={onSetGateway}
+              onSetFeature={onSetFeature}
+            />
+          </Section>
+        )}
+
+        {integrationsOf(plan?.integrations, moduleId).length > 0 && (
+          <Section title="Platform integrations">
+            <IntegrationsSection
+              moduleId={moduleId}
+              integrations={plan?.integrations}
+              providerName={(id) => names.get(id) ?? id}
+              onChange={(feature, on) =>
+                onSetIntegration(moduleId, feature, on)
+              }
+            />
           </Section>
         )}
 
@@ -534,6 +569,10 @@ function describeConnection(
         return outgoing
           ? `Checks policy with ${name(e.to)}`
           : `Authorizes requests for ${name(e.from)}`;
+      case "integrates":
+        return outgoing
+          ? `Integrates with ${name(e.to)} for ${e.feature}`
+          : `Provides ${e.feature} to ${name(e.from)}`;
       case "uses": {
         const what =
           e.resources.length > 0

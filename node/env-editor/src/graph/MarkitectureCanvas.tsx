@@ -156,6 +156,12 @@ const EDGE_STYLE: Record<
     dash: "2 4",
     animated: false,
   },
+  integrates: {
+    label: "Platform integration",
+    stroke: "hsl(var(--status-blocked))",
+    dash: "1 3",
+    animated: false,
+  },
   uses: {
     label: "Uses",
     stroke: "hsl(var(--muted-foreground))",
@@ -180,6 +186,8 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
       return "sign-in";
     case "authorizes":
       return "policy";
+    case "integrates":
+      return e.feature === "observability" ? "traces" : e.feature;
     case "uses":
       return undefined;
   }
@@ -199,6 +207,8 @@ function edgeTitle(e: TopologyEdgeDto, gateways: Set<string>): string {
       return `The gateway delegates sign-in to ${e.to}; login portal at ${e.portal_prefix}`;
     case "authorizes":
       return `The gateway asks ${e.to} to authorize each signed-in request on :${e.host_port}`;
+    case "integrates":
+      return `${e.from} integrates with ${e.to} for ${e.feature} (${e.protocol})`;
     case "uses":
       return e.resources.length > 0
         ? `${e.from} uses ${e.to} (${e.protocol}) for ${e.resources.join(", ")}`

@@ -34,11 +34,11 @@ import { MarkitectureCanvas } from "./graph/MarkitectureCanvas.js";
 import type { NodeFilesTarget } from "./graph/nodeFiles.js";
 import type { NodeSlots } from "./graph/nodeSlots.js";
 import { CLIENTS_NODE_ID } from "./graph/useTopologyLayout.js";
-import { DIRECT, gatewayEnabled, OPEN } from "./inspector/AccessSection.js";
 import { InspectorPanel } from "./inspector/InspectorPanel.js";
 import { ConfigPanel } from "./layout/ConfigPanel.js";
 import { PlannerProvider, usePlanner } from "./planner.js";
 import { moduleName, replacementsOf } from "./selection/catalogIndex.js";
+import { gatewayEnabled } from "./selection/platform.js";
 import { componentOrigin, describeOrigin } from "./state/origin.js";
 import { isEmptySelection, useEnvironment } from "./state/useEnvironment.js";
 import type {
@@ -447,8 +447,8 @@ function EditorBody({
           ? "Download environment (.zip) — hosted secrets are placeholders, see its README"
           : "Download environment (.zip) with fresh credentials"
       }
-      gatewayEnabled={gatewayEnabled(selection.gateway)}
-      onToggleGateway={(on) => env.setGateway(on ? OPEN : DIRECT)}
+      gatewayEnabled={gatewayEnabled(selection)}
+      onToggleGateway={env.setGateway}
       variant={chrome === "workspace" ? "bar" : "floating"}
       leading={chrome === "workspace" ? toolbarLeading : undefined}
     />
@@ -504,8 +504,10 @@ function EditorBody({
           hosted={selection.hosted?.[inspected]}
           onSetHosted={env.setHosted}
           onSetKnob={env.setKnob}
-          gateway={selection.gateway}
+          selection={selection}
           onSetGateway={env.setGateway}
+          onSetFeature={env.setFeature}
+          onSetIntegration={env.setIntegration}
           onRemove={removeComponent}
           onSwap={swapComponent}
           onSelect={goTo}
@@ -596,6 +598,7 @@ function EditorBody({
                 onToggleCapability={env.toggleCapability}
                 onSetKnob={env.setKnob}
                 onSetGateway={env.setGateway}
+                onSetFeature={env.setFeature}
               />
             </Card>
           </TabsContent>
