@@ -1213,12 +1213,20 @@ fn mlflow() -> Arc<dyn Module> {
         helpers: vec![HelperService::init("mlflow-gateway-init")],
         // Under the default upstream; `Mlflow::secrets_in` follows the `upstream` knob.
         secrets: mlflow_secrets("keys"),
-        deploy: vec![DeployStepSpec::new(
-            "kek",
-            DeployPhase::Configure,
-            "Set the AI Gateway's key passphrase",
-            include_str!("../../templates/modules/mlflow/kek.deploy.md.jinja"),
-        )],
+        deploy: vec![
+            DeployStepSpec::new(
+                "kek",
+                DeployPhase::Configure,
+                "Set the AI Gateway's key passphrase",
+                include_str!("../../templates/modules/mlflow/kek.deploy.md.jinja"),
+            ),
+            DeployStepSpec::new(
+                "traces",
+                DeployPhase::Verify,
+                "Find the AI Gateway's traces",
+                include_str!("../../templates/modules/mlflow/traces.deploy.md.jinja"),
+            ),
+        ],
         ..Provides::default()
     };
     // `MLFLOW_S3_ENDPOINT_URL` and the AWS_* credentials are no longer declared here — they

@@ -4,8 +4,10 @@ Runs once per `docker compose up` (the `mlflow-gateway-init` service) and is ide
 endpoints and settings made in the MLflow UI survive re-runs.
 
 MLFLOW_GATEWAY_MODELS lists `provider:model` pairs. Each becomes an endpoint *named the model
-id*, with usage tracking on, so clients that ask for the model by its usual id (Claude Code, the
-OpenAI SDKs) reach it unchanged. A `databricks:` pair names a workspace serving endpoint, and
+id*, so clients that ask for the model by its usual id (Claude Code, the OpenAI SDKs) reach it
+unchanged. Every endpoint this job makes has usage tracking on: MLflow records each call through
+it as a trace in the endpoint's own experiment, `gateway/<endpoint>`. Tracking is turned back on
+if it was switched off. A `databricks:` pair names a workspace serving endpoint, and
 its endpoint drops the `databricks-` prefix (`databricks:databricks-claude-opus-5-5` serves
 `claude-opus-5-5`).
 
@@ -197,6 +199,12 @@ def route_of(endpoint):
     return None
 
 
+def traced(endpoint):
+    """Whether MLflow traces the endpoint's calls: with usage tracking on, each call becomes a
+    trace in the endpoint's experiment (`gateway/<endpoint>`, made with the endpoint)."""
+    return bool(endpoint.get("usage_tracking")) and bool(endpoint.get("experiment_id"))
+
+
 def seed(gw, pairs, upstream, env):
     secrets = {s["secret_name"]: s for s in gw.call("GET", "/secrets/list").get("secrets", [])}
     definitions = {
@@ -254,6 +262,13 @@ def seed(gw, pairs, upstream, env):
             log(f"re-pointed endpoint {name} ({provider}, {route_of(existing)} -> {route})")
         else:
             log(f"endpoint {name} exists ({route})")
+        if not traced(existing):
+            existing = gw.call(
+                "POST",
+                "/endpoints/update",
+                {"endpoint_id": existing["endpoint_id"], "usage_tracking": True},
+            )["endpoint"]
+            log(f"turned on tracing for endpoint {name}")
         gw.call(
             "POST",
             "/endpoints/set-tag",

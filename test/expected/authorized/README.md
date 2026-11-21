@@ -130,7 +130,19 @@ The gateway then serves the stack at <https://authorized.localhost:9080>. [LAYOU
 
 ## Verify
 
-### 5. Trust the gateway's local certificate authority
+### 5. Find the AI Gateway's traces (`mlflow`)
+
+Each call through the AI Gateway (`/ai-gateway/…` at the gateway, see [LAYOUT.md](LAYOUT.md)) is
+recorded as a trace in MLflow. The traces of an endpoint go to its own experiment, named
+`gateway/<endpoint>` (e.g. `gateway/claude-opus-5-5`), not to `Default`: open it under
+**Experiments**, then **Traces**. The `mlflow-gateway-init` job creates every endpoint with
+tracing on, and turns it back on at each start if it was switched off.
+
+The server logs `Failed to send trace to MLflow backend: When an mlflow-artifacts URI was
+supplied, …` for each call. That warning is harmless: MLflow has already stored the trace's
+spans in its database and only fails to write an extra copy to artifact storage.
+
+### 6. Trust the gateway's local certificate authority
 
 The gateway serves HTTPS with a certificate from a CA minted for this environment. Copy it out, then add it to your browser or pass it to `curl --cacert`:
 
