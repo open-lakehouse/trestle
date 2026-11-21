@@ -663,7 +663,9 @@ impl BindingBackend for PyBackend<'_> {
             .map(|r| r.type_name.clone())
             .unwrap_or_else(|| spec.singular.clone());
         let doc = format!(" The requests on one `{resource}`. It sends no request itself.");
-        driver::resource_accessor(service, quote! { #[doc = #doc] }, "Py")
+        // PyO3 names the method after the ident without its `r#`; a Python keyword is suffixed.
+        let name = super::py_ident(&spec.singular);
+        driver::resource_accessor(service, quote! { #[doc = #doc] }, "Py", name)
     }
 }
 
@@ -717,6 +719,7 @@ impl PyBackend<'_> {
         let signature = pyo3_signature(method, parts.mode, python.keyword_only);
         let client_call = &parts.client_call;
         let builder_calls = generate_builder_pattern(method, is_list, self);
+        let (oneof_checks, oneof_setters) = oneof_variant_setters(method, parts.mode);
         let MethodOutput { future, value } = output;
         let (py_type, convert) = match &value {
             Some((py_type, convert)) => (py_type.clone(), convert.clone()),
@@ -732,7 +735,9 @@ impl PyBackend<'_> {
                 py: Python,
                 #(#param_defs,)*
             ) -> #py_result_type<#py_type> {
+                #(#oneof_checks)*
                 let request = #client_call #(#builder_calls)*;
+                #(#oneof_setters)*
                 #[allow(clippy::let_unit_value)]
                 let result = crate::codegen::runtime::block_on(py, #future)??;
                 Ok(#convert)
@@ -763,7 +768,9 @@ impl PyBackend<'_> {
                 py: Python<'py>,
                 #(#param_defs,)*
             ) -> ::pyo3::PyResult<crate::codegen::py_future::PyFuture<'py, #async_type>> {
+                #(#oneof_checks)*
                 let request = #client_call #(#builder_calls)*;
+                #(#oneof_setters)*
                 crate::codegen::py_future::PyFuture::new(py, async move {
                     #[allow(clippy::let_unit_value, unused_variables)]
                     let result = #future
@@ -787,9 +794,10 @@ fn method_doc_attrs(method: &MethodHandler<'_>) -> TokenStream {
 }
 
 impl SetterRender for PyBackend<'_> {
-    fn supports(&self, _setter: &OptionalSetter<'_>) -> bool {
-        // PyO3 accepts every parameter type; no capability filter.
-        true
+    fn supports(&self, setter: &OptionalSetter<'_>) -> bool {
+        // PyO3 accepts every parameter type. A oneof is set through its variants instead
+        // (`oneof_variant_setters`).
+        !matches!(setter.field_type.base_type, BaseType::OneOf(_))
     }
 
     fn param_ident(&self, name: &str) -> Ident {
@@ -859,22 +867,21 @@ impl SetterRender for PyBackend<'_> {
 /// matching value conversion happens at the call/setter site
 /// ([`PyBackend::client_call`] / [`PyBackend::render_setter`]).
 fn python_param_defs(method: &MethodHandler<'_>, mode: BindingMode) -> Vec<TokenStream> {
-    method
-        .param_plan(mode)
+    python_params(method, mode)
         .into_iter()
         .map(|p| {
-            let param_name = super::py_ident(p.name());
-            if json_param(p.field_type()).is_some() {
-                return if p.is_optional() {
+            let param_name = super::py_ident(p.name);
+            if json_param(&p.ty).is_some() {
+                return if p.optional {
                     quote! { #param_name: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>> }
                 } else {
                     quote! { #param_name: ::pyo3::Bound<'_, ::pyo3::PyAny> }
                 };
             }
-            let rust_type = method.field_type(p.field_type(), RenderContext::PythonParameter);
-            let py_type = wrap_param_type(p.field_type(), &rust_type);
+            let rust_type = method.field_type(&p.ty, RenderContext::PythonParameter);
+            let py_type = wrap_param_type(&p.ty, &rust_type);
             // A required list or map is not an `Option`.
-            let py_type = if p.is_optional() || !is_collection(p.field_type()) {
+            let py_type = if p.optional || !is_collection(&p.ty) {
                 py_type
             } else {
                 strip_option(py_type)
@@ -882,6 +889,86 @@ fn python_param_defs(method: &MethodHandler<'_>, mode: BindingMode) -> Vec<Token
             quote! { #param_name: #py_type }
         })
         .collect()
+}
+
+/// A parameter of a Python binding method: a request param, or one variant of a request oneof.
+struct PyParam<'p> {
+    /// The proto field name.
+    name: &'p str,
+    ty: UnifiedType,
+    optional: bool,
+}
+
+/// The parameters of a Python binding method, from the shared [`MethodHandler::param_plan`]. A
+/// oneof has no Python type, so each of its variants is an optional keyword argument of its own,
+/// as in the model constructors (`OneofAccessor`); the method rejects more than one of them (see
+/// [`oneof_variant_setters`]).
+fn python_params<'p>(method: &'p MethodHandler<'_>, mode: BindingMode) -> Vec<PyParam<'p>> {
+    method
+        .param_plan(mode)
+        .into_iter()
+        .flat_map(|p| match p.oneof_variants() {
+            Some(variants) => variants
+                .iter()
+                .map(|v| PyParam {
+                    name: &v.field_name,
+                    ty: UnifiedType {
+                        is_optional: true,
+                        ..v.field_type.clone()
+                    },
+                    optional: true,
+                })
+                .collect::<Vec<_>>(),
+            None => vec![PyParam {
+                name: p.name(),
+                ty: p.field_type().clone(),
+                optional: p.is_optional(),
+            }],
+        })
+        .collect()
+}
+
+/// For each request oneof of `method`: a check that at most one of its variant arguments is set
+/// (a `ValueError` otherwise), and the statement that hands the one that is to its `with_<variant>`
+/// setter on `request`.
+fn oneof_variant_setters(
+    method: &MethodHandler<'_>,
+    mode: BindingMode,
+) -> (Vec<TokenStream>, Vec<TokenStream>) {
+    let mut checks = Vec::new();
+    let mut setters = Vec::new();
+    for param in method.param_plan(mode) {
+        let Some(variants) = param.oneof_variants() else {
+            continue;
+        };
+        let idents: Vec<Ident> = variants
+            .iter()
+            .map(|v| super::py_ident(&v.field_name))
+            .collect();
+        let names = variants
+            .iter()
+            .map(|v| format!("`{}`", super::sanitize_python_field_name(&v.field_name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let message = format!("at most one of {names} may be set");
+        checks.push(quote! {
+            if [#(#idents.is_some()),*].into_iter().filter(|set| *set).count() > 1 {
+                // `?` converts for the sync method's error type; the async one is a `PyErr`.
+                Err(::pyo3::exceptions::PyValueError::new_err(#message))?;
+            }
+        });
+        for (variant, ident) in variants.iter().zip(&idents) {
+            let with_method = format_ident!("with_{}", variant.field_name);
+            let value = convert_param_value(&variant.field_type, quote! { value });
+            setters.push(quote! {
+                let request = match #ident {
+                    ::core::option::Option::Some(value) => request.#with_method(#value),
+                    ::core::option::Option::None => request,
+                };
+            });
+        }
+    }
+    (checks, setters)
 }
 
 /// The free-form JSON type of a param, which Python passes as a plain object.
@@ -1024,9 +1111,9 @@ fn pyo3_signature(
 ) -> TokenStream {
     let mut signature_parts = Vec::new();
     let mut star = keyword_only;
-    for p in method.param_plan(mode).iter() {
-        let ident = super::py_ident(p.name());
-        if p.is_optional() {
+    for p in python_params(method, mode) {
+        let ident = super::py_ident(p.name);
+        if p.optional {
             if std::mem::take(&mut star) {
                 signature_parts.push(quote! { * });
             }

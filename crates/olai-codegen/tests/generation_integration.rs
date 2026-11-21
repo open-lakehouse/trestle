@@ -16,6 +16,8 @@ use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
 use tempfile::TempDir;
 
+mod support;
+
 fn metadata() -> CodeGenMetadata {
     let bytes = include_bytes!("../proto/example.bin");
     let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
@@ -1305,7 +1307,7 @@ fn keyword_named_params_generate_raw_identifiers() {
         // several destructure a tuple. Both read the body field as `body.r#type`.
         for binding in [
             "let r#type = body.r#type;",
-            "let (r#type, data) = (body.r#type, body.data);",
+            "let (r#type, data, payload) = (body.r#type, body.data, body.payload);",
             // A `get` with `body: "*"` reads its body too.
             "impl<S: Send + Sync> axum::extract::FromRequest<S> for FindEventsRequest",
             "let r#match = body.r#match;",
@@ -1318,6 +1320,15 @@ fn keyword_named_params_generate_raw_identifiers() {
                 "{runtime:?}: extractors bind `{binding}`:\n{common}"
             );
         }
+        // A service whose only extractor reads path params next to its body (`SetPointer`) still
+        // imports the `RequestPartsExt` that `parts.extract` needs.
+        let pointer =
+            std::fs::read_to_string(tmp.path().join("common/extractors/pointer/server.rs"))
+                .unwrap();
+        assert!(
+            pointer.contains("use axum::{RequestExt, RequestPartsExt};"),
+            "{runtime:?}: pointer extractor imports `RequestPartsExt`:\n{pointer}"
+        );
         // Python keyword args are suffixed (`from_`, `in_`), never a raw ident that PyO3 would
         // expose as the unusable `from` / `in`.
         let python = read_all(&tmp.path().join("python"));
@@ -1331,11 +1342,102 @@ fn keyword_named_params_generate_raw_identifiers() {
             !python.contains("r#in") && !python.contains(" from:"),
             "{runtime:?}: Python binding exposes a keyword arg:\n{python}"
         );
+        // A request oneof (#395) is one optional keyword argument per variant, at most one set,
+        // each handed to the client builder's variant setter.
+        for part in [
+            "r#ref: Option<String>,",
+            "seq: Option<i64>,",
+            "route: ::core::option::Option<PyRoute>,",
+            "\"at most one of `ref`, `seq`, `route` may be set\"",
+            "::core::option::Option::Some(value) => request.with_route(value.into()),",
+        ] {
+            assert!(
+                python.contains(part),
+                "{runtime:?}: Python binding has `{part}`:\n{python}"
+            );
+        }
+        // buffa boxes a message variant; prost stores it inline.
+        let client_src = read_all(&tmp.path().join("client"));
+        let route_variant = match runtime {
+            olai_codegen::Runtime::Buffa => {
+                "post_event_request::Payload::Route(::std::boxed::Box::new(route))"
+            }
+            olai_codegen::Runtime::Prost => "post_event_request::Payload::Route(route)",
+        };
+        assert!(
+            client_src.contains(route_variant),
+            "{runtime:?}: oneof setter stores `{route_variant}`:\n{client_src}"
+        );
         let models = read_all(&tmp.path().join("models"));
         assert!(
             models.contains("self.r#type"),
             "{runtime:?}: resource name accessors read `self.r#type`:\n{models}"
         );
+        // A resource singular named after a keyword (#393): the root accessor and the parent's
+        // child navigator are raw idents, the binding accessors name the JS/Python method `type`.
+        let client = read_all(&tmp.path().join("client"));
+        for accessor in [
+            "pub fn r#type(",
+            "pub fn type_from_full_name(",
+            "type_name: impl Into<String>,\n    ) -> crate::codegen::variety::TypeClient",
+        ] {
+            assert!(
+                client.contains(accessor),
+                "{runtime:?}: client has `{accessor}`:\n{client}"
+            );
+        }
+        assert!(
+            python.contains(
+                "pub fn r#type(&self, kind_name: String, type_name: String) -> PyTypeClient"
+            ),
+            "{runtime:?}: Python accessor is `type`:\n{python}"
+        );
+        // napi-derive can't take a raw ident: the NAPI accessor is `type_`, named `type` in JS.
+        let node = read_all(&tmp.path().join("node"));
+        assert!(
+            node.contains("#[napi(js_name = \"type\")]\n    pub fn type_("),
+            "{runtime:?}: NAPI accessor is named `type` in JS:\n{node}"
+        );
+        // NAPI params name the `.d.ts` params (camelCased, a `_` suffix dropped): never raw, never
+        // a JS reserved word.
+        for param in [
+            "type_: String",
+            "ref_: String",
+            "class_param: String",
+            "super_param: String",
+        ] {
+            assert!(
+                node.contains(param),
+                "{runtime:?}: NAPI binding takes `{param}`:\n{node}"
+            );
+        }
+        assert!(
+            !node.contains("r#"),
+            "{runtime:?}: NAPI binding has a raw ident:\n{node}"
+        );
+        // Message params cross NAPI as protobuf bytes (#384): a `Buffer` per message, optional or
+        // required, singular or a list; the TS client encodes them with `toBinary`.
+        for param in [
+            "changes: ::core::option::Option<::std::vec::Vec<napi::bindgen_prelude::Buffer>>",
+            "routes: ::std::vec::Vec<napi::bindgen_prelude::Buffer>",
+        ] {
+            assert!(
+                node.contains(param),
+                "{runtime:?}: NAPI binding takes `{param}`:\n{node}"
+            );
+        }
+        let ts = read_all(&tmp.path().join("node_ts"));
+        for part in [
+            "changes?: Kind[];",
+            "this.inner.update(changes?.map((m) => Buffer.from(toBinary(KindSchema, m))))",
+            "async putRoutes(routes: Route[]): Promise<void>",
+            "routes.map((m) => Buffer.from(toBinary(RouteSchema, m)))",
+        ] {
+            assert!(
+                ts.contains(part),
+                "{runtime:?}: TS client has `{part}`:\n{ts}"
+            );
+        }
         // The raw-ident prefix never leaks into a non-Rust output (TS, Python stubs).
         for path in walk(tmp.path())
             .into_iter()
@@ -1346,6 +1448,22 @@ fn keyword_named_params_generate_raw_identifiers() {
                 !src.contains("r#"),
                 "{runtime:?}: {} carries a raw-ident prefix",
                 path.display()
+            );
+            if path.extension().is_some_and(|e| e == "ts") {
+                support::assert_ts_parses(&path, &src);
+            }
+        }
+        // JS reserved words (#394) bind under an escaped name; the options key stays the proto
+        // name.
+        for binding in [
+            "const { match, from, in: in_, delete: delete_ } = options || {};",
+            "async listRoutes(ref: string, class_: string)",
+            "delete?: boolean;",
+            "async getScope(super_: string,",
+        ] {
+            assert!(
+                ts.contains(binding),
+                "{runtime:?}: TS client has `{binding}`:\n{ts}"
             );
         }
     }
@@ -1378,19 +1496,6 @@ fn client_only_config_with_keyword_body_fields_parses() {
     }
 }
 
-/// `proto/example_keyword_oneof.bin`, compiled from `proto/example_keyword_oneof.proto`.
-/// Regenerate it from the crate root with:
-///
-/// ```sh
-/// protoc -I proto -I tests/rest_client_e2e/proto --include_imports \
-///   -o proto/example_keyword_oneof.bin proto/example_keyword_oneof.proto
-/// ```
-fn keyword_oneof_metadata() -> CodeGenMetadata {
-    let bytes = include_bytes!("../proto/example_keyword_oneof.bin");
-    let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
-    parse_file_descriptor_set(&fds).expect("parse succeeds")
-}
-
 /// A request oneof variant named after a keyword gets a builder setter with a raw-ident parameter.
 #[test]
 fn keyword_named_oneof_variant_setter_uses_raw_identifier() {
@@ -1398,7 +1503,7 @@ fn keyword_named_oneof_variant_setter_uses_raw_identifier() {
         let tmp = TempDir::new().unwrap();
         let mut config = full_client_config(tmp.path());
         config.runtime = runtime;
-        generate_code(&keyword_oneof_metadata(), &config)
+        generate_code(&edge_case_metadata(), &config)
             .unwrap_or_else(|e| panic!("{runtime:?}: generation failed: {e:?}"));
         for path in walk(tmp.path())
             .into_iter()

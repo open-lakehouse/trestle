@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use convert_case::{Case, Casing};
 use itertools::Itertools;
 
-use super::caps::{is_napi_supported, is_required_message_body, message_type_name};
+use super::caps::{crosses_napi, is_message_param, message_type_name};
 use crate::analysis::{EmitShape, RequestParam, RequestType};
 use crate::codegen::{BindingMode, BindingsConfig, MethodHandler, ServiceHandler};
 use crate::parsing::types::unified_to_typescript;
@@ -314,12 +314,14 @@ fn generate_imports_sorted(services: &[&ServiceHandler<'_>]) -> String {
             // including resource-less (Flat) services that decode `*Response` messages directly.
             type_names.extend(decoded_type_name(&method));
 
-            // Required message bodies are encoded with `toBinary(<Type>Schema, value)` before
-            // crossing to the native binding, so import each body's type and schema too.
+            // Message params are encoded with `toBinary(<Type>Schema, value)` before crossing to
+            // the native binding, so import each one's type and schema too.
             type_names.extend(
                 method
-                    .required_parameters()
-                    .filter(|param| is_required_message_body(param))
+                    .plan
+                    .parameters
+                    .iter()
+                    .filter(|param| !param.is_path_param() && is_message_param(param))
                     .filter_map(message_type_name),
             );
         }
@@ -419,7 +421,7 @@ fn is_root_collection(method: &MethodHandler<'_>) -> bool {
 fn generate_options_interface(method: &MethodHandler<'_>) -> Option<String> {
     let optional_params: Vec<&RequestParam> = method
         .optional_parameters()
-        .filter(|p| !p.is_path_param() && is_napi_supported(p))
+        .filter(|p| !p.is_path_param() && crosses_napi(p))
         .collect();
 
     if optional_params.is_empty() {
@@ -431,9 +433,7 @@ fn generate_options_interface(method: &MethodHandler<'_>) -> Option<String> {
     let mut fields = String::new();
     for param in &optional_params {
         let ts_name = param.name().to_case(Case::Camel);
-        let ts_type = unified_to_typescript(param.field_type());
-        // Strip the " | undefined" suffix since we use `?:` syntax
-        let ts_type = ts_type.strip_suffix(" | undefined").unwrap_or(&ts_type);
+        let ts_type = ts_param_type(param);
         if let Some(doc) = param.documentation() {
             let cleaned = doc.trim().replace('\n', "\n   * ");
             fields.push_str(&format!("  /** {cleaned} */\n"));
@@ -517,15 +517,15 @@ fn generate_resource_client_class(service: &ServiceHandler<'_>) -> Option<String
 
 /// The required/optional param split for an instance-style (get/update/delete) TS method, using the
 /// shared [`MethodHandler::param_plan_split`] for path/`page_token` filtering plus the NAPI
-/// capability filter. Required params keep message bodies (passed as bytes); optional params don't.
+/// capability filter (messages are kept, and passed as bytes).
 fn ts_param_split<'a>(
     method: &'a MethodHandler<'a>,
     mode: BindingMode,
 ) -> (Vec<&'a RequestParam>, Vec<&'a RequestParam>) {
     let (required, optional) = method.param_plan_split(mode);
     (
-        ts_capability_filter(required, true),
-        ts_capability_filter(optional, false),
+        ts_capability_filter(required),
+        ts_capability_filter(optional),
     )
 }
 
@@ -550,21 +550,49 @@ fn ts_collection_param_split<'a>(
         .filter(|p| !(drop_page_token && p.name() == "page_token"))
         .collect();
     (
-        ts_capability_filter(required, true),
-        ts_capability_filter(optional, false),
+        ts_capability_filter(required),
+        ts_capability_filter(optional),
     )
 }
 
-/// Apply the NAPI capability filter shared by the Node and TS bindings: drop params NAPI can't pass.
-/// Required params additionally keep message bodies (which cross as serialized bytes).
-fn ts_capability_filter(
-    params: Vec<&RequestParam>,
-    keep_message_bodies: bool,
-) -> Vec<&RequestParam> {
-    params
-        .into_iter()
-        .filter(|p| is_napi_supported(p) || (keep_message_bodies && is_required_message_body(p)))
-        .collect()
+/// Apply the NAPI capability filter shared by the Node and TS bindings: drop params NAPI can't pass
+/// (messages cross as serialized bytes).
+fn ts_capability_filter(params: Vec<&RequestParam>) -> Vec<&RequestParam> {
+    params.into_iter().filter(|p| crosses_napi(p)).collect()
+}
+
+/// The TS type of a param, without `| undefined`. A message is its typed object (`TagPolicy`, or
+/// `GrantChange[]` for a list), referenced through its (possibly aliased) import name so a message
+/// named after a JS global resolves to its `$` alias; it is serialized to bytes when forwarded to
+/// the native binding (see [`ts_native_arg`]).
+fn ts_param_type(param: &RequestParam) -> String {
+    match message_type_name(param) {
+        Some(name) if is_message_param(param) => {
+            let ty = ts_type_ident(&name);
+            if param.field_type().is_repeated {
+                format!("{ty}[]")
+            } else {
+                ty
+            }
+        }
+        _ => unified_to_typescript(param.field_type()).replace(" | undefined", ""),
+    }
+}
+
+/// The argument the native binding takes for the param bound as `name`: a message is serialized to
+/// protobuf bytes, a `Buffer` per message (`toBinary` yields a `Uint8Array`); anything else passes
+/// as is.
+fn ts_native_arg(param: &RequestParam, name: &str) -> String {
+    let Some(ty) = message_type_name(param).filter(|_| is_message_param(param)) else {
+        return name.to_string();
+    };
+    let encode = |value: &str| format!("Buffer.from(toBinary({ty}Schema, {value}))");
+    match (param.field_type().is_repeated, param.is_optional()) {
+        (true, true) => format!("{name}?.map((m) => {})", encode("m")),
+        (true, false) => format!("{name}.map((m) => {})", encode("m")),
+        (false, true) => format!("{name} === undefined ? undefined : {}", encode(name)),
+        (false, false) => encode(name),
+    }
 }
 
 /// The TS method name of an instance-style method, which is also the native (NAPI) method it calls.
@@ -773,17 +801,7 @@ impl MethodCallSpec {
 
         let required_param_list = required_params
             .iter()
-            .map(|p| {
-                // A required message body is accepted as its typed object (e.g.
-                // `tagPolicy: TagPolicy`) and serialized to bytes when forwarded to the native
-                // binding (see `all_args` below). Reference the type through its (possibly aliased)
-                // import name so a body named after a JS global resolves to its `$` alias.
-                let ty = match message_type_name(p) {
-                    Some(name) if is_required_message_body(p) => ts_type_ident(&name),
-                    _ => unified_to_typescript(p.field_type()).replace(" | undefined", ""),
-                };
-                format!("{}: {}", p.name().to_case(Case::Camel), ty)
-            })
+            .map(|p| format!("{}: {}", js_ident(p.name()), ts_param_type(p)))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -800,9 +818,19 @@ impl MethodCallSpec {
         };
 
         let optional_destructure = if has_options {
+            // The options key is the proto name; a reserved word binds under its escaped name
+            // (`delete: delete_`).
             let fields = optional_params
                 .iter()
-                .map(|p| p.name().to_case(Case::Camel))
+                .map(|p| {
+                    let key = p.name().to_case(Case::Camel);
+                    let local = js_ident(p.name());
+                    if key == local {
+                        key
+                    } else {
+                        format!("{key}: {local}")
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("    const {{ {fields} }} = options || {{}};\n")
@@ -810,24 +838,12 @@ impl MethodCallSpec {
             String::new()
         };
 
-        let mut args: Vec<String> = required_params
+        let all_args = required_params
             .iter()
-            .map(|p| {
-                let name = p.name().to_case(Case::Camel);
-                // Serialize required message bodies to protobuf bytes for the native binding.
-                match message_type_name(p) {
-                    // `toBinary` yields a `Uint8Array`; the native binding expects a Node `Buffer`.
-                    Some(ty) if is_required_message_body(p) => {
-                        format!("Buffer.from(toBinary({ty}Schema, {name}))")
-                    }
-                    _ => name,
-                }
-            })
-            .collect();
-        for p in optional_params {
-            args.push(p.name().to_case(Case::Camel));
-        }
-        let all_args = args.join(", ");
+            .chain(optional_params)
+            .map(|p| ts_native_arg(p, &js_ident(p.name())))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         Self {
             full_param_list,
@@ -974,14 +990,14 @@ fn generate_resource_accessor(service: &ServiceHandler<'_>) -> Option<String> {
     let param_list = spec
         .params
         .iter()
-        .map(|p| format!("{}: string", p.to_case(Case::Camel)))
+        .map(|p| format!("{}: string", js_ident(p)))
         .collect::<Vec<_>>()
         .join(", ");
 
     let arg_list = spec
         .params
         .iter()
-        .map(|p| p.to_case(Case::Camel))
+        .map(|p| js_ident(p))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -992,4 +1008,16 @@ fn generate_resource_accessor(service: &ServiceHandler<'_>) -> Option<String> {
 
 "#
     ))
+}
+
+/// The JS identifier of a proto field name, for a local binding or a parameter: camelCase, with a
+/// `_` suffix for a word that can't name a binding in strict-mode JS (`delete` → `delete_`). Object
+/// keys and class members may be reserved words, so they keep the plain camelCase name.
+fn js_ident(name: &str) -> String {
+    let camel = name.to_case(Case::Camel);
+    if super::is_js_reserved(&camel) {
+        format!("{camel}_")
+    } else {
+        camel
+    }
 }

@@ -315,6 +315,14 @@ impl RequestParam {
         matches!(self, RequestParam::Path(_))
     }
 
+    /// The variants of a oneof body field; `None` for any other param.
+    pub fn oneof_variants(&self) -> Option<&[OneofVariant]> {
+        match self {
+            RequestParam::Body(field) => field.oneof_variants.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn documentation(&self) -> Option<&str> {
         match self {
             RequestParam::Path(param) => param.documentation.as_deref(),

@@ -62,6 +62,7 @@ fn main() {
         dual_transport: false,
         client_protocols: olai_codegen::ClientProtocols::default(),
         connect_client_path: None,
+        authz: None,
         // The Python exception classes raise the errors of the client error module, so the
         // Python output needs it; the client then carries `codegen/error.rs`.
         rest_client: RestClientOptions {

@@ -125,6 +125,12 @@ fn serve() -> (String, tokio::runtime::Runtime) {
             .route("/api/v1/widget-lines", get(stream_widgets))
             .route("/api/v1/widgets/{name}/version", get(widget_version))
             .route(
+                "/api/v1/widgets/{name}/pointer",
+                axum::routing::post(|body: String| async move {
+                    axum::Json(json!({"body": body}))
+                }),
+            )
+            .route(
                 "/api/v1/blobs/{*path}",
                 axum::routing::put(|body: axum::body::Bytes| async move {
                     assert_eq!(body.as_ref(), b"\x00\x01\xff");
@@ -201,4 +207,9 @@ fn token_provider() {
 #[test]
 fn python_api() {
     python_test!("test_python_api.py");
+}
+
+#[test]
+fn request_oneof() {
+    python_test!("test_request_oneof.py");
 }

@@ -189,7 +189,7 @@ fn child_nav_method(
     let child_low_level = child.low_level_client_type(crate::codegen::ClientProtocol::Rest);
     let module = format_ident!("{}", link.child_base_path);
 
-    let method_name = format_ident!("{}", link.child_singular);
+    let method_name = crate::utils::field_ident(&link.child_singular);
     // The child's accessor params are parent params + one trailing leaf; the leaf is the new arg.
     let leaf = link.child_accessor_params.last()?;
     let leaf_ident = crate::utils::field_ident(leaf);

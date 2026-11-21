@@ -4,15 +4,16 @@
 //! [`crate::codegen::bindings`]; this module supplies the NAPI-specific scaffold, marshaling, and
 //! method bodies through [`NapiBackend`]'s [`BindingBackend`] impl.
 
+use convert_case::{Case, Casing};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use super::super::format_tokens;
-use super::caps::{is_napi_supported, is_napi_supported_type, is_required_message_body};
+use super::caps::{crosses_napi, is_message_param, is_message_type, is_napi_supported_type};
 use crate::codegen::bindings::builder::{OptionalSetter, SetterRender, generate_builder_pattern};
 use crate::codegen::bindings::{BindingBackend, ShapeParts, driver};
 use crate::codegen::{BindingMode, MethodHandler, Runtime, ServiceHandler};
-use crate::parsing::types::{BaseType, RenderContext};
+use crate::parsing::types::{BaseType, RenderContext, UnifiedType};
 
 /// The `use <crate>::Message;` import that brings the model runtime's `Message` trait
 /// (`encode_to_vec` / decode) into scope for the generated NAPI module.
@@ -179,20 +180,27 @@ impl BindingBackend for NapiBackend {
     }
 
     /// Render the NAPI method param defs from the shared [`MethodHandler::param_plan`], then apply the
-    /// NAPI-specific capability filter (drop params NAPI can't pass, except required message bodies,
-    /// which cross as a `Buffer`). Path/`page_token` filtering already happened in `param_plan`.
+    /// NAPI-specific capability filter (drop params NAPI can't pass; messages cross as `Buffer`s).
+    /// Path/`page_token` filtering already happened in `param_plan`.
     fn param_defs(&self, method: &MethodHandler<'_>, mode: BindingMode) -> Vec<TokenStream> {
         method
             .param_plan(mode)
             .into_iter()
-            // Keep NAPI-native params and required message bodies (passed as a `Buffer`); drop other
-            // unsupported params (e.g. optional message setters, which stay codegen-omitted for now).
-            .filter(|p| is_napi_supported(p) || is_required_message_body(p))
+            // Keep NAPI-native params and messages (passed as `Buffer`s); drop the rest (oneofs and
+            // free-form JSON fields).
+            .filter(|p| crosses_napi(p))
             .map(|p| {
-                let param_name = p.field_ident();
-                if is_required_message_body(p) {
-                    // Message bodies cross the NAPI boundary as serialized bytes (decoded below).
-                    quote! { #param_name: napi::bindgen_prelude::Buffer }
+                let param_name = napi_param_ident(p.name());
+                if is_message_param(p) {
+                    // Messages cross the NAPI boundary as serialized bytes (decoded below).
+                    let mut ty = quote! { napi::bindgen_prelude::Buffer };
+                    if p.field_type().is_repeated {
+                        ty = quote! { ::std::vec::Vec<#ty> };
+                    }
+                    if p.is_optional() {
+                        ty = quote! { ::core::option::Option<#ty> };
+                    }
+                    quote! { #param_name: #ty }
                 } else {
                     let rust_type = method.field_type(p.field_type(), RenderContext::NapiParameter);
                     quote! { #param_name: #rust_type }
@@ -205,38 +213,28 @@ impl BindingBackend for NapiBackend {
         let (method_name, drop_path) = driver::client_method(method, mode);
         let args = method
             .required_parameters()
-            .filter(|param| {
-                !(drop_path && param.is_path_param())
-                    && (is_napi_supported(param) || is_required_message_body(param))
-            })
+            .filter(|param| !(drop_path && param.is_path_param()) && crosses_napi(param))
             .map(|param| {
                 if driver::is_seeded_page_token(method, param) {
                     return quote! { ::std::string::String::new() };
                 }
-                let param_name = param.field_ident();
-                if is_required_message_body(param) {
-                    // Decode the protobuf bytes received over the NAPI boundary back into the message.
-                    let msg_ty = format_ident!(
-                        "{}",
-                        match &param.field_type().base_type {
-                            BaseType::Message(n) | BaseType::OneOf(n) =>
-                                crate::utils::extract_simple_type_name(n),
-                            _ => unreachable!("is_required_message_body guarantees a message type"),
+                let param_name = napi_param_ident(param.name());
+                if is_message_param(param) {
+                    // Decode the protobuf bytes received over the NAPI boundary back into the
+                    // message(s).
+                    let ty = param.field_type();
+                    if ty.is_repeated {
+                        let decode = decode_message(method.config.runtime, ty, quote! { b });
+                        quote! {
+                            #param_name
+                                .iter()
+                                .map(|b| #decode)
+                                .collect::<napi::Result<::std::vec::Vec<_>>>()?
                         }
-                    );
-                    // Decode the protobuf bytes back into the message using the consumed runtime's
-                    // `Message` trait: prost's `decode(impl Buf)` vs buffa's `decode_from_slice(&[u8])`.
-                    let decode_expr = match method.config.runtime {
-                        Runtime::Prost => quote! {
-                            <#msg_ty as prost::Message>::decode(#param_name.as_ref())
-                        },
-                        Runtime::Buffa => quote! {
-                            <#msg_ty as buffa::Message>::decode_from_slice(#param_name.as_ref())
-                        },
-                    };
-                    quote! {
-                        #decode_expr
-                            .map_err(|e| napi::Error::new(napi::Status::GenericFailure, format!("invalid {} payload: {e}", stringify!(#msg_ty))))?
+                    } else {
+                        let decode =
+                            decode_message(method.config.runtime, ty, quote! { #param_name });
+                        quote! { #decode? }
                     }
                 } else if let BaseType::Enum(enum_name) = &param.field_type().base_type {
                     // The enum crosses the NAPI boundary as `i32`; convert to the bare enum the
@@ -343,7 +341,17 @@ impl BindingBackend for NapiBackend {
     }
 
     fn emit_resource_accessor(&self, service: &ServiceHandler<'_>) -> Option<TokenStream> {
-        driver::resource_accessor(service, quote! { #[napi] }, "Napi")
+        let spec = service.accessor_spec()?;
+        // napi-derive can't take a raw ident (it derives `r#type_c_callback`), so a keyword
+        // singular gets a `_` suffix in Rust and its own name in JS.
+        let name = napi_ident(&spec.singular);
+        let attr = if name == spec.singular {
+            quote! { #[napi] }
+        } else {
+            let js_name = spec.singular.to_case(Case::Camel);
+            quote! { #[napi(js_name = #js_name)] }
+        };
+        driver::resource_accessor(service, attr, "Napi", name)
     }
 }
 
@@ -392,8 +400,12 @@ impl NapiBackend {
 }
 
 impl SetterRender for NapiBackend {
+    fn param_ident(&self, name: &str) -> Ident {
+        napi_param_ident(name)
+    }
+
     fn supports(&self, setter: &OptionalSetter<'_>) -> bool {
-        is_napi_supported_type(&setter.field_type.base_type)
+        is_napi_supported_type(&setter.field_type.base_type) || is_message_type(setter.field_type)
     }
 
     fn render_setter(
@@ -402,6 +414,24 @@ impl SetterRender for NapiBackend {
         param_ident: &Ident,
         with_method: &Ident,
     ) -> TokenStream {
+        if is_message_type(setter.field_type) {
+            // Optional messages cross as `Option<Buffer>` (`Option<Vec<Buffer>>` for a list, left
+            // out as the empty list); decode them for the builder.
+            let decode = decode_message(self.runtime, setter.field_type, quote! { b });
+            return if setter.field_type.is_repeated {
+                quote! {
+                    .#with_method(
+                        #param_ident
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|b| #decode)
+                            .collect::<napi::Result<::std::vec::Vec<_>>>()?,
+                    )
+                }
+            } else {
+                quote! { .#with_method(#param_ident.as_ref().map(|b| #decode).transpose()?) }
+            };
+        }
         if matches!(setter.field_type.base_type, BaseType::Map(_, _))
             || setter.field_type.is_repeated
         {
@@ -439,4 +469,54 @@ fn enum_rust_type_path(enum_name: &str) -> TokenStream {
     let path = crate::parsing::types::convert_protobuf_enum_to_rust_type(enum_name);
     path.parse()
         .expect("enum rust path is a valid token stream")
+}
+
+/// The `napi::Result` of decoding the protobuf bytes `bytes` (a `Buffer` or `&Buffer`) into the
+/// message type of `ty`, with the consumed runtime's `Message` trait: prost's `decode(impl Buf)`,
+/// buffa's `decode_from_slice(&[u8])`.
+fn decode_message(runtime: Runtime, ty: &UnifiedType, bytes: TokenStream) -> TokenStream {
+    let msg_ty = match &ty.base_type {
+        BaseType::Message(n) | BaseType::OneOf(n) => {
+            format_ident!("{}", crate::utils::extract_simple_type_name(n))
+        }
+        other => unreachable!("only messages cross NAPI as bytes, not {other:?}"),
+    };
+    let decode = match runtime {
+        Runtime::Prost => quote! { <#msg_ty as prost::Message>::decode(#bytes.as_ref()) },
+        Runtime::Buffa => {
+            quote! { <#msg_ty as buffa::Message>::decode_from_slice(#bytes.as_ref()) }
+        }
+    };
+    quote! {
+        #decode.map_err(|e| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("invalid {} payload: {e}", stringify!(#msg_ty)),
+            )
+        })
+    }
+}
+
+/// The Rust ident of a `#[napi]` method named `name`: a Rust keyword gets a `_` suffix (`type_`),
+/// since napi-derive builds further idents from it and can't take a raw one.
+fn napi_ident(name: &str) -> Ident {
+    let ident = crate::utils::field_ident(name);
+    if ident.to_string().starts_with("r#") {
+        format_ident!("{name}_")
+    } else {
+        ident
+    }
+}
+
+/// The Rust ident of a `#[napi]` method parameter for the proto field `name`. napi-derive writes
+/// the camelCased ident into the `.d.ts` (dropping a `_` suffix), so it must be neither raw
+/// (`r#type`) nor a JS reserved word once camelCased (`delete`, `super`): a reserved word becomes
+/// `<name>_param` (`deleteParam`), another Rust keyword `<name>_` (`type`). The call is positional,
+/// so the name doesn't reach the wire.
+fn napi_param_ident(name: &str) -> Ident {
+    if super::is_js_reserved(&name.to_case(Case::Camel)) {
+        format_ident!("{name}_param")
+    } else {
+        napi_ident(name)
+    }
 }

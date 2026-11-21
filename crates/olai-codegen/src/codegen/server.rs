@@ -43,8 +43,12 @@ pub(super) fn generate_common(service: &ServiceHandler<'_>) -> crate::error::Res
         .collect_vec();
     let mod_path = service.models_path_crate();
 
-    // Only import RequestPartsExt when there are FromRequestParts impls (path/query params).
-    let has_parts_extractors = service.rest_methods().any(|m| m.plan.needs_request_parts);
+    // Only import RequestPartsExt when an extractor reads the request parts: a FromRequestParts
+    // impl, or a body extractor with path/query params next to the body (`is_hybrid`).
+    let has_parts_extractors = service
+        .rest_methods()
+        .filter(|method| !beyond_server(method))
+        .any(|m| m.plan.needs_request_parts || reads_parts_and_body(&m));
 
     let axum_imports = if has_parts_extractors {
         quote! { use axum::{RequestExt, RequestPartsExt}; }
@@ -204,14 +208,8 @@ fn from_request_parts_impl(method: &MethodHandler<'_>) -> TokenStream {
 fn from_request_impl(method: &MethodHandler<'_>) -> TokenStream {
     let input_type = method.input_type();
 
-    let is_hybrid = method
-        .plan
-        .parameters
-        .iter()
-        .any(|param| matches!(param, RequestParam::Path(_) | RequestParam::Query(_)));
-
     // Check if we need a hybrid extractor (path/query + body)
-    if is_hybrid {
+    if reads_parts_and_body(method) {
         // Generate hybrid implementation
         generate_hybrid_request_impl(method)
     } else {
@@ -235,9 +233,19 @@ fn from_request_impl(method: &MethodHandler<'_>) -> TokenStream {
     }
 }
 
+/// Whether a body method's extractor also reads path/query params from the request parts (the
+/// hybrid `FromRequest` impl).
+fn reads_parts_and_body(method: &MethodHandler<'_>) -> bool {
+    method
+        .plan
+        .parameters
+        .iter()
+        .any(|param| matches!(param, RequestParam::Path(_) | RequestParam::Query(_)))
+}
+
 /// Generate hybrid FromRequest implementation for methods with path/query + body
 fn generate_hybrid_request_impl(method: &MethodHandler<'_>) -> TokenStream {
-    // Only reached when is_hybrid == true (caller checked path/query params exist),
+    // Only reached when `reads_parts_and_body` (caller checked path/query params exist),
     // which requires a non-Empty input message, so input_type() is always Some here.
     let input_type = method.input_type().unwrap();
     let path_extractions = path_extractions(method);

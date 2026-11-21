@@ -52,6 +52,8 @@ message ListKindsRequest {
   // Python keywords as optional query params: Python callers pass them as `from_=` / `in_=`.
   optional string from = 4;
   optional string in = 5;
+  // A JS reserved word as an option: the TS client binds it as `delete_` (#394).
+  optional bool delete = 6;
 }
 
 message ListKindsResponse {
@@ -84,11 +86,24 @@ service RouteService {
   rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse) {
     option (google.api.http) = {get: "/routes"};
   }
+  // A required list of messages (#384): Node takes it as `Vec<Buffer>`.
+  rpc PutRoutes(PutRoutesRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/routes:batch"
+      body: "*"
+    };
+  }
+}
+
+message PutRoutesRequest {
+  repeated Route routes = 1 [(google.api.field_behavior) = REQUIRED];
 }
 
 message ListRoutesRequest {
   // A keyword-named required query param.
   string ref = 1 [(google.api.field_behavior) = REQUIRED];
+  // A JS reserved word as a required param: the TS client takes `class_` (#394).
+  string class = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
 message ListRoutesResponse {
@@ -152,6 +167,14 @@ message PostEventRequest {
   string session_id = 1;
   string type = 2;
   google.protobuf.Struct data = 3;
+  // A oneof on a request (#395): Python takes one keyword argument per variant, and a message
+  // variant is boxed by buffa.
+  oneof payload {
+    // A variant named after a Rust keyword.
+    string ref = 4;
+    int64 seq = 5;
+    Route route = 6;
+  }
 }
 
 message GetScopeRequest {
@@ -162,4 +185,96 @@ message GetScopeRequest {
 message FindEventsRequest {
   string session_id = 1;
   string match = 2;
+}
+
+// A child resource of `Kind` whose singular is a Rust keyword (`type`): the root accessor, the
+// `Kind` client's child navigator and the Python and Node accessors all name a method after it.
+message Variety {
+  option (google.api.resource) = {
+    type: "example.io/Variety"
+    pattern: "kinds/{kind}/types/{type}"
+    plural: "types"
+    singular: "type"
+    name_field: "full_name"
+  };
+
+  string full_name = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string kind_name = 2;
+  string name = 3;
+  string comment = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+service VarietyService {
+  rpc CreateType(CreateTypeRequest) returns (Variety) {
+    option (google.api.http) = {
+      post: "/types"
+      body: "*"
+    };
+  }
+  rpc GetType(GetTypeRequest) returns (Variety) {
+    option (google.api.http) = {get: "/types/{full_name}"};
+  }
+  rpc ListTypes(ListTypesRequest) returns (ListTypesResponse) {
+    option (google.api.http) = {get: "/types"};
+  }
+  rpc UpdateType(UpdateTypeRequest) returns (Variety) {
+    option (google.api.http) = {
+      patch: "/types/{full_name}"
+      body: "*"
+    };
+  }
+  rpc DeleteType(DeleteTypeRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/types/{full_name}"};
+  }
+}
+
+message CreateTypeRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  string kind_name = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetTypeRequest {
+  string full_name = 1;
+}
+
+message ListTypesRequest {
+  string kind_name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {child_type: "example.io/Variety"}
+  ];
+  int32 max_results = 2;
+  string page_token = 3;
+}
+
+message ListTypesResponse {
+  repeated Variety types = 1;
+  string next_page_token = 2;
+}
+
+message UpdateTypeRequest {
+  string full_name = 1;
+  // An optional list of messages (#384): Node takes it as protobuf bytes, `Option<Vec<Buffer>>`.
+  repeated Kind changes = 2 [(google.api.field_behavior) = OPTIONAL];
+}
+
+message DeleteTypeRequest {
+  string full_name = 1;
+}
+
+// A request oneof whose variant is a Rust keyword: the client builder's setter takes `r#ref`.
+service PointerService {
+  rpc SetPointer(SetPointerRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/pointers/{name}"
+      body: "*"
+    };
+  }
+}
+
+message SetPointerRequest {
+  string name = 1;
+  oneof target {
+    string ref = 2;
+    int64 seq = 3;
+  }
 }

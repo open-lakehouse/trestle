@@ -474,7 +474,7 @@ fn resource_accessor_method(service: &ServiceHandler<'_>) -> Option<TokenStream>
     }
     let spec = service.accessor_spec()?;
     let client_ty = service.scoped_client_type()?;
-    let method_name = format_ident!("{}", spec.singular);
+    let method_name = crate::utils::field_ident(&spec.singular);
     let ctor = low_level_client_ctor(service);
 
     let param_idents: Vec<_> = spec

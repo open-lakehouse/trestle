@@ -110,10 +110,10 @@ pub(crate) fn py_ident(field_name: &str) -> proc_macro2::Ident {
 
 fn sanitize_python_field_name(field_name: &str) -> String {
     match field_name {
-        "not" | "and" | "or" | "is" | "in" | "def" | "class" | "if" | "else" | "for" | "while"
-        | "try" | "except" | "finally" | "with" | "as" | "import" | "from" | "pass" | "break"
-        | "continue" | "return" | "yield" | "raise" | "assert" | "del" | "global" | "nonlocal"
-        | "lambda" | "None" | "True" | "False" | "async" | "await" => {
+        "not" | "and" | "or" | "is" | "in" | "def" | "class" | "if" | "else" | "elif" | "for"
+        | "while" | "try" | "except" | "finally" | "with" | "as" | "import" | "from" | "pass"
+        | "break" | "continue" | "return" | "yield" | "raise" | "assert" | "del" | "global"
+        | "nonlocal" | "lambda" | "None" | "True" | "False" | "async" | "await" => {
             format!("{field_name}_")
         }
         _ => field_name.to_string(),
