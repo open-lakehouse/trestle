@@ -37,4 +37,6 @@ textwrap = "0.16"
 
 [dev-dependencies]
 rstest = "0.23"
+swc_common = "27"
+swc_ecma_parser = { version = "47", default-features = false, features = ["typescript"] }
 tempfile = "3"

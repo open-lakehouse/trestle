@@ -782,7 +782,7 @@ impl MethodCallSpec {
                     Some(name) if is_required_message_body(p) => ts_type_ident(&name),
                     _ => unified_to_typescript(p.field_type()).replace(" | undefined", ""),
                 };
-                format!("{}: {}", p.name().to_case(Case::Camel), ty)
+                format!("{}: {}", js_ident(p.name()), ty)
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -800,9 +800,19 @@ impl MethodCallSpec {
         };
 
         let optional_destructure = if has_options {
+            // The options key is the proto name; a reserved word binds under its escaped name
+            // (`delete: delete_`).
             let fields = optional_params
                 .iter()
-                .map(|p| p.name().to_case(Case::Camel))
+                .map(|p| {
+                    let key = p.name().to_case(Case::Camel);
+                    let local = js_ident(p.name());
+                    if key == local {
+                        key
+                    } else {
+                        format!("{key}: {local}")
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("    const {{ {fields} }} = options || {{}};\n")
@@ -813,7 +823,7 @@ impl MethodCallSpec {
         let mut args: Vec<String> = required_params
             .iter()
             .map(|p| {
-                let name = p.name().to_case(Case::Camel);
+                let name = js_ident(p.name());
                 // Serialize required message bodies to protobuf bytes for the native binding.
                 match message_type_name(p) {
                     // `toBinary` yields a `Uint8Array`; the native binding expects a Node `Buffer`.
@@ -825,7 +835,7 @@ impl MethodCallSpec {
             })
             .collect();
         for p in optional_params {
-            args.push(p.name().to_case(Case::Camel));
+            args.push(js_ident(p.name()));
         }
         let all_args = args.join(", ");
 
@@ -974,14 +984,14 @@ fn generate_resource_accessor(service: &ServiceHandler<'_>) -> Option<String> {
     let param_list = spec
         .params
         .iter()
-        .map(|p| format!("{}: string", p.to_case(Case::Camel)))
+        .map(|p| format!("{}: string", js_ident(p)))
         .collect::<Vec<_>>()
         .join(", ");
 
     let arg_list = spec
         .params
         .iter()
-        .map(|p| p.to_case(Case::Camel))
+        .map(|p| js_ident(p))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -992,4 +1002,68 @@ fn generate_resource_accessor(service: &ServiceHandler<'_>) -> Option<String> {
 
 "#
     ))
+}
+
+/// The JS identifier of a proto field name, for a local binding or a parameter: camelCase, with a
+/// `_` suffix for a word that can't name a binding in strict-mode JS (`delete` → `delete_`). Object
+/// keys and class members may be reserved words, so they keep the plain camelCase name.
+fn js_ident(name: &str) -> String {
+    const RESERVED: &[&str] = &[
+        // ECMAScript reserved words.
+        "break",
+        "case",
+        "catch",
+        "class",
+        "const",
+        "continue",
+        "debugger",
+        "default",
+        "delete",
+        "do",
+        "else",
+        "enum",
+        "export",
+        "extends",
+        "false",
+        "finally",
+        "for",
+        "function",
+        "if",
+        "import",
+        "in",
+        "instanceof",
+        "new",
+        "null",
+        "return",
+        "super",
+        "switch",
+        "this",
+        "throw",
+        "true",
+        "try",
+        "typeof",
+        "var",
+        "void",
+        "while",
+        "with",
+        // Reserved in strict mode (ES modules and classes are strict) and in async functions.
+        "await",
+        "implements",
+        "interface",
+        "let",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "static",
+        "yield",
+        "arguments",
+        "eval",
+    ];
+    let camel = name.to_case(Case::Camel);
+    if RESERVED.contains(&camel.as_str()) {
+        format!("{camel}_")
+    } else {
+        camel
+    }
 }

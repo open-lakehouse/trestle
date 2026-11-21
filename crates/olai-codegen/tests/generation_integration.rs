@@ -16,6 +16,8 @@ use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
 use tempfile::TempDir;
 
+mod support;
+
 fn metadata() -> CodeGenMetadata {
     let bytes = include_bytes!("../proto/example.bin");
     let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
@@ -1370,6 +1372,23 @@ fn keyword_named_params_generate_raw_identifiers() {
                 !src.contains("r#"),
                 "{runtime:?}: {} carries a raw-ident prefix",
                 path.display()
+            );
+            if path.extension().is_some_and(|e| e == "ts") {
+                support::assert_ts_parses(&path, &src);
+            }
+        }
+        // JS reserved words (#394) bind under an escaped name; the options key stays the proto
+        // name.
+        let ts = read_all(&tmp.path().join("node_ts"));
+        for binding in [
+            "const { match, from, in: in_, delete: delete_ } = options || {};",
+            "async listRoutes(ref: string, class_: string)",
+            "delete?: boolean;",
+            "async getScope(super_: string,",
+        ] {
+            assert!(
+                ts.contains(binding),
+                "{runtime:?}: TS client has `{binding}`:\n{ts}"
             );
         }
     }

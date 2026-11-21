@@ -32,6 +32,8 @@ use protobuf::Message;
 use protobuf::descriptor::FileDescriptorSet;
 use tempfile::TempDir;
 
+mod support;
+
 fn metadata() -> CodeGenMetadata {
     let bytes = include_bytes!("../proto/example.bin");
     let fds = FileDescriptorSet::parse_from_bytes(bytes).expect("valid descriptor");
@@ -215,6 +217,7 @@ fn run_golden(runtime: Runtime, subdir: &str) {
     generate_code(&metadata(), &config).expect("generation succeeds");
 
     let golden = golden_dir(subdir);
+    assert_non_rust_output_parses(tmp.path());
 
     if std::env::var_os("BLESS").is_some() {
         // Rewrite the golden tree from scratch so deleted outputs don't linger.
@@ -268,4 +271,40 @@ fn run_golden(runtime: Runtime, subdir: &str) {
         diffs.len(),
         diffs.join("\n")
     );
+}
+
+/// The generated TypeScript parses, and so does the generated Python when a `python3` is on
+/// `PATH` (the Rust output is compiled by the e2e fixtures; matching a golden can't catch a syntax
+/// error in it).
+fn assert_non_rust_output_parses(root: &Path) {
+    let python = std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    for rel in relative_files(root) {
+        let path = root.join(&rel);
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("ts") => {
+                let src = std::fs::read_to_string(&path).expect("read generated");
+                support::assert_ts_parses(&path, &src);
+            }
+            Some("py") if python => {
+                let out = std::process::Command::new("python3")
+                    .args([
+                        "-c",
+                        "import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])",
+                    ])
+                    .arg(&path)
+                    .output()
+                    .expect("run python3");
+                assert!(
+                    out.status.success(),
+                    "{} does not parse as Python:\n{}",
+                    path.display(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            _ => {}
+        }
+    }
 }

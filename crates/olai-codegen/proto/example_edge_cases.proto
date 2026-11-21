@@ -52,6 +52,8 @@ message ListKindsRequest {
   // Python keywords as optional query params: Python callers pass them as `from_=` / `in_=`.
   optional string from = 4;
   optional string in = 5;
+  // A JS reserved word as an option: the TS client binds it as `delete_` (#394).
+  optional bool delete = 6;
 }
 
 message ListKindsResponse {
@@ -89,6 +91,8 @@ service RouteService {
 message ListRoutesRequest {
   // A keyword-named required query param.
   string ref = 1 [(google.api.field_behavior) = REQUIRED];
+  // A JS reserved word as a required param: the TS client takes `class_` (#394).
+  string class = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
 message ListRoutesResponse {
