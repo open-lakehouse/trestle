@@ -24,7 +24,11 @@ Import from the barrel, `@open-lakehouse/ui-kit`:
   `Label`, `ResizeHandle` / `usePaneSize`, `Select*`, `Separator`, `Sheet*`,
   `Switch`, `Tabs*`, `Textarea`, `Toaster`, `Tooltip*` (plus the `*Variants` and
   `*Props` for `Badge` / `Button`).
-- Helpers: `cn`.
+- Composites: `CommitHistory`, a GitHub-style history (entries grouped by day
+  along a timeline, with author, relative time, badges and a copyable ref).
+  Hosts map their own records (revisions, commits, table versions) to
+  `CommitHistoryEntry`.
+- Helpers: `cn`, `groupByDay`, `formatRelativeTime`.
 - Theme: `ThemeProvider`, `useTheme`.
 
 ## Tailwind

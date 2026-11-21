@@ -15,6 +15,15 @@ export {
   CardTitle,
 } from "./card.js";
 export {
+  type CommitAuthor,
+  type CommitDayGroup,
+  CommitHistory,
+  type CommitHistoryEntry,
+  type CommitHistoryProps,
+  formatRelativeTime,
+  groupByDay,
+} from "./commit-history.js";
+export {
   Dialog,
   DialogClose,
   DialogContent,
