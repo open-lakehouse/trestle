@@ -1336,6 +1336,30 @@ fn keyword_named_params_generate_raw_identifiers() {
             models.contains("self.r#type"),
             "{runtime:?}: resource name accessors read `self.r#type`:\n{models}"
         );
+        // A resource singular named after a keyword (#393): the root accessor and the parent's
+        // child navigator are raw idents, the binding accessors name the JS/Python method `type`.
+        let client = read_all(&tmp.path().join("client"));
+        for accessor in [
+            "pub fn r#type(",
+            "pub fn type_from_full_name(",
+            "type_name: impl Into<String>,\n    ) -> crate::codegen::variety::TypeClient",
+        ] {
+            assert!(
+                client.contains(accessor),
+                "{runtime:?}: client has `{accessor}`:\n{client}"
+            );
+        }
+        assert!(
+            python.contains(
+                "pub fn r#type(&self, kind_name: String, type_name: String) -> PyTypeClient"
+            ),
+            "{runtime:?}: Python accessor is `type`:\n{python}"
+        );
+        let node = read_all(&tmp.path().join("node"));
+        assert!(
+            node.contains("#[napi(js_name = \"type\")]\n    pub fn r#type("),
+            "{runtime:?}: NAPI accessor is named `type` in JS:\n{node}"
+        );
         // The raw-ident prefix never leaks into a non-Rust output (TS, Python stubs).
         for path in walk(tmp.path())
             .into_iter()

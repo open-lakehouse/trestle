@@ -145,8 +145,11 @@ pub(crate) fn scoped_client_imports<'s>(
         })
 }
 
-/// The root-client accessor `<singular>(<params>: String…) -> <prefix><Client>` wrapping the Rust
-/// client's resource accessor, with `attr` on it.
+/// The root-client accessor `<binding_name>(<params>: String…) -> <prefix><Client>` wrapping the
+/// Rust client's resource accessor, with `attr` on it.
+///
+/// `binding_name` is the binding's own method ident, which each language escapes its own way (a
+/// Rust keyword singular such as `type` is `r#type` on the Rust client).
 ///
 /// A nested resource has a composite `full_name`; the underlying Rust client accessor takes a
 /// single `full_name` string, so the decomposed params are joined with `.` for
@@ -155,9 +158,10 @@ pub(crate) fn resource_accessor(
     service: &ServiceHandler<'_>,
     attr: TokenStream,
     client_prefix: &str,
+    binding_name: Ident,
 ) -> Option<TokenStream> {
     let spec = service.accessor_spec()?;
-    let method_name = format_ident!("{}", spec.singular);
+    let method_name = crate::utils::field_ident(&spec.singular);
     let client_name = format_ident!("{client_prefix}{}", service.client_type());
 
     let param_idents: Vec<_> = spec
@@ -186,7 +190,7 @@ pub(crate) fn resource_accessor(
 
     Some(quote! {
         #attr
-        pub fn #method_name(&self, #(#param_list),*) -> #client_name {
+        pub fn #binding_name(&self, #(#param_list),*) -> #client_name {
             #client
         }
     })

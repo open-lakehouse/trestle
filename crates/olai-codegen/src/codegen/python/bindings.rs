@@ -663,7 +663,9 @@ impl BindingBackend for PyBackend<'_> {
             .map(|r| r.type_name.clone())
             .unwrap_or_else(|| spec.singular.clone());
         let doc = format!(" The requests on one `{resource}`. It sends no request itself.");
-        driver::resource_accessor(service, quote! { #[doc = #doc] }, "Py")
+        // PyO3 names the method after the ident without its `r#`; a Python keyword is suffixed.
+        let name = super::py_ident(&spec.singular);
+        driver::resource_accessor(service, quote! { #[doc = #doc] }, "Py", name)
     }
 }
 

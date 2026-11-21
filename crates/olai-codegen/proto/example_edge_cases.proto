@@ -163,3 +163,65 @@ message FindEventsRequest {
   string session_id = 1;
   string match = 2;
 }
+
+// A child resource of `Kind` whose singular is a Rust keyword (`type`): the root accessor, the
+// `Kind` client's child navigator and the Python and Node accessors all name a method after it.
+message Variety {
+  option (google.api.resource) = {
+    type: "example.io/Variety"
+    pattern: "kinds/{kind}/types/{type}"
+    plural: "types"
+    singular: "type"
+    name_field: "full_name"
+  };
+
+  string full_name = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+  string kind_name = 2;
+  string name = 3;
+  string comment = 4 [(google.api.field_behavior) = OPTIONAL];
+}
+
+service VarietyService {
+  rpc CreateType(CreateTypeRequest) returns (Variety) {
+    option (google.api.http) = {
+      post: "/types"
+      body: "*"
+    };
+  }
+  rpc GetType(GetTypeRequest) returns (Variety) {
+    option (google.api.http) = {get: "/types/{full_name}"};
+  }
+  rpc ListTypes(ListTypesRequest) returns (ListTypesResponse) {
+    option (google.api.http) = {get: "/types"};
+  }
+  rpc DeleteType(DeleteTypeRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {delete: "/types/{full_name}"};
+  }
+}
+
+message CreateTypeRequest {
+  string name = 1 [(google.api.field_behavior) = REQUIRED];
+  string kind_name = 2 [(google.api.field_behavior) = REQUIRED];
+}
+
+message GetTypeRequest {
+  string full_name = 1;
+}
+
+message ListTypesRequest {
+  string kind_name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference) = {child_type: "example.io/Variety"}
+  ];
+  int32 max_results = 2;
+  string page_token = 3;
+}
+
+message ListTypesResponse {
+  repeated Variety types = 1;
+  string next_page_token = 2;
+}
+
+message DeleteTypeRequest {
+  string full_name = 1;
+}

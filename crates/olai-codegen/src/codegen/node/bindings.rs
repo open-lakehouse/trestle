@@ -4,6 +4,7 @@
 //! [`crate::codegen::bindings`]; this module supplies the NAPI-specific scaffold, marshaling, and
 //! method bodies through [`NapiBackend`]'s [`BindingBackend`] impl.
 
+use convert_case::{Case, Casing};
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
@@ -343,7 +344,17 @@ impl BindingBackend for NapiBackend {
     }
 
     fn emit_resource_accessor(&self, service: &ServiceHandler<'_>) -> Option<TokenStream> {
-        driver::resource_accessor(service, quote! { #[napi] }, "Napi")
+        let spec = service.accessor_spec()?;
+        let name = crate::utils::field_ident(&spec.singular);
+        // A keyword singular is a raw ident (`r#type`); name the JS method explicitly so the
+        // prefix never reaches JS.
+        let attr = if name.to_string().starts_with("r#") {
+            let js_name = spec.singular.to_case(Case::Camel);
+            quote! { #[napi(js_name = #js_name)] }
+        } else {
+            quote! { #[napi] }
+        };
+        driver::resource_accessor(service, attr, "Napi", name)
     }
 }
 
