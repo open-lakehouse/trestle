@@ -278,3 +278,139 @@ fn test_schema_override_rebuilds_from_jsonschema() {
         .unwrap();
     assert!(!schema.contains_key(serde_yaml::Value::String("$schema".into())));
 }
+
+/// #397: a message-typed field is an `allOf: [$ref]` wrapper in the spec. It takes the
+/// referenced message's annotations only: `additionalProperties: false` next to the
+/// `allOf` would forbid every key of the nested object, and `required` belongs to the
+/// referenced component, which keeps both.
+#[test]
+fn test_ref_wrappers_take_annotations_only() {
+    let dir = TempDir::new().unwrap();
+    let spec_path = dir.path().join("openapi.yaml");
+    let jsonschema_dir = dir.path().join("jsonschema");
+    fs::create_dir_all(&jsonschema_dir).unwrap();
+
+    let config_key = "example.creds.v1.AwsIamRoleConfig.schema.strict.json";
+    let parent_key = "example.creds.v1.Credential.schema.strict.json";
+    let config = serde_json::json!({
+        "type": "object",
+        "title": "AWS IAM role",
+        "description": "The AWS IAM role configuration.",
+        "additionalProperties": false,
+        "required": ["role_arn"],
+        "properties": { "role_arn": { "type": "string", "minLength": 1 } },
+    });
+    let config_ref = format!("#/$defs/{config_key}");
+    let parent = serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "aws_iam_role": { "$ref": config_ref },
+            "bare": { "$ref": config_ref },
+            "mixed": { "$ref": config_ref },
+            "inline": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "maxLength": 8 } },
+            },
+        },
+    });
+    let bundle = |root: &str| {
+        serde_json::json!({
+            "$ref": format!("#/$defs/{root}"),
+            "$defs": { config_key: config, parent_key: parent },
+        })
+        .to_string()
+    };
+    fs::write(
+        jsonschema_dir.join("example.creds.v1.AwsIamRoleConfig.schema.strict.bundle.json"),
+        bundle(config_key),
+    )
+    .unwrap();
+    fs::write(
+        jsonschema_dir.join("example.creds.v1.Credential.schema.strict.bundle.json"),
+        bundle(parent_key),
+    )
+    .unwrap();
+
+    let yaml = concat!(
+        "openapi: \"3.0.0\"\n",
+        "info:\n  title: Test\n  version: \"1.0\"\n",
+        "components:\n  schemas:\n",
+        "    AwsIamRoleConfig:\n      type: object\n      properties:\n",
+        "        role_arn:\n          type: string\n",
+        "    Credential:\n      type: object\n      properties:\n",
+        "        aws_iam_role:\n          allOf:\n",
+        "            - $ref: '#/components/schemas/AwsIamRoleConfig'\n",
+        "        bare:\n          $ref: '#/components/schemas/AwsIamRoleConfig'\n",
+        "        mixed:\n          allOf:\n",
+        "            - $ref: '#/components/schemas/AwsIamRoleConfig'\n",
+        "            - type: object\n",
+        "        inline:\n          type: object\n          properties:\n",
+        "            name:\n              type: string\n",
+    );
+    fs::write(&spec_path, yaml).unwrap();
+
+    olai_codegen::enrich_openapi(
+        &spec_path,
+        &jsonschema_dir,
+        false,
+        None,
+        &Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+
+    let parsed: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&spec_path).unwrap()).unwrap();
+    let schemas = &parsed["components"]["schemas"];
+    let props = &schemas["Credential"]["properties"];
+    let has = |node: &serde_yaml::Value, key: &str| node.get(key).is_some();
+
+    // The wrappers: annotations, and nothing that constrains the nested object.
+    for name in ["aws_iam_role", "bare"] {
+        let wrapper = &props[name];
+        assert_eq!(
+            wrapper["description"].as_str(),
+            Some("The AWS IAM role configuration."),
+            "{name}"
+        );
+        assert_eq!(wrapper["title"].as_str(), Some("AWS IAM role"), "{name}");
+        for key in ["additionalProperties", "required", "properties", "type"] {
+            assert!(!has(wrapper, key), "{name} has `{key}`: {wrapper:?}");
+        }
+    }
+    assert_eq!(
+        props["aws_iam_role"]["allOf"][0]["$ref"].as_str(),
+        Some("#/components/schemas/AwsIamRoleConfig")
+    );
+
+    // The referenced component still carries the message's validation.
+    let component = &schemas["AwsIamRoleConfig"];
+    assert_eq!(component["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(component["required"][0].as_str(), Some("role_arn"));
+    assert_eq!(
+        component["properties"]["role_arn"]["minLength"].as_u64(),
+        Some(1)
+    );
+
+    // An `allOf` that adds an inline schema is not a plain reference: it is enriched
+    // as before.
+    assert_eq!(
+        props["mixed"]["additionalProperties"].as_bool(),
+        Some(false)
+    );
+
+    // An inline object still takes its own validation, nested fields included.
+    let inline = &props["inline"];
+    assert_eq!(inline["additionalProperties"].as_bool(), Some(false));
+    assert_eq!(inline["required"][0].as_str(), Some("name"));
+    assert_eq!(inline["properties"]["name"]["maxLength"].as_u64(), Some(8));
+
+    // And the parent component itself is not a wrapper.
+    assert_eq!(
+        schemas["Credential"]["additionalProperties"].as_bool(),
+        Some(false)
+    );
+}

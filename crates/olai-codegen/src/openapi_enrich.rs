@@ -310,9 +310,44 @@ const VALIDATION_FIELDS: &[&str] = &[
     "title",
 ];
 
+/// The fields a node that only references another schema may carry. They annotate
+/// the use; they do not constrain it.
+const ANNOTATION_FIELDS: &[&str] = &["description", "title"];
+
+/// Whether `node` only references another schema: a `$ref`, or an `allOf` of nothing
+/// but `$ref`s, with no `properties` of its own.
+///
+/// Such a node takes no validation from the referenced message. The referenced
+/// component already carries it, and next to an `allOf`, `additionalProperties: false`
+/// applies to the wrapper's own (absent) `properties`, so it would reject every key
+/// of the nested object.
+fn is_ref_wrapper(node: &YamlValue) -> bool {
+    if node.get("properties").is_some() {
+        return false;
+    }
+    if node.get("$ref").is_some() {
+        return true;
+    }
+    node.get("allOf")
+        .and_then(|v| v.as_sequence())
+        .is_some_and(|entries| {
+            !entries.is_empty()
+                && entries.iter().all(|entry| {
+                    entry
+                        .as_mapping()
+                        .is_some_and(|m| m.len() == 1 && entry.get("$ref").is_some())
+                })
+        })
+}
+
 /// Merge validation fields from a JSON Schema node into an OpenAPI YAML schema node.
 fn merge_validation(source: &serde_json::Value, target: &mut YamlValue) {
-    for &key in VALIDATION_FIELDS {
+    merge_fields(source, target, VALIDATION_FIELDS);
+}
+
+/// Merge `fields` from a JSON Schema node into an OpenAPI YAML schema node.
+fn merge_fields(source: &serde_json::Value, target: &mut YamlValue, fields: &[&str]) {
+    for &key in fields {
         let val = match source.get(key) {
             Some(v) => v,
             None => continue,
@@ -347,6 +382,12 @@ fn enrich_schema(
     defs: &JsonMap<String, serde_json::Value>,
     camel_case: bool,
 ) {
+    // A reference to a message takes only its annotations; the referenced component
+    // is enriched on its own.
+    if is_ref_wrapper(openapi) {
+        merge_fields(json_schema, openapi, ANNOTATION_FIELDS);
+        return;
+    }
     merge_validation(json_schema, openapi);
 
     // Recurse into properties
