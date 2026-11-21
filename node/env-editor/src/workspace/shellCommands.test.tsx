@@ -91,6 +91,16 @@ describe("the shell's commands", () => {
     ]);
   });
 
+  test("⇧⌘E and ⇧⌘H show the sidebar's views", () => {
+    const log: string[] = [];
+    const list = build(log, { sideViews: sideViewItems(true) });
+    const byShortcut = (s: string) =>
+      list.find((c) => [c.shortcut].flat().includes(s));
+    byShortcut("mod+shift+e")?.run();
+    byShortcut("mod+shift+h")?.run();
+    expect(log).toEqual(["showView:explorer", "showView:history"]);
+  });
+
   test("a Show command per workbench view, and one back to the editors", () => {
     const log: string[] = [];
     const views = [{ id: "apps", label: "Apps" }];

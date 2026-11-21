@@ -50,6 +50,8 @@ export const EDITOR_SHORTCUTS: readonly string[] = [
   "mod+k",
   "mod+b",
   "mod+j",
+  "mod+shift+e",
+  "mod+shift+h",
   ...Array.from({ length: 9 }, (_, i) => `mod+${i + 1}`),
   "mod+z",
   "mod+shift+z",

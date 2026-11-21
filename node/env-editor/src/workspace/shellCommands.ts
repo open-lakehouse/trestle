@@ -13,7 +13,12 @@ export interface ShellCommandState {
   /** The open editors, in tab order. */
   open: readonly EditorTab[];
   /** The side views, the editor's and a host's. */
-  sideViews: readonly { id: string; label: string; run?: () => void }[];
+  sideViews: readonly {
+    id: string;
+    label: string;
+    run?: () => void;
+    shortcut?: string;
+  }[];
   activeEnv: EnvDoc | undefined;
   /** A host's workbench views. */
   workbenchViews: readonly { id: string; label: string }[];
@@ -81,6 +86,7 @@ export function shellCommands(
             title: `Show ${view.label}`,
             section: "Go to",
             keywords: ["view", "sidebar"],
+            shortcut: view.shortcut,
             run: () => actions.showView(view.id),
           },
     ),

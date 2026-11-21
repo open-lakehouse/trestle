@@ -3,8 +3,11 @@
 
 export {
   ActivityBar,
+  type ActivityItem,
+  activityItems,
   BUILTIN_SIDE_VIEWS,
   type SideView,
+  sidebarTabItems,
   sideViewItems,
 } from "./ActivityBar.js";
 export {
@@ -90,6 +93,7 @@ export {
   type WorkspaceDoc,
   workspaceToml,
 } from "./model.js";
+export { SidebarTabs } from "./SidebarTabs.js";
 export {
   createLocalStorageWorkspaceStore,
   createMemoryWorkspaceStore,

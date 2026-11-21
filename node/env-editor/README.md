@@ -75,8 +75,9 @@ views inside the shell with `<ContributionsProvider contributions>`. The editor
 draws what it is given and knows nothing about how anything runs. Everything is
 optional, and with no contributions the shell is unchanged:
 
-- `sideViews`: extra activity-bar views (`align: "end"` puts one at the
-  bottom).
+- `sideViews`: extra sidebar views, as tabs at the top of the sidebar after the
+  editor's Environments, History and Workspace settings (`align: "end"` puts
+  one on the right).
 - `workbenchViews`: activity-bar items for views that take over the main area
   (e.g. a host's Apps). While one is active its `render` replaces the editor
   tabs, which stay mounted and hidden so the diagram and viewers keep their
@@ -88,6 +89,11 @@ optional, and with no contributions the shell is unchanged:
 - `activityActions`: activity-bar buttons that run instead of opening a sidebar
   view, e.g. a host's settings in a dialog over the workspace. They are listed
   in the ⌘K palette as well.
+
+  The activity bar, the rail left of the sidebar, moves between experiences:
+  an Editor button, then the workbench views and actions. It is drawn only when
+  a host gives workbench views or actions. The editor's own views switch from
+  the sidebar's tabs, or with ⇧⌘E (Environments) and ⇧⌘H (History).
 - `environment.status(envId)`: a run-state dot and placement (`local slot 0`, a
   remote branch) in the tree, and the header over the environment's tab, with
   its revision. `details` adds facts to that header (`{ label, value, copy?,
