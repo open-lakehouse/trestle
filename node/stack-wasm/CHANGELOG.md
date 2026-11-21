@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.8...stack-wasm-v0.0.9) - 2026-11-21
+
+### Added
+
+- [**breaking**] configure platform features and per-service integrations (#432)
+
+### Fixed
+
+- keep AI Gateway endpoints traced, say where traces go (#430)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.7...stack-wasm-v0.0.8) - 2026-11-18
 
 ### Fixed

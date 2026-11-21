@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.19](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.18...olai-codegen-v0.0.19) - 2026-11-21
+
+### Fixed
+
+- fix keyword, oneof and message params in bindings (#423)
+- keep validation off allOf $ref wrappers in enrich-openapi (#421)
+
 ## [0.0.18](https://github.com/open-lakehouse/trestle/compare/olai-codegen-v0.0.17...olai-codegen-v0.0.18) - 2026-11-16
 
 ### Fixed
