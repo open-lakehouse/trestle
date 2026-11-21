@@ -266,6 +266,22 @@ pub enum TopologyEdgeDto {
         /// The surface whose requests are checked (its listener's host port).
         host_port: u16,
     },
+    /// A component integrates with a platform feature (identity, policy, observability) its
+    /// provider serves: e.g. a service exporting its traces to the tracing backend. The
+    /// gateway's own identity and policy integrations are its `authenticates` and `authorizes`
+    /// edges.
+    Integrates {
+        /// The edge's stable key (`kind:from→to:qualifier`).
+        key: String,
+        /// The integrating component.
+        from: String,
+        /// The feature's provider.
+        to: String,
+        /// The feature (`identity`, `policy`, `observability`).
+        feature: crate::PlatformFeature,
+        /// The protocol spoken (e.g. `otlp-grpc`).
+        protocol: String,
+    },
     /// A component uses a capability another component provides.
     Uses {
         /// The edge's stable key (`kind:from→to:qualifier`).
@@ -291,6 +307,7 @@ impl TopologyEdgeDto {
             | Self::Route { from, to, .. }
             | Self::Authenticates { from, to, .. }
             | Self::Authorizes { from, to, .. }
+            | Self::Integrates { from, to, .. }
             | Self::Uses { from, to, .. } => (from, to),
         }
     }
@@ -305,6 +322,7 @@ impl TopologyEdgeDto {
             Self::Route { host_port, .. } => ("route", host_port.to_string()),
             Self::Authenticates { host_port, .. } => ("authenticates", host_port.to_string()),
             Self::Authorizes { host_port, .. } => ("authorizes", host_port.to_string()),
+            Self::Integrates { feature, .. } => ("integrates", feature.to_string()),
             Self::Uses { role, .. } => ("uses", role.clone()),
         };
         let (from, to) = self.endpoints();
@@ -318,6 +336,7 @@ impl TopologyEdgeDto {
             | Self::Route { key, .. }
             | Self::Authenticates { key, .. }
             | Self::Authorizes { key, .. }
+            | Self::Integrates { key, .. }
             | Self::Uses { key, .. } => key,
         }
     }
@@ -329,6 +348,7 @@ impl TopologyEdgeDto {
             | Self::Route { key, .. }
             | Self::Authenticates { key, .. }
             | Self::Authorizes { key, .. }
+            | Self::Integrates { key, .. }
             | Self::Uses { key, .. } => *key = derived,
         }
     }
@@ -834,6 +854,30 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         }
     }
     edges.extend(uses);
+    // Every active platform-feature integration, but the gateway's identity and policy ones
+    // (its authenticates / authorizes edges) and those taken through the gateway.
+    for integration in &plan.integrations {
+        let crate::IntegrationState::Active { protocol, .. } = &integration.state else {
+            continue;
+        };
+        let from = integration.module.as_str();
+        let gateway_check = Some(from) == gateway_module.as_deref()
+            && integration.feature != crate::PlatformFeature::Observability;
+        if gateway_check
+            || protocol == crate::protocol::GATEWAY_HEADERS
+            || !nodes.iter().any(|n| n.id == from)
+            || !nodes.iter().any(|n| n.id == integration.provider.as_str())
+        {
+            continue;
+        }
+        edges.push(TopologyEdgeDto::Integrates {
+            key: String::new(),
+            from: from.to_string(),
+            to: integration.provider.as_str().to_string(),
+            feature: integration.feature,
+            protocol: protocol.clone(),
+        });
+    }
     for edge in &mut edges {
         edge.assign_key();
     }
@@ -1244,7 +1288,47 @@ mod tests {
         // Every variant was exercised, so the uniqueness check above covers each one.
         assert_eq!(
             kinds.into_iter().collect::<Vec<_>>(),
-            ["access", "authenticates", "authorizes", "route", "uses"]
+            [
+                "access",
+                "authenticates",
+                "authorizes",
+                "integrates",
+                "route",
+                "uses"
+            ]
+        );
+    }
+
+    #[test]
+    fn services_integrating_with_a_platform_feature_draw_an_integrates_edge() {
+        let selection = Selection::modules(["envoy", "postgres", "mlflow", "omnigent"])
+            .with_feature(crate::PlatformFeature::Identity)
+            .with_feature(crate::PlatformFeature::Policy)
+            .with_feature(crate::PlatformFeature::Observability);
+        let g = graph_dto(&plan(&selection));
+        let integrates: Vec<(&str, &str, String)> = g
+            .edges
+            .iter()
+            .filter_map(|e| match e {
+                TopologyEdgeDto::Integrates {
+                    from, to, feature, ..
+                } => Some((from.as_str(), to.as_str(), feature.to_string())),
+                _ => None,
+            })
+            .collect();
+        // The gateway's sign-in and policy checks are its authenticates / authorizes edges, and
+        // Omnigent takes identity through the gateway: only the trace exports are drawn.
+        assert_eq!(
+            integrates,
+            [
+                ("envoy", "jaeger", "observability".to_string()),
+                ("opa", "jaeger", "observability".to_string()),
+            ]
+        );
+        assert!(
+            g.edges
+                .iter()
+                .any(|e| matches!(e, TopologyEdgeDto::Authorizes { to, .. } if to == "opa"))
         );
     }
 

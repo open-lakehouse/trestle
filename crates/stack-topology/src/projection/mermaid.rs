@@ -146,6 +146,9 @@ fn edge_parts<'a>(
         }
         TopologyEdgeDto::Authenticates { from, to, .. } => (from, to, "-.->", "authn".into()),
         TopologyEdgeDto::Authorizes { from, to, .. } => (from, to, "-.->", "authz".into()),
+        TopologyEdgeDto::Integrates {
+            from, to, feature, ..
+        } => (from, to, "-.->", feature.to_string()),
         TopologyEdgeDto::Uses {
             from,
             to,

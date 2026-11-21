@@ -86,6 +86,37 @@
           "type": "array",
           "items": { "type": "string" }
         },
+        "protocols": {
+          "description": "For a platform-feature provider: the protocols it serves its integrators, on which endpoint.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["protocol", "endpoint"],
+            "properties": {
+              "protocol": { "type": "string" },
+              "endpoint": { "type": "string" },
+              "path": { "type": "string" }
+            }
+          }
+        },
+        "integrations": {
+          "description": "The platform features the module can integrate with, over which protocols.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["feature"],
+            "properties": {
+              "feature": { "enum": ["identity", "policy", "observability"] },
+              "protocols": { "type": "array", "items": { "type": "string" } },
+              "requires": {
+                "type": "array",
+                "items": { "enum": ["identity", "policy", "observability"] }
+              },
+              "via_gateway": { "type": "boolean" },
+              "note": { "type": "string" }
+            }
+          }
+        },
         "conflicts_with": { "type": "array", "items": { "type": "string" } },
         "resource_kinds": { "type": "array", "items": { "type": "string" } },
         "knobs": { "type": "array", "items": { "$ref": "#/$defs/knob" } },

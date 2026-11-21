@@ -54,6 +54,7 @@ mod function;
 mod gateway;
 pub mod hosted;
 mod impersonation;
+pub mod integrations;
 mod knobs;
 mod names;
 mod python_client;
@@ -69,6 +70,7 @@ use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, StackFacts
 use crate::model::connection::Connection;
 use crate::model::endpoint::{RouteIntent, Scheme};
 use crate::model::placement::{Placement, Vantage};
+use crate::model::platform::{PlatformFeature, PlatformSelection};
 use crate::model::role::{Role, ServiceSpec};
 use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
@@ -80,13 +82,14 @@ use client_env::resolve_client_env;
 pub use gateway::{
     AuthConfig, ClusterConfig, ENVOY_AUTH_KNOB, ENVOY_AUTH_KNOB_LEGACY, EXT_AUTHZ_PATH_EXTRA,
     GATEWAY_TLS_PORT, GatewayConfig, GatewayRoute, ListenerConfig, PolicyConfig, SecureOrigin,
-    TlsListenerConfig, TlsVirtualHost,
+    TlsListenerConfig, TlsVirtualHost, TracingConfig,
 };
 use hosted::SecretValues;
 pub use hosted::{
     FunctionRequirement, HostedConnection, HostedKind, HostedResource, HostedStepView,
     HostedVendor, NEON_AI_GATEWAY_TOKEN_VAR, NeonRequirements, Secrets, function_url_var,
 };
+pub use integrations::{Integration, IntegrationState};
 pub use names::{is_valid_resource_name, resource_name_rule};
 use python_client::resolve_python_client;
 pub use python_client::{ClientSelection, PYTHON_CLIENT_BASE_DEPENDENCIES, PythonWorkspace};
@@ -131,37 +134,45 @@ pub struct Selection {
     /// example notebooks (see [`ClientSelection`]). Off by default.
     #[serde(default, skip_serializing_if = "ClientSelection::is_default")]
     pub client: ClientSelection,
-    /// Whether the environment runs a gateway and how it guards access. The gateway itself is
-    /// not a module selection: unless [`enabled`](GatewaySettings::enabled) is off, every
-    /// environment has one (the catalog's `gateway`-role provider), so this says whether it
-    /// runs, requires sign-in and enforces policy. See [`GatewaySettings`].
-    #[serde(default)]
+    /// Whether the environment runs a gateway. The gateway itself is not a module selection:
+    /// unless [`enabled`](GatewaySettings::enabled) is off, every environment has one (the
+    /// catalog's `gateway`-role provider). See [`GatewaySettings`].
+    #[serde(default, skip_serializing_if = "GatewaySettings::is_open")]
     pub gateway: GatewaySettings,
+    /// The platform features the environment turns on (identity, policy, observability), each
+    /// with its provider. The providers join the environment on their own; every module that
+    /// can integrate with a feature does so by default (see [`integrations`](Self::integrations)).
+    #[serde(default, skip_serializing_if = "PlatformSelection::is_empty")]
+    pub platform: PlatformSelection,
+    /// Per-module opt-outs of platform-feature integrations: module id → (feature → on). A
+    /// module integrates with every selected feature it can unless its entry here says `false`;
+    /// only opt-outs need to be written. A UI reads each integration's state off
+    /// [`Plan::integrations`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub integrations: BTreeMap<ModuleId, BTreeMap<PlatformFeature, bool>>,
 }
 
-/// How the environment's gateway guards access. Each setting pulls in its provider by role,
-/// so no module id appears here: the `auth`-role provider (the bundled Authelia) for sign-in,
-/// the `policy`-role provider (the bundled OPA) for authorization.
+/// Whether the environment runs a gateway (see [`Selection::gateway`]).
 ///
-/// Older manifests expressed these through the gateway's `auth` knob override and by
-/// selecting the providers as modules; the planner still honours both (see
-/// [`Selection::normalize_gateway`] to rewrite them into this form).
+/// Manifests before version 7 also configured sign-in and policy here (`auth`, `policy`);
+/// those became [platform features](Selection::platform), and
+/// [`migrate_platform`](crate::manifest::migrate_platform) moves them over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewaySettings {
     /// Run the gateway. On by default. Off plans a **direct** environment with no gateway:
     /// every surface endpoint is published on its own host port and addressed at the path the
     /// service itself serves (see [`DIRECT`](Self::DIRECT)). For bare deployments that only
-    /// need a service and its backends; sign-in, policy, emulated public hostnames and an app
+    /// need a service and its backends; identity, policy, emulated public hostnames and an app
     /// upstream all need the gateway ([`PlanError::GatewayRequired`]).
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
-    /// Require single-sign-on for API and UI routes (forward-auth). Resource backends
-    /// (object stores, databases) are never gated.
-    #[serde(default)]
+    /// Legacy (before version 7): require sign-in. Read, never written.
+    #[doc(hidden)]
+    #[serde(default, skip_serializing)]
     pub auth: bool,
-    /// Authorize every signed-in request against a Rego policy. Implies [`auth`](Self::auth):
-    /// the policy decides on the identity sign-in asserts.
-    #[serde(default)]
+    /// Legacy (before version 7): enforce policy. Read, never written.
+    #[doc(hidden)]
+    #[serde(default, skip_serializing)]
     pub policy: bool,
 }
 
@@ -180,23 +191,16 @@ impl Default for GatewaySettings {
 }
 
 impl GatewaySettings {
-    /// Open: a gateway with no sign-in and no policy.
+    /// Whether these are the default settings: a gateway fronts the environment.
+    pub fn is_open(&self) -> bool {
+        self.enabled
+    }
+
+    /// A gateway fronting the environment (the default).
     pub const OPEN: Self = Self {
         enabled: true,
         auth: false,
         policy: false,
-    };
-    /// Sign-in only.
-    pub const SIGN_IN: Self = Self {
-        enabled: true,
-        auth: true,
-        policy: false,
-    };
-    /// Sign-in plus policy.
-    pub const POLICY: Self = Self {
-        enabled: true,
-        auth: true,
-        policy: true,
     };
     /// No gateway: services are published directly on their own host ports.
     pub const DIRECT: Self = Self {
@@ -204,11 +208,6 @@ impl GatewaySettings {
         auth: false,
         policy: false,
     };
-
-    /// Whether sign-in is on, explicitly or because [`policy`](Self::policy) needs it.
-    pub fn auth_enabled(&self) -> bool {
-        self.auth || self.policy
-    }
 }
 
 impl Selection {
@@ -224,55 +223,10 @@ impl Selection {
         }
     }
 
-    /// Rewrite the legacy ways of configuring the gateway into [`gateway`](Self::gateway):
-    /// the gateway's `auth` knob override, and the gateway, auth and policy providers selected
-    /// as modules or capabilities. The planner adds those providers by role, so listing them is
-    /// redundant. A provider is only dropped when planning would pick that same provider
-    /// anyway, which leaves the plan unchanged.
-    ///
-    /// Errors like [`Catalog::plan`] would on an invalid `auth` override, and with
-    /// [`PlanError::PolicyRequiresAuth`] for a policy engine with sign-in explicitly off (a
-    /// combination the settings cannot express).
-    pub fn normalize_gateway(&mut self, catalog: &Catalog, ctx: &PlanCtx) -> Result<(), PlanError> {
-        let auth = gateway::gateway_auth_enabled(self, catalog)?;
-        let policy = gateway::policy_provider(self, catalog);
-        if let (Some(module), false) = (&policy, auth) {
-            return Err(PlanError::PolicyRequiresAuth {
-                module: module.clone(),
-            });
-        }
-        self.gateway = GatewaySettings {
-            enabled: self.gateway.enabled,
-            auth,
-            policy: policy.is_some(),
-        };
-
-        for gateway_id in catalog.providers_of(Role::GATEWAY) {
-            if let Some(overrides) = self.knob_overrides.get_mut(gateway_id) {
-                overrides.remove(ENVOY_AUTH_KNOB);
-                overrides.remove(ENVOY_AUTH_KNOB_LEGACY);
-                if overrides.is_empty() {
-                    self.knob_overrides.remove(gateway_id);
-                }
-            }
-        }
-        self.capabilities
-            .retain(|c| c != Role::AUTH && c != Role::POLICY);
-        let first = |role: &str| catalog.providers_of(role).first().map(|p| (*p).clone());
-        let (first_auth, first_policy) = (first(Role::AUTH), first(Role::POLICY));
-        let modules = std::mem::take(&mut self.modules);
-        for module in modules {
-            let implied = if catalog.providers_of(Role::GATEWAY).contains(&&module) {
-                gateway::gateway_provider(self, catalog, ctx).as_ref() == Some(&module)
-            } else {
-                (auth && first_auth.as_ref() == Some(&module))
-                    || (policy.is_some() && first_policy.as_ref() == Some(&module))
-            };
-            if !implied {
-                self.modules.push(module);
-            }
-        }
-        Ok(())
+    /// This selection with the platform `feature` on, filled by the catalog's default provider.
+    pub fn with_feature(mut self, feature: PlatformFeature) -> Self {
+        self.platform = self.platform.with(feature);
+        self
     }
 }
 
@@ -754,16 +708,41 @@ pub enum PlanError {
         #[source]
         source: AddressError,
     },
-    /// A `policy`-role module was selected but gateway auth is off (the `auth` knob is
-    /// explicitly `false`, or the catalog has no auth provider). The policy engine decides on
-    /// the identity the auth provider asserts, so without auth it could only deny everything.
+    /// The selection turns on policy without identity. The policy engine decides on the
+    /// identity sign-in asserts, so without it it could only deny everything.
     #[error(
-        "policy engine `{module}` needs gateway sign-in to assert an identity; set \
-         `[selection.gateway] policy = true` and drop the gateway's `auth = \"false\"` override"
+        "policy engine `{module}` needs identity to decide on; set `[selection.platform] \
+         identity = true`"
     )]
-    PolicyRequiresAuth {
-        /// The selected policy-role module.
+    PolicyRequiresIdentity {
+        /// The policy provider.
         module: ModuleId,
+    },
+    /// A selected platform feature names a module that doesn't provide it, or the catalog has
+    /// no provider for it.
+    #[error("no provider for {feature}: {reason}")]
+    UnknownPlatformProvider {
+        /// The feature.
+        feature: PlatformFeature,
+        /// What is wrong.
+        reason: String,
+    },
+    /// A platform-feature provider doesn't declare what its integrations need.
+    #[error("platform provider `{module}` is misconfigured: {reason}")]
+    PlatformProviderMisconfigured {
+        /// The provider.
+        module: ModuleId,
+        /// What specifically is missing.
+        reason: String,
+    },
+    /// The selection's [`integrations`](Selection::integrations) opts out a module that isn't
+    /// in the environment, or of a feature it can't integrate with.
+    #[error("unknown integration for `{module}`: {reason}")]
+    UnknownIntegration {
+        /// The module named.
+        module: ModuleId,
+        /// What is wrong.
+        reason: String,
     },
     /// The selection turns the gateway off ([`GatewaySettings::enabled`]) but asks for
     /// something only the gateway provides: sign-in, policy, a module emulating public
@@ -927,6 +906,8 @@ pub struct Plan {
     /// The stack-wide facts every module's services, client env and render were settled
     /// against.
     pub stack_facts: StackFacts,
+    /// Every module's integration with each selected platform feature, on or off (and why).
+    pub integrations: Vec<Integration>,
     /// The gateway facts the address resolver reads (captured from [`PlanCtx`]). Private:
     /// callers reach addressing through [`Plan::service`] → [`ServiceRef::address`], never
     /// by reconstructing this.
@@ -1133,6 +1114,17 @@ impl Catalog {
     }
 }
 
+/// The platform-feature providers the gateway integrates with, which the route and bind phases
+/// wire into its config.
+pub(super) struct GatewayWiring {
+    /// The identity provider gating its listeners.
+    pub auth: Option<ModuleId>,
+    /// The policy engine checking each gated request.
+    pub policy: Option<ModuleId>,
+    /// Where it exports its traces.
+    pub tracing: Option<crate::model::platform::ActiveIntegration>,
+}
+
 /// The planner implementation behind [`Catalog::plan`]: four pure phases, each in its own
 /// module, run in order.
 ///
@@ -1150,12 +1142,14 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     // A module the selection hosts as a function plans as its hosted wrapper.
     let functions = function::host_functions(selection, catalog)?;
     let catalog = functions.as_ref().unwrap_or(catalog);
+    let selection = &*augment::normalize_platform(selection, catalog);
     let mut augmented = augment::augment(selection, catalog, ctx, false)?;
     let mut settled = settle::settle(
         &augmented.selection,
         catalog,
         &augmented.ctx,
-        augmented.auth_provider.is_some(),
+        augmented.gateway.as_ref(),
+        &augmented.platform,
     )?;
     // Without a gateway, a module emulating public hostnames (only known once the graph is
     // resolved) still needs the gateway's in-network TLS listener: plan again with it.
@@ -1171,26 +1165,36 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             &augmented.selection,
             catalog,
             &augmented.ctx,
-            augmented.auth_provider.is_some(),
+            augmented.gateway.as_ref(),
+            &augmented.platform,
         )?;
     }
     let (selection, ctx) = (&*augmented.selection, &*augmented.ctx);
+    // What the gateway is wired to: the providers of the features it integrates with.
+    let gateway = augmented.gateway.as_ref();
+    let wired = GatewayWiring {
+        auth: settled
+            .gateway_integration(gateway, PlatformFeature::Identity)
+            .cloned(),
+        policy: settled
+            .gateway_integration(gateway, PlatformFeature::Policy)
+            .cloned(),
+        tracing: gateway.and_then(|g| {
+            settled
+                .integrations
+                .iter()
+                .find(|i| &i.module == g && i.feature == PlatformFeature::Observability)
+                .and_then(Integration::active)
+        }),
+    };
     let routed = route::route(
         &mut settled,
         catalog,
         ctx,
         selection.gateway.enabled,
-        augmented.auth_provider.as_ref(),
-        augmented.policy_provider.as_ref(),
+        &wired,
     )?;
-    let bound = bind::bind(
-        &settled,
-        &routed,
-        catalog,
-        ctx,
-        augmented.auth_provider.as_ref(),
-        augmented.policy_provider.as_ref(),
-    )?;
+    let bound = bind::bind(&settled, &routed, catalog, ctx, &wired)?;
 
     let secrets = settled
         .graph
@@ -1225,6 +1229,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         env: bound.env,
         gateway_facts: routed.facts,
         stack_facts: settled.stack_facts,
+        integrations: settled.integrations,
         client_env_host: InjectedEnv::new(),
         client_env_container: InjectedEnv::new(),
         python_client: None,
@@ -1338,24 +1343,21 @@ mod tests {
 
     /// A minimal gateway module (role `gateway`) carrying the `ENVOY_AUTH` knob, under a
     /// deliberately NON-`envoy` id — so the by-role lookups are exercised, not an id match.
-    fn gateway_module(auth_default_on: bool) -> crate::catalog::module::DataModule {
+    /// A gateway that enforces sign-in over forward-auth, like the baseline's.
+    fn gateway_module() -> crate::catalog::module::DataModule {
         let mut m = module_with(
             "edge",
             vec![ep("http", 10000, RouteIntent::Internal)],
-            crate::catalog::module::Provides::default(),
+            crate::catalog::module::Provides {
+                integrations: vec![crate::IntegrationSpec::new(
+                    PlatformFeature::Identity,
+                    &[crate::protocol::FORWARD_AUTH],
+                )],
+                ..Default::default()
+            },
         );
         m.provider_of = Some("gateway".into());
         m.service_specs[0].role = Role::gateway();
-        m.knobs = vec![crate::catalog::module::Knob {
-            key: ENVOY_AUTH_KNOB.into(),
-            title: None,
-            kind: crate::catalog::module::KnobKind::Bool,
-            default: Some(if auth_default_on { "true" } else { "false" }.into()),
-            required: false,
-            help: None,
-            aliases: vec![],
-            advanced: false,
-        }];
         m
     }
 
@@ -1366,6 +1368,10 @@ mod tests {
         provides
             .extras
             .insert(EXT_AUTHZ_PATH_EXTRA.into(), "/verify".into());
+        provides.protocols = vec![crate::ProtocolOffer::new(
+            crate::protocol::FORWARD_AUTH,
+            "http",
+        )];
         let mut m = module_with(
             "gatekeeper",
             vec![ep("http", 4180, RouteIntent::Internal)],
@@ -1378,11 +1384,11 @@ mod tests {
 
     #[test]
     fn ext_authz_wiring_follows_a_renamed_reported_auth_provider() {
-        // Knob on, provider `gatekeeper` on :4180 with path /verify: the emitted cluster and the
-        // AuthConfig must follow the resolved provider, never the bundled authelia/9091.
+        // Identity on, provider `gatekeeper` on :4180 with path /verify: the emitted cluster and
+        // the AuthConfig must follow the resolved provider, never the bundled authelia/9091.
         let p = plan_env(
-            &Selection::modules(["edge"]),
-            &Catalog::from_modules([arc(gateway_module(true)), arc(auth_provider_module())]),
+            &Selection::modules(["edge"]).with_feature(PlatformFeature::Identity),
+            &Catalog::from_modules([arc(gateway_module()), arc(auth_provider_module())]),
             &PlanCtx::default(),
         )
         .expect("plan succeeds");
@@ -1434,18 +1440,24 @@ mod tests {
     }
 
     #[test]
-    fn knob_on_but_no_auth_provider_leaves_the_gateway_open() {
-        // The knob defaults on, but the catalog has no `auth`-role provider. Auth must stay off
-        // entirely rather than gate the gateway behind a phantom upstream.
-        let p = plan_env(
-            &Selection::modules(["edge"]),
-            &Catalog::from_modules([arc(gateway_module(true))]),
+    fn identity_without_a_provider_is_rejected() {
+        // The catalog has no `auth`-role provider: the gateway can't gate anything, and saying
+        // so beats leaving it silently open.
+        let err = plan_env(
+            &Selection::modules(["edge"]).with_feature(PlatformFeature::Identity),
+            &Catalog::from_modules([arc(gateway_module())]),
             &PlanCtx::default(),
         )
-        .expect("plan succeeds");
+        .unwrap_err();
         assert!(
-            p.gateway.auth.is_none(),
-            "no auth provider → no AuthConfig, gateway left open"
+            matches!(
+                err,
+                PlanError::UnknownPlatformProvider {
+                    feature: PlatformFeature::Identity,
+                    ..
+                }
+            ),
+            "{err:?}"
         );
     }
 
@@ -1460,9 +1472,13 @@ mod tests {
         );
         provider.provider_of = Some("auth".into());
         provider.service_specs[0].role = Role::auth();
+        provider.provides.protocols = vec![crate::ProtocolOffer::new(
+            crate::protocol::FORWARD_AUTH,
+            "http",
+        )];
         let err = plan_env(
-            &Selection::modules(["edge"]),
-            &Catalog::from_modules([arc(gateway_module(true)), arc(provider)]),
+            &Selection::modules(["edge"]).with_feature(PlatformFeature::Identity),
+            &Catalog::from_modules([arc(gateway_module()), arc(provider)]),
             &PlanCtx::default(),
         )
         .unwrap_err();
@@ -2066,12 +2082,16 @@ mod tests {
     }
 
     #[test]
-    fn gateway_settings_pull_in_sign_in_and_policy() {
+    fn platform_features_pull_in_their_providers() {
         let catalog = baseline_catalog();
-        let mut selection = Selection::modules(["postgres", "mlflow"]);
+        let selection = Selection::modules(["postgres", "mlflow"]);
 
-        selection.gateway = GatewaySettings::SIGN_IN;
-        let p = plan_env(&selection, &catalog, &PlanCtx::default()).unwrap();
+        let p = plan_env(
+            &selection.clone().with_feature(PlatformFeature::Identity),
+            &catalog,
+            &PlanCtx::default(),
+        )
+        .unwrap();
         let ids = graph_ids(&p);
         assert!(ids.contains(&"authelia".to_string()) && !ids.contains(&"opa".to_string()));
         assert_eq!(p.gateway.auth.as_ref().unwrap().cluster, "authelia");
@@ -2089,20 +2109,37 @@ mod tests {
             envoy.dependencies
         );
 
-        // Policy implies sign-in.
-        selection.gateway = GatewaySettings {
-            auth: false,
-            policy: true,
-            ..GatewaySettings::OPEN
-        };
-        let p = plan_env(&selection, &catalog, &PlanCtx::default()).unwrap();
+        let p = plan_env(
+            &selection
+                .clone()
+                .with_feature(PlatformFeature::Identity)
+                .with_feature(PlatformFeature::Policy),
+            &catalog,
+            &PlanCtx::default(),
+        )
+        .unwrap();
         let ids = graph_ids(&p);
         assert!(ids.contains(&"authelia".to_string()) && ids.contains(&"opa".to_string()));
         assert!(p.gateway.auth.is_some() && p.gateway.policy.is_some());
     }
 
     #[test]
-    fn normalizing_legacy_gateway_selections_keeps_the_plan() {
+    fn policy_without_identity_is_rejected() {
+        let err = plan_env(
+            &Selection::modules(["mlflow"]).with_feature(PlatformFeature::Policy),
+            &baseline_catalog(),
+            &PlanCtx::default(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, PlanError::PolicyRequiresIdentity { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_gateway_selections_plan_like_their_platform_features() {
+        use PlatformFeature::*;
         let catalog = baseline_catalog();
         let ctx = PlanCtx::default();
         let base = ["envoy", "postgres", "rustfs", "mlflow"];
@@ -2114,75 +2151,67 @@ mod tests {
                 .insert(key.into(), value.into());
             s
         };
-        let cases = [
-            (Selection::modules(base), GatewaySettings::OPEN),
-            (
-                with_auth_override(ENVOY_AUTH_KNOB, "true"),
-                GatewaySettings::SIGN_IN,
-            ),
+        let mut sign_in = Selection::modules(base);
+        sign_in.gateway.auth = true;
+        let mut policy = Selection::modules(base);
+        policy.gateway.policy = true;
+        let cases: Vec<(Selection, Vec<PlatformFeature>)> = vec![
+            (Selection::modules(base), vec![]),
+            (sign_in, vec![Identity]),
+            (policy, vec![Identity, Policy]),
+            (with_auth_override(ENVOY_AUTH_KNOB, "true"), vec![Identity]),
             (
                 with_auth_override(ENVOY_AUTH_KNOB_LEGACY, "yes"),
-                GatewaySettings::SIGN_IN,
+                vec![Identity],
             ),
-            (
-                with_auth_override(ENVOY_AUTH_KNOB, "false"),
-                GatewaySettings::OPEN,
-            ),
+            (with_auth_override(ENVOY_AUTH_KNOB, "false"), vec![]),
             (
                 Selection::modules(["envoy", "authelia", "postgres", "rustfs", "mlflow"]),
-                GatewaySettings::SIGN_IN,
+                vec![Identity],
             ),
             (
                 Selection {
                     capabilities: vec![Role::AUTH.into()],
                     ..Selection::modules(base)
                 },
-                GatewaySettings::SIGN_IN,
+                vec![Identity],
             ),
             (
                 Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "opa"]),
-                GatewaySettings::POLICY,
+                vec![Identity, Policy],
+            ),
+            (
+                Selection::modules(["envoy", "postgres", "rustfs", "mlflow", "jaeger"]),
+                vec![Observability],
             ),
         ];
-        for (legacy, want) in cases {
-            let mut normalized = legacy.clone();
-            normalized.normalize_gateway(&catalog, &ctx).unwrap();
-            assert_eq!(normalized.gateway, want, "{legacy:?}");
-            assert_eq!(
-                normalized.modules,
-                ["postgres", "rustfs", "mlflow"].map(ModuleId::from),
-                "{legacy:?}"
-            );
-            assert!(normalized.knob_overrides.is_empty() && normalized.capabilities.is_empty());
-
+        for (legacy, features) in cases {
+            let current = features
+                .iter()
+                .fold(Selection::modules(base), |s, f| s.with_feature(*f));
             let before = plan_env(&legacy, &catalog, &ctx)
                 .unwrap()
                 .materialize()
                 .unwrap();
-            let after = plan_env(&normalized, &catalog, &ctx)
+            let after = plan_env(&current, &catalog, &ctx)
                 .unwrap()
                 .materialize()
                 .unwrap();
-            assert_eq!(
-                before, after,
-                "{legacy:?} plans differently once normalized"
-            );
+            assert_eq!(before, after, "{legacy:?} plans unlike {features:?}");
         }
     }
 
     #[test]
-    fn normalizing_policy_with_sign_in_off_is_rejected() {
+    fn policy_with_sign_in_explicitly_off_is_rejected() {
         let mut selection = Selection::modules(["envoy", "opa", "mlflow"]);
         selection
             .knob_overrides
             .entry(ModuleId::from("envoy"))
             .or_default()
             .insert(ENVOY_AUTH_KNOB.into(), "false".into());
-        let err = selection
-            .normalize_gateway(&baseline_catalog(), &PlanCtx::default())
-            .unwrap_err();
+        let err = plan_env(&selection, &baseline_catalog(), &PlanCtx::default()).unwrap_err();
         assert!(
-            matches!(err, PlanError::PolicyRequiresAuth { .. }),
+            matches!(err, PlanError::PolicyRequiresIdentity { .. }),
             "{err:?}"
         );
     }

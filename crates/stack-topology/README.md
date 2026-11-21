@@ -398,27 +398,57 @@ and scheduled and run by its Rust core. It fills the `orchestration` role.
   `https://<env>.localhost` origin, at its own port) and Rivers runs in forward-auth mode,
   taking the user from the gateway's `Remote-*` headers.
 
-## Gateway authentication and authorization
+## Platform features: identity, policy, observability
 
-Unless it is [turned off](#environments-without-a-gateway), every environment has the
-gateway: the planner adds the `gateway`-role provider (Envoy) whether or not it was selected.
-How it guards access is a setting of the environment, not a module to pick:
+Some capabilities belong to the whole environment rather than to one service. Each is filled
+by one provider module, and every module that can work with it does:
 
 ```toml
-[selection.gateway]
-auth = true     # sign-in (the `auth`-role provider, Authelia)
-policy = true   # authorization (the `policy`-role provider, OPA); implies auth
+[selection.platform]
+identity = true        # sign-in (the `auth`-role provider, Authelia); needs the gateway
+policy = "opa"         # authorization (the `policy`-role provider); needs identity
+observability = true   # traces (the `tracing`-role provider, Jaeger)
 ```
 
-`trestle env new --auth` / `--policy` set these, and the wizard asks for them. Manifests
-from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `authelia` /
-`opa` in `modules`) still plan the same; `Selection::normalize_gateway` rewrites them.
+`true` picks the catalog's provider; a module id picks that one. `trestle env new --identity`
+/ `--policy` / `--observability` set these (`--policy=opa` names a provider), and the wizard
+asks for them. The providers join the environment on their own, so they are not modules to
+pick.
 
-- **Authentication**: `auth = true` fronts every
+**Integrations.** A module declares what it can integrate with, and over which protocols
+(`Provides::integrations`), and a provider declares the protocols it serves
+(`Provides::protocols`). Wherever a selected feature's provider speaks one of a module's
+protocols, the integration is on. A selection opts a module out:
+
+```toml
+[selection.integrations.opa]
+observability = false
+```
+
+The plan lists every integration (`Plan::integrations`, `integrations` in `plan.json`) as
+`active` (with its protocol and in-network endpoint), `disabled`, or `incompatible` with a
+reason. A module's templates read its active ones as `integrations.<feature>`. In the
+baseline:
+
+| Module | Integrates with | Over |
+|---|---|---|
+| `envoy` (the gateway) | identity, policy (needs identity), observability | forward-auth, Envoy gRPC `ext_authz`, OTLP/gRPC |
+| `opa` | observability | OTLP/gRPC (`distributed_tracing`) |
+| `omnigent`, `rivers` | identity, from the gateway's `Remote-*` headers | — |
+| `unity-catalog-rs` | policy | olai-auth's `/v1/authorize`, which OPA doesn't serve: incompatible for now |
+
+Manifests before version 7 configured sign-in and policy on the gateway
+(`[selection.gateway] auth / policy`, the `envoy` `auth` knob, or `authelia` / `opa` /
+`jaeger` in `modules`). They still plan the same; reading one migrates it
+(`migrate_platform`).
+
+### Identity and policy at the gateway
+
+- **Authentication**: identity fronts every
   API and UI route on the shared listener with Authelia forward-auth. Authelia's
   asserted identity reaches upstreams as `Remote-User` / `Remote-Email` / `Remote-Name` /
   `Remote-Groups`. Client-supplied copies are stripped before any check runs.
-- **Managing users**: with auth on, accounts live in `modules/authelia/users.yml`, and a step
+- **Managing users**: with identity on, accounts live in `modules/authelia/users.yml`, and a step
   in the environment's deployment `README.md` explains how to edit them: add a block per user with an
   argon2id password hash, then `docker compose restart authelia`. The file starts with one
   demo account (`demo` / `authelia`) and is written on the first render only, so later
@@ -433,8 +463,8 @@ from before this setting (`[selection.knob_overrides.envoy] auth = "true"`, or `
   `curl --cacert ca.pem`. In-network callers keep plain HTTP at the gateway's
   `<env>.internal` network alias. `client/*.env` already points at both. Without auth, the
   gateway stays on `http://localhost:<port>`.
-- **Authorization**: `policy = true` adds an Open Policy Agent check after
-  authentication (Envoy gRPC `ext_authz`, failing closed), and also turns auth on. The
+- **Authorization**: policy adds an Open Policy Agent check after
+  authentication (Envoy gRPC `ext_authz`, failing closed). The
   policy is `policies/authz.rego`, written once and then yours to edit. By default any
   signed-in user may read and the `writers` or `admins` group may write. Check changes with
   `opa test policies/`, and roll them out with `--set opa.dry_run=true` first: every
@@ -496,7 +526,7 @@ The CLI drives it:
 trestle workspace init demo --mesh   # writes demo/trestle-workspace.toml
 cd demo
 trestle workspace add dev -y         # every `trestle env new` flag works here
-trestle workspace add prod --auth -y # slot 1: gateway on https://demo-prod.localhost:10080
+trestle workspace add prod --identity -y # slot 1: gateway on https://demo-prod.localhost:10080
 trestle workspace list               # slot, project, gateway, and whether it runs
 trestle workspace render             # re-render all, then check no port is bound twice
 trestle workspace up [ENV…]          # docker compose up -d --wait, per member

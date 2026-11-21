@@ -36,7 +36,7 @@ flowchart LR
 
 ### 1. Review the sign-in accounts (`authelia`)
 
-Sign-in is on (`[selection.gateway] auth = true`): Authelia checks every API and UI route on the
+Sign-in is on (`[selection.platform] identity`): Authelia checks every API and UI route on the
 gateway's shared listener. Browsers get its login page; API clients send basic auth.
 
 The accounts live in `modules/authelia/users.yml`. It starts with one demo account, username

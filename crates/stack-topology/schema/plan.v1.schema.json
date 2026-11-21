@@ -109,6 +109,23 @@
         }
       }
     },
+    "integrations": {
+      "description": "Each module's integration with each selected platform feature (identity, policy, observability): active over a protocol, disabled by the selection, or incompatible with the feature's provider.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["module", "feature", "provider", "state"],
+        "properties": {
+          "module": { "type": "string" },
+          "feature": { "enum": ["identity", "policy", "observability"] },
+          "provider": { "type": "string" },
+          "state": { "enum": ["active", "disabled", "incompatible"] },
+          "protocol": { "type": "string" },
+          "endpoint": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
     "gateway": {
       "type": "object",
       "required": ["listeners", "clusters", "admin_port"],
@@ -223,7 +240,9 @@
       "type": "object",
       "required": ["kind", "key", "from", "to"],
       "properties": {
-        "kind": { "enum": ["access", "route", "authenticates", "authorizes", "uses"] },
+        "kind": {
+          "enum": ["access", "route", "authenticates", "authorizes", "integrates", "uses"]
+        },
         "key": {
           "description": "Unique within the graph and stable across re-plans: kind:from→to:qualifier.",
           "type": "string",

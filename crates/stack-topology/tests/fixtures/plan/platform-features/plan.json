@@ -1,0 +1,1338 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:fb97bd00678694f067c0f246ce4ec45d946e4dd5b14b4c0c1e7eacd157f237cb"
+  },
+  "recipe": {
+    "digest": "sha256:4c6eac7dd507ec78fc5f529540292c54f5fc2711ec2a9f426b46fb6dffc6eac2"
+  },
+  "context": {
+    "env_name": "platform",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 9080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {},
+    "data_root": "./.data"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "authelia",
+        "model": "authelia",
+        "kind": "component",
+        "display_name": "Authelia",
+        "summary": "Forward-auth single-sign-on for the gateway (file-based).",
+        "category": "gateway",
+        "role": "auth",
+        "placement": "container:authelia",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 9080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "authelia",
+                "endpoint": "portal",
+                "kind": "ui",
+                "prefix": "/authelia",
+                "gated": false
+              },
+              {
+                "module": "jaeger",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/jaeger",
+                "gated": true
+              },
+              {
+                "module": "jaeger",
+                "endpoint": "otlp_http",
+                "kind": "api",
+                "prefix": "/v1/traces",
+                "gated": true
+              },
+              {
+                "module": "unity-catalog-rs",
+                "endpoint": "rest",
+                "kind": "api",
+                "prefix": "/api/2.1/unity-catalog",
+                "gated": true
+              },
+              {
+                "module": "omnigent",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/omnigent",
+                "gated": true
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking",
+                "kind": "api",
+                "prefix": "/api/2.0/mlflow",
+                "gated": true
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking_v3",
+                "kind": "api",
+                "prefix": "/api/3.0/mlflow",
+                "gated": true
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking_v4",
+                "kind": "api",
+                "prefix": "/api/4.0/mlflow",
+                "gated": true
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "otel",
+                "kind": "api",
+                "prefix": "/api/2.0/otel",
+                "gated": true
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "ai_gateway",
+                "kind": "api",
+                "prefix": "/ai-gateway",
+                "gated": true
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/mlflow",
+                "gated": true
+              }
+            ]
+          },
+          {
+            "host_port": 9100,
+            "kind": "service",
+            "protocols": [
+              "S3 + STS"
+            ],
+            "exposes": [
+              {
+                "module": "rustfs",
+                "endpoint": "s3",
+                "kind": "service",
+                "prefix": "/",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "jaeger",
+        "model": "jaeger",
+        "kind": "component",
+        "display_name": "Jaeger",
+        "summary": "All-in-one OTLP tracing backend with the Jaeger UI.",
+        "category": "observability",
+        "role": "tracing",
+        "placement": "container:jaeger",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "opa",
+        "model": "openPolicyAgent",
+        "kind": "component",
+        "display_name": "Open Policy Agent",
+        "summary": "Rego authorization for every gateway request, after sign-on.",
+        "category": "gateway",
+        "role": "policy",
+        "placement": "container:opa",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "unitycatalog",
+            "consumers": [
+              "unity-catalog-rs"
+            ]
+          },
+          {
+            "resource": "relational_db",
+            "name": "omnigent",
+            "consumers": [
+              "omnigent"
+            ]
+          },
+          {
+            "resource": "relational_db",
+            "name": "mlflow",
+            "consumers": [
+              "mlflow"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "unity-catalog-rs",
+        "model": "mangrove",
+        "kind": "component",
+        "display_name": "Unity Catalog (Rust)",
+        "summary": "mangrove's Rust Unity Catalog server; the same REST API, in a container or as a Neon Function.",
+        "category": "catalog",
+        "role": "data_catalog",
+        "placement": "container:unitycatalog",
+        "cloud": null,
+        "api": "unity-catalog",
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "omnigent",
+        "model": "omnigent",
+        "kind": "component",
+        "display_name": "Omnigent",
+        "summary": "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway or an upstream.",
+        "category": "agents",
+        "role": "agent_platform",
+        "placement": "container:omnigent",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "rustfs",
+        "model": "rustfs",
+        "kind": "component",
+        "display_name": "RustFS",
+        "summary": "Self-hosted S3-compatible object store with STS; answers the AWS S3/STS hostnames in-network.",
+        "category": "storage",
+        "role": "object_store",
+        "placement": "container:rustfs",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "S3 + STS"
+        ],
+        "provisions": [
+          {
+            "resource": "object_store",
+            "name": "mlflow",
+            "consumers": [
+              "mlflow"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "object_store",
+            "singular": "bucket",
+            "plural": "buckets"
+          }
+        ]
+      },
+      {
+        "id": "mlflow",
+        "model": "mlflow",
+        "kind": "component",
+        "display_name": "MLflow",
+        "summary": "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
+        "category": "ml",
+        "role": "experiment_tracking",
+        "placement": "container:mlflow",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9080
+      },
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9100",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9100
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→jaeger:9080",
+        "from": "envoy",
+        "to": "jaeger",
+        "host_port": 9080,
+        "gated": true
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→unity-catalog-rs:9080",
+        "from": "envoy",
+        "to": "unity-catalog-rs",
+        "host_port": 9080,
+        "gated": true
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→omnigent:9080",
+        "from": "envoy",
+        "to": "omnigent",
+        "host_port": 9080,
+        "gated": true
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→mlflow:9080",
+        "from": "envoy",
+        "to": "mlflow",
+        "host_port": 9080,
+        "gated": true
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→rustfs:9100",
+        "from": "envoy",
+        "to": "rustfs",
+        "host_port": 9100,
+        "gated": false
+      },
+      {
+        "kind": "authenticates",
+        "key": "authenticates:envoy→authelia:9080",
+        "from": "envoy",
+        "to": "authelia",
+        "host_port": 9080,
+        "portal_prefix": "/authelia"
+      },
+      {
+        "kind": "authorizes",
+        "key": "authorizes:envoy→opa:9080",
+        "from": "envoy",
+        "to": "opa",
+        "host_port": 9080
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog-rs→postgres:relational_db",
+        "from": "unity-catalog-rs",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "unitycatalog"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→postgres:relational_db",
+        "from": "omnigent",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "omnigent"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→postgres:relational_db",
+        "from": "mlflow",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "mlflow"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→rustfs:object_store",
+        "from": "mlflow",
+        "to": "rustfs",
+        "role": "object_store",
+        "protocol": "S3",
+        "resources": [
+          "mlflow"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→mlflow:experiment_tracking",
+        "from": "omnigent",
+        "to": "mlflow",
+        "role": "experiment_tracking",
+        "protocol": "HTTP",
+        "resources": []
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→unity-catalog-rs:data_catalog",
+        "from": "mlflow",
+        "to": "unity-catalog-rs",
+        "role": "data_catalog",
+        "protocol": "HTTP",
+        "resources": []
+      },
+      {
+        "kind": "integrates",
+        "key": "integrates:envoy→jaeger:observability",
+        "from": "envoy",
+        "to": "jaeger",
+        "feature": "observability",
+        "protocol": "otlp-grpc"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "authelia",
+      "component": "authelia",
+      "kind": "service"
+    },
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "jaeger",
+      "component": "jaeger",
+      "kind": "service"
+    },
+    {
+      "name": "opa",
+      "component": "opa",
+      "kind": "service"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "unitycatalog",
+      "component": "unity-catalog-rs",
+      "kind": "service"
+    },
+    {
+      "name": "unitycatalog-migrate",
+      "component": "unity-catalog-rs",
+      "kind": "init"
+    },
+    {
+      "name": "omnigent",
+      "component": "omnigent",
+      "kind": "service"
+    },
+    {
+      "name": "rustfs",
+      "component": "rustfs",
+      "kind": "service"
+    },
+    {
+      "name": "sts-shim",
+      "component": "rustfs",
+      "kind": "sidecar"
+    },
+    {
+      "name": "rustfs-init",
+      "component": "rustfs",
+      "kind": "init"
+    },
+    {
+      "name": "mlflow",
+      "component": "mlflow",
+      "kind": "service"
+    },
+    {
+      "name": "mlflow-gateway-init",
+      "component": "mlflow",
+      "kind": "init"
+    }
+  ],
+  "services": {
+    "authelia": [
+      {
+        "name": "authelia",
+        "role": "auth",
+        "placement": {
+          "kind": "container",
+          "service": "authelia"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 9091,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "jaeger": [
+      {
+        "name": "jaeger",
+        "role": "tracing",
+        "placement": {
+          "kind": "container",
+          "service": "jaeger"
+        },
+        "endpoints": [
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 16686,
+            "host_port": 16686,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit"
+          },
+          {
+            "id": "otlp_grpc",
+            "scheme": "grpc",
+            "internal_port": 4317,
+            "host_port": 4317,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          },
+          {
+            "id": "otlp_http",
+            "scheme": "http",
+            "internal_port": 4318,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/v1/traces",
+            "rewrite": "passthrough"
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/jaeger"
+      }
+    ],
+    "mlflow": [
+      {
+        "name": "mlflow",
+        "role": "experiment_tracking",
+        "placement": {
+          "kind": "container",
+          "service": "mlflow"
+        },
+        "endpoints": [
+          {
+            "id": "tracking",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "tracking_v3",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/3.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "tracking_v4",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/4.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "otel",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.0/otel",
+            "rewrite": {
+              "to": "/mlflow"
+            }
+          },
+          {
+            "id": "ai_gateway",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/ai-gateway",
+            "rewrite": {
+              "to": "/mlflow/gateway"
+            },
+            "route": {
+              "streaming": true,
+              "strip_client_credentials": true
+            }
+          },
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/mlflow"
+      }
+    ],
+    "omnigent": [
+      {
+        "name": "omnigent",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent"
+        },
+        "endpoints": [
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 8000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit",
+            "route": {
+              "streaming": true
+            }
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/omnigent"
+      }
+    ],
+    "opa": [
+      {
+        "name": "opa",
+        "role": "policy",
+        "placement": {
+          "kind": "container",
+          "service": "opa"
+        },
+        "endpoints": [
+          {
+            "id": "grpc",
+            "scheme": "grpc",
+            "internal_port": 9191,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "rustfs": [
+      {
+        "name": "rustfs",
+        "role": "object_store",
+        "placement": {
+          "kind": "container",
+          "service": "rustfs"
+        },
+        "endpoints": [
+          {
+            "id": "s3",
+            "scheme": "http",
+            "internal_port": 9000,
+            "intent": {
+              "kind": "gatewayed"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "unity-catalog-rs": [
+      {
+        "name": "unitycatalog",
+        "role": "data_catalog",
+        "placement": {
+          "kind": "container",
+          "service": "unitycatalog"
+        },
+        "endpoints": [
+          {
+            "id": "rest",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.1/unity-catalog",
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 9080,
+        "routes": [
+          {
+            "prefix": "/api/2.1/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          },
+          {
+            "prefix": "/api/2.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/2.0/mlflow"
+          },
+          {
+            "prefix": "/api/3.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/3.0/mlflow"
+          },
+          {
+            "prefix": "/api/4.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/4.0/mlflow"
+          },
+          {
+            "prefix": "/api/2.0/otel",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow"
+          },
+          {
+            "prefix": "/ai-gateway",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/gateway"
+          },
+          {
+            "prefix": "/v1/traces",
+            "cluster": "jaeger_otlp_http",
+            "rewrite": null
+          },
+          {
+            "prefix": "/omnigent",
+            "cluster": "omnigent",
+            "rewrite": null
+          },
+          {
+            "prefix": "/jaeger",
+            "cluster": "jaeger",
+            "rewrite": null
+          },
+          {
+            "prefix": "/mlflow",
+            "cluster": "mlflow",
+            "rewrite": null
+          }
+        ]
+      },
+      {
+        "host_port": 9100,
+        "routes": [
+          {
+            "prefix": "/",
+            "cluster": "rustfs",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "authelia",
+        "host": "authelia",
+        "port": 9091
+      },
+      {
+        "name": "jaeger",
+        "host": "jaeger",
+        "port": 16686
+      },
+      {
+        "name": "jaeger_otlp_grpc",
+        "host": "jaeger",
+        "port": 4317
+      },
+      {
+        "name": "jaeger_otlp_http",
+        "host": "jaeger",
+        "port": 4318
+      },
+      {
+        "name": "mlflow",
+        "host": "mlflow",
+        "port": 5000
+      },
+      {
+        "name": "omnigent",
+        "host": "omnigent",
+        "port": 8000
+      },
+      {
+        "name": "opa",
+        "host": "opa",
+        "port": 9191
+      },
+      {
+        "name": "rustfs",
+        "host": "rustfs",
+        "port": 9000
+      },
+      {
+        "name": "sts-shim",
+        "host": "sts-shim",
+        "port": 8080
+      },
+      {
+        "name": "unitycatalog",
+        "host": "unitycatalog",
+        "port": 8080
+      }
+    ],
+    "admin_port": 9901,
+    "auth": {
+      "cluster": "authelia",
+      "portal_prefix": "/authelia"
+    },
+    "tls": {
+      "port": 443,
+      "hosts": [
+        "mlflow.s3.amazonaws.com",
+        "mlflow.s3.us-east-1.amazonaws.com",
+        "s3.amazonaws.com",
+        "s3.us-east-1.amazonaws.com",
+        "sts.amazonaws.com",
+        "sts.us-east-1.amazonaws.com"
+      ],
+      "virtual_hosts": [
+        {
+          "cluster": "sts-shim",
+          "hosts": [
+            "sts.amazonaws.com",
+            "sts.us-east-1.amazonaws.com"
+          ]
+        },
+        {
+          "cluster": "rustfs",
+          "hosts": [
+            "s3.amazonaws.com",
+            "s3.us-east-1.amazonaws.com",
+            "mlflow.s3.amazonaws.com",
+            "mlflow.s3.us-east-1.amazonaws.com"
+          ]
+        }
+      ]
+    },
+    "policy": {
+      "cluster": "opa"
+    },
+    "tracing": {
+      "cluster": "jaeger_otlp_grpc"
+    }
+  },
+  "client": {
+    "host": {
+      "AWS_ENDPOINT_URL_S3": "http://localhost:9100",
+      "AWS_REGION": "us-east-1",
+      "MLFLOW_AI_GATEWAY_URL": "https://platform.localhost:9080/ai-gateway",
+      "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD": "false",
+      "MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD": "false",
+      "MLFLOW_REGISTRY_URI": "uc:https://platform.localhost:9080",
+      "MLFLOW_TRACKING_URI": "https://platform.localhost:9080",
+      "OMNIGENT_URL": "https://platform.localhost:9080/omnigent",
+      "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://platform.localhost:9080/v1/traces",
+      "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+      "UNITY_CATALOG_URL": "https://platform.localhost:9080/api/2.1/unity-catalog"
+    },
+    "container": {
+      "AWS_ENDPOINT_URL_S3": "http://envoy:9100",
+      "AWS_REGION": "us-east-1",
+      "MLFLOW_AI_GATEWAY_URL": "http://platform.internal:10000/ai-gateway",
+      "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD": "false",
+      "MLFLOW_ENABLE_PROXY_MULTIPART_UPLOAD": "false",
+      "MLFLOW_REGISTRY_URI": "uc:http://platform.internal:10000",
+      "MLFLOW_TRACKING_URI": "http://platform.internal:10000",
+      "OMNIGENT_URL": "http://platform.internal:10000/omnigent",
+      "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://platform.internal:10000/v1/traces",
+      "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+      "UNITY_CATALOG_URL": "http://platform.internal:10000/api/2.1/unity-catalog"
+    }
+  },
+  "integrations": [
+    {
+      "module": "envoy",
+      "feature": "identity",
+      "provider": "authelia",
+      "state": "active",
+      "protocol": "forward-auth",
+      "endpoint": "http://authelia:9091"
+    },
+    {
+      "module": "envoy",
+      "feature": "policy",
+      "provider": "opa",
+      "state": "active",
+      "protocol": "envoy-ext-authz-grpc",
+      "endpoint": "http://opa:9191"
+    },
+    {
+      "module": "envoy",
+      "feature": "observability",
+      "provider": "jaeger",
+      "state": "active",
+      "protocol": "otlp-grpc",
+      "endpoint": "http://jaeger:4317"
+    },
+    {
+      "module": "opa",
+      "feature": "observability",
+      "provider": "jaeger",
+      "state": "disabled"
+    },
+    {
+      "module": "unity-catalog-rs",
+      "feature": "policy",
+      "provider": "opa",
+      "state": "incompatible",
+      "reason": "`opa` doesn't serve olai-authorize; its authorizer also needs callers to present olai-auth tokens, which the gateway's sign-in doesn't issue"
+    },
+    {
+      "module": "omnigent",
+      "feature": "identity",
+      "provider": "authelia",
+      "state": "active",
+      "protocol": "gateway-headers"
+    }
+  ],
+  "secrets": [
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "help": "Anthropic API key, for `anthropic:` models."
+    },
+    {
+      "name": "DATABRICKS_HOST",
+      "help": "The Databricks workspace URL that serves `databricks:` models."
+    },
+    {
+      "name": "DATABRICKS_METADATA_SERVICE_URL",
+      "help": "A Databricks SDK metadata-service token endpoint the MLflow server fetches and refreshes workspace tokens from (the desktop serves one per Databricks profile)."
+    },
+    {
+      "name": "DATABRICKS_TOKEN",
+      "help": "A static workspace token (e.g. from `databricks auth token`), used instead of the token endpoint; it stops working when it expires."
+    },
+    {
+      "name": "GEMINI_API_KEY",
+      "help": "Gemini API key, for `gemini:` models."
+    },
+    {
+      "name": "MLFLOW_CRYPTO_KEK_PASSPHRASE",
+      "required": true,
+      "minted": true,
+      "help": "Seals the provider keys MLflow's AI Gateway stores, in its database. Any random string, generated once and kept: keys sealed under one can't be read with another."
+    },
+    {
+      "name": "NEON_AI_GATEWAY_BASE_URL",
+      "help": "The Neon AI Gateway of the environment's branch (its bare host)."
+    },
+    {
+      "name": "NEON_AI_GATEWAY_TOKEN",
+      "help": "A Neon credential with the `ai_gateway:invoke` scope on the environment's branch."
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "help": "OpenAI API key, for `openai:` models."
+    },
+    {
+      "name": "UC_SERVER_KEK",
+      "required": true,
+      "minted": true,
+      "help": "Seals the credentials Unity Catalog stores: 32 random bytes, base64. Generate it once and keep it: credentials sealed under one can't be read with another."
+    }
+  ],
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": true
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/authelia/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/authelia/configuration.yml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/authelia/users.yml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/authelia/.env/authelia.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/authelia/secrets/session_secret",
+      "sensitive": true
+    },
+    {
+      "path": "modules/authelia/secrets/storage_encryption_key",
+      "sensitive": true
+    },
+    {
+      "path": "modules/authelia/secrets/jwt_secret",
+      "sensitive": true
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/certs.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/jaeger/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/opa/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/opa/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "policies/authz.rego",
+      "sensitive": false
+    },
+    {
+      "path": "policies/authz_test.rego",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": true
+    },
+    {
+      "path": "modules/unity-catalog-rs/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog-rs/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog-rs/.env/unitycatalog.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/.env/omnigent.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/databricks/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/databricks/databricks_token.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/rustfs/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/rustfs/.env/rustfs.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/rustfs/sts_shim.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/.env/mlflow.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/mlflow/seed_gateway.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/METADATA",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/entry_points.txt",
+      "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "configure",
+      "module": "authelia",
+      "id": "accounts",
+      "title": "Review the sign-in accounts",
+      "instructions": "Sign-in is on (`[selection.platform] identity`): Authelia checks every API and UI route on the\ngateway's shared listener. Browsers get its login page; API clients send basic auth.\n\nThe accounts live in `modules/authelia/users.yml`. It starts with one demo account, username\n`demo` with password `authelia`. Change or remove that account before you share the\nenvironment. To add, change, or remove users:\n\n1. Edit `modules/authelia/users.yml`. Each user is one block under `users:`. Copy the `demo`\n   block, then change the name, `displayname`, `email`, `groups`, and `password`.\n2. Hash each password (Authelia stores argon2id hashes, not plain text), then paste the printed\n   `$argon2id$…` digest in as the user's `password`:\n\n   ```bash\n   docker run --rm authelia/authelia:latest \\\n     authelia crypto hash generate argon2 --password 'choose-a-password'\n   ```\n3. If the stack is already running, restart Authelia so it rereads the file:\n   `docker compose restart authelia`.\n\nThe services behind the gateway receive a user's `email` and `displayname` as the\n`Remote-Email` and `Remote-Name` headers, and `groups` as `Remote-Groups`. With policy on, the\ndefault policy lets any signed-in user read and lets the `writers` or `admins` group write.\n\n`trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive\nre-renders. To start over from the demo account, delete the file and render again."
+    },
+    {
+      "order": 2,
+      "phase": "configure",
+      "module": "unity-catalog-rs",
+      "id": "kek",
+      "title": "Set Unity Catalog's key-encryption key",
+      "instructions": "Unity Catalog seals the credentials it stores with a key-encryption key, read from\n`UC_SERVER_KEK` (32 bytes, base64) in the environment of the process that starts the stack.\nCompose passes it through to the server; it is never written into this directory, and without\nit the server refuses to start. Generate one once and keep it: credentials sealed under it\ncan't be read with another.\n\n```sh\nexport UC_SERVER_KEK=\"$(openssl rand -base64 32)\"\n```"
+    },
+    {
+      "order": 3,
+      "phase": "configure",
+      "module": "mlflow",
+      "id": "kek",
+      "title": "Set the AI Gateway's key passphrase",
+      "instructions": "MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from\n`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose\npasses it through to the server; it is never written into this directory, and without it the\nstack doesn't start. Generate one once and keep it: keys sealed under it can't be read with\nanother.\n\n```sh\nexport MLFLOW_CRYPTO_KEK_PASSPHRASE=\"$(openssl rand -base64 32)\"\n```\n\nWith trestle's state store, keep it in the keychain instead (`<target>` is the workspace or\nenvironment, as for any `trestle var set`):\n`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.\n\nAn environment made before the passphrase was required sealed its keys under\n`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow\nUI and let the next start store them again."
+    },
+    {
+      "order": 4,
+      "phase": "configure",
+      "id": "local-credentials",
+      "title": "Set the services' own credentials",
+      "instructions": "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n| RustFS root access key | `LOCAL_RUSTFS_ACCESS_KEY` |\n| RustFS root secret key | `LOCAL_RUSTFS_SECRET_KEY` |\n| Authelia session secret | `LOCAL_AUTHELIA_SESSION_SECRET` |\n| Authelia storage encryption key | `LOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY` |\n| Authelia identity-verification JWT secret | `LOCAL_AUTHELIA_JWT_SECRET` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nLOCAL_RUSTFS_ACCESS_KEY=$(openssl rand -hex 10)\nLOCAL_RUSTFS_SECRET_KEY=$(openssl rand -hex 20)\nLOCAL_AUTHELIA_SESSION_SECRET=$(openssl rand -hex 32)\nLOCAL_AUTHELIA_STORAGE_ENCRYPTION_KEY=$(openssl rand -hex 32)\nLOCAL_AUTHELIA_JWT_SECRET=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service."
+    },
+    {
+      "order": 5,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <https://platform.localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
+    },
+    {
+      "order": 6,
+      "phase": "verify",
+      "module": "mlflow",
+      "id": "traces",
+      "title": "Find the AI Gateway's traces",
+      "instructions": "Each call through the AI Gateway (`/ai-gateway/…` at the gateway, see [LAYOUT.md](LAYOUT.md)) is\nrecorded as a trace in MLflow. The traces of an endpoint go to its own experiment, named\n`gateway/<endpoint>` (e.g. `gateway/claude-opus-5-5`), not to `Default`: open it under\n**Experiments**, then **Traces**. The `mlflow-gateway-init` job creates every endpoint with\ntracing on, and turns it back on at each start if it was switched off.\n\nThe server logs `Failed to send trace to MLflow backend: When an mlflow-artifacts URI was\nsupplied, …` for each call. That warning is harmless: MLflow has already stored the trace's\nspans in its database and only fails to write an extra copy to artifact storage."
+    },
+    {
+      "order": 7,
+      "phase": "verify",
+      "id": "trust",
+      "title": "Trust the gateway's local certificate authority",
+      "instructions": "The gateway serves HTTPS with a certificate from a CA minted for this environment. Copy it out, then add it to your browser or pass it to `curl --cacert`:\n\n```bash\ndocker compose cp gateway-certs:/certs/ca.pem .\n```"
+    }
+  ]
+}

@@ -14,8 +14,8 @@ Each scenario is a source `env.toml` under `scenarios/` (plus a placeholder
 | **minimal** | postgres, rustfs (+ the always-on gateway) | Baseline gateway + relational DB + S3 object store (with STS) |
 | **lakehouse** | minimal + unity-catalog, mlflow | Resource demands (auto-created DBs/buckets), multi-route gateway, UC S3 credential vending |
 | **lakehouse-rs** | lakehouse on `unity-catalog-rs` (mangrove's Rust server) | A second implementation of the `unity-catalog` API: same service and routes, YAML config, migrate job, KEK passed through from the environment |
-| **authenticated** | lakehouse + `[selection.gateway] auth = true` | Authelia pulled in automatically; forward-auth on API/UI routes |
-| **authorized** | lakehouse + headwaters, `[selection.gateway] auth = true, policy = true` | Authelia plus OPA policy checks at the gateway (`policies/authz.rego`) |
+| **authenticated** | lakehouse + `[selection.gateway] auth = true` (a v2 file: read as the identity feature) | Authelia pulled in automatically; forward-auth on API/UI routes |
+| **authorized** | lakehouse + headwaters, `[selection.gateway] auth = true, policy = true` (a v2 file: read as identity + policy) | Authelia plus OPA policy checks at the gateway (`policies/authz.rego`) |
 | **agents** | lakehouse + jaeger, omnigent | The agent runtime on MLflow's AI gateway, with tracing |
 | **agents-rs** | lakehouse-rs + omnigent, uc-mcp | Unity Catalog tools for agents over MCP (`uc mcp serve`), at the gateway and in-network |
 | **full-azure** | lakehouse modules on Azurite + jaeger, headwaters | Provider substitution (`object_store=azurite`), tracing, lineage UI |
@@ -99,8 +99,10 @@ trestle env new myenv --select postgres,rustfs \
 
 Knobs persist in `env.toml` under `[selection.knob_overrides.<module>]`.
 Legacy SCREAMING_SNAKE names (`POSTGRES_IMAGE`, …) are still accepted as
-aliases when resolving overrides. Gateway sign-in and policy are not knobs: they live in
-`[selection.gateway]` (`auth`, `policy`).
+aliases when resolving overrides. Sign-in, policy and tracing are not knobs: they are
+platform features, under `[selection.platform]` (`identity`, `policy`, `observability`).
+Files before version 7 kept the first two in `[selection.gateway]` (`auth`, `policy`), which
+still reads.
 
 ## Configurable today vs structural
 

@@ -17,7 +17,7 @@ services:
       UV_LINK_MODE: copy
       # The code location runs in a child interpreter; keep the pipelines importable there.
       PYTHONPATH: /pipelines
-{%- if env.GATEWAY_AUTH == "true" %}
+{%- if integrations.identity %}
       # The gateway authenticates every request on Rivers' listener and strips client-supplied
       # identity headers, so the Remote-* identity it asserts is trusted as the Rivers user.
       # Rivers only accepts those headers from a trusted peer: the gateway's address on the

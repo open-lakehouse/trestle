@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 
-use super::knobs::{coerce_knob, resolve_knob};
 use super::resolve::ResolvedGraph;
 use super::{AppUpstream, PlanCtx, PlanError, Selection};
 use crate::catalog::Catalog;
@@ -62,11 +61,9 @@ pub struct ListenerConfig {
     pub gated: bool,
 }
 
-/// The gateway knob key that turns on forward-auth. A bool knob with this key, declared on
-/// the module filling the `gateway` role and resolving truthy, makes the planner pull in the
-/// `auth`-role provider and gate the shared listener (see [`AuthConfig`]). The contract lives
-/// here (the planner owns the wiring); the baseline catalog's `envoy` module declares the knob
-/// under this same key.
+/// The gateway knob override that turned on forward-auth before version 7 of the manifest,
+/// when sign-in became the [identity](crate::PlatformFeature::Identity) platform feature.
+/// Only [`migrate_platform`](crate::manifest::migrate_platform) reads it.
 pub const ENVOY_AUTH_KNOB: &str = "auth";
 
 /// Legacy override key accepted as an alias of [`ENVOY_AUTH_KNOB`].
@@ -88,131 +85,6 @@ pub(super) const AUTH_IDENTITY_HEADERS: [&str; 4] = [
     "Remote-Name",
     "Remote-Groups",
 ];
-
-/// The `auth`-role provider the selection picks *explicitly* — by module id, or through the
-/// `auth` capability (its first provider) — if any.
-pub(super) fn selected_auth_provider(selection: &Selection, catalog: &Catalog) -> Option<ModuleId> {
-    let providers = catalog.providers_of(Role::AUTH);
-    selection
-        .modules
-        .iter()
-        .find(|m| providers.contains(m))
-        .cloned()
-        .or_else(|| {
-            selection
-                .capabilities
-                .iter()
-                .any(|c| c == Role::AUTH)
-                .then(|| providers.first().map(|p| (*p).clone()))
-                .flatten()
-        })
-}
-
-/// The `policy`-role provider the selection names (by module id or by the `policy`
-/// capability), if any. Selecting one is what puts the gateway's authorization check in place.
-pub(super) fn selected_policy_provider(
-    selection: &Selection,
-    catalog: &Catalog,
-) -> Option<ModuleId> {
-    let providers = catalog.providers_of(Role::POLICY);
-    selection
-        .modules
-        .iter()
-        .find(|m| providers.contains(m))
-        .cloned()
-        .or_else(|| {
-            selection
-                .capabilities
-                .iter()
-                .any(|c| c == Role::POLICY)
-                .then(|| providers.first().map(|p| (*p).clone()))
-                .flatten()
-        })
-}
-
-/// A legacy `auth` override on a gateway module (the canonical [`ENVOY_AUTH_KNOB`] key or
-/// its [`ENVOY_AUTH_KNOB_LEGACY`] alias), coerced to a bool. Read whether or not the gateway
-/// still declares the knob, so manifests written before [`GatewaySettings`](super::GatewaySettings)
-/// keep planning the same.
-fn legacy_auth_override(
-    selection: &Selection,
-    gateway_id: &ModuleId,
-) -> Result<Option<bool>, PlanError> {
-    let Some(overrides) = selection.knob_overrides.get(gateway_id) else {
-        return Ok(None);
-    };
-    let Some(raw) = overrides
-        .get(ENVOY_AUTH_KNOB)
-        .or_else(|| overrides.get(ENVOY_AUTH_KNOB_LEGACY))
-    else {
-        return Ok(None);
-    };
-    let kind = crate::catalog::module::KnobKind::Bool;
-    match coerce_knob(raw, &kind) {
-        Some(value) => Ok(Some(value == "true")),
-        None => Err(PlanError::InvalidKnobValue {
-            module: gateway_id.clone(),
-            key: ENVOY_AUTH_KNOB.into(),
-            value: raw.clone(),
-            kind,
-        }),
-    }
-}
-
-/// Whether gateway forward-auth is on for this selection.
-///
-/// [`Selection::gateway`] wins when it asks for sign-in (directly or through `policy`).
-/// Otherwise the legacy signals decide, read off whichever catalog module fills the `gateway`
-/// role: an explicit `auth` knob override; else selecting an identity provider (see
-/// [`selected_auth_provider`]) or a policy engine, since an auth provider the gateway never
-/// consults would run as an orphan, up but authenticating nothing; else the gateway's own
-/// `auth` knob default, if it declares one.
-pub(super) fn gateway_auth_enabled(
-    selection: &Selection,
-    catalog: &Catalog,
-) -> Result<bool, PlanError> {
-    if selection.gateway.auth_enabled() {
-        return Ok(true);
-    }
-    for gateway_id in catalog.providers_of(Role::GATEWAY) {
-        if let Some(explicit) = legacy_auth_override(selection, gateway_id)? {
-            return Ok(explicit);
-        }
-    }
-    if selected_auth_provider(selection, catalog).is_some()
-        || selected_policy_provider(selection, catalog).is_some()
-    {
-        return Ok(true);
-    }
-    for gateway_id in catalog.providers_of(Role::GATEWAY) {
-        let Some(module) = catalog.get(gateway_id) else {
-            continue;
-        };
-        if let Some(knob) = module.knobs().iter().find(|k| k.key == ENVOY_AUTH_KNOB)
-            && let Some(value) = resolve_knob(gateway_id, knob, None)?
-        {
-            return Ok(value == "true");
-        }
-    }
-    Ok(false)
-}
-
-/// The `policy`-role provider to wire: the one the selection names, else the catalog's first
-/// when [`GatewaySettings::policy`](super::GatewaySettings::policy) asks for one.
-pub(super) fn policy_provider(selection: &Selection, catalog: &Catalog) -> Option<ModuleId> {
-    selected_policy_provider(selection, catalog).or_else(|| {
-        selection
-            .gateway
-            .policy
-            .then(|| {
-                catalog
-                    .providers_of(Role::POLICY)
-                    .first()
-                    .map(|p| (*p).clone())
-            })
-            .flatten()
-    })
-}
 
 /// The `gateway`-role provider an environment runs: the one the selection names, else
 /// the first preferred via [`PlanCtx::provider_preference`], else the catalog's first. `None`
@@ -288,6 +160,18 @@ pub struct GatewayConfig {
     pub policy: Option<PolicyConfig>,
     /// The shared listener's HTTPS origin, present exactly when [`auth`](Self::auth) is.
     pub secure: Option<SecureOrigin>,
+    /// Where the gateway exports a trace of each request, present only when its
+    /// observability integration is on.
+    pub tracing: Option<TracingConfig>,
+}
+
+/// The gateway's trace export (see [`GatewayConfig::tracing`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TracingConfig {
+    /// The upstream (HTTP/2) cluster of the tracing backend's OTLP/gRPC endpoint.
+    pub cluster: String,
+    /// The service name the gateway's spans carry.
+    pub service_name: String,
 }
 
 /// The shared listener's origin under forward-auth (see [`GatewayConfig::secure`]).
@@ -728,6 +612,50 @@ pub(super) fn wire_policy(
         .ok_or_else(|| misconfigured("service has no Internal gRPC endpoint"))?;
     let cluster = ensure_cluster(gateway, service, endpoint)?;
     gateway.policy = Some(PolicyConfig { cluster });
+    Ok(())
+}
+
+/// Wire the gateway's trace export to the tracing backend `provider`: an HTTP/2 cluster for the
+/// endpoint the provider serves OTLP/gRPC on, and the [`TracingConfig`] the Envoy renderer turns
+/// into its OpenTelemetry tracer.
+pub(super) fn wire_tracing(
+    provider: &ModuleId,
+    services_of: &BTreeMap<ModuleId, Vec<ServiceSpec>>,
+    catalog: &Catalog,
+    service_name: &str,
+    gateway: &mut GatewayConfig,
+) -> Result<(), PlanError> {
+    let misconfigured = |reason: String| PlanError::PlatformProviderMisconfigured {
+        module: provider.clone(),
+        reason,
+    };
+    let offer = catalog
+        .get(provider)
+        .and_then(|m| {
+            m.provides()
+                .protocols
+                .iter()
+                .find(|o| o.protocol == crate::protocol::OTLP_GRPC)
+                .cloned()
+        })
+        .ok_or_else(|| misconfigured("it doesn't serve OTLP/gRPC".into()))?;
+    let (service, endpoint) = services_of[provider]
+        .iter()
+        .find_map(|s| {
+            s.endpoints
+                .iter()
+                .find(|e| e.id == offer.endpoint)
+                .map(|e| (s, e))
+        })
+        .ok_or_else(|| misconfigured(format!("no service declares `{}`", offer.endpoint)))?;
+    let cluster = ensure_cluster(gateway, service, endpoint)?;
+    if let Some(c) = gateway.clusters.iter_mut().find(|c| c.name == cluster) {
+        c.http2 = true;
+    }
+    gateway.tracing = Some(TracingConfig {
+        cluster,
+        service_name: service_name.into(),
+    });
     Ok(())
 }
 

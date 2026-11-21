@@ -15,6 +15,17 @@ static_resources:
                 codec_type: AUTO
                 stat_prefix: ingress_http
                 use_remote_address: true
+                # A span per request, exported over OTLP/gRPC to the tracing backend (the
+                # gateway's observability integration).
+                tracing:
+                  provider:
+                    name: envoy.tracers.opentelemetry
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                      grpc_service:
+                        envoy_grpc: { cluster_name: jaeger_otlp_grpc }
+                        timeout: 1s
+                      service_name: envoy
                 # One line per request, `<host> <method> <path> -> <cluster> <status>`: the
                 # quickest way to see where a request went. Anchored here (Envoy rejects
                 # unknown top-level keys) and reused by every other listener.
@@ -113,6 +124,17 @@ static_resources:
                 codec_type: AUTO
                 stat_prefix: ingress_http
                 use_remote_address: true
+                # A span per request, exported over OTLP/gRPC to the tracing backend (the
+                # gateway's observability integration).
+                tracing:
+                  provider:
+                    name: envoy.tracers.opentelemetry
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig
+                      grpc_service:
+                        envoy_grpc: { cluster_name: jaeger_otlp_grpc }
+                        timeout: 1s
+                      service_name: envoy
                 access_log: *access_log
                 upgrade_configs:
                   - upgrade_type: websocket
@@ -204,6 +226,23 @@ static_resources:
                     socket_address:
                       address: jaeger
                       port_value: 16686
+    - name: jaeger_otlp_grpc
+      type: STRICT_DNS
+      connect_timeout: 2s
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: jaeger_otlp_grpc
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: jaeger
+                      port_value: 4317
     - name: jaeger_otlp_http
       type: STRICT_DNS
       connect_timeout: 2s

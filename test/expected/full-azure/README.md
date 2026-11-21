@@ -29,6 +29,7 @@ flowchart LR
     n6 -->|"Azure Blob: mlflow"| n1
     n7 -->|"PostgreSQL: lineage"| n4
     n6 -->|"HTTP"| n5
+    n2 -.->|"observability"| n3
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb

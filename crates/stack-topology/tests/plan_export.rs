@@ -21,6 +21,7 @@ const FIXTURES: &[&str] = &[
     "docs-uc-aws",
     "docs-uc-default",
     "hosted",
+    "platform-features",
     "uc-api-storage",
     "uc-direct",
 ];

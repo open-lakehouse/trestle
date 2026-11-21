@@ -11,6 +11,7 @@
 pub mod connection;
 pub mod endpoint;
 pub mod placement;
+pub mod platform;
 pub mod role;
 
 pub use connection::{
@@ -18,4 +19,8 @@ pub use connection::{
 };
 pub use endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
 pub use placement::{Placement, Vantage};
+pub use platform::{
+    ActiveIntegration, FeatureChoice, IntegrationSpec, PlatformFeature, PlatformSelection,
+    ProtocolOffer,
+};
 pub use role::{Role, ServiceSpec};

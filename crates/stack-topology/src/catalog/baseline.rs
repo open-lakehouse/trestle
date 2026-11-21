@@ -66,6 +66,7 @@ use crate::model::connection::{
 };
 use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
+use crate::model::platform::{IntegrationSpec, PlatformFeature, ProtocolOffer, protocol};
 use crate::model::role::{Role, ServiceSpec};
 use crate::plan::hosted::{HostedConnection, HostedKind, HostedResource, HostedVendor};
 use crate::render::RenderFile;
@@ -501,13 +502,22 @@ fn string_knob(
 ///
 /// Every environment runs it unless the gateway is turned off: the planner adds the
 /// `gateway`-role provider whether or not it was selected (and, without a gateway, only for a
-/// module that emulates public hostnames). Sign-in and policy are [`GatewaySettings`](crate::GatewaySettings), realized
-/// in the planner and the Envoy renderer (they pull in `authelia` / `opa` and emit the
-/// `ext_authz` filters), so its knobs are its images and whether the admin port is published.
+/// module that emulates public hostnames). It integrates with the identity, policy and
+/// observability [platform features](crate::PlatformFeature): the planner and the Envoy renderer
+/// wire their providers in (the `ext_authz` filters, the OpenTelemetry tracer), so its knobs
+/// are its images and whether the admin port is published.
 fn envoy() -> Arc<dyn Module> {
     let provides = Provides {
         // Mints the local CA and leaf certificate when a module impersonates a public host.
         helpers: vec![HelperService::init("gateway-certs")],
+        // The gateway enforces sign-in and policy for everything behind it, and traces every
+        // request it forwards.
+        integrations: vec![
+            IntegrationSpec::new(PlatformFeature::Identity, &[protocol::FORWARD_AUTH]),
+            IntegrationSpec::new(PlatformFeature::Policy, &[protocol::ENVOY_EXT_AUTHZ_GRPC])
+                .requiring(&[PlatformFeature::Identity]),
+            IntegrationSpec::new(PlatformFeature::Observability, &[protocol::OTLP_GRPC]),
+        ],
         ..Provides::default()
     };
     Arc::new(DataModule {
@@ -574,7 +584,7 @@ fn envoy() -> Arc<dyn Module> {
 }
 
 /// `authelia` — the bundled forward-auth provider, pulled in by
-/// [`GatewaySettings::auth`](crate::GatewaySettings::auth) (it is not part of the default
+/// the [identity](crate::PlatformFeature::Identity) platform feature (it is not part of the default
 /// selection and rides in only when sign-in is on). The gateway waits for it to be healthy. Self-contained for the showcase: a file-based user
 /// database and local, on-disk storage — no external database.
 ///
@@ -595,6 +605,8 @@ fn authelia(credentials: &LocalCredentials) -> Arc<dyn Module> {
         crate::plan::EXT_AUTHZ_PATH_EXTRA.into(),
         "/authelia/api/authz/ext-authz/".into(),
     );
+    // The gateway checks every request with it (`ext_authz` over HTTP).
+    provides.protocols = vec![ProtocolOffer::new(protocol::FORWARD_AUTH, "http")];
     // The gateway must not accept requests before it can check them.
     provides.ready_gate = Some(ReadyGate {
         service: "authelia".into(),
@@ -2024,6 +2036,14 @@ fn unity_catalog_rs() -> Arc<dyn Module> {
             .minted(),
         ],
         api: Some(UNITY_CATALOG_API.into()),
+        // Its authorizer asks a policy decision point over olai-auth's API, for callers it
+        // authenticated itself.
+        integrations: vec![
+            IntegrationSpec::new(PlatformFeature::Policy, &[protocol::OLAI_AUTHORIZE]).noting(
+                "its authorizer also needs callers to present olai-auth tokens, which the \
+                     gateway's sign-in doesn't issue",
+            ),
+        ],
         // As a function, the function's own step says where the key goes instead.
         deploy: vec![DeployStepSpec::new(
             "kek",
@@ -2112,6 +2132,11 @@ fn jaeger() -> Arc<dyn Module> {
         "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL".into(),
         ClientValue::literal("http/protobuf"),
     );
+    // In-network, services export straight to its OTLP ports.
+    provides.protocols = vec![
+        ProtocolOffer::new(protocol::OTLP_GRPC, "otlp_grpc"),
+        ProtocolOffer::new(protocol::OTLP_HTTP, "otlp_http").at("/v1/traces"),
+    ];
     Arc::new(DataModule {
         id: ModuleId::from("jaeger"),
         model: Some("jaeger".into()),
@@ -2119,7 +2144,8 @@ fn jaeger() -> Arc<dyn Module> {
         summary: Some("All-in-one OTLP tracing backend with the Jaeger UI.".into()),
         category: Some("observability".into()),
         provider_of: Some(Role::TRACING.into()),
-        requires: vec![ModuleId::from("envoy")],
+        // The gateway fronts its UI when there is one; a gatewayless stack publishes it.
+        requires: vec![],
         conflicts_with: vec![],
         needs: vec![],
         service_specs: vec![ServiceSpec {
@@ -2535,6 +2561,8 @@ impl Omnigent {
                     ClientValue::endpoint("omnigent", "ui", UrlPart::Full),
                 )]
                 .into(),
+                // Signs users in by the identity the gateway asserts (`Remote-Email`).
+                integrations: vec![IntegrationSpec::via_gateway(PlatformFeature::Identity)],
                 ..Provides::default()
             },
             render: template_with_files(
@@ -3009,7 +3037,11 @@ const RIVERS_MODULE_KNOB: &str = "module";
 /// sign-in when forward-auth is on: Rivers then runs in its forward-auth mode, taking the user
 /// from the `Remote-*` headers the gateway asserts (and strips from clients).
 fn rivers() -> Arc<dyn Module> {
-    let mut provides = Provides::default();
+    let mut provides = Provides {
+        // Attributes runs to the identity the gateway asserts (forward mode).
+        integrations: vec![IntegrationSpec::via_gateway(PlatformFeature::Identity)],
+        ..Provides::default()
+    };
     provides.client_env.insert(
         "RIVERS_URL".into(),
         ClientValue::endpoint("rivers", "ui", UrlPart::Full),
@@ -3118,6 +3150,13 @@ fn opa() -> Arc<dyn Module> {
                 service: "opa".into(),
                 readiness: Readiness::Healthy,
             }),
+            // Envoy's gRPC `ext_authz` API, on the plugin's port.
+            protocols: vec![ProtocolOffer::new(protocol::ENVOY_EXT_AUTHZ_GRPC, "grpc")],
+            // A span per decision, over OTLP/gRPC (`distributed_tracing`).
+            integrations: vec![IntegrationSpec::new(
+                PlatformFeature::Observability,
+                &[protocol::OTLP_GRPC],
+            )],
             ..Provides::default()
         },
         knobs: vec![

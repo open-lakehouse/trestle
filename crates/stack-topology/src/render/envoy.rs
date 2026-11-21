@@ -38,6 +38,15 @@ struct EnvoyCtx<'a> {
     /// The authorization policy engine's cluster, when a policy module is selected. Checked
     /// after forward-auth on the listener(s) flagged `ext_authz`.
     policy: Option<PolicyCtx<'a>>,
+    /// The tracing backend's cluster and the gateway's span service name, when the gateway's
+    /// observability integration is on.
+    tracing: Option<TracingCtx<'a>>,
+}
+
+#[derive(Serialize)]
+struct TracingCtx<'a> {
+    cluster: &'a str,
+    service_name: &'a str,
 }
 
 #[derive(Serialize)]
@@ -240,6 +249,10 @@ pub fn render_envoy(gateway: &GatewayConfig) -> String {
         }),
         policy: gateway.policy.as_ref().map(|p| PolicyCtx {
             cluster: &p.cluster,
+        }),
+        tracing: gateway.tracing.as_ref().map(|t| TracingCtx {
+            cluster: &t.cluster,
+            service_name: &t.service_name,
         }),
         secure: gateway.secure.as_ref().map(|s| SecureCtx {
             cert_chain: format!("{}/leaf.pem", s.trust.mount_path),

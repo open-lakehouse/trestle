@@ -314,7 +314,7 @@ fn opa_with_auth_explicitly_off_is_rejected() {
     assert!(
         matches!(
             err,
-            olai_stack_topology::PlanError::PolicyRequiresAuth { .. }
+            olai_stack_topology::PlanError::PolicyRequiresIdentity { .. }
         ),
         "{err}"
     );
