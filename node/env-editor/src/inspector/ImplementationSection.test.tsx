@@ -120,16 +120,16 @@ describe("Implementation", () => {
   });
 
   test("held in place by a component that requires this implementation", () => {
-    // The planner would add the required OSS server back beside the Rust one.
-    const html = inspect("unity-catalog-oss", {
-      planned: ["puppygraph", "unity-catalog-oss"],
+    // The planner would add the required Rust server back beside the OSS one.
+    const html = inspect("unity-catalog-rs", {
+      planned: ["uc-mcp", "unity-catalog-rs"],
     });
     expect(html).toMatch(/role="radio" aria-checked="false" disabled=""/);
     expect(html).toContain("needs this implementation");
-    expect(html).toContain(module("puppygraph").display_name ?? "puppygraph");
-    // Implied only by what uses the API, it still switches.
+    expect(html).toContain(module("uc-mcp").display_name ?? "uc-mcp");
+    // Implied only by what uses the API (PuppyGraph takes any Unity Catalog), it still switches.
     const free = inspect("unity-catalog-oss", {
-      planned: ["mlflow", "unity-catalog-oss"],
+      planned: ["puppygraph", "unity-catalog-oss"],
     });
     expect(free).not.toContain('disabled=""');
     expect(free).toContain("Switching resets its settings");
