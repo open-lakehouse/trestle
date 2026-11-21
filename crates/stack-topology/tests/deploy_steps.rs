@@ -103,13 +103,15 @@ fn steps_run_in_phase_then_dependency_order_with_the_targets_last() {
             "mlflow/kek",
             "compose/secrets",
             "compose/up",
+            // A later phase comes after the target's steps of an earlier one.
+            "mlflow/traces",
         ],
         "{order:?}"
     );
     assert!(order.windows(2).all(|w| w[0].0 <= w[1].0));
     assert_eq!(
         out.deploy.iter().map(|s| s.order).collect::<Vec<_>>(),
-        [1, 2, 3, 4, 5, 6]
+        [1, 2, 3, 4, 5, 6, 7]
     );
 
     let readme = file(&out, "README.md");
@@ -359,6 +361,7 @@ fn a_stack_without_hosted_resources_still_says_how_to_start() {
             ("kek", DeployPhase::Configure),
             ("local-credentials", DeployPhase::Configure),
             ("up", DeployPhase::Start),
+            ("traces", DeployPhase::Verify),
         ])
     );
     assert!(!out.files.iter().any(|f| f.path.starts_with("deploy/")));

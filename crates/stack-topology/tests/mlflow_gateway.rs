@@ -340,3 +340,75 @@ for provider, model, upstream, env in cases:
         assert_eq!(row[2], true, "a skip says why");
     }
 }
+
+/// A gateway call trace is only recorded for an endpoint with usage tracking on (MLflow 3.18
+/// traces each call into the endpoint's `gateway/<endpoint>` experiment): the seeder creates its
+/// endpoints with it, turns it back on for its own endpoints, and leaves the user's alone.
+#[test]
+fn the_seeder_keeps_tracing_on_for_its_endpoints() {
+    let Some(out) = seeder(
+        r#"
+class Fake:
+    def __init__(self, endpoints):
+        self.endpoints = endpoints
+        self.calls = []
+    def call(self, method, path, body=None):
+        self.calls.append([path, body])
+        if path == "/secrets/list":
+            return {"secrets": [{"secret_name": "anthropic", "secret_id": "s-1"}]}
+        if path == "/model-definitions/list":
+            return {"model_definitions": []}
+        if path == "/endpoints/list":
+            return {"endpoints": self.endpoints}
+        if path == "/model-definitions/create":
+            return {"model_definition": {"model_definition_id": "d-" + body["name"]}}
+        if path == "/endpoints/create":
+            return {"endpoint": {"endpoint_id": "e-" + body["name"], "usage_tracking": True, "experiment_id": "1"}}
+        if path == "/endpoints/update":
+            return {"endpoint": {"endpoint_id": body["endpoint_id"], "usage_tracking": True, "experiment_id": "2"}}
+        return {}
+
+tag = [{"key": "trestle.route", "value": "keys"}]
+cases = {
+    "fresh": [],
+    "ours_off": [{"name": "m", "endpoint_id": "e-m", "tags": tag}],
+    "ours_no_experiment": [{"name": "m", "endpoint_id": "e-m", "tags": tag, "usage_tracking": True}],
+    "ours_on": [{"name": "m", "endpoint_id": "e-m", "tags": tag, "usage_tracking": True, "experiment_id": "1"}],
+    "users_off": [{"name": "m", "endpoint_id": "e-m"}],
+}
+for case, endpoints in cases.items():
+    gw = Fake(endpoints)
+    seed["seed"](gw, [("anthropic", "m")], "keys", {"ANTHROPIC_API_KEY": "sk-x"})
+    writes = [c for c in gw.calls if c[0] in ("/endpoints/create", "/endpoints/update")]
+    print(json.dumps([case, writes]))
+"#,
+    ) else {
+        eprintln!("skipped: no python3");
+        return;
+    };
+    // The seeder logs to stdout too; the rows are the JSON lines.
+    let rows: BTreeMap<String, serde_json::Value> = out
+        .lines()
+        .filter(|l| l.starts_with('['))
+        .map(|l| {
+            let row: serde_json::Value = serde_json::from_str(l).unwrap();
+            (row[0].as_str().unwrap().to_string(), row[1].clone())
+        })
+        .collect();
+    let update = serde_json::json!([[
+        "/endpoints/update",
+        {"endpoint_id": "e-m", "usage_tracking": true}
+    ]]);
+    // A new endpoint is created with tracking on, and needs no update.
+    let fresh = rows["fresh"].as_array().unwrap();
+    assert_eq!(fresh.len(), 1, "{fresh:?}");
+    assert_eq!(fresh[0][0], "/endpoints/create");
+    assert_eq!(fresh[0][1]["usage_tracking"], true);
+    // One of ours with tracking off, or without the experiment its traces go to, is turned on.
+    assert_eq!(rows["ours_off"], update);
+    assert_eq!(rows["ours_no_experiment"], update);
+    // Already traced: nothing to write.
+    assert_eq!(rows["ours_on"], serde_json::json!([]));
+    // The user's own endpoint is left as it is.
+    assert_eq!(rows["users_off"], serde_json::json!([]));
+}

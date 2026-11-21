@@ -835,9 +835,8 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "http://unitycatalog:8080",
           required: false,
-          help: "Where the MCP server reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
+          help: "Where the MCP server reaches Unity Catalog's REST API. Unset, the stack's own: `http://unitycatalog:8080` directly on the compose network (not through the gateway), or the function's URL when Unity Catalog runs as a function. Set, used as is wherever Unity Catalog runs.",
           advanced: true,
         },
       ],
@@ -889,7 +888,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
       summary: "Graph queries (Cypher, Gremlin) over Unity Catalog tables.",
       category: "graph",
       provider_of: "graph",
-      requires: ["envoy", "unity-catalog-oss"],
+      requires: ["envoy"],
       conflicts_with: [],
       resource_kinds: [],
       resource_nouns: [],
@@ -910,9 +909,8 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "http://unitycatalog:8080",
           required: false,
-          help: "Where PuppyGraph reaches Unity Catalog's REST API, directly on the compose network (not through the gateway).",
+          help: "Where PuppyGraph reaches Unity Catalog's REST API. Unset, the stack's own: `http://unitycatalog:8080` directly on the compose network (not through the gateway), or the function's URL when Unity Catalog runs as a function. Set, used as is wherever Unity Catalog runs.",
           advanced: true,
         },
         {
@@ -946,6 +944,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
         },
       ],
       hosted: null,
+      requires_apis: ["unity-catalog"],
     },
     {
       id: "rivers",
@@ -1939,6 +1938,15 @@ export const FIXTURE_PLAN: PlanResult = {
     },
     {
       order: 5,
+      phase: "verify",
+      module: "mlflow",
+      id: "traces",
+      title: "Find the AI Gateway's traces",
+      instructions:
+        "Each call through the AI Gateway (`/ai-gateway/…` at the gateway, see [LAYOUT.md](LAYOUT.md)) is\nrecorded as a trace in MLflow. The traces of an endpoint go to its own experiment, named\n`gateway/<endpoint>` (e.g. `gateway/claude-opus-5-5`), not to `Default`: open it under\n**Experiments**, then **Traces**. The `mlflow-gateway-init` job creates every endpoint with\ntracing on, and turns it back on at each start if it was switched off.\n\nThe server logs `Failed to send trace to MLflow backend: When an mlflow-artifacts URI was\nsupplied, …` for each call. That warning is harmless: MLflow has already stored the trace's\nspans in its database and only fails to write an extra copy to artifact storage.",
+    },
+    {
+      order: 6,
       phase: "verify",
       id: "trust",
       title: "Trust the gateway's local certificate authority",
