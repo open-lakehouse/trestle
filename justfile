@@ -85,7 +85,7 @@ test-state-pg PG_PORT="5435":
   cargo test --locked -p olai-stack-state --features postgres
   cargo test --locked -p olai-trestle --features test-engine --test team_state_cli
 
-# Run the olai-auth Postgres tests (authz migrations, API keys, grants) against a throwaway Postgres container.
+# Run the olai-auth Postgres tests (authz migrations, API keys, grants, Neon Auth user status) against a throwaway Postgres container.
 test-auth-pg PG_PORT="5434":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -102,7 +102,7 @@ test-auth-pg PG_PORT="5434":
     sleep 1
   done
   export DATABASE_URL_PG="postgres://${user}:${pass}@localhost:{{ PG_PORT }}/${db}"
-  cargo test --locked -p olai-auth --features postgres --test postgres -- --nocapture
+  cargo test --locked -p olai-auth --features postgres --test postgres --test neon_user_status -- --nocapture
 
 # Regenerate the Homebrew formula for an existing `olai-trestle-v*` release and
 # print it (does not push). Downloads the `.sha256` sidecars from that release

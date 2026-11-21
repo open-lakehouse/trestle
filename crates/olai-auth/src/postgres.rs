@@ -3,6 +3,7 @@ use sqlx::PgPool;
 
 use crate::api_key::{ApiKeyRecord, ApiKeyStore};
 use crate::error::BoxError;
+use crate::user_status::{UserStatus, UserStatusStore};
 
 /// The schema the Postgres stores use unless configured otherwise.
 pub(crate) const DEFAULT_SCHEMA: &str = "authz";
@@ -95,9 +96,86 @@ impl ApiKeyStore for PgApiKeyStore {
     }
 }
 
+/// The schema Neon Auth keeps its users in.
+pub(crate) const DEFAULT_NEON_AUTH_SCHEMA: &str = "neon_auth";
+
+/// A [`UserStatusStore`] that reads Neon Auth's users from Postgres.
+///
+/// Neon Auth keeps them in `neon_auth."user"` (see [`with_schema`](Self::with_schema)
+/// for another schema). Of its columns, this reads only these:
+///
+/// ```sql
+/// CREATE TABLE neon_auth."user" (
+///     id           uuid PRIMARY KEY,  -- the token's `sub`
+///     role         text,              -- `admin`, or a comma-separated list
+///     banned       boolean,
+///     "banExpires" timestamptz,
+///     ...
+/// );
+/// ```
+///
+/// A user is an admin when their `role` is, or lists, `admin` (see
+/// [`UserStatus::from_role`]), and banned while `banned` is set and `banExpires` is
+/// unset or in the future. A user who is not in the table, including a `sub` that is
+/// not a user id at all, is unknown (`None`), so their token is rejected. A missing
+/// table is an error. The issuer is not consulted: one service trusts one Neon Auth
+/// instance, whose users are all in this table.
+///
+/// The role the pool connects as needs only `SELECT (id, role, banned, "banExpires")`.
+#[derive(Debug, Clone)]
+pub struct PgNeonUserStatus {
+    pool: PgPool,
+    query: String,
+}
+
+impl PgNeonUserStatus {
+    /// A store reading `neon_auth."user"` through `pool`.
+    pub fn new(pool: PgPool) -> Self {
+        Self {
+            pool,
+            query: user_status_query(DEFAULT_NEON_AUTH_SCHEMA),
+        }
+    }
+
+    /// Reads the `user` table from `schema` instead of `neon_auth`.
+    pub fn with_schema(mut self, schema: &str) -> Self {
+        self.query = user_status_query(schema);
+        self
+    }
+}
+
+/// The status lookup against `schema`, quoted as an identifier.
+fn user_status_query(schema: &str) -> String {
+    let schema = quote_ident(schema);
+    format!(
+        "SELECT role, \
+                COALESCE(banned, false) AND (\"banExpires\" IS NULL OR \"banExpires\" > now()) \
+         FROM {schema}.\"user\" WHERE id::text = $1"
+    )
+}
+
+#[async_trait]
+impl UserStatusStore for PgNeonUserStatus {
+    async fn status(&self, _issuer: &str, sub: &str) -> Result<Option<UserStatus>, BoxError> {
+        let row: Option<(Option<String>, bool)> = sqlx::query_as(&self.query)
+            .bind(sub)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(role, banned)| UserStatus::from_role(role.as_deref(), banned)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quotes_the_users_schema() {
+        let default = user_status_query(DEFAULT_NEON_AUTH_SCHEMA);
+        assert!(default.contains(r#"FROM "neon_auth"."user""#), "{default}");
+        let odd = user_status_query(r#"a"b"#);
+        assert!(odd.contains(r#"FROM "a""b"."user""#), "{odd}");
+    }
 
     #[test]
     fn quotes_the_schema() {
