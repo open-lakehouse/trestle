@@ -7,12 +7,18 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorMessage } from "../errors.js";
 import { usePlanner } from "../planner.js";
 import { migrateSelection } from "../selection/migrate.js";
+import {
+  withFeature,
+  withGateway,
+  withIntegration,
+} from "../selection/platform.js";
 import type {
   CatalogDto,
-  GatewaySettings,
+  FeatureChoice,
   HostedResource,
   PlanContext,
   PlanResult,
+  PlatformFeature,
   Selection,
 } from "../types.js";
 
@@ -53,8 +59,20 @@ export interface EnvironmentState {
   /** Configure how hosted provider `moduleId` is reached (`hosted`), or go
    *  back to its default configuration (`undefined`). */
   setHosted: (moduleId: string, hosted: HostedResource | undefined) => void;
-  /** Set how the gateway guards access (`policy` implies sign-in). */
-  setGateway: (gateway: GatewaySettings) => void;
+  /** Run the gateway or not. Off turns identity and policy off. */
+  setGateway: (on: boolean) => void;
+  /** Turn a platform feature on with `choice` (`true` for the catalog's
+   *  provider), or off with `undefined`. Policy implies identity. */
+  setFeature: (
+    feature: PlatformFeature,
+    choice: FeatureChoice | undefined,
+  ) => void;
+  /** Turn `moduleId`'s integration with `feature` on (the default) or off. */
+  setIntegration: (
+    moduleId: string,
+    feature: PlatformFeature,
+    on: boolean,
+  ) => void;
   /** Replace the selection with the catalog's default. */
   applyDefault: () => void;
   undo: () => void;
@@ -341,12 +359,26 @@ export function useEnvironment(
     [],
   );
 
-  const setGateway = useCallback((gateway: GatewaySettings) => {
-    dispatch({
-      type: "edit",
-      next: (s) => ({ ...s, gateway: { ...gateway } }),
-    });
+  const setGateway = useCallback((on: boolean) => {
+    dispatch({ type: "edit", next: (s) => withGateway(s, on) });
   }, []);
+
+  const setFeature = useCallback(
+    (feature: PlatformFeature, choice: FeatureChoice | undefined) => {
+      dispatch({ type: "edit", next: (s) => withFeature(s, feature, choice) });
+    },
+    [],
+  );
+
+  const setIntegration = useCallback(
+    (moduleId: string, feature: PlatformFeature, on: boolean) => {
+      dispatch({
+        type: "edit",
+        next: (s) => withIntegration(s, moduleId, feature, on),
+      });
+    },
+    [],
+  );
 
   const applyDefault = useCallback(() => {
     if (!catalog) return;
@@ -375,6 +407,8 @@ export function useEnvironment(
     removeResource,
     setHosted,
     setGateway,
+    setFeature,
+    setIntegration,
     applyDefault,
     undo,
     redo,
@@ -397,6 +431,7 @@ export const selectionEdits = {
           modules: s.modules.filter((m) => m !== moduleId),
           knob_overrides: withoutKey(s.knob_overrides, moduleId),
           hosted: withoutKey(s.hosted ?? {}, moduleId),
+          integrations: withoutKey(s.integrations ?? {}, moduleId),
         }
       : s,
   swap: (s: Selection, fromId: string, toId: string): Selection => ({
@@ -404,6 +439,7 @@ export const selectionEdits = {
     modules: [...s.modules.filter((m) => m !== fromId && m !== toId), toId],
     knob_overrides: withoutKey(s.knob_overrides, fromId),
     hosted: withoutKey(s.hosted ?? {}, fromId),
+    integrations: withoutKey(s.integrations ?? {}, fromId),
   }),
   toggleCapability: (s: Selection, capability: string): Selection => ({
     ...s,
@@ -429,6 +465,8 @@ function cloneSelection(selection: Selection): Selection {
     extra_resources: [...(selection.extra_resources ?? [])],
     hosted: { ...(selection.hosted ?? {}) },
     gateway: selection.gateway && { ...selection.gateway },
+    platform: { ...selection.platform },
+    integrations: { ...selection.integrations },
   };
 }
 

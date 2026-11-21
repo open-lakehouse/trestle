@@ -259,10 +259,16 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
 /**
  * The key the planner assigns `edge` (Rust `TopologyEdgeDto::derive_key`):
  * `kind:from→to:qualifier`, where the qualifier is the capability for a
- * `uses` edge and the surface's host port for the gateway's edges.
+ * `uses` edge, the feature for an `integrates` edge, and the surface's host
+ * port for the gateway's edges.
  */
 export function edgeKey(edge: UnkeyedEdge): string {
-  const qualifier = edge.kind === "uses" ? edge.role : String(edge.host_port);
+  const qualifier =
+    edge.kind === "uses"
+      ? edge.role
+      : edge.kind === "integrates"
+        ? edge.feature
+        : String(edge.host_port);
   return `${edge.kind}:${edge.from}→${edge.to}:${qualifier}`;
 }
 
@@ -271,6 +277,7 @@ const EDGE_KINDS: readonly TopologyEdgeKind[] = [
   "route",
   "authenticates",
   "authorizes",
+  "integrates",
   "uses",
 ];
 

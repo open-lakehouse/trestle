@@ -6,7 +6,7 @@ import {
   capabilityLabel,
   conflictsWith,
   groupByCategory,
-  isGatewayManaged,
+  isPlatformManaged,
   slotHolders,
 } from "../selection/catalogIndex.js";
 import { describeOrigin, formatList, type Origin } from "../state/origin.js";
@@ -391,7 +391,7 @@ export function paletteRows(
   // Gateway-managed modules show only once they're in the environment: they
   // come from its access settings, not from picking.
   const found = catalog.modules
-    .filter((m) => present.has(m.id) || !isGatewayManaged(m))
+    .filter((m) => present.has(m.id) || !isPlatformManaged(m))
     .filter((m) => !byRole || m.provider_of === byRole)
     .filter((m) =>
       matches(m.display_name, m.id, m.summary, m.category, m.provider_of),

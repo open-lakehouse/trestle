@@ -1,7 +1,12 @@
 import { Card } from "@open-lakehouse/ui-kit";
-import { AccessSection } from "../inspector/AccessSection.js";
+import { PlatformSection } from "../inspector/PlatformSection.js";
 import { SelectionStep } from "../selection/SelectionStep.js";
-import type { CatalogDto, GatewaySettings, Selection } from "../types.js";
+import type {
+  CatalogDto,
+  FeatureChoice,
+  PlatformFeature,
+  Selection,
+} from "../types.js";
 
 export interface ConfigPanelProps {
   catalog: CatalogDto | undefined;
@@ -9,11 +14,15 @@ export interface ConfigPanelProps {
   onToggleModule: (moduleId: string) => void;
   onToggleCapability: (capability: string) => void;
   onSetKnob: (moduleId: string, key: string, value: string) => void;
-  onSetGateway: (gateway: GatewaySettings) => void;
+  onSetGateway: (on: boolean) => void;
+  onSetFeature: (
+    feature: PlatformFeature,
+    choice: FeatureChoice | undefined,
+  ) => void;
 }
 
 /**
- * The gateway and its access, then technology/capability selection and inline knobs: the
+ * The gateway and the platform features, then technology/capability selection and inline knobs: the
  * list view of the same selection the canvas edits. Every change replans live.
  */
 export function ConfigPanel({
@@ -23,15 +32,21 @@ export function ConfigPanel({
   onToggleCapability,
   onSetKnob,
   onSetGateway,
+  onSetFeature,
 }: ConfigPanelProps) {
   return (
     <div className="h-full min-h-0 overflow-auto p-4">
       <div className="w-full max-w-3xl">
         <Card className="mb-6 p-4">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Gateway
+            Platform
           </h3>
-          <AccessSection gateway={selection.gateway} onChange={onSetGateway} />
+          <PlatformSection
+            catalog={catalog}
+            selection={selection}
+            onSetGateway={onSetGateway}
+            onSetFeature={onSetFeature}
+          />
         </Card>
         {catalog ? (
           <SelectionStep

@@ -4,7 +4,7 @@
 
 import {
   capabilityLabel,
-  isGatewayManaged,
+  isPlatformManaged,
 } from "../selection/catalogIndex.js";
 import type { CatalogDto, GraphDto, Selection } from "../types.js";
 
@@ -12,7 +12,7 @@ export type Origin =
   | { kind: "explicit" }
   /** Pulled in by the planner; `requiredBy` names what needs it. */
   | { kind: "auto"; requiredBy: string[] }
-  /** The gateway itself, or a provider its access settings turned on. */
+  /** The gateway itself, or the provider of a platform feature. */
   | { kind: "gateway"; role: string };
 
 /** Derive a planned component's origin from the selection and the plan graph. */
@@ -24,7 +24,7 @@ export function componentOrigin(
 ): Origin {
   if (selection.modules.includes(id)) return { kind: "explicit" };
   const module = catalog?.modules.find((m) => m.id === id);
-  if (module?.provider_of && isGatewayManaged(module)) {
+  if (module?.provider_of && isPlatformManaged(module)) {
     return { kind: "gateway", role: module.provider_of };
   }
   const nodes = new Map(graph?.nodes.map((n) => [n.id, n]) ?? []);
@@ -34,13 +34,15 @@ export function componentOrigin(
   for (const m of catalog?.modules ?? []) {
     if (m.requires.includes(id) && nodes.has(m.id)) requiredBy.add(name(m.id));
   }
-  // Components that call it for a resource, sign-in or policy.
+  // Components that call it for a resource, sign-in, policy or a platform
+  // feature.
   for (const e of graph?.edges ?? []) {
     if (e.to !== id) continue;
     if (
       e.kind === "uses" ||
       e.kind === "authenticates" ||
-      e.kind === "authorizes"
+      e.kind === "authorizes" ||
+      e.kind === "integrates"
     ) {
       requiredBy.add(name(e.from));
     }
@@ -71,9 +73,13 @@ export function describeOrigin(origin: Origin): string {
   if (origin.kind === "explicit") return "Added by you";
   if (origin.kind === "gateway") {
     if (origin.role === "gateway") return "Every environment has the gateway";
-    return origin.role === "policy"
-      ? "Turned on by the gateway's policy setting"
-      : "Turned on by the gateway's sign-in setting";
+    const feature =
+      origin.role === "policy"
+        ? "policy"
+        : origin.role === "tracing"
+          ? "observability"
+          : "identity";
+    return `Provides the ${feature} platform feature`;
   }
   return origin.requiredBy.length > 0
     ? `Pulled in by ${formatList(origin.requiredBy)}`
