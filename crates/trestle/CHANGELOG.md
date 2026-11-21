@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.38](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.37...olai-trestle-v0.0.38) - 2026-11-21
+
+### Added
+
+- [**breaking**] model identity, policy and observability as platform features (#431)
+- work on a team's shared state with `--state` (#416)
+- [**breaking**] run instances of a team's shared store (#415)
+
 ## [0.0.36](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.35...olai-trestle-v0.0.36) - 2026-11-17
 
 ### Added

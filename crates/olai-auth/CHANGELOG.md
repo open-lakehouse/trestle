@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-auth-v0.0.5...olai-auth-v0.0.6) - 2026-11-21
+
+### Added
+
+- add a Postgres UserStatusStore for Neon Auth users (#420)
+
 ## [0.0.4](https://github.com/open-lakehouse/trestle/compare/olai-auth-v0.0.3...olai-auth-v0.0.4) - 2026-11-15
 
 ### Added

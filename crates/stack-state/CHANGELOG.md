@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14](https://github.com/open-lakehouse/trestle/compare/olai-stack-state-v0.0.13...olai-stack-state-v0.0.14) - 2026-11-21
+
+### Added
+
+- [**breaking**] share workspaces and environments over Postgres (#414)
+
 ## [0.0.6](https://github.com/open-lakehouse/trestle/compare/olai-stack-state-v0.0.5...olai-stack-state-v0.0.6) - 2026-11-09
 
 ### Changed

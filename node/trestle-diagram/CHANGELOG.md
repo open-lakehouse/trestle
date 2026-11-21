@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.13.0...trestle-diagram-v0.14.0) - 2026-11-21
+
+### Added
+
+- add a GitHub-style commit history component (#425)
+- [**breaking**] configure platform features and per-service integrations (#432)
+- [**breaking**] navigate inside the sidebar, quieter diagram, commit history (#426)
+
+### Fixed
+
+- keep AI Gateway endpoints traced, say where traces go (#430)
+
 ## [0.13.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.12.0...trestle-diagram-v0.13.0) - 2026-11-18
 
 ### Fixed

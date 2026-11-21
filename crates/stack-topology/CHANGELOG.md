@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.24](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.23...olai-stack-topology-v0.0.24) - 2026-11-21
+
+### Added
+
+- [**breaking**] configure platform features and per-service integrations (#432)
+- [**breaking**] model identity, policy and observability as platform features (#431)
+
+### Fixed
+
+- keep AI Gateway endpoints traced, say where traces go (#430)
+
 ## [0.0.23](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.22...olai-stack-topology-v0.0.23) - 2026-11-18
 
 ### Fixed

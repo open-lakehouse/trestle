@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.9...env-editor-v0.0.10) - 2026-11-21
+
+### Added
+
+- [**breaking**] configure platform features and per-service integrations (#432)
+- [**breaking**] navigate inside the sidebar, quieter diagram, commit history (#426)
+
+### Fixed
+
+- keep AI Gateway endpoints traced, say where traces go (#430)
+
 ## [0.0.9](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.8...env-editor-v0.0.9) - 2026-11-10
 
 ### Added
