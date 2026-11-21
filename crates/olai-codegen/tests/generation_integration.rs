@@ -1320,6 +1320,15 @@ fn keyword_named_params_generate_raw_identifiers() {
                 "{runtime:?}: extractors bind `{binding}`:\n{common}"
             );
         }
+        // A service whose only extractor reads path params next to its body (`SetPointer`) still
+        // imports the `RequestPartsExt` that `parts.extract` needs.
+        let pointer =
+            std::fs::read_to_string(tmp.path().join("common/extractors/pointer/server.rs"))
+                .unwrap();
+        assert!(
+            pointer.contains("use axum::{RequestExt, RequestPartsExt};"),
+            "{runtime:?}: pointer extractor imports `RequestPartsExt`:\n{pointer}"
+        );
         // Python keyword args are suffixed (`from_`, `in_`), never a raw ident that PyO3 would
         // expose as the unusable `from` / `in`.
         let python = read_all(&tmp.path().join("python"));
