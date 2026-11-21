@@ -1,0 +1,16 @@
+{
+  "storage-credentials": [
+    {
+      "prefix": "s3://bucket/__unitystorage/tables/tab",
+      "operation": "READ_WRITE",
+      "config": { "s3.access-key-id": "ak-tab", "s3.secret-access-key": "sk-tab" },
+      "expiration-time-ms": 1893456000000
+    },
+    {
+      "prefix": "s3://bucket/__unitystorage/tables/table2",
+      "operation": "READ_WRITE",
+      "config": { "s3.access-key-id": "ak-table2", "s3.secret-access-key": "sk-table2" },
+      "expiration-time-ms": 1893456000000
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 //! ```json
 //! {
 //!   "storage-credentials": [{
-//!     "prefix": "s3://bucket/warehouse/tab/",
+//!     "prefix": "s3://bucket/warehouse/tab",
 //!     "operation": "READ_WRITE",
 //!     "config": {
 //!       "s3.access-key-id": "…", "s3.secret-access-key": "…", "s3.session-token": "…",
@@ -34,7 +34,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use super::{RedactedConfig, VendContext, convert_related, prefix_string, resolve_expiry};
+use super::{RedactedConfig, VendContext, convert_related, resolve_expiry};
 use crate::error::{Error, Result};
 use crate::location::{StorageProvider, StorageScope};
 use crate::model::{
@@ -93,7 +93,12 @@ impl From<AccessLevel> for Operation {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct StorageCredential {
-    /// The storage prefix the credential covers.
+    /// The storage prefix the credential covers: the location as the catalog stores
+    /// it, without a trailing `/` (as in the spec's examples and the reference server).
+    ///
+    /// Clients pick the longest prefix that matches, and must match on whole path
+    /// segments: `s3://b/tab` covers `s3://b/tab/part`, not `s3://b/table2`.
+    /// [`to_vended`](Self::to_vended) parses the prefix and matches it that way.
     pub prefix: String,
     /// The access level granted.
     pub operation: Operation,
@@ -154,11 +159,31 @@ impl StorageCredential {
     }
 }
 
-impl TryFrom<&VendedCredential> for StorageCredential {
-    type Error = Error;
+impl StorageCredential {
+    /// Serializes `vended` for a server whose catalog stores the location as
+    /// `location`, which becomes the `prefix` exactly as spelled.
+    ///
+    /// The UC reference server returns the location as stored, and the `TryFrom`
+    /// conversion can only write the canonical form, which loses spellings such as `s3a://` or an
+    /// emulator's endpoint URL. `location` may name `vended`'s scope or storage within
+    /// it.
+    ///
+    /// Fails if `location` is not a storage location this crate parses, if it is
+    /// broader than or unrelated to `vended`'s scope (the prefix would claim storage the
+    /// credential was not vended for), and for Azure AD bearer tokens, which the Delta
+    /// API cannot carry.
+    pub fn for_location(location: &str, vended: &VendedCredential) -> Result<Self> {
+        let named = location.parse::<StorageScope>()?;
+        if !vended.scope.contains(&named) {
+            return Err(Error::invalid_credential(format!(
+                "prefix {named} is not within the credential's scope {}",
+                vended.scope
+            )));
+        }
+        Self::with_prefix(location.to_owned(), vended)
+    }
 
-    /// Fails for Azure AD bearer tokens, which the Delta API cannot carry.
-    fn try_from(vended: &VendedCredential) -> Result<Self> {
+    fn with_prefix(prefix: String, vended: &VendedCredential) -> Result<Self> {
         let mut config = BTreeMap::new();
         match &vended.credentials {
             StorageCredentials::Aws {
@@ -196,11 +221,25 @@ impl TryFrom<&VendedCredential> for StorageCredential {
             StorageCredentials::None => {}
         }
         Ok(Self {
-            prefix: prefix_string(&vended.scope),
+            prefix,
             operation: vended.access.into(),
             config,
             expiration_time_ms: vended.expires_at.map(|t| t.timestamp_millis()),
         })
+    }
+}
+
+impl TryFrom<&VendedCredential> for StorageCredential {
+    type Error = Error;
+
+    /// Uses the canonical form of `vended`'s scope as the `prefix`, with no trailing
+    /// `/` below the bucket root (`s3://bucket/tab`). Use
+    /// [`for_location`](StorageCredential::for_location) to keep the catalog's
+    /// spelling.
+    ///
+    /// Fails for Azure AD bearer tokens, which the Delta API cannot carry.
+    fn try_from(vended: &VendedCredential) -> Result<Self> {
+        Self::with_prefix(vended.scope.to_string(), vended)
     }
 }
 
