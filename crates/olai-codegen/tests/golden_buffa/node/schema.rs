@@ -31,8 +31,27 @@ impl NapiSchemaClient {
     }
 
     #[napi(catch_unwind)]
-    pub async fn update(&self) -> napi::Result<Buffer> {
-        let request = self.client.update();
+    pub async fn update(
+        &self,
+        schema: ::core::option::Option<napi::bindgen_prelude::Buffer>,
+    ) -> napi::Result<Buffer> {
+        let request = self
+            .client
+            .update()
+            .with_schema(
+                schema
+                    .as_ref()
+                    .map(|b| {
+                        <Schema as buffa::Message>::decode_from_slice(b.as_ref())
+                            .map_err(|e| {
+                                napi::Error::new(
+                                    napi::Status::GenericFailure,
+                                    format!("invalid {} payload: {e}", stringify!(Schema)),
+                                )
+                            })
+                    })
+                    .transpose()?,
+            );
         request.await.map(|item| Buffer::from(item.encode_to_vec())).default_error()
     }
 

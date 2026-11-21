@@ -86,6 +86,17 @@ service RouteService {
   rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse) {
     option (google.api.http) = {get: "/routes"};
   }
+  // A required list of messages (#384): Node takes it as `Vec<Buffer>`.
+  rpc PutRoutes(PutRoutesRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post: "/routes:batch"
+      body: "*"
+    };
+  }
+}
+
+message PutRoutesRequest {
+  repeated Route routes = 1 [(google.api.field_behavior) = REQUIRED];
 }
 
 message ListRoutesRequest {
@@ -206,6 +217,12 @@ service VarietyService {
   rpc ListTypes(ListTypesRequest) returns (ListTypesResponse) {
     option (google.api.http) = {get: "/types"};
   }
+  rpc UpdateType(UpdateTypeRequest) returns (Variety) {
+    option (google.api.http) = {
+      patch: "/types/{full_name}"
+      body: "*"
+    };
+  }
   rpc DeleteType(DeleteTypeRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {delete: "/types/{full_name}"};
   }
@@ -232,6 +249,12 @@ message ListTypesRequest {
 message ListTypesResponse {
   repeated Variety types = 1;
   string next_page_token = 2;
+}
+
+message UpdateTypeRequest {
+  string full_name = 1;
+  // An optional list of messages (#384): Node takes it as protobuf bytes, `Option<Vec<Buffer>>`.
+  repeated Kind changes = 2 [(google.api.field_behavior) = OPTIONAL];
 }
 
 message DeleteTypeRequest {

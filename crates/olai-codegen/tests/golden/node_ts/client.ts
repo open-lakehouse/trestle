@@ -127,6 +127,22 @@ function parseNativeError(e: unknown): never {
 
 // ── end ExampleError error hierarchy ─────────────────────────────────────────────────────
 
+export interface CreateCatalogOptions {
+  catalog?: Catalog;
+}
+
+export interface UpdateCatalogOptions {
+  catalog?: Catalog;
+}
+
+export interface UpdateSchemaOptions {
+  schema?: Schema;
+}
+
+export interface CreateTagAssignmentOptions {
+  tag?: TagAssignment;
+}
+
 export class CatalogClient {
   private readonly inner: NativeCatalogClient;
 
@@ -141,9 +157,10 @@ export class CatalogClient {
     } catch (e) { throw parseNativeError(e); }
   }
 
-  async update(): Promise<Catalog> {
+  async update(options?: UpdateCatalogOptions): Promise<Catalog> {
+    const { catalog } = options || {};
     try {
-      return fromBinary(CatalogSchema, await this.inner.update());
+      return fromBinary(CatalogSchema, await this.inner.update(catalog === undefined ? undefined : Buffer.from(toBinary(CatalogSchema, catalog))));
     } catch (e) { throw parseNativeError(e); }
   }
 
@@ -180,9 +197,10 @@ export class SchemaClient {
     } catch (e) { throw parseNativeError(e); }
   }
 
-  async update(): Promise<Schema> {
+  async update(options?: UpdateSchemaOptions): Promise<Schema> {
+    const { schema } = options || {};
     try {
-      return fromBinary(SchemaSchema, await this.inner.update());
+      return fromBinary(SchemaSchema, await this.inner.update(schema === undefined ? undefined : Buffer.from(toBinary(SchemaSchema, schema))));
     } catch (e) { throw parseNativeError(e); }
   }
 
@@ -201,9 +219,10 @@ export class ExampleClient {
     this.inner = NativeClient.fromUrl(url, token);
   }
 
-  async createCatalog(): Promise<Catalog> {
+  async createCatalog(options?: CreateCatalogOptions): Promise<Catalog> {
+    const { catalog } = options || {};
     try {
-      return fromBinary(CatalogSchema, await this.inner.createCatalog());
+      return fromBinary(CatalogSchema, await this.inner.createCatalog(catalog === undefined ? undefined : Buffer.from(toBinary(CatalogSchema, catalog))));
     } catch (e) { throw parseNativeError(e); }
   }
 
@@ -294,9 +313,10 @@ export class ExampleClient {
   /**
      * Create/assign a tag. Path params: entity_type, entity_name; body: tag.
      */
-  async createTagAssignment(entityType: string, entityName: string): Promise<TagAssignment> {
+  async createTagAssignment(entityType: string, entityName: string, options?: CreateTagAssignmentOptions): Promise<TagAssignment> {
+    const { tag } = options || {};
     try {
-      return fromBinary(TagAssignmentSchema, await this.inner.createTagAssignment(entityType, entityName));
+      return fromBinary(TagAssignmentSchema, await this.inner.createTagAssignment(entityType, entityName, tag === undefined ? undefined : Buffer.from(toBinary(TagAssignmentSchema, tag))));
     } catch (e) { throw parseNativeError(e); }
   }
 

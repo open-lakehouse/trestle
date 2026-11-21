@@ -44,8 +44,27 @@ impl NapiExampleClient {
     }
 
     #[napi(catch_unwind)]
-    pub async fn create_catalog(&self) -> napi::Result<Buffer> {
-        let request = self.client.create_catalog();
+    pub async fn create_catalog(
+        &self,
+        catalog: ::core::option::Option<napi::bindgen_prelude::Buffer>,
+    ) -> napi::Result<Buffer> {
+        let request = self
+            .client
+            .create_catalog()
+            .with_catalog(
+                catalog
+                    .as_ref()
+                    .map(|b| {
+                        <Catalog as buffa::Message>::decode_from_slice(b.as_ref())
+                            .map_err(|e| {
+                                napi::Error::new(
+                                    napi::Status::GenericFailure,
+                                    format!("invalid {} payload: {e}", stringify!(Catalog)),
+                                )
+                            })
+                    })
+                    .transpose()?,
+            );
         request.await.map(|item| Buffer::from(item.encode_to_vec())).default_error()
     }
 
@@ -193,8 +212,27 @@ impl NapiExampleClient {
         &self,
         entity_type: String,
         entity_name: String,
+        tag: ::core::option::Option<napi::bindgen_prelude::Buffer>,
     ) -> napi::Result<Buffer> {
-        let request = self.client.create_tag_assignment(entity_type, entity_name);
+        let request = self
+            .client
+            .create_tag_assignment(entity_type, entity_name)
+            .with_tag(
+                tag
+                    .as_ref()
+                    .map(|b| {
+                        <TagAssignment as buffa::Message>::decode_from_slice(b.as_ref())
+                            .map_err(|e| {
+                                napi::Error::new(
+                                    napi::Status::GenericFailure,
+                                    format!(
+                                        "invalid {} payload: {e}", stringify!(TagAssignment)
+                                    ),
+                                )
+                            })
+                    })
+                    .transpose()?,
+            );
         request.await.map(|item| Buffer::from(item.encode_to_vec())).default_error()
     }
 

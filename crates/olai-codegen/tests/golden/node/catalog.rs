@@ -23,8 +23,27 @@ impl NapiCatalogClient {
     }
 
     #[napi(catch_unwind)]
-    pub async fn update(&self) -> napi::Result<Buffer> {
-        let request = self.client.update();
+    pub async fn update(
+        &self,
+        catalog: ::core::option::Option<napi::bindgen_prelude::Buffer>,
+    ) -> napi::Result<Buffer> {
+        let request = self
+            .client
+            .update()
+            .with_catalog(
+                catalog
+                    .as_ref()
+                    .map(|b| {
+                        <Catalog as prost::Message>::decode(b.as_ref())
+                            .map_err(|e| {
+                                napi::Error::new(
+                                    napi::Status::GenericFailure,
+                                    format!("invalid {} payload: {e}", stringify!(Catalog)),
+                                )
+                            })
+                    })
+                    .transpose()?,
+            );
         request.await.map(|item| Buffer::from(item.encode_to_vec())).default_error()
     }
 

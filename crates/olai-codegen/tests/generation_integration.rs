@@ -1383,11 +1383,52 @@ fn keyword_named_params_generate_raw_identifiers() {
             ),
             "{runtime:?}: Python accessor is `type`:\n{python}"
         );
+        // napi-derive can't take a raw ident: the NAPI accessor is `type_`, named `type` in JS.
         let node = read_all(&tmp.path().join("node"));
         assert!(
-            node.contains("#[napi(js_name = \"type\")]\n    pub fn r#type("),
+            node.contains("#[napi(js_name = \"type\")]\n    pub fn type_("),
             "{runtime:?}: NAPI accessor is named `type` in JS:\n{node}"
         );
+        // NAPI params name the `.d.ts` params (camelCased, a `_` suffix dropped): never raw, never
+        // a JS reserved word.
+        for param in [
+            "type_: String",
+            "ref_: String",
+            "class_param: String",
+            "super_param: String",
+        ] {
+            assert!(
+                node.contains(param),
+                "{runtime:?}: NAPI binding takes `{param}`:\n{node}"
+            );
+        }
+        assert!(
+            !node.contains("r#"),
+            "{runtime:?}: NAPI binding has a raw ident:\n{node}"
+        );
+        // Message params cross NAPI as protobuf bytes (#384): a `Buffer` per message, optional or
+        // required, singular or a list; the TS client encodes them with `toBinary`.
+        for param in [
+            "changes: ::core::option::Option<::std::vec::Vec<napi::bindgen_prelude::Buffer>>",
+            "routes: ::std::vec::Vec<napi::bindgen_prelude::Buffer>",
+        ] {
+            assert!(
+                node.contains(param),
+                "{runtime:?}: NAPI binding takes `{param}`:\n{node}"
+            );
+        }
+        let ts = read_all(&tmp.path().join("node_ts"));
+        for part in [
+            "changes?: Kind[];",
+            "this.inner.update(changes?.map((m) => Buffer.from(toBinary(KindSchema, m))))",
+            "async putRoutes(routes: Route[]): Promise<void>",
+            "routes.map((m) => Buffer.from(toBinary(RouteSchema, m)))",
+        ] {
+            assert!(
+                ts.contains(part),
+                "{runtime:?}: TS client has `{part}`:\n{ts}"
+            );
+        }
         // The raw-ident prefix never leaks into a non-Rust output (TS, Python stubs).
         for path in walk(tmp.path())
             .into_iter()
@@ -1405,7 +1446,6 @@ fn keyword_named_params_generate_raw_identifiers() {
         }
         // JS reserved words (#394) bind under an escaped name; the options key stays the proto
         // name.
-        let ts = read_all(&tmp.path().join("node_ts"));
         for binding in [
             "const { match, from, in: in_, delete: delete_ } = options || {};",
             "async listRoutes(ref: string, class_: string)",
