@@ -99,7 +99,16 @@ pub async fn serve(
         );
         let caller = CallerId::new(&consumer);
         let service = service.clone();
-        let shutdown = shutdown.clone();
+        // End the open streams first: a graceful shutdown waits for them, and a consumer's
+        // stream stays open for as long as it runs.
+        let shutdown = {
+            let shutdown = shutdown.clone();
+            let service = service.clone();
+            async move {
+                shutdown.await;
+                service.close_streams();
+            }
+        };
         tasks.spawn(async move {
             serve_listener(listener, caller, service, shutdown)
                 .await

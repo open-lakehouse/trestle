@@ -23,7 +23,7 @@ use envoy_types::pb::envoy::service::secret::v3::secret_discovery_service_server
 use envoy_types::util::pack_any;
 use futures::{Stream, StreamExt};
 use prost::Name;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -46,6 +46,7 @@ pub struct SdsService<R = SocketCaller> {
     policy: Arc<Policy>,
     resolver: Arc<R>,
     boot_id: Arc<str>,
+    closing: Arc<watch::Sender<bool>>,
 }
 
 impl<R> Clone for SdsService<R> {
@@ -54,6 +55,7 @@ impl<R> Clone for SdsService<R> {
             policy: self.policy.clone(),
             resolver: self.resolver.clone(),
             boot_id: self.boot_id.clone(),
+            closing: self.closing.clone(),
         }
     }
 }
@@ -75,7 +77,17 @@ impl<R: CallerResolver> SdsService<R> {
             policy,
             resolver: Arc::new(resolver),
             boot_id: uuid::Uuid::new_v4().simple().to_string().into(),
+            closing: Arc::new(watch::channel(false).0),
         }
+    }
+
+    /// Ends every open `StreamSecrets` stream, and every one opened later, with `UNAVAILABLE`.
+    ///
+    /// A graceful shutdown waits for open streams, and a consumer's stream stays open for as
+    /// long as it runs, so the server calls this when it starts shutting down. Clients
+    /// reconnect to the next server and keep their last value meanwhile.
+    pub fn close_streams(&self) {
+        self.closing.send_replace(true);
     }
 
     /// The tonic service to add to a server.
@@ -221,9 +233,23 @@ impl<R: CallerResolver> SecretDiscoveryService for SdsService<R> {
             last_sent: None,
         };
         let (tx, rx) = mpsc::channel(4);
+        let mut closing = self.closing.subscribe();
         tokio::spawn(async move {
             tracing::debug!(consumer = state.caller.as_str(), "secret stream opened");
-            while let Some(message) = inbound.next().await {
+            loop {
+                // The borrow `wait_for` returns is dropped inside, so it never crosses an await.
+                let closed = async {
+                    let _ = closing.wait_for(|closed| *closed).await;
+                };
+                let message = tokio::select! {
+                    () = closed => {
+                        tracing::debug!(consumer = state.caller.as_str(), "closing the secret stream: shutting down");
+                        let _ = tx.send(Err(Status::unavailable("the secret server is shutting down"))).await;
+                        return;
+                    }
+                    message = inbound.next() => message,
+                };
+                let Some(message) = message else { break };
                 let request = match message {
                     Ok(request) => request,
                     Err(status) => {
