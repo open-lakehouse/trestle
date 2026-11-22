@@ -153,7 +153,9 @@ export function ActionsMenu({
         align="end"
         // Closes at once, like an editor's menus: reopened while it still
         // faded out, the click reopening it would also count as outside it.
-        className="min-w-[11rem] max-w-72 data-[state=closed]:animate-none"
+        // Important: tailwind-merge doesn't know tw-animate's `animate-out`
+        // conflicts with it, so both stay, and `animate-out` comes later.
+        className="min-w-[11rem] max-w-72 data-[state=closed]:animate-none!"
         // Keyboard selection clicks the entry too.
         onClickCapture={() => {
           picked.current = true;
