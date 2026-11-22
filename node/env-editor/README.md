@@ -68,6 +68,18 @@ store that keeps revisions), then a host's. Opening a file from the canvas or
 the inspector lands on Files at that file. Revision and comparison tabs open
 as tabs of their own.
 
+The open tabs, the active one and each environment's sub-tab live in an editor
+store, as the workbench and the bottom panel do. A host that opens tabs from
+code (a header detail, a ⌘K command, a Start action) wraps the shell and the
+code that builds its contributions in `<EditorProvider>` and calls
+`useEditor().openEnvironment(id, { subTab })`. That opens or activates the
+environment's tab, sets its sub-tab, and brings the editor tabs back over a
+workbench view. `opts` can also name a `revision` or a `compare` pair, the same
+tabs the editor opens. An unknown sub-tab id falls back to the first enabled
+tab, and a disabled one is shown with its reason. `useEditor()` also gives
+`activate`, `close` and `setView`. Without an `EditorProvider` the shell keeps a
+store of its own. `createEditor()` makes one to pass in.
+
 ### Host contributions
 
 A host that runs environments (the desktop shell) can put its run state and
@@ -97,8 +109,10 @@ optional, and with no contributions the shell is unchanged:
 - `environment.status(envId)`: a run-state dot and placement (`local slot 0`, a
   remote branch) in the tree, and the header over the environment's tab, with
   its revision. `details` adds facts to that header (`{ label, value, copy?,
-  title? }`, e.g. a remote target or the gateway URL with a copy button); they
-  replace the editor's own gateway detail.
+  title?, icon?, run? }`, e.g. a remote target or the gateway URL with a copy
+  button); they replace the editor's own gateway detail. With `run` a fact is a
+  button that runs it, e.g. opens the environment's Configure tab through
+  `useEditor().openEnvironment`.
 - `environment.actions(envId)`: buttons in that header (Start, Stop). A disabled
   one shows its `reason`.
 - `environment.tabs(envId)`: sub-tabs after the editor's Diagram, Files and

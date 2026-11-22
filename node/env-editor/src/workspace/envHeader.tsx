@@ -71,30 +71,33 @@ export function EnvHeader({
           <span className="truncate">{name}</span>
         </span>
       )}
-      {status && (
-        <>
-          <span
-            className="inline-flex items-center gap-1.5 font-medium"
-            title={status.detail}
-          >
-            <RunStateDot status={status} />
-            {runStateLabel(status)}
-          </span>
-          {status.revision !== undefined && (
-            <span className="font-mono text-muted-foreground">
-              rev {status.revision}
+      {/* The state, placement and details truncate before the actions do. */}
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+        {status && (
+          <>
+            <span
+              className="inline-flex items-center gap-1.5 font-medium"
+              title={status.detail}
+            >
+              <RunStateDot status={status} />
+              {runStateLabel(status)}
             </span>
-          )}
-          {status.placement && (
-            <span className="truncate text-muted-foreground">
-              {status.placement}
-            </span>
-          )}
-        </>
-      )}
-      {facts.map((fact) => (
-        <Detail key={fact.label} detail={fact} />
-      ))}
+            {status.revision !== undefined && (
+              <span className="font-mono text-muted-foreground">
+                rev {status.revision}
+              </span>
+            )}
+            {status.placement && (
+              <span className="truncate text-muted-foreground">
+                {status.placement}
+              </span>
+            )}
+          </>
+        )}
+        {facts.map((fact) => (
+          <Detail key={fact.label} detail={fact} />
+        ))}
+      </div>
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {actions.map((action) => (
           <ActionButton key={action.id} action={action} />
@@ -104,21 +107,53 @@ export function EnvHeader({
   );
 }
 
+/** A header fact: its label and value, with its icon and a copy button where
+ *  asked. With `run` the fact is a ghost button that runs it; the copy button
+ *  sits beside the button, since a button can't hold another. */
 function Detail({ detail }: { detail: EnvironmentDetail }) {
+  const { icon, label, value, copy, title, run } = detail;
+  const text = (
+    <>
+      {icon && (
+        <span className="inline-flex shrink-0 [&_svg]:h-3.5 [&_svg]:w-3.5">
+          {icon}
+        </span>
+      )}
+      <span>{label}</span>
+      <span className="truncate font-mono text-foreground">{value}</span>
+    </>
+  );
+  const copyButton = copy && (
+    <CopyButton
+      text={value}
+      label={`Copy ${label}`}
+      className="h-5 w-5 [&_svg]:h-3 [&_svg]:w-3"
+    />
+  );
+  if (run) {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-0.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          title={title ?? value}
+          onClick={run}
+          className="h-6 min-w-0 max-w-full gap-1 px-1.5 text-xs font-normal text-muted-foreground"
+        >
+          {text}
+        </Button>
+        {copyButton}
+      </span>
+    );
+  }
   return (
     <span
       className="inline-flex min-w-0 items-center gap-1 text-muted-foreground"
-      title={detail.title ?? detail.value}
+      title={title ?? value}
     >
-      <span>{detail.label}</span>
-      <span className="truncate font-mono text-foreground">{detail.value}</span>
-      {detail.copy && (
-        <CopyButton
-          text={detail.value}
-          label={`Copy ${detail.label}`}
-          className="h-5 w-5 [&_svg]:h-3 [&_svg]:w-3"
-        />
-      )}
+      {text}
+      {copyButton}
     </span>
   );
 }

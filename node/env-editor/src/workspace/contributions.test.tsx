@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TooltipProvider } from "@open-lakehouse/ui-kit";
-import type { ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   ActivityBar,
@@ -223,7 +223,90 @@ describe("environment header", () => {
     expect(out).not.toContain('aria-label="Copy target"');
     expect(out).not.toContain("replaced by the host");
   });
+
+  test("a detail with run is a button, with its icon and copy beside it", () => {
+    const props = {
+      actions: [],
+      details: [
+        {
+          label: "configure",
+          value: "dev",
+          icon: <span id="gear" />,
+          title: "Open the Configure tab",
+          copy: true,
+          run: () => {},
+        },
+        { label: "gateway", value: "https://dev.localhost" },
+      ],
+    };
+    const out = html(<EnvHeader status={undefined} {...props} />);
+    expect(out).toMatch(/<button[^>]*title="Open the Configure tab"/);
+    expect(out).toContain('type="button"');
+    expect(out).toContain('<span id="gear"></span>');
+    expect(out).toContain('aria-label="Copy configure"');
+
+    // A fact without run stays plain text, with no button of its own.
+    const plain = html(
+      <EnvHeader
+        status={undefined}
+        actions={[]}
+        details={[{ label: "gateway", value: "https://dev.localhost" }]}
+      />,
+    );
+    expect(plain).toContain("https://dev.localhost");
+    expect(plain).not.toContain("<button");
+  });
+
+  test("clicking a detail's button runs it", () => {
+    let opened = 0;
+    const details = [
+      {
+        label: "configure",
+        value: "dev",
+        run: () => {
+          opened++;
+        },
+      },
+    ];
+    // The header's detail is a component: render its element and take the
+    // button's click handler from the tree.
+    const header = EnvHeader({ status: undefined, details, actions: [] });
+    const [fact] = elementsIn(header, (el) => isDetail(el, "configure"));
+    if (!fact) throw new Error("the configure detail is missing");
+    const rendered = (fact.type as (p: unknown) => ReactElement)(fact.props);
+    const [button] = elementsIn(
+      rendered,
+      (el) => typeof (el.props as { onClick?: unknown }).onClick === "function",
+    );
+    if (!button) throw new Error("the detail has no button");
+    (button.props as { onClick: () => void }).onClick();
+    expect(opened).toBe(1);
+  });
 });
+
+/** The React elements under `node` that `match`, walking their children (the
+ *  components inside are not rendered). */
+function elementsIn(
+  node: ReactNode,
+  match: (el: ReactElement) => boolean,
+): ReactElement[] {
+  const found: ReactElement[] = [];
+  const walk = (n: ReactNode) => {
+    if (Array.isArray(n)) {
+      for (const child of n) walk(child);
+      return;
+    }
+    if (!isValidElement(n)) return;
+    if (match(n)) found.push(n);
+    walk((n.props as { children?: ReactNode }).children);
+  };
+  walk(node);
+  return found;
+}
+
+function isDetail(el: ReactElement, label: string): boolean {
+  return (el.props as { detail?: { label?: string } }).detail?.label === label;
+}
 
 describe("environment sub-tabs", () => {
   test("Diagram first; a disabled tab says why and can't be picked", () => {

@@ -42,7 +42,6 @@ import {
   useEffect,
   useId,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import {
@@ -85,14 +84,10 @@ import {
   useContributions,
 } from "./contributions.js";
 import { EnvTree } from "./EnvTree.js";
+import { EditorProvider, useEditor, useEditorStore } from "./editorStore.js";
 import {
-  closeTab,
   type EditorTab,
-  type EnvView,
   INITIAL_VIEW,
-  neighbourAfterClose,
-  openTab,
-  pruneTabs,
   tabKey,
   tabLabel,
   withFile,
@@ -150,13 +145,16 @@ export function WorkspaceShell(props: WorkspaceShellProps) {
       <ShellBody {...props} />
     </CommandProvider>
   );
-  // A host's providers share the workbench and the bottom panel with its own
-  // code; without one the shell keeps its own.
+  // A host's providers share the workbench, the bottom panel and the editor
+  // tabs with its own code; without one the shell keeps its own.
   if (!useBottomPanelStore()) {
     node = <BottomPanelProvider>{node}</BottomPanelProvider>;
   }
   if (!useWorkbenchStore()) {
     node = <WorkbenchProvider>{node}</WorkbenchProvider>;
+  }
+  if (!useEditorStore()) {
+    node = <EditorProvider>{node}</EditorProvider>;
   }
   return node;
 }
@@ -218,52 +216,32 @@ function ShellBody({
     invert: true,
   });
 
-  // Open editor tabs (an environment, or one of its revisions or comparisons)
-  // and the active one. A member that leaves the workspace closes its tabs.
-  const [open, setOpen] = useState<EditorTab[]>([]);
-  const [activeKey, setActiveKey] = useState<string>();
+  // Open editor tabs (an environment, or one of its revisions or comparisons),
+  // the active one and where each environment's tab is, in the editor store
+  // (see `editorStore.tsx`). A member that leaves the workspace closes its tabs.
+  const {
+    tabs: open,
+    activeKey,
+    active: activeTab,
+    views: envViews,
+    openEnvironment,
+    activate,
+    close: closeEditor,
+    setView: setEnvView,
+    syncEnvironments,
+  } = useEditor();
   const envs = workspace?.envs ?? [];
-  const started = useRef(false);
   useEffect(() => {
-    if (!workspace) return;
-    const ids = new Set(workspace.envs.map((e) => e.id));
-    setOpen((tabs) => {
-      // Start with the first environment open.
-      if (!started.current && workspace.envs[0]) {
-        started.current = true;
-        return [{ env: workspace.envs[0].id }];
-      }
-      return pruneTabs(tabs, ids);
-    });
-  }, [workspace]);
-  useEffect(() => {
-    if (!activeKey || !open.some((t) => tabKey(t) === activeKey)) {
-      const last = open.at(-1);
-      setActiveKey(last && tabKey(last));
-    }
-  }, [open, activeKey]);
+    if (workspace) syncEnvironments(workspace.envs.map((e) => e.id));
+  }, [workspace, syncEnvironments]);
   const openEditor = useCallback(
-    (tab: EditorTab) => {
-      setOpen((tabs) => openTab(tabs, tab));
-      setActiveKey(tabKey(tab));
-      showEditor(EDITOR_VIEW);
-    },
-    [showEditor],
+    (tab: EditorTab) => openEnvironment(tab.env, tab),
+    [openEnvironment],
   );
   const openEnv = useCallback(
-    (id: string) => openEditor({ env: id }),
-    [openEditor],
+    (id: string) => openEnvironment(id),
+    [openEnvironment],
   );
-  const closeEditor = useCallback(
-    (key: string) => {
-      setOpen((tabs) => {
-        if (key === activeKey) setActiveKey(neighbourAfterClose(tabs, key));
-        return closeTab(tabs, key);
-      });
-    },
-    [activeKey],
-  );
-  const activeTab = open.find((t) => tabKey(t) === activeKey);
   const activeEnv = envs.find((e) => e.id === activeTab?.env);
   // A store without revisions has no history view; leave it if it was open.
   const hasRevisions = !!ws.revisions;
@@ -277,16 +255,7 @@ function ShellBody({
   }, [hasRevisions, view, viewExists]);
   const hostView = hostViews?.find((v) => v.id === view);
 
-  // Where each environment's tab is: its sub-tab, the file open under Files.
-  const [envViews, setEnvViews] = useState<Record<string, EnvView>>({});
-  const updateView = useCallback(
-    (id: string, update: (view: EnvView) => EnvView) =>
-      setEnvViews((views) => ({
-        ...views,
-        [id]: update(views[id] ?? INITIAL_VIEW),
-      })),
-    [],
-  );
+  // Where the active environment's tab is: its sub-tab, the file open under Files.
   const activeEnvId = activeEnv?.id;
   const activeView = (activeEnvId && envViews[activeEnvId]) || INITIAL_VIEW;
   // The services' states on the active environment's canvas, from the host.
@@ -370,10 +339,7 @@ function ShellBody({
             },
             {
               openEnv,
-              activate: (key) => {
-                setActiveKey(key);
-                showEditor(EDITOR_VIEW);
-              },
+              activate,
               openWorkbench: showEditor,
               showView,
               toggleSidebar: () => setSidebarOpen((o) => !o),
@@ -407,6 +373,7 @@ function ShellBody({
       planner.bundle,
       downloading,
       openEnv,
+      activate,
       showView,
       ws.addEnv,
       openEditor,
@@ -537,7 +504,7 @@ function ShellBody({
                 envs={envs}
                 activeKey={activeKey}
                 plans={plans}
-                onSelect={setActiveKey}
+                onSelect={activate}
                 onClose={closeEditor}
               />
               <div className="min-h-0 flex-1">
@@ -561,7 +528,7 @@ function ShellBody({
                     envId={activeEnv.id}
                     name={activeEnv.name}
                     view={activeView}
-                    onView={(v) => updateView(activeEnv.id, () => v)}
+                    onView={(v) => setEnvView(activeEnv.id, v)}
                     revisions={{
                       revisions: hasRevisions,
                       head: activeEnv.head,
@@ -580,7 +547,7 @@ function ShellBody({
                           ws.setSelection(activeEnv.id, s)
                         }
                         onOpenFile={(path) =>
-                          updateView(activeEnv.id, (v) => withFile(v, path))
+                          setEnvView(activeEnv.id, withFile(activeView, path))
                         }
                         slots={slots}
                         toolbarLeading={
@@ -596,10 +563,10 @@ function ShellBody({
                         plan={plans[activeEnv.id]}
                         path={activeView.filePath}
                         onSelect={(path) =>
-                          updateView(activeEnv.id, (v) => ({
-                            ...v,
+                          setEnvView(activeEnv.id, {
+                            ...activeView,
                             filePath: path,
-                          }))
+                          })
                         }
                       />
                     }
