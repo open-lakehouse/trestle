@@ -197,12 +197,15 @@ since the normal dependency already orders it first.)
 
 ### Published crates and the `trestle` / `olai-trestle` naming
 
-Twelve crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
+Thirteen crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
 `olai-http-wasm`, `olai-trestle`, `olai-stack-topology`, `olai-stack-runtime`,
 `olai-stack-state`,
-`olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending`, and
-`olai-auth`.
-They are the packages listed in `release-plz.toml`. `olai-test-emulators` and
+`olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending`,
+`olai-auth`, and `olai-secret-server`.
+They are the packages listed in `release-plz.toml`. A release of
+`olai-secret-server` also pushes its image,
+`ghcr.io/open-lakehouse/trestle-secret-server:<version>`
+(`.github/workflows/release-secret-server-image.yml`). `olai-test-emulators` and
 `stack-topology-wasm` have `publish = false`.
 
 The CLI crate is published as `olai-trestle`, because the name `trestle` was

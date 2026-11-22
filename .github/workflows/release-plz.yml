@@ -18,6 +18,10 @@ name: Release-plz
 # publish-npm.yml) stages it on npmjs.com (a maintainer approves it there),
 # publishes it to GitHub Packages, and attaches the attested tarball to its
 # GitHub Release.
+#
+# When the run releases `olai-secret-server`, `release-secret-server-image` (a
+# `workflow_call` into release-secret-server-image.yml) pushes the multi-arch
+# image ghcr.io/open-lakehouse/trestle-secret-server:<version>.
 
 on:
   push:
@@ -75,6 +79,9 @@ jobs:
       # The npm packages this run released, as a JSON array of
       # { package, tag } (`[]` when none) — the publish-npm matrix.
       npm_releases: ${{ steps.npm.outputs.releases }}
+      # olai-secret-server's release tag IF this run released it, else empty — the
+      # release-secret-server-image job keys off this.
+      secret_server_tag: ${{ steps.secret_server.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -132,6 +139,19 @@ jobs:
             <<< "${RELEASES:-[]}")"
           echo "npm packages released this run: $releases"
           echo "releases=$releases" >> "$GITHUB_OUTPUT"
+      - name: Extract olai-secret-server release
+        id: secret_server
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          set -euo pipefail
+          tag="$(jq -r '[.[]? | select(.package_name == "olai-secret-server")][0].tag // empty' <<< "${RELEASES:-[]}")"
+          if [ -z "$tag" ]; then
+            echo "olai-secret-server not released this run — skipping its image."
+            exit 0
+          fi
+          echo "olai-secret-server released (tag ${tag}) → pushing its image."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   # --- Build + attach the prebuilt CLI binaries, iff olai-trestle was released ---
   release-binaries:
@@ -147,6 +167,22 @@ jobs:
     uses: ./.github/workflows/release-binaries.yml
     with:
       tag: ${{ needs.release-plz-release.outputs.cli_tag }}
+
+  # --- Push the secret server image, iff olai-secret-server was released ---
+  release-secret-server-image:
+    name: Release secret server image
+    needs: release-plz-release
+    if: ${{ needs.release-plz-release.outputs.secret_server_tag != '' }}
+    # A called workflow cannot exceed the caller job's permissions: checkout,
+    # pushing to GHCR, and the OIDC build-provenance attestation.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-secret-server-image.yml
+    with:
+      tag: ${{ needs.release-plz-release.outputs.secret_server_tag }}
 
   # --- Publish each npm package released this run (none: skipped) ---
   publish-npm:
