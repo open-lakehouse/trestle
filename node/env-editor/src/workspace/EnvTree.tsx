@@ -15,11 +15,9 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { type HTMLAttributes, type ReactNode, type Ref, useState } from "react";
-import { RunStateDot } from "../graph/RunStateDot.js";
+import { type ReactElement, type ReactNode, useRef, useState } from "react";
 import { runStateTitle } from "../graph/runState.js";
 import {
-  EnvStatus,
   IconButton,
   InlineConfirm,
   NameInput,
@@ -29,6 +27,7 @@ import { type EnvironmentStatus, useContributions } from "./contributions.js";
 import type { EditorTab } from "./editors.js";
 import { ActionsMenu, RunActionButton, useEnvActions } from "./envActions.js";
 import { EnvHoverCard } from "./envCard.js";
+import { EnvStatusIndicator } from "./envIndicator.js";
 import {
   type EnvDoc,
   freeName,
@@ -185,16 +184,16 @@ export function EnvTree({
 }
 
 /** One environment's row, with its actions on hover (and while its menu is
- *  open). The rest of its props (a hover card trigger's) go to the row. */
+ *  open). `wrap` wraps the row (e.g. in a hover card); `onActionsHover` says
+ *  when the pointer is over its actions. */
 function Row({
   selected,
   onClick,
   children,
   actions,
   pinned,
-  ref,
-  className,
-  ...rest
+  wrap = (row) => row,
+  onActionsHover,
 }: {
   selected?: boolean;
   onClick: () => void;
@@ -202,12 +201,11 @@ function Row({
   actions?: ReactNode;
   /** Keeps the actions shown, e.g. while the row's menu is open. */
   pinned?: boolean;
-  ref?: Ref<HTMLDivElement>;
-} & Omit<HTMLAttributes<HTMLDivElement>, "onClick">) {
-  return (
+  wrap?: (row: ReactElement) => ReactNode;
+  onActionsHover?: (over: boolean) => void;
+}) {
+  return wrap(
     <div
-      {...rest}
-      ref={ref}
       role="treeitem"
       aria-selected={!!selected}
       tabIndex={-1}
@@ -219,7 +217,6 @@ function Row({
           : pinned
             ? "bg-sidebar-accent/60"
             : "hover:bg-sidebar-accent/60",
-        className,
       )}
     >
       <button
@@ -231,6 +228,8 @@ function Row({
       </button>
       {actions && (
         <div
+          onPointerEnter={() => onActionsHover?.(true)}
+          onPointerLeave={() => onActionsHover?.(false)}
           className={cn(
             "shrink-0 items-center",
             pinned ? "flex" : "hidden group-hover:flex",
@@ -239,7 +238,7 @@ function Row({
           {actions}
         </div>
       )}
-    </div>
+    </div>,
   );
 }
 
@@ -274,68 +273,94 @@ function EnvNode({
 }) {
   const { run, menu } = useEnvActions(env.id);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Where the pointer is, in refs: re-rendering the row as it moves would
+  // stall its menu's closing animation.
+  const overActions = useRef(false);
+  const closeCard = useRef<(() => void) | null>(null);
   const port = plan?.plan?.gateway.listeners[0]?.host_port;
   const ports = `slot ${env.slot}: host ports +${env.slot * SLOT_PORT_STRIDE}`;
+  const indicator = (
+    <EnvStatusIndicator
+      env={env}
+      plan={plan}
+      clashing={clashing}
+      status={status}
+    />
+  );
   return (
     <>
-      <EnvHoverCard
-        envId={env.id}
-        name={env.name}
-        planStatus={<EnvStatus plan={plan} clashing={clashing} />}
-        footnote={ports}
-        openDelay={900}
-        side="right"
-        disabled={menuOpen}
-      >
-        <Row
-          selected={active}
-          onClick={onOpen}
-          pinned={menuOpen}
-          actions={
-            <>
-              {run && <RunActionButton action={run} />}
-              <ActionsMenu
-                label={`More actions for ${env.name}`}
-                onOpenChange={setMenuOpen}
-                leading={
-                  <>
-                    <DropdownMenuItem onSelect={onRename} className={ITEM}>
-                      <Pencil /> Rename
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onSelect={onDuplicate} className={ITEM}>
-                      <Copy /> Duplicate
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={onRemove}
-                      variant="destructive"
-                      className={ITEM}
-                    >
-                      <Trash2 /> Remove
-                    </DropdownMenuItem>
-                  </>
-                }
-                actions={menu}
-              />
-            </>
-          }
-        >
-          <EnvStatus plan={plan} clashing={clashing} />
-          <span className={cn("truncate", active && "font-medium")}>
-            {env.name}
-          </span>
-          {status && <RunStateDot status={status} />}
-          <span
-            className={cn(
-              "ml-auto shrink-0 truncate pr-1 font-mono text-[11px] text-muted-foreground",
-              menuOpen ? "hidden" : "group-hover:hidden",
-            )}
-            title={status ? runStateTitle(status) : undefined}
+      <Row
+        selected={active}
+        onClick={onOpen}
+        pinned={menuOpen}
+        onActionsHover={(over) => {
+          overActions.current = over;
+          if (over) closeCard.current?.();
+        }}
+        // Resting on it (not on its actions) a little shows its card.
+        wrap={(row) => (
+          <EnvHoverCard
+            envId={env.id}
+            name={env.name}
+            planStatus={indicator}
+            footnote={ports}
+            openDelay={900}
+            side="right"
+            disabled={menuOpen}
+            blocked={() => overActions.current}
+            closeRef={closeCard}
           >
-            {status?.placement ??
-              (port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`)}
-          </span>
-        </Row>
-      </EnvHoverCard>
+            {row}
+          </EnvHoverCard>
+        )}
+        actions={
+          <>
+            {run && <RunActionButton action={run} />}
+            <ActionsMenu
+              label={`More actions for ${env.name}`}
+              onOpenChange={(open) => {
+                setMenuOpen(open);
+                // A card asked for before the menu opened doesn't show
+                // after it closes: it takes a fresh rest on the row.
+                closeCard.current?.();
+              }}
+              leading={
+                <>
+                  <DropdownMenuItem onSelect={onRename} className={ITEM}>
+                    <Pencil /> Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={onDuplicate} className={ITEM}>
+                    <Copy /> Duplicate
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={onRemove}
+                    variant="destructive"
+                    className={ITEM}
+                  >
+                    <Trash2 /> Remove
+                  </DropdownMenuItem>
+                </>
+              }
+              actions={menu}
+            />
+          </>
+        }
+      >
+        {indicator}
+        <span className={cn("truncate", active && "font-medium")}>
+          {env.name}
+        </span>
+        <span
+          className={cn(
+            "ml-auto shrink-0 truncate pr-1 font-mono text-[11px] text-muted-foreground",
+            menuOpen ? "hidden" : "group-hover:hidden",
+          )}
+          title={status ? runStateTitle(status) : undefined}
+        >
+          {status?.placement ??
+            (port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`)}
+        </span>
+      </Row>
       {confirm}
     </>
   );

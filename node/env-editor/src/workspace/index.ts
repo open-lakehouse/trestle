@@ -95,6 +95,15 @@ export {
   type EnvHoverCardProps,
 } from "./envCard.js";
 export {
+  type DraftState,
+  EnvIndicator,
+  EnvStatusIndicator,
+  environmentIndicator,
+  type Indicator,
+  type IndicatorKind,
+  useDraftState,
+} from "./envIndicator.js";
+export {
   DESIGN_TAB,
   EnvironmentPane,
   type EnvironmentPaneProps,

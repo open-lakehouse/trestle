@@ -54,7 +54,6 @@ import { CommandProvider, useCommands } from "../commands/CommandProvider.js";
 import { EnvironmentEditor } from "../EnvironmentEditor.js";
 import { errorMessage } from "../errors.js";
 import type { NodeSlots } from "../graph/nodeSlots.js";
-import { RunStateDot } from "../graph/RunStateDot.js";
 import { usePlanner } from "../planner.js";
 import type { Bundle, CatalogDto } from "../types.js";
 import {
@@ -72,13 +71,7 @@ import {
   useBottomPanelState,
   useBottomPanelStore,
 } from "./bottomPanel.js";
-import {
-  Breadcrumb,
-  EnvStatus,
-  IconButton,
-  NameInput,
-  SidebarHeader,
-} from "./chrome.js";
+import { Breadcrumb, IconButton, NameInput, SidebarHeader } from "./chrome.js";
 import {
   hostPanels,
   type PanelContribution,
@@ -94,6 +87,7 @@ import {
   withFile,
 } from "./editors.js";
 import { EnvHoverCard } from "./envCard.js";
+import { EnvStatusIndicator } from "./envIndicator.js";
 import { EnvironmentPane } from "./envPane.js";
 import {
   contextFor,
@@ -506,6 +500,9 @@ function ShellBody({
                 envs={envs}
                 activeKey={activeKey}
                 plans={plans}
+                clashing={
+                  new Set(conflicts.flatMap((c) => [c.first.env, c.second.env]))
+                }
                 onSelect={activate}
                 onClose={closeEditor}
               />
@@ -696,6 +693,7 @@ function TabStrip({
   envs,
   activeKey,
   plans,
+  clashing,
   onSelect,
   onClose,
 }: {
@@ -703,6 +701,8 @@ function TabStrip({
   envs: EnvDoc[];
   activeKey: string | undefined;
   plans: Record<string, MemberPlan>;
+  /** The names of the environments whose host ports clash. */
+  clashing: ReadonlySet<string>;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
 }) {
@@ -746,7 +746,12 @@ function TabStrip({
               {secondary ? (
                 <History className="h-3.5 w-3.5 text-muted-foreground" />
               ) : (
-                <EnvStatus plan={plans[env.id]} />
+                <EnvStatusIndicator
+                  env={env}
+                  plan={plans[env.id]}
+                  clashing={clashing.has(env.name)}
+                  status={status}
+                />
               )}
               {label}
               {secondary && (
@@ -754,7 +759,6 @@ function TabStrip({
                   {env.name}
                 </span>
               )}
-              {status && <RunStateDot status={status} />}
             </button>
             <button
               type="button"
@@ -776,7 +780,14 @@ function TabStrip({
             key={key}
             envId={env.id}
             name={env.name}
-            planStatus={<EnvStatus plan={plans[env.id]} />}
+            planStatus={
+              <EnvStatusIndicator
+                env={env}
+                plan={plans[env.id]}
+                clashing={clashing.has(env.name)}
+                status={statusOf?.(env.id)}
+              />
+            }
             details={envDetails(env, plans[env.id])}
             openDelay={400}
           >

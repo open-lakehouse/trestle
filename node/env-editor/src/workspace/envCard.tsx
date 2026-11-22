@@ -142,6 +142,12 @@ export interface EnvHoverCardProps
   side?: "top" | "right" | "bottom" | "left";
   /** Keeps it closed, e.g. while the trigger's menu is open. */
   disabled?: boolean;
+  /** Asked before it opens: `true` keeps it closed (e.g. while the pointer
+   *  is on the trigger's own buttons). Read when it would open, so the
+   *  trigger needn't re-render to change it. */
+  blocked?: () => boolean;
+  /** Receives a function that closes the card. */
+  closeRef?: { current: (() => void) | null };
   /** The trigger: one element that takes a ref and pointer handlers. */
   children: ReactElement;
 }
@@ -152,15 +158,18 @@ export function EnvHoverCard({
   openDelay = 500,
   side = "bottom",
   disabled,
+  blocked,
+  closeRef,
   children,
   ...card
 }: EnvHoverCardProps) {
   const status = useContributions().contributions?.environment?.status?.(envId);
   const [open, setOpen] = useState(false);
+  if (closeRef) closeRef.current = () => setOpen(false);
   return (
     <HoverCard
       open={open && !disabled}
-      onOpenChange={setOpen}
+      onOpenChange={(next) => setOpen(next && !blocked?.())}
       openDelay={openDelay}
       closeDelay={100}
     >
