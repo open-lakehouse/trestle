@@ -30,6 +30,7 @@ import { errorMessage } from "./errors.js";
 import { CanvasNotice, CanvasToolbar } from "./graph/CanvasToolbar.js";
 import { ComponentPalette } from "./graph/ComponentPalette.js";
 import type { CanvasActions } from "./graph/canvasActions.js";
+import { isModuleNode } from "./graph/cloud.js";
 import { MarkitectureCanvas } from "./graph/MarkitectureCanvas.js";
 import type { NodeFilesTarget } from "./graph/nodeFiles.js";
 import type { NodeSlots } from "./graph/nodeSlots.js";
@@ -168,12 +169,10 @@ function EditorBody({
     [planFiles],
   );
 
-  /** The components in the current plan (everything but the clients). */
+  /** The modules in the current plan (not the clients, nor the services
+   *  outside the environment they call). */
   const planned = useMemo(
-    () =>
-      new Set(
-        graph?.nodes.filter((n) => n.kind !== "clients").map((n) => n.id) ?? [],
-      ),
+    () => new Set(graph?.nodes.filter(isModuleNode).map((n) => n.id) ?? []),
     [graph],
   );
 

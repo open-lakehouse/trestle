@@ -67,6 +67,7 @@ const functionNode = (
   kind: "external",
   placement: `external:https://br-example-${id}.compute.aws.neon.tech`,
   cloud: "neon",
+  cloud_name: "Neon",
 });
 const headwaters = functionNode("headwaters", {
   display_name: "Headwaters",
@@ -125,6 +126,63 @@ export const NeonFunctions: Story = {
         catalog={FIXTURE_CATALOG}
         initialSelection={functionsSelection}
       />
+    </div>
+  ),
+};
+
+// MLflow's AI Gateway on the Neon AI Gateway of the environment's branch
+// (`mlflow.upstream = neon`): the planner draws the branch's gateway in the
+// Neon group, with a `token` edge from MLflow.
+const aiGatewayPlan: PlanResult = {
+  ...FIXTURE_PLAN,
+  graph: {
+    nodes: [
+      ...FIXTURE_PLAN.graph.nodes,
+      {
+        id: "@neon-ai-gateway",
+        model: null,
+        kind: "external",
+        display_name: "AI Gateway",
+        summary: "The Neon AI Gateway of the environment's branch.",
+        category: null,
+        role: "ai_gateway",
+        placement: null,
+        cloud: "neon",
+        cloud_name: "Neon",
+        offers: [],
+        surfaces: [],
+        provisions: [],
+        resource_nouns: [],
+      },
+    ],
+    edges: [
+      ...FIXTURE_PLAN.graph.edges,
+      {
+        key: "uses:mlflow→@neon-ai-gateway:ai_gateway",
+        kind: "uses",
+        from: "mlflow",
+        to: "@neon-ai-gateway",
+        role: "ai_gateway",
+        protocol: "HTTP",
+        resources: [],
+        auth: "token",
+      },
+    ],
+  },
+};
+const aiGatewayPlanner: Planner = {
+  ...fixturePlanner,
+  async plan() {
+    return aiGatewayPlan;
+  },
+};
+
+/** MLflow's models from the Neon AI Gateway: a service outside the
+ *  environment, in the Neon group, reached with a token. */
+export const NeonAiGateway: Story = {
+  render: () => (
+    <div className="h-screen">
+      <EnvironmentEditor planner={aiGatewayPlanner} catalog={FIXTURE_CATALOG} />
     </div>
   ),
 };

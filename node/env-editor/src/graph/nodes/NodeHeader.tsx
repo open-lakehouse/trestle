@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { describeOrigin } from "../../state/origin.js";
 import type { GraphNodeDto } from "../../types.js";
 import { useCanvasContext } from "../canvasActions.js";
+import { cloudName, isModuleNode } from "../cloud.js";
 import { useNodeFiles } from "../nodeFiles.js";
 import { useNodeSlots } from "../nodeSlots.js";
 import { ModuleIcon } from "../projectIcons.js";
@@ -26,7 +27,11 @@ import { NODE_HEADER } from "../useTopologyLayout.js";
  */
 export function NodeHeader({ node }: { node: GraphNodeDto }) {
   const style = roleStyle(node.role);
-  const origin = useCanvasContext()?.actions.originOf(node.id);
+  // A service outside the environment is no module: nothing selected or
+  // provisioned it, and its cloud's frame already names where it runs.
+  const module = isModuleNode(node);
+  const actions = useCanvasContext()?.actions;
+  const origin = module ? actions?.originOf(node.id) : undefined;
   const slots = useNodeSlots();
   const files = useNodeFiles(node.id);
   const title = node.display_name ?? node.id;
@@ -65,16 +70,18 @@ export function NodeHeader({ node }: { node: GraphNodeDto }) {
           {role === undefined ? style.label : <Slot>{role}</Slot>}
         </div>
       </div>
-      {node.kind === "external" && (
+      {node.kind === "external" && module && (
         <Chip
           icon={<Cloud className="h-2.5 w-2.5" />}
           title={
-            node.cloud
-              ? `Runs in ${node.cloud.toUpperCase()}, outside the stack`
+            node.cloud != null
+              ? `Runs in ${cloudName(node.cloud, node.cloud_name)}, outside the stack`
               : "Runs outside the stack"
           }
         >
-          {node.cloud ? node.cloud.toUpperCase() : "External"}
+          {node.cloud != null
+            ? cloudName(node.cloud, node.cloud_name)
+            : "External"}
         </Chip>
       )}
       {origin && origin.kind !== "explicit" && (

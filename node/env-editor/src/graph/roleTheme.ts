@@ -5,7 +5,9 @@
 import {
   Bot,
   Boxes,
+  BrainCircuit,
   CalendarClock,
+  Container,
   Database,
   DoorOpen,
   Gauge,
@@ -93,6 +95,16 @@ const ROLE_STYLES: Record<string, RoleStyle> = {
     label: "Orchestrator",
     icon: CalendarClock,
     accent: "text-[hsl(var(--status-ready))]",
+  },
+  ai_gateway: {
+    label: "AI gateway",
+    icon: BrainCircuit,
+    accent: "text-primary",
+  },
+  sandbox_host: {
+    label: "Sandbox host",
+    icon: Container,
+    accent: "text-primary",
   },
 };
 

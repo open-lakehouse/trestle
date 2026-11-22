@@ -29,6 +29,7 @@ import type {
   SurfaceDto,
   TopologyEdgeDto,
 } from "../types.js";
+import { cloudFrames } from "./cloud.js";
 import type { Point } from "./edges/ElkEdge.js";
 import {
   arrangeColumns,
@@ -515,11 +516,7 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
   };
 
   // External-cloud resources, grouped by cloud, each group one frame.
-  const clouds = new Map<string, GraphNodeDto[]>();
-  for (const n of graph.nodes) {
-    if (n.cloud == null) continue;
-    clouds.set(n.cloud, [...(clouds.get(n.cloud) ?? []), n]);
-  }
+  const clouds = cloudFrames(graph.nodes);
   const framed = new Set(
     graph.nodes.filter((n) => n.cloud != null).map((n) => n.id),
   );
@@ -544,7 +541,7 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
     },
     children: [
       ...graph.nodes.filter((n) => n.cloud == null).map(elkNode),
-      ...[...clouds].map(([cloud, members]) => ({
+      ...[...clouds].map(([cloud, { members }]) => ({
         id: cloudGroupId(cloud),
         layoutOptions: {
           "elk.padding": `[top=${CLOUD_GROUP_HEADER + CLOUD_GROUP_PAD / 2},left=${CLOUD_GROUP_PAD},bottom=${CLOUD_GROUP_PAD},right=${CLOUD_GROUP_PAD}]`,
@@ -654,7 +651,10 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
         draggable: false,
         focusable: false,
         zIndex: -1,
-        data: { cloud } satisfies CloudGroupNodeData,
+        data: {
+          cloud,
+          name: clouds.get(cloud)?.name,
+        } satisfies CloudGroupNodeData,
       };
     });
     const memberNodes: Node[] = graph.nodes.map((n) => {

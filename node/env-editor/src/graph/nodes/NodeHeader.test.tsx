@@ -152,23 +152,48 @@ describe("NodeHeader files chip", () => {
 });
 
 describe("NodeHeader cloud badge", () => {
-  const external = (cloud: string | null): GraphNodeDto => ({
+  const external = (
+    cloud: string | null,
+    cloud_name?: string,
+  ): GraphNodeDto => ({
     ...node,
     kind: "external",
     placement: "external:https://br-example-unitycatalog.neon.tech",
     cloud,
+    cloud_name,
   });
 
   test("a module run as a Neon Function names its cloud", () => {
-    const html = renderToStaticMarkup(<NodeHeader node={external("neon")} />);
-    expect(html).toContain(">NEON</span>");
-    expect(html).toContain('title="Runs in NEON, outside the stack"');
+    const html = renderToStaticMarkup(
+      <NodeHeader node={external("neon", "Neon")} />,
+    );
+    expect(html).toContain(">Neon</span>");
+    expect(html).toContain('title="Runs in Neon, outside the stack"');
     expect(html).toContain("lucide-cloud");
   });
 
-  test("an unnamed cloud reads External", () => {
-    const html = renderToStaticMarkup(<NodeHeader node={external("")} />);
-    expect(html).toContain(">External</span>");
+  test("a snapshot without the cloud's name shows its label", () => {
+    const html = renderToStaticMarkup(<NodeHeader node={external("neon")} />);
+    expect(html).toContain(">neon</span>");
+  });
+
+  test("an unnamed cloud reads Hosted", () => {
+    const html = renderToStaticMarkup(
+      <NodeHeader node={external("", "Hosted")} />,
+    );
+    expect(html).toContain(">Hosted</span>");
+    expect(renderToStaticMarkup(<NodeHeader node={external("")} />)).toContain(
+      ">Hosted</span>",
+    );
+  });
+
+  test("a service outside the environment leaves its cloud to its frame", () => {
+    const html = renderToStaticMarkup(
+      <NodeHeader
+        node={{ ...external("neon", "Neon"), id: "@neon-ai-gateway" }}
+      />,
+    );
+    expect(html).not.toContain("lucide-cloud");
   });
 
   test("a local component has no badge", () => {
