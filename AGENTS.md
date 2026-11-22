@@ -36,6 +36,10 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
 - `crates/stack-state/` (`olai-stack-state`): the shared SQLite state store
   (workspaces, environments, immutable revisions, instances, host-wide slot
   leases) under `TRESTLE_HOME`, behind `trestle ws` / `env create` / `var`
+- `crates/secret-server/` (`olai-secret-server`): SDS server that hands generic
+  secrets to Envoy over per-consumer Unix sockets (lib, bin, and the image
+  `ghcr.io/open-lakehouse/trestle-secret-server`); see
+  [`docs/egress-gateway.md`](docs/egress-gateway.md)
 - `crates/olai-test-emulators/`: testcontainers storage emulators (test-only,
   unpublished)
 - `node/`: Bun workspace: env editor, diagram package
