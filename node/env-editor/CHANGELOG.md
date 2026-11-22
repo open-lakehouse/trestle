@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.13...env-editor-v0.0.14) - 2026-11-22
+
+### Added
+
+- [**breaking**] egress gateway with injected credentials (#446)
+- cloud display names and authenticated outside edges (#444)
+
 ## [0.0.13](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.12...env-editor-v0.0.13) - 2026-11-22
 
 ### Fixed

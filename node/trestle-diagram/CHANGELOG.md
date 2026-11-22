@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.15.1...trestle-diagram-v0.16.0) - 2026-11-22
+
+### Added
+
+- [**breaking**] egress gateway with injected credentials (#446)
+- cloud display names and authenticated outside edges (#444)
+- Omnigent MCP registry from egress routes (#452)
+- Neon and Databricks groups in the environment graph (#443)
+
 ## [0.15.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.15.0...trestle-diagram-v0.15.1) - 2026-11-22
 
 ### Fixed
