@@ -50,7 +50,7 @@ jobs:
       # clippy. Lint the SQLite and native-Postgres backends (both together, so the
       # `--features sqlite,postgres` combination is covered too).
       - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
-      - run: cargo clippy --locked --all-targets --features olai-http/recording,olai-http/neon -- -D warnings
+      - run: cargo clippy --locked --all-targets --features olai-http/recording,olai-http/neon,olai-http/sds -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --all-features -- -D warnings
@@ -165,8 +165,8 @@ jobs:
         run: cargo test --locked --lib --tests
       - name: Run tests (olai-store sqlx feature)
         run: cargo test --locked --lib --tests -p olai-store --features sqlx
-      - name: Run tests (olai-http recording and neon features)
-        run: cargo test --locked --lib --tests -p olai-http --features recording,neon
+      - name: Run tests (olai-http recording, neon and sds features)
+        run: cargo test --locked --lib --tests -p olai-http --features recording,neon,sds
       - name: Run tests (olai-storage-credentials wire adapters)
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-auth HTTP key source and PDP client)

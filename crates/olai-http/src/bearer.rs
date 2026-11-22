@@ -14,6 +14,7 @@
 //! | Static token | [`BearerAuth::static_token`] |
 //! | OAuth 2.0 client credentials against any token endpoint | [`BearerAuth::client_credentials`] |
 //! | Token read from an environment variable / a file (e.g. a projected Kubernetes token) | [`BearerAuth::token_env`], [`BearerAuth::token_file`] |
+//! | Token fetched from a secret server over SDS, and watched for rotation (feature `sds`) | `BearerAuth::sds` |
 //! | Azure service principal, managed identity, workload identity, Azure CLI | [`BearerAuth::azure_client_secret`], [`BearerAuth::azure_managed_identity`], [`BearerAuth::azure_workload_identity`], [`BearerAuth::azure_cli`] |
 //! | GCP ID token from the metadata server, a service-account key, or the Google Cloud CLI | [`BearerAuth::gcp_id_token`], [`BearerAuth::gcp_service_account_id_token`], [`BearerAuth::gcloud_id_token`] |
 //! | AWS identity as a signed `sts:GetCallerIdentity` request | [`BearerAuth::aws_signed_identity`] |
@@ -99,6 +100,51 @@ impl fmt::Debug for BearerCredential {
 
 /// A shared provider of [`BearerCredential`]s.
 pub type BearerCredentialProvider = Arc<dyn CredentialProvider<Credential = BearerCredential>>;
+
+/// Bearer tokens from an [`SdsCredentialProvider`](crate::sds::SdsCredentialProvider), one
+/// [`BearerCredential`] per version of the secret.
+#[cfg(feature = "sds")]
+struct SdsBearerProvider {
+    inner: crate::sds::SdsCredentialProvider,
+    last: std::sync::Mutex<Option<(Arc<crate::sds::SdsSecret>, Arc<BearerCredential>)>>,
+}
+
+#[cfg(feature = "sds")]
+impl fmt::Debug for SdsBearerProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("SdsBearerProvider")
+            .field(&self.inner)
+            .finish()
+    }
+}
+
+#[cfg(feature = "sds")]
+#[async_trait]
+impl CredentialProvider for SdsBearerProvider {
+    type Credential = BearerCredential;
+
+    async fn get_credential(&self) -> Result<Arc<BearerCredential>> {
+        let secret = self.inner.get_credential().await?;
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((seen, bearer)) = last.as_ref()
+            && Arc::ptr_eq(seen, &secret)
+        {
+            return Ok(Arc::clone(bearer));
+        }
+        let token = secret.expose_str()?.trim();
+        if token.is_empty() {
+            return Err(generic(format!(
+                "SDS secret `{}` holds no token",
+                secret.name()
+            )));
+        }
+        let bearer = Arc::new(BearerCredential {
+            token: token.to_string(),
+        });
+        *last = Some((secret, Arc::clone(&bearer)));
+        Ok(bearer)
+    }
+}
 
 /// OAuth 2.0 client-credentials grant configuration.
 #[derive(Clone, Default)]
@@ -337,6 +383,30 @@ impl BearerAuth {
     /// every few minutes.
     pub fn token_file(&self, path: impl Into<String>) -> BearerCredentialProvider {
         Arc::new(LocalTokenProvider::new(TokenLocation::File(path.into())))
+    }
+
+    /// A token fetched from the secret server on the Unix socket `socket` as the secret
+    /// `name`, over SDS (see [`crate::sds`]).
+    ///
+    /// The first use fetches it; a background watch then swaps in each rotated value, and
+    /// the last value is kept while the server is away. The value is read as UTF-8, with
+    /// surrounding whitespace trimmed. Uses the runtime set with
+    /// [`with_runtime`](Self::with_runtime), if any, for the watch.
+    #[cfg(feature = "sds")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "sds")))]
+    pub fn sds(
+        &self,
+        socket: impl Into<std::path::PathBuf>,
+        name: impl Into<String>,
+    ) -> BearerCredentialProvider {
+        let mut provider = crate::sds::SdsCredentialProvider::new(socket, name);
+        if let Some(handle) = &self.runtime {
+            provider = provider.with_runtime(handle.clone());
+        }
+        Arc::new(SdsBearerProvider {
+            inner: provider,
+            last: std::sync::Mutex::new(None),
+        })
     }
 
     /// An Azure AD token for `scope` (e.g. `api://my-app/.default`) from a

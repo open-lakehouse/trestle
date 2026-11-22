@@ -29,12 +29,17 @@ chrono = { version = "0.4.34", default-features = false, features = [
   "serde",
 ] }
 futures = "0.3"
+# Optional: the Envoy v3 protos and their tonic client, for the SDS client (`sds`).
+envoy-types = { version = "0.7", optional = true }
 http = "1"
 # Optional: only needed by the `connectrpc` transport bridge to collect bodies.
 http-body-util = { version = "0.1", optional = true }
 humantime = "2.1"
 hyper = { version = "1.2", default-features = false }
+# Optional: the Unix-socket connector of the SDS client (`sds`).
+hyper-util = { version = "0.1", optional = true, features = ["tokio"] }
 percent-encoding = "2.1"
+prost = { workspace = true, optional = true }
 quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"] }
 rand = { version = "0.9", default-features = false, features = [
   "std",
@@ -54,10 +59,19 @@ tokio = { version = "1.29.0", features = [
   "time",
   "io-util",
 ] }
+tokio-stream = { version = "0.1", optional = true }
+# Optional: the gRPC transport of the SDS client (`sds`).
+tonic = { version = "0.14", optional = true, default-features = false, features = [
+  "channel",
+  "codegen",
+] }
+tower = { version = "0.5", optional = true, features = ["util"] }
 tracing = { version = "0.1" }
 url = "2.2"
 
 [dev-dependencies]
+# SDS client tests only (`sds`): the secret server, in process.
+olai-secret-server = { path = "../secret-server" }
 # Emulator tests only (`emulator-it`): SAS signatures validated by Azurite.
 olai-test-emulators = { path = "../olai-test-emulators" }
 hyper = { version = "1.2", features = ["server"] }
@@ -80,9 +94,25 @@ connectrpc = ["dep:connectrpc", "dep:http-body-util"]
 # A client for the Neon control plane's branch storage and branch credentials API
 # (`neon`): discovery, and creating, revealing, listing and revoking credentials.
 neon = []
+# A client of the secret discovery service (`SdsCredentialProvider`, `BearerAuth::sds`): a
+# named secret fetched over a Unix socket from `olai-secret-server` and watched for rotation.
+# Pulls in tonic and the Envoy protos only when enabled.
+sds = [
+  "dep:envoy-types",
+  "dep:hyper-util",
+  "dep:prost",
+  "dep:tokio-stream",
+  "dep:tonic",
+  "dep:tower",
+  "tokio/net",
+]
 # Integration tests against containerized emulators (needs Docker). See
 # `olai-test-emulators`.
 emulator-it = []
+
+[[example]]
+name = "sds_probe"
+required-features = ["sds"]
 
 [package.metadata.cargo-machete]
 ignored = ["rust-ini"]
