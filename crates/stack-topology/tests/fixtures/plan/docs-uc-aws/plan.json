@@ -9,10 +9,10 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:49a22c7a0fdcffd50eaf1fd332086c6f4b0cc00b07f24539791f4a55916e5cd0"
+    "digest": "sha256:3581221c6fa8459abb9cbe9f325b4ce502369286f378608519e4c63c46381b19"
   },
   "recipe": {
-    "digest": "sha256:9f4f0a71bc1561dcc084d0b4522f01e785e390ad0e71e108c823692a2a2c30b6"
+    "digest": "sha256:4751fcafed064c3bdd70eedc77a941e41a1e3f88d49e0bc97194cb56436de2ee"
   },
   "context": {
     "env_name": "uc-docs",

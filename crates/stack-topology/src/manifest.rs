@@ -138,9 +138,11 @@ impl EnvManifest {
     /// `unity-catalog-rs`; an older file's selection is migrated on read (see
     /// [`migrate_selection`]). Version 7 made sign-in, policy and tracing
     /// [platform features](crate::Selection::platform); an older file's gateway settings and
-    /// listed providers are migrated on read (see [`migrate_platform`]).
+    /// listed providers are migrated on read (see [`migrate_platform`]). Version 8 added
+    /// egress routes ([`Selection::egress`](crate::Selection::egress)); an older file has none,
+    /// so it reads unchanged.
     pub fn current_version() -> u32 {
-        7
+        8
     }
 
     /// A manifest for `selection` under `context`, at the current schema version.
@@ -1004,6 +1006,45 @@ mod tests {
         let m = EnvManifest::from_toml(text).unwrap();
         assert_eq!(m.selection.modules, vec![ModuleId::from("jaeger")]);
         assert!(m.selection.platform.is_empty());
+    }
+
+    #[test]
+    fn a_v7_manifest_reads_unchanged_with_no_egress() {
+        let text = "version = 7\n[selection]\nmodules = [\"omnigent\"]\n";
+        let m = EnvManifest::from_toml(text).unwrap();
+        // Nothing to migrate: the file keeps its version, and has no egress.
+        assert_eq!(m.version, 7);
+        assert_eq!(m.selection.modules, vec![ModuleId::from("omnigent")]);
+        assert!(m.selection.egress.is_empty());
+        assert!(!m.selection.egress.is_enabled());
+        assert!(!m.to_toml().unwrap().contains("egress"));
+    }
+
+    #[test]
+    fn a_v8_manifest_round_trips_its_egress_routes() {
+        let text = r#"
+            version = 8
+
+            [selection]
+            modules = ["omnigent"]
+
+            [[selection.egress.routes]]
+            name = "workgraph-planner"
+            function = "workgraph"
+            path = "/mcp"
+            consumers = ["omnigent"]
+            credential = { kind = "bearer", secret = "WORKGRAPH_PLANNER_API_KEY" }
+            mcp = { title = "Work graph (planner)", tools = ["read", "submit"] }
+        "#;
+        let m = EnvManifest::from_toml(text).unwrap();
+        let route = &m.selection.egress.routes[0];
+        assert_eq!(route.function.as_deref(), Some("workgraph"));
+        assert_eq!(route.mcp.as_ref().unwrap().tools, ["read", "submit"]);
+        assert!(m.selection.egress.is_enabled());
+        // `enabled` is implied by the route, so it isn't written.
+        let written = m.to_toml().unwrap();
+        assert!(!written.contains("enabled"), "{written}");
+        assert_eq!(EnvManifest::from_toml(&written).unwrap(), m);
     }
 
     #[test]

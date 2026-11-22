@@ -79,14 +79,23 @@ impl Role {
     pub const ORCHESTRATION: &'static str = "orchestration";
     /// `mcp_server` — a Model Context Protocol server exposing tools to agents.
     pub const MCP_SERVER: &'static str = "mcp_server";
+    /// `egress` — the egress gateway: the proxy the environment's services reach outside
+    /// upstreams through, which adds each route's credential.
+    pub const EGRESS: &'static str = "egress";
 
     /// The roles the planner fills from the environment itself rather than the module
-    /// selection: the always-on [`GATEWAY`](Self::GATEWAY), and the [`AUTH`](Self::AUTH),
+    /// selection: the always-on [`GATEWAY`](Self::GATEWAY), the [`EGRESS`](Self::EGRESS)
+    /// gateway (implied by the selection's egress routes), and the [`AUTH`](Self::AUTH),
     /// [`POLICY`](Self::POLICY) and [`TRACING`](Self::TRACING) providers of the
     /// [platform features](crate::PlatformSelection). UIs should not offer their providers as
     /// modules to pick.
-    pub const PLATFORM: [&'static str; 4] =
-        [Self::GATEWAY, Self::AUTH, Self::POLICY, Self::TRACING];
+    pub const PLATFORM: [&'static str; 5] = [
+        Self::GATEWAY,
+        Self::EGRESS,
+        Self::AUTH,
+        Self::POLICY,
+        Self::TRACING,
+    ];
 
     /// The `object_store` role.
     pub fn object_store() -> Role {
@@ -103,6 +112,10 @@ impl Role {
     /// The `gateway` role.
     pub fn gateway() -> Role {
         Role::new(Self::GATEWAY)
+    }
+    /// The `egress` role.
+    pub fn egress() -> Role {
+        Role::new(Self::EGRESS)
     }
     /// The `sql_engine` role.
     pub fn sql_engine() -> Role {

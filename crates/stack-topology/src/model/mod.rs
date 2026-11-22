@@ -9,6 +9,7 @@
 //! phases are built on top of them.
 
 pub mod connection;
+pub mod egress;
 pub mod endpoint;
 pub mod placement;
 pub mod platform;
@@ -17,7 +18,8 @@ pub mod role;
 pub use connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
 };
-pub use endpoint::{Endpoint, Rewrite, RouteIntent, Scheme};
+pub use egress::{EgressRoute, EgressSelection, McpRoute, egress_url_var};
+pub use endpoint::{Endpoint, InjectedCredential, Rewrite, RouteIntent, Scheme};
 pub use placement::{Placement, Vantage};
 pub use platform::{
     ActiveIntegration, FeatureChoice, IntegrationSpec, PlatformFeature, PlatformSelection,

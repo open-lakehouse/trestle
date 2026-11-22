@@ -50,6 +50,7 @@ mod augment;
 mod bind;
 mod client_env;
 mod demands;
+pub mod egress;
 mod function;
 mod gateway;
 pub mod hosted;
@@ -68,6 +69,7 @@ use crate::catalog::Catalog;
 use crate::catalog::baseline::DATA_ROOT_DEFAULT;
 use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, StackFacts};
 use crate::model::connection::Connection;
+use crate::model::egress::EgressSelection;
 use crate::model::endpoint::{RouteIntent, Scheme};
 use crate::model::placement::{Placement, Vantage};
 use crate::model::platform::{PlatformFeature, PlatformSelection};
@@ -76,6 +78,7 @@ use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
 use crate::render::InjectedEnv;
 use crate::target::TargetId;
+pub use egress::EgressConfig;
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;
@@ -151,6 +154,10 @@ pub struct Selection {
     /// [`Plan::integrations`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub integrations: BTreeMap<ModuleId, BTreeMap<PlatformFeature, bool>>,
+    /// The upstreams outside the environment its services reach through the egress gateway,
+    /// which adds each one's credential (see [`EgressSelection`]). Any route runs the gateway.
+    #[serde(default, skip_serializing_if = "EgressSelection::is_empty")]
+    pub egress: EgressSelection,
 }
 
 /// Whether the environment runs a gateway (see [`Selection::gateway`]).
@@ -753,6 +760,37 @@ pub enum PlanError {
         /// What needs the gateway.
         reason: String,
     },
+    /// An [egress route](Selection::egress) names a consumer that isn't in the environment, or
+    /// one with nothing running in it to call the route from.
+    #[error("egress route `{route}`: consumer `{module}` {reason}")]
+    UnknownEgressConsumer {
+        /// The route.
+        route: String,
+        /// The consumer named.
+        module: ModuleId,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// An [egress route](Selection::egress) names a function that can't be the one it means: a
+    /// malformed slug, or the function of a module that runs in the environment as a container.
+    #[error("egress route `{route}`: function `{function}` {reason}")]
+    UnknownEgressFunction {
+        /// The route.
+        route: String,
+        /// The function named.
+        function: String,
+        /// What is wrong with it.
+        reason: String,
+    },
+    /// An [egress route](Selection::egress) is unusable: a bad name, path, upstream or
+    /// credential, a name another route has, or no egress gateway in the catalog.
+    #[error("egress route `{route}`: {reason}")]
+    InvalidEgressRoute {
+        /// The route.
+        route: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// The selected `policy`-role provider does not declare what the gateway needs to wire its
     /// gRPC `ext_authz` check.
     #[error("policy provider `{module}` is misconfigured: {reason}")]
@@ -907,6 +945,9 @@ pub struct Plan {
     /// The stack-wide facts every module's services, client env and render were settled
     /// against.
     pub stack_facts: StackFacts,
+    /// The egress gateway, when the environment runs one: its routes, their listeners and
+    /// consumers, and the secret server's sockets (see [`egress`]).
+    pub egress: Option<EgressConfig>,
     /// Every module's integration with each selected platform feature, on or off (and why).
     pub integrations: Vec<Integration>,
     /// The gateway facts the address resolver reads (captured from [`PlanCtx`]). Private:
@@ -1013,6 +1054,22 @@ impl Plan {
             |m| self.provisioned_by(m),
             |m| self.stack_facts.functions.get(m.as_str()),
         );
+        // A function route reaches a function on the branch that no module may run.
+        for route in self.egress.iter().flat_map(|e| &e.routes) {
+            let (Some(slug), Some(egress)) = (&route.function, &self.egress) else {
+                continue;
+            };
+            if req.functions.iter().any(|f| &f.slug == slug) {
+                continue;
+            }
+            req.functions.push(FunctionRequirement {
+                module: egress.module.clone(),
+                slug: slug.clone(),
+                url_var: Some(function_url_var(slug)),
+                env: BTreeMap::new(),
+                secrets: Vec::new(),
+            });
+        }
         req.ai_gateway = self
             .secrets
             .values()
@@ -1144,7 +1201,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     let functions = function::host_functions(selection, catalog)?;
     let catalog = functions.as_ref().unwrap_or(catalog);
     let selection = &*augment::normalize_platform(selection, catalog);
-    let mut augmented = augment::augment(selection, catalog, ctx, false)?;
+    let mut augmented = augment::augment(selection, catalog, ctx, false, false)?;
     let mut settled = settle::settle(
         &augmented.selection,
         catalog,
@@ -1153,15 +1210,19 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         &augmented.platform,
     )?;
     // Without a gateway, a module emulating public hostnames (only known once the graph is
-    // resolved) still needs the gateway's in-network TLS listener: plan again with it.
-    if !selection.gateway.enabled
+    // resolved) still needs the gateway's in-network TLS listener; and a module declaring an
+    // outside endpoint with an injected credential needs the egress gateway. Plan again with
+    // them.
+    let emulating = !selection.gateway.enabled
         && settled
             .graph
             .nodes
             .iter()
-            .any(|m| !m.provides().impersonated_hosts.is_empty())
-    {
-        augmented = augment::augment(selection, catalog, ctx, true)?;
+            .any(|m| !m.provides().impersonated_hosts.is_empty());
+    let injecting = egress::injects_credentials(&settled.services)
+        && egress::egress_provider(catalog).is_some_and(|m| !settled.stack_facts.has(m.as_str()));
+    if emulating || injecting {
+        augmented = augment::augment(selection, catalog, ctx, emulating, injecting)?;
         settled = settle::settle(
             &augmented.selection,
             catalog,
@@ -1195,9 +1256,16 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         selection.gateway.enabled,
         &wired,
     )?;
-    let bound = bind::bind(&settled, &routed, catalog, ctx, &wired)?;
+    let egress = egress::plan_egress(
+        selection,
+        catalog,
+        &settled.stack_facts,
+        &settled.services,
+        ctx.secrets.as_ref(),
+    )?;
+    let bound = bind::bind(&settled, &routed, catalog, ctx, &wired, egress.as_ref())?;
 
-    let secrets = settled
+    let mut secrets: BTreeMap<ModuleId, Vec<DeclaredSecret>> = settled
         .graph
         .nodes
         .iter()
@@ -1206,6 +1274,16 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             (!declared.is_empty()).then(|| (m.id().clone(), declared.into_owned()))
         })
         .collect();
+    // A route's secret is the egress module's alone: only the secret server reads it.
+    if let Some(egress) = &egress {
+        let declared = egress.declared_secrets();
+        if !declared.is_empty() {
+            secrets
+                .entry(egress.module.clone())
+                .or_default()
+                .extend(declared);
+        }
+    }
     let mut plan = Plan {
         env_name: ctx.env_name.clone(),
         project_name: ctx.compose_project().to_owned(),
@@ -1235,6 +1313,7 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         client_env_container: InjectedEnv::new(),
         python_client: None,
         secrets,
+        egress,
     };
     // Resolved last: client addresses read the settled routes through the plan's own
     // addressing API.

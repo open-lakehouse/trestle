@@ -210,7 +210,7 @@ const PLACEHOLDER_HOST_PREFIX: &str = "trestle-ref-";
 const PLACEHOLDER_HOST_SUFFIX: &str = ".invalid";
 
 /// The variable `s` reads when it is exactly one `${VAR}` reference.
-fn whole_ref(s: &str) -> Option<&str> {
+pub(crate) fn whole_ref(s: &str) -> Option<&str> {
     let name = s.strip_prefix("${")?.strip_suffix('}')?;
     let valid = name
         .bytes()

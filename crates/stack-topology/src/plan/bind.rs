@@ -61,6 +61,10 @@ pub struct ModuleBinding {
     /// every one is resolved.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unresolved_upstreams: Vec<String>,
+    /// The egress gateway's routes and SDS sockets (egress module only; the `egress` render
+    /// global).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub egress: Option<super::egress::EgressConfig>,
     /// The module's active platform-feature integrations, by feature (the `integrations`
     /// render global).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -84,6 +88,7 @@ impl ModuleBinding {
             tls: self.tls.clone(),
             mesh: self.mesh.clone(),
             unresolved_upstreams: self.unresolved_upstreams.clone(),
+            egress: self.egress.clone(),
             integrations: self.integrations.clone(),
             stack: self.stack.clone(),
         }
@@ -107,6 +112,7 @@ pub(super) fn bind(
     catalog: &Catalog,
     ctx: &PlanCtx,
     wired: &GatewayWiring,
+    egress: Option<&super::egress::EgressConfig>,
 ) -> Result<Bound, PlanError> {
     let Settled {
         graph,
@@ -335,6 +341,12 @@ pub(super) fn bind(
             let direct = routed.direct.as_ref().and_then(|d| d.get(module.id()));
             (direct.cloned().unwrap_or_default(), None, None, None)
         };
+        // The egress gateway publishes nothing: its admin port is for its own health check.
+        let egress = egress.filter(|e| &e.module == module.id());
+        let admin_port = admin_port.or(egress.map(|e| e.admin_port));
+        if let Some(e) = egress {
+            unresolved_upstreams.extend(e.unresolved_upstreams.iter().cloned());
+        }
         bindings.insert(
             module.id().clone(),
             ModuleBinding {
@@ -347,6 +359,7 @@ pub(super) fn bind(
                 tls,
                 mesh,
                 unresolved_upstreams,
+                egress: egress.cloned(),
                 integrations: integrations_of.remove(module.id()).unwrap_or_default(),
                 stack: stack_facts.clone(),
             },

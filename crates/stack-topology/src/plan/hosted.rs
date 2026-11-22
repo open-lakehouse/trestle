@@ -809,7 +809,7 @@ fn azure_blob_endpoint(account: &str) -> String {
 
 /// The `${NAME}` references in `s`: each one's byte span and name. Only the bare `${NAME}` form
 /// counts (an identifier, not starting with a digit).
-fn env_refs(s: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+pub(super) fn env_refs(s: &str) -> Vec<(std::ops::Range<usize>, &str)> {
     let mut refs = Vec::new();
     let mut i = 0;
     while let Some(off) = s[i..].find("${") {

@@ -110,11 +110,13 @@ export function slotHolders(
 
 /**
  * The roles the planner fills on its own (mirrors the Rust `Role::PLATFORM`):
- * the always-on gateway, and the providers of the platform features (identity,
- * policy, observability). Pickers don't offer them.
+ * the always-on gateway, the egress gateway (implied by egress routes), and the
+ * providers of the platform features (identity, policy, observability). Pickers
+ * don't offer them.
  */
 export const PLATFORM_ROLES: readonly string[] = [
   "gateway",
+  "egress",
   "auth",
   "policy",
   "tracing",

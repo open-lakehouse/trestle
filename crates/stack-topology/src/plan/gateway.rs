@@ -373,7 +373,7 @@ pub(super) fn frontable(origin: &str) -> bool {
 /// host over TLS on its port (443 by default), an `http` one's in plaintext. Only an origin at
 /// its root can be fronted (the gateway forwards the client's path unchanged); `None`
 /// otherwise.
-fn external_upstream(origin: &str) -> Option<(String, u16, Option<String>)> {
+pub(super) fn external_upstream(origin: &str) -> Option<(String, u16, Option<String>)> {
     let url = crate::address::origin_url(origin)?;
     if !matches!(url.path(), "" | "/") {
         return None;

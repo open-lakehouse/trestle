@@ -82,7 +82,10 @@ pub mod workspace;
 pub use model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential, TlsTrust,
 };
-pub use model::endpoint::{Endpoint, Rewrite, RouteIntent, RouteOptions, Scheme};
+pub use model::egress::{EgressRoute, EgressSelection, McpRoute, egress_url_var};
+pub use model::endpoint::{
+    Endpoint, InjectedCredential, Rewrite, RouteIntent, RouteOptions, Scheme,
+};
 pub use model::placement::{Placement, Vantage};
 pub use model::platform::{
     ActiveIntegration, FeatureChoice, IntegrationSpec, PlatformFeature, PlatformSelection,
