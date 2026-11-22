@@ -923,3 +923,103 @@ fn shared_state_commands_say_what_is_attached() {
             .contains("no shared state")
     );
 }
+
+/// `demo/dev` with one egress route to an outside upstream, called from rustfs, committed.
+fn egress_demo(home: &Home) {
+    let dir = home.path("egress-env");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("env.toml"),
+        r#"version = 8
+
+[selection]
+modules = ["rustfs"]
+
+[[selection.egress.routes]]
+name = "search"
+upstream = "https://api.search.example.com"
+path = "/v1"
+consumers = ["rustfs"]
+credential = { kind = "bearer", secret = "SEARCH_API_KEY" }
+"#,
+    )
+    .unwrap();
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&["env", "create", "demo/dev", "--from", dir.to_str().unwrap()]);
+    home.ok(&["env", "commit", "demo/dev"]);
+}
+
+#[test]
+fn a_route_credential_rotates_into_the_running_instances() {
+    let home = Home::new();
+    egress_demo(&home);
+
+    // Not a route's credential: refused before anything is read or stored.
+    let err = home.fails(&["secret", "rotate", "demo/dev", "OTHER_KEY"]);
+    assert!(
+        err.contains("`OTHER_KEY` is no egress route's credential") && err.contains("var set"),
+        "{err}"
+    );
+    // The value never comes from the command line.
+    let err = home.fails(&["secret", "rotate", "demo/dev", "SEARCH_API_KEY=v"]);
+    assert!(err.contains("read from stdin"), "{err}");
+    assert!(home.keychain().is_empty());
+
+    // Nothing runs yet: the value is stored, for the next `up`.
+    let out = home.ok_with_stdin(&["secret", "rotate", "demo/dev", "SEARCH_API_KEY"], "v1\n");
+    assert!(out.contains("stored SEARCH_API_KEY on demo/dev"), "{out}");
+    assert!(out.contains("no instance of demo/dev is running"), "{out}");
+    let key = home.keychain_key(&format!("^{ID}/SEARCH_API_KEY$"));
+    assert_eq!(home.keychain()[&key], "v1");
+
+    home.ok(&["up", "demo/dev"]);
+    let out = home.ok_with_stdin(&["secret", "rotate", "demo/dev", "SEARCH_API_KEY"], "v2");
+    assert!(
+        out.contains("recreated secret-server in demo_dev_r1"),
+        "{out}"
+    );
+    // The same keychain entry, so every revision that refers to it sees the new value.
+    assert_eq!(home.keychain_key(&format!("^{ID}/SEARCH_API_KEY$")), key);
+    assert_eq!(home.keychain()[&key], "v2");
+    assert!(!out.contains("v2"), "{out}");
+
+    // This machine's own value overrides the environment's, so a rotation stored there would
+    // never reach the secret server: refused, and nothing is recreated or stored.
+    home.ok(&["var", "set", "demo/dev", "--local", "SEARCH_API_KEY=pinned"]);
+    let err = home.fails(&["secret", "rotate", "demo/dev", "SEARCH_API_KEY"]);
+    assert!(
+        err.contains("is set by its local_vars") && err.contains("demo_dev_r1"),
+        "{err}"
+    );
+    assert_eq!(home.keychain()[&key], "v2");
+    // `--local` stores it there instead, and the rotation goes through.
+    let out = home.ok_with_stdin(
+        &["secret", "rotate", "demo/dev", "SEARCH_API_KEY", "--local"],
+        "v3",
+    );
+    assert!(out.contains("(this machine only)"), "{out}");
+    assert!(out.contains("recreated secret-server"), "{out}");
+    let local = home.keychain_key(&format!("^{ID}@local/SEARCH_API_KEY$"));
+    assert_eq!(home.keychain()[&local], "v3");
+
+    // A stopped revision: stored, nothing recreated.
+    home.ok(&["down", "demo/dev"]);
+    let out = home.ok_with_stdin(
+        &[
+            "secret",
+            "rotate",
+            "demo/dev@1",
+            "SEARCH_API_KEY",
+            "--local",
+        ],
+        "v4",
+    );
+    assert!(
+        out.contains("no instance of demo/dev@1 is running"),
+        "{out}"
+    );
+    assert!(
+        home.fails(&["secret", "rotate", "demo", "SEARCH_API_KEY"])
+            .contains("<ws>/<env>")
+    );
+}

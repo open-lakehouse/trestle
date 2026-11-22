@@ -10,6 +10,7 @@ pub mod neon;
 pub mod new;
 mod output;
 pub mod run;
+pub mod secret;
 mod state;
 pub mod target;
 pub mod team;
@@ -81,6 +82,10 @@ pub enum Commands {
     /// keychain.
     #[command(subcommand)]
     Var(var::VarCommand),
+    /// Egress route credentials: `rotate` stores a new value and recreates the secret server
+    /// of the environment's running instances with it.
+    #[command(subcommand)]
+    Secret(secret::SecretCommand),
     /// Start a revision of an environment (the head by default): `<ws>/<env>[@<rev>]`.
     Up(run::UpArgs),
     /// Stop the instances of a workspace, an environment or a revision.
@@ -116,6 +121,7 @@ pub fn run() -> Result<()> {
         Commands::Ws(cmd) => ws::run(cmd),
         Commands::State(cmd) => team::run(cmd),
         Commands::Var(cmd) => var::run(cmd),
+        Commands::Secret(cmd) => secret::run(cmd),
         Commands::Up(args) => run::run_up(args),
         Commands::Down(args) => run::run_down(args),
         Commands::Ps(args) => run::run_ps(args),
@@ -213,6 +219,34 @@ mod tests {
     #[test]
     fn new_requires_a_name() {
         assert!(Cli::try_parse_from(["trestle", "new"]).is_err());
+    }
+
+    #[test]
+    fn secret_rotate_takes_a_name_and_never_a_value() {
+        let cli = parse(&[
+            "trestle",
+            "secret",
+            "rotate",
+            "demo/dev@2",
+            "SEARCH_API_KEY",
+        ]);
+        let Commands::Secret(secret::SecretCommand::Rotate(args)) = cli.command else {
+            panic!("expected secret rotate");
+        };
+        assert_eq!(args.target.to_string(), "demo/dev@2");
+        assert_eq!(args.name, "SEARCH_API_KEY");
+        assert!(!args.local && !args.shared);
+        // No argument carries the value: it comes from stdin.
+        assert!(
+            Cli::try_parse_from(["trestle", "secret", "rotate", "demo/dev", "KEY", "value"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "trestle", "secret", "rotate", "demo/dev", "KEY", "--local", "--shared"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

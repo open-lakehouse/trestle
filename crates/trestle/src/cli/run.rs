@@ -88,7 +88,7 @@ pub struct HealthArgs {
 }
 
 /// The instances `target` names: a workspace's, an environment's, or one revision's.
-fn instances_of(ctx: &Ctx, target: &Target) -> Result<Vec<Instance>> {
+pub(super) fn instances_of(ctx: &Ctx, target: &Target) -> Result<Vec<Instance>> {
     let ws = target.workspace(&ctx.store)?;
     let envs = match &target.env {
         None => ctx.store.environments(&ws.id)?,
