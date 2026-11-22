@@ -22,8 +22,11 @@ const buttonVariants = cva(
       size: {
         default: "h-10 px-4 py-2",
         sm: "h-9 rounded-md px-3",
+        // Editor chrome (toolbars, sidebars): one line of small text.
+        xs: "h-6 gap-1 rounded px-2 text-xs [&_svg]:size-3.5",
         lg: "h-11 rounded-md px-8",
         icon: "h-10 w-10",
+        "icon-xs": "h-6 w-6 rounded [&_svg]:size-3.5",
       },
     },
     defaultVariants: {
