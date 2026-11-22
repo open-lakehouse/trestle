@@ -367,6 +367,7 @@ trestle env set-knob demo/dev mlflow.log_level=debug
 trestle env commit demo/dev                                     # r1
 trestle var set demo/dev LOG_LEVEL=info
 printf %s "$TOKEN" | trestle var set demo/dev --secret TOKEN
+printf %s "$KEY" | trestle secret rotate demo/dev SEARCH_API_KEY  # an egress route's credential
 trestle up demo/dev                     # the head; `demo/dev@1` for a revision
 trestle ps
 trestle health demo/dev

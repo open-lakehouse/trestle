@@ -125,6 +125,39 @@ CLI flags win over the file. A `--set` overrides the same `variables:` key, a
 `--select` replaces the same category in `selections:`, and `--app` adds to
 `apps:`.
 
+## Running environments
+
+The store-backed commands (`ws`, `env create`/`commit`, `var`, `up`, `down`, `ps`,
+`logs`, `health`, `neon`, `state`) are listed in
+[`docs/multi-env.md`](../../docs/multi-env.md#cli). Running instances are covered in
+[`docs/runtime.md`](../../docs/runtime.md).
+
+### `trestle secret rotate <ws>/<env>[@<n>] <NAME>`
+
+Stores a new value for an egress route's credential (the variable its
+`credential.secret` names) and hands it to the running instances without
+restarting the egress gateway:
+
+```bash
+printf %s "$NEW_KEY" | trestle secret rotate demo/dev SEARCH_API_KEY
+# stored SEARCH_API_KEY on demo/dev
+# recreated secret-server in demo_dev_r1
+```
+
+- The value comes from stdin, or a prompt on a terminal, and never from the command line.
+- It is stored the way `trestle var set <ws>/<env> --secret <NAME>` stores a secret: in the
+  keychain, referenced from the environment's vars. On a team's state (`--state`) it goes to
+  this machine's own vars unless you pass `--shared`, and `--local` always puts it there.
+- Each running instance of the environment then gets its `secret-server` recreated with
+  the new value. `@<n>` limits that to revision n's instance. If no instance is running,
+  the value is stored for the next `trestle up`.
+- It refuses a name that isn't an egress route's credential (use `trestle var set` for
+  other secrets). It also refuses one that a higher layer (revision vars, this machine's vars, or the
+  instance's overrides) sets over where it would be stored.
+
+See [`docs/egress-gateway.md`](../../docs/egress-gateway.md) for the egress gateway and
+its secret server.
+
 ## Troubleshooting
 
 - **`git ... failed` when using a git template.** Git templates are cloned with

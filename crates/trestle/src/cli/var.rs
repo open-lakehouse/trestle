@@ -137,7 +137,7 @@ fn scope(ctx: &Ctx, target: &Target, draft: bool, local: bool) -> Result<(VarSco
     }
 }
 
-fn check_key(key: &str) -> Result<()> {
+pub(super) fn check_key(key: &str) -> Result<()> {
     let mut chars = key.chars();
     let valid = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -191,15 +191,7 @@ fn run_set(ctx: &Ctx, args: SetArgs) -> Result<()> {
             }
             check_key(var)?;
             let value = read_secret(var)?;
-            let key = format!("{prefix}/{var}");
-            ctx.secrets().set(&key, &value)?;
-            changes.push((
-                var.clone(),
-                VarValue::Secret(SecretRef {
-                    provider: KEYCHAIN.into(),
-                    key,
-                }),
-            ));
+            changes.push((var.clone(), keychain_secret(ctx, &prefix, var, &value)?));
         } else {
             let (key, value) = var.split_once('=').ok_or_else(|| {
                 Error::other(format!("expected KEY=VALUE, got `{var}`"))
@@ -227,6 +219,58 @@ fn run_set(ctx: &Ctx, args: SetArgs) -> Result<()> {
         if local { " (this machine only)" } else { "" }
     );
     Ok(())
+}
+
+/// Put `value` in the keychain under `<prefix>/<var>` and return the reference a var set holds.
+fn keychain_secret(ctx: &Ctx, prefix: &str, var: &str, value: &SecretValue) -> Result<VarValue> {
+    let key = format!("{prefix}/{var}");
+    ctx.secrets().set(&key, value)?;
+    Ok(VarValue::Secret(SecretRef {
+        provider: KEYCHAIN.into(),
+        key,
+    }))
+}
+
+/// Where `var set <target> --secret <var>` (with `--local` / `--shared`) would put `var`, and
+/// whether that is this machine's own set: what `secret rotate` stores into.
+pub(super) fn secret_scope(
+    ctx: &Ctx,
+    target: &Target,
+    var: &str,
+    local: bool,
+    shared: bool,
+) -> Result<(VarScope, String, bool)> {
+    let args = SetArgs {
+        target: target.clone(),
+        vars: vec![var.to_owned()],
+        secret: true,
+        draft: false,
+        local,
+        shared,
+    };
+    let local = sets_local(ctx, &args)?;
+    let (scope, prefix) = scope(ctx, target, false, local)?;
+    Ok((scope, prefix, local))
+}
+
+/// Store `value` as the secret `var` of `scope` (keychain key prefix `prefix`), as
+/// `var set --secret` does, dropping the keychain entry it replaces when nothing else uses it.
+pub(super) fn store_secret(
+    ctx: &Ctx,
+    target: &Target,
+    (scope, prefix): (&VarScope, &str),
+    var: &str,
+    value: &SecretValue,
+) -> Result<()> {
+    let new = keychain_secret(ctx, prefix, var, value)?;
+    let mut replaced = Vec::new();
+    ctx.store.modify_vars(scope, |vars| {
+        if let Some(old) = vars.0.insert(var.to_owned(), new) {
+            replaced.push(old);
+        }
+        Ok::<_, Error>(())
+    })?;
+    forget_unused(ctx, target, replaced)
 }
 
 fn run_unset(ctx: &Ctx, args: UnsetArgs) -> Result<()> {
@@ -277,7 +321,7 @@ fn forget_unused(ctx: &Ctx, target: &Target, dropped: Vec<VarValue>) -> Result<(
     Ok(())
 }
 
-fn describe(target: &Target, draft: bool) -> String {
+pub(super) fn describe(target: &Target, draft: bool) -> String {
     if draft {
         format!("{target} (draft)")
     } else {
@@ -286,7 +330,7 @@ fn describe(target: &Target, draft: bool) -> String {
 }
 
 /// A secret's value: stdin when it isn't a terminal, else a prompt.
-fn read_secret(key: &str) -> Result<SecretValue> {
+pub(super) fn read_secret(key: &str) -> Result<SecretValue> {
     let value = if std::io::stdin().is_terminal() {
         cliclack::password(format!("Value of {key}"))
             .mask('•')
