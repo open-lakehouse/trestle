@@ -63,6 +63,8 @@ jobs:
       - run: cargo clippy --locked --all-targets -p olai-vended-store --all-features -- -D warnings
       # Trusted Neon vending is opt-in (never a default feature): lint it explicitly.
       - run: cargo clippy --locked --all-targets -p olai-credential-vending --features neon-trusted-vending -- -D warnings
+      # The secret server's Docker test is feature-gated: lint it explicitly.
+      - run: cargo clippy --locked --all-targets -p olai-secret-server --features emulator-it -- -D warnings
 
   wasm:
     name: Wasm32
@@ -139,6 +141,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/stack-runtime/Cargo.toml -- cargo check --locked --all-features
       - name: Verify MSRV (olai-stack-state)
         run: cargo msrv verify --manifest-path crates/stack-state/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-secret-server)
+        run: cargo msrv verify --manifest-path crates/secret-server/Cargo.toml -- cargo check --locked
 
   test:
     name: Test / ${{ matrix.os }}
@@ -214,6 +218,8 @@ jobs:
         run: |
           docker pull rustfs/rustfs:1.0.6
           docker pull mcr.microsoft.com/azure-storage/azurite:3.37.0
+          docker pull envoyproxy/envoy:v1.40.2
+          docker pull mendhak/http-https-echo:39
       - name: Run emulator tests (olai-storage-credentials)
         run: cargo test --locked -p olai-storage-credentials --features emulator-it --tests
       - name: Run emulator tests (olai-http)
@@ -222,6 +228,14 @@ jobs:
         run: cargo test --locked -p olai-vended-store --features emulator-it,delta-api --tests
       - name: Run emulator tests (olai-credential-vending)
         run: cargo test --locked -p olai-credential-vending --features emulator-it --tests
+      # Envoy at the egress gateway's pinned release against the secret server image,
+      # built from this checkout.
+      - name: Build the secret server image
+        run: docker build -t olai-secret-server:it -f crates/secret-server/Dockerfile .
+      - name: Run Envoy tests (olai-secret-server)
+        env:
+          SECRET_SERVER_IMAGE: olai-secret-server:it
+        run: cargo test --locked -p olai-secret-server --features emulator-it --tests
 
   postgres:
     name: Postgres backend

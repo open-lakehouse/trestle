@@ -1,7 +1,7 @@
 # Egress gateway and secret delivery over SDS
 
-Status: design. Nothing here is implemented yet. Phases and their done-whens
-are at the end.
+Status: phase 1 (the secret server, [`crates/secret-server`](../crates/secret-server))
+is implemented; the rest is design. Phases and their done-whens are at the end.
 
 An environment's gateway today is its **ingress**: the Envoy that publishes the
 host ports, routes to every service, and drops what a client sends as its own
@@ -51,8 +51,10 @@ host.
 - **Credential injection** with `envoy.filters.http.credential_injector`:
   `overwrite: true`, so a caller can't put its own credential in place of the
   injected one, and `allow_request_without_credential: false`, so a missing
-  secret is a `401` and never an unauthenticated request. The route also
-  removes the caller's `authorization` and `x-api-key` before injecting.
+  secret is a `401` and never an unauthenticated request. A `header_mutation`
+  filter ahead of the injector removes the caller's `authorization` and
+  `x-api-key`. The route's `request_headers_to_remove` can't do it: the router
+  applies it after the injector, so it would remove the injected header too.
 - **The generic credential** (`envoy.http.injected_credentials.generic`) names
   a secret fetched over SDS, the header (`Authorization` by default) and
   `header_value_prefix` (`Bearer `), so the server holds the raw key.
@@ -68,8 +70,10 @@ host.
   lock.
 - **Its own image pin.** `credential_injector` and both credential extensions
   are `alpha` in Envoy 1.40. The ingress follows `envoyproxy/envoy:v1.40-latest`.
-  The egress pins an exact patch release, and the integration test runs against
-  that pin (see [Risks](#risks)).
+  The egress pins an exact patch release, `envoyproxy/envoy:v1.40.2`, and the
+  integration test runs against that pin (see [Risks](#risks)).
+- **A node id.** SDS over gRPC requires `node.id` and `node.cluster` in the
+  bootstrap. Envoy refuses to start without them.
 
 The ingress is unchanged. `strip_client_credentials` keeps its meaning: the
 upstream behind that route holds its own credential (MLflow's AI Gateway holds

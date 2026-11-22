@@ -1410,6 +1410,18 @@ name = "env-editor"
 version = "0.0.13"
 
 [[package]]
+name = "envoy-types"
+version = "0.7.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1fdd3fa7e8347872dd5d6e8626441589f0fd87d7fcf3003a4cca2103ecc39c0"
+dependencies = [
+ "futures-core",
+ "prost",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3179,6 +3191,32 @@ dependencies = [
  "url",
  "web-sys",
  "web-time",
+]
+
+[[package]]
+name = "olai-secret-server"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "envoy-types",
+ "futures",
+ "hyper-util",
+ "prost",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "testcontainers",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
