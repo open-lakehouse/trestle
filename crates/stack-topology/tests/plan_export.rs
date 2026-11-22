@@ -22,6 +22,7 @@ const FIXTURES: &[&str] = &[
     "docs-uc-aws",
     "docs-uc-default",
     "egress",
+    "egress-mcp",
     "hosted",
     "platform-features",
     "uc-api-storage",
@@ -81,7 +82,13 @@ fn exports_match_their_goldens() {
 }
 
 /// Fixtures whose rendered files are committed beside their `plan.json`, under `rendered/`.
-const RENDERED: &[&str] = &["docs-uc-aws", "docs-uc-default", "egress", "uc-api-storage"];
+const RENDERED: &[&str] = &[
+    "docs-uc-aws",
+    "docs-uc-default",
+    "egress",
+    "egress-mcp",
+    "uc-api-storage",
+];
 
 /// The materialized files a fixture's golden holds: everything but credentials (which inline
 /// secrets make ordinary), the human-readable layout report, and `.env` files, which this

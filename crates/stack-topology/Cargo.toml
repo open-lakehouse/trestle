@@ -40,7 +40,7 @@ url = { workspace = true }
 # so it is NOT feature-gated. `default-features = false` + `builtins` keeps it lean and
 # wasm32-clean; `serde` lets the renderer take a `#[derive(Serialize)]` context;
 # deliberately NO `loader` feature (it does filesystem globbing).
-minijinja = { version = "2.19", default-features = false, features = ["builtins", "serde"] }
+minijinja = { version = "2.19", default-features = false, features = ["builtins", "json", "serde"] }
 
 [dev-dependencies]
 jsonschema = { version = "0.58.6", default-features = false }

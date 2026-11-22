@@ -1,0 +1,6 @@
+# The egress routes `uc-mcp` may call: the egress gateway adds their credentials.
+# Written by the planner and merged over `modules/uc-mcp/compose.yaml`.
+services:
+  uc-mcp:
+    environment:
+      EGRESS_CATALOG_TOOLS_URL: "http://egress-gateway:10003/"

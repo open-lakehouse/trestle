@@ -65,6 +65,10 @@ pub struct ModuleBinding {
     /// global).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub egress: Option<super::egress::EgressConfig>,
+    /// The egress routes the module may call (the `egress_routes` render global), never their
+    /// credentials.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub egress_routes: Vec<super::egress::ConsumedEgressRoute>,
     /// The module's active platform-feature integrations, by feature (the `integrations`
     /// render global).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -89,6 +93,7 @@ impl ModuleBinding {
             mesh: self.mesh.clone(),
             unresolved_upstreams: self.unresolved_upstreams.clone(),
             egress: self.egress.clone(),
+            egress_routes: self.egress_routes.clone(),
             integrations: self.integrations.clone(),
             stack: self.stack.clone(),
         }
@@ -341,6 +346,9 @@ pub(super) fn bind(
             let direct = routed.direct.as_ref().and_then(|d| d.get(module.id()));
             (direct.cloned().unwrap_or_default(), None, None, None)
         };
+        let egress_routes = egress
+            .map(|e| e.consumed_by(module.id()))
+            .unwrap_or_default();
         // The egress gateway publishes nothing: its admin port is for its own health check.
         let egress = egress.filter(|e| &e.module == module.id());
         let admin_port = admin_port.or(egress.map(|e| e.admin_port));
@@ -360,6 +368,7 @@ pub(super) fn bind(
                 mesh,
                 unresolved_upstreams,
                 egress: egress.cloned(),
+                egress_routes,
                 integrations: integrations_of.remove(module.id()).unwrap_or_default(),
                 stack: stack_facts.clone(),
             },

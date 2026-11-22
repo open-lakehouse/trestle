@@ -99,6 +99,21 @@ impl EgressConfig {
             .collect()
     }
 
+    /// The routes `consumer` may call, in listener order, as it sees them: where to call each
+    /// and what it serves, never its credential.
+    pub fn consumed_by(&self, consumer: &ModuleId) -> Vec<ConsumedEgressRoute> {
+        self.routes
+            .iter()
+            .filter(|r| r.consumers.contains(consumer))
+            .map(|r| ConsumedEgressRoute {
+                name: r.name.clone(),
+                url: r.url.clone(),
+                url_var: r.url_var.clone(),
+                mcp: r.mcp.clone(),
+            })
+            .collect()
+    }
+
     /// Every module that calls some route, in route order.
     pub fn consumers(&self) -> Vec<&ModuleId> {
         let mut out: Vec<&ModuleId> = Vec::new();
@@ -138,6 +153,22 @@ pub struct PlannedEgressRoute {
     pub token_endpoint: Option<TokenEndpoint>,
     /// The modules that may call it.
     pub consumers: Vec<ModuleId>,
+    /// What it serves, when it is an MCP server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpRoute>,
+}
+
+/// A route as one of its consumers sees it (see [`EgressConfig::consumed_by`]): a consumer's
+/// render reads these as the `egress_routes` global, to configure itself (an MCP registry, say).
+/// It carries nothing about the credential, so no consumer's files can name the route's secret.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConsumedEgressRoute {
+    /// The route's name.
+    pub name: String,
+    /// What the consumer calls: `http://egress-gateway:<port><path>`.
+    pub url: String,
+    /// The variable the consumer reads [`url`](Self::url) from.
+    pub url_var: String,
     /// What it serves, when it is an MCP server.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpRoute>,
@@ -253,6 +284,10 @@ pub(super) fn plan_egress(
         check_credential(route)?;
         for consumer in &route.consumers {
             check_consumer(&route.name, consumer, &module, stack, services)?;
+            if let Some(m) = catalog.get(consumer) {
+                m.check_egress_route(route)
+                    .map_err(|reason| invalid(&route.name, &reason))?;
+            }
         }
         let (function, origin) = match (&route.function, &route.upstream) {
             (Some(slug), None) => {

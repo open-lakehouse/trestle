@@ -303,6 +303,28 @@ Claude needs one, so tokens refresh on their own.
 - **Your own host.** Agents can also run on your machine against the stack's server:
   `omnigent host "$OMNIGENT_URL"` or `omnigent run --server "$OMNIGENT_URL"`, with
   `client/host.env` loaded.
+- **MCP servers through the egress gateway.** Every [egress route](../../docs/egress-gateway.md)
+  with `mcp` set and `omnigent` among its `consumers` becomes a service in Omnigent's MCP
+  registry. The registry is rendered to `modules/omnigent/mcp-registry.yaml`, mounted into the
+  server, and named by `OMNIGENT_MCP_REGISTRY`. Each service's id is the route's name,
+  its `url` is the route's `http://egress-gateway:<port><path>`, and its `tools` are the route's
+  `mcp.tools`. Each service also has `auth: none` and `allow_http: true`: the egress gateway
+  adds the route's credential and does the TLS, so neither the registry nor any Omnigent
+  container holds the key. A session selects services by id
+  (`mcp_registry_services: ["<route>"]`). Omnigent's rules apply at plan time: an MCP route
+  for Omnigent is named in lowercase letters, digits, `-` and `_`, starts with a letter, has
+  at most 40 characters and no `__`, and lists at least one tool. Without such a route there
+  is no registry file and no variable.
+
+  ```toml
+  [[selection.egress.routes]]
+  name = "tickets"
+  upstream = "https://tickets.example.com"
+  path = "/mcp"
+  consumers = ["omnigent"]
+  credential = { kind = "bearer", secret = "TICKETS_API_KEY" }
+  mcp = { title = "Tickets", tools = ["search", "read_ticket"] }
+  ```
 
 **Auth.** With the gateway open (the default), Omnigent runs single-user, like the rest of the
 stack. With gateway sign-in on, Omnigent trusts the identity the gateway asserts (`Remote-Email`):
