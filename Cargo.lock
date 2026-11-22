@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "env-editor"
-version = "0.0.12"
+version = "0.0.13"
 
 [[package]]
 name = "equivalent"
@@ -5797,7 +5797,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.15.0"
+version = "0.15.1"
 
 [[package]]
 name = "triomphe"

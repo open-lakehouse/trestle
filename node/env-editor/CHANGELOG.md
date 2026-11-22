@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.12...env-editor-v0.0.13) - 2026-11-22
+
+### Fixed
+
+- close the ⋯ menus at once (#439)
+
 ## [0.0.12](https://github.com/open-lakehouse/trestle/compare/env-editor-v0.0.11...env-editor-v0.0.12) - 2026-11-22
 
 ### Added
