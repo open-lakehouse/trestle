@@ -1,7 +1,7 @@
 [package]
 name = "olai-credential-vending"
 description = "Server-side minting of downscoped cloud storage credentials from registered principals"
-version = "0.0.8"
+version = "0.0.9"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,7 +25,7 @@ tracing = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 
 # in-repo dependencies
-olai-http = { path = "../olai-http", version = "0.0.13" }
+olai-http = { path = "../olai-http", version = "0.0.14" }
 olai-storage-credentials = { path = "../olai-storage-credentials", version = "0.0.6" }
 
 [dev-dependencies]
