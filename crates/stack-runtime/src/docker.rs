@@ -180,6 +180,19 @@ impl ComposeEngine for DockerCli {
         self.lifecycle(dir, &args, &opts.env, opts.progress).await
     }
 
+    async fn recreate_service(&self, dir: &Path, service: &str, opts: &UpOptions) -> Result<()> {
+        let timeout = opts.wait_timeout.map(|t| t.as_secs().max(1).to_string());
+        let mut args = vec!["compose", "up", "-d", "--no-deps", "--force-recreate"];
+        if opts.wait {
+            args.push("--wait");
+            if let Some(timeout) = &timeout {
+                args.extend(["--wait-timeout", timeout]);
+            }
+        }
+        args.push(service);
+        self.lifecycle(dir, &args, &opts.env, opts.progress).await
+    }
+
     async fn down(&self, dir: &Path, opts: &DownOptions) -> Result<()> {
         let mut args = vec!["compose", "down"];
         if opts.volumes {

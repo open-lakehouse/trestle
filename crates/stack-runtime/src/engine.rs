@@ -73,6 +73,12 @@ pub trait ComposeEngine: Send + Sync {
     /// Create and start the project in `dir` (`docker compose up -d`).
     async fn up(&self, dir: &Path, opts: &UpOptions) -> Result<()>;
 
+    /// Recreate `service` of the running project in `dir` alone, leaving every other container
+    /// as it is (`docker compose up -d --no-deps --force-recreate <service>`). `opts.env` must be
+    /// the whole launch environment: Compose interpolates every file of the project, not just
+    /// the service's.
+    async fn recreate_service(&self, dir: &Path, service: &str, opts: &UpOptions) -> Result<()>;
+
     /// Stop and remove the project in `dir` (`docker compose down`).
     async fn down(&self, dir: &Path, opts: &DownOptions) -> Result<()>;
 

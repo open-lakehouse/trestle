@@ -231,6 +231,15 @@ impl ComposeEngine for CliEngine {
         self.inner().up(dir, opts).await
     }
 
+    async fn recreate_service(
+        &self,
+        dir: &Path,
+        service: &str,
+        opts: &UpOptions,
+    ) -> olai_stack_runtime::Result<()> {
+        self.inner().recreate_service(dir, service, opts).await
+    }
+
     async fn down(&self, dir: &Path, opts: &DownOptions) -> olai_stack_runtime::Result<()> {
         self.inner().down(dir, opts).await
     }

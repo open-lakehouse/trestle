@@ -26,6 +26,16 @@ pub enum FakeCall {
         /// The variables passed.
         env: BTreeMap<String, String>,
     },
+    /// [`recreate_service`](ComposeEngine::recreate_service) of `service` in `project`, with
+    /// the `env` it was given.
+    Recreate {
+        /// The project name.
+        project: String,
+        /// The service recreated.
+        service: String,
+        /// The variables passed.
+        env: BTreeMap<String, String>,
+    },
     /// [`down`](ComposeEngine::down) of `project`.
     Down {
         /// The project name.
@@ -49,10 +59,13 @@ struct Inner {
     unavailable: bool,
     calls: Vec<FakeCall>,
     clock: i64,
+    /// How many times each container was recreated, for fresh container names.
+    generations: BTreeMap<String, u32>,
 }
 
-/// An in-memory Docker: `up` creates a project with scripted services, `down` removes it, and
-/// both raise the [events](ComposeEngine::events) Docker would. Clones share state, so a test
+/// An in-memory Docker: `up` creates a project with scripted services, `down` removes it,
+/// `recreate_service` gives one service a new container, and each raises the
+/// [events](ComposeEngine::events) Docker would. Clones share state, so a test
 /// can hand one to the code under test and inspect another.
 ///
 /// A project's name is read from the `name:` line of the head `compose.yaml` in the directory
@@ -266,6 +279,72 @@ impl ComposeEngine for FakeEngine {
                 status: exit_status(1),
                 stderr: format!("container {project}-app-1 is unhealthy"),
             });
+        }
+        Ok(())
+    }
+
+    async fn recreate_service(&self, dir: &Path, service: &str, opts: &UpOptions) -> Result<()> {
+        self.check_available()?;
+        let project = project_in(dir)?;
+        let mut inner = self.lock();
+        inner.calls.push(FakeCall::Recreate {
+            project: project.clone(),
+            service: service.to_owned(),
+            env: opts.env.clone(),
+        });
+        let Some(services) = inner.projects.get(&project) else {
+            return Err(Error::Failed {
+                command: format!("compose up -d --no-deps --force-recreate {service}"),
+                status: exit_status(1),
+                stderr: format!("project {project} is not running"),
+            });
+        };
+        let old = services
+            .iter()
+            .find(|s| s.service == service)
+            .map(|s| s.container.clone());
+        let generation = {
+            let n = inner
+                .generations
+                .entry(format!("{project}/{service}"))
+                .or_insert(0);
+            *n += 1;
+            *n
+        };
+        // A new container, as `--force-recreate` makes: the old one is destroyed.
+        let container = format!("{project}-{service}-1-g{generation}");
+        let status = ServiceStatus {
+            container: container.clone(),
+            service: service.to_owned(),
+            state: State::Running,
+            health: Health::Healthy,
+            exit_code: 0,
+            status: "Up".into(),
+            published: Vec::new(),
+        };
+        let services = inner.projects.get_mut(&project).expect("checked above");
+        match services.iter_mut().find(|s| s.service == service) {
+            Some(s) => *s = status,
+            None => services.push(status),
+        }
+        let mut events = Vec::new();
+        if let Some(old) = old {
+            for action in [
+                EventAction::Stop,
+                EventAction::Die { exit_code: Some(0) },
+                EventAction::Destroy,
+            ] {
+                events.push(next_event(&mut inner, &project, service, &old, action));
+            }
+        }
+        for action in [EventAction::Create, EventAction::Start] {
+            events.push(next_event(
+                &mut inner, &project, service, &container, action,
+            ));
+        }
+        drop(inner);
+        for e in events {
+            let _ = self.events.send(e);
         }
         Ok(())
     }
