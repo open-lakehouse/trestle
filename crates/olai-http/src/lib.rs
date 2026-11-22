@@ -84,6 +84,9 @@ pub mod gcp;
 #[cfg(feature = "neon")]
 #[cfg_attr(docsrs, doc(cfg(feature = "neon")))]
 pub mod neon;
+#[cfg(feature = "sds")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sds")))]
+pub mod sds;
 pub mod service;
 
 mod retry;
@@ -93,6 +96,7 @@ mod util;
 /// The `reqwest` of this crate, for the types of [`RequestSigner`] and [`CloudClient`].
 pub use reqwest;
 
+pub use backoff::BackoffConfig;
 pub use client::{Certificate, ClientConfigKey, ClientOptions};
 pub use credential::*;
 pub use error::*;
