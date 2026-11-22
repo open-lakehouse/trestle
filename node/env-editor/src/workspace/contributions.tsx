@@ -41,7 +41,8 @@ export interface EnvironmentStatus {
   details?: EnvironmentDetail[];
 }
 
-/** One fact in an environment's header: `label value`, optionally copyable. */
+/** One fact in an environment's header: `label value`, optionally copyable,
+ *  and optionally a button that runs something (e.g. opens a sub-tab). */
 export interface EnvironmentDetail {
   label: string;
   value: string;
@@ -49,6 +50,11 @@ export interface EnvironmentDetail {
   copy?: boolean;
   /** Tooltip; defaults to `value`. */
   title?: string;
+  /** Drawn before the label. */
+  icon?: ReactNode;
+  /** Makes the fact a button that runs this when clicked, e.g. to open the
+   *  environment's Configure tab. Its copy button, if any, stays beside it. */
+  run?: () => void;
 }
 
 /** A button a host offers, e.g. in an environment's header. */
@@ -78,6 +84,8 @@ export interface EnvironmentTab {
   enabled: boolean;
   /** Why it is disabled, e.g. "dev isn't running". */
   reason?: string;
+  /** The tab's body. The pane gives it `min-h-0 flex-1`, so a body that
+   *  scrolls renders its own `overflow-auto` (or the like). */
   render: () => ReactNode;
 }
 

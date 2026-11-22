@@ -52,6 +52,17 @@ export {
 } from "./diff.js";
 export { EnvTree, type EnvTreeProps } from "./EnvTree.js";
 export {
+  createEditor,
+  type EditorHandle,
+  EditorProvider,
+  type EditorProviderProps,
+  type EditorState,
+  type EditorStore,
+  type OpenEnvironmentOptions,
+  useEditor,
+  useEditorStore,
+} from "./editorStore.js";
+export {
   CHANGES_TAB,
   type ChangesAvailability,
   closeTab,
