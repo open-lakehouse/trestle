@@ -23,12 +23,9 @@ import {
 } from "./contributions.js";
 import { EnvTree } from "./EnvTree.js";
 import { type EnvView, INITIAL_VIEW } from "./editors.js";
-import {
-  designTab,
-  EnvHeader,
-  EnvironmentPane,
-  EnvSubTabs,
-} from "./envHeader.js";
+import { ActionsMenu, menuActions, RunActionButton } from "./envActions.js";
+import { EnvCard } from "./envCard.js";
+import { designTab, EnvironmentPane, EnvSubTabs } from "./envPane.js";
 import type { WorkspaceDoc } from "./model.js";
 import { SidebarTabs } from "./SidebarTabs.js";
 import { shellCommands } from "./shellCommands.js";
@@ -175,112 +172,120 @@ describe("side views", () => {
   });
 });
 
-describe("environment header", () => {
-  test("shows the state, revision, placement and actions", () => {
-    let started = 0;
+describe("environment card", () => {
+  test("shows the state, revision, placement and details", () => {
     const out = html(
-      <EnvHeader
-        status={{ state: "running", revision: 3, placement: "local slot 0" }}
-        actions={[
-          { id: "stop", label: "Stop", run: () => started++ },
-          {
-            id: "logs",
-            label: "Open logs",
-            enabled: false,
-            reason: "No logs yet",
-            run: () => {},
-          },
-        ]}
-      />,
-    );
-    expect(out).toContain('data-run-state="running"');
-    expect(out).toContain(">running<");
-    expect(out).toContain("rev 3");
-    expect(out).toContain("local slot 0");
-    expect(out).toContain("Stop");
-    // The disabled action says why.
-    expect(out).toMatch(/title="No logs yet"[^>]*>\s*<button[^>]*disabled/);
-  });
-
-  test("names the environment and shows details, copyable where asked", () => {
-    const out = html(
-      <EnvHeader
+      <EnvCard
         name="dev"
         status={{
           state: "running",
+          revision: 3,
+          placement: "local slot 0",
           details: [
             { label: "target", value: "branch preview" },
             { label: "gateway", value: "https://dev.localhost", copy: true },
           ],
         }}
         details={[{ label: "editor", value: "replaced by the host's" }]}
-        actions={[]}
       />,
     );
     expect(out).toContain(">dev<");
+    expect(out).toContain('data-run-state="running"');
+    expect(out).toContain(">running<");
+    expect(out).toContain("rev 3 · local slot 0");
     expect(out).toContain("branch preview");
     expect(out).toContain('aria-label="Copy gateway"');
     expect(out).not.toContain('aria-label="Copy target"');
     expect(out).not.toContain("replaced by the host");
   });
 
-  test("a detail with run is a button, with its icon and copy beside it", () => {
-    const props = {
-      actions: [],
-      details: [
-        {
-          label: "configure",
-          value: "dev",
-          icon: <span id="gear" />,
-          title: "Open the Configure tab",
-          copy: true,
-          run: () => {},
-        },
-        { label: "gateway", value: "https://dev.localhost" },
-      ],
-    };
-    const out = html(<EnvHeader status={undefined} {...props} />);
-    expect(out).toMatch(/<button[^>]*title="Open the Configure tab"/);
-    expect(out).toContain('type="button"');
-    expect(out).toContain('<span id="gear"></span>');
-    expect(out).toContain('aria-label="Copy configure"');
-
-    // A fact without run stays plain text, with no button of its own.
-    const plain = html(
-      <EnvHeader
+  test("without a host status: the editor's facts and a footnote", () => {
+    const out = html(
+      <EnvCard
+        name="dev"
         status={undefined}
-        actions={[]}
+        planStatus={<span id="plan" />}
         details={[{ label: "gateway", value: "https://dev.localhost" }]}
+        footnote="slot 0: host ports +0"
       />,
     );
-    expect(plain).toContain("https://dev.localhost");
-    expect(plain).not.toContain("<button");
+    expect(out).toContain('<span id="plan"></span>');
+    expect(out).toContain("https://dev.localhost");
+    expect(out).toContain("slot 0: host ports +0");
+    expect(out).not.toContain("data-run-state");
+    // A fact without run stays plain text, with no button of its own.
+    expect(out).not.toContain("<button");
   });
 
-  test("clicking a detail's button runs it", () => {
-    let opened = 0;
+  test("a detail with run is a button with its icon; clicking runs it, then onRun", () => {
+    const calls: string[] = [];
     const details = [
       {
         label: "configure",
         value: "dev",
-        run: () => {
-          opened++;
-        },
+        icon: <span id="gear" />,
+        title: "Open the Configure tab",
+        copy: true,
+        run: () => calls.push("run"),
       },
     ];
-    // The header's detail is a component: render its element and take the
-    // button's click handler from the tree.
-    const header = EnvHeader({ status: undefined, details, actions: [] });
-    const [fact] = elementsIn(header, (el) => isDetail(el, "configure"));
-    if (!fact) throw new Error("the configure detail is missing");
-    const rendered = (fact.type as (p: unknown) => ReactElement)(fact.props);
+    const props = {
+      name: "dev",
+      status: undefined,
+      details,
+      onRun: () => calls.push("closed"),
+    };
+    const out = html(<EnvCard {...props} />);
+    expect(out).toMatch(/<button[^>]*title="Open the Configure tab"/);
+    expect(out).toContain('<span id="gear"></span>');
+    expect(out).toContain('aria-label="Copy configure"');
+
+    // The card's detail rows are components: render the row's element and
+    // take the button's click handler from the tree.
+    const [row] = elementsIn(EnvCard(props), (el) => isDetail(el, "configure"));
+    if (!row) throw new Error("the configure detail is missing");
+    const rendered = (row.type as (p: unknown) => ReactElement)(row.props);
     const [button] = elementsIn(
       rendered,
       (el) => typeof (el.props as { onClick?: unknown }).onClick === "function",
     );
     if (!button) throw new Error("the detail has no button");
     (button.props as { onClick: () => void }).onClick();
-    expect(opened).toBe(1);
+    expect(calls).toEqual(["run", "closed"]);
+  });
+});
+
+describe("environment actions", () => {
+  const start = { id: "start", label: "Start", run: () => {} };
+  const apps = { id: "apps", label: "Apps", run: () => {} };
+
+  test("the menus list every action but the run action", () => {
+    expect(menuActions([start, apps], start).map((a) => a.id)).toEqual([
+      "apps",
+    ]);
+    expect(menuActions([start, apps], undefined).map((a) => a.id)).toEqual([
+      "start",
+      "apps",
+    ]);
+  });
+
+  test("the run action is an icon named by its label; disabled, it says why", () => {
+    const out = html(<RunActionButton action={start} />);
+    expect(out).toContain('aria-label="Start"');
+    expect(out).not.toContain('disabled=""');
+    const off = html(
+      <RunActionButton
+        action={{ ...start, enabled: false, reason: "Commit a revision first" }}
+      />,
+    );
+    expect(off).toMatch(/tabindex="0"[^>]*>\s*<button[^>]*disabled/);
+  });
+
+  test("a menu with nothing in it draws nothing", () => {
+    expect(html(<ActionsMenu label="More" actions={[]} />)).toBe("");
+    expect(html(<ActionsMenu label="More" actions={[apps]} />)).toContain(
+      'aria-label="More"',
+    );
   });
 });
 
@@ -387,11 +392,33 @@ describe("environment tree", () => {
     expect(out).toContain("branch preview");
   });
 
-  test("without contributions it is unchanged: no badges, slot offsets", () => {
+  test("without contributions: no badges, slot offsets, a menu per row", () => {
     const out = html(<Tree />);
     expect(out).not.toContain("data-run-state");
     expect(out).toContain("+0");
     expect(out).toContain("+1000");
+    // Rename, Duplicate and Remove are in each row's menu, not inline.
+    expect(out).toContain('aria-label="More actions for dev"');
+    expect(out).toContain('aria-label="More actions for prod"');
+    expect(out).not.toContain('aria-label="Rename"');
+  });
+
+  test("a host's run action is on each row", () => {
+    const out = html(
+      <Tree
+        contributions={{
+          environment: {
+            runAction: (id) => ({
+              id: "start",
+              label: `Start ${id}`,
+              run: () => {},
+            }),
+          },
+        }}
+      />,
+    );
+    expect(out).toContain('aria-label="Start dev"');
+    expect(out).toContain('aria-label="Start prod"');
   });
 
   test("one row per environment: no diagram or file rows", () => {
@@ -445,9 +472,6 @@ describe("EnvironmentPane", () => {
           view={{ ...INITIAL_VIEW, ...view }}
           onView={() => {}}
           revisions={revisions}
-          details={[
-            { label: "gateway", value: "https://dev.localhost", copy: true },
-          ]}
           diagram={<div id="diagram" />}
           files={<div id="files" />}
           changes={<div id="changes" />}
@@ -455,11 +479,9 @@ describe("EnvironmentPane", () => {
       </ContributionsProvider>,
     );
 
-  test("without contributions: the header, the editor's tabs, the diagram", () => {
+  test("without contributions: the editor's tabs and the diagram, no header", () => {
     const out = pane();
-    expect(out).toContain(">dev<");
-    expect(out).toContain("https://dev.localhost");
-    expect(out).toContain('aria-label="Copy gateway"');
+    expect(out).not.toContain("More actions for dev");
     expect(out).toContain('aria-label="Environment views"');
     expect(out).toContain(">Diagram<");
     expect(out).toContain(">Files<");
@@ -504,11 +526,25 @@ describe("EnvironmentPane", () => {
     },
   };
 
-  test("a host's status and tabs follow the editor's", () => {
+  test("a host's tabs follow the editor's", () => {
     const out = pane(host);
-    expect(out).toContain('data-run-state="stopped"');
     expect(out.indexOf(">Files<")).toBeLessThan(out.indexOf(">Catalog<"));
     expect(out).toContain('<div id="diagram"></div>');
+  });
+
+  test("the host's run action and its menu end the sub-tabs", () => {
+    const out = pane({
+      environment: {
+        runAction: () => ({ id: "stop", label: "Stop", run: () => {} }),
+        actions: () => [
+          { id: "stop", label: "Stop", run: () => {} },
+          { id: "apps", label: "Apps", run: () => {} },
+        ],
+      },
+    });
+    expect(out).toContain('aria-label="Stop"');
+    expect(out).toContain('aria-label="More actions for dev"');
+    expect(out.indexOf(">Diagram<")).toBeLessThan(out.indexOf('"Stop"'));
   });
 
   test("an enabled host tab renders in place of the editor", () => {

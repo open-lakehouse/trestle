@@ -54,6 +54,7 @@ import { CommandProvider, useCommands } from "../commands/CommandProvider.js";
 import { EnvironmentEditor } from "../EnvironmentEditor.js";
 import { errorMessage } from "../errors.js";
 import type { NodeSlots } from "../graph/nodeSlots.js";
+import { RunStateDot } from "../graph/RunStateDot.js";
 import { usePlanner } from "../planner.js";
 import type { Bundle, CatalogDto } from "../types.js";
 import {
@@ -92,7 +93,8 @@ import {
   tabLabel,
   withFile,
 } from "./editors.js";
-import { EnvironmentPane } from "./envHeader.js";
+import { EnvHoverCard } from "./envCard.js";
+import { EnvironmentPane } from "./envPane.js";
 import {
   contextFor,
   type EnvDoc,
@@ -533,8 +535,6 @@ function ShellBody({
                       revisions: hasRevisions,
                       head: activeEnv.head,
                     }}
-                    planStatus={<EnvStatus plan={plans[activeEnv.id]} />}
-                    details={envDetails(activeEnv, plans[activeEnv.id])}
                     diagram={
                       <EnvironmentEditor
                         key={activeEnv.id}
@@ -706,6 +706,7 @@ function TabStrip({
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
 }) {
+  const statusOf = useContributions().contributions?.environment?.status;
   return (
     <div
       role="tablist"
@@ -720,10 +721,11 @@ function TabStrip({
         const label = tabLabel(tab, env.name);
         // A revision or comparison also names its environment.
         const secondary = tab.revision !== undefined || !!tab.compare;
-        return (
+        const status = secondary ? undefined : statusOf?.(env.id);
+        const chip = (
           <div
             key={key}
-            title={secondary ? `${env.name} ${label}` : env.name}
+            title={secondary ? `${env.name} ${label}` : undefined}
             className={cn(
               "group flex items-center gap-1.5 border-r pl-3 pr-1 text-sm",
               active
@@ -741,7 +743,7 @@ function TabStrip({
               }}
               className="flex items-center gap-1.5 whitespace-nowrap"
             >
-              {tab.revision !== undefined || tab.compare ? (
+              {secondary ? (
                 <History className="h-3.5 w-3.5 text-muted-foreground" />
               ) : (
                 <EnvStatus plan={plans[env.id]} />
@@ -752,6 +754,7 @@ function TabStrip({
                   {env.name}
                 </span>
               )}
+              {status && <RunStateDot status={status} />}
             </button>
             <button
               type="button"
@@ -766,12 +769,26 @@ function TabStrip({
             </button>
           </div>
         );
+        if (secondary) return chip;
+        // An environment's tab shows its card while the pointer rests on it.
+        return (
+          <EnvHoverCard
+            key={key}
+            envId={env.id}
+            name={env.name}
+            planStatus={<EnvStatus plan={plans[env.id]} />}
+            details={envDetails(env, plans[env.id])}
+            openDelay={400}
+          >
+            {chip}
+          </EnvHoverCard>
+        );
       })}
     </div>
   );
 }
 
-/** The editor's own header facts for `env`: where its gateway answers. */
+/** The editor's own facts for `env`'s card: where its gateway answers. */
 function envDetails(env: EnvDoc, plan: MemberPlan | undefined) {
   const url = gatewayUrl(plan?.plan, env.name);
   return url ? [{ label: "gateway", value: url, copy: true }] : [];

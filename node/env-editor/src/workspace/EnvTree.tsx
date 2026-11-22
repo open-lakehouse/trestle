@@ -1,9 +1,10 @@
 // The explorer: the workspace's environments, one row each; picking one opens
 // its environment tab (its diagram, files and changes are that tab's
-// sub-tabs). Environments are added, renamed, duplicated and removed
-// here.
+// sub-tabs). Environments are added, renamed, duplicated and removed here,
+// from each row's ⋯ menu, beside the host's run action; resting on a row a
+// little shows its card.
 
-import { cn } from "@open-lakehouse/ui-kit";
+import { cn, DropdownMenuItem } from "@open-lakehouse/ui-kit";
 import {
   Copy,
   Download,
@@ -14,7 +15,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type HTMLAttributes, type ReactNode, type Ref, useState } from "react";
 import { RunStateDot } from "../graph/RunStateDot.js";
 import { runStateTitle } from "../graph/runState.js";
 import {
@@ -26,6 +27,8 @@ import {
 } from "./chrome.js";
 import { type EnvironmentStatus, useContributions } from "./contributions.js";
 import type { EditorTab } from "./editors.js";
+import { ActionsMenu, RunActionButton, useEnvActions } from "./envActions.js";
+import { EnvHoverCard } from "./envCard.js";
 import {
   type EnvDoc,
   freeName,
@@ -181,30 +184,43 @@ export function EnvTree({
   );
 }
 
-/** One environment's row, with its actions on hover. */
+/** One environment's row, with its actions on hover (and while its menu is
+ *  open). The rest of its props (a hover card trigger's) go to the row. */
 function Row({
   selected,
   onClick,
   children,
   actions,
-  title,
+  pinned,
+  ref,
+  className,
+  ...rest
 }: {
   selected?: boolean;
   onClick: () => void;
   children: ReactNode;
   actions?: ReactNode;
-  title?: string;
-}) {
+  /** Keeps the actions shown, e.g. while the row's menu is open. */
+  pinned?: boolean;
+  ref?: Ref<HTMLDivElement>;
+} & Omit<HTMLAttributes<HTMLDivElement>, "onClick">) {
   return (
     <div
+      {...rest}
+      ref={ref}
       role="treeitem"
       aria-selected={!!selected}
       tabIndex={-1}
+      data-pinned={pinned || undefined}
       className={cn(
-        "group flex h-6 items-center pl-3 pr-2 text-[13px]",
-        selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
+        "group flex h-6 items-center pl-3 pr-1 text-[13px]",
+        selected
+          ? "bg-sidebar-accent"
+          : pinned
+            ? "bg-sidebar-accent/60"
+            : "hover:bg-sidebar-accent/60",
+        className,
       )}
-      title={title}
     >
       <button
         type="button"
@@ -214,13 +230,21 @@ function Row({
         {children}
       </button>
       {actions && (
-        <div className="hidden shrink-0 items-center group-hover:flex">
+        <div
+          className={cn(
+            "shrink-0 items-center",
+            pinned ? "flex" : "hidden group-hover:flex",
+          )}
+        >
           {actions}
         </div>
       )}
     </div>
   );
 }
+
+/** The row menu's own items: as compact as the host's. */
+const ITEM = "text-xs [&_svg]:size-3.5";
 
 function EnvNode({
   env,
@@ -248,43 +272,70 @@ function EnvNode({
   /** The removal confirmation, drawn under the row while it asks. */
   confirm?: ReactNode;
 }) {
+  const { run, menu } = useEnvActions(env.id);
+  const [menuOpen, setMenuOpen] = useState(false);
   const port = plan?.plan?.gateway.listeners[0]?.host_port;
+  const ports = `slot ${env.slot}: host ports +${env.slot * SLOT_PORT_STRIDE}`;
   return (
     <>
-      <Row
-        selected={active}
-        onClick={onOpen}
-        title={`slot ${env.slot}: host ports +${env.slot * SLOT_PORT_STRIDE}`}
-        actions={
-          <>
-            <IconButton label="Rename" onClick={onRename}>
-              <Pencil />
-            </IconButton>
-            <IconButton
-              label="Duplicate (e.g. dev → prod)"
-              onClick={onDuplicate}
-            >
-              <Copy />
-            </IconButton>
-            <IconButton label="Remove" onClick={onRemove}>
-              <Trash2 />
-            </IconButton>
-          </>
-        }
+      <EnvHoverCard
+        envId={env.id}
+        name={env.name}
+        planStatus={<EnvStatus plan={plan} clashing={clashing} />}
+        footnote={ports}
+        openDelay={900}
+        side="right"
+        disabled={menuOpen}
       >
-        <EnvStatus plan={plan} clashing={clashing} />
-        <span className={cn("truncate", active && "font-medium")}>
-          {env.name}
-        </span>
-        {status && <RunStateDot status={status} />}
-        <span
-          className="ml-auto shrink-0 truncate font-mono text-[11px] text-muted-foreground group-hover:hidden"
-          title={status ? runStateTitle(status) : undefined}
+        <Row
+          selected={active}
+          onClick={onOpen}
+          pinned={menuOpen}
+          actions={
+            <>
+              {run && <RunActionButton action={run} />}
+              <ActionsMenu
+                label={`More actions for ${env.name}`}
+                onOpenChange={setMenuOpen}
+                leading={
+                  <>
+                    <DropdownMenuItem onSelect={onRename} className={ITEM}>
+                      <Pencil /> Rename
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={onDuplicate} className={ITEM}>
+                      <Copy /> Duplicate
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={onRemove}
+                      variant="destructive"
+                      className={ITEM}
+                    >
+                      <Trash2 /> Remove
+                    </DropdownMenuItem>
+                  </>
+                }
+                actions={menu}
+              />
+            </>
+          }
         >
-          {status?.placement ??
-            (port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`)}
-        </span>
-      </Row>
+          <EnvStatus plan={plan} clashing={clashing} />
+          <span className={cn("truncate", active && "font-medium")}>
+            {env.name}
+          </span>
+          {status && <RunStateDot status={status} />}
+          <span
+            className={cn(
+              "ml-auto shrink-0 truncate pr-1 font-mono text-[11px] text-muted-foreground",
+              menuOpen ? "hidden" : "group-hover:hidden",
+            )}
+            title={status ? runStateTitle(status) : undefined}
+          >
+            {status?.placement ??
+              (port ? `:${port}` : `+${env.slot * SLOT_PORT_STRIDE}`)}
+          </span>
+        </Row>
+      </EnvHoverCard>
       {confirm}
     </>
   );

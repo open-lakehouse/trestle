@@ -14,7 +14,7 @@ import {
   useEditor,
 } from "./editorStore.js";
 import { envSubTabs, INITIAL_VIEW, resolveSubTab, tabKey } from "./editors.js";
-import { EnvironmentPane } from "./envHeader.js";
+import { EnvironmentPane } from "./envPane.js";
 import {
   createWorkbench,
   EDITOR_VIEW,
