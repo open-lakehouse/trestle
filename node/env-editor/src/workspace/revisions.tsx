@@ -12,6 +12,7 @@ import {
   CommitHistory,
   type CommitHistoryEntry,
   Input,
+  SplitButton,
 } from "@open-lakehouse/ui-kit";
 import type { ColorMode } from "@xyflow/react";
 import { GitCommitHorizontal, GitCompare, Loader2, Undo2 } from "lucide-react";
@@ -22,6 +23,11 @@ import { usePlanner } from "../planner.js";
 import type { CatalogDto, PlanResult, Selection } from "../types.js";
 import { Breadcrumb, SidebarHeader } from "./chrome.js";
 import {
+  type CommitAction,
+  type HostAction,
+  useContributions,
+} from "./contributions.js";
+import {
   compareSelections,
   describeHosted,
   describeHostedChange,
@@ -31,6 +37,7 @@ import {
   type SelectionDiff,
 } from "./diff.js";
 import type { EditorTab } from "./editors.js";
+import { ActionMenuItem } from "./envActions.js";
 import { contextFor, type EnvDoc, type WorkspaceDoc } from "./model.js";
 import {
   type RevisionDoc,
@@ -111,6 +118,8 @@ export function RevisionsView({
   }, [focusCommit]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const hostEnv = useContributions().contributions?.environment;
+  const commitActions = (env && hostEnv?.commitActions?.(env.id)) || [];
 
   if (!revisions) return null;
   const items = list && "value" in list ? list.value : [];
@@ -121,16 +130,26 @@ export function RevisionsView({
     "value" in draftDigest &&
     draftDigest.value === head.digest;
 
-  const commit = () => {
+  /** Commit the draft, then run `then` (a commit action) with the revision. */
+  const commit = (then?: CommitAction) => {
     if (!env) return;
     setBusy(true);
     setProblem(null);
     revisions
       .commit(env.id, message.trim() || undefined)
-      .then(() => setMessage(""))
+      .then((revision) => {
+        setMessage("");
+        then?.run(revision);
+      })
       .catch((e: unknown) => setProblem(errorMessage(e)))
       .finally(() => setBusy(false));
   };
+  const canCommit = !busy && !!env?.selection && !unchanged;
+  const commitIcon = busy ? (
+    <Loader2 className="animate-spin" />
+  ) : (
+    <GitCommitHorizontal />
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -160,31 +179,21 @@ export function RevisionsView({
               aria-label="Revision message"
               placeholder="Message (optional)"
               value={message}
+              className="h-7 px-2 text-xs"
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !busy && env.selection) commit();
+                if (e.key === "Enter" && canCommit) commit();
               }}
             />
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                disabled={busy || !env.selection || unchanged}
-                onClick={commit}
-              >
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <GitCommitHorizontal className="h-4 w-4" />
-                )}
-                Commit
-              </Button>
+            <div className="flex items-center justify-end gap-1">
               {head && (
                 <Button
                   type="button"
-                  size="sm"
-                  variant="outline"
+                  size="xs"
+                  variant="ghost"
                   disabled={unchanged}
+                  title={`Compare the draft with #${head.number}`}
+                  className="mr-auto text-muted-foreground"
                   onClick={() =>
                     onOpen({
                       env: env.id,
@@ -192,8 +201,36 @@ export function RevisionsView({
                     })
                   }
                 >
-                  <GitCompare className="h-4 w-4" />
+                  <GitCompare />
                   Diff
+                </Button>
+              )}
+              {commitActions.length > 0 ? (
+                <SplitButton
+                  type="button"
+                  size="xs"
+                  disabled={!canCommit}
+                  onClick={() => commit()}
+                  menuLabel="More ways to commit"
+                  menu={commitActions.map((action) => (
+                    <ActionMenuItem
+                      key={action.id}
+                      action={asMenuAction(action, () => commit(action))}
+                    />
+                  ))}
+                >
+                  {commitIcon}
+                  Commit
+                </SplitButton>
+              ) : (
+                <Button
+                  type="button"
+                  size="xs"
+                  disabled={!canCommit}
+                  onClick={() => commit()}
+                >
+                  {commitIcon}
+                  Commit
                 </Button>
               )}
             </div>
@@ -246,6 +283,12 @@ export function RevisionsView({
       )}
     </div>
   );
+}
+
+/** A commit action as a menu entry that commits, then runs it. */
+function asMenuAction(action: CommitAction, commit: () => void): HostAction {
+  const { run: _, ...rest } = action;
+  return { ...rest, run: commit };
 }
 
 /** A revision as a history entry; the newest is the environment's HEAD. */

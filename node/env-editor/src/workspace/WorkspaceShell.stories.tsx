@@ -9,6 +9,7 @@ import {
   Activity,
   AppWindow,
   Play,
+  RotateCcw,
   ScrollText,
   Settings2,
   ShieldCheck,
@@ -228,27 +229,41 @@ function fakeRuntime(): EditorContributions & {
             },
           ],
         },
-      actions: (id) =>
+      runAction: (id) =>
         running(id)
-          ? [
-              {
-                id: "stop",
-                label: "Stop",
-                icon: <Square />,
-                run: () => transition(id, "stopping", "stopped"),
-              },
-            ]
-          : [
-              {
-                id: "start",
-                label: "Start",
-                icon: <Play />,
-                variant: "primary",
-                enabled: state[id] === "stopped",
-                reason: `${id} is ${state[id]}`,
-                run: () => transition(id, "starting", "running"),
-              },
-            ],
+          ? {
+              id: "stop",
+              label: `Stop ${id}`,
+              icon: <Square />,
+              run: () => transition(id, "stopping", "stopped"),
+            }
+          : {
+              id: "start",
+              label: `Start ${id}`,
+              icon: <Play />,
+              variant: "primary",
+              enabled: state[id] === "stopped",
+              reason: `${id} is ${state[id]}`,
+              run: () => transition(id, "starting", "running"),
+            },
+      actions: (id) => [
+        {
+          id: "restart",
+          label: "Restart",
+          icon: <RotateCcw />,
+          enabled: running(id),
+          reason: notRunning(id),
+          run: () => transition(id, "starting", "running"),
+        },
+      ],
+      commitActions: (id) => [
+        {
+          id: "commit-start",
+          label: "Commit and start",
+          icon: <Play />,
+          run: () => transition(id, "starting", "running"),
+        },
+      ],
       tabs: (id) => [
         ...["Catalog", "Lineage", "Logs"].map((label) => ({
           id: label.toLowerCase(),
@@ -327,8 +342,9 @@ export const WithRevisions: Story = {
 };
 
 /** A host's contributions: Doctor and App settings side views, run-state
- *  badges with placement in the tree, a header with details (target, a
- *  copyable gateway URL) and Start/Stop, Catalog / Lineage / Logs sub-tabs
+ *  badges with placement in the tree, a hover card with details (target, a
+ *  copyable gateway URL), Start/Stop on the rows and the sub-tabs, Commit and
+ *  start, Catalog / Lineage / Logs sub-tabs
  *  (disabled until the environment runs) and an always-on Policies tab, each
  *  service's state on the canvas, and two bottom panel tabs, Run and Logs.
  *  "Show logs" in ⌘K opens the Logs tab through `useBottomPanel`'s store. */
@@ -397,7 +413,7 @@ export const WithViewerSeams: Story = {
 
 /** A host's workbench view: an Apps item in the activity bar that takes over
  *  the main area (with its own sidebar) while the ⌘K palette, bottom panel
- *  and status bar stay. Each environment's header has an "Open apps" action
+ *  and status bar stay. Each environment's ⋯ menu has an "Open apps" action
  *  that opens it through `useWorkbench()`; the activity-bar item, ⌘K "Show
  *  the editors" or opening an environment switches back, with the diagram
  *  as it was. */

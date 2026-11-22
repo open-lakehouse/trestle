@@ -21,6 +21,7 @@ export {
 export { Breadcrumb } from "./chrome.js";
 export {
   type ActivityActionContribution,
+  type CommitAction,
   ContributionsProvider,
   type ContributionsProviderProps,
   type DiffViewerProps,
@@ -81,13 +82,34 @@ export {
   withFile,
 } from "./editors.js";
 export {
+  ActionMenuItem,
+  ActionsMenu,
+  menuActions,
+  RunActionButton,
+  useEnvActions,
+} from "./envActions.js";
+export {
+  EnvCard,
+  type EnvCardProps,
+  EnvHoverCard,
+  type EnvHoverCardProps,
+} from "./envCard.js";
+export {
+  type DraftState,
+  EnvIndicator,
+  EnvStatusIndicator,
+  environmentIndicator,
+  type Indicator,
+  type IndicatorKind,
+  useDraftState,
+} from "./envIndicator.js";
+export {
   DESIGN_TAB,
-  EnvHeader,
   EnvironmentPane,
   type EnvironmentPaneProps,
   EnvSubTabs,
   useEnvSubTabs,
-} from "./envHeader.js";
+} from "./envPane.js";
 export {
   contextFor,
   type EnvDoc,

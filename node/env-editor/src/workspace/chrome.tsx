@@ -7,15 +7,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@open-lakehouse/ui-kit";
-import {
-  AlertTriangle,
-  ChevronRight,
-  CircleCheck,
-  CircleX,
-  Loader2,
-} from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
-import type { MemberPlan } from "./useMemberPlans.js";
 
 /** A sidebar view's title row, with its actions on the right. */
 export function SidebarHeader({
@@ -65,28 +58,6 @@ export function IconButton({
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
-}
-
-/** A member's state: planning, failed, clashing with another, or fine. */
-export function EnvStatus({
-  plan,
-  clashing,
-}: {
-  plan: MemberPlan | undefined;
-  clashing?: boolean;
-}) {
-  if (!plan) {
-    return (
-      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-    );
-  }
-  if (plan.error) {
-    return <CircleX className="h-3.5 w-3.5 shrink-0 text-destructive" />;
-  }
-  if (clashing) {
-    return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-ready" />;
-  }
-  return <CircleCheck className="h-3.5 w-3.5 shrink-0 text-success" />;
 }
 
 /** An inline name field: Enter submits (keeping it open on a refusal), Escape

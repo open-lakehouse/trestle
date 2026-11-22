@@ -1,11 +1,12 @@
 // What a host adds to the workspace shell: commands, extra side views,
 // workbench views that take over the main area, viewers for files and diffs,
-// and per environment a run status with header details, header actions,
-// sub-tabs after the editor's own, each service's state on the canvas, and
-// panels: tabs of the bottom panel, after Problems, in place of the static Run
-// output. The editor only renders what it is given and learns nothing about how
-// the host runs anything (containers, remote branches, ...). A host that
-// contributes nothing gets the shell as it always was.
+// and per environment a run status with hover-card details, a run action,
+// menu actions, more ways to commit, sub-tabs after the editor's own, each
+// service's state on the canvas, and panels: tabs of the bottom panel, after
+// Problems, in place of the static Run output. The editor only renders what
+// it is given and learns nothing about how the host runs anything
+// (containers, remote branches, ...). A host that contributes nothing gets the
+// shell as it always was.
 //
 // Contributions are plain data plus callbacks, so a host can derive them from
 // its own cache (a query cache, a store) and either re-render the provider
@@ -23,10 +24,12 @@ import type { FileSource } from "../artifacts/fileSource.js";
 import type { Command } from "../commands/registry.js";
 import type { NodeStatus, RunState } from "../graph/runState.js";
 import { PROBLEMS_PANEL, RUN_OUTPUT_PANEL } from "./bottomPanel.js";
+import type { RevisionSummary } from "./store.js";
 
 export type { NodeStatus, RunState } from "../graph/runState.js";
 
-/** An environment's run state, for its tree row and its tab's header. */
+/** An environment's run state: a dot on its tree row and its tab, and its
+ *  hover card. */
 export interface EnvironmentStatus {
   state: RunState;
   /** Short text for the state (e.g. "running 3/3"); defaults to its name. */
@@ -37,12 +40,13 @@ export interface EnvironmentStatus {
   placement?: string;
   /** More detail, shown in tooltips. */
   detail?: string;
-  /** Facts for the header, e.g. a remote target or the gateway's URL. */
+  /** Facts for its hover card, e.g. a remote target or the gateway's URL. */
   details?: EnvironmentDetail[];
 }
 
-/** One fact in an environment's header: `label value`, optionally copyable,
- *  and optionally a button that runs something (e.g. opens a sub-tab). */
+/** One fact in an environment's hover card: `label value`, optionally
+ *  copyable, and optionally a button that runs something (e.g. opens a
+ *  sub-tab). */
 export interface EnvironmentDetail {
   label: string;
   value: string;
@@ -50,14 +54,16 @@ export interface EnvironmentDetail {
   copy?: boolean;
   /** Tooltip; defaults to `value`. */
   title?: string;
-  /** Drawn before the label. */
+  /** Drawn before the label, e.g. the provider's logo. */
   icon?: ReactNode;
-  /** Makes the fact a button that runs this when clicked, e.g. to open the
-   *  environment's Configure tab. Its copy button, if any, stays beside it. */
+  /** Makes the fact a button that runs this when clicked (and closes the
+   *  card), e.g. to open the environment's Configure tab. Its copy button, if
+   *  any, stays beside it. */
   run?: () => void;
 }
 
-/** A button a host offers, e.g. in an environment's header. */
+/** Something a host offers to do with an environment: its run action (an
+ *  icon button) or an entry of its ⋯ menus. */
 export interface HostAction {
   /** Unique among the actions it is listed with. */
   id: string;
@@ -65,11 +71,26 @@ export interface HostAction {
   icon?: ReactNode;
   /** Defaults to `true`. */
   enabled?: boolean;
-  /** Why it is disabled, shown as its tooltip. */
+  /** Why it is disabled, shown with it. */
   reason?: string;
   /** Defaults to `"default"`. */
   variant?: "primary" | "default" | "destructive";
   run: () => void;
+}
+
+/** An entry of the Commit button's menu, e.g. "Commit and start": it commits
+ *  the draft, then runs with the new revision. */
+export interface CommitAction {
+  /** Unique among the commit actions. */
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  /** Defaults to `true`. */
+  enabled?: boolean;
+  /** Why it is disabled, shown with it. */
+  reason?: string;
+  /** Runs after a successful commit, with the revision it made. */
+  run: (revision: RevisionSummary) => void;
 }
 
 /** A sub-tab of an environment's tab, after the editor's own Diagram, Files
@@ -191,7 +212,16 @@ export interface DiffViewerProps {
 /** What a host knows about each environment, by the workspace's env id. */
 export interface EnvironmentContributions {
   status?: (envId: string) => EnvironmentStatus | undefined;
+  /** The one action drawn as an icon button on the environment's tree row
+   *  and at the end of its sub-tabs: typically Start, or Stop while it runs.
+   *  Its icon is drawn alone, its label is the tooltip. */
+  runAction?: (envId: string) => HostAction | undefined;
+  /** Everything else the host offers to do with it, in its ⋯ menus (the
+   *  tree row's, after Rename, Duplicate and Remove, and the sub-tabs').
+   *  An action with the `runAction`'s id is left out of them. */
   actions?: (envId: string) => HostAction[];
+  /** More ways to commit, in the Commit button's menu. */
+  commitActions?: (envId: string) => CommitAction[];
   tabs?: (envId: string) => EnvironmentTab[];
   /** A service's state, by catalog module id. */
   nodeStatus?: (envId: string, moduleId: string) => NodeStatus | undefined;

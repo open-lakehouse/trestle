@@ -62,15 +62,15 @@ memory.
 ### Environment tabs
 
 The explorer lists one row per environment, and picking one opens its tab.
-Every environment tab has a header (name, state, details, actions), then its
-sub-tabs: the editor's Diagram, Files (the rendered files) and Changes (with a
-store that keeps revisions), then a host's. Opening a file from the canvas or
+Every environment tab starts with its sub-tabs: the editor's Diagram, Files (the rendered files) and Changes (with a
+store that keeps revisions), then a host's, with the host's run action and a ⋯ menu of its other actions
+at their end. Opening a file from the canvas or
 the inspector lands on Files at that file. Revision and comparison tabs open
 as tabs of their own.
 
 The open tabs, the active one and each environment's sub-tab live in an editor
 store, as the workbench and the bottom panel do. A host that opens tabs from
-code (a header detail, a ⌘K command, a Start action) wraps the shell and the
+code (a card detail, a ⌘K command, a Start action) wraps the shell and the
 code that builds its contributions in `<EditorProvider>` and calls
 `useEditor().openEnvironment(id, { subTab })`. That opens or activates the
 environment's tab, sets its sub-tab, and brings the editor tabs back over a
@@ -94,7 +94,7 @@ optional, and with no contributions the shell is unchanged:
   (e.g. a host's Apps). While one is active its `render` replaces the editor
   tabs, which stay mounted and hidden so the diagram and viewers keep their
   state, and its `sidebar`, if given, replaces the sidebar. The ⌘K palette,
-  bottom panel and status bar stay. To switch from code (a header action, a
+  bottom panel and status bar stay. To switch from code (a menu action, a
   command), wrap the shell and the code that builds the contributions in
   `<WorkbenchProvider>` and call `useWorkbench().open(id)`, or
   `open("editor")` to go back.
@@ -107,14 +107,24 @@ optional, and with no contributions the shell is unchanged:
   a host gives workbench views or actions. The editor's own views switch from
   the sidebar's tabs, or with ⇧⌘E (Environments) and ⇧⌘H (History).
 - `environment.status(envId)`: a run-state dot and placement (`local slot 0`, a
-  remote branch) in the tree, and the header over the environment's tab, with
-  its revision. `details` adds facts to that header (`{ label, value, copy?,
-  title?, icon?, run? }`, e.g. a remote target or the gateway URL with a copy
-  button); they replace the editor's own gateway detail. With `run` a fact is a
-  button that runs it, e.g. opens the environment's Configure tab through
-  `useEditor().openEnvironment`.
-- `environment.actions(envId)`: buttons in that header (Start, Stop). A disabled
-  one shows its `reason`.
+  remote branch) in the tree, a dot on its editor tab, and its hover card
+  (resting on the tab, or a little longer on its tree row), with its revision.
+  `details` adds facts to that card (`{ label, value, copy?, title?, icon?,
+  run? }`, e.g. a remote target with its provider's logo, or the gateway URL
+  with a copy button); they replace the editor's own gateway detail. With
+  `run` a fact is a button that runs it and closes the card, e.g. opens the
+  environment's Configure tab through `useEditor().openEnvironment`.
+- `environment.runAction(envId)`: one action drawn as an icon button on the
+  environment's tree row and at the end of its sub-tabs, typically Start, or
+  Stop while it runs. Its label is the tooltip, and a disabled one shows its
+  `reason`.
+- `environment.actions(envId)`: everything else, in the ⋯ menus: the tree
+  row's (after Rename, Duplicate and Remove) and the sub-tabs'. An action with
+  the run action's id is left out. A disabled one shows its `reason`.
+- `environment.commitActions(envId)`: more ways to commit, in the History
+  Commit button's menu (`{ id, label, icon?, enabled?, reason?, run(revision)
+  }`, e.g. "Commit and start"). Each commits the draft, then runs with the new
+  revision.
 - `environment.tabs(envId)`: sub-tabs after the editor's Diagram, Files and
   Changes (Catalog, Logs). A disabled tab can't be picked and says why.
 - `environment.nodeStatus(envId, moduleId)`: each service's state, a dot on its
@@ -146,8 +156,8 @@ optional, and with no contributions the shell is unchanged:
 
 The `WorkspaceShell/WithContributions` story drives every seam from a fake
 runtime, `WorkspaceShell/WithViewerSeams` swaps in host viewers, and
-`WorkspaceShell/WithWorkbenchView` adds an Apps workbench view that header
-actions open.
+`WorkspaceShell/WithWorkbenchView` adds an Apps workbench view that the
+environments' ⋯ menus open.
 
 ### Running a module as a Neon Function
 

@@ -46,6 +46,11 @@ export {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "./dropdown-menu.js";
+export {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "./hover-card.js";
 export { Input } from "./input.js";
 export { Label } from "./label.js";
 export {
@@ -74,6 +79,7 @@ export {
   SheetTrigger,
 } from "./sheet.js";
 export { Toaster } from "./sonner.js";
+export { SplitButton, type SplitButtonProps } from "./split-button.js";
 export { Switch, type SwitchProps } from "./switch.js";
 export { ThemeProvider, useTheme } from "./ThemeProvider.js";
 export { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs.js";
