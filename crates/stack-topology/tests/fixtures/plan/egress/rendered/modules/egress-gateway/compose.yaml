@@ -37,7 +37,7 @@ services:
         condition: service_started
 
   secret-server:
-    image: ghcr.io/open-lakehouse/trestle-secret-server:0.0.0
+    image: ghcr.io/open-lakehouse/trestle-secret-server:0.0.1
     restart: unless-stopped
     configs:
       - source: secret_server_config

@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:bc9df14e705020fd0926fee1665d55455135263620473c70e09ce99bbd0e7f74"
+    "digest": "sha256:a33bfdbce511bc3ac521079de5422da10420a40fb3d00da0d37a7b502d6889fd"
   },
   "modules": [
     {
@@ -124,7 +124,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/open-lakehouse/trestle-secret-server:0.0.0",
+          "default": "ghcr.io/open-lakehouse/trestle-secret-server:0.0.1",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "advanced": true

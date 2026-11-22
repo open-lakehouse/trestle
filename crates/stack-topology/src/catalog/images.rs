@@ -12,7 +12,7 @@ pub const ENVOY: &str = "envoyproxy/envoy:v1.40-latest";
 pub const EGRESS_ENVOY: &str = "envoyproxy/envoy:v1.40.2";
 /// The SDS secret server the egress gateway fetches its credentials from. A placeholder until
 /// the first `olai-secret-server` image is released.
-pub const SECRET_SERVER: &str = "ghcr.io/open-lakehouse/trestle-secret-server:0.0.0";
+pub const SECRET_SERVER: &str = "ghcr.io/open-lakehouse/trestle-secret-server:0.0.1";
 /// Authelia forward-auth provider.
 pub const AUTHELIA: &str = "ghcr.io/authelia/authelia:4.39";
 /// Postgres relational database.
