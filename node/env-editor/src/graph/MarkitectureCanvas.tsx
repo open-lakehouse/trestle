@@ -35,6 +35,7 @@ import {
   CanvasContext,
   type CanvasContextValue,
 } from "./canvasActions.js";
+import { isModuleNode } from "./cloud.js";
 import { ElkEdge } from "./edges/ElkEdge.js";
 import {
   NodeFilesContext,
@@ -175,8 +176,9 @@ const EDGE_KINDS = Object.keys(EDGE_STYLE) as TopologyEdgeKind[];
 /** A short label for an edge at the gateway. The cards already detail the
  *  rest: the gateway rows list routes, and a provider lists what it offers.
  *  Internal "uses" edges carry no label, so the graph stays legible; their
- *  detail is in the edge's accessible title. */
-function edgeLabel(e: TopologyEdgeDto): string | undefined {
+ *  detail is in the edge's accessible title. A "uses" edge leaving the
+ *  environment says how it authenticates (`native`, `token`, `injected`). */
+export function edgeLabel(e: TopologyEdgeDto): string | undefined {
   switch (e.kind) {
     case "access":
       return `:${e.host_port}`;
@@ -189,13 +191,13 @@ function edgeLabel(e: TopologyEdgeDto): string | undefined {
     case "integrates":
       return e.feature === "observability" ? "traces" : e.feature;
     case "uses":
-      return undefined;
+      return e.auth;
   }
 }
 
 /** The full detail of an edge, for its accessible label. `gateways` holds the
  *  gateway nodes' ids: without one, clients reach a component directly. */
-function edgeTitle(e: TopologyEdgeDto, gateways: Set<string>): string {
+export function edgeTitle(e: TopologyEdgeDto, gateways: Set<string>): string {
   switch (e.kind) {
     case "access":
       return gateways.has(e.to)
@@ -209,10 +211,12 @@ function edgeTitle(e: TopologyEdgeDto, gateways: Set<string>): string {
       return `The gateway asks ${e.to} to authorize each signed-in request on :${e.host_port}`;
     case "integrates":
       return `${e.from} integrates with ${e.to} for ${e.feature} (${e.protocol})`;
-    case "uses":
+    case "uses": {
+      const how = e.auth ? `${e.protocol}, ${e.auth} auth` : e.protocol;
       return e.resources.length > 0
-        ? `${e.from} uses ${e.to} (${e.protocol}) for ${e.resources.join(", ")}`
-        : `${e.from} uses ${e.to} (${e.protocol}) as its ${roleStyle(e.role).label.toLowerCase()}`;
+        ? `${e.from} uses ${e.to} (${how}) for ${e.resources.join(", ")}`
+        : `${e.from} uses ${e.to} (${how}) as its ${roleStyle(e.role).label.toLowerCase()}`;
+    }
   }
 }
 
@@ -237,10 +241,11 @@ export function MarkitectureCanvas({
   );
 }
 
-/** The component a node stands for (absent for the clients node). */
+/** The module a node stands for (absent for the clients node and a service
+ *  outside the environment). */
 function nodeComponent(node: Node): GraphNodeDto | undefined {
   const dto = (node.data as { node?: GraphNodeDto }).node;
-  return dto && dto.kind !== "clients" ? dto : undefined;
+  return dto && isModuleNode(dto) ? dto : undefined;
 }
 
 function MarkitectureFlow({

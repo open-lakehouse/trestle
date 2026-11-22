@@ -4,6 +4,7 @@ import { Box, Database, Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { GraphNodeDto, ProvisionedDto } from "../../types.js";
 import { useCanvasContext } from "../canvasActions.js";
+import { isModuleNode } from "../cloud.js";
 import {
   COMPONENT_WIDTH,
   componentFacts,
@@ -46,7 +47,7 @@ export function ComponentNode({ data, selected }: NodeProps) {
       className={cn(node.kind === "external" && "border-dashed")}
       style={{ width: COMPONENT_WIDTH, height: componentHeight(node) }}
     >
-      <NodeActions id={node.id} selected={selected} />
+      {isModuleNode(node) && <NodeActions id={node.id} selected={selected} />}
       <NodeHeader node={node} />
       {facts.length > 0 && (
         <div

@@ -33,6 +33,35 @@ describe("parseGraphSnapshot", () => {
     expect(parsed).toEqual(snapshot);
   });
 
+  test("keeps a cloud's name and an outside edge's auth", () => {
+    const graph = JSON.parse(JSON.stringify(FIXTURE_PLAN.graph));
+    graph.nodes.push({
+      id: "@neon-ai-gateway",
+      kind: "external",
+      display_name: "AI Gateway",
+      role: "ai_gateway",
+      cloud: "neon",
+      cloud_name: "Neon",
+      offers: [],
+      surfaces: [],
+      provisions: [],
+      resource_nouns: [],
+    });
+    graph.edges.push({
+      key: "uses:mlflow→@neon-ai-gateway:ai_gateway",
+      kind: "uses",
+      from: "mlflow",
+      to: "@neon-ai-gateway",
+      role: "ai_gateway",
+      protocol: "HTTP",
+      resources: [],
+      auth: "token",
+    });
+    const parsed = roundTrip(createGraphSnapshot(graph, { title: "t" }));
+    expect(parsed.graph.nodes.at(-1)?.cloud_name).toBe("Neon");
+    expect(parsed.graph.edges.at(-1)).toMatchObject({ auth: "token" });
+  });
+
   test("reads a v1 snapshot saved before edge keys, deriving them", () => {
     const parsed = roundTrip({
       format: "trestle-graph",
