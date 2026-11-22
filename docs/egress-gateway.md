@@ -1,8 +1,8 @@
 # Egress gateway and secret delivery over SDS
 
 Status: phases 1 (the secret server, [`crates/secret-server`](../crates/secret-server)),
-2, 3 and 5 (Omnigent) are implemented; the rest is design. Phases and their
-done-whens are at the end.
+2, 3, 4, 5 (Omnigent) and 7 (Rust services as SDS consumers, without adoption yet) are
+implemented. The rest is design. Phases and their done-whens are at the end.
 
 An environment's gateway today is its **ingress**: the Envoy that publishes the
 host ports, routes to every service, and drops what a client sends as its own
@@ -96,7 +96,7 @@ with prost and tonic 0.14):
   same nonce and an error detail as a NACK (logged, not retried with the same
   version), and sends a new version when a value changes.
 - `SecretDiscoveryService.FetchSecrets`, the unary call, for the Rust client
-  (below) and for debugging.
+  ([below](#consumers)) and for debugging.
 - Only `generic_secret` resources. `DeltaSecrets` isn't needed: each consumer
   asks for a handful of names.
 
@@ -290,13 +290,53 @@ environment, and only `secret-server` references it.
   shims that would fetch a value over SDS and `exec` the real process.
   MLflow's `MLFLOW_CRYPTO_KEK_PASSPHRASE` (minted by the desktop) is such a
   value: MLflow reads it from its environment, so it stays there.
-- **Our own Rust services**, later: an `SdsCredentialProvider` in `olai-http`,
-  behind the `CredentialProvider` trait, fetches a named secret over the
-  consumer's socket (`FetchSecrets`, then a `StreamSecrets` watch for
-  rotation). A module declares the secrets it reads this way, and the plan
-  gives it a socket volume and the server a listener for it. Its secrets then
-  leave its process environment. `unity-catalog-rs`'s `UC_SERVER_KEK` and
-  service-to-service tokens are the first candidates.
+- **Our own Rust services** (implemented, phase 7) read their secrets over SDS
+  instead of from their environment.
+  - **The client.** `olai_http::sds::SdsCredentialProvider`, behind olai-http's
+    `CredentialProvider` trait and its `sds` feature, fetches one named secret
+    over the consumer's socket. It calls `FetchSecrets` on first use, then keeps a
+    `StreamSecrets` watch open, which ACKs each version with its nonce and swaps
+    the cached value on rotation. While the server is gone (it's being recreated,
+    say), the provider keeps the last value and reconnects with backoff. A name
+    the consumer may not see is `NotFound`. For a bearer token there's
+    `BearerAuth::sds(socket, name)`, next to `token_env` and `token_file`. Both use
+    the same Envoy v3 protos as the server (`envoy-types`), so neither the default
+    nor the wasm build pulls in tonic.
+  - **The module.** A module declares what it reads this way in
+    `Provides::sds_secrets` (or `Module::sds_secrets_in`, by knobs). Each entry is a
+    name the service asks for and the launch variable that holds it. That variable
+    must also be one of the module's declared `secrets`, which still says whether
+    it's required or minted:
+
+    ```rust
+    Provides {
+        secrets: vec![DeclaredSecret::required("EXAMPLE_SERVER_KEK", "…")],
+        sds_secrets: vec![SdsSecret::new("server-kek", "EXAMPLE_SERVER_KEK")],
+        ..Provides::default()
+    }
+    ```
+  - **The plan.** A module with SDS secrets pulls in the egress module, which runs
+    the secret server. With no routes, its Envoy runs idle with no listeners. The
+    module becomes a consumer like the egress Envoy:
+    - It gets a volume `sds-<module>`, which the secret server mounts at
+      `/run/trestle-sds/<module>/` and the module's containers at
+      `/run/trestle-sds/`.
+    - It gets a listener in `secret-server.yaml` that serves it those names.
+    - It gets an override file (`modules/egress-gateway/consumers/<module>.yaml`,
+      the same one that carries route URLs). The override mounts the volume, sets
+      `TRESTLE_SDS_SOCKET=/run/trestle-sds/sds.sock`, and starts the module after
+      `secret-server`, so the module's own template doesn't change.
+    - Its SDS variables move to the egress module's declared secrets, the same
+      way a route's do, and reach `secret-server` alone. The module's fragment
+      must not pass them through.
+    - `trestle secret rotate` covers them like route credentials: it recreates
+      only `secret-server`, and the module's watch picks up the new value without
+      a restart.
+
+    The egress Envoy is one consumer of the same list (`EgressConfig::sds_consumers`)
+    with its secrets taken from the routes, not a special case.
+  - **Adoption** in our services (mangrove, headwaters, `unity-catalog-rs`'s
+    `UC_SERVER_KEK` and service-to-service tokens) comes next (S8).
 
 ## The first user: agents and the workgraph function
 
@@ -410,10 +450,14 @@ runs a long-lived endpoint of that shape.
    them. Done when an agent in a local environment works on the work graph
    through its route, and its key appears nowhere but the keychain and the
    secret server's environment.
-7. **Rust services as SDS consumers.** `SdsCredentialProvider` in `olai-http`,
-   module-declared SDS secrets, and adoption by our own services. Done when a
-   service reads a secret over its socket and the secret is gone from its
-   environment.
+7. **Rust services as SDS consumers** (implemented, without adoption).
+   `SdsCredentialProvider` in `olai-http`, module-declared SDS secrets
+   (`Provides::sds_secrets`), and then adoption by our own services (S8). Done when
+   a service reads a secret over its socket and the secret is gone from its
+   environment: `crates/stack-runtime/tests/live_sds.rs` runs olai-http's
+   `sds_probe` as a module's container. It checks that the probe reads its token
+   over SDS, that a recreate of `secret-server` reaches it without a restart, and
+   that only the secret server's container environment holds the value.
 8. **A host-backed source.** The in-environment server pulls from the desktop
    (then possibly the CLI). Done when rotating a key in the desktop reaches
    Envoy without recreating any container.

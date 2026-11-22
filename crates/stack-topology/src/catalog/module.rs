@@ -179,6 +179,15 @@ pub struct Provides {
     /// [`Module::secrets_in`] narrows the list by knobs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<DeclaredSecret>,
+    /// The [`secrets`](Self::secrets) this module's containers read over SDS from the
+    /// environment's secret server rather than from their environment: each by the name the
+    /// service asks for, and the launch variable that holds it. The planner gives the module a
+    /// socket at `/run/trestle-sds/sds.sock` (also in `TRESTLE_SDS_SOCKET`) and the secret
+    /// server a listener serving it these names; each variable then reaches the secret server
+    /// alone, so the module's fragment must not pass it through. [`Module::sds_secrets_in`]
+    /// narrows the list by knobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sds_secrets: Vec<SdsSecret>,
     /// For a module hosted as a function: the resource kinds it demands as a container
     /// (`relational_db`, …), which the function finds where it is deployed (its branch's
     /// Postgres) rather than in the stack. The planner sets it on the
@@ -228,6 +237,28 @@ pub struct Provides {
     /// [`catalog::deploy`]: crate::catalog::deploy
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deploy: Vec<DeployStepSpec>,
+}
+
+/// A secret a module's containers read over SDS (see [`Provides::sds_secrets`]): names only,
+/// never a value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SdsSecret {
+    /// The name the service asks the secret server for, e.g. `"server-kek"`.
+    pub name: String,
+    /// The launch variable that holds the value, e.g. `"EXAMPLE_SERVER_KEK"`: one of the
+    /// module's [`secrets`](Provides::secrets).
+    pub env: String,
+}
+
+impl SdsSecret {
+    /// The secret `name`, held by the launch variable `env`.
+    pub fn new(name: impl Into<String>, env: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            env: env.into(),
+        }
+    }
 }
 
 /// A secret variable a module's containers read at launch (see [`Provides::secrets`]): its
@@ -1216,10 +1247,6 @@ pub trait Module: Send + Sync {
         let _ = (knobs, stack);
         Ok(())
     }
-    /// The secret variables this module reads at launch with the resolved `knobs`, in a stack
-    /// with the given [`StackFacts`]. Defaults to [`Provides::secrets`]; a module overrides it
-    /// when a knob or a partner module changes which secrets it needs, or whether one is
-    /// required.
     /// Checks an egress route this module consumes against what the module can use (a
     /// registry's naming rules, say); the reason becomes the route's plan error. Accepts every
     /// route by default.
@@ -1227,9 +1254,20 @@ pub trait Module: Send + Sync {
         let _ = route;
         Ok(())
     }
+    /// The secret variables this module reads at launch with the resolved `knobs`, in a stack
+    /// with the given [`StackFacts`]. Defaults to [`Provides::secrets`]; a module overrides it
+    /// when a knob or a partner module changes which secrets it needs, or whether one is
+    /// required.
     fn secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
         let _ = (knobs, stack);
         Cow::Borrowed(&self.provides().secrets)
+    }
+    /// The secrets this module reads over SDS with the resolved `knobs`, in a stack with the
+    /// given [`StackFacts`]. Defaults to [`Provides::sds_secrets`]; a module overrides it when
+    /// a knob changes which secrets it reads that way.
+    fn sds_secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [SdsSecret]> {
+        let _ = (knobs, stack);
+        Cow::Borrowed(&self.provides().sds_secrets)
     }
     /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
     /// extras).

@@ -16,6 +16,7 @@ use std::fmt::Write as _;
 
 use crate::catalog::module::ModuleId;
 use crate::model::placement::Vantage;
+use crate::plan::egress::{SDS_SOCKET_VAR, SECRET_SERVER_SERVICE};
 use crate::plan::{LocalSecrets, Plan};
 use crate::render::deploy::{DEPLOY_README_PATH, render_readme, render_steps};
 use crate::render::envoy::render_envoy;
@@ -169,9 +170,10 @@ pub fn render_modules(
     Ok((renders, head))
 }
 
-/// Give each egress-route consumer the URLs of the routes it may call (`EGRESS_<ROUTE>_URL`):
-/// an override file, written by the egress module, that Compose merges over the consumer's
-/// fragment, so no consumer's template has to know about egress.
+/// Give each egress-route consumer the URLs of the routes it may call (`EGRESS_<ROUTE>_URL`),
+/// and each module reading secrets over SDS its socket: an override file, written by the egress
+/// module, that Compose merges over the consumer's fragment, so no consumer's template has to
+/// know about egress or SDS.
 fn add_egress_overrides(
     plan: &Plan,
     renders: &mut [(ModuleId, RenderOutput)],
@@ -180,8 +182,18 @@ fn add_egress_overrides(
     let Some(egress) = &plan.egress else {
         return;
     };
+    let mut consumers: Vec<&ModuleId> = egress.consumers();
+    for module in egress
+        .sds_consumers
+        .iter()
+        .filter_map(|c| c.module.as_ref())
+    {
+        if !consumers.contains(&module) {
+            consumers.push(module);
+        }
+    }
     let mut files = Vec::new();
-    for consumer in egress.consumers() {
+    for consumer in consumers {
         let Some(include) = includes.iter_mut().find(|i| &i.module == consumer) else {
             continue;
         };
@@ -195,17 +207,44 @@ fn add_egress_overrides(
                 _ => None,
             })
             .collect();
-        let env = egress.consumer_env(consumer);
-        let mut text = format!(
-            "# The egress routes `{consumer}` may call: the egress gateway adds their credentials.\n\
-             # Written by the planner and merged over `modules/{consumer}/compose.yaml`.\n\
-             services:\n"
+        let mut env = egress.consumer_env(consumer);
+        let sds = egress.sds_consumer(consumer);
+        if let Some(sds) = sds {
+            env.insert(SDS_SOCKET_VAR.to_string(), sds.socket.clone());
+        }
+        let mut text = if egress.consumer_env(consumer).is_empty() {
+            String::new()
+        } else {
+            format!(
+                "# The egress routes `{consumer}` may call: the egress gateway adds their credentials.\n"
+            )
+        };
+        let _ = writeln!(
+            text,
+            "# Written by the planner and merged over `modules/{consumer}/compose.yaml`."
         );
+        if sds.is_some() {
+            text.push_str(
+                "# Its socket to the secret server, which serves it its SDS secrets: only it and the\n\
+                 # secret server mount the volume, and the mount is its identity.\n",
+            );
+        }
+        text.push_str("services:\n");
         for service in containers {
             let _ = writeln!(text, "  {service}:\n    environment:");
-            for (key, url) in &env {
-                let _ = writeln!(text, "      {key}: \"{url}\"");
+            for (key, value) in &env {
+                let _ = writeln!(text, "      {key}: \"{value}\"");
             }
+            if let Some(sds) = sds {
+                let _ = writeln!(
+                    text,
+                    "    volumes:\n      - {}:{}\n    depends_on:\n      {SECRET_SERVER_SERVICE}:\n        condition: service_started",
+                    sds.volume, sds.dir
+                );
+            }
+        }
+        if let Some(sds) = sds {
+            let _ = writeln!(text, "volumes:\n  {}:", sds.volume);
         }
         let path = format!(
             "modules/{}/consumers/{consumer}.yaml",

@@ -1,12 +1,14 @@
-//! `trestle secret rotate`: a new value for an egress route's credential, handed to the running
-//! instances without restarting the egress gateway.
+//! `trestle secret rotate`: a new value for a secret the secret server holds (an egress route's
+//! credential, or a secret a module reads over SDS), handed to the running instances without
+//! restarting the egress gateway or the module.
 //!
 //! The value is read from stdin (or asked for), never from the command line, and stored as
 //! `trestle var set <ws>/<env> --secret <NAME>` would: in the keychain, on the environment, or on
 //! this machine's own vars on a team's state (`--state`). Each running instance of the
 //! environment (or only `@<n>`'s) then gets its `secret-server` recreated with the new value
 //! (`docker compose up -d --no-deps --force-recreate secret-server`). The egress Envoy's SDS
-//! stream reconnects and it swaps the value in; nothing else restarts.
+//! stream reconnects and it swaps the value in, as does a module's SDS client; nothing else
+//! restarts.
 
 use clap::{Args, Subcommand};
 use olai_stack_runtime::Layer;
@@ -20,8 +22,9 @@ use crate::error::{Error, Result};
 /// The `trestle secret` subcommand group.
 #[derive(Subcommand)]
 pub enum SecretCommand {
-    /// Store a new value for an egress route's credential and recreate the secret server of
-    /// every running instance with it (the value is read from stdin, or asked for).
+    /// Store a new value for a secret the secret server holds (an egress route's credential,
+    /// or a module's SDS secret) and recreate the secret server of every running instance with
+    /// it (the value is read from stdin, or asked for).
     Rotate(RotateArgs),
 }
 
@@ -30,7 +33,8 @@ pub struct RotateArgs {
     /// `<ws>/<env>` (its running instances) or `<ws>/<env>@<n>` (revision n's).
     pub target: Target,
 
-    /// The variable holding the route's credential: its `credential.secret`.
+    /// The variable holding the secret: a route's `credential.secret`, or the `env` of a
+    /// module's SDS secret.
     pub name: String,
 
     /// Store it on this machine only, as `var set --local` does.
@@ -64,7 +68,7 @@ fn run_rotate(ctx: &Ctx, args: RotateArgs) -> Result<()> {
     super::var::check_key(name)?;
     if args.target.env.is_none() {
         return Err(Error::other(
-            "a route's credential belongs to an environment (<ws>/<env>)",
+            "a secret the secret server holds belongs to an environment (<ws>/<env>)",
         ));
     }
     if args.target.rev == Some(Rev::Draft) {
@@ -141,7 +145,7 @@ fn running_instances(ctx: &Ctx, target: &Target) -> Result<Vec<Instance>> {
     Ok(out)
 }
 
-/// `name` must be the credential of an egress route: of a running instance's revision, or (when
+/// `name` must be a secret the secret server holds: of a running instance's revision, or (when
 /// none runs) of the revision `target` names (the head without `@`).
 fn check_route_secret(ctx: &Ctx, target: &Target, running: &[Instance], name: &str) -> Result<()> {
     let (_, env) = target.environment(&ctx.store)?;
@@ -152,23 +156,24 @@ fn check_route_secret(ctx: &Ctx, target: &Target, running: &[Instance], name: &s
     numbers.dedup();
     for number in &numbers {
         let rev = revision(&ctx.store, &env, Some(Rev::Number(*number)))?;
-        if route_secrets(&rev)?.iter().any(|s| s == name) {
+        if served_secrets(&rev)?.iter().any(|s| s == name) {
             return Ok(());
         }
     }
     let revs: Vec<String> = numbers.iter().map(|n| format!("r{n}")).collect();
     Err(Error::other(format!(
-        "`{name}` is no egress route's credential in {target} ({})",
+        "`{name}` is not a secret the secret server holds in {target} ({})",
         revs.join(", ")
     ))
     .with_hint(format!(
-        "rotation recreates the secret server, which only holds route credentials; set other \
-         secrets with `trestle var set {target} --secret {name}`"
+        "rotation recreates the secret server, which only holds egress route credentials and \
+         modules' SDS secrets; set other secrets with `trestle var set {target} --secret {name}`"
     )))
 }
 
-/// The variables holding the revision's egress route credentials.
-fn route_secrets(rev: &olai_stack_state::Revision) -> Result<Vec<String>> {
+/// The variables the revision's secret server holds: the egress routes' credentials and the
+/// modules' SDS secrets.
+fn served_secrets(rev: &olai_stack_state::Revision) -> Result<Vec<String>> {
     let catalog = super::env_store::catalog_for(rev.modules())?;
     let plan = rev
         .manifest()

@@ -47,8 +47,8 @@ services:
       - source: secret_server_config
         target: /etc/trestle/secret-server.yaml
 {%- if egress.secrets %}
-    # The routes' credentials, by name only: the launcher supplies the values. No other service
-    # in the environment lists them.
+    # The routes' credentials and the secrets modules read over SDS, by name only: the launcher
+    # supplies the values. No other service in the environment lists them.
     environment:
 {%- for var in egress.secrets %}
       {{ var }}:

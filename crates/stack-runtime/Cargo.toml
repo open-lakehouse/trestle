@@ -42,6 +42,8 @@ keyring = { version = "3.6", default-features = false, features = [
 rusqlite = "0.32"
 # The live egress test's upstream certificate and its CA.
 rcgen = "0.14"
+# The live SDS test's digests of the values its probe reports.
+ring = { version = "0.17", default-features = false, features = ["std"] }
 # Reads rendered compose fragments in the egress tests.
 serde_yaml = { workspace = true }
 tempfile = "3"

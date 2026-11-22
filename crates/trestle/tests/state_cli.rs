@@ -957,7 +957,8 @@ fn a_route_credential_rotates_into_the_running_instances() {
     // Not a route's credential: refused before anything is read or stored.
     let err = home.fails(&["secret", "rotate", "demo/dev", "OTHER_KEY"]);
     assert!(
-        err.contains("`OTHER_KEY` is no egress route's credential") && err.contains("var set"),
+        err.contains("`OTHER_KEY` is not a secret the secret server holds")
+            && err.contains("var set"),
         "{err}"
     );
     // The value never comes from the command line.
