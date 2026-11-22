@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/open-lakehouse/trestle/compare/ui-kit-v0.0.2...ui-kit-v0.0.3) - 2026-11-22
+
+### Added
+
+- [**breaking**] run actions, hover cards and a split Commit instead of the header (#437)
+
 ## [0.0.2](https://github.com/open-lakehouse/trestle/compare/ui-kit-v0.0.1...ui-kit-v0.0.2) - 2026-11-21
 
 ### Added

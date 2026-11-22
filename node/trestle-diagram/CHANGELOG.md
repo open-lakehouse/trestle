@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.14.1...trestle-diagram-v0.15.0) - 2026-11-22
+
+### Added
+
+- [**breaking**] run actions, hover cards and a split Commit instead of the header (#437)
+
 ## [0.14.1](https://github.com/open-lakehouse/trestle/compare/trestle-diagram-v0.14.0...trestle-diagram-v0.14.1) - 2026-11-22
 
 ### Added
