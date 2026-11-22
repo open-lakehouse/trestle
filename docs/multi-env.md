@@ -337,7 +337,9 @@ The network plan comes in three phases. Each phase keeps the next one open.
    plus an agent. Envoy fetches its SVID and trust bundle over SDS from the
    agent and does mTLS on a mesh listener. Envoy RBAC (or the existing OPA
    policy hook) then authorizes by SPIFFE ID. That enables policies like "prod
-   accepts reads from dev's catalog, never writes".
+   accepts reads from dev's catalog, never writes". The environment's secret
+   server ([`egress-gateway.md`](egress-gateway.md)) checks its callers the
+   same way then, by SPIFFE ID instead of the socket they call on.
 
    Two trust models are left open:
    - One trust domain per workspace with per-env path prefixes

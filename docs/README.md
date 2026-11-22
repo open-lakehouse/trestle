@@ -11,6 +11,10 @@ Design records and deeper explanations for Trestle.
 - [Running environments](runtime.md): `olai-stack-runtime`'s Compose engine, what
   the Docker engines print (captured as fixtures), and how credentials reach
   Compose; and the state store the CLI and the desktop app share.
+- [Egress gateway](egress-gateway.md): a second Envoy that injects credentials
+  into outbound requests, the secret server that feeds it over SDS, caller
+  identity before and after SPIRE, and the environment graph's Neon and
+  Databricks groups. Design.
 - [Credential vending](credential-vending.md): protocol-neutral crates for vended
   storage credentials (model, client-side `object_store` integration, server-side
   minting), shared by Unity Catalog, Iceberg REST and Open Sharing. Accepted, with
