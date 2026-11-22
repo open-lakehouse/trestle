@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -104,9 +105,12 @@ impl<T: TokenProvider> CredentialProvider for TokenCredentialProvider<T> {
 /// Each cloud provider and Databricks implements this trait.
 /// `send()` in `CloudClient` calls `self.signer.sign(builder).await?`.
 ///
+/// [`Any`] is a supertrait, so the holder of a `dyn RequestSigner` can get the signer's
+/// own type back: `(signer as &dyn Any).downcast_ref::<BearerProviderSigner>()`.
+///
 /// # References
 /// - <https://docs.rs/reqwest/latest/reqwest/struct.RequestBuilder.html>
-pub trait RequestSigner: Debug + Send + Sync {
+pub trait RequestSigner: Any + Debug + Send + Sync {
     /// Sign a [`reqwest::RequestBuilder`], returning the modified builder.
     fn sign<'a>(
         &'a self,

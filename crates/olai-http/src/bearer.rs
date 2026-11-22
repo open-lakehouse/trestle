@@ -1382,4 +1382,14 @@ mod tests {
             assert!(!debug.contains("super-secret"), "secret leaked: {debug}");
         }
     }
+
+    #[tokio::test]
+    async fn a_dyn_signer_downcasts_to_the_bearer_signer() {
+        let signer: Arc<dyn crate::RequestSigner> =
+            Arc::new(BearerProviderSigner(BearerAuth::static_token("tok")));
+        let any: &dyn std::any::Any = &*signer;
+        let bearer = any.downcast_ref::<BearerProviderSigner>().unwrap();
+        assert_eq!(bearer.0.get_credential().await.unwrap().token, "tok");
+        assert!(any.downcast_ref::<crate::SignerChain>().is_none());
+    }
 }
