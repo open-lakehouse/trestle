@@ -102,7 +102,7 @@ pub use catalog::module::{
     ExtraResource, GatewayTls, HelperKind, HelperService, HostedFunction, ImpersonatedHost, Knob,
     KnobKind, KnobRejection, MeshNetwork, Module, ModuleId, OutsideService, PortDecl, PortMapping,
     Provides, PythonClient, Readiness, ReadyGate, RenderCtx, RenderSpec, ResolvedKnobs,
-    ResourceDemand, StackFacts, TemplateError, UrlPart, is_model_ref,
+    ResourceDemand, SdsSecret, StackFacts, TemplateError, UrlPart, is_model_ref,
 };
 pub use catalog::{
     Catalog, DATA_ROOT_DEFAULT, DATA_ROOT_VAR, HOST_PORT_VAR_PREFIX, baseline_catalog,

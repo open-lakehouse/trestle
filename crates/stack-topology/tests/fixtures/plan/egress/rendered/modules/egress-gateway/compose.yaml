@@ -42,8 +42,8 @@ services:
     configs:
       - source: secret_server_config
         target: /etc/trestle/secret-server.yaml
-    # The routes' credentials, by name only: the launcher supplies the values. No other service
-    # in the environment lists them.
+    # The routes' credentials and the secrets modules read over SDS, by name only: the launcher
+    # supplies the values. No other service in the environment lists them.
     environment:
       WORKGRAPH_PLANNER_API_KEY:
       SEARCH_API_KEY:

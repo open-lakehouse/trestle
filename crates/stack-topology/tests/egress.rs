@@ -7,10 +7,12 @@
 //! `envoy --mode validate` at the pinned image.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use olai_stack_topology::{
-    EgressRoute, EgressSelection, InjectedCredential, MaterializedOutput, McpRoute, ModuleId, Plan,
-    PlanCtx, PlanError, Secrets, Selection, baseline_catalog,
+    DataModule, DeclaredSecret, EgressRoute, EgressSelection, InjectedCredential,
+    MaterializedOutput, McpRoute, ModuleId, Placement, Plan, PlanCtx, PlanError, Provides,
+    RenderSpec, Role, SdsSecret, Secrets, Selection, ServiceSpec, baseline_catalog,
 };
 
 const PLANNER_KEY: &str = "WORKGRAPH_PLANNER_API_KEY";
@@ -879,4 +881,221 @@ fn the_registry_is_a_visible_file_of_the_plan() {
     };
     assert!(paths(vec![docs_route()]).iter().any(|p| p == REGISTRY));
     assert!(!paths(vec![upstream_route()]).iter().any(|p| p == REGISTRY));
+}
+
+/// The variable holding the secret the `sds-app` test module reads over SDS.
+const SDS_KEY: &str = "SDS_APP_SERVER_KEK";
+
+/// A module whose `app` container reads `server-kek` over SDS, held by `SDS_KEY`, and also
+/// reads `SDS_APP_OTHER` from its environment as usual.
+fn sds_module(sds_secrets: Vec<SdsSecret>) -> DataModule {
+    DataModule {
+        id: ModuleId::from("sds-app"),
+        model: None,
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "app".into(),
+            role: Role::new("app"),
+            placement: Placement::Container {
+                service: "app".into(),
+            },
+            endpoints: vec![],
+            depends_on: vec![],
+            base_path: String::new(),
+        }],
+        provides: Provides {
+            secrets: vec![
+                DeclaredSecret::required(SDS_KEY, "The key-encryption key."),
+                DeclaredSecret::optional("SDS_APP_OTHER", "Read from the environment."),
+            ],
+            sds_secrets,
+            ..Provides::default()
+        },
+        knobs: vec![],
+        renders: RenderSpec {
+            fragment: "services:\n  app:\n    image: example/app:1\n    environment:\n      SDS_APP_OTHER:\n".into(),
+            files: vec![],
+        }
+        .for_compose(),
+    }
+}
+
+fn sds_plan(module: DataModule, routes: Vec<EgressRoute>) -> Result<Plan, PlanError> {
+    let mut catalog = baseline_catalog();
+    catalog.insert(Arc::new(module));
+    let mut selection = Selection::modules(["sds-app"]);
+    if !routes.is_empty() {
+        selection.modules.push(ModuleId::from("omnigent"));
+        selection.knob_overrides.insert(
+            ModuleId::from("omnigent"),
+            [("upstream".to_string(), "keys".to_string())].into(),
+        );
+        selection.egress.routes = routes;
+    }
+    let ctx = PlanCtx {
+        env_name: "sds".into(),
+        secrets: Some(branch()),
+        ..PlanCtx::default()
+    };
+    catalog.plan(&selection, &ctx)
+}
+
+/// A module's SDS secret pulls in the secret server, which serves it on the module's own
+/// socket; the variable moves to the secret server alone, and the module's containers mount
+/// the socket.
+#[test]
+fn a_modules_sds_secret_appears_only_on_the_secret_server() {
+    let plan = sds_plan(
+        sds_module(vec![SdsSecret::new("server-kek", SDS_KEY)]),
+        vec![upstream_route()],
+    )
+    .unwrap();
+    assert!(plan.stack_facts.has("egress-gateway"));
+
+    // Declared on the egress module alone, still required; the module keeps its other secret.
+    let declaring: Vec<&str> = plan
+        .secrets
+        .iter()
+        .filter(|(_, s)| s.iter().any(|s| s.name == SDS_KEY))
+        .map(|(m, _)| m.as_str())
+        .collect();
+    assert_eq!(declaring, ["egress-gateway"]);
+    let own: Vec<&str> = plan.secrets[&ModuleId::from("sds-app")]
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(own, ["SDS_APP_OTHER"]);
+    assert!(
+        plan.declared_secrets()
+            .iter()
+            .any(|s| s.name == SDS_KEY && s.required)
+    );
+
+    let out = plan.materialize().unwrap();
+    // The server listens for both consumers: the Envoy (the route) and the module.
+    let config = yaml(file(&out, "modules/egress-gateway/secret-server.yaml"));
+    let listeners = config["listeners"].as_sequence().unwrap();
+    assert_eq!(listeners.len(), 2);
+    assert_eq!(listeners[0]["consumer"].as_str(), Some("egress-gateway"));
+    assert_eq!(listeners[0]["secrets"][0]["name"].as_str(), Some("search"));
+    assert_eq!(listeners[1]["consumer"].as_str(), Some("sds-app"));
+    assert_eq!(
+        listeners[1]["socket"].as_str(),
+        Some("/run/trestle-sds/sds-app/sds.sock")
+    );
+    assert_eq!(
+        listeners[1]["secrets"][0]["name"].as_str(),
+        Some("server-kek")
+    );
+    assert_eq!(listeners[1]["secrets"][0]["env"].as_str(), Some(SDS_KEY));
+
+    // The module's container mounts its socket volume, which the server mounts too.
+    let overlay = yaml(file(&out, "modules/egress-gateway/consumers/sds-app.yaml"));
+    let app = &overlay["services"]["app"];
+    assert_eq!(
+        app["volumes"][0].as_str(),
+        Some("sds-sds-app:/run/trestle-sds")
+    );
+    assert_eq!(
+        app["environment"]["TRESTLE_SDS_SOCKET"].as_str(),
+        Some("/run/trestle-sds/sds.sock")
+    );
+    assert_eq!(
+        app["depends_on"]["secret-server"]["condition"].as_str(),
+        Some("service_started")
+    );
+    let fragment = yaml(file(&out, "modules/egress-gateway/compose.yaml"));
+    let server_volumes =
+        serde_yaml::to_string(&fragment["services"]["secret-server"]["volumes"]).unwrap();
+    assert!(
+        server_volumes.contains("sds-sds-app:/run/trestle-sds/sds-app"),
+        "{server_volumes}"
+    );
+    // Envoy mounts only its own socket.
+    let envoy = serde_yaml::to_string(&fragment["services"]["egress-gateway"]).unwrap();
+    assert!(!envoy.contains("sds-sds-app"), "{envoy}");
+
+    // No rendered file names the variable but the secret server's.
+    for f in &out.files {
+        if !f.contents.contains(SDS_KEY) {
+            continue;
+        }
+        match f.path.as_str() {
+            "modules/egress-gateway/secret-server.yaml" => {}
+            "modules/egress-gateway/compose.yaml" => {
+                let fragment = yaml(&f.contents);
+                for (name, service) in fragment["services"].as_mapping().unwrap() {
+                    let text = serde_yaml::to_string(service).unwrap();
+                    assert!(
+                        !text.contains(SDS_KEY) || name.as_str() == Some("secret-server"),
+                        "{name:?} names {SDS_KEY}"
+                    );
+                }
+                let env = &fragment["services"]["secret-server"]["environment"];
+                assert!(env.as_mapping().unwrap().contains_key(SDS_KEY));
+            }
+            other => panic!("{other} names {SDS_KEY}"),
+        }
+    }
+}
+
+/// Without any route, a module's SDS secret still brings in the secret server.
+#[test]
+fn an_sds_secret_alone_plans_the_secret_server() {
+    let plan = sds_plan(
+        sds_module(vec![SdsSecret::new("server-kek", SDS_KEY)]),
+        vec![],
+    )
+    .unwrap();
+    let egress = plan.egress.as_ref().expect("the egress module is planned");
+    assert!(egress.routes.is_empty());
+    assert_eq!(egress.secrets, [SDS_KEY]);
+    let names: Vec<&str> = egress
+        .sds_consumers
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(names, ["egress-gateway", "sds-app"]);
+    assert!(egress.sds_consumers[0].secrets.is_empty());
+    let out = plan.materialize().unwrap();
+    let config = yaml(file(&out, "modules/egress-gateway/secret-server.yaml"));
+    assert_eq!(
+        config["listeners"][1]["secrets"][0]["env"].as_str(),
+        Some(SDS_KEY)
+    );
+}
+
+#[test]
+fn unusable_sds_secrets_are_plan_errors() {
+    let cases = [
+        (
+            vec![SdsSecret::new("server-kek", "SDS_APP_UNDECLARED")],
+            "not one of the module's declared secrets",
+        ),
+        (
+            vec![
+                SdsSecret::new("server-kek", SDS_KEY),
+                SdsSecret::new("server-kek", SDS_KEY),
+            ],
+            "named twice",
+        ),
+        (
+            vec![SdsSecret::new("9-bad name", SDS_KEY)],
+            "letters, digits",
+        ),
+    ];
+    for (secrets, reason) in cases {
+        let err = sds_plan(sds_module(secrets), vec![]).unwrap_err();
+        assert!(
+            matches!(&err, PlanError::InvalidSdsSecret { module, .. } if module.as_str() == "sds-app"),
+            "{err}"
+        );
+        assert!(err.to_string().contains(reason), "{err}");
+    }
 }

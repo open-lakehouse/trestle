@@ -1,7 +1,7 @@
 //! An instance with an egress route on a [`FakeEngine`]: the route's secret resolves like any
 //! declared secret, reaches Compose only as launch environment that the `secret-server`
 //! service alone references, never lands in the tree, and a rotation recreates
-//! `secret-server` alone.
+//! `secret-server` alone. The same holds for a secret a module reads over SDS.
 #![cfg(feature = "testing")]
 
 use std::collections::BTreeMap;
@@ -15,7 +15,8 @@ use olai_stack_runtime::{
 use olai_stack_state::{Draft, InstanceId, SecretRef, Store, VarSet, VarValue};
 use olai_stack_topology::plan::egress::{EGRESS_SERVICE, SECRET_SERVER_SERVICE};
 use olai_stack_topology::{
-    EgressRoute, EnvManifest, InjectedCredential, ModuleId, PlanCtx, Selection,
+    DataModule, DeclaredSecret, EgressRoute, EnvManifest, InjectedCredential, ModuleId, Placement,
+    PlanCtx, Provides, RenderSpec, Role, SdsSecret, Selection, ServiceSpec,
 };
 
 /// The variable holding the route's credential.
@@ -302,4 +303,163 @@ async fn a_rotation_recreates_the_secret_server_alone() {
         Err(InstanceError::MissingSecrets(names)) if names == [ROUTE_KEY.to_owned()]
     ));
     assert_eq!(f.engine.calls().len(), calls);
+}
+
+/// The variable holding the secret the `sds-app` module reads over SDS.
+const SDS_KEY: &str = "SDS_APP_TOKEN";
+const SDS_MODULE: &str = "sds-app";
+const SDS_MODULE_PATH: &str = "modules/sds-app/module.yaml";
+
+/// `sds-app`: one `app` container that reads its token over SDS, so the fragment never passes
+/// `SDS_KEY` through.
+fn sds_module_yaml() -> String {
+    let module = DataModule {
+        id: ModuleId::from(SDS_MODULE),
+        model: None,
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "app".into(),
+            role: Role::new("app"),
+            placement: Placement::Container {
+                service: "app".into(),
+            },
+            endpoints: vec![],
+            depends_on: vec![],
+            base_path: String::new(),
+        }],
+        provides: Provides {
+            secrets: vec![DeclaredSecret::required(
+                SDS_KEY,
+                "The app's upstream token.",
+            )],
+            sds_secrets: vec![SdsSecret::new("app-token", SDS_KEY)],
+            ..Provides::default()
+        },
+        knobs: vec![],
+        renders: RenderSpec {
+            fragment: "services:\n  app:\n    image: example/app:1\n".into(),
+            files: vec![],
+        }
+        .for_compose(),
+    };
+    serde_yaml::to_string(&module).unwrap()
+}
+
+/// `demo/dev` at revision 1: `sds-app` alone, its token set from the `rotating` provider.
+fn sds_instance(f: &Fixture) -> InstanceId {
+    let ws = f.store.create_workspace("demo", false).unwrap();
+    let mut selection = Selection::modules([SDS_MODULE]);
+    selection.gateway.enabled = false;
+    let mut manifest = EnvManifest::new(selection, PlanCtx::default());
+    manifest.catalog.manifests.push(SDS_MODULE_PATH.into());
+    let mut draft = Draft::new(manifest);
+    draft
+        .modules
+        .insert(SDS_MODULE_PATH.into(), sds_module_yaml());
+    let env = f.store.create_environment(&ws.id, "dev", draft).unwrap();
+    f.store.commit_draft(&env.id).unwrap();
+    let mut vars = VarSet::new();
+    vars.set(
+        SDS_KEY,
+        VarValue::Secret(SecretRef {
+            provider: "rotating".into(),
+            key: "route".into(),
+        }),
+    );
+    f.store.set_environment_vars(&env.id, &vars).unwrap();
+    let id = f.store.create_instance(&env.id, 1).unwrap().id;
+    f.engine.script(
+        "demo_dev_r1",
+        [
+            (EGRESS_SERVICE, Health::Healthy),
+            (SECRET_SERVER_SERVICE, Health::None),
+            ("app", Health::None),
+        ],
+    );
+    id
+}
+
+#[tokio::test]
+async fn a_module_sds_secret_reaches_only_the_secret_server() {
+    let f = fixture();
+    let id = sds_instance(&f);
+    let started = f.instances.start(&id).await.unwrap();
+    assert_eq!(
+        last_env(&f.engine, false).get(SDS_KEY).map(String::as_str),
+        Some(SENTINEL_V1)
+    );
+    assert_no_value(&started.dir);
+
+    let mut files = Vec::new();
+    walk(&started.dir, &mut files);
+    let dir = started.dir.display().to_string();
+    let mut referenced_by = Vec::new();
+    let mut mounted = false;
+    for (path, text) in &files {
+        let relative = path.strip_prefix(&dir).unwrap().trim_start_matches('/');
+        if relative == "modules/egress-gateway/consumers/sds-app.yaml" {
+            // The module's container gets its socket, not the variable.
+            let overlay: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+            let app = &overlay["services"]["app"];
+            assert_eq!(
+                app["volumes"][0].as_str(),
+                Some("sds-sds-app:/run/trestle-sds")
+            );
+            mounted = true;
+        }
+        if !text.contains(SDS_KEY) {
+            continue;
+        }
+        match relative {
+            "modules/egress-gateway/secret-server.yaml" => {
+                let config: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+                let listener = config["listeners"]
+                    .as_sequence()
+                    .unwrap()
+                    .iter()
+                    .find(|l| l["consumer"].as_str() == Some(SDS_MODULE))
+                    .expect("a listener for the module");
+                assert_eq!(listener["secrets"][0]["name"].as_str(), Some("app-token"));
+                assert_eq!(listener["secrets"][0]["env"].as_str(), Some(SDS_KEY));
+            }
+            "modules/egress-gateway/compose.yaml" => {
+                let fragment: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+                for (name, service) in fragment["services"].as_mapping().unwrap() {
+                    if serde_yaml::to_string(service).unwrap().contains(SDS_KEY) {
+                        referenced_by.push(name.as_str().unwrap().to_owned());
+                    }
+                }
+            }
+            other => panic!("{other} names {SDS_KEY}"),
+        }
+    }
+    assert!(mounted, "no consumer overlay for the module");
+    assert_eq!(referenced_by, [SECRET_SERVER_SERVICE]);
+}
+
+#[tokio::test]
+async fn a_rotation_of_a_module_sds_secret_recreates_the_secret_server_alone() {
+    let f = fixture();
+    let id = sds_instance(&f);
+    f.instances.start(&id).await.unwrap();
+    let app = container_of(&f.engine, "app");
+    let server = container_of(&f.engine, SECRET_SERVER_SERVICE);
+
+    *f.secret.0.lock().unwrap() = SENTINEL_V2.into();
+    let recreated = f
+        .instances
+        .recreate_service(&id, SECRET_SERVER_SERVICE)
+        .await
+        .unwrap();
+    let env = last_env(&f.engine, true);
+    assert_eq!(env.get(SDS_KEY).map(String::as_str), Some(SENTINEL_V2));
+    assert_ne!(container_of(&f.engine, SECRET_SERVER_SERVICE), server);
+    assert_eq!(container_of(&f.engine, "app"), app);
+    assert_no_value(&recreated.dir);
 }

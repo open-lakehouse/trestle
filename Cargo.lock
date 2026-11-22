@@ -3236,6 +3236,7 @@ dependencies = [
  "olai-stack-state",
  "olai-stack-topology",
  "rcgen",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

@@ -134,9 +134,10 @@ The store-backed commands (`ws`, `env create`/`commit`, `var`, `up`, `down`, `ps
 
 ### `trestle secret rotate <ws>/<env>[@<n>] <NAME>`
 
-Stores a new value for an egress route's credential (the variable its
-`credential.secret` names) and hands it to the running instances without
-restarting the egress gateway:
+Stores a new value for a secret the secret server holds and hands it to the
+running instances without restarting the egress gateway or the consumers. That
+secret is an egress route's credential (the variable its `credential.secret`
+names) or a secret a module reads over SDS (its `sds_secrets` entry's `env`):
 
 ```bash
 printf %s "$NEW_KEY" | trestle secret rotate demo/dev SEARCH_API_KEY
@@ -151,8 +152,8 @@ printf %s "$NEW_KEY" | trestle secret rotate demo/dev SEARCH_API_KEY
 - Each running instance of the environment then gets its `secret-server` recreated with
   the new value. `@<n>` limits that to revision n's instance. If no instance is running,
   the value is stored for the next `trestle up`.
-- It refuses a name that isn't an egress route's credential (use `trestle var set` for
-  other secrets). It also refuses one that a higher layer (revision vars, this machine's vars, or the
+- It refuses a name the secret server doesn't hold (use `trestle var set` for other
+  secrets). It also refuses one that a higher layer (revision vars, this machine's vars, or the
   instance's overrides) sets over where it would be stored.
 
 See [`docs/egress-gateway.md`](../../docs/egress-gateway.md) for the egress gateway and

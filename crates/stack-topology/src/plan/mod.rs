@@ -67,7 +67,7 @@ mod settle;
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::DATA_ROOT_DEFAULT;
-use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, StackFacts};
+use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, SdsSecret, StackFacts};
 use crate::model::connection::Connection;
 use crate::model::egress::EgressSelection;
 use crate::model::endpoint::{RouteIntent, Scheme};
@@ -791,6 +791,18 @@ pub enum PlanError {
         /// What is wrong with it.
         reason: String,
     },
+    /// A module's [SDS secret](crate::Provides::sds_secrets) is unusable: a bad or repeated
+    /// name, a variable the module doesn't declare, a module with no container to mount the
+    /// socket in, or no egress gateway (which runs the secret server) in the catalog.
+    #[error("module `{module}`: SDS secret `{secret}`: {reason}")]
+    InvalidSdsSecret {
+        /// The module reading it.
+        module: ModuleId,
+        /// The secret's name.
+        secret: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// The selected `policy`-role provider does not declare what the gateway needs to wire its
     /// gRPC `ext_authz` check.
     #[error("policy provider `{module}` is misconfigured: {reason}")]
@@ -1219,7 +1231,12 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             .nodes
             .iter()
             .any(|m| !m.provides().impersonated_hosts.is_empty());
-    let injecting = egress::injects_credentials(&settled.services)
+    // A module reading secrets over SDS needs the secret server, which the egress module runs.
+    let reads_sds = settled.graph.nodes.iter().any(|m| {
+        !m.sds_secrets_in(&settled.knobs[m.id()], &settled.stack_facts)
+            .is_empty()
+    });
+    let injecting = (egress::injects_credentials(&settled.services) || reads_sds)
         && egress::egress_provider(catalog).is_some_and(|m| !settled.stack_facts.has(m.as_str()));
     if emulating || injecting {
         augmented = augment::augment(selection, catalog, ctx, emulating, injecting)?;
@@ -1256,15 +1273,6 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
         selection.gateway.enabled,
         &wired,
     )?;
-    let egress = egress::plan_egress(
-        selection,
-        catalog,
-        &settled.stack_facts,
-        &settled.services,
-        ctx.secrets.as_ref(),
-    )?;
-    let bound = bind::bind(&settled, &routed, catalog, ctx, &wired, egress.as_ref())?;
-
     let mut secrets: BTreeMap<ModuleId, Vec<DeclaredSecret>> = settled
         .graph
         .nodes
@@ -1274,14 +1282,51 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             (!declared.is_empty()).then(|| (m.id().clone(), declared.into_owned()))
         })
         .collect();
-    // A route's secret is the egress module's alone: only the secret server reads it.
+    let sds: Vec<(ModuleId, Vec<SdsSecret>)> = settled
+        .graph
+        .nodes
+        .iter()
+        .filter_map(|m| {
+            let wanted = m.sds_secrets_in(&settled.knobs[m.id()], &settled.stack_facts);
+            (!wanted.is_empty()).then(|| (m.id().clone(), wanted.into_owned()))
+        })
+        .collect();
+    let egress = egress::plan_egress(
+        selection,
+        catalog,
+        &settled.stack_facts,
+        &settled.services,
+        ctx.secrets.as_ref(),
+        &egress::SdsDemands {
+            sds,
+            declared: &secrets,
+        },
+    )?;
+    let bound = bind::bind(&settled, &routed, catalog, ctx, &wired, egress.as_ref())?;
+
+    // The secrets the secret server serves are the egress module's alone: a route's, and each
+    // one a module reads over SDS (moved off that module, keeping its declaration).
     if let Some(egress) = &egress {
-        let declared = egress.declared_secrets();
-        if !declared.is_empty() {
+        let mut moved = egress.declared_route_secrets();
+        for consumer in &egress.sds_consumers {
+            let Some(module) = &consumer.module else {
+                continue;
+            };
+            let Some(own) = secrets.get_mut(module) else {
+                continue;
+            };
+            let (served, kept): (Vec<_>, Vec<_>) = std::mem::take(own)
+                .into_iter()
+                .partition(|d| consumer.secrets.iter().any(|s| s.env == d.name));
+            *own = kept;
+            moved.extend(served);
+        }
+        secrets.retain(|_, declared| !declared.is_empty());
+        if !moved.is_empty() {
             secrets
                 .entry(egress.module.clone())
                 .or_default()
-                .extend(declared);
+                .extend(moved);
         }
     }
     let mut plan = Plan {
