@@ -16,6 +16,7 @@ use olai_stack_topology::projection::export::{
 use olai_stack_topology::{EnvManifest, PlanCtx, Secrets, baseline_catalog};
 
 const FIXTURES: &[&str] = &[
+    "ai-gateways",
     "baseline-uc",
     "custom-context",
     "docs-uc-aws",

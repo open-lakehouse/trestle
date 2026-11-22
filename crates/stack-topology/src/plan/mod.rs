@@ -86,8 +86,9 @@ pub use gateway::{
 };
 use hosted::SecretValues;
 pub use hosted::{
-    FunctionRequirement, HostedConnection, HostedKind, HostedResource, HostedStepView,
-    HostedVendor, NEON_AI_GATEWAY_TOKEN_VAR, NeonRequirements, Secrets, function_url_var,
+    AWS_CLOUD, AZURE_CLOUD, DATABRICKS_CLOUD, FunctionRequirement, HostedConnection, HostedKind,
+    HostedResource, HostedStepView, HostedVendor, NEON_AI_GATEWAY_TOKEN_VAR, NEON_CLOUD,
+    NeonRequirements, Secrets, cloud_display_name, function_url_var,
 };
 pub use integrations::{Integration, IntegrationState};
 pub use names::{is_valid_resource_name, resource_name_rule};

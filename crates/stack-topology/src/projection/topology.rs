@@ -34,6 +34,13 @@ use serde::Serialize;
 /// the host). `@` cannot appear in a module id, so it never collides with a component.
 pub const CLIENTS_NODE_ID: &str = "@clients";
 
+/// The id of the synthetic node standing for an [`OutsideService`](crate::OutsideService):
+/// `@<cloud>-<service>` (e.g. `@neon-ai-gateway`). Like [`CLIENTS_NODE_ID`], it never collides
+/// with a module id.
+pub fn outside_node_id(cloud: &str, service: &str) -> String {
+    format!("@{cloud}-{service}")
+}
+
 /// The functional diagram: components and the typed relationships between them.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphDto {
@@ -86,6 +93,11 @@ pub struct GraphNodeDto {
     /// (e.g. `"aws"`), or `""` when it is unnamed. The UI groups these nodes by it. `None`
     /// for everything the stack runs.
     pub cloud: Option<String>,
+    /// The name [`cloud`](Self::cloud)'s group is shown under (`"Neon"`, `"AWS"`, `"Hosted"`
+    /// for an unnamed cloud; see [`cloud_display_name`](crate::cloud_display_name)). Set
+    /// exactly when `cloud` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_name: Option<String>,
     /// The API it serves, when other implementations serve the same one (e.g.
     /// `unity-catalog`): a host finds the stack's server of an API by it, whichever module
     /// implements it.
@@ -296,6 +308,11 @@ pub enum TopologyEdgeDto {
         protocol: String,
         /// The resources used (database / bucket names).
         resources: Vec<String>,
+        /// How the consumer authenticates, for a provider outside the environment (a hosted
+        /// provider, or a cloud's [`OutsideService`](crate::OutsideService)). `None` for one
+        /// the stack runs.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<crate::EdgeAuth>,
     },
 }
 
@@ -517,6 +534,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                     role: demand.resource.clone(),
                     protocol: protocol(connection, false),
                     resources: vec![demand.name.clone()],
+                    auth: None,
                 }),
             }
         }
@@ -595,6 +613,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 role,
                 protocol: "HTTP".to_string(),
                 resources: Vec::new(),
+                auth: None,
             });
         }
     }
@@ -643,6 +662,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
                 role: kind.clone(),
                 protocol: protocol(&template.0, false),
                 resources: Vec::new(),
+                auth: None,
             });
         }
     }
@@ -714,6 +734,10 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         if !plan.has_gateway() && gateway_module.as_deref() == Some(id) {
             continue;
         }
+        let cloud = plan
+            .hosted
+            .get(m.id())
+            .map(|e| e.cloud.clone().unwrap_or_default());
         let kind = if gateway_module.as_deref() == Some(id) {
             NodeKind::Gateway
         } else if matches!(svc.placement, Placement::Container { .. }) {
@@ -730,10 +754,10 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             category: m.category().map(str::to_string),
             role: Some(svc.role.as_str().to_string()),
             placement: Some(placement_str(&svc.placement)),
-            cloud: plan
-                .hosted
-                .get(m.id())
-                .map(|e| e.cloud.clone().unwrap_or_default()),
+            cloud: cloud.clone(),
+            cloud_name: cloud
+                .as_deref()
+                .map(|c| crate::cloud_display_name(c).to_string()),
             api: m.provides().api.clone(),
             offers: offers_of(id),
             surfaces: if kind == NodeKind::Gateway {
@@ -746,6 +770,70 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         });
     }
 
+    // The services outside the environment the components call directly (a cloud's AI
+    // gateway): one node per (service, cloud), in its cloud's group, after the stack's own.
+    for module in &plan.graph.nodes {
+        let from = module.id().as_str();
+        if !nodes.iter().any(|n| n.id == from) {
+            continue;
+        }
+        let Some(binding) = plan.bindings.get(module.id()) else {
+            continue;
+        };
+        for outside in module.calls_outside_in(&binding.knobs, &plan.stack_facts) {
+            let id = outside_node_id(&outside.cloud, &outside.service);
+            if !nodes.iter().any(|n| n.id == id) {
+                nodes.push(GraphNodeDto {
+                    id: id.clone(),
+                    model: None,
+                    kind: NodeKind::External,
+                    display_name: Some(outside.display_name.clone()),
+                    summary: Some(outside.summary.clone()),
+                    category: None,
+                    role: Some(outside.role.clone()),
+                    placement: None,
+                    cloud_name: Some(crate::cloud_display_name(&outside.cloud).to_string()),
+                    cloud: Some(outside.cloud.clone()),
+                    api: None,
+                    offers: Vec::new(),
+                    surfaces: Vec::new(),
+                    provisions: Vec::new(),
+                    resource_nouns: Vec::new(),
+                });
+            }
+            uses.push(TopologyEdgeDto::Uses {
+                key: String::new(),
+                from: from.to_string(),
+                to: id,
+                role: outside.role,
+                protocol: outside.protocol,
+                resources: Vec::new(),
+                auth: Some(outside.auth),
+            });
+        }
+    }
+    // A hosted provider is outside the environment too. From the stack, its connection's
+    // credentials are in the consumer's environment; from a function on the provider's own
+    // cloud (a Neon Function on its branch), the cloud injects them.
+    let cloud_of = |id: &str| {
+        nodes
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| n.cloud.clone())
+    };
+    for edge in &mut uses {
+        if let TopologyEdgeDto::Uses { from, to, auth, .. } = edge
+            && auth.is_none()
+            && let Some(cloud) = cloud_of(to)
+        {
+            *auth = Some(if cloud_of(from).as_deref() == Some(cloud.as_str()) {
+                crate::EdgeAuth::Native
+            } else {
+                crate::EdgeAuth::Token
+            });
+        }
+    }
+
     let clients = || GraphNodeDto {
         id: CLIENTS_NODE_ID.to_string(),
         model: None,
@@ -756,6 +844,7 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         role: None,
         placement: None,
         cloud: None,
+        cloud_name: None,
         api: None,
         offers: Vec::new(),
         surfaces: Vec::new(),
@@ -1229,6 +1318,99 @@ mod tests {
         ));
         let alone = graph_dto(&plan(&Selection::modules(["mlflow"])));
         assert!(mlflow_uses_uc(&alone).is_empty());
+    }
+
+    /// The outside nodes and their callers' auth in a plan of `modules` with `knobs`.
+    fn outside(modules: &[&str], knobs: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
+        let mut selection = Selection::modules(modules.iter().copied());
+        for (module, key, value) in knobs {
+            selection
+                .knob_overrides
+                .entry((*module).into())
+                .or_default()
+                .insert((*key).into(), (*value).into());
+        }
+        let g = graph_dto(&plan(&selection));
+        g.edges
+            .iter()
+            .filter_map(|e| match e {
+                TopologyEdgeDto::Uses { from, to, auth, .. } if to.starts_with('@') => {
+                    let node = g.nodes.iter().find(|n| n.id == *to).expect("node drawn");
+                    assert_eq!(node.kind, NodeKind::External);
+                    assert_eq!(
+                        node.cloud_name.as_deref(),
+                        node.cloud.as_deref().map(crate::cloud_display_name)
+                    );
+                    Some((
+                        from.clone(),
+                        to.clone(),
+                        auth.expect("an outside edge says how it authenticates")
+                            .to_string(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn triple(from: &str, to: &str, auth: &str) -> (String, String, String) {
+        (from.into(), to.into(), auth.into())
+    }
+
+    #[test]
+    fn cloud_ai_gateways_and_the_sandbox_host_are_outside_nodes() {
+        let stack = ["envoy", "mlflow", "omnigent"];
+        // MLflow's own provider keys, and Omnigent through MLflow: nothing outside.
+        assert!(outside(&stack, &[]).is_empty());
+        assert_eq!(
+            outside(&stack, &[("mlflow", "upstream", "neon")]),
+            [triple("mlflow", "@neon-ai-gateway", "token")]
+        );
+        assert_eq!(
+            outside(&stack, &[("mlflow", "upstream", "databricks")]),
+            [triple("mlflow", "@databricks-ai-gateway", "native")]
+        );
+        // Both on one cloud's gateway share its node.
+        assert_eq!(
+            outside(
+                &stack,
+                &[
+                    ("mlflow", "upstream", "neon"),
+                    ("omnigent", "upstream", "neon")
+                ]
+            ),
+            [
+                triple("omnigent", "@neon-ai-gateway", "token"),
+                triple("mlflow", "@neon-ai-gateway", "token"),
+            ]
+        );
+        assert_eq!(
+            outside(
+                &["envoy", "omnigent"],
+                &[
+                    ("omnigent", "upstream", "databricks"),
+                    ("omnigent", "sandbox_host", "databricks")
+                ]
+            ),
+            [
+                triple("omnigent", "@databricks-ai-gateway", "native"),
+                triple("omnigent", "@databricks-sandbox-host", "native"),
+            ]
+        );
+        // Without the in-stack host, the agents' models are the attached host's business; the
+        // sandbox host is still the server's.
+        assert_eq!(
+            outside(
+                &["envoy", "omnigent"],
+                &[
+                    ("omnigent", "upstream", "neon"),
+                    ("omnigent", "host", "false"),
+                    ("omnigent", "sandbox_host", "databricks")
+                ]
+            ),
+            [triple("omnigent", "@databricks-sandbox-host", "native")]
+        );
+        assert!(outside(&["envoy", "omnigent"], &[("omnigent", "upstream", "keys")]).is_empty());
     }
 
     #[test]

@@ -57,9 +57,10 @@ use super::credentials::{self, LocalCredentials};
 use crate::catalog::deploy::{DeployPhase, DeployStepSpec};
 use crate::catalog::images;
 use crate::catalog::module::{
-    ClientNotebook, ClientValue, ConnectionBinding, DataModule, DeclaredSecret, HelperService,
-    ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId, Provides, PythonClient,
-    Readiness, ReadyGate, RenderSpec, ResolvedKnobs, ResourceDemand, StackFacts, UrlPart,
+    ClientNotebook, ClientValue, ConnectionBinding, DataModule, DeclaredSecret, EdgeAuth,
+    HelperService, ImpersonatedHost, Knob, KnobKind, KnobRejection, Module, ModuleId,
+    OutsideService, Provides, PythonClient, Readiness, ReadyGate, RenderSpec, ResolvedKnobs,
+    ResourceDemand, StackFacts, UrlPart,
 };
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
@@ -68,7 +69,9 @@ use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
 use crate::model::platform::{IntegrationSpec, PlatformFeature, ProtocolOffer, protocol};
 use crate::model::role::{Role, ServiceSpec};
-use crate::plan::hosted::{HostedConnection, HostedKind, HostedResource, HostedVendor};
+use crate::plan::hosted::{
+    DATABRICKS_CLOUD, HostedConnection, HostedKind, HostedResource, HostedVendor, NEON_CLOUD,
+};
 use crate::render::RenderFile;
 use crate::target::TargetId;
 
@@ -1156,6 +1159,36 @@ pub const MLFLOW_AI_GATEWAY_MODELS_NEON: &str = MLFLOW_AI_GATEWAY_MODELS_DEFAULT
 
 /// The [`mlflow`] knob choosing where its AI Gateway calls models: `keys`, `databricks` or `neon`.
 const MLFLOW_UPSTREAM_KNOB: &str = "upstream";
+
+/// The cloud AI gateway a model `upstream` (an `upstream` knob value of [`mlflow`] or
+/// [`omnigent`]) calls, as a service outside the environment: the Neon AI Gateway of the
+/// environment's branch, reached with a token from the environment, or a Databricks
+/// workspace's serving endpoints, reached natively (the SDK, with a profile or metadata
+/// service). `None` for an upstream that is no cloud gateway (`keys`, `mlflow`).
+fn cloud_ai_gateway(upstream: &str) -> Option<OutsideService> {
+    let (cloud, summary, auth) = match upstream {
+        "neon" => (
+            NEON_CLOUD,
+            "The Neon AI Gateway of the environment's branch.",
+            EdgeAuth::Token,
+        ),
+        "databricks" => (
+            DATABRICKS_CLOUD,
+            "A Databricks workspace's AI Gateway (its serving endpoints).",
+            EdgeAuth::Native,
+        ),
+        _ => return None,
+    };
+    Some(OutsideService {
+        cloud: cloud.into(),
+        service: "ai-gateway".into(),
+        role: Role::AI_GATEWAY.into(),
+        display_name: "AI Gateway".into(),
+        summary: summary.into(),
+        protocol: "HTTP".into(),
+        auth,
+    })
+}
 /// The [`mlflow`] knob listing the models its AI Gateway serves.
 const MLFLOW_MODELS_KNOB: &str = "ai_gateway_models";
 /// Seals the provider keys MLflow's AI Gateway stores.
@@ -1555,6 +1588,11 @@ impl Module for Mlflow {
             );
         }
         Cow::Owned(env)
+    }
+    fn calls_outside_in(&self, knobs: &ResolvedKnobs, _stack: &StackFacts) -> Vec<OutsideService> {
+        cloud_ai_gateway(knobs.get(MLFLOW_UPSTREAM_KNOB).unwrap_or("keys"))
+            .into_iter()
+            .collect()
     }
     fn integrates_with_in(&self, _knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
         // The server's model registry is UC's when both are in the stack.
@@ -2375,6 +2413,21 @@ fn headwaters() -> Arc<dyn Module> {
 const OMNIGENT_HOST_KNOB: &str = "host";
 /// The [`omnigent`] knob choosing where its host's harnesses call models.
 const OMNIGENT_UPSTREAM_KNOB: &str = "upstream";
+/// The [`omnigent`] knob choosing where its sessions run.
+const OMNIGENT_SANDBOX_HOST_KNOB: &str = "sandbox_host";
+
+/// Whether an `omnigent` with the given knobs runs its agent host in the stack: its `host`
+/// knob is on and the gateway is open (under forward-auth a host can't present the
+/// gateway-asserted identity).
+fn omnigent_runs_host(knobs: &ResolvedKnobs, stack: &StackFacts) -> bool {
+    knobs.bool(OMNIGENT_HOST_KNOB, true) && !stack.gateway_auth
+}
+
+/// Whether an `omnigent` with the given knobs runs its sessions on a Databricks workspace's
+/// sandbox host.
+fn omnigent_sandbox_on_databricks(knobs: &ResolvedKnobs) -> bool {
+    knobs.get(OMNIGENT_SANDBOX_HOST_KNOB) == Some("databricks")
+}
 
 /// Where an `omnigent` host's harnesses call models with the given knobs, in `stack`: its
 /// `upstream` knob, with `auto` standing for MLflow's AI Gateway. An error says why the
@@ -2515,6 +2568,24 @@ impl Omnigent {
                     advanced: false,
                 },
                 Knob {
+                    key: OMNIGENT_SANDBOX_HOST_KNOB.into(),
+                    title: Some("Sessions run on".into()),
+                    kind: KnobKind::Enum {
+                        options: vec!["local".into(), "databricks".into()],
+                    },
+                    default: Some("local".into()),
+                    required: false,
+                    help: Some(
+                        "Where Omnigent's sessions run. `local`: on the agent hosts attached to \
+                         the server (the stack's host, or your own). `databricks`: on the \
+                         sandbox host of a Databricks workspace (DATABRICKS_HOST, passed to \
+                         the server); the graph draws it in the Databricks group."
+                            .into(),
+                    ),
+                    aliases: vec![],
+                    advanced: true,
+                },
+                Knob {
                     advanced: false,
                     ..string_knob(
                         "model",
@@ -2630,13 +2701,49 @@ impl Module for Omnigent {
             .map_err(|reason| KnobRejection::new(OMNIGENT_UPSTREAM_KNOB, reason))
     }
     fn secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
-        // Only the host reads them.
-        if !knobs.bool(OMNIGENT_HOST_KNOB, true) || stack.gateway_auth {
-            return Cow::Borrowed(&[]);
+        // The upstream's are the host's; the sandbox host's workspace is the server's.
+        let mut secrets = if omnigent_runs_host(knobs, stack) {
+            omnigent_secrets(omnigent_upstream(knobs, stack).unwrap_or_default())
+        } else {
+            Vec::new()
+        };
+        if omnigent_sandbox_on_databricks(knobs) {
+            secrets.retain(|s| s.name != "DATABRICKS_HOST");
+            secrets.insert(
+                0,
+                DeclaredSecret::required(
+                    "DATABRICKS_HOST",
+                    "The Databricks workspace URL whose serving endpoints the agents call, and \
+                     whose sandbox host runs Omnigent's sessions.",
+                ),
+            );
         }
-        Cow::Owned(omnigent_secrets(
-            omnigent_upstream(knobs, stack).unwrap_or_default(),
-        ))
+        Cow::Owned(secrets)
+    }
+    fn calls_outside_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<OutsideService> {
+        let mut calls = Vec::new();
+        // The host's harnesses call the upstream; a host attached from outside the stack
+        // brings its own configuration.
+        if omnigent_runs_host(knobs, stack)
+            && let Some(gateway) = omnigent_upstream(knobs, stack)
+                .ok()
+                .and_then(cloud_ai_gateway)
+        {
+            calls.push(gateway);
+        }
+        if omnigent_sandbox_on_databricks(knobs) {
+            calls.push(OutsideService {
+                cloud: DATABRICKS_CLOUD.into(),
+                service: "sandbox-host".into(),
+                role: Role::SANDBOX_HOST.into(),
+                display_name: "Sandbox host".into(),
+                summary: "The Databricks workspace's sandbox host Omnigent runs sessions on."
+                    .into(),
+                protocol: "HTTP".into(),
+                auth: EdgeAuth::Native,
+            });
+        }
+        calls
     }
     fn integrates_with_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
         let mut with = match omnigent_upstream(knobs, stack) {

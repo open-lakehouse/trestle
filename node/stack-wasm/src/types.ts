@@ -342,6 +342,11 @@ export interface GraphNodeDto {
   /** For a resource provided by an external cloud: its environment's label
    *  (e.g. "aws"; "" when unnamed). External nodes are grouped by it. */
   cloud?: string | null;
+  /** The name `cloud`'s group is shown under ("Neon", "Databricks", "AWS",
+   *  "Azure", "Hosted" when unnamed), from the planner's
+   *  `cloud_display_name`. Set exactly when `cloud` is; absent in snapshots
+   *  saved before it existed. */
+  cloud_name?: string;
   /** The API it serves, when other implementations serve the same one (e.g.
    *  `unity-catalog`): a host finds the stack's server of an API by it. */
   api?: string | null;
@@ -354,6 +359,12 @@ export interface GraphNodeDto {
   /** For a provider: what it calls each kind of resource it provisions. */
   resource_nouns: ResourceNounDto[];
 }
+
+/** How a connection to something outside the environment is authenticated
+ *  (mirrors `EdgeAuth`): the service's own client and configuration
+ *  (`native`), a credential in its environment (`token`), or one the egress
+ *  gateway injects (`injected`). */
+export type EdgeAuth = "native" | "token" | "injected";
 
 /** A typed, request-direction edge: `from` calls `to` (mirrors
  *  `TopologyEdgeDto`, serde tag "kind"). `key` (`kind:from→to:qualifier`) is
@@ -389,6 +400,9 @@ export type TopologyEdgeDto = { key: string } & (
       role: string;
       protocol: string;
       resources: string[];
+      /** For a provider outside the environment: how the consumer
+       *  authenticates. */
+      auth?: EdgeAuth;
     }
 );
 

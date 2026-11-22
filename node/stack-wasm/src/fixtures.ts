@@ -797,6 +797,18 @@ export const FIXTURE_CATALOG: CatalogDto = {
           help: "Where the host's harnesses call models. `mlflow`: the stack's MLflow AI Gateway, which holds the credentials and traces every call. Without MLflow, the upstream directly: `neon`, the Neon AI Gateway of the environment's branch (NEON_AI_GATEWAY_BASE_URL, NEON_AI_GATEWAY_TOKEN); `databricks`, a workspace's serving endpoints (DATABRICKS_HOST, with tokens from DATABRICKS_METADATA_SERVICE_URL or DATABRICKS_TOKEN); `keys`, the providers (ANTHROPIC_API_KEY, OPENAI_API_KEY). `auto`: `mlflow`, which the stack must then have.",
         },
         {
+          key: "sandbox_host",
+          title: "Sessions run on",
+          kind: {
+            kind: "enum",
+            options: ["local", "databricks"],
+          },
+          default: "local",
+          required: false,
+          help: "Where Omnigent's sessions run. `local`: on the agent hosts attached to the server (the stack's host, or your own). `databricks`: on the sandbox host of a Databricks workspace (DATABRICKS_HOST, passed to the server); the graph draws it in the Databricks group.",
+          advanced: true,
+        },
+        {
           key: "model",
           title: "Agent model",
           kind: {
@@ -1992,7 +2004,7 @@ export const FIXTURE_PLAN: PlanResult = {
       id: "accounts",
       title: "Review the sign-in accounts",
       instructions:
-        "Sign-in is on (`[selection.gateway] auth = true`): Authelia checks every API and UI route on the\ngateway's shared listener. Browsers get its login page; API clients send basic auth.\n\nThe accounts live in `modules/authelia/users.yml`. It starts with one demo account, username\n`demo` with password `authelia`. Change or remove that account before you share the\nenvironment. To add, change, or remove users:\n\n1. Edit `modules/authelia/users.yml`. Each user is one block under `users:`. Copy the `demo`\n   block, then change the name, `displayname`, `email`, `groups`, and `password`.\n2. Hash each password (Authelia stores argon2id hashes, not plain text), then paste the printed\n   `$argon2id$…` digest in as the user's `password`:\n\n   ```bash\n   docker run --rm authelia/authelia:latest \\\n     authelia crypto hash generate argon2 --password 'choose-a-password'\n   ```\n3. If the stack is already running, restart Authelia so it rereads the file:\n   `docker compose restart authelia`.\n\nThe services behind the gateway receive a user's `email` and `displayname` as the\n`Remote-Email` and `Remote-Name` headers, and `groups` as `Remote-Groups`. With policy on, the\ndefault policy lets any signed-in user read and lets the `writers` or `admins` group write.\n\n`trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive\nre-renders. To start over from the demo account, delete the file and render again.",
+        "Sign-in is on (`[selection.platform] identity`): Authelia checks every API and UI route on the\ngateway's shared listener. Browsers get its login page; API clients send basic auth.\n\nThe accounts live in `modules/authelia/users.yml`. It starts with one demo account, username\n`demo` with password `authelia`. Change or remove that account before you share the\nenvironment. To add, change, or remove users:\n\n1. Edit `modules/authelia/users.yml`. Each user is one block under `users:`. Copy the `demo`\n   block, then change the name, `displayname`, `email`, `groups`, and `password`.\n2. Hash each password (Authelia stores argon2id hashes, not plain text), then paste the printed\n   `$argon2id$…` digest in as the user's `password`:\n\n   ```bash\n   docker run --rm authelia/authelia:latest \\\n     authelia crypto hash generate argon2 --password 'choose-a-password'\n   ```\n3. If the stack is already running, restart Authelia so it rereads the file:\n   `docker compose restart authelia`.\n\nThe services behind the gateway receive a user's `email` and `displayname` as the\n`Remote-Email` and `Remote-Name` headers, and `groups` as `Remote-Groups`. With policy on, the\ndefault policy lets any signed-in user read and lets the `writers` or `admins` group write.\n\n`trestle env render` writes `users.yml` only when it doesn't exist yet, so your edits survive\nre-renders. To start over from the demo account, delete the file and render again.",
     },
     {
       order: 2,

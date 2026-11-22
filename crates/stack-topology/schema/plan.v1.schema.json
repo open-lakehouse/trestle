@@ -230,6 +230,10 @@
         "role": { "$ref": "#/$defs/nullableString" },
         "placement": { "$ref": "#/$defs/nullableString" },
         "cloud": { "$ref": "#/$defs/nullableString" },
+        "cloud_name": {
+          "description": "The name the node's cloud group is shown under (Neon, Databricks, AWS, Azure, Hosted). Set exactly when cloud is.",
+          "type": "string"
+        },
         "surfaces": { "type": "array" },
         "offers": { "type": "array", "items": { "type": "string" } },
         "provisions": { "type": "array" },
@@ -249,7 +253,11 @@
           "pattern": "^[a-z]+:[^→]+→[^:]+:.+$"
         },
         "from": { "type": "string" },
-        "to": { "type": "string" }
+        "to": { "type": "string" },
+        "auth": {
+          "description": "On a uses edge to a provider outside the environment: how the consumer authenticates.",
+          "enum": ["native", "token", "injected"]
+        }
       }
     }
   }

@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:fb97bd00678694f067c0f246ce4ec45d946e4dd5b14b4c0c1e7eacd157f237cb"
+    "digest": "sha256:49a22c7a0fdcffd50eaf1fd332086c6f4b0cc00b07f24539791f4a55916e5cd0"
   },
   "modules": [
     {
@@ -872,6 +872,21 @@
           "default": "auto",
           "required": false,
           "help": "Where the host's harnesses call models. `mlflow`: the stack's MLflow AI Gateway, which holds the credentials and traces every call. Without MLflow, the upstream directly: `neon`, the Neon AI Gateway of the environment's branch (NEON_AI_GATEWAY_BASE_URL, NEON_AI_GATEWAY_TOKEN); `databricks`, a workspace's serving endpoints (DATABRICKS_HOST, with tokens from DATABRICKS_METADATA_SERVICE_URL or DATABRICKS_TOKEN); `keys`, the providers (ANTHROPIC_API_KEY, OPENAI_API_KEY). `auto`: `mlflow`, which the stack must then have."
+        },
+        {
+          "key": "sandbox_host",
+          "title": "Sessions run on",
+          "kind": {
+            "kind": "enum",
+            "options": [
+              "local",
+              "databricks"
+            ]
+          },
+          "default": "local",
+          "required": false,
+          "help": "Where Omnigent's sessions run. `local`: on the agent hosts attached to the server (the stack's host, or your own). `databricks`: on the sandbox host of a Databricks workspace (DATABRICKS_HOST, passed to the server); the graph draws it in the Databricks group.",
+          "advanced": true
         },
         {
           "key": "model",
