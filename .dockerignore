@@ -1,0 +1,14 @@
+# Build context for crates/secret-server/Dockerfile (the workspace root). Cargo loads
+# every workspace member's manifest, so crates/ and node/ stay; build output, VCS and
+# local state do not.
+**/target/
+**/node_modules/
+.git/
+.claude/
+.isaac/
+.github/
+docs/
+examples/
+scratch/
+**/.DS_Store
+.env
