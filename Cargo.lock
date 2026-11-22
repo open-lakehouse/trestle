@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "env-editor"
-version = "0.0.13"
+version = "0.0.14"
 
 [[package]]
 name = "envoy-types"
@@ -3221,7 +3221,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.15"
+version = "0.0.16"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3241,7 +3241,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "dirs",
  "futures",
@@ -3260,7 +3260,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.24"
+version = "0.0.25"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -3325,7 +3325,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.38"
+version = "0.0.39"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -5101,7 +5101,7 @@ dependencies = [
 
 [[package]]
 name = "stack-wasm"
-version = "0.0.9"
+version = "0.0.10"
 
 [[package]]
 name = "stacker"
@@ -5837,7 +5837,7 @@ dependencies = [
 
 [[package]]
 name = "trestle-diagram"
-version = "0.15.1"
+version = "0.16.0"
 
 [[package]]
 name = "triomphe"

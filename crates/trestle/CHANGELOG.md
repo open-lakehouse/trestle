@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.39](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.38...olai-trestle-v0.0.39) - 2026-11-22
+
+### Added
+
+- rotate an egress secret (#450)
+- recreate a service and scope egress secrets to the secret server (#449)
+
 ## [0.0.38](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.37...olai-trestle-v0.0.38) - 2026-11-21
 
 ### Added

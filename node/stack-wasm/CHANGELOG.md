@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.9...stack-wasm-v0.0.10) - 2026-11-22
+
+### Added
+
+- Omnigent MCP registry from egress routes (#452)
+- [**breaking**] egress gateway with injected credentials (#446)
+- Neon and Databricks groups in the environment graph (#443)
+
 ## [0.0.9](https://github.com/open-lakehouse/trestle/compare/stack-wasm-v0.0.8...stack-wasm-v0.0.9) - 2026-11-21
 
 ### Added

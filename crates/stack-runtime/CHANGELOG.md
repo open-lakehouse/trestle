@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.16](https://github.com/open-lakehouse/trestle/compare/olai-stack-runtime-v0.0.15...olai-stack-runtime-v0.0.16) - 2026-11-22
+
+### Added
+
+- recreate a service and scope egress secrets to the secret server (#449)
+
 ## [0.0.15](https://github.com/open-lakehouse/trestle/compare/olai-stack-runtime-v0.0.14...olai-stack-runtime-v0.0.15) - 2026-11-21
 
 ### Added

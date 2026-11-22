@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.25](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.24...olai-stack-topology-v0.0.25) - 2026-11-22
+
+### Added
+
+- Omnigent MCP registry from egress routes (#452)
+- [**breaking**] egress gateway with injected credentials (#446)
+- Neon and Databricks groups in the environment graph (#443)
+
+### Fixed
+
+- pin the secret server image at 0.0.1 (#448)
+
 ## [0.0.24](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.23...olai-stack-topology-v0.0.24) - 2026-11-21
 
 ### Added
