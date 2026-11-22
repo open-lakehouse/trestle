@@ -287,3 +287,28 @@ async fn binding_replaces_a_stale_socket() {
     assert_eq!(mode, 0o666);
     drop(listener);
 }
+
+/// A graceful stop ends the streams consumers hold open (with `UNAVAILABLE`, so they
+/// reconnect) instead of waiting on them: a recreate of the server needn't wait for Docker to
+/// kill it.
+#[tokio::test]
+async fn a_stop_ends_open_streams_instead_of_waiting_for_them() {
+    let harness = Harness::start().await;
+    let mut client = harness.client("a").await;
+    let (tx, mut responses) = open(&mut client).await;
+    tx.send(request(&["planner"], "", "")).await.unwrap();
+    let first = next_within(&mut responses, Duration::from_secs(5))
+        .await
+        .unwrap();
+    tx.send(request(&["planner"], &first.version_info, &first.nonce))
+        .await
+        .unwrap();
+
+    // The client keeps its request stream open, as Envoy and the Rust client do.
+    tokio::time::timeout(Duration::from_secs(5), harness.stop())
+        .await
+        .expect("the server stopped with a stream open");
+    let status = responses.message().await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::Unavailable, "{status}");
+    drop(tx);
+}

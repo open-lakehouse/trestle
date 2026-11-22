@@ -131,7 +131,8 @@ listeners:
   (`docker compose up -d --no-deps --force-recreate secret-server`). Envoy's
   stream drops and reconnects, the new version arrives, and the egress Envoy
   swaps it without a restart. While the server is down, Envoy keeps the last
-  value it had.
+  value it had. On shutdown the server ends its open streams itself, so the old
+  container stops at once instead of waiting for Docker to kill it.
 
 The server is generic: it knows listeners, consumers and names, not what the
 names are for.

@@ -82,7 +82,12 @@ Logs name consumers, secrets, versions and nonces. They never contain a value, a
 Recreate the server with the new value in its environment, for example
 `docker compose up -d --no-deps --force-recreate secret-server`. Envoy's stream drops and
 reconnects, the new version arrives, and Envoy swaps the secret without a restart. While
-the server is down, Envoy keeps the last value it had.
+the server is down, Envoy keeps the last value it had. olai-http's SDS client
+(`SdsCredentialProvider`) behaves the same way.
+
+On `SIGTERM` the server ends every open `StreamSecrets` stream with `UNAVAILABLE` before its
+graceful shutdown, which would otherwise wait on them until Docker kills the container. So
+a recreate takes as long as the new container takes to start.
 
 ## The Envoy side
 
