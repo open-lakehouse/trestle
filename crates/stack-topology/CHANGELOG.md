@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.26](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.25...olai-stack-topology-v0.0.26) - 2026-11-22
+
+### Added
+
+- module-declared SDS secrets on the secret server (#456)
+
 ## [0.0.25](https://github.com/open-lakehouse/trestle/compare/olai-stack-topology-v0.0.24...olai-stack-topology-v0.0.25) - 2026-11-22
 
 ### Added

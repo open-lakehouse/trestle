@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.40](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.39...olai-trestle-v0.0.40) - 2026-11-22
+
+### Added
+
+- module-declared SDS secrets on the secret server (#456)
+
 ## [0.0.39](https://github.com/open-lakehouse/trestle/compare/olai-trestle-v0.0.38...olai-trestle-v0.0.39) - 2026-11-22
 
 ### Added

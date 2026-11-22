@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.13...olai-http-v0.0.14) - 2026-11-22
+
+### Added
+
+- SDS credential provider over Unix sockets (#455)
+- Any as a supertrait of RequestSigner (#453)
+
 ## [0.0.12](https://github.com/open-lakehouse/trestle/compare/olai-http-v0.0.11...olai-http-v0.0.12) - 2026-11-14
 
 ### Changed
