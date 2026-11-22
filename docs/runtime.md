@@ -196,6 +196,28 @@ source (the keychain, read live) is a later phase. See
 [`egress-gateway.md`](egress-gateway.md) for the design and why the server
 runs inside the environment.
 
+The runtime needs nothing route-specific for this. The egress module declares
+each route's secret as a required secret (`Plan::declared_secrets`), so it
+resolves like any other declared secret: from the instance's layers, else from
+the `env` provider by name. A route whose secret is set nowhere fails `start`
+with `InstanceError::MissingSecrets` before Compose runs. The secret goes into
+the launch environment with everything else, and the `secret-server` service
+lists it by name only (`environment: VAR:` with no value), so Compose hands it
+to that container and no other. Tests check this with sentinel values: under
+`FakeEngine`, the value is in no file of the instance's tree and only
+`secret-server` names its variable in the rendered compose files. Against real
+Docker, a consumer gets a `200` through the egress gateway with the injected
+token in place of its own, only the `secret-server` container's environment
+holds the value, and after a rotation the next request carries the new value
+from the same egress container.
+
+Rotation (`trestle secret rotate`, see the [CLI](../crates/trestle/README.md))
+stores the new value where `trestle var set --secret` would, then calls
+`Instances::recreate_service(id, "secret-server")` for each running instance.
+Envoy's SDS stream drops and reconnects, the new version arrives, and Envoy
+swaps it in without a restart. While the server is down, Envoy keeps the
+value it had.
+
 ## Instances
 
 `Instances` runs the store's instances on an engine. Each instance runs one
@@ -216,6 +238,14 @@ revision, so two revisions of one environment run side by side:
    checks the plan's host ports.
 4. Records the instance as wanted running and runs `up --wait` with the launch
    environment.
+
+`recreate_service(id, service)` recreates one service of a running instance
+with the launch environment it resolves to now (`docker compose up -d --no-deps
+--force-recreate --wait <service>`); every other container keeps running. It
+renders the tree afresh as `start` does, fails with `MissingSecrets` before
+Compose when a required secret is set nowhere, and refuses an instance that
+isn't running (`NotRunning`) or a service its plan doesn't run
+(`UnknownService`).
 
 `stop` runs `down` and keeps the slot. `remove` also drops the tree and
 releases the slot. `health` and `events` follow the engine. `reconcile`, run on

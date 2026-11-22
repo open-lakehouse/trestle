@@ -9,7 +9,8 @@ use futures::StreamExt;
 use olai_stack_state::{AttachmentId, Desired, Instance, InstanceId, Revision, SecretRef, Store};
 use olai_stack_topology::{
     Catalog, LOCAL_CREDENTIALS, LaunchEnvError, LocalCredentials, LocalSecrets, MaterializedOutput,
-    Plan, PlanError, RenderError, RuntimePlacement, Secrets, Vantage, baseline_catalog_with,
+    Placement, Plan, PlanError, RenderError, RuntimePlacement, Secrets, Vantage,
+    baseline_catalog_with,
 };
 use serde::Serialize;
 
@@ -85,6 +86,15 @@ pub enum InstanceError {
         revision: u32,
         /// The instance running it.
         running: InstanceId,
+    },
+    /// The instance's project isn't running, so it has no service to recreate.
+    #[error("instance {0} is not running")]
+    NotRunning(InstanceId),
+    /// The instance's plan has no container of this name.
+    #[error("the instance runs no service `{service}`")]
+    UnknownService {
+        /// The service asked for.
+        service: String,
     },
     /// Writing the materialized tree failed.
     #[error("{path}: {source}")]
@@ -557,6 +567,52 @@ impl<E: ComposeEngine> Instances<E> {
             progress: Progress::Quiet,
         };
         self.engine.up(&materialized.dir, &opts).await?;
+        Ok(materialized)
+    }
+
+    /// Recreate `service` of the running instance alone, with the launch environment it
+    /// resolves to now (`up --no-deps --force-recreate <service>`, waiting for it). Every other
+    /// container keeps running untouched.
+    ///
+    /// This is how a rotated secret reaches the instance: rotating an egress route's credential
+    /// recreates the `secret-server` service, the egress Envoy's SDS stream reconnects and it
+    /// swaps the new value in without a restart. The tree is rendered afresh first, as on
+    /// [`start`](Self::start), and a required secret set nowhere fails with
+    /// [`InstanceError::MissingSecrets`] before Compose runs.
+    pub async fn recreate_service(&self, id: &InstanceId, service: &str) -> Result<Materialized> {
+        let project = self.placement(id)?.project_name;
+        let running = self
+            .engine
+            .ls()
+            .await?
+            .into_iter()
+            .any(|p| p.name == project && p.is_running());
+        if !running {
+            return Err(InstanceError::NotRunning(id.clone()));
+        }
+        let materialized = self.materialize(id).await?;
+        let known = materialized.plan.services.values().flatten().any(
+            |s| matches!(&s.placement, Placement::Container { service: name } if name == service),
+        );
+        if !known {
+            return Err(InstanceError::UnknownService {
+                service: service.to_owned(),
+            });
+        }
+        if !materialized.missing_secrets.is_empty() {
+            return Err(InstanceError::MissingSecrets(
+                materialized.missing_secrets.clone(),
+            ));
+        }
+        let opts = UpOptions {
+            wait: true,
+            wait_timeout: self.wait_timeout,
+            env: materialized.launch.clone(),
+            progress: Progress::Quiet,
+        };
+        self.engine
+            .recreate_service(&materialized.dir, service, &opts)
+            .await?;
         Ok(materialized)
     }
 

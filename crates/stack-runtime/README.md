@@ -4,8 +4,8 @@ Runs [trestle](https://github.com/open-lakehouse/trestle) environments on Docker
 Compose. `olai-stack-topology` plans and renders an environment; this crate starts,
 stops and watches it. The `trestle` CLI and the desktop app share it.
 
-- **`ComposeEngine`**: up, down, ls, ps, logs, events and network removal, as an
-  async trait.
+- **`ComposeEngine`**: up, down, recreating one service, ls, ps, logs, events and
+  network removal, as an async trait.
   - `DockerCli` runs the `docker` CLI and tells "Docker is not available" apart
     from "nothing is running".
   - `FakeEngine` (feature `testing`) is an in-memory stand-in for tests.
@@ -21,6 +21,9 @@ stops and watches it. The `trestle` CLI and the desktop app share it.
   side.
   - It starts, stops and removes instances, reports their health and events, and
     reconciles with Docker after a restart.
+  - `recreate_service` recreates one service of a running instance with the launch
+    environment it resolves to now. Rotating an egress route's credential uses it to
+    recreate the secret server alone.
   - The rendered tree is a cache under the state directory and holds no credential.
 - **`EffectiveEnv`**: an instance's variables from every layer (catalog defaults,
   revision, placement, client env, workspace/environment/revision vars, this

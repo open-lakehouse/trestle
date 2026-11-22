@@ -40,6 +40,10 @@ keyring = { version = "3.6", default-features = false, features = [
 [dev-dependencies]
 # To file an instance under an attachment in tests without a Postgres to attach.
 rusqlite = "0.32"
+# The live egress test's upstream certificate and its CA.
+rcgen = "0.14"
+# Reads rendered compose fragments in the egress tests.
+serde_yaml = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
