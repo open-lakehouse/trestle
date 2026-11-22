@@ -184,6 +184,18 @@ and a hosted plan. Instances are tested the same way, under `FakeEngine` and
 against real Docker. `trestle env render` keeps writing ordinary env directories
 (sensitive files git-ignored) for users who run `docker compose up` themselves.
 
+## Decision: egress credentials reach an in-environment secret server
+
+The credentials an egress gateway injects into outbound requests (an agent's
+API key for an outside MCP server, say) follow the rule above, with one
+narrowing: only the environment's `secret-server` service lists them. It hands
+them to the egress Envoy over SDS, through a Unix socket in a volume only that
+Envoy mounts, so they reach no other container and still never land in the
+rendered tree. Rotating one recreates the secret server alone. A host-backed
+source (the keychain, read live) is a later phase. See
+[`egress-gateway.md`](egress-gateway.md) for the design and why the server
+runs inside the environment.
+
 ## Instances
 
 `Instances` runs the store's instances on an engine. Each instance runs one
