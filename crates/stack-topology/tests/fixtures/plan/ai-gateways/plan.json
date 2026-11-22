@@ -1,0 +1,846 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:49a22c7a0fdcffd50eaf1fd332086c6f4b0cc00b07f24539791f4a55916e5cd0"
+  },
+  "recipe": {
+    "digest": "sha256:a8b2f2b73e2d16f9b76a1dfe36a31592fe03184cc0d8cb2ccf7885e086b8a19d"
+  },
+  "context": {
+    "env_name": "ai-gateways",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 9080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {},
+    "data_root": "./.data"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 9080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "omnigent",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/omnigent",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking",
+                "kind": "api",
+                "prefix": "/api/2.0/mlflow",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking_v3",
+                "kind": "api",
+                "prefix": "/api/3.0/mlflow",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "tracking_v4",
+                "kind": "api",
+                "prefix": "/api/4.0/mlflow",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "otel",
+                "kind": "api",
+                "prefix": "/api/2.0/otel",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "ai_gateway",
+                "kind": "api",
+                "prefix": "/ai-gateway",
+                "gated": false
+              },
+              {
+                "module": "mlflow",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/mlflow",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "neon-storage",
+        "model": "neonObjectStorage",
+        "kind": "external",
+        "display_name": "Neon Object Storage",
+        "summary": "The S3-compatible object storage of a Neon branch; the branch supplies its keys.",
+        "category": "storage",
+        "role": "object_store",
+        "placement": "external:${NEON_S3_ENDPOINT}",
+        "cloud": "neon",
+        "cloud_name": "Neon",
+        "surfaces": [],
+        "offers": [
+          "S3"
+        ],
+        "provisions": [
+          {
+            "resource": "object_store",
+            "name": "mlflow",
+            "consumers": [
+              "mlflow"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "object_store",
+            "singular": "bucket",
+            "plural": "buckets"
+          }
+        ]
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "omnigent",
+            "consumers": [
+              "omnigent"
+            ]
+          },
+          {
+            "resource": "relational_db",
+            "name": "mlflow",
+            "consumers": [
+              "mlflow"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "omnigent",
+        "model": "omnigent",
+        "kind": "component",
+        "display_name": "Omnigent",
+        "summary": "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway or an upstream.",
+        "category": "agents",
+        "role": "agent_platform",
+        "placement": "container:omnigent",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "mlflow",
+        "model": "mlflow",
+        "kind": "component",
+        "display_name": "MLflow",
+        "summary": "Experiment + model tracking and an AI Gateway; Databricks-shaped URLs.",
+        "category": "ml",
+        "role": "experiment_tracking",
+        "placement": "container:mlflow",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@databricks-ai-gateway",
+        "model": null,
+        "kind": "external",
+        "display_name": "AI Gateway",
+        "summary": "A Databricks workspace's AI Gateway (its serving endpoints).",
+        "category": null,
+        "role": "ai_gateway",
+        "placement": null,
+        "cloud": "databricks",
+        "cloud_name": "Databricks",
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@databricks-sandbox-host",
+        "model": null,
+        "kind": "external",
+        "display_name": "Sandbox host",
+        "summary": "The Databricks workspace's sandbox host Omnigent runs sessions on.",
+        "category": null,
+        "role": "sandbox_host",
+        "placement": null,
+        "cloud": "databricks",
+        "cloud_name": "Databricks",
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@neon-ai-gateway",
+        "model": null,
+        "kind": "external",
+        "display_name": "AI Gateway",
+        "summary": "The Neon AI Gateway of the environment's branch.",
+        "category": null,
+        "role": "ai_gateway",
+        "placement": null,
+        "cloud": "neon",
+        "cloud_name": "Neon",
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9080
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→omnigent:9080",
+        "from": "envoy",
+        "to": "omnigent",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→mlflow:9080",
+        "from": "envoy",
+        "to": "mlflow",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→postgres:relational_db",
+        "from": "omnigent",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "omnigent"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→postgres:relational_db",
+        "from": "mlflow",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "mlflow"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→neon-storage:object_store",
+        "from": "mlflow",
+        "to": "neon-storage",
+        "role": "object_store",
+        "protocol": "S3",
+        "resources": [
+          "mlflow"
+        ],
+        "auth": "token"
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→@databricks-ai-gateway:ai_gateway",
+        "from": "omnigent",
+        "to": "@databricks-ai-gateway",
+        "role": "ai_gateway",
+        "protocol": "HTTP",
+        "resources": [],
+        "auth": "native"
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→@databricks-sandbox-host:sandbox_host",
+        "from": "omnigent",
+        "to": "@databricks-sandbox-host",
+        "role": "sandbox_host",
+        "protocol": "HTTP",
+        "resources": [],
+        "auth": "native"
+      },
+      {
+        "kind": "uses",
+        "key": "uses:mlflow→@neon-ai-gateway:ai_gateway",
+        "from": "mlflow",
+        "to": "@neon-ai-gateway",
+        "role": "ai_gateway",
+        "protocol": "HTTP",
+        "resources": [],
+        "auth": "token"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "omnigent",
+      "component": "omnigent",
+      "kind": "service"
+    },
+    {
+      "name": "omnigent-host",
+      "component": "omnigent",
+      "kind": "service"
+    },
+    {
+      "name": "mlflow",
+      "component": "mlflow",
+      "kind": "service"
+    },
+    {
+      "name": "mlflow-gateway-init",
+      "component": "mlflow",
+      "kind": "init"
+    }
+  ],
+  "services": {
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "mlflow": [
+      {
+        "name": "mlflow",
+        "role": "experiment_tracking",
+        "placement": {
+          "kind": "container",
+          "service": "mlflow"
+        },
+        "endpoints": [
+          {
+            "id": "tracking",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "tracking_v3",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/3.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "tracking_v4",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/4.0/mlflow",
+            "rewrite": "inherit"
+          },
+          {
+            "id": "otel",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.0/otel",
+            "rewrite": {
+              "to": "/mlflow"
+            }
+          },
+          {
+            "id": "ai_gateway",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/ai-gateway",
+            "rewrite": {
+              "to": "/mlflow/gateway"
+            },
+            "route": {
+              "streaming": true,
+              "strip_client_credentials": true
+            }
+          },
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 5000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/mlflow"
+      }
+    ],
+    "neon-storage": [
+      {
+        "name": "s3",
+        "role": "object_store",
+        "placement": {
+          "kind": "external",
+          "origin": "${NEON_S3_ENDPOINT}"
+        },
+        "endpoints": [
+          {
+            "id": "s3",
+            "scheme": "https",
+            "internal_port": 443,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "omnigent": [
+      {
+        "name": "omnigent",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent"
+        },
+        "endpoints": [
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 8000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit",
+            "route": {
+              "streaming": true
+            }
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/omnigent"
+      },
+      {
+        "name": "omnigent-host",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent-host"
+        },
+        "endpoints": [],
+        "depends_on": [
+          "omnigent"
+        ]
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 9080,
+        "routes": [
+          {
+            "prefix": "/api/2.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/2.0/mlflow"
+          },
+          {
+            "prefix": "/api/3.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/3.0/mlflow"
+          },
+          {
+            "prefix": "/api/4.0/mlflow",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/api/4.0/mlflow"
+          },
+          {
+            "prefix": "/api/2.0/otel",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow"
+          },
+          {
+            "prefix": "/ai-gateway",
+            "cluster": "mlflow",
+            "rewrite": "/mlflow/gateway"
+          },
+          {
+            "prefix": "/omnigent",
+            "cluster": "omnigent",
+            "rewrite": null
+          },
+          {
+            "prefix": "/mlflow",
+            "cluster": "mlflow",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "mlflow",
+        "host": "mlflow",
+        "port": 5000
+      },
+      {
+        "name": "omnigent",
+        "host": "omnigent",
+        "port": 8000
+      }
+    ],
+    "admin_port": 9901,
+    "auth": null,
+    "tls": null,
+    "policy": null
+  },
+  "client": {
+    "host": {
+      "MLFLOW_AI_GATEWAY_URL": "http://localhost:9080/ai-gateway",
+      "MLFLOW_TRACKING_URI": "http://localhost:9080",
+      "OMNIGENT_URL": "http://localhost:9080/omnigent"
+    },
+    "container": {
+      "MLFLOW_AI_GATEWAY_URL": "http://envoy:10000/ai-gateway",
+      "MLFLOW_TRACKING_URI": "http://envoy:10000",
+      "OMNIGENT_URL": "http://envoy:10000/omnigent"
+    }
+  },
+  "secrets": [
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "help": "Anthropic API key, for `anthropic:` models."
+    },
+    {
+      "name": "DATABRICKS_HOST",
+      "required": true,
+      "help": "The Databricks workspace URL that serves `databricks:` models."
+    },
+    {
+      "name": "DATABRICKS_METADATA_SERVICE_URL",
+      "help": "A Databricks SDK metadata-service token endpoint the MLflow server fetches and refreshes workspace tokens from (the desktop serves one per Databricks profile)."
+    },
+    {
+      "name": "DATABRICKS_TOKEN",
+      "help": "A static workspace token (e.g. from `databricks auth token`), used instead of the token endpoint; it stops working when it expires."
+    },
+    {
+      "name": "GEMINI_API_KEY",
+      "help": "Gemini API key, for `gemini:` models."
+    },
+    {
+      "name": "MLFLOW_CRYPTO_KEK_PASSPHRASE",
+      "required": true,
+      "minted": true,
+      "help": "Seals the provider keys MLflow's AI Gateway stores, in its database. Any random string, generated once and kept: keys sealed under one can't be read with another."
+    },
+    {
+      "name": "NEON_AI_GATEWAY_BASE_URL",
+      "required": true,
+      "help": "The Neon AI Gateway of the environment's branch (its bare host)."
+    },
+    {
+      "name": "NEON_AI_GATEWAY_TOKEN",
+      "required": true,
+      "help": "A Neon credential with the `ai_gateway:invoke` scope on the environment's branch."
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "help": "OpenAI API key, for `openai:` models."
+    }
+  ],
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": true
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/.env/omnigent.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/databricks/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/databricks/databricks_token.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/.env/mlflow.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/mlflow/seed_gateway.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/trestle_mlflow_uc_registry.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/METADATA",
+      "sensitive": false
+    },
+    {
+      "path": "modules/mlflow/uc-registry/entry_points.txt",
+      "sensitive": false
+    },
+    {
+      "path": "deploy/neon-storage-buckets.sh",
+      "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "provision",
+      "module": "neon-storage",
+      "id": "buckets",
+      "title": "Create the buckets",
+      "instructions": "Create the buckets the stack uses: `mlflow`, through the S3-compatible API at `${NEON_S3_ENDPOINT}`.\nThe script needs the AWS CLI, signed in with credentials that may create buckets (a profile,\nSSO, or keys). Set `NEON_S3_ACCESS_KEY_ID` and `NEON_S3_SECRET_ACCESS_KEY` to a\nkey that may read and write them.",
+      "script": "deploy/neon-storage-buckets.sh",
+      "commands": "region=\"${NEON_S3_REGION}\"\nendpoint=(--endpoint-url \"${NEON_S3_ENDPOINT}\")\nfor bucket in 'mlflow' ; do\n  if aws s3api head-bucket --bucket \"$bucket\" ${endpoint[@]+\"${endpoint[@]}\"} 2>/dev/null; then\n    echo \"bucket $bucket exists\"\n  elif [ \"$region\" = us-east-1 ]; then\n    aws s3api create-bucket --bucket \"$bucket\" --region \"$region\" \\\n      ${endpoint[@]+\"${endpoint[@]}\"} >/dev/null\n    echo \"created bucket $bucket\"\n  else\n    aws s3api create-bucket --bucket \"$bucket\" --region \"$region\" \\\n      --create-bucket-configuration \"LocationConstraint=$region\" \\\n      ${endpoint[@]+\"${endpoint[@]}\"} >/dev/null\n    echo \"created bucket $bucket\"\n  fi\ndone\n"
+    },
+    {
+      "order": 2,
+      "phase": "configure",
+      "module": "mlflow",
+      "id": "kek",
+      "title": "Set the AI Gateway's key passphrase",
+      "instructions": "MLflow seals the provider keys and tokens its AI Gateway stores with a passphrase, read from\n`MLFLOW_CRYPTO_KEK_PASSPHRASE` in the environment of the process that starts the stack. Compose\npasses it through to the server; it is never written into this directory, and without it the\nstack doesn't start. Generate one once and keep it: keys sealed under it can't be read with\nanother.\n\n```sh\nexport MLFLOW_CRYPTO_KEK_PASSPHRASE=\"$(openssl rand -base64 32)\"\n```\n\nWith trestle's state store, keep it in the keychain instead (`<target>` is the workspace or\nenvironment, as for any `trestle var set`):\n`openssl rand -base64 32 | trestle var set <target> --secret MLFLOW_CRYPTO_KEK_PASSPHRASE`.\n\nAn environment made before the passphrase was required sealed its keys under\n`lakehouse-dev-kek`: set that value to keep them, or delete the gateway's secrets in the MLflow\nUI and let the next start store them again."
+    },
+    {
+      "order": 3,
+      "phase": "configure",
+      "id": "secrets",
+      "title": "Supply the hosted resources' secrets",
+      "instructions": "The hosted resources read `NEON_S3_ACCESS_KEY_ID`, `NEON_S3_ENDPOINT`, `NEON_S3_REGION`, `NEON_S3_SECRET_ACCESS_KEY`. Set them in `secrets.env` beside `env.toml` (git-ignored; the scripts above save what they create there) or export them, then render again so the stack picks them up:\n\n```bash\ntrestle env render .\n```"
+    },
+    {
+      "order": 4,
+      "phase": "configure",
+      "id": "local-credentials",
+      "title": "Set the services' own credentials",
+      "instructions": "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service."
+    },
+    {
+      "order": 5,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
+    },
+    {
+      "order": 6,
+      "phase": "verify",
+      "module": "mlflow",
+      "id": "traces",
+      "title": "Find the AI Gateway's traces",
+      "instructions": "Each call through the AI Gateway (`/ai-gateway/…` at the gateway, see [LAYOUT.md](LAYOUT.md)) is\nrecorded as a trace in MLflow. The traces of an endpoint go to its own experiment, named\n`gateway/<endpoint>` (e.g. `gateway/claude-opus-5-5`), not to `Default`: open it under\n**Experiments**, then **Traces**. The `mlflow-gateway-init` job creates every endpoint with\ntracing on, and turns it back on at each start if it was switched off.\n\nThe server logs `Failed to send trace to MLflow backend: When an mlflow-artifacts URI was\nsupplied, …` for each call. That warning is harmless: MLflow has already stored the trace's\nspans in its database and only fails to write an extra copy to artifact storage."
+    }
+  ],
+  "deploy_setup": "# Secrets kept in secrets.env (git-ignored) are read like exported ones.\nif [ -f secrets.env ]; then\n  set -a\n  # shellcheck source=/dev/null\n  . ./secrets.env\n  set +a\nfi\n\n# save_secret NAME VALUE: record NAME in secrets.env (and this shell), unless secrets.env\n# already sets it.\nsave_secret() {\n  if [ -f secrets.env ] && grep -q \"^$1=\" secrets.env; then\n    echo \"secrets.env already sets $1; leaving it as is\"\n  else\n    (umask 077 && printf '%s=%s\\n' \"$1\" \"$2\" >> secrets.env)\n    echo \"saved $1 to secrets.env\"\n  fi\n  export \"$1=$2\"\n}\n"
+}

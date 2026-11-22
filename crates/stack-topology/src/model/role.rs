@@ -66,6 +66,11 @@ impl Role {
     /// `agent_platform` — an AI-agent runtime: a coordinating server plus the hosts its agents
     /// run on.
     pub const AGENT_PLATFORM: &'static str = "agent_platform";
+    /// `ai_gateway` — a model gateway: one API and credential for many model providers (a
+    /// cloud's, outside the environment; see [`OutsideService`](crate::OutsideService)).
+    pub const AI_GATEWAY: &'static str = "ai_gateway";
+    /// `sandbox_host` — a host that runs an agent platform's sessions outside the environment.
+    pub const SANDBOX_HOST: &'static str = "sandbox_host";
     /// `notebooks` — a hosted notebook editor serving the stack's client workspace.
     pub const NOTEBOOKS: &'static str = "notebooks";
     /// `graph` — a graph query engine (openCypher / Gremlin) over the lakehouse's tables.

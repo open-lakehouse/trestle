@@ -43,7 +43,7 @@ pub fn graph_mermaid(graph: &GraphDto) -> String {
         }
     }
     for (c, cloud) in clouds.iter().enumerate() {
-        let title = if cloud.is_empty() { "Hosted" } else { cloud };
+        let title = crate::cloud_display_name(cloud);
         let _ = writeln!(out, "    subgraph cloud{c}[\"{}\"]", escape(title));
         for (i, node) in graph.nodes.iter().enumerate() {
             if node.cloud.as_deref() == Some(cloud) {
@@ -154,13 +154,19 @@ fn edge_parts<'a>(
             to,
             protocol,
             resources,
+            auth,
             ..
         } => {
-            let label = if resources.is_empty() {
+            let mut label = if resources.is_empty() {
                 protocol.clone()
             } else {
                 format!("{protocol}: {}", resources.join(", "))
             };
+            // An edge leaving the environment says how it authenticates.
+            if let Some(auth) = auth {
+                label.push_str(" · ");
+                label.push_str(auth.as_str());
+            }
             (from, to, "-->", label)
         }
     }
@@ -190,6 +196,7 @@ mod tests {
             role: None,
             placement: None,
             cloud: None,
+            cloud_name: None,
             api: None,
             surfaces: vec![],
             offers: vec![],
@@ -263,6 +270,7 @@ mod tests {
                     role: "relational_db".into(),
                     protocol: "PostgreSQL".into(),
                     resources: vec!["catalog".into(), "mlflow".into()],
+                    auth: Some(crate::EdgeAuth::Token),
                 },
                 TopologyEdgeDto::Uses {
                     key: "v".into(),
@@ -271,6 +279,7 @@ mod tests {
                     role: "object_store".into(),
                     protocol: "Azure Blob".into(),
                     resources: vec![],
+                    auth: None,
                 },
             ],
         }
@@ -284,7 +293,7 @@ mod tests {
     n1{{"<b>Envoy</b><br/>gateway"}}:::gateway
     n2["<b>The #quot;#lt;App#gt;#quot;</b><br/>data catalog"]:::component
     n3["<b>authelia</b><br/>auth"]:::component
-    subgraph cloud0["aws"]
+    subgraph cloud0["AWS"]
         n4["<b>hosted-postgres</b>"]:::external
     end
     subgraph cloud1["Hosted"]
@@ -294,7 +303,7 @@ mod tests {
     n1 -->|"/api, /ui 🔒"| n2
     n1 -.->|"authn"| n3
     n1 -.->|"authz"| n3
-    n2 -->|"PostgreSQL: catalog, mlflow"| n4
+    n2 -->|"PostgreSQL: catalog, mlflow · token"| n4
     n2 -->|"Azure Blob"| n5
 "#;
         assert!(text.starts_with(expected), "got:\n{text}");

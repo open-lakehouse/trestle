@@ -924,6 +924,60 @@ fn render_template(
         .map_err(|e| TemplateError(e.to_string()))
 }
 
+/// How a connection to something outside the environment is authenticated, as the
+/// environment graph labels it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeAuth {
+    /// The service's own client and configuration (an SDK with a CLI profile, a metadata
+    /// service, or a credential the platform injects where the caller runs).
+    Native,
+    /// A credential in the service's environment (a token, a password in a DSN).
+    Token,
+    /// A credential the egress gateway injects; the service holds none.
+    Injected,
+}
+
+impl EdgeAuth {
+    /// The label the graph shows (`native`, `token`, `injected`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EdgeAuth::Native => "native",
+            EdgeAuth::Token => "token",
+            EdgeAuth::Injected => "injected",
+        }
+    }
+}
+
+impl std::fmt::Display for EdgeAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A service in a cloud, outside the environment, that a module calls directly (see
+/// [`Module::calls_outside_in`]): e.g. a cloud's AI gateway an agent platform gets its models
+/// from. Nothing in the plan provisions or runs it; the environment graph draws it in its
+/// cloud's group, with a uses edge from each caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutsideService {
+    /// The cloud that holds it (e.g. [`NEON_CLOUD`](crate::NEON_CLOUD)).
+    pub cloud: String,
+    /// Its id within the cloud (e.g. `"ai-gateway"`). Callers naming the same cloud and id
+    /// share one node.
+    pub service: String,
+    /// The function it fills, as a role (e.g. `"ai_gateway"`).
+    pub role: String,
+    /// Its human-readable name (e.g. `"AI Gateway"`).
+    pub display_name: String,
+    /// One-line summary, for a tooltip.
+    pub summary: String,
+    /// How the caller speaks to it (e.g. `"HTTP"`).
+    pub protocol: String,
+    /// How the caller authenticates.
+    pub auth: EdgeAuth,
+}
+
 /// Stack-wide facts a module's topology may depend on beyond its own knobs, settled by the
 /// planner before any module's services are computed (see [`Module::services_in`] and
 /// [`Module::client_env_in`]).
@@ -1199,6 +1253,14 @@ pub trait Module: Send + Sync {
     /// catalog when one is present). Each draws a uses edge in the environment graph, like a
     /// [`requires`](Module::requires) entry. Defaults to none.
     fn integrates_with_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<ModuleId> {
+        let _ = (knobs, stack);
+        Vec::new()
+    }
+    /// The services outside the environment this module calls directly with the resolved
+    /// `knobs`, in a stack with the given [`StackFacts`] (a cloud's AI gateway, say). Each draws
+    /// a node in its cloud's group and an authenticated uses edge in the environment graph.
+    /// Defaults to none.
+    fn calls_outside_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Vec<OutsideService> {
         let _ = (knobs, stack);
         Vec::new()
     }

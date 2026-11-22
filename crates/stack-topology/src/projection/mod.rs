@@ -895,13 +895,26 @@ mod tests {
         let pg = node("hosted-postgres");
         assert_eq!(pg.kind, NodeKind::External);
         assert_eq!(pg.cloud.as_deref(), Some("neon"));
+        assert_eq!(pg.cloud_name.as_deref(), Some("Neon"));
         // Unconfigured, a hosted provider sits in its kind's default cloud.
         assert_eq!(node("aws-s3").cloud.as_deref(), Some("aws"));
+        assert_eq!(node("aws-s3").cloud_name.as_deref(), Some("AWS"));
         assert_eq!(
             pg.placement.as_deref(),
             Some("external:tcp://db.example.com:5432")
         );
         assert_eq!(node("mlflow").cloud, None);
+        assert_eq!(node("mlflow").cloud_name, None);
+        // The stack reaches them with the credentials in its environment.
+        for to in ["hosted-postgres", "aws-s3"] {
+            let auth = result.graph.edges.iter().find_map(|e| match e {
+                TopologyEdgeDto::Uses {
+                    from, to: t, auth, ..
+                } if from == "mlflow" && t == to => Some(*auth),
+                _ => None,
+            });
+            assert_eq!(auth, Some(Some(crate::EdgeAuth::Token)), "mlflow → {to}");
+        }
         // Its consumers still use it, and nothing is rendered for it.
         assert!(
             result

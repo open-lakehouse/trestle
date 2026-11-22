@@ -35,6 +35,33 @@ use crate::catalog::module::{HostedFunction, ModuleId};
 use crate::model::connection::{Connection, ConnectionTemplate, ObjectStoreCredential};
 use crate::model::role::Role;
 
+/// The cloud id of Neon: a branch's Postgres, object storage, functions and AI Gateway.
+pub const NEON_CLOUD: &str = "neon";
+/// The cloud id of Databricks: a workspace's AI Gateway (serving endpoints) and sandbox host.
+pub const DATABRICKS_CLOUD: &str = "databricks";
+/// The cloud id of Amazon Web Services.
+pub const AWS_CLOUD: &str = "aws";
+/// The cloud id of Microsoft Azure.
+pub const AZURE_CLOUD: &str = "azure";
+
+/// The name a cloud's group is shown under in the environment graph: `Neon`, `Databricks`,
+/// `AWS`, `Azure`, or `Hosted` for an unnamed cloud (`""`). Any other (free-form) id is its
+/// own name.
+///
+/// The one place this mapping lives; the graph carries the result
+/// ([`GraphNodeDto::cloud_name`](crate::projection::topology::GraphNodeDto::cloud_name)), so
+/// every renderer shows the same names.
+pub fn cloud_display_name(cloud: &str) -> &str {
+    match cloud {
+        "" => "Hosted",
+        NEON_CLOUD => "Neon",
+        DATABRICKS_CLOUD => "Databricks",
+        AWS_CLOUD => "AWS",
+        AZURE_CLOUD => "Azure",
+        other => other,
+    }
+}
+
 /// What a hosted provider module stands in for — and so which [`HostedConnection`] variant
 /// configures it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -77,9 +104,9 @@ impl HostedKind {
     pub fn default_cloud(self) -> Option<&'static str> {
         match self {
             HostedKind::Postgres => None,
-            HostedKind::S3 => Some("aws"),
-            HostedKind::AzureBlob => Some("azure"),
-            HostedKind::Function => Some("neon"),
+            HostedKind::S3 => Some(AWS_CLOUD),
+            HostedKind::AzureBlob => Some(AZURE_CLOUD),
+            HostedKind::Function => Some(NEON_CLOUD),
         }
     }
 
@@ -217,9 +244,9 @@ impl HostedVendor {
     pub fn default_cloud(self) -> Option<&'static str> {
         match self {
             HostedVendor::Generic => None,
-            HostedVendor::Neon | HostedVendor::NeonFunction => Some("neon"),
-            HostedVendor::AwsRds | HostedVendor::AwsS3 => Some("aws"),
-            HostedVendor::AzurePostgres | HostedVendor::AzureStorage => Some("azure"),
+            HostedVendor::Neon | HostedVendor::NeonFunction => Some(NEON_CLOUD),
+            HostedVendor::AwsRds | HostedVendor::AwsS3 => Some(AWS_CLOUD),
+            HostedVendor::AzurePostgres | HostedVendor::AzureStorage => Some(AZURE_CLOUD),
         }
     }
 
@@ -1092,6 +1119,20 @@ mod tests {
             username: "app".into(),
             password: "${PG_PASSWORD}".into(),
             ssl_mode: None,
+        }
+    }
+
+    #[test]
+    fn clouds_have_display_names() {
+        for (cloud, name) in [
+            ("neon", "Neon"),
+            ("databricks", "Databricks"),
+            ("aws", "AWS"),
+            ("azure", "Azure"),
+            ("", "Hosted"),
+            ("on-prem", "on-prem"),
+        ] {
+            assert_eq!(cloud_display_name(cloud), name);
         }
     }
 

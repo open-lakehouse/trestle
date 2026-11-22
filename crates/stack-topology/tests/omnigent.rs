@@ -307,6 +307,42 @@ fn omnigent_no_longer_pulls_in_mlflow_and_auto_needs_it() {
 }
 
 #[test]
+fn a_databricks_sandbox_host_needs_its_workspace_on_the_server() {
+    let server = |p: &Plan| -> serde_yaml::Value {
+        let doc: serde_yaml::Value = serde_yaml::from_str(&fragment(p, "omnigent")).unwrap();
+        doc["services"]["omnigent"].clone()
+    };
+    // By default sessions run on the attached hosts: no workspace.
+    let p = plan_with(&[]);
+    assert!(secret(&p, "DATABRICKS_HOST").is_none());
+    assert!(server(&p)["environment"].get("DATABRICKS_HOST").is_none());
+
+    let p = plan_with(&[("omnigent", "sandbox_host", "databricks")]);
+    assert!(secret(&p, "DATABRICKS_HOST").unwrap().required);
+    assert!(server(&p)["environment"].get("DATABRICKS_HOST").is_some());
+
+    // With the Databricks upstream too, the host and the server share the one secret.
+    let p = baseline_catalog()
+        .plan(
+            &selection(
+                &["envoy", "omnigent"],
+                &[
+                    ("omnigent", "upstream", "databricks"),
+                    ("omnigent", "sandbox_host", "databricks"),
+                ],
+            ),
+            &PlanCtx::default(),
+        )
+        .unwrap();
+    let names: Vec<&str> = p.secrets[&ModuleId::from("omnigent")]
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names.iter().filter(|n| **n == "DATABRICKS_HOST").count(), 1);
+    assert!(names.contains(&"DATABRICKS_METADATA_SERVICE_URL"));
+}
+
+#[test]
 fn the_neon_upstream_points_both_families_at_the_branch_gateway() {
     let p = plan_direct("neon");
     let env = host_env(&p);

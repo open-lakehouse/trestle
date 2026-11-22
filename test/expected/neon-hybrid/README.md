@@ -12,7 +12,7 @@ flowchart LR
     n1{{"<b>Envoy</b><br/>gateway"}}:::gateway
     n4["<b>Omnigent</b><br/>agent platform"]:::component
     n6["<b>MLflow</b><br/>experiment tracking"]:::component
-    subgraph cloud0["neon"]
+    subgraph cloud0["Neon"]
         n2["<b>Headwaters</b><br/>lineage"]:::external
         n3["<b>Hosted Postgres</b><br/>relational db"]:::external
         n5["<b>Neon Object Storage</b><br/>object store"]:::external
@@ -23,13 +23,13 @@ flowchart LR
     n1 -->|"/omnigent"| n4
     n1 -->|"/api/2.0/mlflow, /api/3.0/mlflow, /api/4.0/mlflow, /api/2.0/otel, /ai-gateway, /mlflow"| n6
     n1 -->|"/api/2.1/unity-catalog"| n7
-    n4 -->|"PostgreSQL: omnigent"| n3
-    n6 -->|"PostgreSQL: mlflow"| n3
-    n6 -->|"S3: mlflow"| n5
+    n4 -->|"PostgreSQL: omnigent · token"| n3
+    n6 -->|"PostgreSQL: mlflow · token"| n3
+    n6 -->|"S3: mlflow · token"| n5
     n4 -->|"HTTP"| n6
-    n6 -->|"HTTP"| n7
-    n2 -->|"PostgreSQL"| n3
-    n7 -->|"PostgreSQL"| n3
+    n6 -->|"HTTP · token"| n7
+    n2 -->|"PostgreSQL · native"| n3
+    n7 -->|"PostgreSQL · native"| n3
     classDef clients fill:#f1f5f9,stroke:#64748b
     classDef gateway fill:#ede9fe,stroke:#7c3aed
     classDef component fill:#eff6ff,stroke:#2563eb

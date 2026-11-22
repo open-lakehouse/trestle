@@ -19,6 +19,10 @@ services:
       ARTIFACT_DIR: /data/artifacts
       # Anchors the server's data dir (admin roster, artifacts) on the mounted volume.
       OMNIGENT_ADMIN_CREDENTIALS_PATH: /data/admin-credentials
+{%- if knobs.sandbox_host == "databricks" %}
+      # Sessions run on this workspace's sandbox host.
+      DATABRICKS_HOST:
+{%- endif %}
 {%- if integrations.identity %}
       # The gateway authenticates every request and strips client-supplied identity headers,
       # so the email it asserts is trusted as the Omnigent user.
