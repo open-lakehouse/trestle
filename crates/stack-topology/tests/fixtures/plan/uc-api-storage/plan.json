@@ -9,10 +9,10 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:49a22c7a0fdcffd50eaf1fd332086c6f4b0cc00b07f24539791f4a55916e5cd0"
+    "digest": "sha256:3581221c6fa8459abb9cbe9f325b4ce502369286f378608519e4c63c46381b19"
   },
   "recipe": {
-    "digest": "sha256:60060c24d99515b2dc9035e4721d1814cbb8b2199f4106310abdf8932ed3db19"
+    "digest": "sha256:c4d3313a706d0999f67e73457326fb11f30e411c9f40713f30fb34955cad1390"
   },
   "context": {
     "env_name": "lakehouse",

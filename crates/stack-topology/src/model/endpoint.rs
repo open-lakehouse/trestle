@@ -141,6 +141,72 @@ pub struct RouteOptions {
     /// no effect on a shared-listener route, which is always gated under forward-auth.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gated: bool,
+    /// The endpoint is outside the stack and needs a credential the caller must not hold: the
+    /// planner gives its module a route through the egress gateway, which adds the credential
+    /// to every request (see [`InjectedCredential`]). Only meaningful on an endpoint of a
+    /// service [placed](crate::Placement::External) at an outside origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject_credential: Option<InjectedCredential>,
+}
+
+/// A credential the egress gateway adds to each request it forwards to an upstream outside the
+/// environment, so no caller holds it.
+///
+/// Every `secret` / `client_secret` names a variable, as a module's
+/// [declared secrets](crate::DeclaredSecret) do: it is never a value. The variable reaches only
+/// the environment's secret server, which hands its value to the egress gateway over SDS.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InjectedCredential {
+    /// `Authorization: Bearer <secret>`.
+    Bearer {
+        /// The variable holding the token.
+        secret: String,
+    },
+    /// `<name>: <prefix><secret>`.
+    Header {
+        /// The header to set (e.g. `x-api-key`).
+        name: String,
+        /// The variable holding the value.
+        secret: String,
+        /// What goes before the value (e.g. `"Token "`); nothing when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+    },
+    /// The OAuth2 client-credentials grant: the gateway fetches and refreshes the access token
+    /// itself, so only the client secret is a secret.
+    #[serde(rename = "oauth2_client_credentials")]
+    OAuth2ClientCredentials {
+        /// The token endpoint's URL.
+        token_url: String,
+        /// The client id (not a secret).
+        client_id: String,
+        /// The variable holding the client secret.
+        client_secret: String,
+        /// The scopes to request.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        scopes: Vec<String>,
+    },
+}
+
+impl InjectedCredential {
+    /// The variable holding the credential's secret part.
+    pub fn secret_var(&self) -> &str {
+        match self {
+            Self::Bearer { secret } | Self::Header { secret, .. } => secret,
+            Self::OAuth2ClientCredentials { client_secret, .. } => client_secret,
+        }
+    }
+
+    /// The header the credential is sent in, and what precedes its value; `None` for OAuth2,
+    /// whose token always goes in `Authorization: Bearer`.
+    pub fn header(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Bearer { .. } => Some(("Authorization", "Bearer ")),
+            Self::Header { name, prefix, .. } => Some((name, prefix.as_deref().unwrap_or(""))),
+            Self::OAuth2ClientCredentials { .. } => None,
+        }
+    }
 }
 
 impl RouteOptions {
@@ -309,6 +375,15 @@ impl Endpoint {
     /// gateway's sign-in when forward-auth is on.
     pub(crate) fn gated(mut self) -> Endpoint {
         self.route.gated = true;
+        self
+    }
+
+    /// This endpoint with [`RouteOptions::inject_credential`] set: its module reaches it through
+    /// the egress gateway, which adds `credential` to every request. The counterpart of
+    /// [`strip_client_credentials`](Self::strip_client_credentials) for an upstream outside the
+    /// environment.
+    pub fn inject_credential(mut self, credential: InjectedCredential) -> Endpoint {
+        self.route.inject_credential = Some(credential);
         self
     }
 }

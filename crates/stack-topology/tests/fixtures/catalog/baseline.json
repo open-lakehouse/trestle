@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:49a22c7a0fdcffd50eaf1fd332086c6f4b0cc00b07f24539791f4a55916e5cd0"
+    "digest": "sha256:3581221c6fa8459abb9cbe9f325b4ce502369286f378608519e4c63c46381b19"
   },
   "modules": [
     {
@@ -94,6 +94,44 @@
           ]
         }
       ]
+    },
+    {
+      "id": "egress-gateway",
+      "model": "envoy",
+      "display_name": "Egress gateway",
+      "summary": "Reaches upstreams outside the environment and adds their credentials, so no caller holds them.",
+      "category": "gateway",
+      "provider_of": "egress",
+      "requires": [],
+      "conflicts_with": [],
+      "resource_kinds": [],
+      "resource_nouns": [],
+      "knobs": [
+        {
+          "key": "image",
+          "title": "Envoy image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "envoyproxy/envoy:v1.40.2",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "advanced": true
+        },
+        {
+          "key": "secret_server_image",
+          "title": "Secret server image",
+          "kind": {
+            "kind": "string"
+          },
+          "default": "ghcr.io/open-lakehouse/trestle-secret-server:0.0.0",
+          "required": false,
+          "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          "advanced": true
+        }
+      ],
+      "helpers": [],
+      "hosted": null
     },
     {
       "id": "authelia",

@@ -89,7 +89,7 @@ fn node_line(i: usize, node: &GraphNodeDto) -> String {
     };
     let (open, close, class) = match node.kind {
         NodeKind::Clients => ("([", "])", "clients"),
-        NodeKind::Gateway => ("{{", "}}", "gateway"),
+        NodeKind::Gateway | NodeKind::Egress => ("{{", "}}", "gateway"),
         NodeKind::Component => ("[", "]", "component"),
         NodeKind::External => ("[", "]", "external"),
     };

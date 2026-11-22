@@ -149,6 +149,7 @@ pub fn baseline_catalog() -> Catalog {
 pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
     Catalog::from_modules([
         envoy(),
+        egress_gateway(),
         authelia(credentials),
         postgres(credentials),
         rustfs(credentials),
@@ -168,7 +169,7 @@ pub fn baseline_catalog_with(credentials: &LocalCredentials) -> Catalog {
         puppygraph(),
         rivers(),
         opa(),
-    ] as [Arc<dyn Module>; 20])
+    ] as [Arc<dyn Module>; 21])
     .with_default_provider(Role::OBJECT_STORE, "rustfs")
     .with_default_provider(Role::RELATIONAL_DB, "postgres")
     // Selecting the `data_catalog` capability picks the OSS server.
@@ -581,6 +582,84 @@ fn envoy() -> Arc<dyn Module> {
                 "gateway_certs_script",
                 include_str!("../../templates/gateway/certs.sh.jinja"),
             )],
+        )
+        .for_compose(),
+    })
+}
+
+/// `egress-gateway` — the Envoy the environment's services reach outside upstreams through,
+/// which adds each route's credential to every request, and the secret server that hands it
+/// those credentials over SDS (see [`plan::egress`](crate::plan::egress)).
+///
+/// The planner adds it when the selection has egress routes, or when a module declares an
+/// outside endpoint with an [injected credential](crate::Endpoint::inject_credential); it is
+/// never picked. Neither service publishes a port or joins the mesh, and Envoy's admin binds
+/// its loopback. Its Envoy bootstrap and the secret server's configuration render from the
+/// plan's routes and name secrets, never values.
+fn egress_gateway() -> Arc<dyn Module> {
+    Arc::new(DataModule {
+        id: ModuleId::from("egress-gateway"),
+        model: Some("envoy".into()),
+        display_name: Some("Egress gateway".into()),
+        summary: Some(
+            "Reaches upstreams outside the environment and adds their credentials, so no \
+             caller holds them."
+                .into(),
+        ),
+        category: Some("gateway".into()),
+        provider_of: Some(Role::EGRESS.into()),
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![
+            ServiceSpec {
+                name: crate::plan::egress::EGRESS_SERVICE.into(),
+                role: Role::egress(),
+                placement: container(crate::plan::egress::EGRESS_SERVICE),
+                endpoints: vec![],
+                depends_on: vec![],
+                base_path: String::new(),
+            },
+            ServiceSpec {
+                name: crate::plan::egress::SECRET_SERVER_SERVICE.into(),
+                role: Role::egress(),
+                placement: container(crate::plan::egress::SECRET_SERVER_SERVICE),
+                endpoints: vec![],
+                depends_on: vec![],
+                base_path: String::new(),
+            },
+        ],
+        provides: Provides::default(),
+        knobs: vec![
+            string_knob(
+                "image",
+                "Envoy image",
+                Some(images::EGRESS_ENVOY),
+                IMAGE_HELP,
+                None,
+            ),
+            string_knob(
+                "secret_server_image",
+                "Secret server image",
+                Some(images::SECRET_SERVER),
+                IMAGE_HELP,
+                None,
+            ),
+        ],
+        renders: template_with_files(
+            include_str!("../../templates/modules/egress-gateway/compose.yaml.jinja"),
+            vec![
+                config_file(
+                    "envoy.yaml",
+                    "egress_envoy_config",
+                    include_str!("../../templates/modules/egress-gateway/envoy.yaml.jinja"),
+                ),
+                config_file(
+                    "secret-server.yaml",
+                    "secret_server_config",
+                    include_str!("../../templates/modules/egress-gateway/secret-server.yaml.jinja"),
+                ),
+            ],
         )
         .for_compose(),
     })
@@ -3338,6 +3417,7 @@ mod tests {
         // and a hand-written module that forgets to implement `model()` fails here.
         let expected = [
             ("envoy", "envoy"),
+            ("egress-gateway", "envoy"),
             ("authelia", "authelia"),
             ("postgres", "postgresql"),
             ("rustfs", "rustfs"),

@@ -133,12 +133,15 @@ pub(super) fn platform_providers(
 ///
 /// With the gateway off, `emulating` still adds it: some module in the graph emulates public
 /// hostnames, which only the gateway's in-network TLS listener answers (see
-/// [`route`](super::route)).
+/// [`route`](super::route)). The egress gateway joins when the selection has egress routes, or
+/// when `injecting` says a module in the graph declares an outside endpoint with an injected
+/// credential (see [`egress`](super::egress)).
 pub(super) fn augment<'a>(
     selection: &'a Selection,
     catalog: &Catalog,
     ctx: &'a PlanCtx,
     emulating: bool,
+    injecting: bool,
 ) -> Result<Augmented<'a>, PlanError> {
     let platform = platform_providers(selection, catalog)?;
     if let (Some(module), None) = (
@@ -159,8 +162,12 @@ pub(super) fn augment<'a>(
     let gateway = (selection.gateway.enabled || emulating)
         .then(|| gateway_provider(selection, catalog, ctx))
         .flatten();
+    let egress = (selection.egress.is_enabled() || injecting)
+        .then(|| super::egress::egress_provider(catalog))
+        .flatten();
     let implied: Vec<&ModuleId> = gateway
         .iter()
+        .chain(egress.iter())
         .chain(platform.values())
         .chain(selection.hosted.keys())
         .filter(|m| !selection.modules.contains(m))

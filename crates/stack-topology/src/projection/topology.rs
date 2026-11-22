@@ -59,6 +59,9 @@ pub enum NodeKind {
     Clients,
     /// The gateway: the single front door, carrying the exposed surface.
     Gateway,
+    /// The egress gateway: the way out to upstreams outside the environment, adding their
+    /// credentials. Drawn like the gateway; it has no surface (nothing reaches it from outside).
+    Egress,
     /// A component the stack runs.
     Component,
     /// A component the plan relies on but does not run on the deploy target: host-bound,
@@ -306,7 +309,7 @@ pub enum TopologyEdgeDto {
         role: String,
         /// How it is spoken, at the functional level (e.g. `"PostgreSQL"`, `"S3"`).
         protocol: String,
-        /// The resources used (database / bucket names).
+        /// The resources used (database / bucket names), or for the egress gateway the routes.
         resources: Vec<String>,
         /// How the consumer authenticates, for a provider outside the environment (a hosted
         /// provider, or a cloud's [`OutsideService`](crate::OutsideService)). `None` for one
@@ -400,6 +403,50 @@ fn protocol(connection: &Connection, full: bool) -> String {
             Some((scheme, _)) => scheme.to_string(),
             None => "SQL".to_string(),
         },
+    }
+}
+
+/// The node an egress route's upstream is drawn as, when no module of the stack serves it: the
+/// branch's function (in the Neon group), or the upstream's host. Its id starts with `@`, so it
+/// never collides with a module.
+fn upstream_node(route: &crate::plan::egress::PlannedEgressRoute) -> GraphNodeDto {
+    let (id, name, summary, cloud) = match &route.function {
+        Some(slug) => (
+            outside_node_id(crate::NEON_CLOUD, slug),
+            slug.clone(),
+            format!("The `{slug}` function on the bound Neon branch."),
+            Some(crate::NEON_CLOUD.to_string()),
+        ),
+        None => {
+            let host = &route.upstream.host;
+            (
+                format!("@upstream/{host}"),
+                host.clone(),
+                format!("An upstream outside the environment, at {}.", route.origin),
+                None,
+            )
+        }
+    };
+    GraphNodeDto {
+        id,
+        model: None,
+        kind: NodeKind::External,
+        display_name: Some(name),
+        summary: Some(summary),
+        category: None,
+        role: Some("upstream".to_string()),
+        placement: Some(placement_str(&Placement::External {
+            origin: route.origin.clone(),
+        })),
+        cloud_name: cloud
+            .as_deref()
+            .map(|c| crate::cloud_display_name(c).to_string()),
+        cloud,
+        api: None,
+        surfaces: Vec::new(),
+        offers: Vec::new(),
+        provisions: Vec::new(),
+        resource_nouns: Vec::new(),
     }
 }
 
@@ -667,6 +714,75 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
         }
     }
 
+    // The egress gateway: each consumer uses it for the routes it may call, and it reaches each
+    // upstream with the credential it injects. A route to a function a module of the stack runs
+    // as reaches that module's node; any other upstream gets a node of its own.
+    let mut upstreams: Vec<GraphNodeDto> = Vec::new();
+    if let Some(egress) = &plan.egress {
+        let gw = egress.module.as_str();
+        let mut push =
+            |from: &str, to: &str, role: &str, protocol: &str, route: &str, auth| match uses
+                .iter_mut()
+                .find(|e| {
+                    matches!(e, TopologyEdgeDto::Uses { from: f, to: t, role: r, .. }
+                    if f == from && t == to && r == role)
+                }) {
+                Some(TopologyEdgeDto::Uses { resources, .. }) => resources.push(route.to_string()),
+                _ => uses.push(TopologyEdgeDto::Uses {
+                    key: String::new(),
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    role: role.to_string(),
+                    protocol: protocol.to_string(),
+                    resources: vec![route.to_string()],
+                    auth,
+                }),
+            };
+        for route in &egress.routes {
+            for consumer in &route.consumers {
+                push(
+                    consumer.as_str(),
+                    gw,
+                    Role::EGRESS,
+                    "HTTP",
+                    &route.name,
+                    None,
+                );
+            }
+            let hosted = route.function.as_deref().and_then(|slug| {
+                plan.stack_facts
+                    .functions
+                    .iter()
+                    .find(|(_, f)| f.slug == slug)
+                    .map(|(id, _)| id.clone())
+            });
+            let to = match hosted {
+                Some(module) => module,
+                None => {
+                    let node = upstream_node(route);
+                    let id = node.id.clone();
+                    if !upstreams.iter().any(|n| n.id == id) {
+                        upstreams.push(node);
+                    }
+                    id
+                }
+            };
+            let protocol = if route.upstream.tls.is_some() {
+                "HTTPS"
+            } else {
+                "HTTP"
+            };
+            push(
+                gw,
+                &to,
+                "upstream",
+                protocol,
+                &route.name,
+                Some(crate::EdgeAuth::Injected),
+            );
+        }
+    }
+
     // The gateway's surfaces, one per listener in listener order (the shared one first). A
     // service surface names the protocols its backends offer.
     let offers_of = |id: &str| -> Vec<String> {
@@ -740,6 +856,8 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             .map(|e| e.cloud.clone().unwrap_or_default());
         let kind = if gateway_module.as_deref() == Some(id) {
             NodeKind::Gateway
+        } else if svc.role == Role::egress() {
+            NodeKind::Egress
         } else if matches!(svc.placement, Placement::Container { .. }) {
             NodeKind::Component
         } else {
@@ -833,6 +951,8 @@ pub fn graph_dto(plan: &Plan) -> GraphDto {
             });
         }
     }
+    // The egress routes' upstreams no module of the stack serves.
+    nodes.extend(upstreams);
 
     let clients = || GraphNodeDto {
         id: CLIENTS_NODE_ID.to_string(),

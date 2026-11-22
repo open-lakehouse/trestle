@@ -481,7 +481,13 @@ export async function layoutTopology(graph: GraphDto): Promise<TopologyFlow> {
   const gateways = new Set(sectionsOf.keys());
   const components = new Set(
     graph.nodes
-      .filter((n) => n.kind === "component" || n.kind === "external")
+      // The egress gateway has no surface: it draws as a component.
+      .filter(
+        (n) =>
+          n.kind === "component" ||
+          n.kind === "external" ||
+          n.kind === "egress",
+      )
       .map((n) => n.id),
   );
   const drawn = visualEdges(graph);

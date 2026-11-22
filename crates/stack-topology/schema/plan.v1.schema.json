@@ -223,7 +223,7 @@
             { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" }
           ]
         },
-        "kind": { "enum": ["clients", "gateway", "component", "external"] },
+        "kind": { "enum": ["clients", "gateway", "egress", "component", "external"] },
         "display_name": { "$ref": "#/$defs/nullableString" },
         "summary": { "$ref": "#/$defs/nullableString" },
         "category": { "$ref": "#/$defs/nullableString" },

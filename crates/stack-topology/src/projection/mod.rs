@@ -654,6 +654,7 @@ pub const KNOWN_ROLES: &[&str] = &[
     Role::AUTH,
     Role::POLICY,
     Role::AGENT_PLATFORM,
+    Role::EGRESS,
 ];
 
 #[cfg(test)]

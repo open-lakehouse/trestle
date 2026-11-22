@@ -271,8 +271,14 @@ export interface LocalCredentialDto {
   max_len: number;
 }
 
-/** What a diagram node stands for (mirrors `NodeKind`). */
-export type NodeKind = "clients" | "gateway" | "component" | "external";
+/** What a diagram node stands for (mirrors `NodeKind`). `egress` is the
+ *  egress gateway: the way out to upstreams outside the environment. */
+export type NodeKind =
+  | "clients"
+  | "gateway"
+  | "egress"
+  | "component"
+  | "external";
 
 /** What kind of endpoint the gateway exposes (mirrors `ExposedKind`). */
 export type ExposedKind = "api" | "ui" | "service";

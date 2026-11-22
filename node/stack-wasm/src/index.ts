@@ -29,6 +29,7 @@ export type {
   ClusterDto,
   DeployPhase,
   DeployStepDto,
+  EdgeAuth,
   Endpoint,
   ExposedDto,
   ExposedKind,

@@ -836,6 +836,10 @@ pub struct RenderCtx<'a> {
     /// `envoy.yaml` names them, so the fragment refuses to start until a render resolves them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved_upstreams: Vec<String>,
+    /// The egress gateway's routes, listeners and secret-server sockets, populated only for
+    /// the egress module (see [`plan::egress`](crate::plan::egress)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<crate::plan::EgressConfig>,
     /// The module's active [platform-feature](crate::PlatformFeature) integrations, by
     /// feature: a fragment exports traces with
     /// `{% if integrations.observability %}{{ integrations.observability.endpoint }}{% endif %}`.
@@ -897,6 +901,7 @@ impl<'a> RenderCtx<'a> {
             tls: None,
             mesh: None,
             unresolved_upstreams: Vec::new(),
+            egress: None,
             integrations: BTreeMap::new(),
             stack: StackFacts::default(),
         }
@@ -1477,6 +1482,7 @@ mod tests {
                 tls: None,
                 mesh: None,
                 unresolved_upstreams: Vec::new(),
+                egress: None,
                 integrations: BTreeMap::new(),
                 stack: StackFacts::default(),
             })
@@ -1527,6 +1533,7 @@ mod tests {
             tls: None,
             mesh: None,
             unresolved_upstreams: Vec::new(),
+            egress: None,
             integrations: BTreeMap::new(),
             stack: StackFacts::default(),
         };

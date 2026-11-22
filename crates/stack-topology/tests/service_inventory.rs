@@ -41,7 +41,24 @@ fn selections() -> Vec<Selection> {
         ]
         .into(),
     );
-    vec![everything, azure, bare_store, uc_rs, mounts]
+    // The egress gateway, with a route for Omnigent.
+    let mut egress = Selection::modules(["omnigent"]);
+    egress.knob_overrides.insert(
+        "omnigent".into(),
+        [("upstream".to_string(), "keys".to_string())].into(),
+    );
+    egress.egress.routes = vec![olai_stack_topology::EgressRoute {
+        name: "search".into(),
+        function: None,
+        upstream: Some("https://api.search.example.com".into()),
+        path: "/".into(),
+        consumers: vec!["omnigent".into()],
+        credential: olai_stack_topology::InjectedCredential::Bearer {
+            secret: "SEARCH_API_KEY".into(),
+        },
+        mcp: None,
+    }];
+    vec![everything, azure, bare_store, uc_rs, mounts, egress]
 }
 
 fn rendered_services(fragment: &str) -> BTreeSet<String> {
@@ -116,8 +133,9 @@ fn every_rendered_container_is_a_service_or_a_declared_helper() {
 }
 
 /// Long-running services (`restart: unless-stopped`) with nothing to probe: a worker with no
-/// listener of its own.
-const UNPROBED: &[&str] = &["omnigent-host"];
+/// listener of its own, and the secret server (a distroless image, serving only Unix sockets;
+/// the egress gateway's own readiness covers it).
+const UNPROBED: &[&str] = &["omnigent-host", "secret-server"];
 
 #[test]
 fn every_long_running_service_has_a_health_check() {

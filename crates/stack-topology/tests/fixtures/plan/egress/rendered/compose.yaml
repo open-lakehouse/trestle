@@ -1,0 +1,33 @@
+# Top-level compose entrypoint. Every backing service is pulled in via `include:`.
+# The file list is owned by the planner, not edited by hand.
+name: lakehouse
+
+configs:
+  egress_envoy_config:
+    file: ./modules/egress-gateway/envoy.yaml
+  envoy_config:
+    file: ./modules/envoy/envoy.yaml
+  omnigent_databricks_config:
+    file: ./modules/omnigent/databricks/config.yaml
+  omnigent_databricks_token:
+    file: ./modules/omnigent/databricks/databricks_token.py
+  postgres_init:
+    file: ./modules/postgres/init-databases.sh
+  secret_server_config:
+    file: ./modules/egress-gateway/secret-server.yaml
+
+secrets:
+  postgres_password:
+    file: ./modules/postgres/secrets/postgres_password
+
+include:
+  - path: ./modules/egress-gateway/compose.yaml
+    project_directory: .
+  - path: ./modules/envoy/compose.yaml
+    project_directory: .
+  - path: ./modules/postgres/compose.yaml
+    project_directory: .
+  - path:
+      - ./modules/omnigent/compose.yaml
+      - ./modules/egress-gateway/consumers/omnigent.yaml
+    project_directory: .

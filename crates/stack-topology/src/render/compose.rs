@@ -33,6 +33,10 @@ pub struct ComposeInclude {
     pub module: ModuleId,
     /// The fragment text (the module's rendered compose `services:` snippet).
     pub fragment: String,
+    /// Files Compose merges over the fragment, in order (paths from the environment root):
+    /// what the planner adds to the module's services without its template knowing, such as
+    /// the URLs of the egress routes it may call.
+    pub overrides: Vec<String>,
 }
 
 /// A top-level compose `configs:` declaration: an alias and the host file it maps to.
@@ -144,10 +148,12 @@ pub fn render_modules(
             includes.push(ComposeInclude {
                 module: id.clone(),
                 fragment: out.fragment.clone(),
+                overrides: Vec::new(),
             });
         }
         renders.push((id.clone(), out));
     }
+    add_egress_overrides(plan, &mut renders, &mut includes);
 
     // Deterministic `configs:` / `secrets:` order regardless of module/graph order.
     configs.sort_by(|a, b| a.alias.cmp(&b.alias));
@@ -161,6 +167,65 @@ pub fn render_modules(
         secrets,
     };
     Ok((renders, head))
+}
+
+/// Give each egress-route consumer the URLs of the routes it may call (`EGRESS_<ROUTE>_URL`):
+/// an override file, written by the egress module, that Compose merges over the consumer's
+/// fragment, so no consumer's template has to know about egress.
+fn add_egress_overrides(
+    plan: &Plan,
+    renders: &mut [(ModuleId, RenderOutput)],
+    includes: &mut [ComposeInclude],
+) {
+    let Some(egress) = &plan.egress else {
+        return;
+    };
+    let mut files = Vec::new();
+    for consumer in egress.consumers() {
+        let Some(include) = includes.iter_mut().find(|i| &i.module == consumer) else {
+            continue;
+        };
+        let containers: Vec<&str> = plan
+            .services
+            .get(consumer)
+            .into_iter()
+            .flatten()
+            .filter_map(|s| match &s.placement {
+                crate::Placement::Container { service } => Some(service.as_str()),
+                _ => None,
+            })
+            .collect();
+        let env = egress.consumer_env(consumer);
+        let mut text = format!(
+            "# The egress routes `{consumer}` may call: the egress gateway adds their credentials.\n\
+             # Written by the planner and merged over `modules/{consumer}/compose.yaml`.\n\
+             services:\n"
+        );
+        for service in containers {
+            let _ = writeln!(text, "  {service}:\n    environment:");
+            for (key, url) in &env {
+                let _ = writeln!(text, "      {key}: \"{url}\"");
+            }
+        }
+        let path = format!(
+            "modules/{}/consumers/{consumer}.yaml",
+            egress.module.as_str()
+        );
+        include.overrides.push(path.clone());
+        files.push(crate::render::RenderFile {
+            path,
+            contents: text,
+            alias: None,
+            sensitive: false,
+            secret_alias: None,
+            at_root: false,
+            preserve: false,
+            moved_from: None,
+        });
+    }
+    if let Some((_, out)) = renders.iter_mut().find(|(id, _)| id == &egress.module) {
+        out.files.extend(files);
+    }
 }
 
 /// Record `module` as the owner of the top-level `alias`, rejecting a second owner.
@@ -291,14 +356,18 @@ pub fn render_compose(head: &HeadFile) -> String {
     }
     push_lines(&mut out, &["", "include:"]);
     for inc in &head.includes {
-        push_lines(
-            &mut out,
-            &[
-                // Each module's fragment is co-located in its own directory.
-                &format!("  - path: ./modules/{}/compose.yaml", inc.module.as_str()),
-                "    project_directory: .",
-            ],
-        );
+        // Each module's fragment is co-located in its own directory.
+        let fragment = format!("./modules/{}/compose.yaml", inc.module.as_str());
+        if inc.overrides.is_empty() {
+            push_lines(&mut out, &[&format!("  - path: {fragment}")]);
+        } else {
+            // Compose merges a path list in order: the planner's overrides go over the fragment.
+            push_lines(&mut out, &["  - path:", &format!("      - {fragment}")]);
+            for path in &inc.overrides {
+                push_lines(&mut out, &[&format!("      - ./{path}")]);
+            }
+        }
+        push_lines(&mut out, &["    project_directory: ."]);
     }
     out
 }

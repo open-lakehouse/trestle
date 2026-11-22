@@ -6,6 +6,13 @@
 
 /// Envoy gateway proxy.
 pub const ENVOY: &str = "envoyproxy/envoy:v1.40-latest";
+/// The egress gateway's Envoy. An exact patch release, unlike the ingress: its
+/// `credential_injector` filter and both injected-credential extensions are alpha, and the
+/// secret server's integration test runs against this release.
+pub const EGRESS_ENVOY: &str = "envoyproxy/envoy:v1.40.2";
+/// The SDS secret server the egress gateway fetches its credentials from. A placeholder until
+/// the first `olai-secret-server` image is released.
+pub const SECRET_SERVER: &str = "ghcr.io/open-lakehouse/trestle-secret-server:0.0.0";
 /// Authelia forward-auth provider.
 pub const AUTHELIA: &str = "ghcr.io/authelia/authelia:4.39";
 /// Postgres relational database.
