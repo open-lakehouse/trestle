@@ -78,7 +78,7 @@ use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
 use crate::render::InjectedEnv;
 use crate::target::TargetId;
-pub use egress::EgressConfig;
+pub use egress::{ConsumedEgressRoute, EgressConfig};
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;

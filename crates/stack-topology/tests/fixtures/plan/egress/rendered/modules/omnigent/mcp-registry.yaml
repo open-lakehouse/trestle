@@ -1,0 +1,12 @@
+# Written by trestle: Omnigent's MCP registry (`OMNIGENT_MCP_REGISTRY`), one service per egress
+# route serving MCP. The egress gateway adds each route's credential, so the server calls it
+# with none and plain HTTP stays on the compose network.
+services:
+  - id: "workgraph-planner"
+    title: "Work graph (planner)"
+    url: "http://egress-gateway:10001/mcp"
+    auth: none
+    allow_http: true
+    tools:
+      - "read"
+      - "submit"

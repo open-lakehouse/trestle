@@ -1,0 +1,801 @@
+{
+  "format": "trestle-plan",
+  "version": 1,
+  "state": "planned",
+  "generator": {
+    "name": "trestle",
+    "version": "0.0.0-test"
+  },
+  "catalog": {
+    "baseline": "olai-stack-topology@test",
+    "manifests": [],
+    "digest": "sha256:bc9df14e705020fd0926fee1665d55455135263620473c70e09ce99bbd0e7f74"
+  },
+  "recipe": {
+    "digest": "sha256:8badf4634e94412d4f2ad7dcf72467f2612f3add7e3a146a316280cbbac71920"
+  },
+  "context": {
+    "env_name": "lakehouse",
+    "target": "compose",
+    "gateway_service": "envoy",
+    "gateway_internal_port": 10000,
+    "gateway_host_port": 9080,
+    "gateway_admin_port": 9901,
+    "dedicated_listener_ports": [],
+    "dedicated_listener_port_base": 9100,
+    "provider_preference": {},
+    "data_root": "./.data"
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "@clients",
+        "model": null,
+        "kind": "clients",
+        "display_name": "Clients",
+        "summary": "Browsers, SDKs and CLIs on the host.",
+        "category": null,
+        "role": null,
+        "placement": null,
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "egress-gateway",
+        "model": "envoy",
+        "kind": "egress",
+        "display_name": "Egress gateway",
+        "summary": "Reaches upstreams outside the environment and adds their credentials, so no caller holds them.",
+        "category": "gateway",
+        "role": "egress",
+        "placement": "container:egress-gateway",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "envoy",
+        "model": "envoy",
+        "kind": "gateway",
+        "display_name": "Envoy",
+        "summary": "Single-port gateway, Databricks-shaped URL rewrites.",
+        "category": "gateway",
+        "role": "gateway",
+        "placement": "container:envoy",
+        "cloud": null,
+        "surfaces": [
+          {
+            "host_port": 9080,
+            "kind": "platform",
+            "protocols": [],
+            "exposes": [
+              {
+                "module": "unity-catalog-rs",
+                "endpoint": "rest",
+                "kind": "api",
+                "prefix": "/api/2.1/unity-catalog",
+                "gated": false
+              },
+              {
+                "module": "uc-mcp",
+                "endpoint": "mcp",
+                "kind": "api",
+                "prefix": "/uc-mcp/mcp",
+                "gated": false
+              },
+              {
+                "module": "omnigent",
+                "endpoint": "ui",
+                "kind": "ui",
+                "prefix": "/omnigent",
+                "gated": false
+              }
+            ]
+          }
+        ],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "postgres",
+        "model": "postgresql",
+        "kind": "component",
+        "display_name": "Postgres",
+        "summary": "Postgres 16; auto-creates DBs other modules declare.",
+        "category": "metadata_db",
+        "role": "relational_db",
+        "placement": "container:db",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [
+          "PostgreSQL"
+        ],
+        "provisions": [
+          {
+            "resource": "relational_db",
+            "name": "unitycatalog",
+            "consumers": [
+              "unity-catalog-rs"
+            ]
+          },
+          {
+            "resource": "relational_db",
+            "name": "omnigent",
+            "consumers": [
+              "omnigent"
+            ]
+          }
+        ],
+        "resource_nouns": [
+          {
+            "kind": "relational_db",
+            "singular": "database",
+            "plural": "databases"
+          }
+        ]
+      },
+      {
+        "id": "unity-catalog-rs",
+        "model": "mangrove",
+        "kind": "component",
+        "display_name": "Unity Catalog (Rust)",
+        "summary": "mangrove's Rust Unity Catalog server; the same REST API, in a container or as a Neon Function.",
+        "category": "catalog",
+        "role": "data_catalog",
+        "placement": "container:unitycatalog",
+        "cloud": null,
+        "api": "unity-catalog",
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "uc-mcp",
+        "model": "ucMcp",
+        "kind": "component",
+        "display_name": "Unity Catalog MCP",
+        "summary": "Unity Catalog tools for agents, served over MCP (mangrove's `uc`).",
+        "category": "agents",
+        "role": "mcp_server",
+        "placement": "container:uc-mcp",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "omnigent",
+        "model": "omnigent",
+        "kind": "component",
+        "display_name": "Omnigent",
+        "summary": "AI-agent platform; agents run in the stack, models via MLflow's AI Gateway or an upstream.",
+        "category": "agents",
+        "role": "agent_platform",
+        "placement": "container:omnigent",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@upstream/tickets.example.com",
+        "model": null,
+        "kind": "external",
+        "display_name": "tickets.example.com",
+        "summary": "An upstream outside the environment, at https://tickets.example.com.",
+        "category": null,
+        "role": "upstream",
+        "placement": "external:https://tickets.example.com",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@upstream/docs.example.com",
+        "model": null,
+        "kind": "external",
+        "display_name": "docs.example.com",
+        "summary": "An upstream outside the environment, at https://docs.example.com:8443.",
+        "category": null,
+        "role": "upstream",
+        "placement": "external:https://docs.example.com:8443",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      },
+      {
+        "id": "@upstream/tools.example.com",
+        "model": null,
+        "kind": "external",
+        "display_name": "tools.example.com",
+        "summary": "An upstream outside the environment, at https://tools.example.com.",
+        "category": null,
+        "role": "upstream",
+        "placement": "external:https://tools.example.com",
+        "cloud": null,
+        "surfaces": [],
+        "offers": [],
+        "provisions": [],
+        "resource_nouns": []
+      }
+    ],
+    "edges": [
+      {
+        "kind": "access",
+        "key": "access:@clients→envoy:9080",
+        "from": "@clients",
+        "to": "envoy",
+        "host_port": 9080
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→unity-catalog-rs:9080",
+        "from": "envoy",
+        "to": "unity-catalog-rs",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→uc-mcp:9080",
+        "from": "envoy",
+        "to": "uc-mcp",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "route",
+        "key": "route:envoy→omnigent:9080",
+        "from": "envoy",
+        "to": "omnigent",
+        "host_port": 9080,
+        "gated": false
+      },
+      {
+        "kind": "uses",
+        "key": "uses:unity-catalog-rs→postgres:relational_db",
+        "from": "unity-catalog-rs",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "unitycatalog"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→postgres:relational_db",
+        "from": "omnigent",
+        "to": "postgres",
+        "role": "relational_db",
+        "protocol": "PostgreSQL",
+        "resources": [
+          "omnigent"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:uc-mcp→unity-catalog-rs:data_catalog",
+        "from": "uc-mcp",
+        "to": "unity-catalog-rs",
+        "role": "data_catalog",
+        "protocol": "HTTP",
+        "resources": []
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→uc-mcp:mcp_server",
+        "from": "omnigent",
+        "to": "uc-mcp",
+        "role": "mcp_server",
+        "protocol": "HTTP",
+        "resources": []
+      },
+      {
+        "kind": "uses",
+        "key": "uses:omnigent→egress-gateway:egress",
+        "from": "omnigent",
+        "to": "egress-gateway",
+        "role": "egress",
+        "protocol": "HTTP",
+        "resources": [
+          "tickets",
+          "docs_search"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:egress-gateway→@upstream/tickets.example.com:upstream",
+        "from": "egress-gateway",
+        "to": "@upstream/tickets.example.com",
+        "role": "upstream",
+        "protocol": "HTTPS",
+        "resources": [
+          "tickets"
+        ],
+        "auth": "injected"
+      },
+      {
+        "kind": "uses",
+        "key": "uses:egress-gateway→@upstream/docs.example.com:upstream",
+        "from": "egress-gateway",
+        "to": "@upstream/docs.example.com",
+        "role": "upstream",
+        "protocol": "HTTPS",
+        "resources": [
+          "docs_search"
+        ],
+        "auth": "injected"
+      },
+      {
+        "kind": "uses",
+        "key": "uses:uc-mcp→egress-gateway:egress",
+        "from": "uc-mcp",
+        "to": "egress-gateway",
+        "role": "egress",
+        "protocol": "HTTP",
+        "resources": [
+          "catalog-tools"
+        ]
+      },
+      {
+        "kind": "uses",
+        "key": "uses:egress-gateway→@upstream/tools.example.com:upstream",
+        "from": "egress-gateway",
+        "to": "@upstream/tools.example.com",
+        "role": "upstream",
+        "protocol": "HTTPS",
+        "resources": [
+          "catalog-tools"
+        ],
+        "auth": "injected"
+      }
+    ]
+  },
+  "containers": [
+    {
+      "name": "egress-gateway",
+      "component": "egress-gateway",
+      "kind": "service"
+    },
+    {
+      "name": "secret-server",
+      "component": "egress-gateway",
+      "kind": "service"
+    },
+    {
+      "name": "envoy",
+      "component": "envoy",
+      "kind": "service"
+    },
+    {
+      "name": "gateway-certs",
+      "component": "envoy",
+      "kind": "init"
+    },
+    {
+      "name": "db",
+      "component": "postgres",
+      "kind": "service"
+    },
+    {
+      "name": "unitycatalog",
+      "component": "unity-catalog-rs",
+      "kind": "service"
+    },
+    {
+      "name": "unitycatalog-migrate",
+      "component": "unity-catalog-rs",
+      "kind": "init"
+    },
+    {
+      "name": "uc-mcp",
+      "component": "uc-mcp",
+      "kind": "service"
+    },
+    {
+      "name": "omnigent",
+      "component": "omnigent",
+      "kind": "service"
+    },
+    {
+      "name": "omnigent-host",
+      "component": "omnigent",
+      "kind": "service"
+    }
+  ],
+  "services": {
+    "egress-gateway": [
+      {
+        "name": "egress-gateway",
+        "role": "egress",
+        "placement": {
+          "kind": "container",
+          "service": "egress-gateway"
+        },
+        "endpoints": [],
+        "depends_on": []
+      },
+      {
+        "name": "secret-server",
+        "role": "egress",
+        "placement": {
+          "kind": "container",
+          "service": "secret-server"
+        },
+        "endpoints": [],
+        "depends_on": []
+      }
+    ],
+    "envoy": [
+      {
+        "name": "envoy",
+        "role": "gateway",
+        "placement": {
+          "kind": "container",
+          "service": "envoy"
+        },
+        "endpoints": [
+          {
+            "id": "http",
+            "scheme": "http",
+            "internal_port": 10000,
+            "host_port": 9080,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "omnigent": [
+      {
+        "name": "omnigent",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent"
+        },
+        "endpoints": [
+          {
+            "id": "ui",
+            "scheme": "http",
+            "internal_port": 8000,
+            "intent": {
+              "kind": "ui_prefixable"
+            },
+            "rewrite": "inherit",
+            "route": {
+              "streaming": true
+            }
+          }
+        ],
+        "depends_on": [],
+        "base_path": "/omnigent"
+      },
+      {
+        "name": "omnigent-host",
+        "role": "agent_platform",
+        "placement": {
+          "kind": "container",
+          "service": "omnigent-host"
+        },
+        "endpoints": [],
+        "depends_on": [
+          "omnigent"
+        ]
+      }
+    ],
+    "postgres": [
+      {
+        "name": "db",
+        "role": "relational_db",
+        "placement": {
+          "kind": "container",
+          "service": "db"
+        },
+        "endpoints": [
+          {
+            "id": "sql",
+            "scheme": "tcp",
+            "internal_port": 5432,
+            "host_port": 5432,
+            "intent": {
+              "kind": "internal"
+            },
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ],
+    "uc-mcp": [
+      {
+        "name": "uc-mcp",
+        "role": "mcp_server",
+        "placement": {
+          "kind": "container",
+          "service": "uc-mcp"
+        },
+        "endpoints": [
+          {
+            "id": "mcp",
+            "scheme": "http",
+            "internal_port": 8090,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/uc-mcp/mcp",
+            "rewrite": "passthrough",
+            "route": {
+              "streaming": true
+            }
+          }
+        ],
+        "depends_on": [
+          "unitycatalog"
+        ]
+      }
+    ],
+    "unity-catalog-rs": [
+      {
+        "name": "unitycatalog",
+        "role": "data_catalog",
+        "placement": {
+          "kind": "container",
+          "service": "unitycatalog"
+        },
+        "endpoints": [
+          {
+            "id": "rest",
+            "scheme": "http",
+            "internal_port": 8080,
+            "intent": {
+              "kind": "api"
+            },
+            "mount_prefix": "/api/2.1/unity-catalog",
+            "rewrite": "inherit"
+          }
+        ],
+        "depends_on": []
+      }
+    ]
+  },
+  "gateway": {
+    "listeners": [
+      {
+        "host_port": 9080,
+        "routes": [
+          {
+            "prefix": "/api/2.1/unity-catalog",
+            "cluster": "unitycatalog",
+            "rewrite": null
+          },
+          {
+            "prefix": "/uc-mcp/mcp",
+            "cluster": "uc-mcp",
+            "rewrite": null
+          },
+          {
+            "prefix": "/omnigent",
+            "cluster": "omnigent",
+            "rewrite": null
+          }
+        ]
+      }
+    ],
+    "clusters": [
+      {
+        "name": "omnigent",
+        "host": "omnigent",
+        "port": 8000
+      },
+      {
+        "name": "uc-mcp",
+        "host": "uc-mcp",
+        "port": 8090
+      },
+      {
+        "name": "unitycatalog",
+        "host": "unitycatalog",
+        "port": 8080
+      }
+    ],
+    "admin_port": 9901,
+    "auth": null,
+    "tls": null,
+    "policy": null
+  },
+  "client": {
+    "host": {
+      "OMNIGENT_URL": "http://localhost:9080/omnigent",
+      "UC_MCP_URL": "http://localhost:9080/uc-mcp/mcp",
+      "UNITY_CATALOG_URL": "http://localhost:9080/api/2.1/unity-catalog"
+    },
+    "container": {
+      "OMNIGENT_URL": "http://envoy:10000/omnigent",
+      "UC_MCP_URL": "http://envoy:10000/uc-mcp/mcp",
+      "UNITY_CATALOG_URL": "http://envoy:10000/api/2.1/unity-catalog"
+    }
+  },
+  "secrets": [
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "help": "Anthropic API key, for Claude."
+    },
+    {
+      "name": "CATALOG_TOOLS_KEY",
+      "required": true,
+      "help": "The credential the egress gateway adds to requests on route `catalog-tools`."
+    },
+    {
+      "name": "DOCS_API_KEY",
+      "required": true,
+      "help": "The credential the egress gateway adds to requests on route `docs_search`."
+    },
+    {
+      "name": "OPENAI_API_KEY",
+      "help": "OpenAI API key, for Codex."
+    },
+    {
+      "name": "TICKETS_API_KEY",
+      "required": true,
+      "help": "The credential the egress gateway adds to requests on route `tickets`."
+    },
+    {
+      "name": "UC_SERVER_KEK",
+      "required": true,
+      "minted": true,
+      "help": "Seals the credentials Unity Catalog stores: 32 random bytes, base64. Generate it once and keep it: credentials sealed under one can't be read with another."
+    }
+  ],
+  "files": [
+    {
+      "path": "compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": ".env",
+      "sensitive": true
+    },
+    {
+      "path": ".gitignore",
+      "sensitive": false
+    },
+    {
+      "path": "client/host.env",
+      "sensitive": false
+    },
+    {
+      "path": "client/container.env",
+      "sensitive": false
+    },
+    {
+      "path": "LAYOUT.md",
+      "sensitive": false
+    },
+    {
+      "path": "README.md",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/envoy.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/secret-server.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/consumers/omnigent.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/egress-gateway/consumers/uc-mcp.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/envoy/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/init-databases.sh",
+      "sensitive": false
+    },
+    {
+      "path": "modules/postgres/.env/db.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/postgres/secrets/postgres_password",
+      "sensitive": true
+    },
+    {
+      "path": "modules/unity-catalog-rs/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog-rs/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/unity-catalog-rs/.env/unitycatalog.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/uc-mcp/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/compose.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/.env/omnigent.env",
+      "sensitive": true
+    },
+    {
+      "path": "modules/omnigent/databricks/config.yaml",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/databricks/databricks_token.py",
+      "sensitive": false
+    },
+    {
+      "path": "modules/omnigent/mcp-registry.yaml",
+      "sensitive": false
+    }
+  ],
+  "deploy": [
+    {
+      "order": 1,
+      "phase": "configure",
+      "module": "unity-catalog-rs",
+      "id": "kek",
+      "title": "Set Unity Catalog's key-encryption key",
+      "instructions": "Unity Catalog seals the credentials it stores with a key-encryption key, read from\n`UC_SERVER_KEK` (32 bytes, base64) in the environment of the process that starts the stack.\nCompose passes it through to the server; it is never written into this directory, and without\nit the server refuses to start. Generate one once and keep it: credentials sealed under it\ncan't be read with another.\n\n```sh\nexport UC_SERVER_KEK=\"$(openssl rand -base64 32)\"\n```"
+    },
+    {
+      "order": 2,
+      "phase": "configure",
+      "id": "local-credentials",
+      "title": "Set the services' own credentials",
+      "instructions": "The services the stack runs use these credentials. Unless `secrets.env` sets them, they are fixed development values, the same in every environment.\n\n| Credential | Name in `secrets.env` |\n| --- | --- |\n| Postgres superuser password | `LOCAL_POSTGRES_PASSWORD` |\n\nTo replace them with random ones, add them to `secrets.env` and render again. Rendering writes each value into every file that uses it (`.env`, `modules/*/.env/`, `modules/*/secrets/`, all git-ignored):\n\n```bash\ncat >> secrets.env <<EOF\nLOCAL_POSTGRES_PASSWORD=$(openssl rand -hex 32)\nEOF\ntrestle env render .\n```\n\nDo this before the first start. Services keep the credentials they first started with in their persisted data (under the data root, `.data/` by default), so a later change also needs that data removed, or the credential changed inside the service."
+    },
+    {
+      "order": 3,
+      "phase": "start",
+      "id": "up",
+      "title": "Start the stack",
+      "instructions": "Start every service and wait until each one is healthy:\n\n```bash\ndocker compose up -d --wait\n```\n\nThe gateway then serves the stack at <http://localhost:9080>. [LAYOUT.md](LAYOUT.md) lists every route and address."
+    }
+  ]
+}

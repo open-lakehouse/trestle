@@ -65,6 +65,7 @@ use crate::catalog::module::{
 use crate::model::connection::{
     Connection, ConnectionField, ConnectionTemplate, ObjectStoreCredential,
 };
+use crate::model::egress::{EgressRoute, McpRoute};
 use crate::model::endpoint::{Endpoint, Rewrite, Scheme};
 use crate::model::placement::Placement;
 use crate::model::platform::{IntegrationSpec, PlatformFeature, ProtocolOffer, protocol};
@@ -2738,6 +2739,13 @@ impl Omnigent {
                             "../../templates/modules/omnigent/databricks/databricks_token.py"
                         ),
                     ),
+                    // The MCP registry: one service per egress route serving MCP. Only with
+                    // such a route; the egress gateway adds the credential, so none is here.
+                    config_file(
+                        "mcp-registry.yaml",
+                        "omnigent_mcp_registry",
+                        include_str!("../../templates/modules/omnigent/mcp-registry.yaml.jinja"),
+                    ),
                 ],
             ),
         }
@@ -2778,6 +2786,12 @@ impl Module for Omnigent {
         omnigent_upstream(knobs, stack)
             .map(drop)
             .map_err(|reason| KnobRejection::new(OMNIGENT_UPSTREAM_KNOB, reason))
+    }
+    fn check_egress_route(&self, route: &EgressRoute) -> Result<(), String> {
+        match &route.mcp {
+            Some(mcp) => omnigent_mcp_service(&route.name, mcp),
+            None => Ok(()),
+        }
     }
     fn secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
         // The upstream's are the host's; the sandbox host's workspace is the server's.
@@ -2874,6 +2888,32 @@ impl Module for Omnigent {
 
 fn omnigent() -> Arc<dyn Module> {
     Arc::new(Omnigent::new())
+}
+
+/// Whether an MCP route named `name` makes a valid Omnigent registry service: the route's name
+/// is the service's id, which Omnigent requires to be lowercase (`^[a-z][a-z0-9_-]{0,39}$`,
+/// without `__`), and a service lists the tools it allows, at least one.
+fn omnigent_mcp_service(name: &str, mcp: &McpRoute) -> Result<(), String> {
+    let id_ok = name.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+        && name.len() <= 40
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        && !name.contains("__");
+    if !id_ok {
+        return Err(
+            "Omnigent's MCP registry names its service after the route: lowercase letters, \
+             digits, `-` and `_`, starting with a letter, at most 40 characters and no `__`"
+                .into(),
+        );
+    }
+    if mcp.tools.is_empty() {
+        return Err(
+            "Omnigent's MCP registry allows only the tools it lists: set the route's `mcp.tools`"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// The compose service (and module id) of [`uc_mcp`].

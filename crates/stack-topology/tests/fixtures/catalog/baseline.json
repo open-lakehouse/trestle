@@ -9,7 +9,7 @@
   "catalog": {
     "baseline": "olai-stack-topology@test",
     "manifests": [],
-    "digest": "sha256:3581221c6fa8459abb9cbe9f325b4ce502369286f378608519e4c63c46381b19"
+    "digest": "sha256:bc9df14e705020fd0926fee1665d55455135263620473c70e09ce99bbd0e7f74"
   },
   "modules": [
     {
@@ -952,7 +952,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/omnigent-ai/omnigent-server:v0.22.0",
+          "default": "ghcr.io/omnigent-ai/omnigent-server:v0.23.0",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [
@@ -966,7 +966,7 @@
           "kind": {
             "kind": "string"
           },
-          "default": "ghcr.io/omnigent-ai/omnigent-host:v0.22.0",
+          "default": "ghcr.io/omnigent-ai/omnigent-host:v0.23.0",
           "required": false,
           "help": "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           "aliases": [

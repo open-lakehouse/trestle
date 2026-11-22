@@ -77,6 +77,45 @@ export const FIXTURE_CATALOG: CatalogDto = {
       ],
     },
     {
+      id: "egress-gateway",
+      model: "envoy",
+      display_name: "Egress gateway",
+      summary:
+        "Reaches upstreams outside the environment and adds their credentials, so no caller holds them.",
+      category: "gateway",
+      provider_of: "egress",
+      requires: [],
+      conflicts_with: [],
+      resource_kinds: [],
+      resource_nouns: [],
+      knobs: [
+        {
+          key: "image",
+          title: "Envoy image",
+          kind: {
+            kind: "string",
+          },
+          default: "envoyproxy/envoy:v1.40.2",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          advanced: true,
+        },
+        {
+          key: "secret_server_image",
+          title: "Secret server image",
+          kind: {
+            kind: "string",
+          },
+          default: "ghcr.io/open-lakehouse/trestle-secret-server:0.0.0",
+          required: false,
+          help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
+          advanced: true,
+        },
+      ],
+      helpers: [],
+      hosted: null,
+    },
+    {
       id: "authelia",
       model: "authelia",
       display_name: "Authelia",
@@ -834,7 +873,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/omnigent-ai/omnigent-server:v0.22.0",
+          default: "ghcr.io/omnigent-ai/omnigent-server:v0.23.0",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["OMNIGENT_IMAGE"],
@@ -846,7 +885,7 @@ export const FIXTURE_CATALOG: CatalogDto = {
           kind: {
             kind: "string",
           },
-          default: "ghcr.io/omnigent-ai/omnigent-host:v0.22.0",
+          default: "ghcr.io/omnigent-ai/omnigent-host:v0.23.0",
           required: false,
           help: "Container image reference (repository:tag or digest). Override to pin or test a different release.",
           aliases: ["OMNIGENT_HOST_IMAGE"],

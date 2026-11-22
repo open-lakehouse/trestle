@@ -840,6 +840,12 @@ pub struct RenderCtx<'a> {
     /// the egress module (see [`plan::egress`](crate::plan::egress)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<crate::plan::EgressConfig>,
+    /// The egress routes this module may call, in listener order (see
+    /// [`ConsumedEgressRoute`](crate::plan::ConsumedEgressRoute)): a consumer configures itself
+    /// from them, e.g. `{% for r in egress_routes if r.mcp %}`. Empty for a module that calls
+    /// no route.
+    #[serde(default)]
+    pub egress_routes: Vec<crate::plan::ConsumedEgressRoute>,
     /// The module's active [platform-feature](crate::PlatformFeature) integrations, by
     /// feature: a fragment exports traces with
     /// `{% if integrations.observability %}{{ integrations.observability.endpoint }}{% endif %}`.
@@ -902,6 +908,7 @@ impl<'a> RenderCtx<'a> {
             mesh: None,
             unresolved_upstreams: Vec::new(),
             egress: None,
+            egress_routes: Vec::new(),
             integrations: BTreeMap::new(),
             stack: StackFacts::default(),
         }
@@ -1213,6 +1220,13 @@ pub trait Module: Send + Sync {
     /// with the given [`StackFacts`]. Defaults to [`Provides::secrets`]; a module overrides it
     /// when a knob or a partner module changes which secrets it needs, or whether one is
     /// required.
+    /// Checks an egress route this module consumes against what the module can use (a
+    /// registry's naming rules, say); the reason becomes the route's plan error. Accepts every
+    /// route by default.
+    fn check_egress_route(&self, route: &crate::model::egress::EgressRoute) -> Result<(), String> {
+        let _ = route;
+        Ok(())
+    }
     fn secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [DeclaredSecret]> {
         let _ = (knobs, stack);
         Cow::Borrowed(&self.provides().secrets)
@@ -1483,6 +1497,7 @@ mod tests {
                 mesh: None,
                 unresolved_upstreams: Vec::new(),
                 egress: None,
+                egress_routes: Vec::new(),
                 integrations: BTreeMap::new(),
                 stack: StackFacts::default(),
             })
@@ -1534,6 +1549,7 @@ mod tests {
             mesh: None,
             unresolved_upstreams: Vec::new(),
             egress: None,
+            egress_routes: Vec::new(),
             integrations: BTreeMap::new(),
             stack: StackFacts::default(),
         };

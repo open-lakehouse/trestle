@@ -1,7 +1,7 @@
 # Omnigent agent platform: the coordinating server, and the host its agents run on
 services:
   omnigent:
-    image: ghcr.io/omnigent-ai/omnigent-server:v0.22.0
+    image: ghcr.io/omnigent-ai/omnigent-server:v0.23.0
     restart: unless-stopped
     depends_on:
       db:
@@ -22,6 +22,11 @@ services:
       # Origin check rejects (multipart posts, WebSockets): trust every `*.localhost` name
       # on the gateway's port.
       OMNIGENT_WS_ALLOWED_ORIGINS: "http://*.localhost:9080"
+      # The MCP servers sessions may use, each reached through the egress gateway.
+      OMNIGENT_MCP_REGISTRY: /etc/trestle/omnigent/mcp-registry.yaml
+    configs:
+      - source: omnigent_mcp_registry
+        target: /etc/trestle/omnigent/mcp-registry.yaml
     volumes:
       - ./.data/omnigent/server:/data
     expose:
@@ -38,7 +43,7 @@ services:
   # module's address) and forwards it to each agent, and points the harnesses at the models'
   # upstream (keys).
   omnigent-host:
-    image: ghcr.io/omnigent-ai/omnigent-host:v0.22.0
+    image: ghcr.io/omnigent-ai/omnigent-host:v0.23.0
     restart: unless-stopped
     depends_on:
       omnigent:

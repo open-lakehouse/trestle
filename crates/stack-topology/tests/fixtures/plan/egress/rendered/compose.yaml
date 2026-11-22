@@ -11,6 +11,8 @@ configs:
     file: ./modules/omnigent/databricks/config.yaml
   omnigent_databricks_token:
     file: ./modules/omnigent/databricks/databricks_token.py
+  omnigent_mcp_registry:
+    file: ./modules/omnigent/mcp-registry.yaml
   postgres_init:
     file: ./modules/postgres/init-databases.sh
   secret_server_config:

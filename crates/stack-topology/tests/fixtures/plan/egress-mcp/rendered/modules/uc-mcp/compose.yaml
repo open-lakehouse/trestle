@@ -1,0 +1,37 @@
+# Unity Catalog MCP: mangrove's `uc mcp serve` over Streamable HTTP
+services:
+  uc-mcp:
+    image: ghcr.io/open-lakehouse/mangrove:0.0.23
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/uc"]
+    # No token: the stack's Unity Catalog server is anonymous, in a container or as a function.
+    # The MCP server does no inbound authentication; the gateway is its only boundary.
+    command:
+      - --server
+      - "http://unitycatalog:8080"
+      - mcp
+      - serve
+      - --http
+      - 0.0.0.0:8090
+      - --path
+      - /uc-mcp/mcp
+      - --allowed-host
+      - "localhost"
+      - --allowed-host
+      - "127.0.0.1"
+      - --allowed-host
+      - "uc-mcp"
+      - --allowed-host
+      - "envoy"
+    depends_on:
+      unitycatalog:
+        condition: service_healthy
+    expose:
+      - "8090"
+    # Replaces the image's own check, which probes the catalog server's port (8080).
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/uc-server", "healthcheck", "--url", "http://127.0.0.1:8090/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5

@@ -676,3 +676,207 @@ fn a_module_declaring_an_injected_credential_gets_a_route() {
         "MODELS_API_KEY"
     );
 }
+
+// ---- Omnigent's MCP registry ----
+
+const REGISTRY: &str = "modules/omnigent/mcp-registry.yaml";
+const REGISTRY_TARGET: &str = "/etc/trestle/omnigent/mcp-registry.yaml";
+const DOCS_KEY: &str = "DOCS_API_KEY";
+
+/// A second MCP route, to an upstream origin.
+fn docs_route() -> EgressRoute {
+    EgressRoute {
+        name: "docs_search".into(),
+        function: None,
+        upstream: Some("https://docs.example.com:8443".into()),
+        path: "/v1/mcp".into(),
+        consumers: vec![ModuleId::from("omnigent")],
+        credential: InjectedCredential::Bearer {
+            secret: DOCS_KEY.into(),
+        },
+        mcp: Some(McpRoute {
+            title: "Docs search".into(),
+            tools: vec!["query".into()],
+        }),
+    }
+}
+
+fn omnigent_server(out: &MaterializedOutput) -> serde_yaml::Value {
+    yaml(file(out, "modules/omnigent/compose.yaml"))["services"]["omnigent"].clone()
+}
+
+#[test]
+fn omnigent_registry_lists_each_mcp_route_through_the_egress() {
+    let (_, out) = rendered(vec![function_route(), upstream_route(), docs_route()]);
+    let registry = yaml(file(&out, REGISTRY));
+    let expected = yaml(
+        r#"
+services:
+  - id: workgraph-planner
+    title: Work graph (planner)
+    url: http://egress-gateway:10001/mcp
+    auth: none
+    allow_http: true
+    tools: [read, submit]
+  - id: docs_search
+    title: Docs search
+    url: http://egress-gateway:10003/v1/mcp
+    auth: none
+    allow_http: true
+    tools: [query]
+"#,
+    );
+    // The `search` route serves no MCP, so the registry leaves it out.
+    assert_eq!(registry, expected);
+
+    let server = omnigent_server(&out);
+    assert_eq!(
+        server["environment"]["OMNIGENT_MCP_REGISTRY"].as_str(),
+        Some(REGISTRY_TARGET)
+    );
+    assert_eq!(
+        server["configs"][0]["source"].as_str(),
+        Some("omnigent_mcp_registry")
+    );
+    assert_eq!(
+        server["configs"][0]["target"].as_str(),
+        Some(REGISTRY_TARGET)
+    );
+    // The registry's calls leave from the server: the host gets none of it.
+    let host = &yaml(file(&out, "modules/omnigent/compose.yaml"))["services"]["omnigent-host"];
+    assert!(host["environment"]["OMNIGENT_MCP_REGISTRY"].is_null());
+    let head = yaml(file(&out, "compose.yaml"));
+    assert_eq!(
+        head["configs"]["omnigent_mcp_registry"]["file"].as_str(),
+        Some("./modules/omnigent/mcp-registry.yaml")
+    );
+}
+
+#[test]
+fn without_an_mcp_route_omnigent_gets_no_registry() {
+    for routes in [vec![], vec![upstream_route()]] {
+        let (_, out) = rendered(routes.clone());
+        assert!(
+            !out.files.iter().any(|f| f.path == REGISTRY),
+            "{routes:?}: a registry was rendered"
+        );
+        let server = omnigent_server(&out);
+        assert!(server["environment"]["OMNIGENT_MCP_REGISTRY"].is_null());
+        assert!(server["configs"].is_null());
+        assert!(!file(&out, "compose.yaml").contains("omnigent_mcp_registry"));
+    }
+}
+
+/// With every route secret set, neither the registry nor anything Omnigent runs with holds a
+/// secret's value or names its variable: the egress gateway adds the credential.
+#[test]
+fn omnigent_holds_no_route_secret() {
+    let sentinels = [
+        (PLANNER_KEY, "sentinel-planner-7f3a"),
+        (DOCS_KEY, "sentinel-docs-91c2"),
+    ];
+    let mut secrets = branch();
+    for (var, value) in sentinels {
+        secrets.insert(var.to_string(), value.to_string());
+    }
+    let plan = plan(
+        &selection(vec![function_route(), docs_route()]),
+        Some(secrets),
+    )
+    .unwrap();
+    let out = plan.materialize().unwrap();
+    let omnigent_files: Vec<_> = out
+        .files
+        .iter()
+        .filter(|f| {
+            f.path.starts_with("modules/omnigent/")
+                || f.path == "modules/egress-gateway/consumers/omnigent.yaml"
+        })
+        .collect();
+    assert!(omnigent_files.iter().any(|f| f.path == REGISTRY));
+    assert!(
+        omnigent_files
+            .iter()
+            .any(|f| f.path == "modules/omnigent/.env/omnigent.env")
+    );
+    for f in omnigent_files {
+        for (var, value) in sentinels {
+            assert!(
+                !f.contents.contains(value),
+                "{} holds {var}'s value",
+                f.path
+            );
+            assert!(!f.contents.contains(var), "{} names {var}", f.path);
+        }
+    }
+    // Nor does the plan hand Omnigent's render anything about the credential.
+    let binding = serde_json::to_string(&plan.bindings[&ModuleId::from("omnigent")]).unwrap();
+    for (var, value) in sentinels {
+        assert!(
+            !binding.contains(value) && !binding.contains(var),
+            "{binding}"
+        );
+    }
+}
+
+#[test]
+fn an_mcp_route_omnigent_cannot_register_is_a_plan_error() {
+    let too_long = format!("a{}", "b".repeat(40));
+    for name in ["Planner", "a__b", too_long.as_str()] {
+        let mut route = docs_route();
+        route.name = name.into();
+        let err = plan(&selection(vec![route]), None).unwrap_err();
+        assert!(
+            matches!(&err, PlanError::InvalidEgressRoute { route, reason }
+                if route == name && reason.contains("Omnigent's MCP registry")),
+            "{name}: {err}"
+        );
+    }
+    // At the limit, the id is fine.
+    let mut route = docs_route();
+    route.name = format!("a{}", "b".repeat(39));
+    assert!(plan(&selection(vec![route]), None).is_ok());
+    let mut route = docs_route();
+    route.mcp.as_mut().unwrap().tools.clear();
+    let err = plan(&selection(vec![route]), None).unwrap_err();
+    assert!(
+        matches!(&err, PlanError::InvalidEgressRoute { route, reason }
+            if route == "docs_search" && reason.contains("mcp.tools")),
+        "{err}"
+    );
+}
+
+/// Omnigent's rules bind only the routes it consumes: an MCP route named any way, with no tool
+/// list, is fine for another consumer, and a non-MCP route for Omnigent is too.
+#[test]
+fn omnigent_rules_bind_only_its_mcp_routes() {
+    let mut other = docs_route();
+    other.name = "Catalog__Tools".into();
+    other.consumers = vec![ModuleId::from("uc-mcp")];
+    other.mcp.as_mut().unwrap().tools.clear();
+    let mut not_mcp = upstream_route();
+    not_mcp.name = "Search__Index".into();
+    let mut selection = selection(vec![other, not_mcp]);
+    selection
+        .modules
+        .extend([ModuleId::from("uc-mcp"), ModuleId::from("unity-catalog-rs")]);
+    let out = plan(&selection, None).unwrap().materialize().unwrap();
+    assert!(!out.files.iter().any(|f| f.path == REGISTRY));
+}
+
+/// The registry is an ordinary configuration file: the plan's projection lists it with the
+/// environment's other files, so the editor shows it on Omnigent's node.
+#[test]
+fn the_registry_is_a_visible_file_of_the_plan() {
+    use olai_stack_topology::projection::plan_result;
+    let paths = |routes| -> Vec<String> {
+        plan_result(&selection(routes), None)
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|f| f.path)
+            .collect()
+    };
+    assert!(paths(vec![docs_route()]).iter().any(|p| p == REGISTRY));
+    assert!(!paths(vec![upstream_route()]).iter().any(|p| p == REGISTRY));
+}

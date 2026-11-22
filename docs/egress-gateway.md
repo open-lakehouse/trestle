@@ -1,7 +1,8 @@
 # Egress gateway and secret delivery over SDS
 
-Status: phase 1 (the secret server, [`crates/secret-server`](../crates/secret-server))
-is implemented; the rest is design. Phases and their done-whens are at the end.
+Status: phases 1 (the secret server, [`crates/secret-server`](../crates/secret-server)),
+2, 3 and 5 (Omnigent) are implemented; the rest is design. Phases and their
+done-whens are at the end.
 
 An environment's gateway today is its **ingress**: the Envoy that publishes the
 host ports, routes to every service, and drops what a client sends as its own
@@ -264,17 +265,26 @@ environment, and only `secret-server` references it.
 
 ## Consumers
 
-- **Omnigent** reaches its upstreams through the egress gateway. Its server
-  reads an MCP registry from `OMNIGENT_MCP_REGISTRY`, and the egress module
-  renders it from the `mcp` routes whose consumers include `omnigent`: one
-  service per route, `url: http://egress-gateway:<port><path>`, `auth: none`,
-  `allow_http: true` (the hop to the egress is inside the environment; the
-  egress does the TLS), and the route's `tools` as the allowlist. Registry
-  calls leave from the Omnigent server, so that is the consumer, and an
-  agent's spec selects its service by id. No agent spec, prompt or container
-  holds the key. The registry's Docker entrypoint wiring is newer than the
-  pinned `omnigent-server:v0.22.0`, so this needs an image bump. Omnigent's
-  model upstreams keep today's delivery until an upstream needs injection.
+- **Omnigent** (implemented, phase 5) reaches MCP servers through the egress
+  gateway. Its server (`omnigent-server:v0.23.0`) reads an MCP registry from
+  `OMNIGENT_MCP_REGISTRY`. The omnigent module renders that registry to
+  `modules/omnigent/mcp-registry.yaml` and mounts it into the server. The
+  registry is built from the `mcp` routes whose consumers include `omnigent`,
+  with one service per route:
+  - `id`: the route's name.
+  - `url: http://egress-gateway:<port><path>`.
+  - `auth: none` and `allow_http: true`. The hop to the egress stays inside
+    the environment, and the egress does the TLS.
+  - `tools`: the route's `tools`, as the allowlist.
+
+  The module reads the routes from its `egress_routes` render global, which
+  carries each route's URL and `mcp` but nothing about its credential.
+  Omnigent's id and tool rules are checked at plan time
+  (`Module::check_egress_route`). Registry calls leave from the Omnigent
+  server, so that is the consumer, and a session selects its services by id
+  (`mcp_registry_services`). No agent spec, prompt or container holds the key.
+  Omnigent's model upstreams keep today's delivery until an upstream needs
+  injection.
 - **Unity Catalog** uses its native options for its own credentials.
 - **Other third-party images** keep today's delivery. There are no launcher
   shims that would fetch a value over SDS and `exec` the real process.
@@ -358,8 +368,8 @@ runs a long-lived endpoint of that shape.
   without the egress gateway. The gateway keeps credentials out of agents. It
   doesn't stop an agent calling out. Putting workloads on an `internal: true`
   network, with the egress as the only way out, is a later hardening step.
-- **The Omnigent registry is a prototype**, and using it needs an image bump.
-  The rendered registry is a small YAML, so following its changes is cheap.
+- **The Omnigent registry is a prototype.** The rendered registry is a small
+  YAML, so following its changes is cheap.
 - **One secret server per environment.** If it is down at Envoy's start, the
   egress listeners wait for their secrets until `initial_fetch_timeout` and
   then reject requests (`401`). While it is down later, Envoy keeps the last
@@ -392,9 +402,9 @@ runs a long-lived endpoint of that shape.
    `trestle secret rotate` recreates it, and the sentinel tests cover routes.
    Done when `trestle up` with a route against a test upstream gets a `200`
    through the egress, and no value appears in the instance directory.
-5. **Omnigent.** The image bump and the rendered MCP registry. Done when an
-   Omnigent agent whose spec holds no credential lists and calls the tools of
-   a route's MCP server.
+5. **Omnigent** (implemented). The image bump and the rendered MCP registry.
+   Done when an Omnigent agent whose spec holds no credential lists and calls
+   the tools of a route's MCP server.
 6. **The workgraph function, live.** In luminescent-lakehouse: per-agent
    `olk_…` keys in the keychain, one route per agent, the desktop showing
    them. Done when an agent in a local environment works on the work graph
