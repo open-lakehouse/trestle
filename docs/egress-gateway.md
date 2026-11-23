@@ -1,8 +1,9 @@
 # Egress gateway and secret delivery over SDS
 
 Status: phases 1 (the secret server, [`crates/secret-server`](../crates/secret-server)),
-2, 3, 4, 5 (Omnigent) and 7 (Rust services as SDS consumers, without adoption yet) are
-implemented. The rest is design. Phases and their done-whens are at the end.
+2, 3, 4, 5 (Omnigent), 6 (the workgraph function, in luminescent-lakehouse) and 7 (Rust
+services as SDS consumers, without adoption yet) are implemented. The rest is design.
+Phases and their done-whens are at the end.
 
 An environment's gateway today is its **ingress**: the Envoy that publishes the
 host ports, routes to every service, and drops what a client sends as its own
@@ -446,7 +447,9 @@ runs a long-lived endpoint of that shape.
 5. **Omnigent** (implemented). The image bump and the rendered MCP registry.
    Done when an Omnigent agent whose spec holds no credential lists and calls
    the tools of a route's MCP server.
-6. **The workgraph function, live.** In luminescent-lakehouse: per-agent
+6. **The workgraph function, live** (implemented, in
+   [luminescent-lakehouse#230](https://github.com/open-lakehouse/luminescent-lakehouse/pull/230),
+   checked live on `preview/pr-230`). In luminescent-lakehouse: per-agent
    `olk_…` keys in the keychain, one route per agent, the desktop showing
    them. Done when an agent in a local environment works on the work graph
    through its route, and its key appears nowhere but the keychain and the
