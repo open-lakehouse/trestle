@@ -19,6 +19,66 @@
 //! [`KeyProvider`] trait is async so external key stores (Azure Key Vault, AWS KMS, GCP KMS,
 //! Databricks) can be plugged in later to perform remote wrap/unwrap without changing callers.
 //!
+//! # KEK rotation
+//!
+//! Every envelope records the id of the KEK that wrapped its DEK, and new writes always wrap
+//! under the provider's [active KEK](KeyProvider::active_kek_id). Rotating a KEK therefore means
+//! moving the existing blobs off the old key before the old key is dropped:
+//!
+//! 1. **Add a version.** Configure the key provider with the new KEK alongside the current one,
+//!    e.g. `LocalKeyProvider::new("v1", [("v1", k1), ("v2", k2)])`. Nothing changes yet.
+//! 2. **Make it active.** Switch the active id to the new KEK (`LocalKeyProvider::new("v2", …)`,
+//!    still holding `v1`). New and updated values are now sealed under `v2`, and
+//!    [`get_with_secrets`] re-wraps a `v1` blob whenever it is read. Blobs nobody reads stay on
+//!    `v1`.
+//! 3. **Sweep.** Run [`ManagedObjectStore::rewrap_all`] to re-wrap every remaining `v1` blob onto
+//!    `v2`. Only the wrapped DEK changes; values are not re-encrypted, and properties and versions
+//!    are left alone. Check [`RewrapReport::failed`]: an entry there is still on its old KEK. The
+//!    sweep is idempotent, so an interrupted run is simply run again.
+//! 4. **Check the count is zero.** [`ManagedObjectStore::kek_usage`] (also returned as
+//!    [`RewrapReport::kek_usage`]) counts blobs per KEK by peeking at each envelope header
+//!    ([`envelope_kek_id`]), without decrypting anything. Proceed once `count("v1")` and
+//!    [`unreadable`](crate::KekUsage::unreadable) are both zero.
+//! 5. **Retire.** Remove `v1` from the key provider. Anything still sealed under it would no
+//!    longer open, which step 4 rules out.
+//!
+//! ```
+//! # async fn run() -> olai_store::Result<()> {
+//! use olai_store::{
+//!     EnvelopeEncryptor, InMemoryStore, LocalKeyProvider, ManagedObjectStore, ResourceRegistry,
+//!     RewrapOptions,
+//! };
+//! # #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+//! # struct Kind;
+//! # impl std::fmt::Display for Kind {
+//! #     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("kind") }
+//! # }
+//! # impl std::str::FromStr for Kind {
+//! #     type Err = String;
+//! #     fn from_str(_: &str) -> Result<Self, String> { Ok(Kind) }
+//! # }
+//! # impl olai_store::Label for Kind { fn as_str(&self) -> &str { "kind" } }
+//! # let backend = InMemoryStore::<Kind>::new();
+//! # let registry = || ResourceRegistry::<Kind>::from_static(&[]);
+//! # let (k1, k2) = (vec![1u8; 32], vec![2u8; 32]);
+//!
+//! // Steps 1 and 2: `v2` is active, `v1` is still configured so old blobs open.
+//! let provider = LocalKeyProvider::new("v2", [("v1".into(), k1), ("v2".into(), k2.clone())])?;
+//! let store =
+//!     ManagedObjectStore::with_encryptor(backend, EnvelopeEncryptor::local(provider), registry());
+//!
+//! // Steps 3 and 4: sweep, then check nothing depends on `v1` any more.
+//! let report = store.rewrap_all(RewrapOptions::default()).await?;
+//! assert!(report.failed.is_empty());
+//! assert_eq!(report.kek_usage.count("v1"), 0);
+//! assert_eq!(report.kek_usage.unreadable, 0);
+//!
+//! // Step 5: rebuild the provider without `v1`.
+//! let _retired = LocalKeyProvider::single("v2", k2)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Interaction with search
 //!
 //! `ManagedObjectStore` routes sensitive fields *out* of an object's `properties` payload and
@@ -27,6 +87,11 @@
 //! non-deterministically encrypted and are not searchable by content — there is no blind indexing.
 //!
 //! [`ManagedObjectStore`]: crate::ManagedObjectStore
+//! [`ManagedObjectStore::rewrap_all`]: crate::ManagedObjectStore::rewrap_all
+//! [`ManagedObjectStore::kek_usage`]: crate::ManagedObjectStore::kek_usage
+//! [`RewrapReport::failed`]: crate::RewrapReport::failed
+//! [`RewrapReport::kek_usage`]: crate::RewrapReport::kek_usage
+//! [`get_with_secrets`]: crate::SecretObjectReader::get_with_secrets
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -253,14 +318,7 @@ impl Envelope {
 
     fn decode(blob: &[u8]) -> Result<Self> {
         let mut cur = blob;
-        let version = take_u8(&mut cur)?;
-        if version != ENVELOPE_VERSION {
-            return Err(crypto_err("unsupported envelope version"));
-        }
-        let kek_len = take_u8(&mut cur)? as usize;
-        let kek_bytes = take(&mut cur, kek_len)?;
-        let kek_id =
-            String::from_utf8(kek_bytes.to_vec()).map_err(|_| crypto_err("invalid KEK id"))?;
+        let kek_id = take_header(&mut cur)?.to_string();
         let nonce_len = take_u8(&mut cur)? as usize;
         let nonce = take(&mut cur, nonce_len)?.to_vec();
         let wrapped_len = take_u32(&mut cur)? as usize;
@@ -273,6 +331,45 @@ impl Envelope {
             ciphertext,
         })
     }
+}
+
+/// Read the envelope header (version byte and KEK id), leaving `cur` just past it.
+fn take_header<'a>(cur: &mut &'a [u8]) -> Result<&'a str> {
+    let version = take_u8(cur)?;
+    if version != ENVELOPE_VERSION {
+        return Err(crypto_err("unsupported envelope version"));
+    }
+    let kek_len = take_u8(cur)? as usize;
+    std::str::from_utf8(take(cur, kek_len)?).map_err(|_| crypto_err("invalid KEK id"))
+}
+
+/// Read the id of the KEK that wrapped a sealed blob's data key, without decrypting anything.
+///
+/// This parses only the envelope header, so it needs no key material and costs no call to the
+/// [`KeyProvider`]. Use it to count how many blobs still depend on a KEK before retiring it (see
+/// the [rotation steps](self#kek-rotation)).
+///
+/// # Errors
+///
+/// Returns an error if `blob` is not an envelope: it is truncated, carries an unsupported format
+/// version, or its KEK id is not UTF-8.
+///
+/// # Examples
+///
+/// ```
+/// # async fn run() -> olai_store::Result<()> {
+/// use olai_store::{EnvelopeEncryptor, LocalKeyProvider, envelope_kek_id};
+///
+/// let encryptor = EnvelopeEncryptor::local(LocalKeyProvider::single("v1", vec![7; 32])?);
+/// let blob = encryptor.seal("name", b"secret").await?;
+/// assert_eq!(envelope_kek_id(&blob)?, "v1");
+/// assert!(envelope_kek_id(b"not an envelope").is_err());
+/// # Ok(())
+/// # }
+/// ```
+pub fn envelope_kek_id(blob: &[u8]) -> Result<KekId> {
+    let mut cur = blob;
+    take_header(&mut cur).map(str::to_string)
 }
 
 fn take<'a>(cur: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
@@ -320,6 +417,11 @@ impl EnvelopeEncryptor {
     /// Convenience constructor wrapping a [`LocalKeyProvider`].
     pub fn local(provider: LocalKeyProvider) -> Self {
         Self::new(Arc::new(provider))
+    }
+
+    /// The KEK that [`seal`](Self::seal) and [`rewrap`](Self::rewrap) currently wrap under.
+    pub fn active_kek_id(&self) -> KekId {
+        self.provider.active_kek_id()
     }
 
     /// Encrypt `plaintext` for `name`, returning a serialized envelope blob.
@@ -494,6 +596,41 @@ mod tests {
         let v2_only = EnvelopeEncryptor::local(LocalKeyProvider::single("v2", key(2)).unwrap());
         assert_eq!(v2_only.open("n", &rewrapped).await.unwrap(), b"value");
         assert!(v2_only.open("n", &blob).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn envelope_kek_id_reads_the_header_only() {
+        let v1 = EnvelopeEncryptor::local(LocalKeyProvider::single("v1", key(1)).unwrap());
+        let blob = v1.seal("n", b"value").await.unwrap();
+        assert_eq!(envelope_kek_id(&blob).unwrap(), "v1");
+
+        // The header alone is enough: the peek never touches the nonce, DEK or ciphertext.
+        let header_len = 1 + 1 + "v1".len();
+        assert_eq!(envelope_kek_id(&blob[..header_len]).unwrap(), "v1");
+
+        let rotated = EnvelopeEncryptor::local(
+            LocalKeyProvider::new("v2", [("v1".into(), key(1)), ("v2".into(), key(2))]).unwrap(),
+        );
+        let rewrapped = rotated.rewrap(&blob).await.unwrap().unwrap();
+        assert_eq!(envelope_kek_id(&rewrapped).unwrap(), "v2");
+        assert_eq!(rotated.active_kek_id(), "v2");
+    }
+
+    #[test]
+    fn envelope_kek_id_rejects_non_envelopes() {
+        assert!(envelope_kek_id(b"").is_err(), "empty");
+        assert!(
+            envelope_kek_id(&[9, 2, b'v', b'1']).is_err(),
+            "unknown version"
+        );
+        assert!(
+            envelope_kek_id(&[ENVELOPE_VERSION, 5, b'v']).is_err(),
+            "truncated id"
+        );
+        assert!(
+            envelope_kek_id(&[ENVELOPE_VERSION, 1, 0xff]).is_err(),
+            "non-UTF-8 id"
+        );
     }
 
     #[test]

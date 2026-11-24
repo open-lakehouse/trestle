@@ -48,8 +48,9 @@ jobs:
       # The sqlite + postgres backends are dialect-bound `sqlx::query!` code checked
       # against the committed `.sqlx/` offline cache — no live database is needed for
       # clippy. Lint the SQLite and native-Postgres backends (both together, so the
-      # `--features sqlite,postgres` combination is covered too).
-      - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres -- -D warnings
+      # `--features sqlite,postgres` combination is covered too), plus `encryption`,
+      # which nothing else in the workspace enables.
+      - run: SQLX_OFFLINE=true cargo clippy --locked --all-targets -p olai-store --features sqlite,postgres,encryption -- -D warnings
       - run: cargo clippy --locked --all-targets --features olai-http/recording,olai-http/neon,olai-http/sds -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-storage-credentials --features wire -- -D warnings
       - run: cargo clippy --locked --all-targets -p olai-auth --features http -- -D warnings
@@ -163,8 +164,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run tests (default features)
         run: cargo test --locked --lib --tests
-      - name: Run tests (olai-store sqlx feature)
-        run: cargo test --locked --lib --tests -p olai-store --features sqlx
+      - name: Run tests (olai-store sqlx and encryption features)
+        run: cargo test --locked --lib --tests -p olai-store --features sqlx,encryption
       - name: Run tests (olai-http recording, neon and sds features)
         run: cargo test --locked --lib --tests -p olai-http --features recording,neon,sds
       - name: Run tests (olai-storage-credentials wire adapters)
@@ -283,11 +284,11 @@ jobs:
         run: |
           export DATABASE_URL_PG="postgres://${PGUSER}:${PGPASSWORD}@localhost:5432/${PGDATABASE}"
           # `--lib` runs the conformance battery; `--doc` compiles the postgres-only
-          # doc examples (behind `#[cfg(feature = "postgres")]`), which no other job
-          # builds — without this they would never be checked. `--doc` cannot be
+          # doc examples (behind `#[cfg(feature = "postgres")]`) and the `encryption`
+          # ones, which no other job builds — without this they would never be checked. `--doc` cannot be
           # combined with other target selectors, so it is a separate invocation.
           cargo test --locked --lib -p olai-store --features postgres
-          cargo test --locked --doc -p olai-store --features postgres
+          cargo test --locked --doc -p olai-store --features postgres,encryption
       # The `authz` migrations, `PgApiKeyStore`, `PgGrantStore` and `PgNeonUserStatus`, each test in a
       # schema it migrates and drops.
       - name: Run Postgres authz tests (olai-auth)

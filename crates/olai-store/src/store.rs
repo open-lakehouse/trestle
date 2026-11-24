@@ -148,6 +148,17 @@ pub(crate) fn object_fingerprint<L: Label>(
     h.finish()
 }
 
+/// Query fingerprint for a [`list_sensitive`](ObjectStoreReader::list_sensitive) listing: the
+/// label, tagged so a sensitive-blob cursor can never be replayed against an ordinary `list` of
+/// the same label (or vice versa).
+pub(crate) fn sensitive_fingerprint<L: Label>(label: L) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    "list_sensitive".hash(&mut h);
+    label.hash(&mut h);
+    h.finish()
+}
+
 /// Query fingerprint for an [`EdgeQuery`]: everything that shapes the result set (endpoint,
 /// label, target restrictions, time window, filter) but not the pagination knobs.
 pub(crate) fn edge_fingerprint<L: Label>(query: &EdgeQuery<'_, L>) -> u64 {
@@ -211,6 +222,10 @@ pub(crate) fn v7_lower_bound(t: chrono::DateTime<chrono::Utc>) -> Uuid {
     // Layout: bits 127..80 = unix_ts_ms (48 bits), everything below zero.
     Uuid::from_u128(millis << 80)
 }
+
+/// One page of [`list_sensitive`](ObjectStoreReader::list_sensitive): the `(id, blob)` pairs and
+/// the token for the next page (`None` on the last one).
+pub type SensitivePage = (Vec<(Uuid, Bytes)>, Option<String>);
 
 /// Read-only interface for the object store.
 #[async_trait::async_trait]
@@ -321,6 +336,60 @@ pub trait ObjectStoreReader<L: Label>: Send + Sync + 'static {
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let _ = id;
         Ok(None)
+    }
+
+    /// List the sensitive blobs stored on objects of a given label, as `(id, blob)` pairs.
+    ///
+    /// Only objects that carry a blob are returned; objects without one are skipped. Ordering and
+    /// pagination follow [`list`](Self::list): ascending `id`, keyset tokens bound to this exact
+    /// query (a token from `list` is not valid here, nor the other way round), at most
+    /// `max_results` pairs per call, and `None` as the token on the final page.
+    ///
+    /// This lets a caller walk every sealed blob in bounded batches without materializing the
+    /// objects themselves, e.g. for [`ManagedObjectStore::kek_usage`] and
+    /// [`ManagedObjectStore::rewrap_all`] during a key rotation.
+    ///
+    /// The default implementation pages [`list`](Self::list) and calls
+    /// [`get_sensitive`](Self::get_sensitive) for each object, so it is correct on any backend
+    /// that implements those two, at the cost of one read per object. Backends that persist the
+    /// blob should override it with a single query over rows that have one; the shared
+    /// conformance battery holds overrides to the same results.
+    ///
+    /// [`ManagedObjectStore::kek_usage`]: crate::ManagedObjectStore#method.kek_usage
+    /// [`ManagedObjectStore::rewrap_all`]: crate::ManagedObjectStore#method.rewrap_all
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`](crate::Error::InvalidArgument) if `page_token` is not a
+    /// valid token for this query.
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<SensitivePage> {
+        let q = sensitive_fingerprint(label);
+        let cursor = decode_cursor(page_token, q)?;
+        let limit = max_results.unwrap_or(usize::MAX);
+        // Resume the underlying listing just past our cursor by minting a `list` token for the
+        // same id. Read one page of objects at a time and stop once one more blob than the page
+        // needs has been collected, so `paginate_keyset` can tell whether more remain.
+        let list_q = object_fingerprint(label, None, None);
+        let mut list_token = cursor.map(|k| encode_cursor(k, list_q));
+        let mut blobs = Vec::new();
+        loop {
+            let (objects, next) = self.list(label, None, max_results, list_token).await?;
+            for object in objects {
+                if let Some(blob) = self.get_sensitive(&object.id).await? {
+                    blobs.push((object.id, blob));
+                }
+            }
+            if blobs.len() > limit || next.is_none() {
+                break;
+            }
+            list_token = next;
+        }
+        Ok(paginate_keyset(blobs, max_results, |(id, _)| *id, q))
     }
 }
 
@@ -768,6 +837,15 @@ impl<L: Label, T: ObjectStoreReader<L>> ObjectStoreReader<L> for Arc<T> {
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         T::get_sensitive(self, id).await
     }
+
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<SensitivePage> {
+        T::list_sensitive(self, label, max_results, page_token).await
+    }
 }
 
 #[async_trait::async_trait]
@@ -1045,5 +1123,96 @@ mod tests {
         let (page, next) = paginate_keyset(ids.clone(), Some(3), |id| *id, 9);
         assert_eq!(page, ids);
         assert!(next.is_none());
+    }
+
+    /// A reader that forwards only the required methods plus `get_sensitive`, so it exercises the
+    /// trait's default `list_sensitive`.
+    struct BaseReader(crate::InMemoryStore<crate::conformance::ConformanceLabel>);
+
+    #[async_trait::async_trait]
+    impl ObjectStoreReader<crate::conformance::ConformanceLabel> for BaseReader {
+        async fn get(&self, id: &Uuid) -> Result<Object<crate::conformance::ConformanceLabel>> {
+            self.0.get(id).await
+        }
+
+        async fn get_by_name(
+            &self,
+            label: crate::conformance::ConformanceLabel,
+            name: &ResourceName,
+        ) -> Result<Object<crate::conformance::ConformanceLabel>> {
+            self.0.get_by_name(label, name).await
+        }
+
+        async fn list(
+            &self,
+            label: crate::conformance::ConformanceLabel,
+            namespace: Option<&ResourceName>,
+            max_results: Option<usize>,
+            page_token: Option<String>,
+        ) -> Result<(
+            Vec<Object<crate::conformance::ConformanceLabel>>,
+            Option<String>,
+        )> {
+            self.0.list(label, namespace, max_results, page_token).await
+        }
+
+        async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+            self.0.get_sensitive(id).await
+        }
+    }
+
+    /// The default `list_sensitive` (built on `list` + `get_sensitive`) returns the same pages as
+    /// the in-memory override, including when blob-less objects straddle page boundaries.
+    #[tokio::test]
+    async fn default_list_sensitive_agrees_with_override() {
+        use crate::conformance::ConformanceLabel::{Node, Other};
+
+        let store = crate::InMemoryStore::new();
+        for i in 0..9 {
+            // Runs of blob-less objects, so a page of objects can hold no blob at all.
+            let blob = (i % 4 == 0 || i == 5).then(|| Bytes::from(format!("b{i}")));
+            store
+                .create(
+                    Node,
+                    &ResourceName::from_naive_str_split(format!("n{i}")),
+                    None,
+                    None,
+                    blob,
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .create(
+                Other,
+                &ResourceName::from_naive_str_split("o"),
+                None,
+                None,
+                Some(Bytes::from_static(b"o")),
+            )
+            .await
+            .unwrap();
+        let base = BaseReader(store.clone());
+
+        for page_size in [None, Some(1), Some(2), Some(3), Some(10)] {
+            let mut token = None;
+            loop {
+                let want = store
+                    .list_sensitive(Node, page_size, token.clone())
+                    .await
+                    .unwrap();
+                let got = base.list_sensitive(Node, page_size, token).await.unwrap();
+                assert_eq!(
+                    got, want,
+                    "default and override disagree at page size {page_size:?}"
+                );
+                match want.1 {
+                    Some(next) => token = Some(next),
+                    None => break,
+                }
+            }
+        }
+        let (others, _) = base.list_sensitive(Other, None, None).await.unwrap();
+        assert_eq!(others.len(), 1);
     }
 }

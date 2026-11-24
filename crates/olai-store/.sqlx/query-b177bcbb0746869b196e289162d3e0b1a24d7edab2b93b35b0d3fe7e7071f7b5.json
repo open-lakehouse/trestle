@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!\", sensitive AS \"sensitive!\" FROM objects\n                   WHERE label = ? AND sensitive IS NOT NULL AND id > ? ORDER BY id LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "sensitive!",
+        "ordinal": 1,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "b177bcbb0746869b196e289162d3e0b1a24d7edab2b93b35b0d3fe7e7071f7b5"
+}

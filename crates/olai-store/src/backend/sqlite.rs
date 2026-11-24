@@ -972,6 +972,63 @@ async fn op_get_sensitive(conn: &mut SqliteConnection, id: &Uuid) -> Result<Opti
     Ok(row.and_then(|r| r.sensitive).map(Bytes::from))
 }
 
+/// Keyset-page the `(id, blob)` pairs of objects with `label` that carry a sensitive blob.
+///
+/// Two `query!` arms (first page / after a cursor) keep the compile-time check, as in
+/// `op_list_objects`; over-fetch one row to detect a further page.
+async fn op_list_sensitive(
+    conn: &mut SqliteConnection,
+    label: impl Label,
+    max_results: Option<usize>,
+    page_token: Option<String>,
+) -> Result<crate::store::SensitivePage> {
+    let q = crate::store::sensitive_fingerprint(label);
+    let cursor = crate::store::decode_cursor(page_token, q)?;
+    let fetch = max_results
+        .unwrap_or(usize::MAX)
+        .saturating_add(1)
+        .min(i64::MAX as usize) as i64;
+    let label_s = label.as_str().to_string();
+    let rows: Vec<(String, Vec<u8>)> = match cursor {
+        Some(k) => {
+            let k_s = k.hyphenated().to_string();
+            sqlx::query!(
+                r#"SELECT id AS "id!", sensitive AS "sensitive!" FROM objects
+                   WHERE label = ? AND sensitive IS NOT NULL AND id > ? ORDER BY id LIMIT ?"#,
+                label_s,
+                k_s,
+                fetch
+            )
+            .fetch_all(conn)
+            .await?
+            .into_iter()
+            .map(|r| (r.id, r.sensitive))
+            .collect()
+        }
+        None => sqlx::query!(
+            r#"SELECT id AS "id!", sensitive AS "sensitive!" FROM objects
+               WHERE label = ? AND sensitive IS NOT NULL ORDER BY id LIMIT ?"#,
+            label_s,
+            fetch
+        )
+        .fetch_all(conn)
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.sensitive))
+        .collect(),
+    };
+    let blobs = rows
+        .into_iter()
+        .map(|(id, blob)| Ok((Uuid::parse_str(&id)?, Bytes::from(blob))))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(crate::store::paginate_keyset(
+        blobs,
+        max_results,
+        |(id, _)| *id,
+        q,
+    ))
+}
+
 /// Replace only the `sensitive` column, leaving properties and version untouched.
 async fn op_set_sensitive(conn: &mut SqliteConnection, id: &Uuid, blob: &[u8]) -> Result<()> {
     let id_s = id.hyphenated().to_string();
@@ -1345,6 +1402,31 @@ impl<L: Label> ObjectStoreReader<L> for SqlStore<L> {
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let mut conn = self.pool.acquire().await?;
         let out = op_get_sensitive(&mut conn, id).await;
+        record_err(&out);
+        out
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list_sensitive",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<crate::store::SensitivePage> {
+        let mut conn = self.pool.acquire().await?;
+        let out = op_list_sensitive(&mut conn, label, max_results, page_token).await;
         record_err(&out);
         out
     }
@@ -1727,6 +1809,31 @@ impl<L: Label> ObjectStoreReader<L> for SqlTx<L> {
         record_err(&out);
         out
     }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list_sensitive",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<crate::store::SensitivePage> {
+        let mut tx = self.tx.lock().await;
+        let out = op_list_sensitive(&mut tx, label, max_results, page_token).await;
+        record_err(&out);
+        out
+    }
 }
 
 #[async_trait::async_trait]
@@ -2045,6 +2152,7 @@ mod tests {
         conformance::transaction_atomicity(&fresh().await).await;
         conformance::transaction_commit(&fresh().await).await;
         conformance::sensitive_blob_roundtrip(&fresh().await).await;
+        conformance::list_sensitive_pages_blobs(&fresh().await).await;
         conformance::search_object_predicates(&fresh().await).await;
         conformance::search_indexed_path_shapes(&fresh().await).await;
         conformance::search_object_pagination_filters_completely(&fresh().await).await;
