@@ -197,11 +197,11 @@ since the normal dependency already orders it first.)
 
 ### Published crates and the `trestle` / `olai-trestle` naming
 
-Thirteen crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
+Fourteen crates publish to crates.io: `olai-store`, `olai-http`, `olai-codegen`,
 `olai-http-wasm`, `olai-trestle`, `olai-stack-topology`, `olai-stack-runtime`,
 `olai-stack-state`,
 `olai-storage-credentials`, `olai-vended-store`, `olai-credential-vending`,
-`olai-auth`, and `olai-secret-server`.
+`olai-auth`, `olai-secret-server`, and `olai-key-service`.
 They are the packages listed in `release-plz.toml`. A release of
 `olai-secret-server` also pushes its image,
 `ghcr.io/open-lakehouse/trestle-secret-server:<version>`

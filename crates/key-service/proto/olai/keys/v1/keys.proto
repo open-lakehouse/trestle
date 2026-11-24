@@ -1,0 +1,88 @@
+// The key service: a KMS-style wrap/unwrap API over versioned key encryption keys (KEKs).
+//
+// A consumer never holds a KEK. It sends a data encryption key (DEK) to be wrapped, stores the
+// wrapped bytes, and sends them back to have them unwrapped. The server holds the keyrings.
+//
+// The caller is the connection, never the request: on a Unix socket per consumer, the socket
+// decides which keys a request may use. A key another consumer holds and a key nobody holds
+// both answer NOT_FOUND.
+//
+// Wrapped DEKs are AES-256-GCM: a 96-bit random nonce followed by the ciphertext and tag. The
+// associated data is the KEK id the caller records: "<key>@v<version>", or the alias the
+// request names. This is the format of olai-store's LocalKeyProvider with the KEK id as its
+// key id, so keys move between the two in both directions.
+syntax = "proto3";
+
+package olai.keys.v1;
+
+service KeyService {
+  // Wraps a DEK under a version of a key: the active version unless the request names one.
+  rpc Wrap(WrapRequest) returns (WrapResponse);
+  // Unwraps a DEK wrapped under a version of a key. Refused for a version below the key's
+  // minimum decrypt version (FAILED_PRECONDITION) and for an unknown version (NOT_FOUND).
+  rpc Unwrap(UnwrapRequest) returns (UnwrapResponse);
+  // The key's versions, as they are now.
+  rpc GetKey(GetKeyRequest) returns (KeyInfo);
+  // The key's versions now, then again each time they change, until the server goes away.
+  rpc WatchKey(WatchKeyRequest) returns (stream KeyInfo);
+}
+
+message WrapRequest {
+  // The key's name, as the consumer's listener lists it.
+  string key = 1;
+  // The plaintext DEK.
+  bytes dek = 2;
+  // The version to wrap under. 0 means the active version. Any other version must lie between
+  // the minimum decrypt version and the active version, or the call fails with
+  // FAILED_PRECONDITION.
+  uint32 version = 3;
+  // Wrap under an alias instead: the alias's version, with the alias as the associated data.
+  // When set, `version` must be 0 or the alias's version.
+  string alias = 4;
+}
+
+message WrapResponse {
+  // The version the DEK was wrapped under.
+  uint32 version = 1;
+  // The wrapped DEK.
+  bytes wrapped = 2;
+}
+
+message UnwrapRequest {
+  // The key's name, as the consumer's listener lists it.
+  string key = 1;
+  // The version the DEK was wrapped under. 0 is allowed only with an alias.
+  uint32 version = 2;
+  // The wrapped DEK.
+  bytes wrapped = 3;
+  // The alias the DEK was wrapped under, when it was: the associated data of the wrap. When
+  // set, `version` must be 0 or the alias's version.
+  string alias = 4;
+}
+
+message UnwrapResponse {
+  // The plaintext DEK.
+  bytes dek = 1;
+}
+
+message GetKeyRequest {
+  // The key's name, as the consumer's listener lists it.
+  string key = 1;
+}
+
+message WatchKeyRequest {
+  // The key's name, as the consumer's listener lists it.
+  string key = 1;
+}
+
+// A key's versions. Holds no key material.
+message KeyInfo {
+  // The key's name.
+  string key = 1;
+  // The version new wraps use.
+  uint32 active_version = 2;
+  // The lowest version the server still unwraps.
+  uint32 min_decrypt_version = 3;
+  // Other KEK ids for versions, such as the id an imported key had before.
+  map<string, uint32> aliases = 4;
+}
