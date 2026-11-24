@@ -166,6 +166,31 @@ fn op_get_sensitive<L: Label>(state: &State<L>, id: &Uuid) -> Result<Option<Byte
     Ok(state.sensitive.get(id).cloned())
 }
 
+/// Keyset-page the `(id, blob)` pairs of objects with `label` that carry a sensitive blob.
+fn op_list_sensitive<L: Label>(
+    state: &State<L>,
+    label: L,
+    max_results: Option<usize>,
+    page_token: Option<String>,
+) -> Result<crate::store::SensitivePage> {
+    let q = crate::store::sensitive_fingerprint(label);
+    let cursor = crate::store::decode_cursor(page_token, q)?;
+    let mut blobs: Vec<(Uuid, Bytes)> = state
+        .sensitive
+        .iter()
+        .filter(|(id, _)| cursor.is_none_or(|k| **id > k))
+        .filter(|(id, _)| state.objects.get(*id).is_some_and(|o| o.label == label))
+        .map(|(id, blob)| (*id, blob.clone()))
+        .collect();
+    blobs.sort_by_key(|(id, _)| *id);
+    Ok(crate::store::paginate_keyset(
+        blobs,
+        max_results,
+        |(id, _)| *id,
+        q,
+    ))
+}
+
 /// Replace only the sensitive blob, leaving the object (and its version) untouched.
 fn op_set_sensitive<L: Label>(state: &mut State<L>, id: &Uuid, blob: Bytes) -> Result<()> {
     if !state.objects.contains_key(id) {
@@ -470,6 +495,30 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryStore<L> {
     )]
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let out = op_get_sensitive(&self.state.lock().unwrap(), id);
+        record_err(&out);
+        out
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list_sensitive",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<crate::store::SensitivePage> {
+        let out = op_list_sensitive(&self.state.lock().unwrap(), label, max_results, page_token);
         record_err(&out);
         out
     }
@@ -822,6 +871,30 @@ impl<L: Label> ObjectStoreReader<L> for InMemoryTx<L> {
     )]
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
         let out = self.with_state(|s| op_get_sensitive(s, id));
+        record_err(&out);
+        out
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            otel.name = "olai_store.list_sensitive",
+            otel.kind = "client",
+            db.system = DB_SYSTEM,
+            db.operation.name = "list_sensitive",
+            db.collection.name = label.as_str(),
+            max_results = ?max_results,
+            otel.status_code = tracing::field::Empty,
+            error.type = tracing::field::Empty,
+        )
+    )]
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<crate::store::SensitivePage> {
+        let out = self.with_state(|s| op_list_sensitive(s, label, max_results, page_token));
         record_err(&out);
         out
     }

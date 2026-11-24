@@ -397,6 +397,141 @@ pub async fn sensitive_blob_roundtrip<S: StoreExec<ConformanceLabel>>(store: &S)
     );
 }
 
+/// [`list_sensitive`](ObjectStoreReader::list_sensitive) returns exactly the `(id, blob)` pairs of
+/// the label's objects that carry a blob, in ascending id order, and pages through them
+/// completely at any page size.
+///
+/// Objects without a blob, objects of another label and deleted objects never appear; a blob
+/// replaced by [`set_sensitive`](crate::ObjectStore::set_sensitive) or `update` is listed with
+/// its current bytes; and a token is bound to its query, so it is rejected by an ordinary `list`
+/// and by a `list_sensitive` of another label.
+pub async fn list_sensitive_pages_blobs<S: StoreExec<ConformanceLabel>>(store: &S) {
+    use bytes::Bytes;
+
+    let mut expected: Vec<(uuid::Uuid, Bytes)> = Vec::new();
+    for i in 0..7 {
+        // Every third object has no blob.
+        let blob = (i % 3 != 2).then(|| Bytes::from(format!("blob-{i}")));
+        let obj = store
+            .create(
+                ConformanceLabel::Node,
+                &rn(&format!("s{i}")),
+                None,
+                None,
+                blob.clone(),
+            )
+            .await
+            .unwrap();
+        if let Some(blob) = blob {
+            expected.push((obj.id, blob));
+        }
+    }
+    // Another label's blob must not leak into the `Node` listing.
+    let other = store
+        .create(
+            ConformanceLabel::Other,
+            &rn("o"),
+            None,
+            None,
+            Some(Bytes::from_static(b"other")),
+        )
+        .await
+        .unwrap();
+
+    // Replace one blob in place and through `update`; delete another object.
+    let replaced = Bytes::from_static(b"rewrapped");
+    store
+        .set_sensitive(&expected[0].0, replaced.clone())
+        .await
+        .unwrap();
+    expected[0].1 = replaced;
+    let updated = Bytes::from_static(b"updated");
+    store
+        .update(
+            &expected[1].0,
+            None,
+            Precondition::Any,
+            Some(updated.clone()),
+        )
+        .await
+        .unwrap();
+    expected[1].1 = updated;
+    let deleted = expected.remove(2);
+    store.delete(&deleted.0).await.unwrap();
+
+    let (all, token) = store
+        .list_sensitive(ConformanceLabel::Node, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        all, expected,
+        "unpaged listing returns every blob, in id order"
+    );
+    assert!(token.is_none(), "an unpaged listing is a single page");
+
+    for page_size in 1..=expected.len() + 1 {
+        let mut seen = Vec::new();
+        let mut token = None;
+        loop {
+            let (page, next) = store
+                .list_sensitive(ConformanceLabel::Node, Some(page_size), token)
+                .await
+                .unwrap();
+            assert!(page.len() <= page_size, "page exceeds max_results");
+            seen.extend(page);
+            match next {
+                Some(t) => token = Some(t),
+                None => break,
+            }
+        }
+        assert_eq!(
+            seen, expected,
+            "paging by {page_size} must yield every blob once"
+        );
+    }
+
+    let (others, _) = store
+        .list_sensitive(ConformanceLabel::Other, None, None)
+        .await
+        .unwrap();
+    assert_eq!(others, vec![(other.id, Bytes::from_static(b"other"))]);
+
+    // Tokens are bound to their query.
+    let (_, token) = store
+        .list_sensitive(ConformanceLabel::Node, Some(1), None)
+        .await
+        .unwrap();
+    let token = token.expect("more than one blob, so a token is minted");
+    let err = store
+        .list(ConformanceLabel::Node, None, Some(1), Some(token.clone()))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(_)),
+        "a list_sensitive token must not be accepted by list, got {err:?}"
+    );
+    let err = store
+        .list_sensitive(ConformanceLabel::Other, Some(1), Some(token))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(_)),
+        "a token for one label must not be accepted for another, got {err:?}"
+    );
+    let (_, list_token) = store
+        .list(ConformanceLabel::Node, None, Some(1), None)
+        .await
+        .unwrap();
+    let err = store
+        .list_sensitive(ConformanceLabel::Node, Some(1), list_token)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(_)),
+        "a list token must not be accepted by list_sensitive, got {err:?}"
+    );
+}
+
 /// Searching objects by payload matches exactly the set the reference
 /// [`Filter::matches`] selects, for each operator and boolean composition.
 ///
@@ -1413,6 +1548,7 @@ where
     transaction_atomicity(&fresh()).await;
     transaction_commit(&fresh()).await;
     sensitive_blob_roundtrip(&fresh()).await;
+    list_sensitive_pages_blobs(&fresh()).await;
     inverse_edges(&with_inverse(parent_child_inverse)).await;
     search_object_predicates(&fresh()).await;
     search_indexed_path_shapes(&fresh()).await;
