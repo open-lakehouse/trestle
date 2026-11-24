@@ -11,9 +11,10 @@ pub const ENVOY: &str = "envoyproxy/envoy:v1.40-latest";
 /// secret server's integration test runs against this release.
 pub const EGRESS_ENVOY: &str = "envoyproxy/envoy:v1.40.2";
 /// The SDS secret server the egress gateway fetches its credentials from, built from
-/// `crates/secret-server`. 0.0.2 ends open SDS streams on shutdown, so a recreate takes about a
-/// second instead of the drain timeout.
-pub const SECRET_SERVER: &str = "ghcr.io/open-lakehouse/trestle-secret-server:0.0.2";
+/// `crates/secret-server`. 0.0.3 also serves the `olai.keys.v1` key service, which wraps and
+/// unwraps consumers' data keys under keyrings it alone holds. (0.0.2 ended open SDS streams on
+/// shutdown, so a recreate takes about a second instead of the drain timeout.)
+pub const SECRET_SERVER: &str = "ghcr.io/open-lakehouse/trestle-secret-server:0.0.3";
 /// Authelia forward-auth provider.
 pub const AUTHELIA: &str = "ghcr.io/authelia/authelia:4.39";
 /// Postgres relational database.
