@@ -3268,10 +3268,13 @@ dependencies = [
 name = "olai-secret-server"
 version = "0.0.2"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "envoy-types",
  "futures",
  "hyper-util",
+ "olai-key-service",
+ "olai-store",
  "prost",
  "reqwest",
  "serde",

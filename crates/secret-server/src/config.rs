@@ -1,5 +1,5 @@
 //! `secret-server.yaml`: the listeners, their consumers, and which variable holds each
-//! secret.
+//! secret and each keyring.
 //!
 //! The file is not secret: it names environment variables, never values. Values are read
 //! from the process environment once, by [`Config::resolve`].
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::caller::CallerId;
+use crate::keyring::{KeyHandle, Keyring, MAX_KEY_NAME_LEN};
 use crate::policy::Policy;
 use crate::secret::SecretValue;
 
@@ -28,7 +29,8 @@ pub struct Config {
     pub listeners: Vec<ListenerConfig>,
 }
 
-/// One Unix socket, the consumer it serves, and the secrets that consumer may see.
+/// One Unix socket, the consumer it serves, the secrets that consumer may see, and the keys it
+/// may wrap and unwrap under.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListenerConfig {
@@ -39,6 +41,9 @@ pub struct ListenerConfig {
     /// The secrets the consumer may see.
     #[serde(default)]
     pub secrets: Vec<SecretRef>,
+    /// The keys the consumer may use through the key service.
+    #[serde(default)]
+    pub keys: Vec<KeyRef>,
 }
 
 /// A secret by the name a consumer asks for, and the variable that holds its value.
@@ -48,6 +53,17 @@ pub struct SecretRef {
     /// The resource name the consumer asks for (Envoy's `sds_config` secret name).
     pub name: String,
     /// The environment variable that holds the value.
+    pub env: String,
+}
+
+/// A key by the name a consumer uses, and the variable that holds its keyring (JSON; see
+/// [`Keyring::from_json`]).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyRef {
+    /// The key name the consumer asks for. Its versions' KEK ids are `<name>@v<n>`.
+    pub name: String,
+    /// The environment variable that holds the keyring.
     pub env: String,
 }
 
@@ -77,14 +93,46 @@ pub enum ConfigError {
     /// Variables the file lists are unset or empty.
     #[error("{}", MissingDisplay(.0))]
     MissingVariables(Vec<MissingVariable>),
+    /// Keyring variables are set but don't hold a valid keyring.
+    #[error("{}", InvalidKeyringsDisplay(.0))]
+    InvalidKeyrings(Vec<InvalidKeyring>),
 }
 
-/// A secret whose variable is unset or empty in the process environment.
+/// A key whose variable doesn't hold a valid keyring. The reason never quotes the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidKeyring {
+    /// The consumer the key belongs to.
+    pub consumer: String,
+    /// The key's name.
+    pub name: String,
+    /// The variable.
+    pub env: String,
+    /// What is wrong with it.
+    pub reason: String,
+}
+
+struct InvalidKeyringsDisplay<'a>(&'a [InvalidKeyring]);
+
+impl fmt::Display for InvalidKeyringsDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "keyrings that cannot be read:")?;
+        for k in self.0 {
+            write!(
+                f,
+                "\n  - key {} (consumer {}): ${}: {}",
+                k.name, k.consumer, k.env, k.reason
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// A secret or keyring whose variable is unset or empty in the process environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingVariable {
-    /// The consumer the secret belongs to.
+    /// The consumer the secret or key belongs to.
     pub consumer: String,
-    /// The secret's name.
+    /// The secret's or key's name.
     pub name: String,
     /// The variable.
     pub env: String,
@@ -96,7 +144,10 @@ struct MissingDisplay<'a>(&'a [MissingVariable]);
 
 impl fmt::Display for MissingDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "secrets without a value in the environment:")?;
+        write!(
+            f,
+            "secrets and keyrings without a value in the environment:"
+        )?;
         for m in self.0 {
             let state = if m.empty { "is empty" } else { "is not set" };
             write!(
@@ -134,8 +185,8 @@ impl Config {
         Ok(config)
     }
 
-    /// Checks the version, and that consumers, sockets and each listener's names are unique
-    /// and non-empty.
+    /// Checks the version, and that consumers, sockets and each listener's secret and key
+    /// names are unique and non-empty.
     pub fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |msg: String| Err(ConfigError::Invalid(msg));
         if self.version != CONFIG_VERSION {
@@ -186,20 +237,42 @@ impl Config {
                     ));
                 }
             }
+            let mut keys = HashSet::new();
+            for key in &listener.keys {
+                if key.name.is_empty() || key.env.is_empty() {
+                    return invalid(format!(
+                        "consumer {} has a key with an empty name or env",
+                        listener.consumer
+                    ));
+                }
+                if key.name.len() > MAX_KEY_NAME_LEN {
+                    return invalid(format!(
+                        "consumer {} has a key name longer than {MAX_KEY_NAME_LEN} bytes",
+                        listener.consumer
+                    ));
+                }
+                if !keys.insert(key.name.as_str()) {
+                    return invalid(format!(
+                        "consumer {} lists key {} more than once",
+                        listener.consumer, key.name
+                    ));
+                }
+            }
         }
         Ok(())
     }
 
     /// Reads every listed variable through `lookup` and builds the [`Policy`].
     ///
-    /// Fails with every unset or empty variable at once, so one restart fixes them all.
-    /// `main` passes [`std::env::var_os`].
+    /// Fails with every unset or empty variable at once, so one restart fixes them all, and
+    /// otherwise with every keyring that cannot be read. `main` passes [`std::env::var_os`].
     pub fn resolve(
         &self,
         lookup: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Policy, ConfigError> {
         let mut policy = Policy::new();
         let mut missing = Vec::new();
+        let mut invalid_keyrings = Vec::new();
         for listener in &self.listeners {
             let caller = CallerId::new(&listener.consumer);
             for secret in &listener.secrets {
@@ -216,11 +289,41 @@ impl Config {
                     }),
                 }
             }
+            for key in &listener.keys {
+                match lookup(&key.env) {
+                    Some(value) if !value.is_empty() => {
+                        let json = zeroize::Zeroizing::new(value.into_encoded_bytes());
+                        match Keyring::from_json(&key.name, &json) {
+                            Ok(keyring) => {
+                                policy.allow_key(
+                                    caller.clone(),
+                                    key.name.clone(),
+                                    KeyHandle::new(keyring),
+                                );
+                            }
+                            Err(e) => invalid_keyrings.push(InvalidKeyring {
+                                consumer: listener.consumer.clone(),
+                                name: key.name.clone(),
+                                env: key.env.clone(),
+                                reason: e.to_string(),
+                            }),
+                        }
+                    }
+                    other => missing.push(MissingVariable {
+                        consumer: listener.consumer.clone(),
+                        name: key.name.clone(),
+                        env: key.env.clone(),
+                        empty: other.is_some(),
+                    }),
+                }
+            }
         }
-        if missing.is_empty() {
-            Ok(policy)
-        } else {
+        if !missing.is_empty() {
             Err(ConfigError::MissingVariables(missing))
+        } else if !invalid_keyrings.is_empty() {
+            Err(ConfigError::InvalidKeyrings(invalid_keyrings))
+        } else {
+            Ok(policy)
         }
     }
 }
@@ -243,7 +346,12 @@ listeners:
         env: WORKGRAPH_REVIEWER_API_KEY
   - socket: /run/trestle-sds/other/sds.sock
     consumer: other
+    keys:
+      - name: server-kek
+        env: OTHER_SERVER_KEK
 "#;
+
+    const KEYRING: &str = r#"{"versions": {"1": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="}, "active": 1, "aliases": {"kek-1": 1}}"#;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let map: HashMap<String, OsString> = pairs
@@ -263,6 +371,8 @@ listeners:
             "WORKGRAPH_REVIEWER_API_KEY"
         );
         assert!(config.listeners[1].secrets.is_empty());
+        assert_eq!(config.listeners[1].keys[0].name, "server-kek");
+        assert!(config.listeners[0].keys.is_empty());
     }
 
     #[test]
@@ -272,6 +382,7 @@ listeners:
             .resolve(env(&[
                 ("WORKGRAPH_PLANNER_API_KEY", "p"),
                 ("WORKGRAPH_REVIEWER_API_KEY", "r"),
+                ("OTHER_SERVER_KEK", KEYRING),
             ]))
             .unwrap();
         let egress = CallerId::new("egress-gateway");
@@ -284,13 +395,67 @@ listeners:
                 .get(&CallerId::new("other"), "workgraph-planner")
                 .is_none()
         );
+        let other = CallerId::new("other");
+        assert_eq!(
+            policy.key(&other, "server-kek").unwrap().current().active(),
+            1
+        );
+        assert!(policy.key(&egress, "server-kek").is_none());
+    }
+
+    #[test]
+    fn lists_every_invalid_keyring_without_values() {
+        let yaml = format!(
+            "{EXAMPLE}  - socket: /run/trestle-sds/third/sds.sock\n    consumer: third\n    keys:\n      - {{name: kek, env: THIRD_KEK}}\n"
+        );
+        let config = Config::from_yaml(&yaml).unwrap();
+        let err = config
+            .resolve(env(&[
+                ("WORKGRAPH_PLANNER_API_KEY", "p"),
+                ("WORKGRAPH_REVIEWER_API_KEY", "r"),
+                (
+                    "OTHER_SERVER_KEK",
+                    r#"{"versions": {"1": "hunter2hunter2"}, "active": 1}"#,
+                ),
+                ("THIRD_KEK", "hunter2-not-json"),
+            ]))
+            .unwrap_err();
+        let ConfigError::InvalidKeyrings(invalid) = &err else {
+            panic!("{err}");
+        };
+        assert_eq!(invalid.len(), 2);
+        let message = err.to_string();
+        assert!(!message.contains("hunter2"), "{message}");
+        assert!(
+            message.contains("key server-kek (consumer other): $OTHER_SERVER_KEK"),
+            "{message}"
+        );
+        assert!(message.contains("$THIRD_KEK: not a keyring"), "{message}");
+    }
+
+    #[test]
+    fn a_missing_keyring_is_a_missing_variable() {
+        let config = Config::from_yaml(EXAMPLE).unwrap();
+        let err = config
+            .resolve(env(&[
+                ("WORKGRAPH_PLANNER_API_KEY", "p"),
+                ("WORKGRAPH_REVIEWER_API_KEY", "r"),
+            ]))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("$OTHER_SERVER_KEK is not set"),
+            "{err}"
+        );
     }
 
     #[test]
     fn lists_every_missing_or_empty_variable_without_values() {
         let config = Config::from_yaml(EXAMPLE).unwrap();
         let err = config
-            .resolve(env(&[("WORKGRAPH_PLANNER_API_KEY", "")]))
+            .resolve(env(&[
+                ("WORKGRAPH_PLANNER_API_KEY", ""),
+                ("OTHER_SERVER_KEK", KEYRING),
+            ]))
             .unwrap_err();
         let ConfigError::MissingVariables(missing) = &err else {
             panic!("{err}");
@@ -346,6 +511,13 @@ listeners:
                 .unwrap_err()
                 .to_string()
                 .contains("more than once")
+        );
+        let dup_key = "version: 1\nlisteners:\n  - socket: /a\n    consumer: c\n    keys:\n      - {name: k, env: A}\n      - {name: k, env: B}\n";
+        assert!(
+            Config::from_yaml(dup_key)
+                .unwrap_err()
+                .to_string()
+                .contains("lists key k more than once")
         );
         let none = "version: 1\nlisteners: []\n";
         assert!(

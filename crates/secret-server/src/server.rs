@@ -1,4 +1,4 @@
-//! Binding the per-consumer Unix sockets and serving SDS on them.
+//! Binding the per-consumer Unix sockets and serving SDS and the key service on them.
 
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
@@ -12,6 +12,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 
 use crate::caller::{CallerId, ConsumerConn};
 use crate::config::Config;
+use crate::keys::KeyService;
 use crate::policy::Policy;
 use crate::sds::SdsService;
 
@@ -59,17 +60,20 @@ pub fn bind_socket(path: &Path) -> Result<UnixListener, ServeError> {
     Ok(listener)
 }
 
-/// Serves SDS for one consumer on an already bound listener until `shutdown` resolves.
+/// Serves SDS and the key service for one consumer on an already bound listener until
+/// `shutdown` resolves.
 pub async fn serve_listener(
     listener: UnixListener,
     consumer: CallerId,
-    service: SdsService,
+    sds: SdsService,
+    keys: KeyService,
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), tonic::transport::Error> {
     let incoming = UnixListenerStream::new(listener)
         .map(move |conn| conn.map(|io| ConsumerConn::new(io, consumer.clone())));
     tonic::transport::Server::builder()
-        .add_service(service.into_server())
+        .add_service(sds.into_server())
+        .add_service(keys.into_server())
         .serve_with_incoming_shutdown(incoming, shutdown)
         .await
 }
@@ -82,7 +86,9 @@ pub async fn serve(
     policy: Policy,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServeError> {
-    let service = SdsService::new(Arc::new(policy));
+    let policy = Arc::new(policy);
+    let sds = SdsService::new(policy.clone());
+    let keys = KeyService::new(policy);
     let shutdown: Shared<BoxFuture<'static, ()>> = shutdown.boxed().shared();
     let mut bound = Vec::with_capacity(config.listeners.len());
     for listener in &config.listeners {
@@ -95,22 +101,24 @@ pub async fn serve(
             consumer = %consumer,
             socket = %config.socket.display(),
             secrets = config.secrets.len(),
+            keys = config.keys.len(),
             "listening",
         );
         let caller = CallerId::new(&consumer);
-        let service = service.clone();
+        let (sds, keys) = (sds.clone(), keys.clone());
         // End the open streams first: a graceful shutdown waits for them, and a consumer's
         // stream stays open for as long as it runs.
         let shutdown = {
             let shutdown = shutdown.clone();
-            let service = service.clone();
+            let (sds, keys) = (sds.clone(), keys.clone());
             async move {
                 shutdown.await;
-                service.close_streams();
+                sds.close_streams();
+                keys.close_streams();
             }
         };
         tasks.spawn(async move {
-            serve_listener(listener, caller, service, shutdown)
+            serve_listener(listener, caller, sds, keys, shutdown)
                 .await
                 .map_err(|source| ServeError::Serve { consumer, source })
         });

@@ -101,6 +101,9 @@ with prost and tonic 0.14):
 - Only `generic_secret` resources. `DeltaSecrets` isn't needed: each consumer
   asks for a handful of names.
 
+On the same sockets it serves a key service (`olai.keys.v1.KeyService`) for key
+encryption keys, which no consumer receives. See [Key material](#key-material).
+
 Its configuration is a rendered, non-secret file,
 `modules/egress-gateway/secret-server.yaml`:
 
@@ -337,8 +340,73 @@ environment, and only `secret-server` references it.
 
     The egress Envoy is one consumer of the same list (`EgressConfig::sds_consumers`)
     with its secrets taken from the routes, not a special case.
-  - **Adoption** in our services (mangrove, headwaters, `unity-catalog-rs`'s
-    `UC_SERVER_KEK` and service-to-service tokens) comes next (S8).
+  - **Adoption** of SDS tokens in our services (mangrove, headwaters,
+    `unity-catalog-rs`'s service-to-service tokens) comes next. A KEK such as
+    `UC_SERVER_KEK` doesn't go over SDS: it moves to the key service
+    ([Key material](#key-material)).
+
+## Key material
+
+The secret server hands out three kinds of material, in two ways:
+
+| Kind | Examples | Who holds it | How it's served |
+|---|---|---|---|
+| **Tokens** | Bearer tokens, API keys, service-account keys | The consumer, to present to someone else | SDS: the value itself, watched for rotation |
+| **Signing keys** | A JWT issuer's private key | The consumer, to sign with locally | SDS today, as a value. Moving them behind a signing API is possible but not planned |
+| **KEKs** | `UC_SERVER_KEK` and other envelope-encryption keys | The secret server only | The key service: wrap and unwrap, never the key |
+
+A token has to leave the server: the consumer sends it on. A KEK doesn't. All a
+service does with one is wrap and unwrap the data keys (DEKs) of the values it
+seals, and that can be done for it. Keeping the KEK in the server means:
+
+- **A compromised service doesn't take its KEK with it.** It can unwrap while it
+  runs, and the server can see and refuse it. It leaves with no key that opens
+  the database offline, from a backup or after the fact. With SDS the KEK would
+  be in its memory and in every heap dump.
+- **Rotation is the server's job.** A new version becomes active without a
+  restart of the service, old versions keep opening until a rewrap sweep has
+  moved every value, and `min_decrypt` then retires them. With a delivered KEK,
+  each service would carry every old key and its own rotation logic.
+- **One audit point.** Each wrap and unwrap is a call the server can log (by
+  consumer, key and version) and later rate-limit.
+
+The cost is a round trip per unwrap and a dependency on the server being up.
+Values opened while the server is away need the client's opt-in DEK cache (off by
+default, bounded, expiring). New values need the server.
+
+**The key service.** `olai.keys.v1.KeyService` (proto and stubs in
+`olai-key-service`, served by `olai-secret-server`) has four RPCs:
+
+- `Wrap(key, dek)` returns `{version, wrapped}`, under the active version unless
+  the request names one between `min_decrypt` and the active version.
+- `Unwrap(key, version, wrapped)` returns the DEK. It is refused below
+  `min_decrypt` and for an unknown version.
+- `GetKey(key)` returns `{active_version, min_decrypt_version, aliases}`.
+- `WatchKey(key)` streams the same on every change.
+
+It runs on the consumers' SDS sockets with the same caller identity. A consumer
+uses only the keys its listener lists (`listeners[].keys[].{name, env}`), and a
+key that isn't its own answers `NOT_FOUND`. Each keyring arrives in the server's
+environment as JSON: `{versions: {"1": "<base64 of 32 bytes>", …}, active,
+min_decrypt, aliases}`. Keyrings never appear in logs or in `Debug` output.
+
+**The wrap format is olai-store's.** A wrap under version `n` of key `k` is
+AES-256-GCM with the KEK id `k@vn` as associated data. That is exactly what
+`LocalKeyProvider` produces for a KEK of that id. An existing `UC_SERVER_KEK`
+(today a `LocalKeyProvider` KEK with the id `kek-1`) is imported as version 1
+with the alias `kek-1`. Its blobs keep opening and rewrap to the active version.
+
+**The client.** `olai_key_service::KeyServiceProvider` (feature `client`)
+implements olai-store's `KeyProvider`, so `EnvelopeEncryptor` and its `rewrap`
+work unchanged. It answers `active_kek_id()` from a cache that a `WatchKey`
+stream keeps current, so a rotation reaches a running service. While the server
+is being recreated, the provider keeps the versions it last saw and reconnects.
+
+**Rotation** today recreates `secret-server` with the new keyring, as for
+tokens. The topology, runtime and CLI side (keys declared by modules, keyrings
+minted and kept in the keychain, `trestle secret rotate` for them) comes next
+(K3), then adoption in mangrove (K4) and `unity-catalog-rs` (K5). With the
+host-backed source (phase 8), keyrings come from the desktop like other values.
 
 ## The first user: agents and the workgraph function
 
@@ -456,7 +524,7 @@ runs a long-lived endpoint of that shape.
    secret server's environment.
 7. **Rust services as SDS consumers** (implemented, without adoption).
    `SdsCredentialProvider` in `olai-http`, module-declared SDS secrets
-   (`Provides::sds_secrets`), and then adoption by our own services (S8). Done when
+   (`Provides::sds_secrets`), and then adoption of tokens by our own services. Done when
    a service reads a secret over its socket and the secret is gone from its
    environment: `crates/stack-runtime/tests/live_sds.rs` runs olai-http's
    `sds_probe` as a module's container. It checks that the probe reads its token
@@ -470,3 +538,9 @@ runs a long-lived endpoint of that shape.
    code is unchanged.
 10. **Databricks through the egress (optional).** Only for a service principal
     or a static-bearer Databricks MCP service.
+
+KEKs take their own track, next to phases 7 and 8 ([Key material](#key-material)):
+K1 is olai-store's rewrap sweep, K2 the key service in `olai-secret-server` and
+its `KeyProvider` client in `olai-key-service` (implemented), K3 the topology,
+runtime and CLI side, K4 and K5 adoption in mangrove and `unity-catalog-rs`
+(importing `UC_SERVER_KEK` as version 1, aliased `kek-1`), and K6 the desktop.

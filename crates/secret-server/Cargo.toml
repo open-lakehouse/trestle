@@ -1,6 +1,6 @@
 [package]
 name = "olai-secret-server"
-description = "A secret discovery service (SDS) server that hands generic secrets to Envoy and other consumers over per-consumer Unix sockets"
+description = "A secret discovery service (SDS) server that hands generic secrets to Envoy and other consumers over per-consumer Unix sockets, and a key service that wraps their data keys"
 version = "0.0.2"
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,16 @@ path = "src/main.rs"
 
 [dependencies]
 # workspace dependencies (in alphabetical order)
+# The keyrings' key material is standard base64 in their JSON.
+base64 = { workspace = true }
 futures = { workspace = true }
+# The olai.keys.v1 messages and server trait.
+olai-key-service = { path = "../key-service", version = "0.0.1" }
+# `LocalKeyProvider` does the wrapping, so the format is exactly olai-store's.
+olai-store = { path = "../olai-store", version = "0.0.8", features = ["encryption"] }
 prost = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "sync", "fs"] }
@@ -37,12 +44,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 hyper-util = { version = "0.1", features = ["tokio"] }
+# The key service's client, for the in-process key service tests.
+olai-key-service = { path = "../key-service", features = ["client"] }
 tempfile = "3.1"
 tonic = { version = "0.14", default-features = false, features = ["channel"] }
 tower = { version = "0.5", features = ["util"] }
 # Docker test only (`emulator-it`).
 reqwest = { workspace = true }
-serde_json = { workspace = true }
 testcontainers = { version = "0.28" }
 
 [features]
