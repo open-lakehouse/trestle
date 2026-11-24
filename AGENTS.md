@@ -37,7 +37,8 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
   (workspaces, environments, immutable revisions, instances, host-wide slot
   leases) under `TRESTLE_HOME`, behind `trestle ws` / `env create` / `var`
 - `crates/secret-server/` (`olai-secret-server`): SDS server that hands generic
-  secrets to Envoy over per-consumer Unix sockets (lib, bin, and the image
+  secrets to Envoy over per-consumer Unix sockets, and the key service that wraps
+  consumers' data keys on the same sockets (lib, bin, and the image
   `ghcr.io/open-lakehouse/trestle-secret-server`); see
   [`docs/egress-gateway.md`](docs/egress-gateway.md)
 - `crates/key-service/` (`olai-key-service`): the `olai.keys.v1` key service API
