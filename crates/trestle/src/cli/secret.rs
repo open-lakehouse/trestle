@@ -66,6 +66,7 @@ fn run_rotate(ctx: &Ctx, args: RotateArgs) -> Result<()> {
         )));
     }
     super::var::check_key(name)?;
+    super::key::refuse_keyring_var(name, "trestle secret rotate")?;
     if args.target.env.is_none() {
         return Err(Error::other(
             "a secret the secret server holds belongs to an environment (<ws>/<env>)",
@@ -117,7 +118,14 @@ fn run_rotate(ctx: &Ctx, args: RotateArgs) -> Result<()> {
         );
         return Ok(());
     }
-    for instance in &running {
+    recreate_secret_server(ctx, &running)
+}
+
+/// Recreate `secret-server` in each of `running`, with the launch environment it resolves to
+/// now.
+pub(super) fn recreate_secret_server(ctx: &Ctx, running: &[Instance]) -> Result<()> {
+    let runtime = ctx.instances();
+    for instance in running {
         ctx.block_on(async {
             Ok(runtime
                 .recreate_service(&instance.id, SECRET_SERVER_SERVICE)
@@ -132,7 +140,7 @@ fn run_rotate(ctx: &Ctx, args: RotateArgs) -> Result<()> {
 }
 
 /// The instances `target` names whose compose project runs.
-fn running_instances(ctx: &Ctx, target: &Target) -> Result<Vec<Instance>> {
+pub(super) fn running_instances(ctx: &Ctx, target: &Target) -> Result<Vec<Instance>> {
     let instances = super::run::instances_of(ctx, target)?;
     let projects = ctx.block_on(running_projects(ctx))?;
     let mut out = Vec::new();

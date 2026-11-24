@@ -190,6 +190,7 @@ fn run_set(ctx: &Ctx, args: SetArgs) -> Result<()> {
                 )));
             }
             check_key(var)?;
+            super::key::refuse_keyring_var(var, "trestle var set")?;
             let value = read_secret(var)?;
             changes.push((var.clone(), keychain_secret(ctx, &prefix, var, &value)?));
         } else {
@@ -198,6 +199,7 @@ fn run_set(ctx: &Ctx, args: SetArgs) -> Result<()> {
                     .with_hint("pass `--secret KEY` to read a secret from stdin")
             })?;
             check_key(key)?;
+            super::key::refuse_keyring_var(key, "trestle var set")?;
             changes.push((key.to_owned(), VarValue::Literal(value.to_owned())));
         }
     }
@@ -274,6 +276,9 @@ pub(super) fn store_secret(
 }
 
 fn run_unset(ctx: &Ctx, args: UnsetArgs) -> Result<()> {
+    for key in &args.keys {
+        super::key::refuse_keyring_var(key, "trestle var unset")?;
+    }
     let (scope, _) = scope(ctx, &args.target, args.draft, args.local)?;
     let mut removed = Vec::new();
     let mut missing = Vec::new();

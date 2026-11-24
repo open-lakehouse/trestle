@@ -1024,3 +1024,447 @@ fn a_route_credential_rotates_into_the_running_instances() {
             .contains("<ws>/<env>")
     );
 }
+
+/// The keyring variable the planner derives for `keys-app`'s key `server-kek`.
+const KEYRING_VAR: &str = "TRESTLE_KEYRING_KEYS_APP__SERVER_KEK";
+/// Two existing 32-byte keys, as `openssl rand -base64 32` prints them.
+const EXISTING_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+const OTHER_KEY: &str = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+
+/// `demo/dev` with `keys-app` (one container sealing under the key `server-kek`), committed.
+fn keys_demo(home: &Home) {
+    use olai_stack_topology::{
+        DataModule, ModuleId, Placement, Provides, RenderSpec, Role, ServiceSpec,
+    };
+    let module = DataModule {
+        id: ModuleId::from("keys-app"),
+        model: None,
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "app".into(),
+            role: Role::new("app"),
+            placement: Placement::Container {
+                service: "app".into(),
+            },
+            endpoints: vec![],
+            depends_on: vec![],
+            base_path: String::new(),
+        }],
+        provides: Provides {
+            keys: vec!["server-kek".into()],
+            ..Provides::default()
+        },
+        knobs: vec![],
+        renders: RenderSpec {
+            fragment: "services:\n  app:\n    image: example/app:1\n".into(),
+            files: vec![],
+        }
+        .for_compose(),
+    };
+    let dir = home.path("keys-env");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("keys-app.module.yaml"),
+        serde_yaml::to_string(&module).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("env.toml"),
+        r#"version = 8
+
+[selection]
+modules = ["keys-app"]
+
+[selection.gateway]
+enabled = false
+
+[catalog]
+manifests = ["keys-app.module.yaml"]
+"#,
+    )
+    .unwrap();
+    home.ok(&["ws", "create", "demo"]);
+    home.ok(&["env", "create", "demo/dev", "--from", dir.to_str().unwrap()]);
+    home.ok(&["env", "commit", "demo/dev"]);
+}
+
+/// The stored keyring of `keys-app/server-kek` on `demo/dev`, as JSON.
+fn stored_keyring(home: &Home) -> Value {
+    let key = home.keychain_key(&format!("^{ID}/{KEYRING_VAR}$"));
+    serde_json::from_str(home.keychain()[&key].as_str().unwrap()).unwrap()
+}
+
+/// What `key show --json` reports.
+fn shown(home: &Home) -> Value {
+    home.json(
+        &["key", "show", "demo/dev", "keys-app/server-kek", "--json"],
+        "keyring",
+    )
+}
+
+#[test]
+fn a_key_is_imported_rotated_retired_and_shown_without_material() {
+    let home = Home::new();
+    keys_demo(&home);
+
+    // Only a key a module declares.
+    let err = home.fails(&["key", "rotate", "demo/dev", "keys-app/other"]);
+    assert!(
+        err.contains("`keys-app/other` is not a key of demo/dev") && err.contains("server-kek"),
+        "{err}"
+    );
+    assert!(
+        home.fails(&["key", "rotate", "demo/dev", "server-kek"])
+            .contains("<module>/<key>")
+    );
+    assert!(
+        home.fails(&["key", "show", "demo/dev", "keys-app/server-kek"])
+            .contains("has no keyring")
+    );
+    // Not a key: refused before anything is stored.
+    let err = home
+        .cmd(&["key", "import", "demo/dev", "keys-app/server-kek"])
+        .write_stdin("AQID")
+        .output()
+        .unwrap();
+    assert!(!err.status.success());
+    assert!(
+        String::from_utf8_lossy(&err.stderr).contains("a key is 32 bytes"),
+        "{}",
+        String::from_utf8_lossy(&err.stderr)
+    );
+    assert!(home.keychain().is_empty());
+
+    // Import an existing key as version 1, keeping its old id as an alias.
+    let out = home.ok_with_stdin(
+        &[
+            "key",
+            "import",
+            "demo/dev",
+            "keys-app/server-kek",
+            "--alias",
+            "kek-1",
+        ],
+        &format!("{EXISTING_KEY}\n"),
+    );
+    assert!(
+        out.contains("imported keys-app/server-kek as server-kek@v1 (alias kek-1) on demo/dev"),
+        "{out}"
+    );
+    assert!(out.contains("only copy"), "{out}");
+    assert!(out.contains("no instance of demo/dev is running"), "{out}");
+    assert!(!out.contains(EXISTING_KEY), "{out}");
+    assert_eq!(
+        stored_keyring(&home),
+        serde_json::json!({
+            "versions": {"1": EXISTING_KEY}, "active": 1, "min_decrypt": 1,
+            "aliases": {"kek-1": 1}
+        })
+    );
+    // Once only.
+    let err = home
+        .cmd(&["key", "import", "demo/dev", "keys-app/server-kek"])
+        .write_stdin(OTHER_KEY)
+        .output()
+        .unwrap();
+    assert!(!err.status.success());
+    assert!(String::from_utf8_lossy(&err.stderr).contains("already has a keyring"));
+
+    // Rotate in the running instance: a random v2, active, and the secret server recreated.
+    home.ok(&["up", "demo/dev"]);
+    let out = home.ok(&["key", "rotate", "demo/dev", "keys-app/server-kek"]);
+    assert!(out.contains("server-kek@v2 is active on demo/dev"), "{out}");
+    assert!(out.contains("--below 2 --confirm-swept"), "{out}");
+    assert!(
+        out.contains("recreated secret-server in demo_dev_r1"),
+        "{out}"
+    );
+    let ring = stored_keyring(&home);
+    assert_eq!(ring["active"], 2);
+    assert_eq!(ring["versions"]["1"], EXISTING_KEY);
+    let v2 = ring["versions"]["2"].as_str().unwrap().to_owned();
+    assert_ne!(v2, EXISTING_KEY);
+    assert!(!out.contains(&v2), "{out}");
+
+    // Retire: above the active version, or unconfirmed, is refused and changes nothing.
+    let err = home.fails(&[
+        "key",
+        "retire",
+        "demo/dev",
+        "keys-app/server-kek",
+        "--below",
+        "3",
+        "--confirm-swept",
+    ]);
+    assert!(
+        err.contains("can't retire versions below 3: the active version is 2"),
+        "{err}"
+    );
+    let err = home.fails(&[
+        "key",
+        "retire",
+        "demo/dev",
+        "keys-app/server-kek",
+        "--below",
+        "2",
+    ]);
+    assert!(
+        err.contains("unreadable")
+            && err.contains("must report zero blobs below 2")
+            && err.contains("server-kek@v1")
+            && err.contains("--confirm-swept"),
+        "{err}"
+    );
+    assert_eq!(stored_keyring(&home), ring);
+    let out = home.ok(&[
+        "key",
+        "retire",
+        "demo/dev",
+        "keys-app/server-kek",
+        "--below",
+        "2",
+        "--confirm-swept",
+    ]);
+    assert!(out.contains("only versions 2 and up"), "{out}");
+    assert!(out.contains("recreated secret-server"), "{out}");
+    let retired = stored_keyring(&home);
+    assert_eq!(retired["min_decrypt"], 2);
+    // The material of every version stays.
+    assert_eq!(retired["versions"]["1"], EXISTING_KEY);
+    assert_eq!(retired["versions"]["2"], v2.as_str());
+    // Again: nothing to do.
+    let out = home.ok(&[
+        "key",
+        "retire",
+        "demo/dev",
+        "keys-app/server-kek",
+        "--below",
+        "1",
+        "--confirm-swept",
+    ]);
+    assert!(
+        out.contains("already unwraps only versions 2 and up"),
+        "{out}"
+    );
+
+    // Show: everything but the material.
+    let view = shown(&home);
+    assert_eq!(
+        view,
+        serde_json::json!({
+            "key": "keys-app/server-kek",
+            "variable": KEYRING_VAR,
+            "versions": [1, 2],
+            "active": 2,
+            "min_decrypt": 2,
+            "aliases": {"kek-1": 1},
+        })
+    );
+    let human = home.ok(&["key", "show", "demo/dev", "keys-app/server-kek"]);
+    assert!(human.contains("1 (retired), 2"), "{human}");
+    for text in [human, view.to_string()] {
+        assert!(
+            !text.contains(EXISTING_KEY) && !text.contains(&v2),
+            "{text}"
+        );
+    }
+
+    // The keyring is in the keychain, and in no file under the trestle home.
+    let mut stack = vec![home.path("home")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                let text = String::from_utf8_lossy(&bytes);
+                assert!(
+                    !text.contains(EXISTING_KEY) && !text.contains(&v2),
+                    "key material in {}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_key_imports_from_an_existing_secret() {
+    let home = Home::new();
+    keys_demo(&home);
+    // From the environment's keychain secret.
+    home.ok_with_stdin(
+        &["var", "set", "demo/dev", "--secret", "UC_SERVER_KEK"],
+        EXISTING_KEY,
+    );
+    home.ok(&[
+        "key",
+        "import",
+        "demo/dev",
+        "keys-app/server-kek",
+        "--from",
+        "UC_SERVER_KEK",
+        "--alias",
+        "kek-1",
+    ]);
+    assert_eq!(stored_keyring(&home)["versions"]["1"], EXISTING_KEY);
+    assert_eq!(shown(&home)["aliases"], serde_json::json!({"kek-1": 1}));
+
+    // From this shell, when the environment doesn't set it.
+    let other = Home::new();
+    keys_demo(&other);
+    let out = other
+        .cmd(&[
+            "key",
+            "import",
+            "demo/dev",
+            "keys-app/server-kek",
+            "--from",
+            "SHELL_KEK",
+        ])
+        .env("SHELL_KEK", OTHER_KEY)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stored_keyring(&other)["versions"]["1"], OTHER_KEY);
+    assert!(
+        other
+            .fails(&[
+                "key",
+                "import",
+                "demo/dev",
+                "keys-app/server-kek",
+                "--from",
+                "NOWHERE_KEK"
+            ])
+            .contains("already has a keyring")
+    );
+}
+
+#[test]
+fn rotating_with_no_keyring_mints_version_one() {
+    let home = Home::new();
+    keys_demo(&home);
+    let out = home.ok(&["key", "rotate", "demo/dev", "keys-app/server-kek"]);
+    assert!(out.contains("server-kek@v1 is active"), "{out}");
+    assert!(!out.contains("--confirm-swept"), "{out}");
+    let view = shown(&home);
+    assert_eq!(view["versions"], serde_json::json!([1]));
+    assert_eq!(view["aliases"], serde_json::json!({}));
+    assert!(
+        home.fails(&[
+            "key",
+            "import",
+            "demo/dev",
+            "keys-app/server-kek",
+            "--from",
+            "NOWHERE_KEK"
+        ])
+        .contains("already has a keyring")
+    );
+    let missing = Home::new();
+    keys_demo(&missing);
+    assert!(
+        missing
+            .fails(&[
+                "key",
+                "import",
+                "demo/dev",
+                "keys-app/server-kek",
+                "--from",
+                "NOWHERE_KEK"
+            ])
+            .contains("`NOWHERE_KEK` is set neither on demo/dev nor in this shell")
+    );
+}
+
+/// A stored keyring that lost a version (edited by hand, say) is refused, not written over,
+/// and so is anything that would write or remove a keyring other than `trestle key`.
+#[test]
+fn keyring_writes_that_drop_material_are_refused() {
+    let home = Home::new();
+    keys_demo(&home);
+    home.ok_with_stdin(
+        &[
+            "key",
+            "import",
+            "demo/dev",
+            "keys-app/server-kek",
+            "--alias",
+            "kek-1",
+        ],
+        EXISTING_KEY,
+    );
+    home.ok(&["key", "rotate", "demo/dev", "keys-app/server-kek"]);
+    let before = stored_keyring(&home);
+
+    // The keychain entry loses version 1 outside `trestle key` (edited by hand).
+    let key = home.keychain_key(&format!("^{ID}/{KEYRING_VAR}$"));
+    let mut tampered = before.clone();
+    tampered["versions"].as_object_mut().unwrap().remove("1");
+    tampered["aliases"] = serde_json::json!({});
+    tampered["min_decrypt"] = 2.into();
+    let mut keychain = home.keychain();
+    keychain.insert(key.clone(), tampered.to_string().into());
+    std::fs::write(
+        home.path("keychain.json"),
+        serde_json::to_string(&keychain).unwrap(),
+    )
+    .unwrap();
+    // `show` reads what is there, but no write builds on it: that would make the loss
+    // permanent.
+    assert_eq!(shown(&home)["versions"], serde_json::json!([2]));
+    let err = home.fails(&["key", "rotate", "demo/dev", "keys-app/server-kek"]);
+    assert!(
+        err.contains("missing version 1") && err.contains("restore"),
+        "{err}"
+    );
+    let err = home.fails(&[
+        "key",
+        "retire",
+        "demo/dev",
+        "keys-app/server-kek",
+        "--below",
+        "2",
+        "--confirm-swept",
+    ]);
+    assert!(err.contains("missing version 1"), "{err}");
+
+    // `var set`, `var unset` and `secret rotate` never touch a keyring.
+    let err = home.fails(&["var", "unset", "demo/dev", KEYRING_VAR]);
+    assert!(err.contains("keyrings are add-only"), "{err}");
+    let err = home
+        .cmd(&["var", "set", "demo/dev", "--secret", KEYRING_VAR])
+        .write_stdin("{}")
+        .output()
+        .unwrap();
+    assert!(!err.status.success());
+    assert!(String::from_utf8_lossy(&err.stderr).contains("only `trestle key` writes them"));
+    assert!(
+        home.fails(&["var", "set", "demo/dev", &format!("{KEYRING_VAR}=x")])
+            .contains("add-only")
+    );
+    assert!(
+        home.fails(&["secret", "rotate", "demo/dev", KEYRING_VAR])
+            .contains("add-only")
+    );
+    assert_eq!(
+        home.keychain()[&key].as_str(),
+        Some(tampered.to_string().as_str())
+    );
+
+    // Removing the environment keeps the keyring's keychain entry.
+    let out = home.ok(&["env", "rm", "demo/dev"]);
+    assert!(out.contains("kept the keyring"), "{out}");
+    assert!(home.keychain().contains_key(&key));
+}

@@ -396,11 +396,12 @@ async fn run_rm(ctx: &Ctx, args: RmArgs) -> Result<()> {
         &format!("workspace `{}`", ws.name),
     )
     .await?;
-    let refs = workspace_keychain_refs(&ctx.store, &ws)?;
+    let (refs, kept) = super::key::keep_keyrings(workspace_keychain_refs(&ctx.store, &ws)?);
     ctx.store.delete_workspace(&ws.id)?;
     for r in refs {
         ctx.secrets().delete(&r.key)?;
     }
+    super::key::report_kept(&kept);
     if ws.mesh {
         forget_mesh(ctx, &ws.name).await;
     }

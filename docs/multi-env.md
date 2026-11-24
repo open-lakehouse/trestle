@@ -368,6 +368,7 @@ trestle env commit demo/dev                                     # r1
 trestle var set demo/dev LOG_LEVEL=info
 printf %s "$TOKEN" | trestle var set demo/dev --secret TOKEN
 printf %s "$KEY" | trestle secret rotate demo/dev SEARCH_API_KEY  # an egress route's credential
+trestle key rotate demo/dev <module>/<key>                         # a module key's keyring (add-only)
 trestle up demo/dev                     # the head; `demo/dev@1` for a revision
 trestle ps
 trestle health demo/dev

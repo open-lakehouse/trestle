@@ -5,6 +5,7 @@ pub mod enrich_openapi;
 pub mod env;
 pub mod env_store;
 pub mod generate;
+pub mod key;
 pub mod list;
 pub mod neon;
 pub mod new;
@@ -86,6 +87,10 @@ pub enum Commands {
     /// of the environment's running instances with it.
     #[command(subcommand)]
     Secret(secret::SecretCommand),
+    /// Keyrings of the keys modules seal their data under through the secret server:
+    /// `import`, `rotate`, `retire` (add-only) and `show`.
+    #[command(subcommand)]
+    Key(key::KeyCommand),
     /// Start a revision of an environment (the head by default): `<ws>/<env>[@<rev>]`.
     Up(run::UpArgs),
     /// Stop the instances of a workspace, an environment or a revision.
@@ -122,6 +127,7 @@ pub fn run() -> Result<()> {
         Commands::State(cmd) => team::run(cmd),
         Commands::Var(cmd) => var::run(cmd),
         Commands::Secret(cmd) => secret::run(cmd),
+        Commands::Key(cmd) => key::run(cmd),
         Commands::Up(args) => run::run_up(args),
         Commands::Down(args) => run::run_down(args),
         Commands::Ps(args) => run::run_ps(args),
@@ -247,6 +253,32 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn key_commands_take_a_module_key_and_never_material() {
+        let cli = parse(&[
+            "trestle",
+            "key",
+            "retire",
+            "demo/dev",
+            "keys-app/server-kek",
+            "--below",
+            "2",
+            "--confirm-swept",
+        ]);
+        let Commands::Key(key::KeyCommand::Retire(args)) = cli.command else {
+            panic!("expected key retire");
+        };
+        assert_eq!(args.key.key.to_string(), "keys-app/server-kek");
+        assert_eq!(args.below, 2);
+        assert!(args.confirm_swept);
+        // `--below` is required; no argument carries key material.
+        assert!(Cli::try_parse_from(["trestle", "key", "retire", "demo/dev", "m/k"]).is_err());
+        assert!(
+            Cli::try_parse_from(["trestle", "key", "import", "demo/dev", "m/k", "AQID"]).is_err()
+        );
+        assert!(Cli::try_parse_from(["trestle", "key", "rotate", "demo/dev", "nokey"]).is_err());
     }
 
     #[test]
