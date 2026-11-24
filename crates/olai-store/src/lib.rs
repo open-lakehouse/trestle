@@ -110,17 +110,20 @@ pub use backend::sqlite::{
     SqlStore, migrate as migrate_sql, migrator as sql_migrator, migrator_with as sql_migrator_with,
 };
 #[cfg(feature = "encryption")]
-pub use encryption::{EnvelopeEncryptor, KekId, KeyProvider, LocalKeyProvider};
+pub use encryption::{EnvelopeEncryptor, KekId, KeyProvider, LocalKeyProvider, envelope_kek_id};
 pub use error::{Error, Result};
 pub use filter::{CompareOp, FieldPath, Filter, Predicate};
 pub use index::PropertyIndex;
 pub use label::Label;
 pub use managed::ManagedObjectStore;
+#[cfg(feature = "encryption")]
+pub use managed::{KekUsage, RewrapFailure, RewrapFailureKind, RewrapOptions, RewrapReport};
 pub use name::{EMPTY_RESOURCE_NAME, ResourceName};
 pub use object::{Association, Object};
 pub use reference::ResourceRef;
 pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, ResourceTypeDescriptor};
 pub use store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, SecretObjectReader, StoreExec, StoreTx, Transactional,
+    ObjectStoreReader, Precondition, SecretObjectReader, SensitivePage, StoreExec, StoreTx,
+    Transactional,
 };

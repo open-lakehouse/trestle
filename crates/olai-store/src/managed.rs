@@ -17,6 +17,11 @@
 //! fields at all: writing a resource that has one is an [`Error::InvalidArgument`], never a silent
 //! drop.
 //!
+//! Rotating the KEK that seals these blobs is covered in the
+//! [`encryption` module docs](crate::encryption#kek-rotation):
+//! `ManagedObjectStore::kek_usage` counts blobs per KEK and `ManagedObjectStore::rewrap_all`
+//! sweeps them onto the active one (both behind the `encryption` feature).
+//!
 //! Because sensitive fields never enter `properties`, they are absent from the searchable payload:
 //! encrypting them does not reduce searchability, and there is no need for (and this crate does
 //! not provide) searchable encryption.
@@ -49,6 +54,11 @@ use crate::store::{
     ObjectStoreReader, Precondition, SecretObjectReader, StoreTx, Transactional, TxnFn,
 };
 use crate::{Error, Result};
+
+#[cfg(feature = "encryption")]
+mod rotation;
+#[cfg(feature = "encryption")]
+pub use rotation::{KekUsage, RewrapFailure, RewrapFailureKind, RewrapOptions, RewrapReport};
 
 /// A registry-aware object store that enforces field roles — the primary store API.
 ///
@@ -349,6 +359,17 @@ impl<L: Label, S: ObjectStoreReader<L>> ObjectStoreReader<L> for ManagedObjectSt
     async fn get_sensitive(&self, id: &Uuid) -> Result<Option<bytes::Bytes>> {
         self.inner.get_sensitive(id).await
     }
+
+    async fn list_sensitive(
+        &self,
+        label: L,
+        max_results: Option<usize>,
+        page_token: Option<String>,
+    ) -> Result<crate::store::SensitivePage> {
+        self.inner
+            .list_sensitive(label, max_results, page_token)
+            .await
+    }
 }
 
 // --- ObjectStore impl ---
@@ -599,7 +620,7 @@ impl<L: Label, S: Transactional<L>> Transactional<L> for ManagedObjectStore<L, S
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::InMemoryStore;
     use crate::registry::{ResourceFieldDescriptor, ResourceTypeDescriptor};
@@ -611,7 +632,7 @@ mod tests {
     // --- A minimal Label implementation ---
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    enum TestLabel {
+    pub(super) enum TestLabel {
         Widget,
         Other,
     }
@@ -691,15 +712,15 @@ mod tests {
         },
     ];
 
-    fn registry() -> ResourceRegistry<TestLabel> {
+    pub(super) fn registry() -> ResourceRegistry<TestLabel> {
         ResourceRegistry::from_static(DESCRIPTORS)
     }
 
-    fn rn(s: &str) -> ResourceName {
+    pub(super) fn rn(s: &str) -> ResourceName {
         ResourceName::from_naive_str_split(s)
     }
 
-    fn props(json: serde_json::Value) -> Option<serde_json::Value> {
+    pub(super) fn props(json: serde_json::Value) -> Option<serde_json::Value> {
         Some(json)
     }
 
