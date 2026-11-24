@@ -402,10 +402,60 @@ work unchanged. It answers `active_kek_id()` from a cache that a `WatchKey`
 stream keeps current, so a rotation reaches a running service. While the server
 is being recreated, the provider keeps the versions it last saw and reconnects.
 
-**Rotation** today recreates `secret-server` with the new keyring, as for
-tokens. The topology, runtime and CLI side (keys declared by modules, keyrings
-minted and kept in the keychain, `trestle secret rotate` for them) comes next
-(K3), then adoption in mangrove (K4) and `unity-catalog-rs` (K5). With the
+**The module.** A module declares the keys it seals under in `Provides::keys`
+(or `Module::keys_in`, by knobs), by name:
+
+```rust
+Provides {
+    keys: vec!["server-kek".into()],
+    ..Provides::default()
+}
+```
+
+The planner treats it as an SDS consumer. The module gets its `sds-<module>`
+socket volume, `TRESTLE_SDS_SOCKET`, and `TRESTLE_KEY_<KEY>` (here
+`TRESTLE_KEY_SERVER_KEK=server-kek`), which it passes to
+`KeyServiceProvider::connect`. The secret server's listener for the module lists
+the key (`keys: [{name: server-kek, env: TRESTLE_KEYRING_<MODULE>__SERVER_KEK}]`).
+That variable is derived by the planner and declared, as required, on the
+secret server alone, so the module never names it and no other rendered file
+does either.
+
+**The CLI.** `trestle key` keeps each keyring in this machine's keychain,
+stored on the environment the way `trestle var set --secret` stores a secret:
+
+```bash
+# version 1 from an existing key, keeping the id its blobs were sealed under
+trestle key import demo/dev unity-catalog-rs/server-kek --from UC_SERVER_KEK --alias kek-1
+# a new random version, made active; secret-server is recreated in the running instances
+trestle key rotate demo/dev unity-catalog-rs/server-kek
+# once the consumer's sweep (rewrap_all, then kek_usage) reports zero blobs below 2
+trestle key retire demo/dev unity-catalog-rs/server-kek --below 2 --confirm-swept
+# versions, active, min_decrypt and aliases; never material
+trestle key show demo/dev unity-catalog-rs/server-kek
+```
+
+- **Keyrings are add-only.** No command removes a version's material. `retire`
+  only raises `min_decrypt`, so a blob the sweep missed can still be recovered.
+  Every write checks that the new keyring keeps each version and alias of the
+  stored one, refuses to build on a stored keyring that has lost a version, and
+  reads the result back. `var set`, `var unset` and `secret rotate` refuse the
+  keyring variables, and `env rm` / `ws rm` keep their keychain entries.
+- **`retire` refuses** an `n` above the active version, and it refuses without
+  `--confirm-swept`: anything still sealed under a lower version stops opening.
+- **Rotation** recreates `secret-server` with the new keyring, as for tokens.
+  The module keeps running, and its provider's watch picks up the new active
+  version. `KeyHandle::replace` is the later seam for a live swap without the
+  recreate.
+- **Back the keychain up.** It holds the only copy of each keyring. Losing it
+  makes everything sealed under the keyring unreadable. An encrypted
+  `trestle key export` is a follow-up ([#471](https://github.com/open-lakehouse/trestle/issues/471)).
+- **Not on a team's state yet.** `--secret` values go to each machine's own
+  keychain, so two machines would hold different keyrings for the same sealed
+  data (a hosted database, say). `trestle key` refuses writes on a team's state
+  until there is a shared keyring source.
+
+Next comes adoption in mangrove (K4) and `unity-catalog-rs` (K5). With the
 host-backed source (phase 8), keyrings come from the desktop like other values.
 
 ## The first user: agents and the workgraph function

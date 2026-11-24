@@ -264,3 +264,94 @@ fn two_machines_share_a_workspace_but_not_instances_or_local_secrets() {
     bob.ok(&["state", "detach", "team"]);
     assert!(bob.ok(&["state", "list"]).contains("no shared state"));
 }
+
+/// A team's machines each have their own keychain, so a keyring written on one would differ
+/// from another's for the same sealed data: every `trestle key` write is refused on a team's
+/// state, and nothing is stored.
+#[test]
+fn keyrings_are_refused_on_a_teams_state() {
+    use olai_stack_topology::{
+        DataModule, ModuleId, Placement, Provides, RenderSpec, Role, ServiceSpec,
+    };
+    let Some(team) = Team::new() else { return };
+    let alice = Machine::new(&team);
+    alice.ok(&["state", "init", "--neon", "proj", "--name", "team"]);
+    let module = DataModule {
+        id: ModuleId::from("keys-app"),
+        model: None,
+        display_name: None,
+        summary: None,
+        category: None,
+        provider_of: None,
+        requires: vec![],
+        conflicts_with: vec![],
+        needs: vec![],
+        service_specs: vec![ServiceSpec {
+            name: "app".into(),
+            role: Role::new("app"),
+            placement: Placement::Container {
+                service: "app".into(),
+            },
+            endpoints: vec![],
+            depends_on: vec![],
+            base_path: String::new(),
+        }],
+        provides: Provides {
+            keys: vec!["server-kek".into()],
+            ..Provides::default()
+        },
+        knobs: vec![],
+        renders: RenderSpec {
+            fragment: "services:\n  app:\n    image: example/app:1\n".into(),
+            files: vec![],
+        }
+        .for_compose(),
+    };
+    let dir = alice.path("keys-env");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("keys-app.module.yaml"),
+        serde_yaml::to_string(&module).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("env.toml"),
+        "version = 8\n\n[selection]\nmodules = [\"keys-app\"]\n\n[selection.gateway]\nenabled = false\n\n[catalog]\nmanifests = [\"keys-app.module.yaml\"]\n",
+    )
+    .unwrap();
+    alice.ok(&["--state", "team", "ws", "create", "demo"]);
+    alice.ok(&[
+        "--state",
+        "team",
+        "env",
+        "create",
+        "demo/dev",
+        "--from",
+        dir.to_str().unwrap(),
+    ]);
+    alice.ok(&["--state", "team", "env", "commit", "demo/dev"]);
+
+    let key = "keys-app/server-kek";
+    for args in [
+        vec!["key", "rotate", "demo/dev", key],
+        vec!["key", "import", "demo/dev", key, "--from", "UC_SERVER_KEK"],
+        vec![
+            "key",
+            "retire",
+            "demo/dev",
+            key,
+            "--below",
+            "1",
+            "--confirm-swept",
+        ],
+    ] {
+        let mut full = vec!["--state", "team"];
+        full.extend(args);
+        let err = alice.fails(&full);
+        assert!(
+            err.contains("on a team's state") && err.contains("this machine's own state"),
+            "{err}"
+        );
+    }
+    assert!(!alice.path("keychain.json").exists());
+}

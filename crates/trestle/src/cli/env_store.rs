@@ -489,11 +489,12 @@ pub(super) fn run_rm(args: RmArgs) -> Result<()> {
         args.force,
         &format!("environment `{}/{}`", ws.name, env.name),
     ))?;
-    let refs = environment_keychain_refs(&ctx.store, &env)?;
+    let (refs, kept) = super::key::keep_keyrings(environment_keychain_refs(&ctx.store, &env)?);
     ctx.store.delete_environment(&env.id)?;
     for r in refs {
         ctx.secrets().delete(&r.key)?;
     }
+    super::key::report_kept(&kept);
     println!("deleted {}/{}", ws.name, env.name);
     Ok(())
 }

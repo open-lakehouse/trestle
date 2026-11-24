@@ -159,6 +159,39 @@ printf %s "$NEW_KEY" | trestle secret rotate demo/dev SEARCH_API_KEY
 See [`docs/egress-gateway.md`](../../docs/egress-gateway.md) for the egress gateway and
 its secret server.
 
+### `trestle key import|rotate|retire|show <ws>/<env>[@<n>] <module>/<key>`
+
+Manages the keyrings of the keys modules seal their data under through the secret
+server's key service (`Provides::keys`). The secret server alone holds a keyring; the
+module only asks it to wrap and unwrap its data keys.
+
+```bash
+trestle key import demo/dev unity-catalog-rs/server-kek --from UC_SERVER_KEK --alias kek-1
+trestle key rotate demo/dev unity-catalog-rs/server-kek
+# recreated secret-server in demo_dev_r1
+trestle key retire demo/dev unity-catalog-rs/server-kek --below 2 --confirm-swept
+trestle key show demo/dev unity-catalog-rs/server-kek [--json]
+```
+
+- `import` makes version 1 from an existing 32-byte key (standard base64). It reads
+  the key from stdin, or from an existing secret with `--from <VAR>`: the
+  environment's or workspace's vars, else this shell. `--alias` keeps the id the key
+  had before, so what it sealed still opens.
+- `rotate` adds a random version and makes it active. If the key has no keyring yet,
+  it mints version 1.
+- `retire --below <n>` raises `min_decrypt`. It refuses an `n` above the active
+  version, and refuses without `--confirm-swept`: the consumer's sweep (olai-store's
+  `rewrap_all`, then `kek_usage`) must report zero blobs below `n` first.
+- `show` prints versions, the active version, `min_decrypt` and aliases, never key
+  material.
+- Writes are **add-only**. None removes a version's material, and a write that would
+  drop a version is refused. Each one reads the stored keyring back to check it, then
+  recreates `secret-server` in the running instances. `var set`, `var unset` and
+  `secret rotate` refuse keyring variables, and `env rm` / `ws rm` keep their
+  keychain entries.
+- The keychain holds the only copy of each keyring, so back it up. On a team's state
+  (`--state`), writes are refused because each machine has its own keychain.
+
 ## Troubleshooting
 
 - **`git ... failed` when using a git template.** Git templates are cloned with
