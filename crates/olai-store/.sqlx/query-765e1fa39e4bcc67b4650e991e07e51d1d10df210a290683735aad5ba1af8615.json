@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE objects SET sensitive = $1 WHERE id = $2 AND sensitive = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Uuid",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "765e1fa39e4bcc67b4650e991e07e51d1d10df210a290683735aad5ba1af8615"
+}

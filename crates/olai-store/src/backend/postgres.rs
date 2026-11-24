@@ -59,7 +59,7 @@ use crate::name::ResourceName;
 use crate::object::{Association, Object};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, StoreTx, Transactional, TxnFn,
+    ObjectStoreReader, Precondition, SensitivePrecondition, StoreTx, Transactional, TxnFn,
 };
 use crate::{Error, Result};
 
@@ -976,23 +976,45 @@ async fn op_list_sensitive(
 }
 
 /// Replace only the `sensitive` column, leaving properties and version untouched.
-async fn op_set_sensitive(conn: &mut PgConnection, id: &Uuid, blob: &[u8]) -> Result<()> {
-    let affected = sqlx::query!("UPDATE objects SET sensitive = $1 WHERE id = $2", blob, id)
-        .execute(conn)
+async fn op_set_sensitive<L: Label>(
+    conn: &mut PgConnection,
+    id: &Uuid,
+    blob: &[u8],
+    precondition: SensitivePrecondition<'_>,
+) -> Result<()> {
+    let affected = match precondition {
+        SensitivePrecondition::Any => {
+            sqlx::query!("UPDATE objects SET sensitive = $1 WHERE id = $2", blob, id)
+                .execute(&mut *conn)
+                .await?
+                .rows_affected()
+        }
+        // The comparison is in the `WHERE` clause, so the check and the write are one statement.
+        SensitivePrecondition::Matches(expected) => sqlx::query!(
+            "UPDATE objects SET sensitive = $1 WHERE id = $2 AND sensitive = $3",
+            blob,
+            id,
+            expected
+        )
+        .execute(&mut *conn)
         .await?
-        .rows_affected();
+        .rows_affected(),
+    };
     if affected == 0 {
-        return Err(Error::NotFound);
+        return Err(match precondition {
+            SensitivePrecondition::Any => Error::NotFound,
+            SensitivePrecondition::Matches(_) => classify_miss::<L>(conn, id).await,
+        });
     }
     Ok(())
 }
 
-/// A zero-row conditional write means either the row is gone (`NotFound`) or its version moved
-/// (`Conflict`). Re-read to disambiguate.
+/// A zero-row conditional write means either the row is gone (`NotFound`) or its version
+/// or sensitive blob moved (`Conflict`). Re-read to disambiguate.
 async fn classify_miss<L: Label>(conn: &mut PgConnection, id: &Uuid) -> Error {
     match op_get::<L>(conn, id).await {
         Ok(_) => {
-            tracing::debug!(id = %id, "CAS precondition conflict (version moved)");
+            tracing::debug!(id = %id, "CAS precondition conflict");
             Error::Conflict
         }
         Err(Error::NotFound) => Error::NotFound,
@@ -1473,9 +1495,14 @@ impl<L: Label> ObjectStore<L> for PgStore<L> {
             otel.status_code = tracing::field::Empty, error.type = tracing::field::Empty,
         )
     )]
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
-        let out = op_set_sensitive(&mut conn, id, &sensitive).await;
+        let out = op_set_sensitive::<L>(&mut conn, id, &sensitive, precondition).await;
         record_err(&out);
         out
     }
@@ -1795,9 +1822,14 @@ impl<L: Label> ObjectStore<L> for PgTx<L> {
             otel.status_code = tracing::field::Empty, error.type = tracing::field::Empty,
         )
     )]
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
         let mut tx = self.tx.lock().await;
-        let out = op_set_sensitive(&mut tx, id, &sensitive).await;
+        let out = op_set_sensitive::<L>(&mut tx, id, &sensitive, precondition).await;
         record_err(&out);
         out
     }
@@ -2017,6 +2049,7 @@ mod tests {
         conformance::transaction_commit(&fresh(&pool).await).await;
         conformance::sensitive_blob_roundtrip(&fresh(&pool).await).await;
         conformance::list_sensitive_pages_blobs(&fresh(&pool).await).await;
+        conformance::sensitive_blob_cas(&fresh(&pool).await).await;
         conformance::search_object_predicates(&fresh(&pool).await).await;
         conformance::search_indexed_path_shapes(&fresh(&pool).await).await;
         conformance::search_object_pagination_filters_completely(&fresh(&pool).await).await;

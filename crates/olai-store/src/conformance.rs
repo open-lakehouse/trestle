@@ -34,7 +34,8 @@ use std::str::FromStr;
 use crate::filter::Filter;
 use crate::name::ResourceName;
 use crate::store::{
-    EdgeEndpoint, EdgeQuery, ObjectStoreReader, Precondition, StoreExec, Transactional,
+    EdgeEndpoint, EdgeQuery, ObjectStoreReader, Precondition, SensitivePrecondition, StoreExec,
+    Transactional,
 };
 use crate::{Error, Label};
 
@@ -377,7 +378,10 @@ pub async fn sensitive_blob_roundtrip<S: StoreExec<ConformanceLabel>>(store: &S)
     // `set_sensitive` rewrites only the blob, leaving the object's version untouched.
     let before = ObjectStoreReader::get(store, &obj.id).await.unwrap();
     let blob3 = Bytes::from_static(b"rewrapped");
-    store.set_sensitive(&obj.id, blob3.clone()).await.unwrap();
+    store
+        .set_sensitive(&obj.id, blob3.clone(), SensitivePrecondition::Any)
+        .await
+        .unwrap();
     assert_eq!(
         store.get_sensitive(&obj.id).await.unwrap().as_deref(),
         Some(&blob3[..]),
@@ -394,6 +398,140 @@ pub async fn sensitive_blob_roundtrip<S: StoreExec<ConformanceLabel>>(store: &S)
     assert!(
         matches!(store.get_sensitive(&obj.id).await, Ok(None)),
         "blob must be gone (Ok(None)) once the object is deleted"
+    );
+}
+
+/// [`set_sensitive`](crate::ObjectStore::set_sensitive) with
+/// [`SensitivePrecondition::Matches`] is a compare-and-swap on the stored blob.
+///
+/// A matching expected blob is replaced; a stale one is rejected with
+/// [`Error::Conflict`] and leaves the stored blob as it was; an object with no blob never matches;
+/// a missing object is [`Error::NotFound`], not `Conflict`; and neither the successful nor the
+/// rejected write touches the object's `version` or `updated_at`. The same holds inside a
+/// transaction.
+pub async fn sensitive_blob_cas<
+    S: StoreExec<ConformanceLabel> + Transactional<ConformanceLabel>,
+>(
+    store: &S,
+) {
+    use bytes::Bytes;
+
+    let a = Bytes::from_static(b"blob-a");
+    let b = Bytes::from_static(b"blob-b");
+    let obj = store
+        .create(
+            ConformanceLabel::Node,
+            &rn("cas"),
+            None,
+            None,
+            Some(a.clone()),
+        )
+        .await
+        .unwrap();
+    let before = ObjectStoreReader::get(store, &obj.id).await.unwrap();
+
+    // The expected blob matches: the write lands.
+    store
+        .set_sensitive(&obj.id, b.clone(), SensitivePrecondition::Matches(&a))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_sensitive(&obj.id).await.unwrap().as_deref(),
+        Some(&b[..]),
+        "a matching precondition must replace the blob"
+    );
+
+    // A stale expected blob is a conflict and leaves the current blob alone.
+    let err = store
+        .set_sensitive(
+            &obj.id,
+            Bytes::from_static(b"blob-c"),
+            SensitivePrecondition::Matches(&a),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Conflict),
+        "stale blob must be a Conflict, got {err:?}"
+    );
+    assert_eq!(
+        store.get_sensitive(&obj.id).await.unwrap().as_deref(),
+        Some(&b[..]),
+        "a rejected write must leave the blob as it was"
+    );
+
+    // Neither write is a versioned mutation.
+    let after = ObjectStoreReader::get(store, &obj.id).await.unwrap();
+    assert_eq!(
+        after.version, before.version,
+        "set_sensitive must not bump the version"
+    );
+    assert_eq!(
+        after.updated_at, before.updated_at,
+        "set_sensitive must not touch updated_at"
+    );
+
+    // An object without a blob never matches.
+    let bare = store
+        .create(ConformanceLabel::Node, &rn("bare"), None, None, None)
+        .await
+        .unwrap();
+    let err = store
+        .set_sensitive(&bare.id, b.clone(), SensitivePrecondition::Matches(&a))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Conflict),
+        "no stored blob must be a Conflict, got {err:?}"
+    );
+    assert!(store.get_sensitive(&bare.id).await.unwrap().is_none());
+
+    // A missing object is NotFound, whatever the precondition.
+    let missing = uuid::Uuid::now_v7();
+    for precondition in [
+        SensitivePrecondition::Any,
+        SensitivePrecondition::Matches(&a),
+    ] {
+        let err = store
+            .set_sensitive(&missing, b.clone(), precondition)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::NotFound),
+            "missing object with {precondition:?} must be NotFound, got {err:?}"
+        );
+    }
+
+    // The same compare-and-swap inside a transaction.
+    let id = obj.id;
+    let res: crate::Result<()> = store
+        .transaction(Box::new(move |tx| {
+            Box::pin(async move {
+                let stale = tx
+                    .set_sensitive(
+                        &id,
+                        Bytes::from_static(b"blob-d"),
+                        SensitivePrecondition::Matches(b"blob-a"),
+                    )
+                    .await;
+                assert!(
+                    matches!(stale, Err(Error::Conflict)),
+                    "stale blob in a transaction must be a Conflict, got {stale:?}"
+                );
+                tx.set_sensitive(
+                    &id,
+                    Bytes::from_static(b"blob-e"),
+                    SensitivePrecondition::Matches(b"blob-b"),
+                )
+                .await
+            })
+        }))
+        .await;
+    res.unwrap();
+    assert_eq!(
+        store.get_sensitive(&obj.id).await.unwrap().as_deref(),
+        Some(&b"blob-e"[..]),
+        "a matching write in a committed transaction must persist"
     );
 }
 
@@ -441,7 +579,7 @@ pub async fn list_sensitive_pages_blobs<S: StoreExec<ConformanceLabel>>(store: &
     // Replace one blob in place and through `update`; delete another object.
     let replaced = Bytes::from_static(b"rewrapped");
     store
-        .set_sensitive(&expected[0].0, replaced.clone())
+        .set_sensitive(&expected[0].0, replaced.clone(), SensitivePrecondition::Any)
         .await
         .unwrap();
     expected[0].1 = replaced;
@@ -1549,6 +1687,7 @@ where
     transaction_commit(&fresh()).await;
     sensitive_blob_roundtrip(&fresh()).await;
     list_sensitive_pages_blobs(&fresh()).await;
+    sensitive_blob_cas(&fresh()).await;
     inverse_edges(&with_inverse(parent_child_inverse)).await;
     search_object_predicates(&fresh()).await;
     search_indexed_path_shapes(&fresh()).await;

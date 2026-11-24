@@ -28,9 +28,8 @@
 //! 1. **Add a version.** Configure the key provider with the new KEK alongside the current one,
 //!    e.g. `LocalKeyProvider::new("v1", [("v1", k1), ("v2", k2)])`. Nothing changes yet.
 //! 2. **Make it active.** Switch the active id to the new KEK (`LocalKeyProvider::new("v2", …)`,
-//!    still holding `v1`). New and updated values are now sealed under `v2`, and
-//!    [`get_with_secrets`] re-wraps a `v1` blob whenever it is read. Blobs nobody reads stay on
-//!    `v1`.
+//!    still holding `v1`). New and updated values are now sealed under `v2`. Existing `v1` blobs
+//!    keep opening (reads never rewrite them) and stay on `v1` until the sweep.
 //! 3. **Sweep.** Run [`ManagedObjectStore::rewrap_all`] to re-wrap every remaining `v1` blob onto
 //!    `v2`. Only the wrapped DEK changes; values are not re-encrypted, and properties and versions
 //!    are left alone. Check [`RewrapReport::failed`]: an entry there is still on its old KEK. The
@@ -91,7 +90,6 @@
 //! [`ManagedObjectStore::kek_usage`]: crate::ManagedObjectStore::kek_usage
 //! [`RewrapReport::failed`]: crate::RewrapReport::failed
 //! [`RewrapReport::kek_usage`]: crate::RewrapReport::kek_usage
-//! [`get_with_secrets`]: crate::SecretObjectReader::get_with_secrets
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -148,7 +146,7 @@ pub trait KeyProvider: Send + Sync + 'static {
 /// A [`KeyProvider`] that holds KEK material in process.
 ///
 /// Holds one active KEK plus any number of retired KEKs so values sealed under a previous key can
-/// still be decrypted and lazily re-wrapped during rotation.
+/// still be decrypted, and re-wrapped by the rotation sweep.
 pub struct LocalKeyProvider {
     active: KekId,
     keys: HashMap<KekId, Zeroizing<[u8; KEY_LEN]>>,

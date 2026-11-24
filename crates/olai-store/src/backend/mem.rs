@@ -20,7 +20,7 @@ use crate::name::ResourceName;
 use crate::object::{Association, Object};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, StoreTx, Transactional, TxnFn,
+    ObjectStoreReader, Precondition, SensitivePrecondition, StoreTx, Transactional, TxnFn,
 };
 use crate::{Error, Result};
 
@@ -191,11 +191,18 @@ fn op_list_sensitive<L: Label>(
     ))
 }
 
-/// Replace only the sensitive blob, leaving the object (and its version) untouched.
-fn op_set_sensitive<L: Label>(state: &mut State<L>, id: &Uuid, blob: Bytes) -> Result<()> {
+/// Replace only the sensitive blob, leaving the object (and its version) untouched. The
+/// precondition is checked under the same lock as the write, so the swap is atomic.
+fn op_set_sensitive<L: Label>(
+    state: &mut State<L>,
+    id: &Uuid,
+    blob: Bytes,
+    precondition: SensitivePrecondition<'_>,
+) -> Result<()> {
     if !state.objects.contains_key(id) {
         return Err(Error::NotFound);
     }
+    precondition.check(state.sensitive.get(id).map(|b| &b[..]))?;
     state.sensitive.insert(*id, blob);
     Ok(())
 }
@@ -656,8 +663,13 @@ impl<L: Label> ObjectStore<L> for InMemoryStore<L> {
             error.type = tracing::field::Empty,
         )
     )]
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
-        let out = op_set_sensitive(&mut self.state.lock().unwrap(), id, sensitive);
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
+        let out = op_set_sensitive(&mut self.state.lock().unwrap(), id, sensitive, precondition);
         record_err(&out);
         out
     }
@@ -1010,8 +1022,13 @@ impl<L: Label> ObjectStore<L> for InMemoryTx<L> {
             error.type = tracing::field::Empty,
         )
     )]
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
-        let out = self.with_state(|s| op_set_sensitive(s, id, sensitive));
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
+        let out = self.with_state(|s| op_set_sensitive(s, id, sensitive, precondition));
         record_err(&out);
         out
     }
