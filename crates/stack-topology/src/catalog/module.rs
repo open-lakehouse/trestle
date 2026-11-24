@@ -188,6 +188,17 @@ pub struct Provides {
     /// narrows the list by knobs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sds_secrets: Vec<SdsSecret>,
+    /// The keys this module seals data under through the secret server's key service, by
+    /// name (e.g. `"server-kek"`). The module never holds a key: it asks the server to wrap and
+    /// unwrap its data keys (`olai.keys.v1`, `olai_key_service::KeyServiceProvider`) on the
+    /// same socket as its [SDS secrets](Self::sds_secrets), at `/run/trestle-sds/sds.sock` (also
+    /// in `TRESTLE_SDS_SOCKET`), and finds each key's name in `TRESTLE_KEY_<KEY>` (the name in
+    /// upper snake case). The planner gives the secret server a listener listing them, each
+    /// keyring held by a variable it derives (`TRESTLE_KEYRING_<MODULE>__<KEY>`) and declares on
+    /// the secret server alone; `trestle key` mints and rotates the keyrings.
+    /// [`Module::keys_in`] narrows the list by knobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
     /// For a module hosted as a function: the resource kinds it demands as a container
     /// (`relational_db`, …), which the function finds where it is deployed (its branch's
     /// Postgres) rather than in the stack. The planner sets it on the
@@ -1268,6 +1279,13 @@ pub trait Module: Send + Sync {
     fn sds_secrets_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [SdsSecret]> {
         let _ = (knobs, stack);
         Cow::Borrowed(&self.provides().sds_secrets)
+    }
+    /// The keys this module seals under through the key service with the resolved `knobs`, in
+    /// a stack with the given [`StackFacts`]. Defaults to [`Provides::keys`]; a module overrides
+    /// it when a knob changes which keys it uses.
+    fn keys_in(&self, knobs: &ResolvedKnobs, stack: &StackFacts) -> Cow<'_, [String]> {
+        let _ = (knobs, stack);
+        Cow::Borrowed(&self.provides().keys)
     }
     /// Non-routing declarative contributions (resource kinds it provisions, ports, env vars,
     /// extras).

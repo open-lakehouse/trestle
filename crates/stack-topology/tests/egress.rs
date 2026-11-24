@@ -1099,3 +1099,159 @@ fn unusable_sds_secrets_are_plan_errors() {
         assert!(err.to_string().contains(reason), "{err}");
     }
 }
+
+/// The variable the planner derives for the `sds-app` module's key `server-kek`.
+const KEYRING_VAR: &str = "TRESTLE_KEYRING_SDS_APP__SERVER_KEK";
+
+/// The `sds-app` module sealing under `keys` through the key service, reading no SDS secret.
+fn keys_module(keys: &[&str]) -> DataModule {
+    let mut module = sds_module(vec![]);
+    module.provides.secrets = vec![DeclaredSecret::optional(
+        "SDS_APP_OTHER",
+        "Read from the environment.",
+    )];
+    module.provides.keys = keys.iter().map(|k| k.to_string()).collect();
+    module
+}
+
+/// A module's key alone brings in the secret server, whose listener for the module lists it;
+/// the keyring's variable is derived, declared on the secret server alone, and named by no
+/// other rendered file, while the module gets its socket and the key's name.
+#[test]
+fn a_modules_key_is_held_by_the_secret_server_alone() {
+    let plan = sds_plan(keys_module(&["server-kek"]), vec![]).unwrap();
+    let egress = plan.egress.as_ref().expect("the egress module is planned");
+    assert_eq!(
+        olai_stack_topology::plan::keyring_var(&ModuleId::from("sds-app"), "server-kek"),
+        KEYRING_VAR
+    );
+    assert_eq!(egress.secrets, [KEYRING_VAR]);
+    let keys: Vec<(&str, &str, &str)> = egress
+        .keys()
+        .map(|(m, k)| (m.as_str(), k.name.as_str(), k.env.as_str()))
+        .collect();
+    assert_eq!(keys, [("sds-app", "server-kek", KEYRING_VAR)]);
+
+    // Declared on the egress module alone, required; the module keeps its own secret.
+    let declaring: Vec<&str> = plan
+        .secrets
+        .iter()
+        .filter(|(_, s)| s.iter().any(|s| s.name == KEYRING_VAR))
+        .map(|(m, _)| m.as_str())
+        .collect();
+    assert_eq!(declaring, ["egress-gateway"]);
+    assert!(
+        plan.declared_secrets()
+            .iter()
+            .any(|s| s.name == KEYRING_VAR && s.required)
+    );
+    let own: Vec<&str> = plan.secrets[&ModuleId::from("sds-app")]
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(own, ["SDS_APP_OTHER"]);
+
+    let out = plan.materialize().unwrap();
+    let config = yaml(file(&out, "modules/egress-gateway/secret-server.yaml"));
+    let listener = &config["listeners"][1];
+    assert_eq!(listener["consumer"].as_str(), Some("sds-app"));
+    assert_eq!(listener["secrets"].as_sequence().map(Vec::len), Some(0));
+    assert_eq!(listener["keys"][0]["name"].as_str(), Some("server-kek"));
+    assert_eq!(listener["keys"][0]["env"].as_str(), Some(KEYRING_VAR));
+    // The Envoy's listener lists no keys.
+    assert!(config["listeners"][0].get("keys").is_none());
+
+    let overlay = yaml(file(&out, "modules/egress-gateway/consumers/sds-app.yaml"));
+    let app = &overlay["services"]["app"];
+    assert_eq!(
+        app["volumes"][0].as_str(),
+        Some("sds-sds-app:/run/trestle-sds")
+    );
+    assert_eq!(
+        app["environment"]["TRESTLE_SDS_SOCKET"].as_str(),
+        Some("/run/trestle-sds/sds.sock")
+    );
+    assert_eq!(
+        app["environment"]["TRESTLE_KEY_SERVER_KEK"].as_str(),
+        Some("server-kek")
+    );
+    let fragment = yaml(file(&out, "modules/egress-gateway/compose.yaml"));
+    let envoy = serde_yaml::to_string(&fragment["services"]["egress-gateway"]).unwrap();
+    assert!(!envoy.contains("sds-sds-app"), "{envoy}");
+
+    for f in &out.files {
+        if !f.contents.contains(KEYRING_VAR) {
+            continue;
+        }
+        match f.path.as_str() {
+            "modules/egress-gateway/secret-server.yaml" => {}
+            "modules/egress-gateway/compose.yaml" => {
+                let fragment = yaml(&f.contents);
+                for (name, service) in fragment["services"].as_mapping().unwrap() {
+                    let text = serde_yaml::to_string(service).unwrap();
+                    assert!(
+                        !text.contains(KEYRING_VAR) || name.as_str() == Some("secret-server"),
+                        "{name:?} names {KEYRING_VAR}"
+                    );
+                }
+                let env = &fragment["services"]["secret-server"]["environment"];
+                assert!(env.as_mapping().unwrap().contains_key(KEYRING_VAR));
+            }
+            other => panic!("{other} names {KEYRING_VAR}"),
+        }
+    }
+}
+
+/// A module's SDS secrets and keys share its one listener and socket.
+#[test]
+fn a_modules_secrets_and_keys_share_its_socket() {
+    let mut module = sds_module(vec![SdsSecret::new("server-token", SDS_KEY)]);
+    module.provides.keys = vec!["server-kek".into(), "audit-kek".into()];
+    let plan = sds_plan(module, vec![]).unwrap();
+    let egress = plan.egress.as_ref().unwrap();
+    assert_eq!(
+        egress.secrets,
+        [SDS_KEY, KEYRING_VAR, "TRESTLE_KEYRING_SDS_APP__AUDIT_KEK"]
+    );
+    let out = plan.materialize().unwrap();
+    let config = yaml(file(&out, "modules/egress-gateway/secret-server.yaml"));
+    let listeners = config["listeners"].as_sequence().unwrap();
+    assert_eq!(listeners.len(), 2);
+    assert_eq!(
+        listeners[1]["secrets"][0]["name"].as_str(),
+        Some("server-token")
+    );
+    let keys: Vec<&str> = listeners[1]["keys"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter_map(|k| k["name"].as_str())
+        .collect();
+    assert_eq!(keys, ["server-kek", "audit-kek"]);
+    let overlay = yaml(file(&out, "modules/egress-gateway/consumers/sds-app.yaml"));
+    let env = &overlay["services"]["app"]["environment"];
+    assert_eq!(env["TRESTLE_KEY_AUDIT_KEK"].as_str(), Some("audit-kek"));
+    assert_eq!(env["TRESTLE_KEY_SERVER_KEK"].as_str(), Some("server-kek"));
+}
+
+#[test]
+fn unusable_keys_are_plan_errors() {
+    let long = "k".repeat(244);
+    let cases: [(Vec<&str>, &str); 4] = [
+        (vec!["9-bad name"], "letters, digits"),
+        (vec!["server-kek", "server-kek"], "named twice"),
+        (vec!["server-kek", "server_kek"], "share the variable"),
+        (vec![long.as_str()], "at most 243 bytes"),
+    ];
+    for (keys, reason) in cases {
+        let err = sds_plan(keys_module(&keys), vec![]).unwrap_err();
+        assert!(
+            matches!(&err, PlanError::InvalidModuleKey { module, .. } if module.as_str() == "sds-app"),
+            "{err}"
+        );
+        assert!(err.to_string().contains(reason), "{err}");
+    }
+    // The longest name the secret server accepts plans.
+    let longest = "k".repeat(243);
+    sds_plan(keys_module(&[longest.as_str()]), vec![]).unwrap();
+}

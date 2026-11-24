@@ -67,7 +67,7 @@ mod settle;
 use crate::address::{AddressError, ServiceRef};
 use crate::catalog::Catalog;
 use crate::catalog::baseline::DATA_ROOT_DEFAULT;
-use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, SdsSecret, StackFacts};
+use crate::catalog::module::{DeclaredSecret, ExtraResource, ModuleId, StackFacts};
 use crate::model::connection::Connection;
 use crate::model::egress::EgressSelection;
 use crate::model::endpoint::{RouteIntent, Scheme};
@@ -78,7 +78,7 @@ use crate::plan::resolve::{ResolveError, ResolvedGraph};
 use crate::plan::routing::RoutePlan;
 use crate::render::InjectedEnv;
 use crate::target::TargetId;
-pub use egress::{ConsumedEgressRoute, EgressConfig};
+pub use egress::{ConsumedEgressRoute, EgressConfig, ServedKey, key_name_var, keyring_var};
 
 pub use bind::ModuleBinding;
 use client_env::resolve_client_env;
@@ -803,6 +803,18 @@ pub enum PlanError {
         /// What is wrong with it.
         reason: String,
     },
+    /// A module's [key](crate::Provides::keys) can't be served: a bad or duplicate name, a
+    /// module with no container to mount the socket in, or no egress gateway (which runs the
+    /// secret server) in the catalog.
+    #[error("module `{module}`: key `{key}`: {reason}")]
+    InvalidModuleKey {
+        /// The module sealing under it.
+        module: ModuleId,
+        /// The key's name.
+        key: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// The selected `policy`-role provider does not declare what the gateway needs to wire its
     /// gRPC `ext_authz` check.
     #[error("policy provider `{module}` is misconfigured: {reason}")]
@@ -1231,10 +1243,12 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             .nodes
             .iter()
             .any(|m| !m.provides().impersonated_hosts.is_empty());
-    // A module reading secrets over SDS needs the secret server, which the egress module runs.
+    // A module reading secrets over SDS, or sealing under keys, needs the secret server, which
+    // the egress module runs.
     let reads_sds = settled.graph.nodes.iter().any(|m| {
-        !m.sds_secrets_in(&settled.knobs[m.id()], &settled.stack_facts)
-            .is_empty()
+        let knobs = &settled.knobs[m.id()];
+        !m.sds_secrets_in(knobs, &settled.stack_facts).is_empty()
+            || !m.keys_in(knobs, &settled.stack_facts).is_empty()
     });
     let injecting = (egress::injects_credentials(&settled.services) || reads_sds)
         && egress::egress_provider(catalog).is_some_and(|m| !settled.stack_facts.has(m.as_str()));
@@ -1282,13 +1296,19 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
             (!declared.is_empty()).then(|| (m.id().clone(), declared.into_owned()))
         })
         .collect();
-    let sds: Vec<(ModuleId, Vec<SdsSecret>)> = settled
+    let sds: Vec<egress::SdsDemand> = settled
         .graph
         .nodes
         .iter()
         .filter_map(|m| {
-            let wanted = m.sds_secrets_in(&settled.knobs[m.id()], &settled.stack_facts);
-            (!wanted.is_empty()).then(|| (m.id().clone(), wanted.into_owned()))
+            let knobs = &settled.knobs[m.id()];
+            let secrets = m.sds_secrets_in(knobs, &settled.stack_facts);
+            let keys = m.keys_in(knobs, &settled.stack_facts);
+            (!secrets.is_empty() || !keys.is_empty()).then(|| egress::SdsDemand {
+                module: m.id().clone(),
+                secrets: secrets.into_owned(),
+                keys: keys.into_owned(),
+            })
         })
         .collect();
     let egress = egress::plan_egress(
@@ -1304,8 +1324,9 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
     )?;
     let bound = bind::bind(&settled, &routed, catalog, ctx, &wired, egress.as_ref())?;
 
-    // The secrets the secret server serves are the egress module's alone: a route's, and each
-    // one a module reads over SDS (moved off that module, keeping its declaration).
+    // The secrets the secret server serves are the egress module's alone: a route's, each one a
+    // module reads over SDS (moved off that module, keeping its declaration), and each key's
+    // keyring (declared here: no module names it).
     if let Some(egress) = &egress {
         let mut moved = egress.declared_route_secrets();
         for consumer in &egress.sds_consumers {
@@ -1320,6 +1341,16 @@ fn plan_env(selection: &Selection, catalog: &Catalog, ctx: &PlanCtx) -> Result<P
                 .partition(|d| consumer.secrets.iter().any(|s| s.env == d.name));
             *own = kept;
             moved.extend(served);
+        }
+        for (module, key) in egress.keys() {
+            moved.push(DeclaredSecret::required(
+                key.env.clone(),
+                format!(
+                    "The keyring of `{module}`'s key `{}`, which the secret server wraps and \
+                     unwraps its data keys under. Minted and rotated with `trestle key`.",
+                    key.name
+                ),
+            ));
         }
         secrets.retain(|_, declared| !declared.is_empty());
         if !moved.is_empty() {
