@@ -449,7 +449,7 @@ trestle key show demo/dev unity-catalog-rs/server-kek
   recreate.
 - **Back the keychain up.** It holds the only copy of each keyring. Losing it
   makes everything sealed under the keyring unreadable. An encrypted
-  `trestle key export` is a follow-up.
+  `trestle key export` is a follow-up ([#471](https://github.com/open-lakehouse/trestle/issues/471)).
 - **Not on a team's state yet.** `--secret` values go to each machine's own
   keychain, so two machines would hold different keyrings for the same sealed
   data (a hosted database, say). `trestle key` refuses writes on a team's state
