@@ -18,8 +18,11 @@
 //!
 //! The secret server has **consumers**, one SDS socket each ([`SdsConsumer`]): the egress
 //! Envoy, which asks for the routes' secrets, and every module that reads
-//! [secrets over SDS](crate::Provides::sds_secrets). A module's SDS secrets move to the egress
-//! module in the same way a route's do, so they too reach the secret server alone.
+//! [secrets over SDS](crate::Provides::sds_secrets) or seals under
+//! [keys](crate::Provides::keys) through its key service. A module's SDS secrets move to the
+//! egress module in the same way a route's do, so they too reach the secret server alone. A
+//! key's keyring is held by a variable the planner derives ([`keyring_var`]) and declares on the
+//! egress module only: the module never sees it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,6 +52,34 @@ pub const SDS_DIR: &str = "/run/trestle-sds";
 pub const SDS_SOCKET_VAR: &str = "TRESTLE_SDS_SOCKET";
 /// The socket's file name in an SDS volume.
 const SDS_SOCKET: &str = "sds.sock";
+/// The longest key name the secret server accepts (a KEK id `<key>@v<n>` must fit in 255
+/// bytes).
+pub const MAX_KEY_NAME_LEN: usize = 243;
+
+/// The variable holding the keyring of `module`'s key `key`, which the secret server alone
+/// reads: `TRESTLE_KEYRING_<MODULE>__<KEY>`, each in upper snake case.
+pub fn keyring_var(module: &ModuleId, key: &str) -> String {
+    format!(
+        "TRESTLE_KEYRING_{}__{}",
+        upper_snake(module.as_str()),
+        upper_snake(key)
+    )
+}
+
+/// The variable a module finds the name of its key `key` in: `TRESTLE_KEY_<KEY>`, in upper
+/// snake case.
+pub fn key_name_var(key: &str) -> String {
+    format!("TRESTLE_KEY_{}", upper_snake(key))
+}
+
+fn upper_snake(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '-' => '_',
+            c => c.to_ascii_uppercase(),
+        })
+        .collect()
+}
 
 /// The egress gateway the plan runs (see the [module docs](self)): the module's render reads it
 /// as the `egress` global.
@@ -132,6 +163,15 @@ impl EgressConfig {
         self.sds_consumers
             .iter()
             .find(|c| c.module.as_ref() == Some(module))
+    }
+
+    /// Every key the secret server holds a keyring for: of each module consumer, in consumer
+    /// order.
+    pub fn keys(&self) -> impl Iterator<Item = (&ModuleId, &ServedKey)> {
+        self.sds_consumers
+            .iter()
+            .filter_map(|c| c.module.as_ref().map(|m| (m, &c.keys)))
+            .flat_map(|(m, keys)| keys.iter().map(move |k| (m, k)))
     }
 
     /// Every module that calls some route, in route order.
@@ -232,6 +272,10 @@ pub struct SdsConsumer {
     pub services: Vec<String>,
     /// The secrets the server serves it on this socket, and the variables holding them.
     pub secrets: Vec<SdsSecret>,
+    /// The keys the server's key service wraps and unwraps under for it on this socket, and the
+    /// variables holding their keyrings.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<ServedKey>,
     /// The named volume holding its socket (`sds-<consumer>`).
     pub volume: String,
     /// Where the server mounts the volume.
@@ -250,6 +294,7 @@ impl SdsConsumer {
         module: Option<ModuleId>,
         services: Vec<String>,
         secrets: Vec<SdsSecret>,
+        keys: Vec<ServedKey>,
     ) -> Self {
         let server_dir = format!("{SDS_DIR}/{name}");
         SdsConsumer {
@@ -257,6 +302,7 @@ impl SdsConsumer {
             module,
             services,
             secrets,
+            keys,
             volume: format!("sds-{name}"),
             server_socket: format!("{server_dir}/{SDS_SOCKET}"),
             server_dir,
@@ -264,6 +310,18 @@ impl SdsConsumer {
             socket: format!("{SDS_DIR}/{SDS_SOCKET}"),
         }
     }
+}
+
+/// A key the secret server's key service holds for a consumer: its name, and the variable
+/// holding its keyring (see [`keyring_var`]). Names only, never key material.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ServedKey {
+    /// The key's name, which the consumer asks for, e.g. `"server-kek"`.
+    pub name: String,
+    /// The variable holding its keyring.
+    pub env: String,
+    /// The variable the consumer finds [`name`](Self::name) in (see [`key_name_var`]).
+    pub name_var: String,
 }
 
 /// The egress-gateway module the catalog offers, if any.
@@ -284,12 +342,20 @@ pub(super) fn injects_credentials(services: &BTreeMap<ModuleId, Vec<ServiceSpec>
         .any(|e| e.route.inject_credential.is_some())
 }
 
+/// What one module asks of the secret server: its [SDS secrets](crate::Provides::sds_secrets)
+/// and its [keys](crate::Provides::keys).
+pub(super) struct SdsDemand {
+    pub(super) module: ModuleId,
+    pub(super) secrets: Vec<SdsSecret>,
+    pub(super) keys: Vec<String>,
+}
+
 /// What the settled graph's modules declare that the secret server serves: each module's
-/// [SDS secrets](crate::Provides::sds_secrets) and the secrets it declares (to check them
-/// against).
+/// [SDS secrets](crate::Provides::sds_secrets) and [keys](crate::Provides::keys), and the
+/// secrets it declares (to check them against).
 pub(super) struct SdsDemands<'a> {
-    /// Each module that reads secrets over SDS, in graph order, and those secrets.
-    pub(super) sds: Vec<(ModuleId, Vec<SdsSecret>)>,
+    /// Each module that reads secrets over SDS or seals under keys, in graph order.
+    pub(super) sds: Vec<SdsDemand>,
     /// Each module's declared secrets.
     pub(super) declared: &'a BTreeMap<ModuleId, Vec<DeclaredSecret>>,
 }
@@ -309,12 +375,13 @@ pub(super) fn plan_egress(
         if let Some(route) = selection.egress.routes.first() {
             return Err(invalid(&route.name, "the catalog has no egress gateway"));
         }
-        if let Some((consumer, wanted)) = demands.sds.first() {
-            return Err(invalid_sds(
-                consumer,
-                &wanted[0].name,
-                "the catalog has no egress gateway to run the secret server",
-            ));
+        if let Some(demand) = demands.sds.first() {
+            let reason = "the catalog has no egress gateway to run the secret server";
+            return Err(match (demand.secrets.first(), demand.keys.first()) {
+                (Some(secret), _) => invalid_sds(&demand.module, &secret.name, reason),
+                (None, Some(key)) => invalid_key(&demand.module, key, reason),
+                (None, None) => invalid_sds(&demand.module, "", reason),
+            });
         }
         return Ok(None);
     };
@@ -407,23 +474,27 @@ pub(super) fn plan_egress(
             .iter()
             .map(|r| SdsSecret::new(&r.name, r.credential.secret_var()))
             .collect(),
+        Vec::new(),
     );
     let mut sds_consumers = vec![envoy];
-    for (consumer, wanted) in &demands.sds {
-        let containers = check_sds_consumer(consumer, wanted, &module, stack, services, demands)?;
+    for demand in &demands.sds {
+        let containers = check_sds_consumer(demand, &module, stack, services, demands)?;
+        let keys = check_keys(demand, &sds_consumers)?;
         sds_consumers.push(SdsConsumer::new(
-            consumer.as_str(),
-            Some(consumer.clone()),
+            demand.module.as_str(),
+            Some(demand.module.clone()),
             containers,
-            wanted.clone(),
+            demand.secrets.clone(),
+            keys,
         ));
     }
     let mut secrets: Vec<String> = Vec::new();
-    for var in sds_consumers
-        .iter()
-        .flat_map(|c| &c.secrets)
-        .map(|s| &s.env)
-    {
+    for var in sds_consumers.iter().flat_map(|c| {
+        c.secrets
+            .iter()
+            .map(|s| &s.env)
+            .chain(c.keys.iter().map(|k| &k.env))
+    }) {
         if !secrets.contains(var) {
             secrets.push(var.clone());
         }
@@ -485,6 +556,73 @@ fn invalid(route: &str, reason: &str) -> PlanError {
     }
 }
 
+fn invalid_key(module: &ModuleId, key: &str, reason: &str) -> PlanError {
+    PlanError::InvalidModuleKey {
+        module: module.clone(),
+        key: key.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+/// A module's keys: each named once, by a valid name of at most [`MAX_KEY_NAME_LEN`] bytes,
+/// whose variables ([`key_name_var`], [`keyring_var`]) no other key of the plan takes.
+fn check_keys(demand: &SdsDemand, planned: &[SdsConsumer]) -> Result<Vec<ServedKey>, PlanError> {
+    let module = &demand.module;
+    let mut out: Vec<ServedKey> = Vec::with_capacity(demand.keys.len());
+    for key in &demand.keys {
+        if !is_name(key) {
+            return Err(invalid_key(
+                module,
+                key,
+                "a key's name is letters, digits, `-` and `_`, starting with a letter",
+            ));
+        }
+        if key.len() > MAX_KEY_NAME_LEN {
+            return Err(invalid_key(
+                module,
+                key,
+                &format!("a key's name is at most {MAX_KEY_NAME_LEN} bytes"),
+            ));
+        }
+        let served = ServedKey {
+            name: key.clone(),
+            env: keyring_var(module, key),
+            name_var: key_name_var(key),
+        };
+        if let Some(other) = out.iter().find(|k| k.name_var == served.name_var) {
+            return Err(invalid_key(
+                module,
+                key,
+                &if other.name == *key {
+                    "it is named twice".to_string()
+                } else {
+                    format!(
+                        "it and key `{}` share the variable `{}`",
+                        other.name, served.name_var
+                    )
+                },
+            ));
+        }
+        if let Some((owner, other)) = planned.iter().find_map(|c| {
+            c.keys
+                .iter()
+                .find(|k| k.env == served.env)
+                .map(|k| (c.name.as_str(), k.name.as_str()))
+        }) {
+            return Err(invalid_key(
+                module,
+                key,
+                &format!(
+                    "its keyring variable `{}` is taken by key `{other}` of `{owner}`",
+                    served.env
+                ),
+            ));
+        }
+        out.push(served);
+    }
+    Ok(out)
+}
+
 fn invalid_sds(module: &ModuleId, secret: &str, reason: &str) -> PlanError {
     PlanError::InvalidSdsSecret {
         module: module.clone(),
@@ -505,18 +643,20 @@ fn is_name(name: &str) -> bool {
 /// socket), must not be the egress module, and must name each secret once, by a valid name,
 /// held by a variable it declares. Returns its container services.
 fn check_sds_consumer(
-    consumer: &ModuleId,
-    wanted: &[SdsSecret],
+    demand: &SdsDemand,
     egress: &ModuleId,
     stack: &StackFacts,
     services: &BTreeMap<ModuleId, Vec<ServiceSpec>>,
     demands: &SdsDemands<'_>,
 ) -> Result<Vec<String>, PlanError> {
-    let first = wanted.first().map_or("", |s| s.name.as_str());
+    let (consumer, wanted) = (&demand.module, demand.secrets.as_slice());
+    // A refusal names the first secret, or the first key of a module asking for keys alone.
+    let refuse = |reason: &str| match (wanted.first(), demand.keys.first()) {
+        (None, Some(key)) => invalid_key(consumer, key, reason),
+        (first, _) => invalid_sds(consumer, first.map_or("", |s| s.name.as_str()), reason),
+    };
     if consumer == egress || consumer.as_str() == EGRESS_SERVICE {
-        return Err(invalid_sds(
-            consumer,
-            first,
+        return Err(refuse(
             "the egress gateway can't consume the secret server over a module socket",
         ));
     }
@@ -530,9 +670,7 @@ fn check_sds_consumer(
         })
         .collect();
     if containers.is_empty() || !stack.runs(consumer.as_str()) {
-        return Err(invalid_sds(
-            consumer,
-            first,
+        return Err(refuse(
             "the module runs no container in the environment to mount the socket in",
         ));
     }

@@ -211,6 +211,9 @@ fn add_egress_overrides(
         let sds = egress.sds_consumer(consumer);
         if let Some(sds) = sds {
             env.insert(SDS_SOCKET_VAR.to_string(), sds.socket.clone());
+            for key in &sds.keys {
+                env.insert(key.name_var.clone(), key.name.clone());
+            }
         }
         let mut text = if egress.consumer_env(consumer).is_empty() {
             String::new()
@@ -225,8 +228,8 @@ fn add_egress_overrides(
         );
         if sds.is_some() {
             text.push_str(
-                "# Its socket to the secret server, which serves it its SDS secrets: only it and the\n\
-                 # secret server mount the volume, and the mount is its identity.\n",
+                "# Its socket to the secret server, which serves it its SDS secrets and its keys: only\n\
+                 # it and the secret server mount the volume, and the mount is its identity.\n",
             );
         }
         text.push_str("services:\n");
