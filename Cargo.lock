@@ -3247,7 +3247,7 @@ dependencies = [
 
 [[package]]
 name = "olai-key-service"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "futures",
@@ -3266,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "olai-secret-server"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -3295,7 +3295,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-runtime"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3316,7 +3316,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-state"
-version = "0.0.16"
+version = "0.0.17"
 dependencies = [
  "dirs",
  "futures",
@@ -3335,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "olai-stack-topology"
-version = "0.0.26"
+version = "0.0.27"
 dependencies = [
  "jsonschema",
  "minijinja",
@@ -3369,7 +3369,7 @@ dependencies = [
 
 [[package]]
 name = "olai-store"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "olai-trestle"
-version = "0.0.40"
+version = "0.0.41"
 dependencies = [
  "assert_cmd",
  "async-trait",
