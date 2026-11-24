@@ -20,6 +20,8 @@ olai-stack-topology = { path = "../stack-topology", version = "0.0.27", features
 
 # workspace dependencies (in alphabetical order)
 async-trait = { workspace = true }
+# Keyrings' key material, as the secret server reads it.
+base64 = { workspace = true }
 # Branch expiry timestamps, behind `neon`.
 chrono = { workspace = true, optional = true }
 futures = { workspace = true }
@@ -27,8 +29,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync"] }
+zeroize = { workspace = true }
 
 # crates.io dependencies (in alphabetical order)
+# New keyring versions: 32 bytes from the operating system's generator.
+getrandom = "0.3"
 # The OS credential store (macOS Keychain, Windows Credential Manager, the Linux kernel
 # keyring), behind `keychain`. Native backends only: no D-Bus secret service.
 keyring = { version = "3.6", default-features = false, features = [
@@ -38,6 +43,11 @@ keyring = { version = "3.6", default-features = false, features = [
 ], optional = true }
 
 [dev-dependencies]
+# The `key_probe` example: a module process sealing through the key service.
+olai-key-service = { path = "../key-service", features = ["client"] }
+# The secret server parses the keyrings the tests build, as it does at launch.
+olai-secret-server = { path = "../secret-server" }
+olai-store = { path = "../olai-store", features = ["encryption"] }
 # To file an instance under an attachment in tests without a Postgres to attach.
 rusqlite = "0.32"
 # The live egress test's upstream certificate and its CA.
@@ -47,7 +57,7 @@ ring = { version = "0.17", default-features = false, features = ["std"] }
 # Reads rendered compose fragments in the egress tests.
 serde_yaml = { workspace = true }
 tempfile = "3"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [features]
 # `KeychainProvider`: secrets in the OS credential store.

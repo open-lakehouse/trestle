@@ -16,6 +16,8 @@
 //!   side by side, with the layered [`EffectiveEnv`] injected and credentials resolved by
 //!   [`SecretProvider`]s ([`EnvProvider`], and `KeychainProvider` behind feature `keychain`) and
 //!   [`Source`] overlays.
+//! - [`Keyring`]: a module key's versioned KEKs, as the secret server's key service reads them,
+//!   and the add-only operations on it (import, rotate, retire).
 //! - `neon` (feature `neon`): Neon branches as a source, through the Neon CLI
 //!   (`NeonControl`, `NeonCli`, `NeonBranchSource`, and `FakeNeon` with `testing`).
 //!
@@ -46,6 +48,7 @@ mod events;
 #[cfg(feature = "testing")]
 mod fake;
 mod instances;
+mod keyring;
 mod logs;
 #[cfg(feature = "neon")]
 #[cfg_attr(docsrs, doc(cfg(feature = "neon")))]
@@ -72,6 +75,7 @@ pub use instances::{
     INSTANCES_DIR, InstanceError, InstanceEvent, Instances, Materialized, PLACEMENT_KEYS,
     ReconcileOptions, Reconciled, instance_project, parse_instance_project,
 };
+pub use keyring::{KEY_LEN, Keyring, KeyringError, KeyringSummary, kek_id};
 pub use logs::{LogLine, parse_log_line};
 pub use ports::{BusyPort, is_free, probe_host_ports};
 pub use reconcile::{ProjectMatch, managed_projects, remove_mesh_if_idle};

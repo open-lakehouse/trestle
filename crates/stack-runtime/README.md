@@ -34,6 +34,11 @@ stops and watches it. The `trestle` CLI and the desktop app share it.
   fallback.
 - **`Source`**: overlays of variables, endpoints and expiring credentials from outside
   the store. `UserVars` is built in.
+- **`Keyring`**: the versioned keys the secret server's key service seals a module's
+  data under, in the JSON form the server reads. Import an existing key as version 1,
+  rotate to a new random version, retire old versions by raising `min_decrypt`. All of
+  these are add-only: no version's material is ever removed, and `check_extends`
+  refuses a write that would drop one.
 
 Credentials go to Compose as process environment (`UpOptions::env`), never through a
 file.
