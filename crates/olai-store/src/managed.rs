@@ -51,7 +51,8 @@ use crate::object::{Association, Object};
 use crate::registry::{FieldRole, ResourceRegistry};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, SecretObjectReader, StoreTx, Transactional, TxnFn,
+    ObjectStoreReader, Precondition, SecretObjectReader, SensitivePrecondition, StoreTx,
+    Transactional, TxnFn,
 };
 use crate::{Error, Result};
 
@@ -453,11 +454,16 @@ impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for ManagedObjectStore<L, S> {
         self.inner.delete(id).await
     }
 
-    async fn set_sensitive(&self, id: &Uuid, sensitive: bytes::Bytes) -> Result<()> {
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: bytes::Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
         // The sealed blob lives on the inner row; forward so the decorator does not
         // silently swallow a blob rewrite (e.g. a KEK-rotation writeback routed through
-        // the outer store) via the trait's no-op default.
-        self.inner.set_sensitive(id, sensitive).await
+        // the outer store) via the trait's default.
+        self.inner.set_sensitive(id, sensitive, precondition).await
     }
 }
 
@@ -516,6 +522,10 @@ impl<L: Label, S: ObjectStore<L>> SecretObjectReader<L> for ManagedObjectStore<L
     /// Without an encryptor, or when no blob is stored, this behaves like
     /// [`get`](ObjectStoreReader::get).
     ///
+    /// This is a pure read: a blob sealed under a retired KEK is opened as it is and never
+    /// rewritten here. [`rewrap_all`](ManagedObjectStore::rewrap_all) moves blobs to the active
+    /// KEK.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::NotFound`] if no object with `id` exists, or a decryption error if the
@@ -547,41 +557,6 @@ impl<L: Label, S: ObjectStore<L>> SecretObjectReader<L> for ManagedObjectStore<L
                 for (key, value) in secret_map {
                     props_map.insert(key, value);
                 }
-            }
-
-            // Lazy KEK rotation: if the blob was sealed under a retired KEK, re-wrap its data key
-            // under the active KEK and write it back. Best-effort — a write failure must not fail
-            // the read, and the value ciphertext is untouched so the result is identical.
-            //
-            // The writeback touches *only* the sealed blob via `set_sensitive`: we must not route
-            // `object.properties` back through `update`, because by this point it has the decrypted
-            // sensitive fields merged in — persisting that would leak plaintext into the (searchable,
-            // unencrypted) properties column. `set_sensitive` also leaves the version/updated_at
-            // untouched, so a read does not masquerade as a mutation.
-            match encryptor.rewrap(&blob).await {
-                Ok(Some(rewrapped)) => {
-                    tracing::debug!(id = %id, "rewrapping sensitive blob under active KEK");
-                    if let Err(e) = self
-                        .inner
-                        .set_sensitive(id, bytes::Bytes::from(rewrapped))
-                        .await
-                    {
-                        tracing::warn!(
-                            id = %id,
-                            error.type = e.kind_str(),
-                            "KEK rotation writeback failed; blob remains under retired KEK"
-                        );
-                    }
-                }
-                // Already sealed under the active KEK — nothing to do.
-                Ok(None) => {}
-                // A malformed blob or unavailable KEK during the rewrap check must not fail the
-                // read (the value ciphertext is untouched); surface it at debug.
-                Err(e) => tracing::debug!(
-                    id = %id,
-                    error.type = e.kind_str(),
-                    "rewrap check failed; leaving blob unchanged"
-                ),
             }
         }
 
@@ -1178,11 +1153,12 @@ pub(crate) mod tests {
         );
     }
 
+    /// Reads never write: a blob under a retired KEK still opens, and stays exactly as it was
+    /// until the rotation sweep (`rewrap_all`) moves it.
     #[cfg(feature = "encryption")]
     #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn rotation_rewraps_on_read() {
-        use crate::encryption::{EnvelopeEncryptor, LocalKeyProvider};
+    async fn retired_kek_read_opens_without_rewriting() {
+        use crate::encryption::{EnvelopeEncryptor, LocalKeyProvider, envelope_kek_id};
 
         let k1 = vec![1u8; 32];
         let k2 = vec![2u8; 32];
@@ -1203,177 +1179,40 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-
-        // Move the same inner store under a v2-active/v1-retired encryptor.
-        let inner = store_v1.inner;
-        let store_v2 = ManagedObjectStore::with_encryptor(
-            inner,
-            EnvelopeEncryptor::local(
-                LocalKeyProvider::new("v2", [("v1".into(), k1), ("v2".into(), k2.clone())])
-                    .unwrap(),
-            ),
-            registry(),
-        );
-
-        // Reading with secrets still works and rewrites the row under v2.
-        let full = store_v2.get_with_secrets(&created.id).await.unwrap();
-        assert_eq!(
-            full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
-            serde_json::json!("rotate-me")
-        );
-        // The rewrap is observable to operators as a debug event.
-        assert!(logs_contain("rewrapping sensitive blob"));
-
-        // The lazy-rotation writeback must NOT leak the decrypted secret into the stored
-        // properties, and must NOT bump the version (a read is not a mutation).
-        let raw = store_v2.inner.get(&created.id).await.unwrap();
-        assert!(
-            raw.properties
-                .as_ref()
-                .and_then(|p| p.as_object())
-                .is_none_or(|m| !m.contains_key("api_key")),
-            "rotation writeback leaked plaintext into stored properties"
-        );
-        assert_eq!(
-            raw.version, created.version,
-            "rotation writeback must not bump the object version"
-        );
-        // A plain get stays redacted after rotation.
-        let redacted = store_v2.get(&created.id).await.unwrap();
-        assert!(
-            !redacted
-                .properties
-                .as_ref()
-                .unwrap()
-                .as_object()
-                .unwrap()
-                .contains_key("api_key")
-        );
-
-        // A v2-only encryptor can now open the rewritten blob.
-        let store_v2_only = ManagedObjectStore::with_encryptor(
-            store_v2.inner,
-            EnvelopeEncryptor::local(LocalKeyProvider::single("v2", k2).unwrap()),
-            registry(),
-        );
-        let full = store_v2_only.get_with_secrets(&created.id).await.unwrap();
-        assert_eq!(
-            full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
-            serde_json::json!("rotate-me")
-        );
-    }
-
-    /// A store backend that behaves like its inner store except that `set_sensitive` always
-    /// fails — used to exercise the best-effort KEK-rotation writeback path.
-    #[cfg(feature = "encryption")]
-    struct FailWriteback<S>(S);
-
-    #[cfg(feature = "encryption")]
-    #[async_trait::async_trait]
-    impl<L: Label, S: ObjectStoreReader<L>> ObjectStoreReader<L> for FailWriteback<S> {
-        async fn get(&self, id: &Uuid) -> Result<Object<L>> {
-            self.0.get(id).await
-        }
-        async fn get_by_name(&self, label: L, name: &ResourceName) -> Result<Object<L>> {
-            self.0.get_by_name(label, name).await
-        }
-        async fn list(
-            &self,
-            label: L,
-            namespace: Option<&ResourceName>,
-            max_results: Option<usize>,
-            page_token: Option<String>,
-        ) -> Result<(Vec<Object<L>>, Option<String>)> {
-            self.0.list(label, namespace, max_results, page_token).await
-        }
-        async fn get_sensitive(&self, id: &Uuid) -> Result<Option<bytes::Bytes>> {
-            self.0.get_sensitive(id).await
-        }
-    }
-
-    #[cfg(feature = "encryption")]
-    #[async_trait::async_trait]
-    impl<L: Label, S: ObjectStore<L>> ObjectStore<L> for FailWriteback<S> {
-        async fn create(
-            &self,
-            label: L,
-            name: &ResourceName,
-            properties: Option<serde_json::Value>,
-            id: Option<Uuid>,
-            sensitive: Option<bytes::Bytes>,
-        ) -> Result<Object<L>> {
-            self.0.create(label, name, properties, id, sensitive).await
-        }
-        async fn update(
-            &self,
-            id: &Uuid,
-            properties: Option<serde_json::Value>,
-            precondition: Precondition,
-            sensitive: Option<bytes::Bytes>,
-        ) -> Result<Object<L>> {
-            self.0.update(id, properties, precondition, sensitive).await
-        }
-        async fn rename(
-            &self,
-            id: &Uuid,
-            new_name: &ResourceName,
-            precondition: Precondition,
-        ) -> Result<Object<L>> {
-            self.0.rename(id, new_name, precondition).await
-        }
-        async fn delete(&self, id: &Uuid) -> Result<()> {
-            self.0.delete(id).await
-        }
-        /// The whole point of the double: the best-effort rotation writeback always fails here.
-        async fn set_sensitive(&self, _id: &Uuid, _sensitive: bytes::Bytes) -> Result<()> {
-            Err(Error::generic("boom"))
-        }
-    }
-
-    /// A failed lazy-rotation writeback must not fail the read, and must be surfaced as a `warn`.
-    #[cfg(feature = "encryption")]
-    #[tokio::test]
-    #[tracing_test::traced_test]
-    async fn writeback_failure_warns_but_read_succeeds() {
-        use crate::encryption::{EnvelopeEncryptor, LocalKeyProvider};
-
-        let k1 = vec![1u8; 32];
-        let k2 = vec![2u8; 32];
-
-        // Seal a value under v1 through a normal in-memory store.
-        let store_v1 = ManagedObjectStore::with_encryptor(
-            InMemoryStore::<TestLabel>::new(),
-            EnvelopeEncryptor::local(LocalKeyProvider::single("v1", k1.clone()).unwrap()),
-            registry(),
-        );
-        let created = store_v1
-            .create(
-                TestLabel::Widget,
-                &rn("w1"),
-                props(serde_json::json!({ "api_key": "rotate-me" })),
-                None,
-                None,
-            )
+        let sealed = store_v1
+            .inner
+            .get_sensitive(&created.id)
             .await
+            .unwrap()
             .unwrap();
 
-        // Re-open the same state behind a writeback-failing backend, under a v2-active encryptor
-        // so a rewrap is due on read.
+        // Move the same inner store under a v2-active/v1-retired encryptor.
         let store_v2 = ManagedObjectStore::with_encryptor(
-            FailWriteback(store_v1.inner),
+            store_v1.inner,
             EnvelopeEncryptor::local(
                 LocalKeyProvider::new("v2", [("v1".into(), k1), ("v2".into(), k2)]).unwrap(),
             ),
             registry(),
         );
 
-        // The read still returns the decrypted value even though the rewrap writeback fails.
         let full = store_v2.get_with_secrets(&created.id).await.unwrap();
         assert_eq!(
             full.properties.as_ref().unwrap().as_object().unwrap()["api_key"],
             serde_json::json!("rotate-me")
         );
-        assert!(logs_contain("KEK rotation writeback failed"));
+
+        // The blob, the row and its version are untouched by the read.
+        let after = store_v2
+            .inner
+            .get_sensitive(&created.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, sealed, "a read must not rewrite the sealed blob");
+        assert_eq!(envelope_kek_id(&after).unwrap(), "v1");
+        let raw = store_v2.inner.get(&created.id).await.unwrap();
+        assert_eq!(raw.version, created.version);
+        assert_eq!(raw.updated_at, created.updated_at);
     }
 
     /// The `skip_all` guardrail at the managed layer: `get_with_secrets` decrypts the sensitive

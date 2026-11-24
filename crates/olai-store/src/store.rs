@@ -54,6 +54,58 @@ impl Precondition {
     }
 }
 
+/// A precondition guarding [`ObjectStore::set_sensitive`]: compare-and-swap on the stored blob.
+///
+/// The sealed blob has no version of its own, and [`set_sensitive`](ObjectStore::set_sensitive)
+/// deliberately leaves the object's [`version`](Object::version) alone, so the swap compares the
+/// blob itself. A caller that read a blob, derived a new one from it (a KEK rewrap) and must not
+/// clobber a concurrent write passes [`Matches`](Self::Matches) with the bytes it read.
+///
+/// `Debug` prints only the expected blob's length.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum SensitivePrecondition<'a> {
+    /// No check: the blob is replaced unconditionally.
+    #[default]
+    Any,
+    /// Replace the blob only if the stored blob equals these bytes exactly, otherwise return
+    /// [`Error::Conflict`](crate::Error::Conflict). An object with no blob never matches.
+    Matches(&'a [u8]),
+}
+
+impl SensitivePrecondition<'_> {
+    /// Check `self` against an object's current blob (`None` if it has none), returning
+    /// [`Error::Conflict`](crate::Error::Conflict) on a [`Matches`](Self::Matches) mismatch.
+    ///
+    /// A helper for store backends that cannot push the comparison into storage:
+    ///
+    /// ```
+    /// use olai_store::SensitivePrecondition;
+    ///
+    /// assert!(SensitivePrecondition::Any.check(None).is_ok());
+    /// assert!(SensitivePrecondition::Matches(b"a").check(Some(b"a")).is_ok());
+    /// assert!(SensitivePrecondition::Matches(b"a").check(Some(b"b")).is_err());
+    /// assert!(SensitivePrecondition::Matches(b"a").check(None).is_err());
+    /// ```
+    pub fn check(&self, current: Option<&[u8]>) -> Result<()> {
+        match self {
+            SensitivePrecondition::Any => Ok(()),
+            SensitivePrecondition::Matches(expected) if current == Some(*expected) => Ok(()),
+            SensitivePrecondition::Matches(_) => Err(crate::Error::Conflict),
+        }
+    }
+}
+
+impl std::fmt::Debug for SensitivePrecondition<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SensitivePrecondition::Any => f.write_str("Any"),
+            SensitivePrecondition::Matches(expected) => {
+                write!(f, "Matches(<{} bytes>)", expected.len())
+            }
+        }
+    }
+}
+
 /// A JSON `null` reference, used to give payload-less rows a value to match against.
 const NULL: serde_json::Value = serde_json::Value::Null;
 
@@ -495,20 +547,45 @@ pub trait ObjectStore<L: Label>: ObjectStoreReader<L> + Send + Sync + 'static {
     ///
     /// This is the in-place counterpart to the `sensitive` parameter of
     /// [`create`](ObjectStore::create) / [`update`](ObjectStore::update): it is used to rewrite
-    /// the sealed blob without touching the row's data — e.g. lazy KEK re-wrapping during a read,
-    /// where bumping the version or overwriting properties would be wrong. Unlike `update`, it is
-    /// **not** a versioned write and takes no [`Precondition`].
+    /// the sealed blob without touching the row's data, e.g. the KEK rotation sweep
+    /// ([`ManagedObjectStore::rewrap_all`]), where bumping the version or overwriting properties
+    /// would be wrong. It is **not** a versioned write: instead of a [`Precondition`] on the
+    /// version, it takes a [`SensitivePrecondition`] on the blob itself.
     ///
-    /// The default implementation is a no-op returning `Ok(())`, for backends that do not persist
-    /// a sensitive blob; backends that do must override it to rewrite the blob column only.
+    /// With [`SensitivePrecondition::Matches`] the blob is replaced only if the stored blob is
+    /// still exactly the expected bytes, checked atomically with the write. A caller that derived
+    /// `sensitive` from a blob it read can therefore never put an older value back over a
+    /// concurrent [`update`](ObjectStore::update).
+    ///
+    /// The default implementation accepts [`SensitivePrecondition::Any`] as a no-op returning
+    /// `Ok(())`, for backends that do not persist a sensitive blob, and rejects
+    /// [`SensitivePrecondition::Matches`] with [`Error::Generic`](crate::Error::Generic), since it
+    /// cannot honour it atomically. Backends that persist a blob must override it to rewrite the
+    /// blob column only, with the comparison in the same atomic step.
+    ///
+    /// [`ManagedObjectStore::rewrap_all`]: crate::ManagedObjectStore#method.rewrap_all
     ///
     /// # Errors
     ///
-    /// Backends that persist a blob return [`Error::NotFound`](crate::Error::NotFound) if no
-    /// object with `id` exists.
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+    /// - [`Error::NotFound`](crate::Error::NotFound) if no object with `id` exists (backends that
+    ///   persist a blob).
+    /// - [`Error::Conflict`](crate::Error::Conflict) if `precondition` is
+    ///   [`SensitivePrecondition::Matches`] and the stored blob differs or is absent.
+    /// - [`Error::Generic`](crate::Error::Generic) from the default implementation for
+    ///   [`SensitivePrecondition::Matches`].
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
         let _ = (id, sensitive);
-        Ok(())
+        match precondition {
+            SensitivePrecondition::Any => Ok(()),
+            SensitivePrecondition::Matches(_) => Err(crate::Error::generic(
+                "conditional sensitive-blob write is not supported by this backend",
+            )),
+        }
     }
 }
 
@@ -891,8 +968,13 @@ impl<L: Label, T: ObjectStore<L>> ObjectStore<L> for Arc<T> {
         T::delete(self, id).await
     }
 
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
-        T::set_sensitive(self, id, sensitive).await
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
+        T::set_sensitive(self, id, sensitive, precondition).await
     }
 }
 

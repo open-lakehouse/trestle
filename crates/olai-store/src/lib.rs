@@ -124,6 +124,6 @@ pub use reference::ResourceRef;
 pub use registry::{FieldRole, ResourceFieldDescriptor, ResourceRegistry, ResourceTypeDescriptor};
 pub use store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, SecretObjectReader, SensitivePage, StoreExec, StoreTx,
-    Transactional,
+    ObjectStoreReader, Precondition, SecretObjectReader, SensitivePage, SensitivePrecondition,
+    StoreExec, StoreTx, Transactional,
 };

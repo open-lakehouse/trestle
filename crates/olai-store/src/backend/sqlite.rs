@@ -43,7 +43,7 @@ use crate::name::ResourceName;
 use crate::object::{Association, Object};
 use crate::store::{
     AssociationStore, AssociationStoreReader, EdgeEndpoint, EdgeQuery, ObjectStore,
-    ObjectStoreReader, Precondition, StoreTx, Transactional, TxnFn,
+    ObjectStoreReader, Precondition, SensitivePrecondition, StoreTx, Transactional, TxnFn,
 };
 use crate::{Error, Result};
 
@@ -1030,24 +1030,46 @@ async fn op_list_sensitive(
 }
 
 /// Replace only the `sensitive` column, leaving properties and version untouched.
-async fn op_set_sensitive(conn: &mut SqliteConnection, id: &Uuid, blob: &[u8]) -> Result<()> {
+async fn op_set_sensitive<L: Label>(
+    conn: &mut SqliteConnection,
+    id: &Uuid,
+    blob: &[u8],
+    precondition: SensitivePrecondition<'_>,
+) -> Result<()> {
     let id_s = id.hyphenated().to_string();
-    let affected = sqlx::query!("UPDATE objects SET sensitive = ? WHERE id = ?", blob, id_s)
-        .execute(conn)
+    let affected = match precondition {
+        SensitivePrecondition::Any => {
+            sqlx::query!("UPDATE objects SET sensitive = ? WHERE id = ?", blob, id_s)
+                .execute(&mut *conn)
+                .await?
+                .rows_affected()
+        }
+        // The comparison is in the `WHERE` clause, so the check and the write are one statement.
+        SensitivePrecondition::Matches(expected) => sqlx::query!(
+            "UPDATE objects SET sensitive = ? WHERE id = ? AND sensitive = ?",
+            blob,
+            id_s,
+            expected
+        )
+        .execute(&mut *conn)
         .await?
-        .rows_affected();
+        .rows_affected(),
+    };
     if affected == 0 {
-        return Err(Error::NotFound);
+        return Err(match precondition {
+            SensitivePrecondition::Any => Error::NotFound,
+            SensitivePrecondition::Matches(_) => classify_miss::<L>(conn, id).await,
+        });
     }
     Ok(())
 }
 
 /// A zero-row conditional write means either the row is gone (`NotFound`) or its
-/// version moved (`Conflict`). Re-read to disambiguate.
+/// version or sensitive blob moved (`Conflict`). Re-read to disambiguate.
 async fn classify_miss<L: Label>(conn: &mut SqliteConnection, id: &Uuid) -> Error {
     match op_get::<L>(conn, id).await {
         Ok(_) => {
-            tracing::debug!(id = %id, "CAS precondition conflict (version moved)");
+            tracing::debug!(id = %id, "CAS precondition conflict");
             Error::Conflict
         }
         Err(Error::NotFound) => Error::NotFound,
@@ -1559,9 +1581,14 @@ impl<L: Label> ObjectStore<L> for SqlStore<L> {
             error.type = tracing::field::Empty,
         )
     )]
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
-        let out = op_set_sensitive(&mut conn, id, &sensitive).await;
+        let out = op_set_sensitive::<L>(&mut conn, id, &sensitive, precondition).await;
         record_err(&out);
         out
     }
@@ -1948,9 +1975,14 @@ impl<L: Label> ObjectStore<L> for SqlTx<L> {
             error.type = tracing::field::Empty,
         )
     )]
-    async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+    async fn set_sensitive(
+        &self,
+        id: &Uuid,
+        sensitive: Bytes,
+        precondition: SensitivePrecondition<'_>,
+    ) -> Result<()> {
         let mut tx = self.tx.lock().await;
-        let out = op_set_sensitive(&mut tx, id, &sensitive).await;
+        let out = op_set_sensitive::<L>(&mut tx, id, &sensitive, precondition).await;
         record_err(&out);
         out
     }
@@ -2153,6 +2185,7 @@ mod tests {
         conformance::transaction_commit(&fresh().await).await;
         conformance::sensitive_blob_roundtrip(&fresh().await).await;
         conformance::list_sensitive_pages_blobs(&fresh().await).await;
+        conformance::sensitive_blob_cas(&fresh().await).await;
         conformance::search_object_predicates(&fresh().await).await;
         conformance::search_indexed_path_shapes(&fresh().await).await;
         conformance::search_object_pagination_filters_completely(&fresh().await).await;

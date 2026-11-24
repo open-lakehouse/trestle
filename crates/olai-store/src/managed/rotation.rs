@@ -10,7 +10,7 @@ use uuid::Uuid;
 use super::ManagedObjectStore;
 use crate::encryption::{KekId, envelope_kek_id};
 use crate::label::Label;
-use crate::store::{ObjectStore, ObjectStoreReader};
+use crate::store::{ObjectStore, ObjectStoreReader, SensitivePrecondition};
 use crate::{Error, Result};
 
 /// Page size [`ManagedObjectStore::kek_usage`] reads blobs in.
@@ -100,6 +100,10 @@ pub struct RewrapReport<L> {
     pub rewrapped: u64,
     /// Blobs already under the active KEK, left untouched.
     pub already_active: u64,
+    /// Blobs another writer replaced between the sweep's read and its write, so the sweep left
+    /// them alone rather than put an older value back. Whatever KEK the new value is under shows
+    /// up in [`kek_usage`](Self::kek_usage); if it is still a retired one, run the sweep again.
+    pub superseded: u64,
     /// Blobs that could not be moved. The sweep carries on past each one.
     pub failed: Vec<RewrapFailure<L>>,
     /// KEK usage across **all** labels, counted after the sweep, whatever
@@ -146,10 +150,10 @@ impl<L: Label, S: ObjectStoreReader<L>> ManagedObjectStore<L, S> {
 impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     /// Re-wrap every sealed blob that is under a retired KEK onto the active KEK.
     ///
-    /// This is the eager counterpart to the lazy rewrap in
-    /// [`get_with_secrets`](crate::SecretObjectReader::get_with_secrets): it reaches blobs nobody
-    /// reads. Blobs are read in pages of [`RewrapOptions::batch_size`]. For each one under a
-    /// retired KEK the current blob is re-read, its data key is re-wrapped
+    /// This is how blobs move to the active KEK; reads
+    /// ([`get_with_secrets`](crate::SecretObjectReader::get_with_secrets)) never rewrite them.
+    /// Blobs are read in pages of [`RewrapOptions::batch_size`]. For each one under a retired KEK
+    /// the current blob is re-read, its data key is re-wrapped
     /// ([`EnvelopeEncryptor::rewrap`](crate::EnvelopeEncryptor::rewrap), so the value ciphertext
     /// is untouched) and the result is written back with
     /// [`set_sensitive`](ObjectStore::set_sensitive). Properties, versions and `updated_at` are
@@ -163,10 +167,12 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
     /// backend while listing), run it again: blobs already moved count as
     /// [`already_active`](RewrapReport::already_active) and the rest are moved.
     ///
-    /// The write is not a compare-and-swap. If another writer replaces a blob between the
-    /// sweep's re-read and its write, the sweep's write wins and puts the older value back.
-    /// The window is one rewrap per blob, but run the sweep at a quiet time if writes to sealed
-    /// fields are frequent.
+    /// The write is a compare-and-swap on the blob the sweep read
+    /// ([`SensitivePrecondition::Matches`]), so it is safe to run alongside other writers: if one
+    /// replaces a blob between the sweep's read and its write, the newer value is kept and the
+    /// blob is counted in [`superseded`](RewrapReport::superseded), not in `failed`. The backend
+    /// must support the conditional write; one that does not reports every blob it would have
+    /// moved as a [`Store`](RewrapFailureKind::Store) failure.
     ///
     /// # Errors
     ///
@@ -191,6 +197,7 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
         let mut report = RewrapReport {
             rewrapped: 0,
             already_active: 0,
+            superseded: 0,
             failed: Vec::new(),
             kek_usage: KekUsage::default(),
         };
@@ -215,6 +222,7 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
         tracing::info!(
             rewrapped = report.rewrapped,
             already_active = report.already_active,
+            superseded = report.superseded,
             failed = report.failed.len(),
             "KEK rotation sweep finished"
         );
@@ -292,12 +300,21 @@ impl<L: Label, S: ObjectStore<L>> ManagedObjectStore<L, S> {
         };
         match self
             .inner
-            .set_sensitive(&id, bytes::Bytes::from(rewrapped))
+            .set_sensitive(
+                &id,
+                bytes::Bytes::from(rewrapped),
+                SensitivePrecondition::Matches(&current),
+            )
             .await
         {
             Ok(()) => report.rewrapped += 1,
             // Deleted between the re-read and the write.
             Err(Error::NotFound) => {}
+            // Replaced between the re-read and the write: keep the newer value.
+            Err(Error::Conflict) => {
+                tracing::debug!(id = %id, "blob changed during the sweep; leaving the newer value");
+                report.superseded += 1;
+            }
             Err(e) => {
                 tracing::debug!(
                     id = %id,
@@ -583,11 +600,13 @@ mod tests {
     }
 
     /// A backend that forwards to an [`InMemoryStore`], except that `list_sensitive` fails once
-    /// its budget of successful calls is spent, and `set_sensitive` can be made to fail.
+    /// its budget of successful calls is spent, `set_sensitive` can be made to fail, and
+    /// `set_sensitive` can be raced by one concurrent `update` that replaces the blob first.
     struct Flaky {
         inner: InMemoryStore<TestLabel>,
         list_budget: AtomicUsize,
         fail_writes: bool,
+        race_with: std::sync::Mutex<Option<Bytes>>,
     }
 
     impl Flaky {
@@ -596,6 +615,7 @@ mod tests {
                 inner,
                 list_budget: AtomicUsize::new(list_budget),
                 fail_writes: false,
+                race_with: std::sync::Mutex::new(None),
             }
         }
     }
@@ -679,11 +699,23 @@ mod tests {
         async fn delete(&self, id: &Uuid) -> Result<()> {
             self.inner.delete(id).await
         }
-        async fn set_sensitive(&self, id: &Uuid, sensitive: Bytes) -> Result<()> {
+        async fn set_sensitive(
+            &self,
+            id: &Uuid,
+            sensitive: Bytes,
+            precondition: SensitivePrecondition<'_>,
+        ) -> Result<()> {
             if self.fail_writes {
                 return Err(Error::generic("read-only replica"));
             }
-            self.inner.set_sensitive(id, sensitive).await
+            let race = self.race_with.lock().unwrap().take();
+            if let Some(blob) = race {
+                // Another writer replaces the blob just before the sweep's write lands.
+                self.inner
+                    .update(id, None, Precondition::Any, Some(blob))
+                    .await?;
+            }
+            self.inner.set_sensitive(id, sensitive, precondition).await
         }
     }
 
@@ -741,5 +773,136 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(report.kek_usage, usage(&[("v1", 2)], 0));
+    }
+    /// A concurrent update that replaces the blob between the sweep's read and its write wins:
+    /// the sweep counts it as superseded and the newer secret survives.
+    #[tokio::test]
+    async fn sweep_keeps_a_concurrent_update() {
+        let backend = InMemoryStore::<TestLabel>::new();
+        let id = seed(&backend, "v1", "a", 1).await[0];
+
+        // The concurrent writer seals a new value for the same object, under v2 (the active KEK).
+        let newer = Bytes::from(
+            encryptor("v2", &["v2"])
+                .seal(&crate::managed::secret_name(&id), br#"{"api_key":"newer"}"#)
+                .await
+                .unwrap(),
+        );
+
+        let flaky = Flaky::new(backend.clone(), usize::MAX);
+        *flaky.race_with.lock().unwrap() = Some(newer.clone());
+        let store = store_with(flaky, "v2", &["v1", "v2"]);
+        let report = store.rewrap_all(RewrapOptions::default()).await.unwrap();
+        assert_eq!(
+            (report.rewrapped, report.already_active, report.superseded),
+            (0, 0, 1)
+        );
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(report.kek_usage, usage(&[("v2", 1)], 0));
+
+        // The stored blob is the concurrent writer's, and it opens to the newer secret.
+        assert_eq!(backend.get_sensitive(&id).await.unwrap(), Some(newer));
+        let full = store_with(backend, "v2", &["v2"])
+            .get_with_secrets(&id)
+            .await
+            .unwrap();
+        assert_eq!(
+            full.properties.unwrap()["api_key"],
+            serde_json::json!("newer")
+        );
+    }
+
+    /// The trait's default `set_sensitive` cannot compare-and-swap, so it rejects `Matches`
+    /// (while `Any` stays a no-op), and the sweep reports the blob as a store failure.
+    #[tokio::test]
+    async fn default_set_sensitive_rejects_conditional_writes() {
+        let backend = InMemoryStore::<TestLabel>::new();
+        let id = seed(&backend, "v1", "a", 1).await[0];
+        let plain = NoCas(backend);
+
+        plain
+            .set_sensitive(&id, Bytes::from_static(b"x"), SensitivePrecondition::Any)
+            .await
+            .unwrap();
+        let err = plain
+            .set_sensitive(
+                &id,
+                Bytes::from_static(b"x"),
+                SensitivePrecondition::Matches(b"y"),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Generic(_)), "{err:?}");
+
+        let report = store_with(plain, "v2", &["v1", "v2"])
+            .rewrap_all(RewrapOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(report.rewrapped, 0);
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].kind, RewrapFailureKind::Store("generic"));
+    }
+
+    /// Forwards to an [`InMemoryStore`] but keeps the trait's default `set_sensitive`.
+    struct NoCas(InMemoryStore<TestLabel>);
+
+    #[async_trait::async_trait]
+    impl ObjectStoreReader<TestLabel> for NoCas {
+        async fn get(&self, id: &Uuid) -> Result<Object<TestLabel>> {
+            self.0.get(id).await
+        }
+        async fn get_by_name(
+            &self,
+            label: TestLabel,
+            name: &ResourceName,
+        ) -> Result<Object<TestLabel>> {
+            self.0.get_by_name(label, name).await
+        }
+        async fn list(
+            &self,
+            label: TestLabel,
+            namespace: Option<&ResourceName>,
+            max_results: Option<usize>,
+            page_token: Option<String>,
+        ) -> Result<(Vec<Object<TestLabel>>, Option<String>)> {
+            self.0.list(label, namespace, max_results, page_token).await
+        }
+        async fn get_sensitive(&self, id: &Uuid) -> Result<Option<Bytes>> {
+            self.0.get_sensitive(id).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore<TestLabel> for NoCas {
+        async fn create(
+            &self,
+            label: TestLabel,
+            name: &ResourceName,
+            properties: Option<serde_json::Value>,
+            id: Option<Uuid>,
+            sensitive: Option<Bytes>,
+        ) -> Result<Object<TestLabel>> {
+            self.0.create(label, name, properties, id, sensitive).await
+        }
+        async fn update(
+            &self,
+            id: &Uuid,
+            properties: Option<serde_json::Value>,
+            precondition: Precondition,
+            sensitive: Option<Bytes>,
+        ) -> Result<Object<TestLabel>> {
+            self.0.update(id, properties, precondition, sensitive).await
+        }
+        async fn rename(
+            &self,
+            id: &Uuid,
+            new_name: &ResourceName,
+            precondition: Precondition,
+        ) -> Result<Object<TestLabel>> {
+            self.0.rename(id, new_name, precondition).await
+        }
+        async fn delete(&self, id: &Uuid) -> Result<()> {
+            self.0.delete(id).await
+        }
     }
 }
