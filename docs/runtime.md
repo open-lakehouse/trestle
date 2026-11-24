@@ -218,6 +218,52 @@ Envoy's SDS stream drops and reconnects, the new version arrives, and Envoy
 swaps it in without a restart. While the server is down, Envoy keeps the
 value it had.
 
+### Keyrings
+
+A module that seals data under a key the secret server holds
+(`Provides::keys`) gets the same treatment, with a keyring in place of a token.
+The planner derives the keyring's variable,
+`TRESTLE_KEYRING_<MODULE>__<KEY>` (`olai_stack_topology::plan::keyring_var`),
+and declares it as required on the egress module alone. So it resolves, fails
+`start` when set nowhere, and reaches only the `secret-server` container like
+a route's secret. The module gets its socket (`TRESTLE_SDS_SOCKET`) and the
+key's name (`TRESTLE_KEY_<KEY>`), never the keyring.
+
+`olai_stack_runtime::Keyring` is the value: the JSON the secret server reads
+(`{versions, active, min_decrypt, aliases}`), with the operations the CLI
+offers on it:
+
+- `Keyring::import(base64, alias)` makes version 1 from an existing 32-byte
+  key, such as `UC_SERVER_KEK` with the alias `kek-1`.
+- `Keyring::rotate` adds a random version (from the OS generator) and makes it
+  active.
+- `Keyring::retire_below(n)` raises `min_decrypt`. It refuses `n` above the
+  active version.
+- `Keyring::summary` shows versions, `active`, `min_decrypt` and aliases, never
+  material.
+
+**Keyrings are add-only.** No operation removes a version's material. A retired
+version stops unwrapping but keeps its key, so lowering `min_decrypt` again
+recovers a blob the sweep missed. Before a caller stores a keyring in place of
+the stored one, it calls `Keyring::check_extends`, which refuses a write that
+would drop or replace a version, or drop or move an alias. `Keyring`'s `Debug`
+shows no material, and its JSON form is a `SecretValue`.
+
+Rotating a keyring stores the new value and recreates `secret-server`, as for a
+token. The consumer's `KeyServiceProvider` keeps running: its `WatchKey` stream
+reconnects and picks up the new active version.
+
+Tests:
+
+- Sentinel keys under `FakeEngine` (`tests/egress_instances.rs`): no file in
+  the instance's tree holds a key, its base64 or the keyring, and only
+  `secret-server` names the variable.
+- `tests/keyring_server.rs` checks that the secret server parses every keyring
+  `Keyring` writes and honours its versions.
+- The live test (`tests/live_keys.rs`, `--ignored`) runs a module process (the
+  `key_probe` example) through an import, a rotation, the `rewrap_all` sweep
+  and a retirement on real Docker.
+
 ## Instances
 
 `Instances` runs the store's instances on an engine. Each instance runs one

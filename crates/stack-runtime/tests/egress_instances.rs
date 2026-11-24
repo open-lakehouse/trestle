@@ -1,7 +1,8 @@
 //! An instance with an egress route on a [`FakeEngine`]: the route's secret resolves like any
 //! declared secret, reaches Compose only as launch environment that the `secret-server`
 //! service alone references, never lands in the tree, and a rotation recreates
-//! `secret-server` alone. The same holds for a secret a module reads over SDS.
+//! `secret-server` alone. The same holds for a secret a module reads over SDS, and for the
+//! keyring of a key a module seals under.
 #![cfg(feature = "testing")]
 
 use std::collections::BTreeMap;
@@ -9,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use olai_stack_runtime::{
-    FakeCall, FakeEngine, Health, InstanceError, Instances, SecretError, SecretProvider,
+    FakeCall, FakeEngine, Health, InstanceError, Instances, Keyring, SecretError, SecretProvider,
     SecretProviders, SecretValue,
 };
 use olai_stack_state::{Draft, InstanceId, SecretRef, Store, VarSet, VarValue};
@@ -462,4 +463,194 @@ async fn a_rotation_of_a_module_sds_secret_recreates_the_secret_server_alone() {
     assert_ne!(container_of(&f.engine, SECRET_SERVER_SERVICE), server);
     assert_eq!(container_of(&f.engine, "app"), app);
     assert_no_value(&recreated.dir);
+}
+
+const KEYS_MODULE: &str = "keys-app";
+const KEYS_MODULE_PATH: &str = "modules/keys-app/module.yaml";
+/// The variable the planner derives for `keys-app`'s key `server-kek`.
+const KEYRING_VAR: &str = "TRESTLE_KEYRING_KEYS_APP__SERVER_KEK";
+/// The 32 bytes of each keyring version: their text, and so their base64, are sentinels.
+const KEY_V1: &[u8; 32] = b"keyringSENTINELv1-0123456789abcd";
+const KEY_V2: &[u8; 32] = b"keyringSENTINELv2-9876543210dcba";
+
+/// `keys-app`: one `app` container that seals under the key `server-kek` through the key
+/// service. It declares no secret: the keyring's variable is the planner's.
+fn keys_module_yaml() -> String {
+    let mut module: DataModule = serde_yaml::from_str(&sds_module_yaml()).unwrap();
+    module.id = ModuleId::from(KEYS_MODULE);
+    module.provides = Provides {
+        keys: vec!["server-kek".into()],
+        ..Provides::default()
+    };
+    serde_yaml::to_string(&module).unwrap()
+}
+
+fn keyring(versions: &[&[u8; 32]]) -> Keyring {
+    use base64::Engine;
+    let encode = |k: &[u8; 32]| base64::engine::general_purpose::STANDARD.encode(k);
+    let mut ring = Keyring::import(&encode(versions[0]), Some("kek-1")).unwrap();
+    for _ in &versions[1..] {
+        ring.rotate().unwrap();
+    }
+    // A rotation draws random material; rebuild the JSON with the sentinel keys instead.
+    let mut json: serde_json::Value = serde_json::from_str(ring.to_secret().expose()).unwrap();
+    for (i, k) in versions.iter().enumerate() {
+        json["versions"][(i + 1).to_string()] = encode(k).into();
+    }
+    Keyring::from_json(&json.to_string()).unwrap()
+}
+
+/// `demo/dev` at revision 1: `keys-app` alone, its keyring set from the `rotating` provider.
+fn keys_instance(f: &Fixture) -> InstanceId {
+    *f.secret.0.lock().unwrap() = keyring(&[KEY_V1]).to_secret().expose().to_owned();
+    let ws = f.store.create_workspace("demo", false).unwrap();
+    let mut selection = Selection::modules([KEYS_MODULE]);
+    selection.gateway.enabled = false;
+    let mut manifest = EnvManifest::new(selection, PlanCtx::default());
+    manifest.catalog.manifests.push(KEYS_MODULE_PATH.into());
+    let mut draft = Draft::new(manifest);
+    draft
+        .modules
+        .insert(KEYS_MODULE_PATH.into(), keys_module_yaml());
+    let env = f.store.create_environment(&ws.id, "dev", draft).unwrap();
+    f.store.commit_draft(&env.id).unwrap();
+    let mut vars = VarSet::new();
+    vars.set(
+        KEYRING_VAR,
+        VarValue::Secret(SecretRef {
+            provider: "rotating".into(),
+            key: "route".into(),
+        }),
+    );
+    f.store.set_environment_vars(&env.id, &vars).unwrap();
+    let id = f.store.create_instance(&env.id, 1).unwrap().id;
+    f.engine.script(
+        "demo_dev_r1",
+        [
+            (EGRESS_SERVICE, Health::Healthy),
+            (SECRET_SERVER_SERVICE, Health::None),
+            ("app", Health::None),
+        ],
+    );
+    id
+}
+
+/// No file under `dir` holds a key's bytes, its base64, or the keyring's JSON.
+fn assert_no_key_material(dir: &Path) {
+    use base64::Engine;
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    assert!(!files.is_empty());
+    for (path, text) in &files {
+        for key in [KEY_V1, KEY_V2] {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(key);
+            assert!(!text.contains(&encoded), "a key's base64 in {path}");
+            assert!(
+                !text.contains(std::str::from_utf8(key).unwrap()),
+                "a key in {path}"
+            );
+        }
+        assert!(!text.contains("\"versions\""), "a keyring in {path}");
+    }
+}
+
+#[tokio::test]
+async fn a_keyring_with_no_value_fails_the_start_before_compose() {
+    let f = fixture();
+    let id = keys_instance(&f);
+    let env = f.store.instance(&id).unwrap().environment;
+    f.store.set_environment_vars(&env, &VarSet::new()).unwrap();
+    let err = f.instances.start(&id).await.unwrap_err();
+    assert!(
+        matches!(&err, InstanceError::MissingSecrets(names) if names == &[KEYRING_VAR.to_owned()]),
+        "{err}"
+    );
+    assert!(f.engine.calls().is_empty());
+}
+
+/// The keyring reaches Compose only as launch environment, which the secret server alone
+/// references; the module gets its socket and the key's name, and no file holds material.
+#[tokio::test]
+async fn a_keyring_reaches_only_the_secret_server() {
+    let f = fixture();
+    let id = keys_instance(&f);
+    let started = f.instances.start(&id).await.unwrap();
+    let launched = last_env(&f.engine, false);
+    let ring = Keyring::from_json(&launched[KEYRING_VAR]).unwrap();
+    assert_eq!(ring, keyring(&[KEY_V1]));
+    assert_no_key_material(&started.dir);
+
+    let mut files = Vec::new();
+    walk(&started.dir, &mut files);
+    let dir = started.dir.display().to_string();
+    let mut referenced_by = Vec::new();
+    for (path, text) in &files {
+        let relative = path.strip_prefix(&dir).unwrap().trim_start_matches('/');
+        if relative == "modules/egress-gateway/consumers/keys-app.yaml" {
+            let overlay: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+            let app = &overlay["services"]["app"];
+            assert_eq!(
+                app["volumes"][0].as_str(),
+                Some("sds-keys-app:/run/trestle-sds")
+            );
+            assert_eq!(
+                app["environment"]["TRESTLE_KEY_SERVER_KEK"].as_str(),
+                Some("server-kek")
+            );
+        }
+        if !text.contains(KEYRING_VAR) {
+            continue;
+        }
+        match relative {
+            "modules/egress-gateway/secret-server.yaml" => {
+                let config: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+                let listener = config["listeners"]
+                    .as_sequence()
+                    .unwrap()
+                    .iter()
+                    .find(|l| l["consumer"].as_str() == Some(KEYS_MODULE))
+                    .expect("a listener for the module");
+                assert_eq!(listener["keys"][0]["name"].as_str(), Some("server-kek"));
+                assert_eq!(listener["keys"][0]["env"].as_str(), Some(KEYRING_VAR));
+            }
+            "modules/egress-gateway/compose.yaml" => {
+                let fragment: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+                for (name, service) in fragment["services"].as_mapping().unwrap() {
+                    if serde_yaml::to_string(service)
+                        .unwrap()
+                        .contains(KEYRING_VAR)
+                    {
+                        referenced_by.push(name.as_str().unwrap().to_owned());
+                    }
+                }
+            }
+            other => panic!("{other} names {KEYRING_VAR}"),
+        }
+    }
+    assert_eq!(referenced_by, [SECRET_SERVER_SERVICE]);
+}
+
+/// A rotated keyring reaches a recreated secret server; the module keeps running.
+#[tokio::test]
+async fn a_keyring_rotation_recreates_the_secret_server_alone() {
+    let f = fixture();
+    let id = keys_instance(&f);
+    f.instances.start(&id).await.unwrap();
+    let app = container_of(&f.engine, "app");
+    let server = container_of(&f.engine, SECRET_SERVER_SERVICE);
+
+    let rotated = keyring(&[KEY_V1, KEY_V2]);
+    rotated.check_extends(&keyring(&[KEY_V1])).unwrap();
+    *f.secret.0.lock().unwrap() = rotated.to_secret().expose().to_owned();
+    let recreated = f
+        .instances
+        .recreate_service(&id, SECRET_SERVER_SERVICE)
+        .await
+        .unwrap();
+    let env = last_env(&f.engine, true);
+    assert_eq!(Keyring::from_json(&env[KEYRING_VAR]).unwrap(), rotated);
+    assert_eq!(rotated.active(), 2);
+    assert_ne!(container_of(&f.engine, SECRET_SERVER_SERVICE), server);
+    assert_eq!(container_of(&f.engine, "app"), app);
+    assert_no_key_material(&recreated.dir);
 }
