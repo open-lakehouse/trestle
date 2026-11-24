@@ -66,6 +66,9 @@ jobs:
       - run: cargo clippy --locked --all-targets -p olai-credential-vending --features neon-trusted-vending -- -D warnings
       # The secret server's Docker test is feature-gated: lint it explicitly.
       - run: cargo clippy --locked --all-targets -p olai-secret-server --features emulator-it -- -D warnings
+      # The key service's client is opt-in: lint the crate with and without it.
+      - run: cargo clippy --locked --all-targets -p olai-key-service -- -D warnings
+      - run: cargo clippy --locked --all-targets -p olai-key-service --features client -- -D warnings
 
   wasm:
     name: Wasm32
@@ -144,6 +147,8 @@ jobs:
         run: cargo msrv verify --manifest-path crates/stack-state/Cargo.toml -- cargo check --locked
       - name: Verify MSRV (olai-secret-server)
         run: cargo msrv verify --manifest-path crates/secret-server/Cargo.toml -- cargo check --locked
+      - name: Verify MSRV (olai-key-service)
+        run: cargo msrv verify --manifest-path crates/key-service/Cargo.toml -- cargo check --locked --all-features
 
   test:
     name: Test / ${{ matrix.os }}
@@ -168,6 +173,8 @@ jobs:
         run: cargo test --locked --lib --tests -p olai-store --features sqlx,encryption
       - name: Run tests (olai-http recording, neon and sds features)
         run: cargo test --locked --lib --tests -p olai-http --features recording,neon,sds
+      - name: Run tests (olai-key-service client)
+        run: cargo test --locked --lib --tests -p olai-key-service --features client
       - name: Run tests (olai-storage-credentials wire adapters)
         run: cargo test --locked --lib --tests -p olai-storage-credentials --features wire
       - name: Run tests (olai-auth HTTP key source and PDP client)

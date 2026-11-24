@@ -40,6 +40,10 @@ Multi-crate Rust workspace (edition and MSRV in the workspace `Cargo.toml`):
   secrets to Envoy over per-consumer Unix sockets (lib, bin, and the image
   `ghcr.io/open-lakehouse/trestle-secret-server`); see
   [`docs/egress-gateway.md`](docs/egress-gateway.md)
+- `crates/key-service/` (`olai-key-service`): the `olai.keys.v1` key service API
+  (wrap/unwrap data keys under versioned KEKs the secret server holds; generated
+  stubs checked in, `BLESS=1` regenerates) and its `olai-store` `KeyProvider`
+  client (`client` feature)
 - `crates/olai-test-emulators/`: testcontainers storage emulators (test-only,
   unpublished)
 - `node/`: Bun workspace: env editor, diagram package
