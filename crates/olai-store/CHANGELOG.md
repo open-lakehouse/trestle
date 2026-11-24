@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/open-lakehouse/trestle/compare/olai-store-v0.0.8...olai-store-v0.0.9) - 2026-11-24
+
+### Added
+
+- sweep and count KEK usage for rotation (#461)
+
+### Fixed
+
+- [**breaking**] compare-and-swap the rewrap writeback, drop rewrap-on-read (#465)
+
 ## [0.0.8](https://github.com/open-lakehouse/trestle/compare/olai-store-v0.0.7...olai-store-v0.0.8) - 2026-11-01
 
 ### Fixed

@@ -1,7 +1,7 @@
 [package]
 name = "olai-secret-server"
 description = "A secret discovery service (SDS) server that hands generic secrets to Envoy and other consumers over per-consumer Unix sockets, and a key service that wraps their data keys"
-version = "0.0.2"
+version = "0.0.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,9 +20,9 @@ path = "src/main.rs"
 base64 = { workspace = true }
 futures = { workspace = true }
 # The olai.keys.v1 messages and server trait.
-olai-key-service = { path = "../key-service", version = "0.0.1" }
+olai-key-service = { path = "../key-service", version = "0.0.2" }
 # `LocalKeyProvider` does the wrapping, so the format is exactly olai-store's.
-olai-store = { path = "../olai-store", version = "0.0.8", features = ["encryption"] }
+olai-store = { path = "../olai-store", version = "0.0.9", features = ["encryption"] }
 prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
